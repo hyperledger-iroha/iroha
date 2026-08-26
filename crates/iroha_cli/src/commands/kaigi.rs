@@ -9,9 +9,9 @@ use eyre::{Result, WrapErr};
 use iroha::data_model::{
     metadata::Metadata,
     prelude::{
-        DomainId, KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
-        KaigiRelayHealthStatus, KaigiRelayManifest, KaigiRelayRegistration, KaigiRoomPolicy,
-        NewKaigi,
+        AccountId, DomainId, KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier,
+        KaigiPrivacyMode, KaigiRelayHealthStatus, KaigiRelayManifest, KaigiRelayRegistration,
+        KaigiRoomPolicy, NewKaigi,
     },
 };
 use iroha_crypto::Hash;
@@ -60,7 +60,7 @@ impl Run for Command {
 }
 #[derive(Args, Debug)]
 pub struct CreateArgs {
-    /// Domain identifier hosting the call (e.g. `kaigi`).
+    /// Domain identifier hosting the call (e.g. `kaigi.universal`).
     #[arg(long, value_name = "DOMAIN-ID")]
     pub domain: String,
     /// Call name within the domain (e.g. `daily-sync`).
@@ -75,13 +75,14 @@ pub struct CreateArgs {
     /// Optional description for participants.
     #[arg(long)]
     pub description: Option<String>,
-    /// Maximum concurrent participants (excluding host).
+    /// Maximum concurrent participants (excluding host); zero is invalid.
     #[arg(long, value_name = "U32")]
     pub max_participants: Option<u32>,
     /// Gas rate charged per minute (defaults to 0).
     #[arg(long, value_name = "U64", default_value_t = 0)]
     pub gas_rate_per_minute: u64,
-    /// Optional billing account that will cover usage (canonical I105 account literal).
+    /// Optional host billing account that will cover usage (canonical I105 account literal).
+    /// Third-party delegated billing is not supported in the first release.
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub billing_account: Option<String>,
     /// Optional scheduled start timestamp (milliseconds since epoch).
@@ -102,13 +103,13 @@ pub struct CreateArgs {
     /// Commitment hash (hex) for privacy mode creation.
     #[arg(long, value_name = "HEX")]
     pub commitment_hex: Option<String>,
-    /// Alias tag describing the host commitment (privacy mode).
+    /// Reserved on-chain alias tag; must be omitted to avoid ledger disclosure.
     #[arg(long)]
     pub commitment_alias: Option<String>,
     /// Nullifier hash (hex) preventing proof replay (privacy mode).
     #[arg(long, value_name = "HEX")]
     pub nullifier_hex: Option<String>,
-    /// Nullifier issuance timestamp (milliseconds since epoch).
+    /// Reserved on-chain timing field; must be omitted or zero.
     #[arg(long, value_name = "U64")]
     pub nullifier_issued_at_ms: Option<u64>,
     /// Roster Merkle root bound into the proof transcript (privacy mode).
@@ -120,6 +121,7 @@ pub struct CreateArgs {
 }
 impl Run for CreateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        validate_max_participants(self.max_participants)?;
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
         let host = crate::resolve_account_id(context, &self.host)
             .wrap_err("failed to resolve host account")?;
@@ -135,6 +137,7 @@ impl Run for CreateArgs {
             ),
             None => None,
         };
+        validate_billing_account(&host, template.billing_account.as_ref())?;
         template.scheduled_start_ms = self.scheduled_start_ms;
         template.privacy_mode = self.privacy_mode.into();
         template.room_policy = self.room_policy.into();
@@ -153,6 +156,7 @@ impl Run for CreateArgs {
             self.roster_root_hex.as_deref(),
             self.proof_hex.as_deref(),
         )?;
+        validate_create_privacy_artifacts(template.privacy_mode, &privacy)?;
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::CreateKaigi {
                 call: template,
@@ -167,7 +171,7 @@ impl Run for CreateArgs {
 #[derive(Args, Debug)]
 pub struct QuickstartArgs {
     /// Domain identifier hosting the call.
-    #[arg(long, value_name = "DOMAIN-ID", default_value = "wonderland")]
+    #[arg(long, value_name = "DOMAIN-ID", default_value = "wonderland.universal")]
     pub domain: String,
     /// Call name within the domain (defaults to a timestamp-based identifier).
     #[arg(long, value_name = "NAME")]
@@ -187,19 +191,9 @@ pub struct QuickstartArgs {
     /// Path to a JSON file providing additional metadata (object with string keys).
     #[arg(long, value_name = "PATH")]
     pub metadata_json: Option<String>,
-    /// Automatically join the host account immediately after creation.
-    #[arg(long)]
-    pub auto_join_host: bool,
     /// File path where the JSON summary should be written (defaults to stdout only).
     #[arg(long, value_name = "PATH")]
     pub summary_out: Option<PathBuf>,
-    /// Root directory where `SoraNet` spool files are expected (informational only).
-    #[arg(
-        long,
-        value_name = "PATH",
-        default_value = "storage/streaming/soranet_routes"
-    )]
-    pub spool_hint: String,
 }
 impl Run for QuickstartArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -219,27 +213,7 @@ impl Run for QuickstartArgs {
         if let Some(path) = self.metadata_json {
             template.metadata = read_metadata(&path)?;
         }
-        context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
-            Box::new(iroha::data_model::isi::kaigi::CreateKaigi {
-                call: template.clone(),
-                commitment: None,
-                nullifier: None,
-                roster_root: None,
-                proof: None,
-            }),
-        )])?;
-        if self.auto_join_host {
-            context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
-                Box::new(iroha::data_model::isi::kaigi::JoinKaigi {
-                    call_id: call_id.clone(),
-                    participant: host.clone(),
-                    commitment: None,
-                    nullifier: None,
-                    roster_root: None,
-                    proof: None,
-                }),
-            )])?;
-        }
+        context.finish(quickstart_instructions(template.clone()))?;
         let torii_url = context.config().torii_api_url.clone();
         let join_hint = format!(
             "iroha --config <path> kaigi join --domain {} --call-name {} --participant <account-id>",
@@ -254,7 +228,6 @@ impl Run for QuickstartArgs {
             room_policy: format!("{:?}", template.room_policy),
             privacy_mode: format!("{:?}", template.privacy_mode),
             join_hint,
-            spool_hint: format!("{}/exit-<relay-id>/kaigi-stream/*.norito", self.spool_hint),
         };
         let summary_out = self.summary_out;
         if let Some(path) = summary_out.as_ref() {
@@ -281,6 +254,17 @@ impl Run for QuickstartArgs {
         let text = render_quickstart_text(&summary, summary_out.as_deref());
         print_with_optional_text(context, Some(text), &output)
     }
+}
+fn quickstart_instructions(template: NewKaigi) -> [iroha::data_model::isi::InstructionBox; 1] {
+    [iroha::data_model::isi::Instruction::into_instruction_box(
+        Box::new(iroha::data_model::isi::kaigi::CreateKaigi {
+            call: template,
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        }),
+    )]
 }
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacyModeArg {
@@ -320,7 +304,6 @@ struct QuickstartSummary {
     room_policy: String,
     privacy_mode: String,
     join_hint: String,
-    spool_hint: String,
 }
 #[derive(Debug, Clone, norito::json::JsonSerialize)]
 struct QuickstartOutput {
@@ -338,7 +321,6 @@ fn render_quickstart_text(summary: &QuickstartSummary, summary_out: Option<&Path
     let _ = writeln!(out, "room_policy: {}", summary.room_policy);
     let _ = writeln!(out, "privacy_mode: {}", summary.privacy_mode);
     let _ = writeln!(out, "join_hint: {}", summary.join_hint);
-    let _ = writeln!(out, "spool_hint: {}", summary.spool_hint);
     if let Some(path) = summary_out {
         let _ = writeln!(out, "summary_out: {}", path.display());
     }
@@ -348,15 +330,20 @@ fn resolve_call_label(value: Option<String>) -> Result<String> {
     if let Some(label) = value {
         return Ok(label);
     }
-    let uptime = SystemTime::now()
+    generated_call_label(SystemTime::now(), std::process::id())
+}
+fn generated_call_label(now: SystemTime, process_id: u32) -> Result<String> {
+    let unix_nanos = now
         .duration_since(UNIX_EPOCH)
         .wrap_err("system clock is before UNIX_EPOCH")?
-        .as_secs();
-    Ok(format!("kaigi_demo_{uptime:x}"))
+        .as_nanos();
+    Ok(format!("kaigi_demo_{unix_nanos:x}_{process_id:x}"))
 }
 #[derive(Args, Debug)]
 pub struct RegisterRelayArgs {
     /// Relay account identifier advertising relay capabilities (canonical I105 account literal).
+    /// The account must have a live domain-qualified primary alias, which selects
+    /// the governance domain where the descriptor is stored.
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub relay: String,
     /// HPKE public key bytes advertised by the relay (base64-encoded raw bytes).
@@ -376,6 +363,7 @@ impl Run for RegisterRelayArgs {
         let hpke_public_key = BASE64_STANDARD
             .decode(self.hpke_public_key_b64.trim())
             .wrap_err("invalid relay HPKE public key base64")?;
+        validate_relay_hpke_public_key(&hpke_public_key)?;
         let relay = KaigiRelayRegistration {
             relay_id,
             hpke_public_key,
@@ -436,13 +424,13 @@ pub struct JoinArgs {
     /// Commitment hash (hex) for privacy mode joins.
     #[arg(long, value_name = "HEX")]
     pub commitment_hex: Option<String>,
-    /// Alias tag describing the commitment (privacy mode).
+    /// Reserved on-chain alias tag; must be omitted to avoid ledger disclosure.
     #[arg(long)]
     pub commitment_alias: Option<String>,
     /// Nullifier hash (hex) preventing duplicate joins (privacy mode).
     #[arg(long, value_name = "HEX")]
     pub nullifier_hex: Option<String>,
-    /// Nullifier issuance timestamp (milliseconds since epoch).
+    /// Reserved on-chain timing field; must be omitted or zero.
     #[arg(long, value_name = "U64")]
     pub nullifier_issued_at_ms: Option<u64>,
     /// Roster Merkle root bound into the proof transcript (privacy mode).
@@ -490,10 +478,6 @@ impl KaigiCommitmentBuilder {
             },
         })
     }
-    fn with_alias(mut self, alias: Option<String>) -> KaigiParticipantCommitment {
-        self.commitment.alias_tag = alias;
-        self.commitment
-    }
 }
 struct ParsedKaigiPrivacyArtifacts {
     commitment: Option<KaigiParticipantCommitment>,
@@ -509,10 +493,18 @@ fn parse_optional_privacy_artifacts(
     roster_root_hex: Option<&str>,
     proof_hex: Option<&str>,
 ) -> Result<ParsedKaigiPrivacyArtifacts> {
+    if commitment_alias.is_some() {
+        eyre::bail!(
+            "commitment aliases are off-chain only and must be omitted from Kaigi privacy instructions"
+        );
+    }
+    if nullifier_issued_at_ms.is_some_and(|issued_at_ms| issued_at_ms != 0) {
+        eyre::bail!("nullifier issuance timestamps are off-chain only and must be omitted or zero");
+    }
     let commitment = commitment_hex
         .map(KaigiCommitmentBuilder::new)
         .transpose()?
-        .map(|builder| builder.with_alias(commitment_alias.map(str::to_owned)));
+        .map(|builder| builder.commitment);
     let nullifier = nullifier_hex
         .map(|hex| build_nullifier(hex, nullifier_issued_at_ms))
         .transpose()?;
@@ -522,6 +514,23 @@ fn parse_optional_privacy_artifacts(
     let proof = proof_hex
         .map(|hex| decode_hex_vec(hex).wrap_err("invalid proof hex"))
         .transpose()?;
+    if proof.as_ref().is_some_and(|proof| proof.is_empty()) {
+        eyre::bail!("privacy proof payload must be non-empty");
+    }
+    let supplied_artifact_count = [
+        commitment.is_some(),
+        nullifier.is_some(),
+        roster_root.is_some(),
+        proof.is_some(),
+    ]
+    .into_iter()
+    .filter(|supplied| *supplied)
+    .count();
+    if supplied_artifact_count != 0 && supplied_artifact_count != 4 {
+        eyre::bail!(
+            "Kaigi privacy artifacts must either all be omitted or include commitment, nullifier, roster root, and proof"
+        );
+    }
     Ok(ParsedKaigiPrivacyArtifacts {
         commitment,
         nullifier,
@@ -548,43 +557,42 @@ pub struct LeaveArgs {
     /// Participant account leaving the call (canonical I105 account literal).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub participant: String,
-    /// Commitment hash (hex) identifying the participant in privacy mode.
+    /// Reserved privacy-leave commitment; must be omitted because privacy-mode leave is off-chain.
     #[arg(long, value_name = "HEX")]
     pub commitment_hex: Option<String>,
-    /// Nullifier hash (hex) preventing duplicate leaves (privacy mode).
+    /// Reserved privacy-leave nullifier; must be omitted because privacy-mode leave is off-chain.
     #[arg(long, value_name = "HEX")]
     pub nullifier_hex: Option<String>,
-    /// Nullifier issuance timestamp (milliseconds since epoch).
+    /// Reserved privacy-leave timing field; must be omitted.
     #[arg(long, value_name = "U64")]
     pub nullifier_issued_at_ms: Option<u64>,
-    /// Roster Merkle root bound into the proof transcript (privacy mode).
+    /// Reserved privacy-leave roster root; must be omitted.
     #[arg(long, value_name = "HEX")]
     pub roster_root_hex: Option<String>,
-    /// Proof bytes attesting ownership (hex encoding of raw bytes).
+    /// Reserved privacy-leave proof; must be omitted.
     #[arg(long, value_name = "HEX")]
     pub proof_hex: Option<String>,
 }
 impl Run for LeaveArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let call_id = parse_call_id(&self.domain, &self.call_name)?;
-        let participant = crate::resolve_account_id(context, &self.participant)
-            .wrap_err("failed to resolve participant account")?;
-        let privacy = parse_optional_privacy_artifacts(
+        validate_leave_privacy_arguments(
             self.commitment_hex.as_deref(),
-            None,
             self.nullifier_hex.as_deref(),
             self.nullifier_issued_at_ms,
             self.roster_root_hex.as_deref(),
             self.proof_hex.as_deref(),
         )?;
+        let call_id = parse_call_id(&self.domain, &self.call_name)?;
+        let participant = crate::resolve_account_id(context, &self.participant)
+            .wrap_err("failed to resolve participant account")?;
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::LeaveKaigi {
                 call_id,
                 participant,
-                commitment: privacy.commitment,
-                nullifier: privacy.nullifier,
-                roster_root: privacy.roster_root,
-                proof: privacy.proof,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
             }),
         )])
     }
@@ -597,19 +605,19 @@ pub struct EndArgs {
     /// Call name within the domain.
     #[arg(long, value_name = "NAME")]
     pub call_name: String,
-    /// Optional timestamp in milliseconds when the call ended.
+    /// Optional end timestamp between call creation and the current block time.
     #[arg(long, value_name = "U64")]
     pub ended_at_ms: Option<u64>,
     /// Commitment hash (hex) for privacy mode end requests.
     #[arg(long, value_name = "HEX")]
     pub commitment_hex: Option<String>,
-    /// Alias tag describing the host commitment (privacy mode).
+    /// Reserved on-chain alias tag; must be omitted to avoid ledger disclosure.
     #[arg(long)]
     pub commitment_alias: Option<String>,
     /// Nullifier hash (hex) preventing proof replay (privacy mode).
     #[arg(long, value_name = "HEX")]
     pub nullifier_hex: Option<String>,
-    /// Nullifier issuance timestamp (milliseconds since epoch).
+    /// Reserved on-chain timing field; must be omitted or zero.
     #[arg(long, value_name = "U64")]
     pub nullifier_issued_at_ms: Option<u64>,
     /// Roster Merkle root bound into the proof transcript (privacy mode).
@@ -665,6 +673,7 @@ pub struct RecordUsageArgs {
 }
 impl Run for RecordUsageArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        validate_usage_duration(self.duration_ms)?;
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
         let usage_commitment = self
             .usage_commitment_hex
@@ -674,6 +683,7 @@ impl Run for RecordUsageArgs {
             .proof_hex
             .map(|hex| decode_hex_vec(&hex).wrap_err("invalid proof hex"))
             .transpose()?;
+        validate_usage_privacy_artifacts(usage_commitment.as_ref(), proof.as_deref())?;
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::RecordKaigiUsage {
                 call_id,
@@ -699,7 +709,7 @@ pub struct ReportRelayHealthArgs {
     /// Observed health status for the relay.
     #[arg(long, value_enum)]
     pub status: RelayHealthStatusArg,
-    /// Timestamp in milliseconds when the status was observed.
+    /// Observation timestamp in milliseconds, no later than the current block time.
     #[arg(long, value_name = "U64")]
     pub reported_at_ms: u64,
     /// Optional notes capturing failure or recovery context.
@@ -708,6 +718,7 @@ pub struct ReportRelayHealthArgs {
 }
 impl Run for ReportRelayHealthArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        validate_relay_health_notes(self.notes.as_deref())?;
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
         let relay_id = crate::resolve_account_id(context, &self.relay)
             .wrap_err("failed to resolve relay account")?;
@@ -743,12 +754,89 @@ fn parse_call_id(domain: &str, call_name: &str) -> Result<KaigiId> {
     let call = iroha::data_model::name::Name::from_str(call_name).wrap_err("invalid call name")?;
     Ok(KaigiId::new(domain_id, call))
 }
+fn validate_max_participants(max_participants: Option<u32>) -> Result<()> {
+    if max_participants == Some(0) {
+        eyre::bail!("Kaigi max participants must be greater than zero when provided");
+    }
+    Ok(())
+}
+fn validate_relay_hpke_public_key(hpke_public_key: &[u8]) -> Result<()> {
+    if hpke_public_key.is_empty() {
+        eyre::bail!("relay HPKE public key must be non-empty");
+    }
+    Ok(())
+}
+fn validate_relay_health_notes(notes: Option<&str>) -> Result<()> {
+    if notes.is_some_and(|notes| notes.chars().count() > 512) {
+        eyre::bail!("relay health notes must not exceed 512 characters");
+    }
+    Ok(())
+}
+fn validate_usage_duration(duration_ms: u64) -> Result<()> {
+    if duration_ms == 0 {
+        eyre::bail!("usage duration must be positive");
+    }
+    Ok(())
+}
+fn validate_billing_account(host: &AccountId, billing_account: Option<&AccountId>) -> Result<()> {
+    if billing_account.is_some_and(|billing_account| billing_account != host) {
+        eyre::bail!(
+            "Kaigi billing account must resolve to the host until delegated billing is supported"
+        );
+    }
+    Ok(())
+}
+fn validate_create_privacy_artifacts(
+    privacy_mode: KaigiPrivacyMode,
+    artifacts: &ParsedKaigiPrivacyArtifacts,
+) -> Result<()> {
+    if privacy_mode == KaigiPrivacyMode::Transparent
+        && (artifacts.commitment.is_some()
+            || artifacts.nullifier.is_some()
+            || artifacts.roster_root.is_some()
+            || artifacts.proof.is_some())
+    {
+        eyre::bail!("transparent Kaigi sessions must not include privacy artifacts");
+    }
+    Ok(())
+}
+fn validate_leave_privacy_arguments(
+    commitment_hex: Option<&str>,
+    nullifier_hex: Option<&str>,
+    nullifier_issued_at_ms: Option<u64>,
+    roster_root_hex: Option<&str>,
+    proof_hex: Option<&str>,
+) -> Result<()> {
+    if commitment_hex.is_some()
+        || nullifier_hex.is_some()
+        || nullifier_issued_at_ms.is_some()
+        || roster_root_hex.is_some()
+        || proof_hex.is_some()
+    {
+        eyre::bail!(
+            "Kaigi leave does not accept privacy artifacts; privacy-mode leave is off-chain only"
+        );
+    }
+    Ok(())
+}
+fn validate_usage_privacy_artifacts(
+    usage_commitment: Option<&Hash>,
+    proof: Option<&[u8]>,
+) -> Result<()> {
+    if proof.is_some_and(|proof| proof.is_empty()) {
+        eyre::bail!("privacy proof payload must be non-empty");
+    }
+    if usage_commitment.is_some() != proof.is_some() {
+        eyre::bail!("usage commitment and privacy proof must be supplied together");
+    }
+    Ok(())
+}
 fn parse_hash(hex: &str) -> Result<Hash> {
-    let trimmed = hex.trim_start_matches("0x");
+    let trimmed = hex.strip_prefix("0x").unwrap_or(hex);
     Hash::from_str(trimmed).wrap_err("invalid hash literal")
 }
 fn decode_hex_vec(hex: &str) -> Result<Vec<u8>> {
-    let trimmed = hex.trim_start_matches("0x");
+    let trimmed = hex.strip_prefix("0x").unwrap_or(hex);
     hex::decode(trimmed).wrap_err("invalid hex encoding")
 }
 fn read_manifest(path: &str) -> Result<KaigiRelayManifest> {
@@ -1020,14 +1108,39 @@ mod tests {
     fn clap_parses_quickstart_defaults() {
         match parse_command(&["quickstart"]) {
             Command::Quickstart(args) => {
-                assert_eq!(args.domain, "wonderland");
+                assert_eq!(args.domain, "wonderland.universal");
+                assert!(parse_call_id(&args.domain, "demo").is_ok());
                 assert!(args.call_name.is_none());
                 assert!(args.host.is_none());
-                assert!(!args.auto_join_host);
-                assert_eq!(args.spool_hint, "storage/streaming/soranet_routes");
             }
             other => panic!("expected quickstart command, got {other:?}"),
         }
+    }
+    #[test]
+    fn generated_quickstart_call_labels_are_process_and_subsecond_scoped() {
+        use std::time::Duration;
+
+        let instant = UNIX_EPOCH + Duration::new(1_700_000_000, 123);
+        let first = generated_call_label(instant, 7).expect("generated label");
+        let other_process = generated_call_label(instant, 8).expect("generated label");
+        let next_tick =
+            generated_call_label(instant + Duration::from_nanos(1), 7).expect("generated label");
+
+        assert!(first.starts_with("kaigi_demo_"));
+        assert_ne!(first, other_process);
+        assert_ne!(first, next_tick);
+        assert!(
+            iroha::data_model::name::Name::from_str(&first).is_ok(),
+            "generated label must be a valid Name"
+        );
+    }
+    #[test]
+    fn quickstart_rejects_retired_auto_join_host_flag() {
+        let result = TestCli::try_parse_from(["test", "quickstart", "--auto-join-host"]);
+        assert!(
+            result.is_err(),
+            "retired compatibility flags must not parse"
+        );
     }
     #[test]
     fn clap_parses_record_usage_with_privacy_fields() {
@@ -1061,15 +1174,49 @@ mod tests {
         assert_eq!(nullifier.issued_at_ms, 0);
     }
     #[test]
-    fn parse_optional_privacy_artifacts_builds_all_fields() {
+    fn local_scalar_validation_rejects_requests_core_would_refuse() {
+        assert!(validate_max_participants(None).is_ok());
+        assert!(validate_max_participants(Some(1)).is_ok());
+        assert!(validate_max_participants(Some(0)).is_err());
+        assert!(validate_usage_duration(1).is_ok());
+        assert!(validate_usage_duration(0).is_err());
+        assert!(validate_relay_hpke_public_key(&[1]).is_ok());
+        assert!(validate_relay_hpke_public_key(&[]).is_err());
+        let max_notes = "界".repeat(512);
+        let oversized_notes = "界".repeat(513);
+        assert!(validate_relay_health_notes(None).is_ok());
+        assert!(validate_relay_health_notes(Some(&max_notes)).is_ok());
+        assert!(validate_relay_health_notes(Some(&oversized_notes)).is_err());
+
+        let hash_hex = "ab".repeat(32);
+        assert!(parse_hash(&format!("0x{hash_hex}")).is_ok());
+        assert!(parse_hash(&format!("0x0x{hash_hex}")).is_err());
+        assert_eq!(
+            decode_hex_vec("0xaa55").expect("single prefix"),
+            [0xaa, 0x55]
+        );
+        assert!(decode_hex_vec("0x0xaa55").is_err());
+    }
+    #[test]
+    fn local_billing_validation_requires_the_resolved_host() {
+        let host = AccountId::parse_encoded(HOST_ACCOUNT).expect("host account");
+        let participant =
+            AccountId::parse_encoded(PARTICIPANT_ACCOUNT).expect("participant account");
+
+        assert!(validate_billing_account(&host, None).is_ok());
+        assert!(validate_billing_account(&host, Some(&host)).is_ok());
+        assert!(validate_billing_account(&host, Some(&participant)).is_err());
+    }
+    #[test]
+    fn parse_optional_privacy_artifacts_builds_ledger_safe_fields() {
         let commitment_hex = format!("0x{}", "ab".repeat(32));
         let nullifier_hex = format!("0x{}", "cd".repeat(32));
         let roster_root_hex = format!("0x{}", "ef".repeat(32));
         let artifacts = parse_optional_privacy_artifacts(
             Some(&commitment_hex),
-            Some("host"),
+            None,
             Some(&nullifier_hex),
-            Some(321),
+            Some(0),
             Some(&roster_root_hex),
             Some("aa55"),
         )
@@ -1079,20 +1226,101 @@ mod tests {
                 .commitment
                 .as_ref()
                 .and_then(|commitment| commitment.alias_tag.as_deref()),
-            Some("host")
+            None
         );
         assert_eq!(
             artifacts
                 .nullifier
                 .as_ref()
                 .map(|nullifier| nullifier.issued_at_ms),
-            Some(321)
+            Some(0)
         );
         assert_eq!(artifacts.proof, Some(vec![0xaa, 0x55]));
         assert_eq!(
             artifacts.roster_root,
             Some(parse_hash(&roster_root_hex).unwrap())
         );
+    }
+    #[test]
+    fn parse_optional_privacy_artifacts_rejects_clear_identity_hints() {
+        let commitment_hex = format!("0x{}", "ab".repeat(32));
+        let nullifier_hex = format!("0x{}", "cd".repeat(32));
+        let alias_error = parse_optional_privacy_artifacts(
+            Some(&commitment_hex),
+            Some("host"),
+            Some(&nullifier_hex),
+            None,
+            None,
+            None,
+        )
+        .expect_err("clear aliases must not enter ledger privacy artifacts");
+        assert!(alias_error.to_string().contains("off-chain only"));
+        let timestamp_error = parse_optional_privacy_artifacts(
+            Some(&commitment_hex),
+            None,
+            Some(&nullifier_hex),
+            Some(1),
+            None,
+            None,
+        )
+        .expect_err("clear issuance timestamps must not enter ledger privacy artifacts");
+        assert!(timestamp_error.to_string().contains("off-chain only"));
+    }
+    #[test]
+    fn privacy_artifacts_must_be_complete_and_match_create_mode() {
+        let commitment_hex = format!("0x{}", "ab".repeat(32));
+        let nullifier_hex = format!("0x{}", "cd".repeat(32));
+        let roster_root_hex = format!("0x{}", "ef".repeat(32));
+        let partial_error =
+            parse_optional_privacy_artifacts(Some(&commitment_hex), None, None, None, None, None)
+                .expect_err("partial privacy artifacts must fail locally");
+        assert!(partial_error.to_string().contains("all be omitted"));
+
+        let empty_proof_error = parse_optional_privacy_artifacts(
+            Some(&commitment_hex),
+            None,
+            Some(&nullifier_hex),
+            Some(0),
+            Some(&roster_root_hex),
+            Some(""),
+        )
+        .expect_err("empty privacy proofs must fail locally");
+        assert!(empty_proof_error.to_string().contains("non-empty"));
+
+        let complete = parse_optional_privacy_artifacts(
+            Some(&commitment_hex),
+            None,
+            Some(&nullifier_hex),
+            Some(0),
+            Some(&roster_root_hex),
+            Some("aa55"),
+        )
+        .expect("complete privacy artifacts");
+        assert!(
+            validate_create_privacy_artifacts(KaigiPrivacyMode::Transparent, &complete).is_err()
+        );
+        assert!(validate_create_privacy_artifacts(KaigiPrivacyMode::ZkRosterV1, &complete).is_ok());
+
+        assert!(validate_leave_privacy_arguments(None, None, None, None, None).is_ok());
+        let leave_error = validate_leave_privacy_arguments(
+            Some(&commitment_hex),
+            Some(&nullifier_hex),
+            Some(0),
+            Some(&roster_root_hex),
+            Some("aa55"),
+        )
+        .expect_err("on-chain leave must reject even complete privacy artifacts");
+        assert!(leave_error.to_string().contains("off-chain only"));
+        assert!(validate_leave_privacy_arguments(None, None, Some(0), None, None).is_err());
+    }
+    #[test]
+    fn usage_privacy_artifacts_must_be_supplied_together() {
+        let commitment = Hash::new(b"usage");
+        assert!(validate_usage_privacy_artifacts(None, None).is_ok());
+        assert!(validate_usage_privacy_artifacts(Some(&commitment), Some(&[1])).is_ok());
+        assert!(validate_usage_privacy_artifacts(Some(&commitment), None).is_err());
+        assert!(validate_usage_privacy_artifacts(None, Some(&[1])).is_err());
+        assert!(validate_usage_privacy_artifacts(Some(&commitment), Some(&[])).is_err());
     }
     #[test]
     fn read_metadata_rejects_non_object_json() {
@@ -1121,7 +1349,6 @@ mod tests {
             room_policy: "Public".to_string(),
             privacy_mode: "Transparent".to_string(),
             join_hint: "iroha kaigi join ...".to_string(),
-            spool_hint: "/tmp/spool".to_string(),
         };
         let text = render_quickstart_text(&summary, Some(Path::new("/tmp/summary.json")));
         assert!(text.contains("call_id: call-1"));

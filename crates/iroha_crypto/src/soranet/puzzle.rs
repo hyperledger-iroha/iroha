@@ -4,7 +4,9 @@
 //! attach a single frame regardless of which policy a relay enforces. Difficulty adjustments and
 //! TTL validation follow the same rules as the `PoW` implementation, while the work predicate is
 //! backed by Argon2id to raise the cost of GPU/ASIC optimisations.
-use crate::soranet::pow::{CHALLENGE_DOMAIN, SOLUTION_DOMAIN, Ticket, ticket_binding_commitment};
+use crate::soranet::pow::{
+    self, CHALLENGE_DOMAIN, SOLUTION_DOMAIN, SignedTicket, Ticket, ticket_binding_commitment,
+};
 use argon2::{Algorithm, Argon2, Params, Version};
 use blake3::Hasher;
 use rand_core::TryCryptoRng;
@@ -15,6 +17,7 @@ use std::{
 };
 use subtle::ConstantTimeEq as _;
 use thiserror::Error;
+use zeroize::Zeroizing;
 const OUTPUT_LEN: usize = 32;
 const SOLUTION_SALT_LEN: usize = SOLUTION_DOMAIN.len() + OUTPUT_LEN;
 const TTL_GRACE: Duration = Duration::from_secs(1);
@@ -297,6 +300,16 @@ pub enum Error {
     #[error("system clock error: {0}")]
     Clock(#[from] std::time::SystemTimeError),
 }
+/// Errors surfaced while verifying a relay-signed Argon2 ticket.
+#[derive(Debug, Error)]
+pub enum SignedTicketVerifyError {
+    /// The canonical ML-DSA envelope or its explicit bindings are invalid.
+    #[error("signed puzzle ticket envelope invalid: {0}")]
+    Envelope(#[source] pow::Error),
+    /// The enclosed ticket does not satisfy the configured Argon2 policy.
+    #[error("signed puzzle ticket proof invalid: {0}")]
+    Puzzle(#[source] Error),
+}
 /// Errors surfaced while minting puzzle tickets (used for tests and fixtures).
 #[derive(Debug, Error)]
 pub enum MintError {
@@ -442,7 +455,7 @@ pub fn verify_at(
     if !bool::from(ticket.client_nonce.ct_eq(&expected_binding)) {
         return Err(Error::InvalidSolution);
     }
-    let challenge = derive_challenge(binding, ticket.client_nonce, ticket.expires_at);
+    let challenge = derive_challenge(binding, &ticket.client_nonce, ticket.expires_at);
     let digest =
         derive_solution_digest(&challenge, &ticket.solution, params).map_err(|err| match err {
             DigestError::Parameters(msg) => Error::Parameters(msg),
@@ -452,6 +465,60 @@ pub fn verify_at(
         return Err(Error::InvalidSolution);
     }
     Ok(())
+}
+/// Verify a canonical ML-DSA envelope over an Argon2 ticket.
+///
+/// Signed tickets never select the hashcash predicate: after authenticating the
+/// exact relay and transcript bindings, the enclosed ticket is always checked
+/// against the supplied Argon2 policy.
+///
+/// # Errors
+/// Returns [`SignedTicketVerifyError`] when the envelope, signature, bindings,
+/// ticket timing, policy, or Argon2 proof is invalid.
+pub fn verify_signed_ticket(
+    signed_ticket: &SignedTicket,
+    public_key: &[u8],
+    binding: &ChallengeBinding<'_>,
+    params: &Parameters,
+) -> Result<(), SignedTicketVerifyError> {
+    verify_signed_ticket_at(
+        signed_ticket,
+        public_key,
+        binding,
+        params,
+        SystemTime::now(),
+    )
+}
+
+/// Verify a canonical ML-DSA envelope over an Argon2 ticket at a fixed time.
+///
+/// # Errors
+/// Returns [`SignedTicketVerifyError`] under the same conditions as
+/// [`verify_signed_ticket`].
+pub fn verify_signed_ticket_at(
+    signed_ticket: &SignedTicket,
+    public_key: &[u8],
+    binding: &ChallengeBinding<'_>,
+    params: &Parameters,
+    now: SystemTime,
+) -> Result<(), SignedTicketVerifyError> {
+    validate_binding(binding)
+        .map_err(Error::MalformedBinding)
+        .map_err(SignedTicketVerifyError::Puzzle)?;
+    if signed_ticket.relay_id.as_slice() != binding.relay_id {
+        return Err(SignedTicketVerifyError::Envelope(pow::Error::RelayMismatch));
+    }
+    if &signed_ticket.transcript_hash != binding.transcript_hash {
+        return Err(SignedTicketVerifyError::Envelope(
+            pow::Error::TranscriptMismatch,
+        ));
+    }
+    // Authenticate the cheap, fixed-size envelope before committing bounded
+    // Argon2 resources to the client-controlled proof.
+    signed_ticket
+        .verify(public_key)
+        .map_err(SignedTicketVerifyError::Envelope)?;
+    verify_at(&signed_ticket.ticket, binding, params, now).map_err(SignedTicketVerifyError::Puzzle)
 }
 /// Mint a puzzle ticket for the given descriptor commitment and TTL.
 ///
@@ -508,12 +575,12 @@ where
             max_skew: params.max_future_skew,
         });
     }
-    let client_nonce = ticket_binding_commitment(
+    let client_nonce = Zeroizing::new(ticket_binding_commitment(
         binding.descriptor_commit,
         binding.relay_id,
         binding.transcript_hash,
-    );
-    let mut previous_solution = None;
+    ));
+    let mut previous_solution: Option<Zeroizing<[u8; 32]>> = None;
     loop {
         let minted_at = now();
         let expires_at = minted_at
@@ -523,19 +590,20 @@ where
         let wire_expires_at =
             unix_time_from_secs(expires_at_secs).ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
         let mut prior = Vec::with_capacity(2);
-        prior.push(("ticket binding commitment", &client_nonce));
+        prior.push(("ticket binding commitment", &*client_nonce));
         if let Some(previous) = previous_solution.as_ref() {
-            prior.push(("previous solution nonce", previous));
+            prior.push(("previous solution nonce", &**previous));
         }
-        let challenge = derive_challenge(binding, client_nonce, expires_at_secs);
-        let mut solution = [0u8; 32];
-        fill_random(rng, "minting puzzle solution nonce", &mut solution)?;
+        let challenge = derive_challenge(binding, &client_nonce, expires_at_secs);
+        let mut solution = Zeroizing::new([0u8; 32]);
+        fill_random(rng, "minting puzzle solution nonce", &mut solution[..])?;
         reject_repeated_nonce_material("minting puzzle solution nonce", &solution, &prior)?;
-        previous_solution = Some(solution);
-        let digest = derive_digest(&challenge, &solution, params).map_err(|err| match err {
-            DigestError::Parameters(msg) => MintError::Parameters(msg),
-            DigestError::Hash(msg) => MintError::Hash(msg),
-        })?;
+        let digest = Zeroizing::new(derive_digest(&challenge, &solution, params).map_err(
+            |err| match err {
+                DigestError::Parameters(msg) => MintError::Parameters(msg),
+                DigestError::Hash(msg) => MintError::Hash(msg),
+            },
+        )?);
         let solved_at = now();
         if solved_at < minted_at {
             return Err(MintError::ClockMovedBackwards);
@@ -547,17 +615,19 @@ where
             // The expiry is part of the Argon2 challenge and cannot be
             // extended after solving. Discard the stale candidate and derive
             // a fresh expiry/challenge before the next expensive evaluation.
+            previous_solution = Some(solution);
             continue;
         }
-        if leading_zero_bits_at_least(&digest, params.difficulty) {
+        if leading_zero_bits_at_least(digest.as_slice(), params.difficulty) {
             return Ok(Ticket {
                 version: 1,
                 difficulty: params.difficulty,
                 expires_at: expires_at_secs,
-                client_nonce,
-                solution,
+                client_nonce: *client_nonce,
+                solution: *solution,
             });
         }
+        previous_solution = Some(solution);
     }
 }
 fn validate_binding(binding: &ChallengeBinding<'_>) -> Result<(), String> {
@@ -577,7 +647,7 @@ fn validate_binding(binding: &ChallengeBinding<'_>) -> Result<(), String> {
 }
 fn derive_challenge(
     binding: &ChallengeBinding<'_>,
-    client_nonce: [u8; 32],
+    client_nonce: &[u8; 32],
     expires_at: u64,
 ) -> blake3::Hash {
     let mut hasher = Hasher::new();
@@ -585,7 +655,7 @@ fn derive_challenge(
     hasher.update(binding.descriptor_commit);
     hasher.update(binding.relay_id);
     hasher.update(binding.transcript_hash);
-    hasher.update(&client_nonce);
+    hasher.update(client_nonce);
     hasher.update(&expires_at.to_be_bytes());
     hasher.finalize()
 }
@@ -659,6 +729,7 @@ mod tests {
     use rand::SeedableRng;
     use rand_chacha::ChaCha20Rng;
     use rand_core::{TryCryptoRng, TryRngCore};
+    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     const DESCRIPTOR: [u8; 32] = [0x11; 32];
     const RELAY: [u8; 32] = [0x22; 32];
     const TRANSCRIPT: [u8; 32] = [0x33; 32];
@@ -909,6 +980,49 @@ mod tests {
         ChallengeBinding::new(&DESCRIPTOR, &RELAY, &TRANSCRIPT)
     }
     #[test]
+    fn signed_ticket_authenticates_and_verifies_argon2_proof() {
+        let params = Parameters::new(
+            NonZeroU32::new(MIN_MEMORY_KIB).expect("minimum memory is non-zero"),
+            NonZeroU32::new(1).expect("one iteration is non-zero"),
+            NonZeroU32::new(1).expect("one lane is non-zero"),
+            1,
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+        );
+        let binding = binding();
+        let mut rng = ChaCha20Rng::seed_from_u64(0x51_6e_65_64);
+        let ticket = mint_ticket(&params, &binding, Duration::from_secs(10), &mut rng)
+            .expect("mint Argon2 ticket");
+        let verify_time = stable_verify_time(&ticket, &params);
+        let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("generate signing key");
+        let signed = SignedTicket::sign(ticket, &RELAY, &TRANSCRIPT, keypair.secret_key())
+            .expect("sign Argon2 ticket");
+
+        verify_signed_ticket_at(
+            &signed,
+            keypair.public_key(),
+            &binding,
+            &params,
+            verify_time,
+        )
+        .expect("signed Argon2 ticket verifies");
+
+        let other_transcript = [0xA5; 32];
+        let substituted = ChallengeBinding::new(&DESCRIPTOR, &RELAY, &other_transcript);
+        let error = verify_signed_ticket_at(
+            &signed,
+            keypair.public_key(),
+            &substituted,
+            &params,
+            verify_time,
+        )
+        .expect_err("transcript substitution must fail");
+        assert!(matches!(
+            error,
+            SignedTicketVerifyError::Envelope(pow::Error::TranscriptMismatch)
+        ));
+    }
+    #[test]
     fn mint_ticket_reports_rng_failure() {
         let mut rng = FailingTryRng;
         let err = mint_ticket(
@@ -985,12 +1099,12 @@ mod tests {
         expected_challenge.extend_from_slice(&client_nonce);
         expected_challenge.extend_from_slice(&expires_at.to_be_bytes());
         assert_eq!(
-            derive_challenge(&binding, client_nonce, expires_at),
+            derive_challenge(&binding, &client_nonce, expires_at),
             blake3::hash(&expected_challenge)
         );
         let params = test_parameters();
         let binding = ChallengeBinding::new(&DESCRIPTOR, &RELAY, &transcript);
-        let challenge = derive_challenge(&binding, client_nonce, expires_at);
+        let challenge = derive_challenge(&binding, &client_nonce, expires_at);
         let mut expected_salt =
             Vec::with_capacity(SOLUTION_DOMAIN.len() + challenge.as_bytes().len());
         expected_salt.extend_from_slice(SOLUTION_DOMAIN);
@@ -1019,7 +1133,7 @@ mod tests {
         );
     }
     fn first_invalid_solution(
-        ticket: Ticket,
+        ticket: &Ticket,
         binding: &ChallengeBinding<'_>,
         params: &Parameters,
     ) -> [u8; 32] {
@@ -1027,7 +1141,7 @@ mod tests {
             for bit in 0..8 {
                 let mut candidate = ticket.solution;
                 candidate[idx] ^= 1u8 << bit;
-                let challenge = derive_challenge(binding, ticket.client_nonce, ticket.expires_at);
+                let challenge = derive_challenge(binding, &ticket.client_nonce, ticket.expires_at);
                 let digest = derive_solution_digest(&challenge, &candidate, params)
                     .expect("digest derivation should succeed");
                 if !leading_zero_bits_at_least(&digest, params.difficulty) {
@@ -1050,7 +1164,7 @@ mod tests {
             let Some(expires_at) = ticket.expires_at.checked_add(delta) else {
                 break;
             };
-            let challenge = derive_challenge(binding, ticket.client_nonce, expires_at);
+            let challenge = derive_challenge(binding, &ticket.client_nonce, expires_at);
             let digest = derive_solution_digest(&challenge, &ticket.solution, params)
                 .expect("digest derivation should succeed");
             if !leading_zero_bits_at_least(&digest, params.difficulty) {
@@ -1086,7 +1200,7 @@ mod tests {
         let binding = binding();
         let mut ticket =
             mint_ticket(&params, &binding, Duration::from_secs(10), &mut rng).expect("mint");
-        ticket.solution = first_invalid_solution(ticket, &binding, &params);
+        ticket.solution = first_invalid_solution(&ticket, &binding, &params);
         let err = verify_at(
             &ticket,
             &binding,

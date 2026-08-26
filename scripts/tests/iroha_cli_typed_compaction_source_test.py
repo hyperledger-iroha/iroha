@@ -53,7 +53,7 @@ SORAFS_EMITTER = """macro_rules! impl_run_with_client_methods {
 
 """
 SORACLOUD_REGION_SHA256 = (
-    "22c6fdd9271bb905c2f7cd1a3b9d827c76862ac9ffa3d98cc2b5536d7cfb5c76"
+    "0ce9f1cdc25f90772c2166c5bd7251f3e2d1656f0e64cb3e7a135111765a9cb9"
 )
 MAIN_SHARED_REGION_SHA256 = (
     "235a6d57b5bfaf88d1a61b5937d19e319466187a658c0513b5886347b281b564"
@@ -573,12 +573,11 @@ def _validate(
     soracloud_region = _region(
         soracloud,
         "    macro_rules! manifest_pair_submission_service_name_case {\n",
-        "    #[test]\n"
-        "    fn model_upload_encryption_recipient_args_can_attach_service_plan_from_manifest_pair() {\n",
+        "    macro_rules! manifest_pair_status_service_name_case {\n",
     )
     if hashlib.sha256(soracloud_region.encode()).hexdigest() != SORACLOUD_REGION_SHA256:
         raise AssertionError("SoraCloud typed manifest-pair family changed")
-    if soracloud_region.count("            #[test]\n            fn $name() {") != 2:
+    if soracloud_region.count("            #[test]\n            fn $name() {") != 1:
         raise AssertionError("SoraCloud test emitters lost their exact #[test] attribute")
 
     main_shared = current[PINS[2].path]

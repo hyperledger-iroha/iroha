@@ -113,8 +113,6 @@ The following gauges are exposed via Prometheus when telemetry is enabled:
 - `p2p_accept_throttle_decisions_total{scope="prefix|ip",decision="allowed|throttled"}`: accept throttle outcomes split by prefix vs per-IP buckets.
 - `p2p_incoming_cap_reject_total`: number of incoming connections rejected due to `max_incoming`.
 - `p2p_total_cap_reject_total`: number of connections rejected due to `max_total_connections`.
-- `p2p_ws_inbound_total`: accepted inbound WebSocket P2P connections.
-- `p2p_ws_outbound_total`: successful outbound WebSocket P2P connections.
 - `p2p_scion_inbound_total`: accepted inbound SCION P2P connections (reserved for future inbound listener support).
 - `p2p_scion_outbound_total`: successful outbound SCION-guided P2P connections.
 
@@ -196,14 +194,6 @@ p2p_incoming_cap_reject_total 0
 # TYPE p2p_total_cap_reject_total gauge
 p2p_total_cap_reject_total 0
 
-# HELP p2p_ws_inbound_total Accepted inbound WebSocket P2P connections
-# TYPE p2p_ws_inbound_total gauge
-p2p_ws_inbound_total 0
-
-# HELP p2p_ws_outbound_total Successful outbound WebSocket P2P connections
-# TYPE p2p_ws_outbound_total gauge
-p2p_ws_outbound_total 0
-
 # HELP p2p_scion_outbound_total Successful outbound SCION P2P connections
 # TYPE p2p_scion_outbound_total gauge
 p2p_scion_outbound_total 0
@@ -228,13 +218,13 @@ p2p_scion_outbound_total 0
 - When `p2p_proxy` is set and the target host is not exempted, the dialer tunnels via:
   - HTTP `CONNECT host:port` for `http://...` / `https://...`
     - `http://...` uses plaintext TCP to the proxy.
-    - `https://...` wraps the proxy connection in TLS before issuing `CONNECT` (requires a build with `iroha_p2p/p2p_tls` enabled). When `p2p_proxy_tls_verify=true`, the proxy hop requires a matching pinned certificate.
+    - `https://...` wraps the proxy connection in pinned TLS before issuing `CONNECT`. Stock builds include the mandatory `iroha_p2p/p2p_tls` transport.
   - SOCKS5 `CONNECT` for `socks5://...` / `socks5h://...`
 - Notes:
   - Basic authentication is supported via `user:pass@...` in the proxy URL.
   - Exemptions are matched as simple host suffixes (e.g., `.example.com`, `localhost`) when `p2p_proxy_required=false`.
   - Disabling `p2p_proxy_tls_verify` may expose proxy credentials (and proxy traffic metadata) to MITM on the proxy hop.
-  - Proxies apply only to TCP-based dials (TCP/TLS/WS). QUIC (UDP) bypasses the proxy; set `quic_enabled=false` and `p2p_proxy_required=true` (with no `p2p_no_proxy` exemptions) if you must force all outbound P2P traffic through a proxy.
+  - Proxies apply only to the mandatory TLS-over-TCP dial. QUIC (UDP) bypasses the proxy; set `quic_enabled=false` and `p2p_proxy_required=true` (with no `p2p_no_proxy` exemptions) if you must force all outbound P2P traffic through a proxy.
   - If no proxy is configured, connections go direct.
 
 ### Relay Mode (Hub/Spoke/Assist)
@@ -311,7 +301,7 @@ Behavior:
 - Peers gossip observed transport capabilities (`scion_supported`) alongside peer-address gossip.
 - Outbound dialing prefers SCION only when both peers advertise SCION support.
 - If SCION preference fails for a peer, dialing continues with the standard transport strategy.
-- Peers without SCION capability continue to use existing QUIC/TLS/TCP/WS behavior.
+- Peers without SCION capability use optional QUIC and mandatory TLS; raw TCP and WebSocket are not peer transports.
 - Successful SCION-preferred outbound connections increment `p2p_scion_outbound_total`.
 
 There are no `network.scion_*` configuration keys. SCION selection is derived
@@ -435,20 +425,19 @@ Operator guidance:
   still uses the `PeerGossip` topic and the same caps/backoffs, so disabling trust gossip does not
   starve peer updates.
 
-Chain-bound signatures are mandatory. Every inbound and outbound peer
+Network-bound signatures are mandatory. Every inbound and outbound peer
 handshake signs one canonical V1 claim containing the identity algorithm and
 public key, advertised address, relay/consensus/confidential/crypto/trust
-capabilities, configured `ChainId`, full 256-bit session binding, and optional
-TLS/QUIC certificate fingerprint. The network start API requires a `ChainId`;
+capabilities, configured `NetworkId`, full 256-bit session binding, and the
+mandatory TLS/QUIC certificate fingerprint. The network start API requires a `NetworkId`;
 changing any advertised claim, replaying it into another session or transport,
-or connecting from another chain fails signature verification before the peer
+or connecting from another network fails signature verification before the peer
 can enter the authenticated set or exchange network traffic. The compact
 64-bit disambiguator is only a simultaneous-connection tie-breaker. There is no
-feature flag or unbound mode. Plain TCP, TLS-over-TCP, and QUIC accepts all
-enter the same `ConnectedFrom` handshake state machine; TLS and QUIC only add
-their server-certificate fingerprint to that common signed claim, while plain
-TCP signs the same mandatory chain and session fields without a certificate
-binding.
+feature flag or unbound mode. Only the TLS-over-TCP and QUIC listeners can enter
+the `ConnectedFrom` handshake state; each adds its server-certificate fingerprint
+to the common signed claim. There is no raw TCP listener or external stream
+admission API.
 
 ### ACL: Allow/Deny (Keys and CIDRs)
 
@@ -478,14 +467,14 @@ binding.
   - `p2p_accept_prefix_cache_total{result}` surfaces prefix cache hit/miss ratios.
   - `p2p_accept_throttle_decisions_total{scope,decision}` splits allow/throttle outcomes across prefix vs per-IP buckets; `p2p_accept_throttled_total` remains the aggregate throttle counter.
 
-### QUIC Transport (experimental)
+### Optional QUIC Transport
 
 - Build-time: enable `iroha_p2p/quic` to include QUIC support.
-- Runtime: set `[network].quic_enabled = true` to turn on the QUIC listener and allow outbound try‑QUIC dials. When a QUIC attempt fails, the dialer falls back to TCP automatically.
-- Current status: inbound QUIC listener is implemented and spawns peers for accepted bidirectional streams. Outbound dialing can attempt QUIC to hostnames (with TCP fallback).
+- Runtime: set `[network].quic_enabled = true` to make the QUIC listener and dialer mandatory startup components. A runtime QUIC connection failure may fall back only to authenticated TLS.
+- Current status: inbound QUIC accepts authenticated bidirectional streams. Outbound dialing can attempt QUIC to hostnames with mandatory TLS as the only fallback.
 - Authentication: nodes use self-signed transport certificates. Rustls verifies
   the TLS `CertificateVerify` proof, then the Iroha identity handshake signs the
-  certificate fingerprint together with the active SoraNet session and v3
+  certificate fingerprint together with the active SoraNet session and V5
   transport-delegation binding. A certificate issued by an untrusted root is
   therefore acceptable, but replaying another node's certificate without its
   private key is not.
@@ -493,78 +482,104 @@ binding.
   - `[network].quic_datagram_max_payload_bytes` (default: 1200) caps the QUIC DATAGRAM payload size conservatively to avoid fragmentation.
   - `[network].quic_datagram_receive_buffer_bytes` / `[network].quic_datagram_send_buffer_bytes` control the QUIC DATAGRAM buffers **per active QUIC connection** (default: 1 MiB each; both must be non-zero to enable the extension). Their process-level memory term is `max_total_connections × (receive + send)`, in addition to the bounded actor, connected-stream, deferred-frame, and subscriber owners; they are not aggregate endpoint-wide caps.
 
-### TLS-over-TCP (camouflage)
+### Mandatory TLS-over-TCP
 
-- Build-time: enable `iroha_p2p/p2p_tls` to include TLS support.
-- Runtime: set `[network].tls_enabled = true` to wrap outbound P2P connections in TLS 1.3 using rustls. Identity remains authenticated at the application layer by the canonical handshake claim, including the address, capabilities, full session binding, certificate fingerprint, and configured `ChainId`; rustls separately verifies possession of the certificate key.
-- Runtime: `tls_fallback_to_plain` (bool; default `false`) controls whether the dialer may fall back to plain TCP when a TLS dial fails. Set `tls_fallback_to_plain=true` to opt into plaintext fallback for outbound dials.
-- Behavior: the dialer connects to `host:port` over TCP and upgrades to TLS; if TLS fails and `tls_fallback_to_plain=true`, it falls back to plain TCP. This helps traversing L4 TLS proxies/LBs and makes traffic resemble HTTPS.
-- Inbound: optionally enable a TLS listener via `[network].tls_listen_address`. When set (and TLS is enabled), the node accepts inbound TLS connections on that address. Plain TCP on `[network].address` remains enabled unless `[network].tls_inbound_only=true`.
-  - `tls_inbound_only` (bool; default `false`): disable the plaintext listener and accept inbound P2P only via TLS-over-TCP. When enabled, TLS binds on `tls_listen_address` when set, otherwise on `[network].address`.
-  - Certificates are self‑signed per process; authentication is enforced at the application handshake.
+- Stock builds include `iroha_p2p/p2p_tls`; a build without it fails network startup before binding the configured listener.
+- `[network].address` is the TLS 1.3 listener and outbound TCP dials always upgrade to TLS 1.3 with the exact `iroha-p2p/1` ALPN. There is no plaintext listener, retry, or runtime downgrade knob.
+- Identity remains authenticated by the canonical V5 application handshake, which binds the certificate fingerprint and configured `NetworkId`; rustls separately verifies possession of the self-signed certificate key.
+- Requesting QUIC without compiled support, or failing to initialize its dialer or listener, aborts startup. A runtime QUIC connection failure may fall back only to this authenticated TLS path.
 
-### WebSocket Fallback (p2p_ws)
+### No WebSocket peer transport
 
-- `iroha_p2p::NetworkHandle::accept_stream(read, write, remote_addr)` allows accepting externally provided duplex streams and spawning a peer, applying the same caps/throttle as TCP accepts.
-- Intended use: Torii `/p2p` WebSocket route upgrades to a raw duplex and forwards its halves to `accept_stream` (feature `p2p_ws`).
-- Outbound fallback: the dialer attempts QUIC/TLS/TCP; if that fails it can fall back to WS/WSS (`ws://host:port/p2p` and `wss://host:port/p2p`).
-- WS is a bounded stream adapter, not a one-message-per-P2P-frame transport. Both client and Torii
-  server split the continuous byte stream into at most 64 KiB WebSocket Binary messages, cap read
-  and write buffers explicitly, and concatenate those chunks before P2P framing. A 17 MiB P2P
-  frame therefore remains valid while a single WebSocket message above 64 KiB is rejected.
-- Preference knob: set `[network].prefer_ws_fallback = true` to try WS/WSS first for any peer address (useful for constrained environments and CI).
-- Status: server-side route and outbound fallback implemented behind `p2p_ws`. An end‑to‑end test exercises the Torii `/p2p` route.
+The first release exposes no Torii WebSocket peer route, build feature, dialer,
+or external stream adapter. Peer traffic enters only through the process-owned
+TLS 1.3 or QUIC listeners that provide the exact certificate fingerprint used
+by V5 channel-binding admission.
 
-### Nonce-bound SoraNet transport delegation (v3)
+### First-release SoraNet P2P authentication (V5)
 
-The first release has two mandatory, non-interchangeable identity roles:
+V5 is the only P2P preface accepted in the first release. V4, V3, and every
+other version are rejected at the five-byte magic/version header; there is no
+version negotiation, compatibility parser, downgrade retry, or legacy
+authentication path.
 
-- the application/consensus `PeerId` is a BLS-normal key;
-- the top-level `soranet_transport_public_key` plus exactly one of
-  `soranet_transport_private_key` or `soranet_transport_private_key_file`
-  forms a distinct Ed25519 key used only by the SoraNet relay handshake.
-  Production profiles use the bounded owner-held file form. Reusing the
-  streaming identity is rejected during configuration parsing.
+The protocol keeps three mandatory, non-interchangeable identity roles:
 
-There is no v1/v2 compatibility list or classical fallback. Every direct TCP,
-TLS, QUIC, and externally supplied stream uses this exact v3 transcript before
-the admission puzzle or ML-KEM handshake:
+- the application/consensus `PeerId` is the BLS-normal node identity;
+- the configured dedicated Ed25519 transport identity supplies cheap online proofs;
+- a process-lifetime ML-DSA-65 identity supplies the mandatory post-quantum
+  online proof.
 
-1. The initiator seeds a CSPRNG from operating-system entropy, generates a
-   fresh 32-byte challenge, and sends `"I2P2" || 0x03 || challenge` (37 bytes).
-2. The responder validates the magic and exact version before signing anything,
-   then confirms `"I2P2" || 0x03` (5 bytes).
-3. For this connection only, the responder constructs a canonical Norito
-   delegation statement containing the exact v3 version, challenge, chain ID,
-   BLS-normal node `PeerId`, and Ed25519 transport public key. The node key signs
-   the domain-separated canonical statement. The responder sends the resulting
-   canonical frame behind a big-endian `u16` length; empty frames and frames
-   above 512 bytes are rejected.
+Network startup consumes the configured Ed25519 identity unchanged, generates
+the process-lifetime ML-DSA-65 identity, retains their private keys behind
+shared ownership, and signs one canonical Norito
+`SoranetTransportCertificateV5` with the BLS-normal node key. The certificate
+contains exactly `p2p_preface_version = 5`, `NetworkId`, node `PeerId`, the
+32-byte Ed25519 public key, and the 1,952-byte ML-DSA-65 public key. Its BLS
+signature uses `iroha:p2p:soranet-transport-certificate:v5|`. The signed
+certificate and its
+`iroha:p2p:soranet-transport-certificate-digest:v5|` hash are cached for the
+life of the network process; an unauthenticated inbound preface never triggers
+a new BLS certificate signature. The later encrypted application hello still
+uses the node identity as described below.
+
+Every TLS and QUIC stream runs this exact V5 exchange before admission work or
+ML-KEM processing:
+
+1. The initiator seeds a CSPRNG from operating-system entropy and generates a
+   fresh 32-byte challenge. All-zero and all-identical-byte output fails closed.
+   It sends `"I2P2" || 0x05 || challenge || binding_tag || [binding]`: exactly
+   70 bytes because tag one must carry the 32-byte TLS/QUIC certificate
+   fingerprint. A missing binding is rejected unconditionally.
+2. The responder verifies the magic, exact V5 byte, and rejects all-zero or
+   all-identical-byte challenges before signing anything. It validates the
+   claimed transport binding against the accepted transport and replies with
+   `"I2P2" || 0x05` (5 bytes). TLS and QUIC require the exact certificate
+   fingerprint; no unbound transport reaches this exchange.
+3. The responder constructs a proof statement containing exactly the cached
+   certificate digest, fresh challenge, and validated transport
+   binding. The Ed25519 transport key signs its canonical encoding under
+   `iroha:p2p:soranet-transport-proof:v5|`. The responder combines this fresh
+   proof with the cached BLS certificate and sends the canonical Norito frame
+   behind a big-endian `u16` length. Empty, non-canonical, or larger-than-4,493
+   byte frames are rejected; 4,493 bytes is the exact maximum V5 frame with a
+   present binding.
 4. The initiator performs bounded canonical decoding and verifies the exact
-   version, fresh challenge, chain, peer, key algorithms and lengths, and BLS
-   signature. Any failure terminates the connection before puzzle minting,
-   admission-ticket exchange, client-hello construction, or ML-KEM work.
-5. Both sides hash the exact canonical signed frame under the v3 delegation
-   binding domain. The final mutual BLS application hello signs that binding
-   together with the full SoraNet session binding and any TLS/QUIC certificate
-   binding. The mandatory SoraNet ML-KEM-derived session key remains the sole
-   P2P content-encryption key.
+   V5 certificate version, `NetworkId`, expected `PeerId`, challenge, transport
+   binding, key algorithms and lengths, BLS certificate signature, certificate
+   digest, and Ed25519 proof. Any failure terminates the connection before an
+   admission credential is minted or released and before client-hello or
+   ML-KEM work.
+5. Both sides hash the complete canonical certificate-plus-proof frame under
+   `iroha:p2p:soranet-transport-delegation-binding:v5|`. Admission commits to
+   the exact serialized client hello and this full-frame binding under
+   `iroha:p2p:soranet-admission:v5|`; a ticket cannot be replayed against a
+   different node certificate, challenge, transport, or client hello.
 
-A captured delegation is therefore useless on a new connection: the fresh
-challenge differs, and verification returns an exact challenge mismatch. This
-replay property requires neither wall clocks nor mutable replay/legacy lists.
+The relay response then carries a mandatory dual-authentication tail: scheme
+byte `0x01`, a 64-byte Ed25519 signature, and a 3,309-byte ML-DSA-65 signature.
+Both signatures cover one length-delimited SHA3-256 digest containing, in
+order, the `soranet.handshake.relay-auth.v1` domain, authentication version,
+scheme, selected NK2/NK3 suite, exact client hello, exact signed relay body,
+transcript hash, Ed25519 public key, ML-DSA-65 public key, cached certificate
+digest, transport ALPN (`iroha-p2p/1`), and TLS server name (`iroha-quic`).
+ML-DSA-65 uses the explicit `soranet.handshake.relay-auth.v1` signing context.
+The client verifies Ed25519 and then ML-DSA-65 before capability acceptance or ML-KEM decapsulation;
+omitting either signature, changing its size, or substituting either certified
+key fails the handshake.
 
-The deliberate cost is one BLS signature for every syntactically valid v3
-client preface. It is performed before the admission puzzle because the client
-must authenticate the responder's Ed25519 transport key before doing that work.
-Malformed headers are rejected before signing, and existing listener admission,
-connection-count, per-IP/prefix rate, and handshake-timeout bounds cap this
-unauthenticated work; operators should size and monitor those bounds as a BLS
-signing DoS budget.
+The final mutual BLS application hello signs a canonical
+`iroha:p2p:identity-binding:v1|` claim over the full session-key hash,
+`NetworkId`, complete V5 frame binding, mandatory TLS/QUIC fingerprint, identity
+algorithm and public key, advertised address, and all relay, consensus,
+confidential, crypto, and trust capabilities. Thus a captured certificate or
+proof cannot authenticate a new challenge, handshake transcript, session, or
+transport. The mandatory SoraNet ML-KEM-derived session key remains the sole
+P2P content-encryption key.
 
-After v3 delegation and SoraNet key establishment, hello frames carry identity,
-consensus caps, and confidential caps (enabled/assume_valid/backend plus the
-`ConfidentialFeatureDigest` containing `vk_set_hash`, `poseidon_params_id`,
+After V5 authentication and SoraNet key establishment, hello frames carry
+identity, consensus caps, and confidential caps (enabled/assume_valid/backend
+plus the `ConfidentialFeatureDigest` containing `vk_set_hash`, `poseidon_params_id`,
 `pedersen_params_id`, and `conf_rules_version`). The encrypted payload is
 length-prefixed with a `u16`, so metadata larger than `65_535` bytes is rejected
 with a deterministic `HandshakeMessageTooLarge` error rather than panicking.
@@ -621,8 +636,8 @@ acquire this reply deadline.
 - Global encrypted cap: `[network].max_frame_bytes` (default 17 MiB plus the 28-byte
   ChaCha20-Poly1305 nonce/tag expansion) rejects oversized frames early. The largest topic
   plaintext ceiling remains exactly 17 MiB.
-  The limit now applies uniformly to TCP, TLS, QUIC, and Torii `/p2p` WebSocket
-  accepts as well as outbound dialers, with `p2p_frame_cap_violations_total`
+  The limit applies uniformly to authenticated TLS and QUIC accepts and outbound
+  dials, with `p2p_frame_cap_violations_total`
   counters incremented whenever an inbound frame is dropped by the topic caps.
   This cap is enforced on encrypted frames, so AEAD overhead (nonce + tag) counts
   toward the limit (currently 28 bytes for ChaCha20-Poly1305). Because the wire
@@ -665,6 +680,6 @@ Recommended:
 
 ### QUIC/TLS Tuning
 
-- TLS: default restricts to TLS 1.3 only when `[network].tls_only_v1_3 = true`.
+- TLS: TLS 1.3 and the exact raw-P2P ALPN are unconditional.
 - QUIC: configure idle timeout via `[network].quic_max_idle_timeout_ms`.
 - QUIC DATAGRAM (best-effort): tune via `[network].quic_datagrams_enabled`, `[network].quic_datagram_max_payload_bytes`, `[network].quic_datagram_receive_buffer_bytes`, and `[network].quic_datagram_send_buffer_bytes`.

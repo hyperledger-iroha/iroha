@@ -1,4 +1,6 @@
-use ivm::{IVM, Memory, PostRunPhase, Transaction, execute_transactions_parallel};
+//! Deterministic public-only parallel transaction execution tests.
+
+use ivm::{IVM, Memory, PostRunPhase, Transaction, VMError, execute_transactions_parallel};
 fn encode_add(rd: u16, rs: u16, rt: u16) -> [u8; 2] {
     let word = ((0x1u16) << 12) | ((rd & 0xf) << 8) | ((rs & 0xf) << 4) | (rt & 0xf);
     word.to_le_bytes()
@@ -36,6 +38,32 @@ fn build_increment_tx(id: usize, addr: u64) -> Transaction {
         result: Ok(()),
     }
 }
+fn build_halt_vm() -> IVM {
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_code(&encode_halt()).expect("load halt program");
+    vm
+}
+fn build_private_stack_state(sentinel: u64) -> IVM {
+    let mut code = Vec::new();
+    code.extend_from_slice(&encode_store(2, 3));
+    code.extend_from_slice(&encode_halt());
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_code(&code)
+        .expect("load private stack-store program");
+    vm.set_zk_mode(true);
+    vm.set_register(2, sentinel);
+    vm.registers.set_tag(2, true);
+    vm.set_register(3, Memory::STACK_START);
+    vm.run_simple().expect("store private stack sentinel");
+    assert_eq!(
+        vm.memory
+            .load_u64(Memory::STACK_START)
+            .expect("read seeded stack sentinel"),
+        sentinel
+    );
+    vm.memory.clear_tracking();
+    vm
+}
 #[test]
 fn parallel_conflict_increments() {
     let addr = Memory::HEAP_START + 0x100;
@@ -52,6 +80,107 @@ fn parallel_non_conflicting() {
     let mem = execute_transactions_parallel(&mut txs).unwrap();
     assert_eq!(mem.load_u64(addr1).unwrap(), 1);
     assert_eq!(mem.load_u64(addr2).unwrap(), 1);
+}
+#[test]
+fn parallel_rejects_private_stack_range_before_copying_sentinel() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    const SENTINEL: u64 = 0xA1B2_C3D4_E5F6_0718;
+    let mut private_base = build_private_stack_state(SENTINEL);
+    // Model a stale/inconsistent snapshot assembled through the public fields:
+    // the source register and mode no longer identify the stack bytes, so the
+    // retained private-memory range is the only fail-closed signal.
+    private_base.registers.set_tag(2, false);
+    private_base.zk_mode = false;
+    assert!(!private_base.zk_mode_enabled());
+    assert!(!private_base.registers.snapshot_tags().contains(&true));
+
+    let callback_count = Arc::new(AtomicUsize::new(0));
+    let callback_count_for_tx = Arc::clone(&callback_count);
+    let transaction = Transaction {
+        id: 0,
+        ivm: build_halt_vm(),
+        base: private_base,
+        read_set: Vec::new(),
+        write_set: Vec::new(),
+        post_run: Some(Box::new(move |vm, phase| {
+            callback_count_for_tx.fetch_add(1, Ordering::SeqCst);
+            if matches!(phase, PostRunPhase::Speculative) {
+                vm.memory
+                    .store_u64(Memory::HEAP_START + 0x1A0, SENTINEL)
+                    .expect("speculative sentinel write");
+            }
+        })),
+        result: Ok(()),
+    };
+    let mut transactions = vec![transaction];
+
+    let result = execute_transactions_parallel(&mut transactions);
+
+    assert!(matches!(result, Err(VMError::PrivacyViolation)));
+    assert_eq!(callback_count.load(Ordering::SeqCst), 0);
+    assert!(transactions[0].result.is_ok());
+    assert!(transactions[0].read_set.is_empty());
+    assert!(transactions[0].write_set.is_empty());
+    assert!(transactions[0].base.memory.write_log().is_empty());
+    let sentinel = SENTINEL.to_le_bytes();
+    assert!(
+        transactions
+            .iter()
+            .all(|tx| tx.write_set.iter().all(|entry| !entry
+                .bytes
+                .windows(sentinel.len())
+                .any(|window| window == sentinel.as_slice())))
+    );
+}
+#[test]
+fn parallel_rejects_zk_mode_and_private_tags_before_speculation() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    for private_base_tag in [false, true] {
+        let callback_count = Arc::new(AtomicUsize::new(0));
+        let callback_count_for_tx = Arc::clone(&callback_count);
+        let mut transaction = build_increment_tx(0, Memory::HEAP_START + 0x180);
+        transaction.ivm.memory.clear_tracking();
+        transaction.base.memory.clear_tracking();
+        if private_base_tag {
+            transaction.base.registers.set_tag(7, true);
+        } else {
+            transaction.ivm.set_zk_mode(true);
+        }
+        transaction.post_run = Some(Box::new(move |_, _| {
+            callback_count_for_tx.fetch_add(1, Ordering::SeqCst);
+        }));
+        let mut transactions = vec![transaction];
+
+        let result = execute_transactions_parallel(&mut transactions);
+
+        assert!(matches!(result, Err(VMError::PrivacyViolation)));
+        assert_eq!(callback_count.load(Ordering::SeqCst), 0);
+        assert!(transactions[0].result.is_ok());
+        assert!(transactions[0].read_set.is_empty());
+        assert!(transactions[0].write_set.is_empty());
+    }
+}
+#[test]
+fn parallel_public_execution_remains_deterministic() {
+    let first = Memory::HEAP_START + 0x190;
+    let second = Memory::HEAP_START + 0x198;
+    let mut transactions = vec![build_increment_tx(1, second), build_increment_tx(0, first)];
+
+    let memory = execute_transactions_parallel(&mut transactions)
+        .expect("public transactions remain eligible for parallel execution");
+
+    assert_eq!(memory.load_u64(first).expect("read first result"), 1);
+    assert_eq!(memory.load_u64(second).expect("read second result"), 1);
+    assert!(transactions.iter().all(|tx| tx.result.is_ok()));
+    assert!(transactions.iter().all(|tx| !tx.write_set.is_empty()));
 }
 fn build_write_tx(id: usize, addr: u64, value: u64) -> Transaction {
     let mut code = Vec::new();

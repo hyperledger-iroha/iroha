@@ -115,8 +115,8 @@ public final class SetKaigiRelayManifestInstruction implements InstructionTempla
       }
       final String normalizedKey =
           KaigiInstructionUtils.requireBase64(hpkePublicKeyBase64, "hpkePublicKey");
-      if (weight < 0 || weight > 0xFF) {
-        throw new IllegalArgumentException("relay hop weight must fit in an unsigned byte");
+      if (weight < 1 || weight > 0xFF) {
+        throw new IllegalArgumentException("relay hop weight must be between 1 and 255");
       }
       relayManifestHops.add(
           new KaigiInstructionUtils.RelayManifestHop()
@@ -164,7 +164,9 @@ public final class SetKaigiRelayManifestInstruction implements InstructionTempla
             new KaigiInstructionUtils.RelayManifestHop(
                 hop.relayId(), hop.hpkePublicKey(), hop.weight()));
       }
-      return new KaigiInstructionUtils.RelayManifest(relayManifestExpiry, Collections.unmodifiableList(copy));
+      return KaigiInstructionUtils.validateRelayManifest(
+          new KaigiInstructionUtils.RelayManifest(
+              relayManifestExpiry, Collections.unmodifiableList(copy)));
     }
 
     private Map<String, String> canonicalArguments() {

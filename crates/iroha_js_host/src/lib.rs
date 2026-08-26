@@ -50,10 +50,6 @@ use iroha::da::{
 use iroha_core::privacy_profiles::{
     compiled_privacy_profile_catalog_v1, validate_local_privacy_compiled_profile_catalog_archive_v1,
 };
-use iroha_core::soracloud_runtime::{
-    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
-    build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
-};
 use iroha_core::zk::confidential_v2::{
     self, ConfidentialTransferInputV2, ConfidentialTransferOutputV2, ConfidentialUnshieldInputV2,
     ConfidentialUnshieldOutputV3,
@@ -143,23 +139,12 @@ use iroha_data_model::{
     proof::{ProofAttachment, ProofAttachmentList},
     role::{NewRole, Role, RoleId},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
-    smart_contract::{
-        ContractAddress,
-        manifest::{ContractManifest, ManifestProvenance},
-    },
-    soracloud::{
-        SORACLOUD_XOR_SCALE, SecretEnvelopeV1, encode_agent_deploy_provenance_payload,
-        encode_bundle_with_materials_provenance_payload,
-        encode_hf_shared_lease_join_provenance_payload, is_canonical_hf_commit_oid_v1,
-    },
-    sorafs::{
-        orderbook_submission::{
-            parse_sorafs_orderbook_cancel_reason_v1, parse_sorafs_orderbook_decimal_u64_v1,
-            parse_sorafs_orderbook_fee_bps_v1, parse_sorafs_orderbook_payload_kind_v1,
-            parse_sorafs_orderbook_side_v1, parse_sorafs_orderbook_tier_v1,
-            parse_sorafs_orderbook_xor_quantity_v1, validate_sorafs_orderbook_owner_account_v1,
-        },
-        pin_registry::StorageClass,
+    smart_contract::{ContractAddress, manifest::ContractManifest},
+    sorafs::orderbook_submission::{
+        parse_sorafs_orderbook_cancel_reason_v1, parse_sorafs_orderbook_decimal_u64_v1,
+        parse_sorafs_orderbook_fee_bps_v1, parse_sorafs_orderbook_payload_kind_v1,
+        parse_sorafs_orderbook_side_v1, parse_sorafs_orderbook_tier_v1,
+        parse_sorafs_orderbook_xor_quantity_v1, validate_sorafs_orderbook_owner_account_v1,
     },
     transaction::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, TransactionAdmissionIntent,
@@ -177,7 +162,7 @@ use iroha_data_model::{
     },
 };
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::HashSet,
     convert::{TryFrom, TryInto},
     fmt, fs,
     num::{NonZeroU32, NonZeroU64},
@@ -900,9 +885,9 @@ fn parse_account_id(input: &str, label: &str) -> napi::Result<AccountId> {
     let raw = input.trim();
     let parsed = match AccountAddress::parse_encoded(raw, None) {
         Ok(address) => address.to_account_id().map_err(|err| err.to_string()),
-        Err(AccountAddressError::UnsupportedAddressFormat) => AccountId::parse_encoded(raw)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .map_err(|err| err.to_string()),
+        Err(AccountAddressError::UnsupportedAddressFormat) => {
+            AccountId::parse_encoded(raw).map_err(|err| err.to_string())
+        }
         Err(err) => Err(err.to_string()),
     };
     parsed.map_err(|err| {
@@ -1362,257 +1347,6 @@ pub fn ed25519_public_key_from_private(private_key: Uint8Array) -> napi::Result<
     let keypair = KeyPair::from_private_key(secret).map_err(norito_to_napi)?;
     let public_bytes = checked_public_key_payload(keypair.public_key())?;
     Ok(Buffer::from(public_bytes.to_vec()))
-}
-fn parse_soracloud_storage_class(value: &str) -> napi::Result<StorageClass> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "hot" => Ok(StorageClass::Hot),
-        "warm" => Ok(StorageClass::Warm),
-        "cold" => Ok(StorageClass::Cold),
-        _ => Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "storage_class must be hot, warm, or cold",
-        )),
-    }
-}
-fn parse_positive_u64_literal(value: &str, label: &str) -> napi::Result<u64> {
-    let parsed = value.trim().parse::<u64>().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{label} must be a positive integer: {err}"),
-        )
-    })?;
-    if parsed == 0 {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{label} must be greater than zero"),
-        ));
-    }
-    Ok(parsed)
-}
-fn parse_positive_u128_literal(value: &str, label: &str) -> napi::Result<u128> {
-    let parsed = value.trim().parse::<u128>().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{label} must be a positive integer: {err}"),
-        )
-    })?;
-    if parsed == 0 {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{label} must be greater than zero"),
-        ));
-    }
-    Ok(parsed)
-}
-fn parse_ed25519_keypair_hex(private_key_hex: &str) -> napi::Result<KeyPair> {
-    let private_key_bytes = hex::decode(private_key_hex.trim()).map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("private_key_hex must be hex-encoded Ed25519 key material: {err}"),
-        )
-    })?;
-    let private_key =
-        PrivateKey::from_bytes(Algorithm::Ed25519, &private_key_bytes).map_err(norito_to_napi)?;
-    KeyPair::from_private_key(private_key).map_err(norito_to_napi)
-}
-fn sign_soracloud_payload(keypair: &KeyPair, payload: &[u8]) -> napi::Result<ManifestProvenance> {
-    Ok(ManifestProvenance {
-        signer: keypair.public_key().clone(),
-        signature: Signature::try_new(keypair.private_key(), payload).map_err(norito_to_napi)?,
-    })
-}
-fn soracloud_source_hash(repo_id: &str, resolved_revision: &str) -> napi::Result<Hash> {
-    let payload = norito::to_bytes(&(repo_id, resolved_revision)).map_err(norito_to_napi)?;
-    Ok(Hash::new(payload))
-}
-/// Build the fully signed request body accepted by `/v1/soracloud/hf/deploy`.
-#[allow(clippy::too_many_arguments)]
-#[napi]
-pub fn soracloud_build_hf_deploy_request_json(
-    repo_id: String,
-    revision: String,
-    model_name: String,
-    service_name: String,
-    apartment_name: Option<String>,
-    storage_class: String,
-    lease_term_ms: String,
-    lease_asset_definition_id: String,
-    base_fee_nanos: String,
-    private_key_hex: String,
-) -> napi::Result<String> {
-    let repo_id = repo_id.trim().to_owned();
-    if !is_canonical_hf_commit_oid_v1(&revision) {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "revision must be the full 40-character lowercase hexadecimal commit OID",
-        ));
-    }
-    let resolved_revision = revision;
-    let model_name = model_name.trim().to_owned();
-    let service_name = service_name
-        .trim()
-        .parse::<Name>()
-        .map_err(|err| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("invalid service_name: {err}"),
-            )
-        })?
-        .to_string();
-    let apartment_name = apartment_name
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            value
-                .parse::<Name>()
-                .map(|name| name.to_string())
-                .map_err(|err| {
-                    napi::Error::new(
-                        napi::Status::InvalidArg,
-                        format!("invalid apartment_name: {err}"),
-                    )
-                })
-        })
-        .transpose()?;
-    if repo_id.is_empty() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "repo_id must not be empty",
-        ));
-    }
-    if model_name.is_empty() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "model_name must not be empty",
-        ));
-    }
-    let storage_class = parse_soracloud_storage_class(&storage_class)?;
-    let lease_term_ms = parse_positive_u64_literal(&lease_term_ms, "lease_term_ms")?;
-    let base_fee = Quantity::from_canonical_numeric(Numeric::new(
-        parse_positive_u128_literal(&base_fee_nanos, "base_fee_nanos")?,
-        SORACLOUD_XOR_SCALE,
-    ))
-    .map_err(norito_to_napi)?;
-    let lease_asset_definition_id = lease_asset_definition_id
-        .trim()
-        .parse::<AssetDefinitionId>()
-        .map_err(|err| {
-            napi::Error::new(
-                napi::Status::InvalidArg,
-                format!("invalid lease_asset_definition_id: {err}"),
-            )
-        })?;
-    let keypair = parse_ed25519_keypair_hex(&private_key_hex)?;
-    let deploy_payload = encode_hf_shared_lease_join_provenance_payload(
-        &repo_id,
-        &resolved_revision,
-        &model_name,
-        &service_name,
-        apartment_name.as_deref(),
-        storage_class,
-        lease_term_ms,
-        &lease_asset_definition_id,
-        &base_fee,
-    )
-    .map_err(norito_to_napi)?;
-    let provenance = sign_soracloud_payload(&keypair, &deploy_payload)?;
-    let service_name_typed = service_name.parse::<Name>().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid service_name: {err}"),
-        )
-    })?;
-    let source_id = soracloud_source_hash(&repo_id, &resolved_revision)?;
-    let generated_bundle = build_soracloud_hf_generated_service_bundle(
-        service_name_typed,
-        &source_id.to_string(),
-        &repo_id,
-        &resolved_revision,
-        &model_name,
-    );
-    let configs: BTreeMap<String, Json> = BTreeMap::new();
-    let secrets: BTreeMap<String, SecretEnvelopeV1> = BTreeMap::new();
-    let service_provenance_payload =
-        encode_bundle_with_materials_provenance_payload(&generated_bundle, &configs, &secrets)
-            .map_err(norito_to_napi)?;
-    let generated_service_provenance =
-        sign_soracloud_payload(&keypair, &service_provenance_payload)?;
-    let generated_apartment_provenance = apartment_name
-        .as_deref()
-        .map(|apartment_name| {
-            let apartment_name = apartment_name.parse::<Name>().map_err(|err| {
-                napi::Error::new(
-                    napi::Status::InvalidArg,
-                    format!("invalid apartment_name: {err}"),
-                )
-            })?;
-            let manifest =
-                build_soracloud_hf_generated_agent_manifest(apartment_name, &generated_bundle);
-            let payload = encode_agent_deploy_provenance_payload(
-                manifest,
-                HF_GENERATED_AGENT_LEASE_TICKS,
-                Some(HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS),
-            )
-            .map_err(norito_to_napi)?;
-            sign_soracloud_payload(&keypair, &payload)
-        })
-        .transpose()?;
-    let mut payload = Map::new();
-    payload.insert(
-        "repo_id".to_owned(),
-        json::to_value(&repo_id).map_err(norito_to_napi)?,
-    );
-    payload.insert(
-        "revision".to_owned(),
-        json::to_value(&resolved_revision).map_err(norito_to_napi)?,
-    );
-    payload.insert(
-        "model_name".to_owned(),
-        json::to_value(&model_name).map_err(norito_to_napi)?,
-    );
-    payload.insert(
-        "service_name".to_owned(),
-        json::to_value(&service_name).map_err(norito_to_napi)?,
-    );
-    if let Some(apartment_name) = &apartment_name {
-        payload.insert(
-            "apartment_name".to_owned(),
-            json::to_value(apartment_name).map_err(norito_to_napi)?,
-        );
-    }
-    payload.insert(
-        "storage_class".to_owned(),
-        json::to_value(&storage_class).map_err(norito_to_napi)?,
-    );
-    payload.insert(
-        "lease_term_ms".to_owned(),
-        json::to_value(&lease_term_ms).map_err(norito_to_napi)?,
-    );
-    payload.insert(
-        "lease_asset_definition_id".to_owned(),
-        json::to_value(&lease_asset_definition_id).map_err(norito_to_napi)?,
-    );
-    payload.insert(
-        "base_fee".to_owned(),
-        json::to_value(&base_fee).map_err(norito_to_napi)?,
-    );
-    let mut root = Map::new();
-    root.insert("payload".to_owned(), Value::Object(payload));
-    root.insert(
-        "provenance".to_owned(),
-        json::to_value(&provenance).map_err(norito_to_napi)?,
-    );
-    root.insert(
-        "generated_service_provenance".to_owned(),
-        json::to_value(&generated_service_provenance).map_err(norito_to_napi)?,
-    );
-    if let Some(generated_apartment_provenance) = &generated_apartment_provenance {
-        root.insert(
-            "generated_apartment_provenance".to_owned(),
-            json::to_value(generated_apartment_provenance).map_err(norito_to_napi)?,
-        );
-    }
-    json::to_json(&Value::Object(root)).map_err(norito_to_napi)
 }
 /// Return the default SM2 distinguishing identifier used when none is provided.
 #[napi]
@@ -7117,7 +6851,6 @@ fn ensure_zk_public_input_owner_canonical(map: &json::Map, context: &str) -> nap
         )
     })?;
     let canonical = AccountId::parse_encoded(owner)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map(|account| account.to_string())
         .map_err(|_| {
             napi::Error::new(
@@ -13533,105 +13266,6 @@ mod tests {
             Some(usage_trigger_id_literal.as_str())
         );
     }
-    #[test]
-    fn soracloud_hf_deploy_request_uses_current_quantity_contract() {
-        let request_json = soracloud_build_hf_deploy_request_json(
-            "openai/demo-model".to_owned(),
-            "0123456789abcdef0123456789abcdef01234567".to_owned(),
-            "demo-model".to_owned(),
-            "demo_model_service".to_owned(),
-            Some("demo_agent".to_owned()),
-            "warm".to_owned(),
-            "86400000".to_owned(),
-            "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_owned(),
-            "10000".to_owned(),
-            "12".repeat(32),
-        )
-        .expect("build signed HF request");
-        let request: json::Value = json::from_json(&request_json).expect("parse signed HF request");
-        let payload = request
-            .get("payload")
-            .and_then(json::Value::as_object)
-            .expect("HF request payload");
-        assert_eq!(
-            payload.get("base_fee").and_then(json::Value::as_str),
-            Some("0.00001"),
-        );
-        assert!(!payload.contains_key("base_fee_nanos"));
-    }
-    #[test]
-    fn soracloud_hf_deploy_request_rejects_mutable_or_noncanonical_revision() {
-        for revision in [
-            "main",
-            "0123456789abcdef",
-            "0123456789ABCDEF0123456789ABCDEF01234567",
-        ] {
-            soracloud_build_hf_deploy_request_json(
-                "openai/demo-model".to_owned(),
-                revision.to_owned(),
-                "demo-model".to_owned(),
-                "demo_model_service".to_owned(),
-                None,
-                "warm".to_owned(),
-                "86400000".to_owned(),
-                "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_owned(),
-                "10000".to_owned(),
-                "12".repeat(32),
-            )
-            .expect_err("HF deploy must require an immutable canonical commit OID");
-        }
-    }
-    #[test]
-    fn soracloud_hf_draft_instruction_json_roundtrips() {
-        let request_json = soracloud_build_hf_deploy_request_json(
-            "openai/demo-model".to_owned(),
-            "0123456789abcdef0123456789abcdef01234567".to_owned(),
-            "demo-model".to_owned(),
-            "demo_model_service".to_owned(),
-            None,
-            "warm".to_owned(),
-            "86400000".to_owned(),
-            "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_owned(),
-            "10000".to_owned(),
-            "12".repeat(32),
-        )
-        .expect("build signed HF request");
-        let request: json::Value = json::from_json(&request_json).expect("parse signed HF request");
-        let provenance: ManifestProvenance = json::from_value(
-            request
-                .get("provenance")
-                .cloned()
-                .expect("deploy provenance"),
-        )
-        .expect("decode deploy provenance");
-        let instruction = iroha_data_model::isi::soracloud::JoinSoracloudHfSharedLease {
-            repo_id: "openai/demo-model".to_owned(),
-            resolved_revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
-            model_name: "demo-model".to_owned(),
-            service_name: "demo_model_service".parse().expect("service name"),
-            apartment_name: None,
-            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
-            lease_term_ms: 86_400_000,
-            lease_asset_definition_id: "4cuvDVPuLBKJyN6dPbRQhmLh68sU"
-                .parse()
-                .expect("asset definition"),
-            base_fee: "0.00001".parse().expect("base fee"),
-            resource_profile: None,
-            max_compute_reservation_fee: "0.000008".parse().expect("max compute reservation fee"),
-            provenance,
-        };
-        let boxed = InstructionBox::from(instruction);
-        let json_value = instruction_to_json_value(&boxed).expect("instruction JSON");
-        let reparsed = value_to_instruction(json_value).expect("parse instruction JSON");
-        assert_eq!(
-            InstructionTrait::id(&*boxed),
-            InstructionTrait::id(&*reparsed),
-        );
-        assert_eq!(
-            InstructionTrait::dyn_encode(&*boxed),
-            InstructionTrait::dyn_encode(&*reparsed),
-        );
-    }
     fn canonical_kotodama_request(source: &str) -> JsKotodamaCompileRequest {
         JsKotodamaCompileRequest {
             source: source.to_owned(),
@@ -15506,7 +15140,7 @@ seiyaku Privacy {
                 proxy_mode: ProxyMode::Bridge,
                 session_id: Some("session".into()),
                 telemetry_label: Some("test-proxy".into()),
-                guard_cache_key_hex: None,
+                client_capability_hex: None,
                 circuit: None,
                 guard_selection: None,
                 route_hints: Vec::new(),
@@ -17961,9 +17595,7 @@ seiyaku Privacy {
             .and_then(|v| v.get("host"))
             .and_then(|v| v.as_str())
         {
-            AccountId::parse_encoded(host)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .expect("host account id");
+            AccountId::parse_encoded(host).expect("host account id");
         }
         if let Some(billing) = value
             .get("Kaigi")
@@ -17972,9 +17604,7 @@ seiyaku Privacy {
             .and_then(|v| v.get("billing_account"))
             .and_then(|v| v.as_str())
         {
-            AccountId::parse_encoded(billing)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .expect("billing account id");
+            AccountId::parse_encoded(billing).expect("billing account id");
         }
         if let Some(relay_id) = value
             .get("Kaigi")
@@ -17986,9 +17616,7 @@ seiyaku Privacy {
             .and_then(|v| v.get("relay_id"))
             .and_then(|v| v.as_str())
         {
-            AccountId::parse_encoded(relay_id)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .expect("relay account id");
+            AccountId::parse_encoded(relay_id).expect("relay account id");
         }
         instruction_from_json(&json_payload).expect("JS builder payload must be parsable");
     }

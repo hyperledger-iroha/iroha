@@ -1515,7 +1515,7 @@ pub mod core {
         RouteEffect::Mutation,
         AdmissionPolicy::Operator,
     )
-    .with_feature_gate(FeatureGate::Any(&["p2p_ws", "connect"]))
+    .with_feature_gate(FeatureGate::Feature("connect"))
     .with_authentication(AuthenticationPolicy::IdentityBoundSignature);
     /// Read the VPN client profile.
     pub const VPN_PROFILE: RouteDescriptor = RouteDescriptor::new(
@@ -2207,22 +2207,6 @@ pub mod streaming {
         AdmissionPolicy, ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener,
         PathPolicy, RouteDescriptor, RouteEffect, RouteProjections,
     };
-    /// Peer-to-peer WebSocket upgrade endpoint.
-    pub const P2P: RouteDescriptor = RouteDescriptor::new(
-        "protocol.p2p_websocket",
-        HttpMethod::Get,
-        "/p2p",
-        ApiSurface::Protocol,
-        Listener::Torii,
-        RouteEffect::LongLivedStream,
-        AdmissionPolicy::ValidatorRosterMember,
-    )
-    .with_authentication(AuthenticationPolicy::ProtocolHandshake)
-    .with_projections(RouteProjections::OPENAPI)
-    .with_path_policy(PathPolicy::ProtocolException {
-        reason: "peer transport handshake path",
-    })
-    .with_implicit_head(true);
     /// SSE event stream.
     pub const EVENTS_SSE: RouteDescriptor = RouteDescriptor::new(
         "events.stream_sse",
@@ -2492,7 +2476,7 @@ pub mod sumeragi {
         "sccp.sora_outbound_material.read",
         "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
     );
-    /// Read one epoch's VRF penalty state as an authenticated operator.
+    /// Read one authoritative epoch VRF penalty report as an authenticated operator.
     pub const VRF_PENALTIES: RouteDescriptor = operator_get(
         "sumeragi.vrf.penalty.read",
         "/v1/sumeragi/vrf/penalties/{epoch}",
@@ -2642,7 +2626,8 @@ pub mod runtime_governance {
         account_compute_post("zk.merkle_path.build", "/v1/zk/merkle-path");
     /// Read a zero-knowledge vote tally.
     pub const ZK_VOTE_TALLY: RouteDescriptor =
-        account_read_post("zk.vote.tally", "/v1/zk/vote/tally");
+        account_read_post("zk.vote.tally", "/v1/zk/vote/tally")
+            .with_projections(RouteProjections::ALL);
     /// Derive an IVM zero-knowledge executable.
     pub const ZK_IVM_DERIVE: RouteDescriptor =
         account_compute_post("zk.ivm.derive", "/v1/zk/ivm/derive")
@@ -2835,19 +2820,22 @@ pub mod runtime_governance {
     pub const GOV_BALLOT_ZK_V1: RouteDescriptor =
         app_post("governance.ballot.zk_v1", "/v1/gov/ballots/zk-v1")
             .with_admission(AdmissionPolicy::AuthenticatedAccount)
-            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_projections(RouteProjections::ALL);
     /// Draft a version-one zero-knowledge ballot-proof instruction.
     pub const GOV_BALLOT_ZK_V1_PROOF: RouteDescriptor = app_post(
         "governance.ballot.zk_v1_proof",
         "/v1/gov/ballots/zk-v1/ballot-proof",
     )
     .with_admission(AdmissionPolicy::AuthenticatedAccount)
-    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_projections(RouteProjections::ALL);
     /// Draft a plain governance ballot instruction.
     pub const GOV_BALLOT_PLAIN: RouteDescriptor =
         app_post("governance.ballot.plain", "/v1/gov/ballots/plain")
             .with_admission(AdmissionPolicy::AuthenticatedAccount)
-            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_projections(RouteProjections::ALL);
     /// Draft a parliament ballot.
     pub const GOV_PARLIAMENT_BALLOT: RouteDescriptor =
         app_post("governance.parliament.ballot", "/v1/gov/parliament/ballots")
@@ -2855,7 +2843,8 @@ pub mod runtime_governance {
             .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Finalize a referendum.
     pub const GOV_FINALIZE: RouteDescriptor =
-        app_post("governance.referendum.finalize", "/v1/gov/finalize");
+        app_post("governance.referendum.finalize", "/v1/gov/finalize")
+            .with_projections(RouteProjections::ALL);
     /// Replace the protected namespace set.
     pub const GOV_PROTECTED_POST: RouteDescriptor = app_operator_post(
         "operator.governance.protected_namespaces.update",
@@ -2894,7 +2883,8 @@ pub mod runtime_governance {
     );
     /// Draft enactment of an approved referendum.
     pub const GOV_ENACT: RouteDescriptor =
-        app_signed_post("governance.referendum.enact", "/v1/gov/enact");
+        app_signed_post("governance.referendum.enact", "/v1/gov/enact")
+            .with_projections(RouteProjections::ALL);
     /// Read the current sortition council.
     pub const GOV_COUNCIL_CURRENT: RouteDescriptor =
         app_signed_get("governance.council.current", "/v1/gov/council/current");
@@ -3607,6 +3597,18 @@ pub mod application_api {
             .with_authentication(AuthenticationPolicy::OnboardingToken)
             .with_admission(AdmissionPolicy::Operator)
     }
+    const fn onboarding_compute_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_post(id, path)
+            .with_authentication(AuthenticationPolicy::OnboardingToken)
+            .with_effect(RouteEffect::ExpensiveCompute)
+            .with_admission(AdmissionPolicy::Operator)
+    }
+    const fn faucet_protocol_compute_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_post(id, path)
+            .with_authentication(AuthenticationPolicy::ProtocolHandshake)
+            .with_effect(RouteEffect::ExpensiveCompute)
+            .with_admission(AdmissionPolicy::AuthenticatedProtocolPrincipal)
+    }
     const fn faucet_protocol_mutation_post(
         id: &'static str,
         path: &'static str,
@@ -3742,10 +3744,13 @@ pub mod application_api {
         ACCOUNTS_QUERY_POST => account_compute_post("application.accounts_query_post", "/v1/accounts/query");
         TRANSACTIONS_QUERY_POST => account_compute_post("application.transactions_query_post", "/v1/transactions/query");
         TRANSACTIONS_VISIBLE_QUERY_POST => account_compute_post("application.transactions_visible_query_post", "/v1/transactions/visible/query");
-        ACCOUNTS_ONBOARD_PLAN_POST => onboarding_post("application.accounts_onboard_plan_post", "/v1/accounts/onboard/plan");
+        ACCOUNTS_ONBOARD_PLAN_POST => onboarding_compute_post("application.accounts_onboard_plan_post", "/v1/accounts/onboard/plan");
+        ACCOUNTS_ONBOARD_PREPARE_POST => onboarding_compute_post("application.accounts_onboard_prepare_post", "/v1/accounts/onboard/prepare");
         ACCOUNTS_ONBOARD_POST => onboarding_post("application.accounts_onboard_post", "/v1/accounts/onboard");
         ACCOUNTS_ONBOARDING_READINESS_GET => onboarding_get("application.accounts_onboarding_readiness_get", "/v1/accounts/onboarding/readiness");
+        ACCOUNTS_ONBOARDING_CURRENT_STATE_POST => app_post("application.accounts_onboarding_current_state_post", "/v1/accounts/onboarding/current-state");
         ACCOUNTS_FAUCET_PUZZLE_GET => app_get("application.accounts_faucet_puzzle_get", "/v1/accounts/faucet/puzzle");
+        ACCOUNTS_FAUCET_PREPARE_POST => faucet_protocol_compute_post("application.accounts_faucet_prepare_post", "/v1/accounts/faucet/prepare");
         ACCOUNTS_FAUCET_POST => faucet_protocol_mutation_post("application.accounts_faucet_post", "/v1/accounts/faucet");
         ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET => app_sdk_get("application.accounts_by_account_id_aliases_get", "/v1/accounts/{account_id}/aliases");
         ACCOUNTS_BY_UAID_PORTFOLIO_GET => app_get("application.accounts_by_uaid_portfolio_get", "/v1/accounts/{uaid}/portfolio");
@@ -3755,8 +3760,8 @@ pub mod application_api {
         NEXUS_DATASPACES_ACCOUNTS_BY_LITERAL_SUMMARY_GET => app_get("application.nexus_dataspaces_accounts_by_literal_summary_get", "/v1/nexus/dataspaces/accounts/{literal}/summary");
         SPACE_DIRECTORY_UAIDS_BY_UAID_GET => app_get("application.space_directory_uaids_by_uaid_get", "/v1/space-directory/uaids/{uaid}");
         SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_GET => app_get("application.space_directory_uaids_by_uaid_manifests_get", "/v1/space-directory/uaids/{uaid}/manifests");
-        SPACE_DIRECTORY_MANIFESTS_POST => account_compute_sdk_post("application.space_directory_manifests_post", "/v1/space-directory/manifests");
-        SPACE_DIRECTORY_MANIFESTS_REVOKE_POST => account_compute_sdk_post("application.space_directory_manifests_revoke_post", "/v1/space-directory/manifests/revoke");
+        SPACE_DIRECTORY_MANIFESTS_POST => account_compute_post("application.space_directory_manifests_post", "/v1/space-directory/manifests");
+        SPACE_DIRECTORY_MANIFESTS_REVOKE_POST => account_compute_post("application.space_directory_manifests_revoke_post", "/v1/space-directory/manifests/revoke");
         RAM_LFE_PROGRAM_POLICIES_GET => app_get("application.ram_lfe_program_policies_get", "/v1/ram-lfe/program-policies");
         RAM_LFE_PROGRAMS_BY_PROGRAM_ID_EXECUTE_POST => account_compute_post("application.ram_lfe_programs_by_program_id_execute_post", "/v1/ram-lfe/programs/{program_id}/execute");
         RAM_LFE_RECEIPTS_VERIFY_POST => account_compute_post("application.ram_lfe_receipts_verify_post", "/v1/ram-lfe/receipts/verify");
@@ -3804,10 +3809,7 @@ pub mod application_api {
         SORACLOUD_MODEL_ARTIFACT_REGISTER_POST => soracloud_mutation_post("application.soracloud_model_artifact_register_post", "/v1/soracloud/model/artifact/register");
         SORACLOUD_MODEL_ARTIFACT_STATUS_GET => account_read_sdk_get("application.soracloud_model_artifact_status_get", "/v1/soracloud/model/artifact/status");
         SORACLOUD_MODEL_UPLOAD_REGISTER_POST => soracloud_mutation_post("application.soracloud_model_upload_register_post", "/v1/soracloud/model/upload/register");
-        SORACLOUD_MODEL_UPLOAD_ENCRYPTION_RECIPIENT_GET => app_get("application.soracloud_model_upload_encryption_recipient_get", "/v1/soracloud/model/upload/encryption-recipient");
         SORACLOUD_MODEL_UPLOAD_STATUS_GET => account_read_sdk_get("application.soracloud_model_upload_status_get", "/v1/soracloud/model/upload/status");
-        SORACLOUD_MODEL_UPLOAD_PRIVATE_EXECUTE_POST => soracloud_compute_post("application.soracloud_model_upload_private_execute_post", "/v1/soracloud/model/upload/private/execute");
-        SORACLOUD_MODEL_UPLOAD_PRIVATE_RECEIPTS_GET => account_read_get("application.soracloud_model_upload_private_receipts_get", "/v1/soracloud/model/upload/private/receipts");
         SORACLOUD_HF_DEPLOY_POST => soracloud_openapi_mutation_post("application.soracloud_hf_deploy_post", "/v1/soracloud/hf/deploy");
         SORACLOUD_HF_STATUS_GET => account_read_sdk_get("application.soracloud_hf_status_get", "/v1/soracloud/hf/status");
         SORACLOUD_HF_LEASE_LEAVE_POST => soracloud_mutation_post("application.soracloud_hf_lease_leave_post", "/v1/soracloud/hf/lease/leave");
@@ -3827,8 +3829,6 @@ pub mod application_api {
         SORACLOUD_AGENT_MESSAGE_ACK_POST => soracloud_mutation_post("application.soracloud_agent_message_ack_post", "/v1/soracloud/agent/message/ack");
         SORACLOUD_AGENT_MAILBOX_STATUS_GET => account_read_sdk_get("application.soracloud_agent_mailbox_status_get", "/v1/soracloud/agent/mailbox/status");
         SORACLOUD_AGENT_AUTONOMY_ALLOW_POST => soracloud_mutation_post("application.soracloud_agent_autonomy_allow_post", "/v1/soracloud/agent/autonomy/allow");
-        SORACLOUD_AGENT_AUTONOMY_RUN_POST => soracloud_mutation_post("application.soracloud_agent_autonomy_run_post", "/v1/soracloud/agent/autonomy/run");
-        SORACLOUD_AGENT_AUTONOMY_RUN_FINALIZE_POST => soracloud_mutation_post("application.soracloud_agent_autonomy_run_finalize_post", "/v1/soracloud/agent/autonomy/run/finalize");
         SORACLOUD_AGENT_AUTONOMY_STATUS_GET => account_read_sdk_get("application.soracloud_agent_autonomy_status_get", "/v1/soracloud/agent/autonomy/status");
         ASSETS_DEFINITIONS_GET => app_get("application.assets_definitions_get", "/v1/assets/definitions");
         ASSETS_DEFINITIONS_BY_ASSET_GET => app_get("application.assets_definitions_by_asset_get", "/v1/assets/definitions/{asset}");
@@ -3839,16 +3839,16 @@ pub mod application_api {
         RWAS_GET => app_get("application.rwas_get", "/v1/rwas");
         RWAS_QUERY_POST => account_compute_post("application.rwas_query_post", "/v1/rwas/query");
         SUBSCRIPTIONS_PLANS_GET => app_get("application.subscriptions_plans_get", "/v1/subscriptions/plans");
-        SUBSCRIPTIONS_PLANS_POST => account_mutation_sdk_post("application.subscriptions_plans_post", "/v1/subscriptions/plans");
+        SUBSCRIPTIONS_PLANS_POST => account_mutation_post("application.subscriptions_plans_post", "/v1/subscriptions/plans");
         SUBSCRIPTIONS_GET => app_get("application.subscriptions_get", "/v1/subscriptions");
-        SUBSCRIPTIONS_POST => account_mutation_sdk_post("application.subscriptions_post", "/v1/subscriptions");
+        SUBSCRIPTIONS_POST => account_mutation_post("application.subscriptions_post", "/v1/subscriptions");
         SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_GET => app_get("application.subscriptions_by_subscription_id_get", "/v1/subscriptions/{subscription_id}");
-        SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_PAUSE_POST => account_mutation_sdk_post("application.subscriptions_by_subscription_id_pause_post", "/v1/subscriptions/{subscription_id}/pause");
-        SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_RESUME_POST => account_mutation_sdk_post("application.subscriptions_by_subscription_id_resume_post", "/v1/subscriptions/{subscription_id}/resume");
-        SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_CANCEL_POST => account_mutation_sdk_post("application.subscriptions_by_subscription_id_cancel_post", "/v1/subscriptions/{subscription_id}/cancel");
-        SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_KEEP_POST => account_mutation_sdk_post("application.subscriptions_by_subscription_id_keep_post", "/v1/subscriptions/{subscription_id}/keep");
-        SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_USAGE_POST => account_mutation_sdk_post("application.subscriptions_by_subscription_id_usage_post", "/v1/subscriptions/{subscription_id}/usage");
-        SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_CHARGE_NOW_POST => account_mutation_sdk_post("application.subscriptions_by_subscription_id_charge_now_post", "/v1/subscriptions/{subscription_id}/charge-now");
+        SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_PAUSE_POST => account_mutation_post("application.subscriptions_by_subscription_id_pause_post", "/v1/subscriptions/{subscription_id}/pause");
+        SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_RESUME_POST => account_mutation_post("application.subscriptions_by_subscription_id_resume_post", "/v1/subscriptions/{subscription_id}/resume");
+        SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_CANCEL_POST => account_mutation_post("application.subscriptions_by_subscription_id_cancel_post", "/v1/subscriptions/{subscription_id}/cancel");
+        SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_KEEP_POST => account_mutation_post("application.subscriptions_by_subscription_id_keep_post", "/v1/subscriptions/{subscription_id}/keep");
+        SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_USAGE_POST => account_mutation_post("application.subscriptions_by_subscription_id_usage_post", "/v1/subscriptions/{subscription_id}/usage");
+        SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_CHARGE_NOW_POST => account_mutation_post("application.subscriptions_by_subscription_id_charge_now_post", "/v1/subscriptions/{subscription_id}/charge-now");
         PARAMETERS_GET => app_get("application.parameters_get", "/v1/parameters");
         EXPLORER_ACCOUNTS_GET => app_get("application.explorer_accounts_get", "/v1/explorer/accounts");
         EXPLORER_DOMAINS_GET => app_get("application.explorer_domains_get", "/v1/explorer/domains");
@@ -3886,7 +3886,7 @@ pub mod application_api {
         EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET => app_get("application.explorer_instructions_by_hash_by_index_get", "/v1/explorer/instructions/{hash}/{index}");
         EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET => app_sdk_get("application.explorer_instructions_by_hash_by_index_contract_view_get", "/v1/explorer/instructions/{hash}/{index}/contract-view");
         KAIGI_CALLS_BY_CALL_ID_GET => app_sdk_get("application.kaigi_calls_by_call_id_get", "/v1/kaigi/calls/{call_id}");
-        KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET => app_sdk_get("application.kaigi_calls_by_call_id_signals_get", "/v1/kaigi/calls/{call_id}/signals");
+        KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET => account_compute_sdk_get("application.kaigi_calls_by_call_id_signals_get", "/v1/kaigi/calls/{call_id}/signals");
         KAIGI_CALLS_BY_CALL_ID_EVENTS_GET => app_unprojected_protocol_get("application.kaigi_calls_by_call_id_events_get", "/v1/kaigi/calls/{call_id}/events");
         KAIGI_RELAYS_GET => operator_expensive_get("application.kaigi_relays_get", "/v1/kaigi/relays");
         KAIGI_RELAYS_BY_RELAY_ID_GET => operator_signed_get("application.kaigi_relays_by_relay_id_get", "/v1/kaigi/relays/{relay_id}");
@@ -4292,7 +4292,6 @@ const CATALOGED_ROUTE_FAMILIES: &[&[RouteDescriptor]] = &[
     iso20022::ROUTES,
     data_availability::ROUTES,
     musubi::ROUTES,
-    &[streaming::P2P],
     streaming::APP_ROUTES,
     mcp_transport::ROUTES,
     connect::ROUTES,

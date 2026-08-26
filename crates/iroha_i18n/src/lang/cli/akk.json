@@ -30,7 +30,6 @@
   "info.listen_events_with_timeout": "𒄿𒁺 𒅗𒂵: {filter} 𒌓: {timeout}",
   "info.listen_blocks": "𒆍𒆳 𒄿𒈾: {height}",
   "info.listen_blocks_with_timeout": "𒆍𒆳 𒄿𒈾: {height} 𒌓: {timeout}",
-  "warning.normalize_no_local_selectors": "𒋗𒁺𒈾 𒆠𒇷𒁺 𒉌𒋼",
   "warning.normalize_skipped_address": "𒋗𒁺𒈾 {index}: {error}",
   "warning.local_selector_warning": "𒄿𒁺: {warning}"
 }

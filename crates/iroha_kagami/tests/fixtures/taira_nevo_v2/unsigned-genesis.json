@@ -54,7 +54,10 @@
               "id": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "metadata": {
                 "key": "value"
-              }
+              },
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -64,7 +67,10 @@
               "id": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
               "metadata": {
                 "purpose": "taira_fee_sponsor_program_owner"
-              }
+              },
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -74,7 +80,10 @@
               "id": "testuﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "metadata": {
                 "purpose": "fee_sponsor_vault_custody"
-              }
+              },
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -84,7 +93,10 @@
               "id": "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
               "metadata": {
                 "key": "value"
-              }
+              },
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -117,7 +129,10 @@
           "Register": {
             "Account": {
               "id": "testuﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
-              "metadata": {}
+              "metadata": {},
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -211,7 +226,10 @@
           "Register": {
             "Account": {
               "id": "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
-              "metadata": {}
+              "metadata": {},
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -668,7 +686,10 @@
               "id": "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP",
               "metadata": {
                 "purpose": "nevo_taira_onboarding_authority"
-              }
+              },
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -678,7 +699,10 @@
               "id": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
               "metadata": {
                 "purpose": "nevo_dpn_contract_admin_api_signer"
-              }
+              },
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -688,7 +712,10 @@
               "id": "testuﾛ1QDｺ4ヰｶtBﾂSAﾐﾒｱK8jW7yﾔfｵﾒzｴiﾕｿtﾅFQ4ﾏvヰAｴ3MF4N9",
               "metadata": {
                 "purpose": "nevo_dpn_inori_controller"
-              }
+              },
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -698,7 +725,10 @@
               "id": "testuﾛ1Q1ヰﾁﾏ3ﾕmヰGmdLbﾜｦｦﾜF3qﾗﾇ2heEQ6vYｽ9tbEQLuCMJYJT",
               "metadata": {
                 "purpose": "nevo_dpn_epr_source_guard"
-              }
+              },
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },

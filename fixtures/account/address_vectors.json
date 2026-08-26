@@ -8,8 +8,8 @@
         },
         "expected_prefix": 753,
         "format": "i105",
-        "input": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSｲ",
-        "note": "Checksum tampering on I105 alias for the default-domain vector."
+        "input": "sorauﾛ1NkﾍﾒRAﾌﾎzLsﾉaPg53ﾊﾐp6SﾏﾅﾏcgNJsﾇzkjﾃUｽAﾗMUUXVｲ",
+        "note": "Checksum tampering on the I105 alias for the first domainless vector."
       },
       {
         "case_id": "i105-prefix-mismatch",
@@ -20,7 +20,7 @@
         },
         "expected_prefix": 753,
         "format": "i105",
-        "input": "n754uﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+        "input": "n754uﾛ1NkﾍﾒRAﾌﾎzLsﾉaPg53ﾊﾐp6SﾏﾅﾏcgNJsﾇzkjﾃUｽAﾗMUUXV1",
         "note": "Encoded with prefix NETWORK_PREFIX + 1 while validators expect NETWORK_PREFIX."
       },
       {
@@ -30,7 +30,7 @@
           "kind": "InvalidI105Char"
         },
         "format": "i105",
-        "input": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HS0",
+        "input": "sorauﾛ1NkﾍﾒRAﾌﾎzLsﾉaPg53ﾊﾐp6SﾏﾅﾏcgNJsﾇzkjﾃUｽAﾗMUUXV0",
         "note": "Introduces a glyph outside the canonical I105 alphabet."
       },
       {
@@ -39,7 +39,7 @@
           "kind": "ChecksumMismatch"
         },
         "format": "i105",
-        "input": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HS1",
+        "input": "sorauﾛ1NkﾍﾒRAﾌﾎzLsﾉaPg53ﾊﾐp6SﾏﾅﾏcgNJsﾇzkjﾃUｽAﾗMUUXV3",
         "note": "Checksum bytes replaced to trigger canonical I105 verification failure."
       },
       {
@@ -48,7 +48,7 @@
           "kind": "UnsupportedAddressFormat"
         },
         "format": "canonical_hex",
-        "input": "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da2G",
+        "input": "0x020001200b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2G",
         "note": "Invalid hex digit injected into canonical representation."
       },
       {
@@ -57,7 +57,7 @@
           "kind": "UnsupportedAddressFormat"
         },
         "format": "canonical_hex",
-        "input": "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da2900",
+        "input": "0x020001200b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d00",
         "note": "Extra zero byte appended past the canonical payload."
       },
       {
@@ -77,26 +77,21 @@
         "controller": {
           "curve": "ed25519",
           "kind": "single",
-          "public_key_hex": "3B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-          "public_key_multihash": "ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
-          "public_key_prefixed": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29"
+          "public_key_hex": "0B513AD9B4924015CA0902ED079044D3AC5DBEC2306F06948C10DA8EB6E39F2D",
+          "public_key_multihash": "ed01200B513AD9B4924015CA0902ED079044D3AC5DBEC2306F06948C10DA8EB6E39F2D",
+          "public_key_prefixed": "ed25519:ed01200B513AD9B4924015CA0902ED079044D3AC5DBEC2306F06948C10DA8EB6E39F2D"
         },
         "encodings": {
-          "canonical_hex": "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+          "canonical_hex": "0x020001200b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d",
           "i105": {
             "prefix": 753,
-            "string": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
+            "string": "sorauﾛ1NkﾍﾒRAﾌﾎzLsﾉaPg53ﾊﾐp6SﾏﾅﾏcgNJsﾇzkjﾃUｽAﾗMUUXV1"
           }
         },
         "input": {
-          "normalized_domain": "default",
-          "raw_domain": "default",
-          "seed_byte": 0
+          "seed_byte": 12
         },
-        "note": "Implicit default-domain address using deterministic Ed25519 key derived from seed byte 0x00.",
-        "selector": {
-          "kind": "default"
-        }
+        "note": "Domainless address using a deterministic Ed25519 key derived from seed byte 0x0c."
       },
       {
         "case_id": "addr-single-treasury-ed25519",
@@ -116,14 +111,9 @@
           }
         },
         "input": {
-          "normalized_domain": "treasury",
-          "raw_domain": "treasury",
           "seed_byte": 1
         },
-        "note": "Non-default domain address (treasury) using deterministic Ed25519 key derived from seed byte 0x01.",
-        "selector": {
-          "kind": "default"
-        }
+        "note": "Domainless address using a second deterministic Ed25519 key derived from seed byte 0x01."
       },
       {
         "case_id": "addr-multisig-council-threshold3",
@@ -176,14 +166,9 @@
             1,
             2
           ],
-          "normalized_domain": "council",
-          "raw_domain": "council",
           "threshold": 3
         },
-        "note": "Council domain multisig with three members (weights 2,1,1) requiring weight ≥3.",
-        "selector": {
-          "kind": "default"
-        }
+        "note": "Domainless multisig with three members (weights 2,1,1) requiring weight ≥3."
       },
       {
         "case_id": "addr-multisig-wonderland-threshold2",
@@ -227,14 +212,9 @@
             1,
             2
           ],
-          "normalized_domain": "wonderland",
-          "raw_domain": "wonderland",
           "threshold": 2
         },
-        "note": "Two-member multisig policy with weights 1 and 2 requiring weight ≥2 on wonderland.",
-        "selector": {
-          "kind": "default"
-        }
+        "note": "Domainless two-member multisig with weights 1 and 2 requiring weight ≥2."
       },
       {
         "case_id": "addr-multisig-default-quorum3",
@@ -296,14 +276,9 @@
             1,
             1
           ],
-          "normalized_domain": "default",
-          "raw_domain": "default",
           "threshold": 3
         },
-        "note": "Implicit-default domain multisig with four members (weight 1 each) requiring weight ≥3.",
-        "selector": {
-          "kind": "default"
-        }
+        "note": "Domainless multisig fixture with four members (weight 1 each) requiring weight ≥3."
       }
     ]
   },

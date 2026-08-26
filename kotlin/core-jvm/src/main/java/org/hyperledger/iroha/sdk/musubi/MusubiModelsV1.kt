@@ -3133,7 +3133,7 @@ internal object MusubiValidationV1 {
 
     private fun canonicalAccountAddress(value: String): AccountAddress {
         requireCanonicalI105Address(value, "maintainer account")
-        return AccountAddress.parseEncodedIgnoringCurveSupport(value, null).address
+        return AccountAddress.parseEncodedIgnoringCurveSupport(value, null)
     }
 
     fun effectivePageLimit(limit: Long): Int = when {

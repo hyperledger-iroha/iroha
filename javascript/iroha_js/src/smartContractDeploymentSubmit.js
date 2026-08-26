@@ -54,10 +54,12 @@ function requireExactString(value, context) {
 }
 
 function requireExactHashHex(value, context) {
-  if (typeof value !== "string" || !/^[0-9a-fA-F]{64}$/u.test(value)) {
-    throw new TypeError(`${context} must be an exact 32-byte hexadecimal string`);
+  if (typeof value !== "string" || !/^[0-9a-f]{63}[13579bdf]$/u.test(value)) {
+    throw new TypeError(
+      `${context} must be an exact canonical lowercase 32-byte Iroha hash`,
+    );
   }
-  return value.toLowerCase();
+  return value;
 }
 
 function normalizeUnsigned(value, maximum, context) {
@@ -234,7 +236,7 @@ function requireAppliedStatus(result, expectedHash, context) {
   }
   const status = requirePlainObject(envelope.status, `${context} status payload`);
   if (status.kind !== "Applied") {
-    throw new Error(`${context} did not return terminal Applied status`);
+    throw new Error(`${context} did not return state-resolved Applied finality`);
   }
   if (!Number.isSafeInteger(status.block_height) || status.block_height < 1) {
     throw new Error(`${context} Applied status must include a positive block height`);

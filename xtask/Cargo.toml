@@ -54,7 +54,6 @@ iroha_torii = { workspace = true, features = [
     "telemetry",
     "profiling",
     "schema",
-    "p2p_ws",
     "zk-verify-batch",
 ], default-features = false }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
@@ -100,10 +99,10 @@ serde_json = "1.0.145"
 toml = "0.9.8"
 eyre = { workspace = true }
 once_cell = { workspace = true }
-soranet-relay = { path = "../tools/soranet-relay" }
+soranet-relay = { path = "../tools/soranet-relay", default-features = false }
+soranet_pq = { path = "../crates/soranet_pq" }
 
 [dev-dependencies]
 assert_cmd = "2.1.1"
 tempfile = { workspace = true }
 norito = { path = "../crates/norito", default-features = false, features = ["node-codec"] }
-soranet_pq = { path = "../crates/soranet_pq" }

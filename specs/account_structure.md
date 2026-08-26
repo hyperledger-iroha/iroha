@@ -77,7 +77,8 @@ network hint.
 
 ### Domain identifiers
 
-`DomainId` wraps a `Name` (normalized string) and is scoped to the local chain.
+`DomainId` wraps a `Name` whose input already uses exact NFC spelling and is
+scoped to the local chain.
 Every chain can register `wonderland`, `finance`, etc. independently.
 
 ### Nexus context
@@ -360,8 +361,8 @@ Highlights:
   Torii emits the generated I105 literal from `AccountId`’s `Display`
   implementation (canonical I105).
 - **Multisig controller payloads.**  
-  Canonical controller bytes now encode `member_count:u16`, so address encoding
-  no longer has the old 255-member hard cap.
+  Canonical controller bytes encode `member_count:u16`, so address encoding
+  supports the full `u16` member-count range.
 - **Failure case (`i105-prefix-mismatch`).**  
   Parsing an i105 literal encoded with prefix `NETWORK_PREFIX + 1` on a node
   expecting the default prefix yields
@@ -423,9 +424,12 @@ tools must implement.
    bidirectional controls, and the reserved delimiters `@`, `#`, `$`. These
    are protocol-level `Name` invariants, enforced identically by constructors
    and Norito/JSON decoders before an identifier or metadata key is returned.
-2. **Unicode NFC composition.** Apply ICU-backed NFC normalisation so canonically
-   equivalent sequences collapse deterministically (e.g., `e\u{0301}` → `é`).
-3. **UTS-46 normalisation.** Run the NFC output through UTS‑46 with
+2. **Unicode NFC spelling gate.** Compute NFC only to verify the input spelling.
+   Reject any input whose bytes would change (for example, reject
+   `e\u{0301}` rather than rewriting it to `é`). Protocol-level `Name`
+   constructors and decoders never collapse alternate spellings.
+3. **UTS-46 routing canonicalisation.** For explicit domain and alias routing,
+   run the already admitted exact-NFC label through UTS‑46 with
    `use_std3_ascii_rules = true`, `transitional_processing = false`, and
    DNS-length enforcement enabled. The result is a lower-case A-label sequence;
    inputs that violate STD3 rules fail here.
@@ -471,93 +475,6 @@ vector suites tracked under ADDR‑2.
   data within TTL; past TTL it emits `RegistryUnavailable` and refuses
   cross-domain routing to avoid inconsistent state.
 
-### 4.1 Registry immutability, aliases, and tombstones (ADDR-7c)
-
-Nexus publishes an **append-only manifest** so every domain or alias assignment
-can be audited and replayed. Operators must treat the bundle described in the
-[address manifest runbook](runbooks/address_manifest_ops.md) as the
-sole source of truth: if a manifest is missing or fails validation, Torii must
-refuse to resolve the affected domain.
-
-Automation support: `cargo xtask address-manifest verify --bundle <current_dir> --previous <previous_dir>`
-replays the checksum, schema, and previous-digest checks spelled out in the
-runbook. Include the command output in change tickets to show the `sequence`
-and `previous_digest` linkage was validated before publishing the bundle.
-
-#### Manifest header & signature contract
-
-| Field | Requirement |
-|-------|-------------|
-| `version` | Currently `1`. Bump only with a matching spec update. |
-| `sequence` | Increment by **exactly** one per publication. Torii caches refuse revisions with gaps or regressions. |
-| `generated_ms` + `ttl_hours` | Establish cache freshness (default 24 h). If the TTL expires before the next publication, Torii flips to `RegistryUnavailable`. |
-| `previous_digest` | BLAKE3 digest (hex) of the prior manifest body. Verifiers recompute it with `b3sum` to prove immutability. |
-| `signatures` | Manifests are signed via Sigstore (`cosign sign-blob`). Ops must run `cosign verify-blob --bundle manifest.sigstore manifest.json` and enforce the governance identity/issuer constraints before rollout. |
-
-The release automation emits `manifest.sigstore` and `checksums.sha256`
-alongside the JSON body. Keep the files together when mirroring to SoraFS or
-HTTP endpoints so auditors can replay the verification steps verbatim.
-
-#### Entry types
-
-| Type | Purpose | Required fields |
-|------|---------|-----------------|
-| `global_domain` | Declares that a domain is registered globally and should map to a chain discriminant and I105 prefix. | `{ "domain": "<label>", "chain": "sora:nexus:global", "i105_prefix": 753, "selector": "global" }` |
-| `tombstone` | Retires an alias/selector permanently. Required when erasing Local‑8 digests or removing a domain. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
-
-`global_domain` entries may optionally include a `manifest_url` or `sorafs_cid`
-to point wallets at signed chain metadata, but the canonical tuple remains
-`{domain, chain, discriminant/i105_prefix}`. `tombstone` records **must** cite
-the selector being retired and the ticket/governance artefact that authorised
-the change so the audit trail is reconstructable offline.
-
-#### Alias/tombstone workflow & telemetry
-
-1. **Detect drift.** Use `torii_address_local8_total{endpoint}`,
-   `torii_address_local8_domain_total{endpoint,domain}`,
-   `torii_address_collision_total{endpoint,kind="local12_digest"}`,
-   `torii_address_collision_domain_total{endpoint,domain}`,
-   `torii_address_domain_total{endpoint,domain_kind}`, and
-   `torii_address_invalid_total{endpoint,reason}` (rendered in
-   `dashboards/grafana/address_ingest.json`) to confirm Local submissions and
-   Local-12 collisions stay at zero before proposing a tombstone. The
-   per-domain counters let owners prove that only dev/test domains emit Local‑8
-   traffic (and that Local‑12 collisions map to known staging domains) while
-   includes the **Domain Kind Mix (5m)** panel so SREs can graph how much
-   `domain_kind="local12"` traffic remains, and the `AddressLocal12Traffic`
-   alert fires whenever production still sees Local-12 selectors despite the
-   retirement gate.
-2. **Derive canonical digests.** Run
-   `iroha tools address convert <address> --format json --expect-prefix 753`
-   (or consume `fixtures/account/address_vectors.json` via
-   `scripts/account_fixture_helper.py`) to capture the exact `digest_hex`.
-  The CLI address tool accepts canonical I105 and the internal
-  canonical `0x…` envelope view; runtime `AccountId` parsers continue to accept
-  canonical I105 only.
-  The JSON summary reports the parsed format/domain kind plus canonical
-  encodings (I105 and canonical hex) for each input.
-  For newline-oriented exports use
-  `iroha tools address normalize --input <file>` to rewrite newline-separated
-  address lists into canonical I105, canonical hex, or JSON forms.
-  When auditors need spreadsheet-friendly evidence, run
-  `iroha tools address audit --input <file> --format csv` to emit a CSV summary
-  (`input,status,format,domain_kind,…`) that highlights domain kind,
-  canonical encodings, and parse failures in the same file.
-3. **Append manifest entries.** Draft the `tombstone` record (and the follow-up
-   `global_domain` record when migrating to the global registry) and validate
-   the manifest with `cargo xtask address-vectors` before requesting signatures.
-4. **Verify & publish.** Follow the runbook checklist (hashes, Sigstore,
-   sequence monotonicity) before mirroring the bundle to SoraFS. Torii now
-   canonicalizes account filters and path literals from canonical I105 input only.
-5. **Monitor & rollback.** Keep the Local‑8 and Local‑12 collision panels at
-   zero for 30 days; if regressions appear, republish the previous manifest
-   only in the affected non-production environment until telemetry stabilises.
-
-All of the steps above are mandatory evidence for ADDR‑7c: manifests without
-the `cosign` signature bundle or without matching `previous_digest` values must
-be rejected automatically, and operators must attach the verification logs to
-their change tickets.
-
 ### 5. Wallet & API ergonomics
 
 - **Display defaults:** Wallets show the I105 address plus a resolved account
@@ -589,7 +506,7 @@ their change tickets.
   Bech32m checksum limbs derived from HRP `snx` and the canonical bytes.
 - **Discriminant configuration:** The configured `u16` value is authoritative;
   no external registry lookup is part of V1 parsing or admission.
-- **Domain policy:** Runtime `Name` parsing validates input and applies NFC.
+- **Domain policy:** Runtime `Name` parsing validates that input already uses exact NFC spelling; domain-label routing separately applies its defined UTS-46 canonicalization.
   Explicit domain and alias constructors additionally use
   `name::canonicalize_domain_label` for UTS-46 and lowercase ASCII output.
 - **Textual helpers:** Rust, TypeScript/JavaScript, Python, and Kotlin codecs use
@@ -637,7 +554,7 @@ messages, plus recommended remediation guidance.
 
 | Code | Failure | Recommended Remediation |
 |------|---------|-------------------------|
-| `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical size for header/controller or a low-level selector payload. | Supply the full canonical payload emitted by the official encoder. |
+| `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical header/controller size. | Supply the full canonical payload emitted by the official encoder. |
 | `ERR_CHECKSUM_MISMATCH` | Canonical I105 checksum validation failed. | Regenerate the canonical I105 address from a trusted source; this typically indicates a copy/paste error. |
 | `ERR_INVALID_HEX_ADDRESS` | Canonical hexadecimal form failed to decode. | Provide a `0x`-prefixed, even-length hex string produced by the official encoder. |
 | `ERR_MISSING_I105_SENTINEL` | I105 form does not start with a recognized chain-discriminant sentinel. | Use the canonical output for the configured chain. |
@@ -651,8 +568,6 @@ messages, plus recommended remediation guidance.
 
 | Code | Failure | Recommended Remediation |
 |------|---------|-------------------------|
-| `ERR_DOMAIN_MISMATCH` | A noncanonical in-memory selector fixture conflicts with an explicit domain context. Canonical V1 addresses are universal and never emit this error. | Reject selector-bearing material and use a canonical I105 address plus an explicit `DomainId` or alias record. |
-| `ERR_INVALID_DOMAIN_LABEL` | Domain label failed normalisation checks. | Canonicalise the domain using UTS-46 non-transitional processing before encoding. |
 | `ERR_UNEXPECTED_NETWORK_PREFIX` | Decoded I105 network prefix differs from the configured value. | Switch to an address from the target chain or adjust the expected discriminant/prefix. |
 | `ERR_UNKNOWN_ADDRESS_CLASS` | Address class bits are not recognised. | Use V1 class `0` (single key) or `1` (multisig). |
 | `ERR_UNEXPECTED_EXTENSION_FLAG` | Reserved extension bit was set. | Clear reserved bits; extensions are unsupported in V1. |

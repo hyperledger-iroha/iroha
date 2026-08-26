@@ -20,7 +20,7 @@ use super::{
         proposal_lookahead_enabled, v2_known_lane_tip_for_route,
     },
     message::{
-        BlockMessage, CanonicalExecutedBlockNeedV1, LANE_HISTORICAL_RECOVERY_VERSION_V4,
+        BlockMessage, CanonicalExecutedBlockNeedV1, LANE_HISTORICAL_RECOVERY_VERSION_V1,
         LaneHistoricalRecoveryKindV1, LaneHistoricalRecoveryPayloadV1,
         LaneHistoricalRecoveryRequestV1, LaneHistoricalRecoveryResponseV1,
     },
@@ -79,8 +79,8 @@ use crate::{
     block::BlockBuilder,
     kura::{
         AutonomousLaneBlockArtifact, AutonomousLifecycleAttemptBindingV1,
-        AutonomousLifecycleBootstrapCompletionOutcome, AutonomousLifecycleCursorPhaseV2,
-        AutonomousLifecycleCursorUnsignedV2, AutonomousLifecyclePayloadCustodyAuthorization,
+        AutonomousLifecycleBootstrapCompletionOutcome, AutonomousLifecycleCursorPhaseV1,
+        AutonomousLifecycleCursorUnsignedV1, AutonomousLifecyclePayloadCustodyAuthorization,
         AutonomousLifecycleProcessGenerationClaim, CertifiedLaneBlockArtifact,
         FinalizedMergeCarrierRepair, HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
         HistoricalAutonomousLaneRecoveryRecordV1, Kura, KuraV2CommitReceipt,
@@ -120,7 +120,7 @@ use crate::{
     },
     queue::{
         AutonomousLanePayloadFanoutAuthorization, LaneQueueReservationGroupBindingV1,
-        LaneQueueReservationGroupIdentityV1, LaneQueueReservationKeyV2,
+        LaneQueueReservationGroupIdentityV1, LaneQueueReservationKeyV1,
         LaneQueueReservationOutcome, LaneQueueReservationRoutingMode,
         LaneQueueReservationSelectionLimits, LaneReservedTransaction, Queue, RoutingDecision,
         RoutingPlan, canonical_lane_queue_reservation_group_identity_projection,
@@ -419,7 +419,7 @@ fn merge_lane_execution_carries_lane(
             },
         )
 }
-fn decode_canonical_merge_reservation_key(encoded: &[u8]) -> Option<LaneQueueReservationKeyV2> {
+fn decode_canonical_merge_reservation_key(encoded: &[u8]) -> Option<LaneQueueReservationKeyV1> {
     norito::decode_canonical(encoded).ok()
 }
 fn decode_canonical_merge_routing_plan(encoded: &[u8]) -> Option<RoutingPlan> {
@@ -1009,8 +1009,8 @@ fn persist_nonqueue_autonomous_payload_with_custody(
             ..ProductionInFlightFirstReleaseSessionProjection::default()
         },
         history: ProductionInFlightFirstReleaseHistoryProjection {
-            ever_queue_plan_v4: true,
-            ever_reservation_v5: true,
+            ever_queue_plan_v1: true,
+            ever_reservation_v1: true,
             ..ProductionInFlightFirstReleaseHistoryProjection::default()
         },
         decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
@@ -1054,11 +1054,11 @@ fn persist_nonqueue_autonomous_payload_with_custody(
             )
         })
     };
-    let prepared_unsigned = AutonomousLifecycleCursorUnsignedV2::new(
+    let prepared_unsigned = AutonomousLifecycleCursorUnsignedV1::new(
         1,
         None,
         binding.clone(),
-        AutonomousLifecycleCursorPhaseV2::prepared(
+        AutonomousLifecycleCursorPhaseV1::prepared(
             process_generation.generation(),
             activate_projection,
         )
@@ -1074,11 +1074,11 @@ fn persist_nonqueue_autonomous_payload_with_custody(
     let prepared_activate = prepared_unsigned
         .finalize(prepared_signature, &descriptor.validator_set)
         .map_err(|reason| V2LaneWorkError::Persistence(reason.to_owned()))?;
-    let live_unsigned = AutonomousLifecycleCursorUnsignedV2::new(
+    let live_unsigned = AutonomousLifecycleCursorUnsignedV1::new(
         2,
         Some(prepared_activate.cursor_hash()),
         binding.clone(),
-        AutonomousLifecycleCursorPhaseV2::live(process_generation.generation(), after_activate)
+        AutonomousLifecycleCursorPhaseV1::live(process_generation.generation(), after_activate)
             .map_err(|reason| V2LaneWorkError::Persistence(reason.to_owned()))?,
         local_peer.clone(),
     )
@@ -2366,7 +2366,7 @@ fn first_release_transport_bitmap(
 }
 /// Queue-fenced authority for one fresh producer payload fanout effect.
 ///
-/// The embedded Queue authorization keeps the complete V4/V5 reservation
+/// The embedded Queue authorization keeps the complete V1 reservation
 /// group live while Kura readback, the composed `FanoutFromProducer` check,
 /// and the exact effect insertion all occur. A duplicate queued effect never
 /// asks for this authority and is therefore an abstract stutter.
@@ -2495,8 +2495,8 @@ impl<'queue> FirstReleaseFanoutFromProducerAuthorization<'queue> {
                 producer_alive: true,
             },
             history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v4: true,
-                ever_reservation_v5: true,
+                ever_queue_plan_v1: true,
+                ever_reservation_v1: true,
                 ..ProductionInFlightFirstReleaseHistoryProjection::default()
             },
             decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
@@ -2579,7 +2579,7 @@ impl FirstReleaseServeLateBodyAuthorization {
                 "late-body authority requires an autonomous recovery payload".to_owned(),
             ));
         };
-        if response.version != LANE_HISTORICAL_RECOVERY_VERSION_V4 || peer != target {
+        if response.version != LANE_HISTORICAL_RECOVERY_VERSION_V1 || peer != target {
             return Err(V2LaneWorkError::Persistence(
                 "late-body response version or destination differs from its authority".to_owned(),
             ));
@@ -2742,8 +2742,8 @@ impl FirstReleaseServeLateBodyAuthorization {
                 producer_alive: true,
             },
             history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v4: true,
-                ever_reservation_v5: true,
+                ever_queue_plan_v1: true,
+                ever_reservation_v1: true,
                 ever_execution_input_durable: ready_signers,
                 ever_ready_authorized: ready_signers,
                 ready_signed: ready_signers,
@@ -2788,7 +2788,7 @@ impl FirstReleaseBodyPublicationAuthorization for FirstReleaseServeLateBodyAutho
 /// Move-only authorization context for one pre-Kura direct reservation release.
 ///
 /// Only a locally derived [`PendingAutonomousReservationBatch`] can construct
-/// this value. Queue still revalidates its complete V4/V5, group, and FIFO
+/// this value. Queue still revalidates its complete V1, group, and FIFO
 /// binding while holding the serialized reservation transition lock; this
 /// context carries no claim about remote validator custody.
 #[must_use = "pre-Kura direct-release context must cross the checked queue boundary"]
@@ -2796,7 +2796,7 @@ pub(crate) struct PreKuraDirectReleaseContext {
     validator_count: u8,
     producer: u128,
     expected_group: LaneQueueReservationGroupBindingV1,
-    ordered_keys: Vec<LaneQueueReservationKeyV2>,
+    ordered_keys: Vec<LaneQueueReservationKeyV1>,
 }
 impl PendingAutonomousReservationBatch {
     fn pre_kura_direct_release_context(
@@ -2908,7 +2908,7 @@ impl PreKuraDirectReleaseContext {
     pub(crate) const fn expected_group(&self) -> LaneQueueReservationGroupBindingV1 {
         self.expected_group
     }
-    pub(crate) fn ordered_keys(&self) -> &[LaneQueueReservationKeyV2] {
+    pub(crate) fn ordered_keys(&self) -> &[LaneQueueReservationKeyV1] {
         &self.ordered_keys
     }
 }
@@ -4274,8 +4274,8 @@ impl V2LaneWorkAdapter {
                 ..ProductionInFlightFirstReleaseSessionProjection::default()
             },
             history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v4: true,
-                ever_reservation_v5: true,
+                ever_queue_plan_v1: true,
+                ever_reservation_v1: true,
                 ..ProductionInFlightFirstReleaseHistoryProjection::default()
             },
             decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
@@ -4309,11 +4309,11 @@ impl V2LaneWorkAdapter {
                 )
             })
         };
-        let prepared_unsigned = AutonomousLifecycleCursorUnsignedV2::new(
+        let prepared_unsigned = AutonomousLifecycleCursorUnsignedV1::new(
             1,
             None,
             binding.clone(),
-            AutonomousLifecycleCursorPhaseV2::prepared(
+            AutonomousLifecycleCursorPhaseV1::prepared(
                 process_generation.generation(),
                 activate_kura,
             )
@@ -4332,11 +4332,11 @@ impl V2LaneWorkAdapter {
                 &payload.origin_proposal.descriptor.validator_set,
             )
             .map_err(|reason| V2LaneWorkError::Persistence(reason.to_owned()))?;
-        let live_unsigned = AutonomousLifecycleCursorUnsignedV2::new(
+        let live_unsigned = AutonomousLifecycleCursorUnsignedV1::new(
             2,
             Some(prepared_activate.cursor_hash()),
             binding.clone(),
-            AutonomousLifecycleCursorPhaseV2::live(process_generation.generation(), after_activate)
+            AutonomousLifecycleCursorPhaseV1::live(process_generation.generation(), after_activate)
                 .map_err(|reason| V2LaneWorkError::Persistence(reason.to_owned()))?,
             self.local_peer.clone(),
         )
@@ -7299,7 +7299,7 @@ impl V2LaneWorkAdapter {
             .historical_recovery_signer_pops(session)
             .map_err(V2LaneWorkError::Persistence)?;
         let request = LaneHistoricalRecoveryRequestV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V4,
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
             requester: self.local_peer.clone(),
             certificate: Some(LaneBlockCertificateV1 {
                 proposal: session.proposal.clone(),
@@ -8169,7 +8169,7 @@ impl V2LaneWorkAdapter {
         &self,
         proposal: &LaneBlockProposalV1,
         author: &PeerId,
-        reservation_keys: &[crate::queue::LaneQueueReservationKeyV2],
+        reservation_keys: &[crate::queue::LaneQueueReservationKeyV1],
     ) -> bool {
         let Ok((reservation_owner_hash, proposal_identity_hash)) =
             autonomous_lane_reservation_identity_hashes_for_proposal(
@@ -9322,7 +9322,7 @@ impl V2LaneWorkAdapter {
             .certificate
             .as_ref()
             .ok_or_else(|| "historical lane recovery request has no lane certificate".to_owned())?;
-        if request.version != LANE_HISTORICAL_RECOVERY_VERSION_V4
+        if request.version != LANE_HISTORICAL_RECOVERY_VERSION_V1
             || &request.requester != sender
             || certificate.proposal.descriptor.proposal_height >= self.context.height
             || !self.historical_recovery_request_fits_frame(request)
@@ -9590,7 +9590,7 @@ impl V2LaneWorkAdapter {
             }
         };
         let response = LaneHistoricalRecoveryResponseV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V4,
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
             request_hash,
             payload: response_payload,
         };
@@ -9658,7 +9658,7 @@ impl V2LaneWorkAdapter {
         let Some(sender) = sender else {
             return V2LaneIngressOutcome::Rejected;
         };
-        if response.version != LANE_HISTORICAL_RECOVERY_VERSION_V4
+        if response.version != LANE_HISTORICAL_RECOVERY_VERSION_V1
             || !self.historical_recovery_response_fits_frame(&response)
         {
             return V2LaneIngressOutcome::Rejected;
@@ -12617,7 +12617,7 @@ impl V2LaneWorkAdapter {
         }
         self.lane_fanout_cursor = (start + advanced.max(1)) % peers.len();
     }
-    /// Publish one freshly durable producer payload under the exact Queue V4/V5
+    /// Publish one freshly durable producer payload under the exact Queue V1
     /// fence used by the first-release `FanoutFromProducer` projection.
     ///
     /// The global transport may also cache the payload on validators outside
@@ -23482,7 +23482,7 @@ pub(super) mod tests {
         adapter: &V2LaneWorkAdapter,
         proposal: &LaneBlockProposalV1,
         producer: &PeerId,
-        reservation: &mut crate::queue::LaneQueueReservationKeyV2,
+        reservation: &mut crate::queue::LaneQueueReservationKeyV1,
     ) {
         let (reservation_owner_hash, proposal_identity_hash) =
             autonomous_lane_reservation_identity_hashes_for_proposal(
@@ -24427,8 +24427,8 @@ pub(super) mod tests {
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
         ));
-        let mut reservation = LaneQueueReservationKeyV2 {
-            version: LaneQueueReservationKeyV2::VERSION,
+        let mut reservation = LaneQueueReservationKeyV1 {
+            version: LaneQueueReservationKeyV1::VERSION,
             entrypoint_hash: entrypoint.hash(),
             queue_plan_admission_binding_hash: Hash::new(admission_binding),
             routing_plan_digest: routing_plan.digest(),
@@ -25374,7 +25374,7 @@ pub(super) mod tests {
             .reopen(successor_context, true)
             .expect("open historical request source at successor height");
         let request = LaneHistoricalRecoveryRequestV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V4,
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
             requester: restart.local_peer,
             certificate: Some(certificate),
             signer_pops: lane_signer_pops(&keys),
@@ -25503,7 +25503,7 @@ pub(super) mod tests {
         chunk_index: u32,
     ) -> LaneHistoricalRecoveryRequestV1 {
         LaneHistoricalRecoveryRequestV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V4,
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
             requester,
             certificate: None,
             signer_pops: BTreeMap::new(),
@@ -26223,7 +26223,7 @@ pub(super) mod tests {
         };
         let authorized = PeerId::new(keys[0].public_key().clone());
         let mut request = LaneHistoricalRecoveryRequestV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V4.saturating_sub(1),
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V1.saturating_sub(1),
             requester: authorized.clone(),
             certificate: Some(certificate),
             signer_pops: lane_signer_pops(&keys),
@@ -26238,7 +26238,7 @@ pub(super) mod tests {
             V2LaneIngressOutcome::Rejected,
             "legacy recovery layouts must fail closed"
         );
-        request.version = LANE_HISTORICAL_RECOVERY_VERSION_V4;
+        request.version = LANE_HISTORICAL_RECOVERY_VERSION_V1;
         let other_committee_member = PeerId::new(keys[1].public_key().clone());
         assert_eq!(
             adapter
@@ -26290,7 +26290,7 @@ pub(super) mod tests {
             commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
         };
         let request = LaneHistoricalRecoveryRequestV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V4,
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
             requester: adapter.local_peer.clone(),
             certificate: Some(certificate),
             signer_pops: lane_signer_pops(&keys),
@@ -26322,7 +26322,7 @@ pub(super) mod tests {
             },
         );
         let response = LaneHistoricalRecoveryResponseV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V4,
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
             request_hash,
             payload: LaneHistoricalRecoveryPayloadV1::CanonicalBlock {
                 block: block.as_ref().clone(),
@@ -26653,7 +26653,7 @@ pub(super) mod tests {
                     .expect("rederive exact Kura activation authority"),
                 &ordered_keys,
             )
-            .expect("authorize the complete FIFO-ordered V4/V5 group");
+            .expect("authorize the complete FIFO-ordered V1 group");
         let contested_hash = ordered_keys[0].entrypoint_hash;
         assert!(
             matches!(
@@ -26749,8 +26749,8 @@ pub(super) mod tests {
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
         ));
-        let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
-            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+        let mut reservation = crate::queue::LaneQueueReservationKeyV1 {
+            version: crate::queue::LaneQueueReservationKeyV1::VERSION,
             entrypoint_hash: entrypoint.hash(),
             queue_plan_admission_binding_hash: Hash::new(
                 b"pending-autonomous-queue-plan-admission-binding",

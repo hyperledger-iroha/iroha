@@ -1821,7 +1821,7 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
         "fn",
         "queue_plan_admission_registry_match_with_application_state_in_view",
         (
-            "QueuePlanAdmissionRegistryKeyV2",
+            "QueuePlanAdmissionRegistryKeyV1",
             "decode_exact_queue_plan_admission_registry_marker",
             "queue_plan_registry_owner_application_state_in_view",
             "QueuePlanAdmissionRegistryMatch::Absent",
@@ -2686,7 +2686,7 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
   "$INFLIGHT_FIRST_RELEASE_MODULE" \\
   inflight_first_release_fixed.cfg \\
   18 \\
-  "FirstReleaseTypeInvariant, MLPayloadSchemaV2CarriesExactAdmissionPreimage, MLValidatorCarrierOwnership, MLSelectedQueuePlanV4ConjunctionBeforeReservationV5, MLReservationV5BeforeKuraActive, MLKuraActiveBeforeExecutionInput, MLExecutionInputBeforeReadyAuthorization, MLReadyAuthorizationBeforeLocalSignature, MLLocalSignaturesBeforeDurableReadyQc, MLCrashDurableFactsRecoverable, MLVolatileSessionLostOnCrash, MLCommitAndReleaseRetainExactScope, MLLaneCommitBeforeAtomicWsvCarrierApplication, MLExactlyOnceCarrierApplication, MLPostCarrierCommitCleanupOrder, MLReleasePrefixesRecoverable, MLReleaseStageOrder, MLQueuePlanV4SelectedConjunctionBound4096\"""",
+  "FirstReleaseTypeInvariant, MLPayloadSchemaV2CarriesExactAdmissionPreimage, MLValidatorCarrierOwnership, MLSelectedQueuePlanV1ConjunctionBeforeReservationV1, MLReservationV1BeforeKuraActive, MLKuraActiveBeforeExecutionInput, MLExecutionInputBeforeReadyAuthorization, MLReadyAuthorizationBeforeLocalSignature, MLLocalSignaturesBeforeDurableReadyQc, MLCrashDurableFactsRecoverable, MLVolatileSessionLostOnCrash, MLCommitAndReleaseRetainExactScope, MLLaneCommitBeforeAtomicWsvCarrierApplication, MLExactlyOnceCarrierApplication, MLPostCarrierCommitCleanupOrder, MLReleasePrefixesRecoverable, MLReleaseStageOrder, MLQueuePlanV1SelectedConjunctionBound4096\"""",
     )
     for call in expected_calls:
         if source.count(call) != 1:
@@ -5003,9 +5003,9 @@ def _validate_inflight_layout_contract(
         evidence_source = evidence_path.read_text(encoding="utf-8")
         for token in (
             "`LaneExecutablePayloadV1`",
-            "`LANE_EXECUTABLE_PAYLOAD_VERSION_V2`",
-            "QueuePlan journal V4",
-            "reservation journal V5",
+            "`LANE_EXECUTABLE_PAYLOAD_VERSION_V1`",
+            "QueuePlan journal V1",
+            "reservation journal V1",
             "selected-batch conjunction",
             "READY signature",
             "atomic WSV carrier application",
@@ -5030,8 +5030,8 @@ def _validate_inflight_layout_contract(
         for token in (
             "Current first-release layouts are source-bound",
             "`LaneExecutablePayloadV1`",
-            "QueuePlan journal V4",
-            "reservation journal V5",
+            "QueuePlan journal V1",
+            "reservation journal V1",
             "selected-batch",
             "READY authorization/signature/QC",
             "post-carrier",

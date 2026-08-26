@@ -136,9 +136,7 @@ fn account_literal_for(name: &str) -> String {
     account_literal(&account)
 }
 fn parse_account_literal(literal: &str) -> AccountId {
-    AccountId::parse_encoded(literal)
-        .expect("account literal should parse as encoded account id")
-        .into_account_id()
+    AccountId::parse_encoded(literal).expect("account literal should parse as encoded account id")
 }
 fn account_id_for_domain(_label: &str, seed: u8) -> AccountId {
     let key_pair = fixture_key_pair(seed);
@@ -451,6 +449,121 @@ fn command() -> TestCommand {
     cmd.env("NO_COLOR", "1");
     cmd.env("CLICOLOR", "0");
     cmd
+}
+#[test]
+fn taira_doctor_bypasses_default_and_explicit_client_config_loading() {
+    let temp_dir =
+        torii_mock_support::TempDir::new("taira_doctor_configless").expect("temp directory");
+    let malformed_config = temp_dir.path().join("malformed-client.toml");
+    fs::write(&malformed_config, b"this is not = [valid toml")
+        .expect("write malformed client config");
+
+    for config in [None, Some(malformed_config.as_path())] {
+        let mut cmd = command();
+        cmd.current_dir(temp_dir.path()).arg("--machine");
+        if let Some(config) = config {
+            cmd.arg("--config").arg(config);
+        }
+        let output = cmd
+            .args([
+                "taira",
+                "doctor",
+                "--public-root",
+                "ftp://taira.invalid",
+                "--json",
+            ])
+            .output()
+            .expect("run configless Taira doctor");
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty(), "command errors belong on stderr");
+        let error: Value =
+            json::from_slice(&output.stderr).expect("decode machine-mode error JSON");
+        assert_eq!(
+            error.pointer("/error/kind").and_then(Value::as_str),
+            Some("command")
+        );
+        assert_eq!(
+            error.pointer("/error/exit_code").and_then(Value::as_u64),
+            Some(1)
+        );
+        let message = error
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .expect("error message");
+        assert!(message.contains("unsupported URL scheme `ftp`"));
+        assert!(!message.contains("Failed to load config"));
+    }
+}
+#[test]
+fn taira_mutation_commands_remain_config_required() {
+    let temp_dir =
+        torii_mock_support::TempDir::new("taira_mutations_require_config").expect("temp directory");
+    for command_args in [
+        vec![
+            "taira",
+            "write-canary",
+            "--onboarding-token-file",
+            "missing.token",
+            "--json",
+        ],
+        vec![
+            "taira",
+            "inrou-canary",
+            "--stage-dir",
+            "missing-stage",
+            "--mode",
+            "deploy",
+            "--json",
+        ],
+    ] {
+        let output = command()
+            .current_dir(temp_dir.path())
+            .arg("--machine")
+            .args(command_args)
+            .output()
+            .expect("run config-required Taira mutation command");
+        assert_eq!(output.status.code(), Some(3));
+        assert!(output.stdout.is_empty(), "config errors belong on stderr");
+        let error: Value =
+            json::from_slice(&output.stderr).expect("decode machine-mode error JSON");
+        assert_eq!(
+            error.pointer("/error/kind").and_then(Value::as_str),
+            Some("config")
+        );
+        assert_eq!(
+            error.pointer("/error/exit_code").and_then(Value::as_u64),
+            Some(3)
+        );
+    }
+}
+#[test]
+fn taira_doctor_rejects_irrelevant_transaction_and_signing_globals() {
+    let output = command()
+        .args([
+            "--machine",
+            "--verbose",
+            "--fee-payer",
+            "authority",
+            "taira",
+            "doctor",
+            "--public-root",
+            "ftp://taira.invalid",
+        ])
+        .output()
+        .expect("run Taira doctor with irrelevant globals");
+    assert_eq!(output.status.code(), Some(4));
+    assert!(output.stdout.is_empty(), "input errors belong on stderr");
+    let error: Value = json::from_slice(&output.stderr).expect("decode machine-mode error JSON");
+    assert_eq!(
+        error.pointer("/error/kind").and_then(Value::as_str),
+        Some("input")
+    );
+    let message = error
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .expect("error message");
+    assert!(message.contains("--verbose"));
+    assert!(message.contains("--fee-payer"));
 }
 #[test]
 fn soracles_aggregate_output_emits_instruction_payload() {

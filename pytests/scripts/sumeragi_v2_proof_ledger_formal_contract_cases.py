@@ -3882,11 +3882,11 @@ def test_production_trace_certificate_rejects_model_action_inventory_drift(
     (
         (
             "queue_plan_selection_and_reservation_fsync",
-            "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1",
         ),
         (
             "queue_plan_selection_and_reservation_fsync",
-            "IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V1",
         ),
         (
             "reservation_cleanup_prefixes",

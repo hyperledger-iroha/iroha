@@ -39,31 +39,22 @@ function assertString(value, name) {
 }
 
 export function normalizeUaidLiteral(value, name) {
-  const literal = assertString(value, name).trim();
-  if (!literal) {
-    fail(ValidationErrorCode.INVALID_ACCOUNT_ID, `${name} must be a non-empty string`, name);
-  }
-  let hexPortion;
-  if (literal.slice(0, 5).toLowerCase() === "uaid:") {
-    hexPortion = literal.slice(5).trim();
-  } else {
-    hexPortion = literal;
-  }
-  if (hexPortion.length !== 64 || !/^[0-9a-fA-F]+$/.test(hexPortion)) {
+  const literal = assertString(value, name);
+  if (!/^uaid:[0-9a-f]{64}$/u.test(literal)) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must contain 64 hex characters`,
+      `${name} must be an exact canonical uaid:<64 lowercase hex> literal`,
       name,
     );
   }
-  if (!/[13579bdf]$/i.test(hexPortion)) {
+  if (!/[13579bdf]$/u.test(literal)) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
       `${name} must have least significant bit set to 1`,
       name,
     );
   }
-  return `uaid:${hexPortion.toLowerCase()}`;
+  return literal;
 }
 
 export function normalizeOpaqueLiteral(value, name) {

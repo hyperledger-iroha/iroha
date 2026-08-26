@@ -9,7 +9,7 @@ public final class UaidBindingsResponse {
   private final List<UaidBindingsDataspace> dataspaces;
 
   public UaidBindingsResponse(final String uaid, final List<UaidBindingsDataspace> dataspaces) {
-    this.uaid = Objects.requireNonNull(uaid, "uaid");
+    this.uaid = UaidLiteral.canonicalize(uaid, "uaid");
     this.dataspaces = List.copyOf(Objects.requireNonNull(dataspaces, "dataspaces"));
   }
 

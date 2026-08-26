@@ -735,13 +735,14 @@ fn validate_builtin_account_alias_query_permission(
                 .cloned()
                 .unwrap_or_default();
             for alias in labels {
+                let resolved =
+                    crate::sns::resolve_active_account_alias(world, catalog, &alias, now_ms)
+                        .map_err(|error| ValidationFail::InternalError(error.to_string()))?;
                 if dataspace_filter.is_some_and(|dataspace| alias.dataspace != dataspace)
                     || domain_filter
                         .as_ref()
                         .is_some_and(|domain| alias.domain.as_ref() != Some(domain))
-                    || crate::sns::resolve_active_account_alias(world, catalog, &alias, now_ms)
-                        .as_ref()
-                        != Some(query.account_id())
+                    || resolved.as_ref() != Some(query.account_id())
                 {
                     continue;
                 }
@@ -1242,16 +1243,17 @@ fn successful_claim_fee_exempt_instructions(
     if !is_sora_v2_tx_hash_literal(&claim_tx_hash) {
         return false;
     }
-    let Some(recipient) = metadata_string(metadata, SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY)
-        .and_then(|literal| {
-            parse_account_id_literal(
-                world,
-                world.dataspace_catalog(),
-                &literal,
-                observation_time_ms,
-            )
-        })
+    let Some(recipient_literal) =
+        metadata_string(metadata, SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY)
     else {
+        return false;
+    };
+    let Ok(Some(recipient)) = parse_account_id_literal(
+        world,
+        world.dataspace_catalog(),
+        &recipient_literal,
+        observation_time_ms,
+    ) else {
         return false;
     };
     let Some(asset_def) = crate::block::parse_asset_definition_literal_with_world(
@@ -1665,7 +1667,7 @@ fn parse_account_id_literal(
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     literal: &str,
     now_ms: u64,
-) -> Option<AccountId> {
+) -> Result<Option<AccountId>, crate::sns::SnsError> {
     crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
 }
 /// Deterministic reason a Nexus fee quote or admission check failed.
@@ -4369,11 +4371,8 @@ pub(crate) fn charge_fees_for_applied_overlay(
             "out of gas: used {gas_used} > limit {limit}"
         )));
     }
-    let confidential_delta = overlay
-        .instruction_slice()
-        .iter()
-        .map(crate::gas::confidential_gas_cost)
-        .sum::<u64>();
+    let confidential_delta =
+        crate::gas::sum_confidential_gas_costs(overlay.instruction_slice().iter());
     if confidential_delta > 0 {
         state_transaction.record_confidential_gas_delta(confidential_delta);
     }
@@ -4848,6 +4847,7 @@ impl Executor {
             &state_transaction.pipeline.gas.tech_account_id,
             state_transaction.block_unix_timestamp_ms(),
         )
+        .map_err(|error| ValidationFail::InternalError(error.to_string()))?
         .ok_or_else(|| {
             ValidationFail::InternalError(
                 "invalid pipeline.gas.tech_account_id; expected canonical I105 account id or on-chain alias"
@@ -5417,10 +5417,7 @@ impl Executor {
             )?;
         }
         let instruction_count = instructions.len();
-        let confidential_delta = instructions
-            .iter()
-            .map(crate::gas::confidential_gas_cost)
-            .sum::<u64>();
+        let confidential_delta = crate::gas::sum_confidential_gas_costs(instructions.iter());
         // 3) Execute ISIs in order.
         let prior_sccp_ivm_proved_execution_binding =
             state_transaction.sccp_ivm_proved_execution_binding.clone();
@@ -6533,10 +6530,8 @@ impl Executor {
                         }
                     }
                 }
-                let confidential_delta = explicit_instructions
-                    .iter()
-                    .map(crate::gas::confidential_gas_cost)
-                    .sum::<u64>();
+                let confidential_delta =
+                    crate::gas::sum_confidential_gas_costs(explicit_instructions.iter());
                 if confidential_delta > 0 {
                     state_transaction.record_confidential_gas_delta(confidential_delta);
                 }
@@ -8203,6 +8198,7 @@ fn initial_alias_scope_owned_by(
                 *dataspace,
                 now_ms,
             )
+            .map_err(|error| ValidationFail::InternalError(error.to_string()))?
             .as_ref()
                 == Some(authority))
         }
@@ -8234,6 +8230,7 @@ fn initial_asset_definition_alias_scope_owned_by(
                 *dataspace,
                 now_ms,
             )
+            .map_err(|error| ValidationFail::InternalError(error.to_string()))?
             .as_ref()
                 == Some(authority))
         }
@@ -8993,7 +8990,9 @@ fn initial_accounts_share_active_lineage(
         state_transaction.world.dataspace_catalog(),
         authority,
         now_ms,
-    ) else {
+    )
+    .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+    else {
         return Ok(false);
     };
     let Some(target) = crate::sns::resolve_active_account_id_rekey_lineage(
@@ -9001,7 +9000,9 @@ fn initial_accounts_share_active_lineage(
         state_transaction.world.dataspace_catalog(),
         target,
         now_ms,
-    ) else {
+    )
+    .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+    else {
         return Ok(false);
     };
     Ok(authority == target)
@@ -9301,6 +9302,21 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
+    // Kaigi lifecycle, usage, and relay mutations enforce their host,
+    // participant, relay, proof, and governance checks inside Core. The Initial
+    // executor additionally protects each domain-owned call namespace above.
+    if is_any!(
+        iroha_data_model::isi::kaigi::CreateKaigi,
+        iroha_data_model::isi::kaigi::JoinKaigi,
+        iroha_data_model::isi::kaigi::LeaveKaigi,
+        iroha_data_model::isi::kaigi::EndKaigi,
+        iroha_data_model::isi::kaigi::RecordKaigiUsage,
+        iroha_data_model::isi::kaigi::SetKaigiRelayManifest,
+        iroha_data_model::isi::kaigi::RegisterKaigiRelay,
+        iroha_data_model::isi::kaigi::ReportKaigiRelayHealth,
+    ) {
+        return true;
+    }
     // Cross-border settlement, relays, and public governance mutations either
     // require an exact Core-enforced permission or consume a cryptographically
     // verified, replay-protected proof. Keep the signed governance draft surface
@@ -9404,6 +9420,16 @@ fn validate_initial_native_instruction_authority(
     use iroha_data_model::isi::{BurnBox, MintBox, RegisterBox, UnregisterBox};
     let any = instruction.as_any();
     let deny = |message: &'static str| Err(ValidationFail::NotPermitted(message.to_owned()));
+    if let Some(create) = any.downcast_ref::<iroha_data_model::isi::kaigi::CreateKaigi>()
+        && !is_genesis
+        && !can_modify_domain_metadata_initial(
+            state_transaction,
+            authority,
+            &create.call.id.domain_id,
+        )?
+    {
+        return deny("authority cannot create a Kaigi in this domain");
+    }
     // Direct multisig mutations are accepted only from the account being changed
     // (including its active rekey lineage), or from an exact controller delegate.
     // The transaction layer still applies the native multisig proposal/quorum flow
@@ -9627,6 +9653,9 @@ fn validate_initial_native_instruction_authority(
     if let Some(set) = any.downcast_ref::<SetKeyValueBox>() {
         let allowed = match set {
             SetKeyValueBox::Domain(set) => {
+                if crate::smartcontracts::isi::kaigi::is_reserved_kaigi_metadata_key(set.key()) {
+                    return deny("native Kaigi metadata keys cannot be changed directly");
+                }
                 is_genesis
                     || can_modify_domain_metadata_initial(
                         state_transaction,
@@ -9675,6 +9704,9 @@ fn validate_initial_native_instruction_authority(
     if let Some(remove) = any.downcast_ref::<RemoveKeyValueBox>() {
         let allowed = match remove {
             RemoveKeyValueBox::Domain(remove) => {
+                if crate::smartcontracts::isi::kaigi::is_reserved_kaigi_metadata_key(remove.key()) {
+                    return deny("native Kaigi metadata keys cannot be changed directly");
+                }
                 is_genesis
                     || can_modify_domain_metadata_initial(
                         state_transaction,
@@ -10146,6 +10178,7 @@ fn authority_owns_any_alias_domain(
             &alias,
             now_ms,
         )
+        .map_err(|error| ValidationFail::InternalError(error.to_string()))?
         .as_ref()
             != Some(subject)
         {
@@ -11331,6 +11364,225 @@ mod tests {
                     if message.contains("does not admit unclassified native instruction")
             ),
             "unexpected genesis oracle rejection: {error:?}"
+        );
+    }
+    #[test]
+    fn initial_executor_admits_the_complete_kaigi_surface() {
+        use iroha_data_model::{
+            isi::kaigi::{
+                CreateKaigi, EndKaigi, JoinKaigi, LeaveKaigi, RecordKaigiUsage, RegisterKaigiRelay,
+                ReportKaigiRelayHealth, SetKaigiRelayManifest,
+            },
+            kaigi::{KaigiId, KaigiRelayHealthStatus, KaigiRelayRegistration, NewKaigi},
+        };
+
+        let host = checked_account_id();
+        let participant = checked_account_id();
+        let relay = checked_account_id();
+        let domain_id = DomainId::try_new("kaigi", "universal").expect("domain id");
+        let call_id = KaigiId::new(
+            domain_id.clone(),
+            Name::from_str("initial-admission").expect("call name"),
+        );
+        let instructions: Vec<InstructionBox> = vec![
+            CreateKaigi {
+                call: NewKaigi::with_defaults(call_id.clone(), host.clone()),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .into(),
+            JoinKaigi {
+                call_id: call_id.clone(),
+                participant: participant.clone(),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .into(),
+            LeaveKaigi {
+                call_id: call_id.clone(),
+                participant,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .into(),
+            EndKaigi {
+                call_id: call_id.clone(),
+                ended_at_ms: None,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .into(),
+            RecordKaigiUsage {
+                call_id: call_id.clone(),
+                duration_ms: 1,
+                billed_gas: 0,
+                usage_commitment: None,
+                proof: None,
+            }
+            .into(),
+            SetKaigiRelayManifest {
+                call_id: call_id.clone(),
+                relay_manifest: None,
+            }
+            .into(),
+            RegisterKaigiRelay {
+                relay: KaigiRelayRegistration {
+                    relay_id: relay.clone(),
+                    hpke_public_key: vec![1],
+                    bandwidth_class: 1,
+                },
+            }
+            .into(),
+            ReportKaigiRelayHealth {
+                call_id,
+                relay_id: relay,
+                status: KaigiRelayHealthStatus::Healthy,
+                reported_at_ms: 0,
+                notes: None,
+            }
+            .into(),
+        ];
+
+        for instruction in instructions {
+            assert!(
+                initial_native_instruction_is_explicitly_admitted(&instruction),
+                "{} must reach its native Core authorization checks",
+                instruction.id()
+            );
+        }
+    }
+    #[test]
+    fn initial_executor_executes_kaigi_create_through_core() {
+        use iroha_data_model::{
+            isi::kaigi::CreateKaigi,
+            kaigi::{KaigiId, NewKaigi, kaigi_metadata_key},
+        };
+
+        let host = checked_account_id();
+        let domain_id = DomainId::try_new("kaigi", "universal").expect("domain id");
+        let call_name = Name::from_str("initial-create").expect("call name");
+        let call_id = KaigiId::new(domain_id.clone(), call_name.clone());
+        let world = World::with(
+            [Domain::new(domain_id.clone()).build(&host)],
+            [Account::new(host.clone()).build(&host)],
+            [],
+        );
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+        let instruction: InstructionBox = CreateKaigi {
+            call: NewKaigi::with_defaults(call_id, host.clone()),
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        }
+        .into();
+
+        super::Executor::Initial
+            .execute_instruction(&mut state_transaction, &host, instruction)
+            .expect("Initial executor must dispatch Kaigi create to Core");
+        let key = kaigi_metadata_key(&call_name).expect("Kaigi metadata key");
+        assert!(
+            state_transaction
+                .world
+                .domain(&domain_id)
+                .expect("domain")
+                .metadata()
+                .contains(&key),
+            "Core Kaigi execution must persist the call record"
+        );
+    }
+    #[test]
+    fn initial_executor_rejects_kaigi_create_in_foreign_domain() {
+        use iroha_data_model::{
+            isi::kaigi::CreateKaigi,
+            kaigi::{KaigiId, NewKaigi, kaigi_metadata_key},
+        };
+
+        let owner = checked_account_id();
+        let intruder = checked_account_id();
+        let domain_id = DomainId::try_new("kaigi", "universal").expect("domain id");
+        let call_name = Name::from_str("squatted-call").expect("call name");
+        let call_id = KaigiId::new(domain_id.clone(), call_name.clone());
+        let world = World::with(
+            [Domain::new(domain_id.clone()).build(&owner)],
+            [
+                Account::new(owner.clone()).build(&owner),
+                Account::new(intruder.clone()).build(&owner),
+            ],
+            [],
+        );
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+        let instruction: InstructionBox = CreateKaigi {
+            call: NewKaigi::with_defaults(call_id, intruder.clone()),
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        }
+        .into();
+
+        let error = super::Executor::Initial
+            .execute_instruction(&mut state_transaction, &intruder, instruction)
+            .expect_err("a non-owner must not squat another domain's Kaigi namespace");
+        assert!(
+            matches!(
+                error,
+                ValidationFail::NotPermitted(ref message)
+                    if message == "authority cannot create a Kaigi in this domain"
+            ),
+            "unexpected foreign-domain Kaigi rejection: {error:?}",
+        );
+        let key = kaigi_metadata_key(&call_name).expect("Kaigi metadata key");
+        assert!(
+            !state_transaction
+                .world
+                .domain(&domain_id)
+                .expect("domain")
+                .metadata()
+                .contains(&key),
+            "denied Kaigi creation must not reserve the foreign call name",
+        );
+    }
+    #[test]
+    fn initial_executor_rejects_direct_native_kaigi_metadata_writes() {
+        use iroha_data_model::kaigi::kaigi_metadata_key;
+
+        let authority = checked_account_id();
+        let domain_id = DomainId::try_new("kaigi", "universal").expect("domain id");
+        let key = kaigi_metadata_key(&Name::from_str("forged").expect("call name"))
+            .expect("Kaigi metadata key");
+        let world = World::with(
+            [Domain::new(domain_id.clone()).build(&authority)],
+            [Account::new(authority.clone()).build(&authority)],
+            [],
+        );
+        let state = state_after_genesis(world);
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 1, 0));
+        let mut state_transaction = block.transaction();
+        let instruction = SetKeyValue::domain(domain_id, key, Json::new("forged record")).into();
+
+        let error = super::Executor::Initial
+            .execute_instruction(&mut state_transaction, &authority, instruction)
+            .expect_err("ordinary domain metadata must not overwrite native Kaigi state");
+        assert!(
+            matches!(
+                error,
+                ValidationFail::NotPermitted(ref message)
+                    if message == "native Kaigi metadata keys cannot be changed directly"
+            ),
+            "unexpected reserved Kaigi metadata rejection: {error:?}"
         );
     }
     #[test]
@@ -14672,8 +14924,8 @@ mod tests {
         let alternate_asset_address = alternate_asset.canonical_address();
         let governed_rates = Json::from_str_norito(&format!(
             concat!(
-                r#"[{{"asset":"{gas_asset}","units_per_gas":9,"twap_local_per_xor":"1","liquidity_profile":"tier1","volatility_class":"stable"}},"#,
-                r#"{{"asset":"{alternate_asset}","units_per_gas":1,"twap_local_per_xor":"1","liquidity_profile":"tier1","volatility_class":"stable"}}]"#
+                r#"[{{"asset":"{gas_asset}","liquidity_profile":"tier1","twap_local_per_xor":"1","units_per_gas":9,"volatility_class":"stable"}},"#,
+                r#"{{"asset":"{alternate_asset}","liquidity_profile":"tier1","twap_local_per_xor":"1","units_per_gas":1,"volatility_class":"stable"}}]"#
             ),
             gas_asset = gas_asset_address,
             alternate_asset = alternate_asset_address,
@@ -14803,8 +15055,8 @@ mod tests {
             let gas_asset_address = gas_asset.canonical_address();
             let payload = Json::from_str_norito(&format!(
                 concat!(
-                    r#"[{{"asset":"{asset}","units_per_gas":9,"twap_local_per_xor":"{twap}","#,
-                    r#""liquidity_profile":"{liquidity}","volatility_class":"{volatility}"}}]"#
+                    r#"[{{"asset":"{asset}","liquidity_profile":"{liquidity}","#,
+                    r#""twap_local_per_xor":"{twap}","units_per_gas":9,"volatility_class":"{volatility}"}}]"#
                 ),
                 asset = gas_asset_address,
                 twap = twap,

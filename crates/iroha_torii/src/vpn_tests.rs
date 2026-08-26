@@ -103,6 +103,7 @@ fn test_vpn_relay_trust() -> VpnRelayTrust {
         .expect("test relay identity");
     VpnRelayTrust {
         relay_id: relay_id.try_into().expect("32-byte Ed25519 identity"),
+        relay_mldsa65_public_key: [0x5A; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1],
         relay_endpoint: "/dns/relay.example/udp/9443/quic".to_owned(),
         tls_server_name: "relay.example".to_owned(),
         relay_tls_spki_sha256: [0xAB; 32],
@@ -534,6 +535,7 @@ fn sample_session_record(account_id: &AccountId) -> VpnSessionRecord {
         flow_label_bits: 24,
         padding_budget_ms: 15,
         relay_id: test_vpn_relay_trust().relay_id,
+        relay_mldsa65_public_key: test_vpn_relay_trust().relay_mldsa65_public_key,
         descriptor_commit: [0xCD; 32],
         tls_server_name: "relay.example".to_owned(),
         relay_tls_spki_sha256: [0xAB; 32],
@@ -574,6 +576,7 @@ fn sample_quote_record(
         exit_class: VpnExitClassV1::try_from_label(&session.exit_class).expect("exit class"),
         relay_endpoint: session.relay_endpoint.clone(),
         relay_id: session.relay_id,
+        relay_mldsa65_public_key: session.relay_mldsa65_public_key,
         descriptor_commit: session.descriptor_commit,
         tls_server_name: session.tls_server_name.clone(),
         relay_tls_spki_sha256: session.relay_tls_spki_sha256,
@@ -639,6 +642,7 @@ fn sample_quote_record(
         flow_label_bits: session.flow_label_bits,
         padding_budget_ms: session.padding_budget_ms,
         relay_id: session.relay_id,
+        relay_mldsa65_public_key: session.relay_mldsa65_public_key,
         descriptor_commit: session.descriptor_commit,
         tls_server_name: session.tls_server_name,
         relay_tls_spki_sha256: session.relay_tls_spki_sha256,
@@ -716,6 +720,7 @@ fn lease_record_from_session_record(
         exit_class: VpnExitClassV1::try_from_label(&record.exit_class).expect("exit class"),
         relay_endpoint: record.relay_endpoint.clone(),
         relay_id: record.relay_id,
+        relay_mldsa65_public_key: record.relay_mldsa65_public_key,
         descriptor_commit: record.descriptor_commit,
         tls_server_name: record.tls_server_name.clone(),
         relay_tls_spki_sha256: record.relay_tls_spki_sha256,
@@ -1143,6 +1148,10 @@ async fn vpn_profile_uses_config_summary() {
         body.relay_id_hex,
         hex::encode(test_vpn_relay_trust().relay_id)
     );
+    assert_eq!(
+        body.relay_mldsa65_public_key_hex,
+        hex::encode(test_vpn_relay_trust().relay_mldsa65_public_key)
+    );
     assert_eq!(body.descriptor_commit_hex, "cd".repeat(32));
     assert_eq!(body.tls_server_name, "relay.example");
     assert_eq!(body.relay_tls_spki_sha256_hex, "ab".repeat(32));
@@ -1175,6 +1184,7 @@ async fn vpn_profile_hides_trust_that_cannot_cover_a_lease() {
     assert!(!body.available);
     assert!(body.relay_endpoint.is_empty());
     assert!(body.relay_id_hex.is_empty());
+    assert!(body.relay_mldsa65_public_key_hex.is_empty());
     assert!(body.descriptor_commit_hex.is_empty());
     assert!(body.tls_server_name.is_empty());
     assert!(body.relay_tls_spki_sha256_hex.is_empty());
@@ -1312,6 +1322,7 @@ fn helper_ticket_is_signed_by_the_vpn_operator() {
         vpn_helper_network_policy_hash_v1(
             &record.relay_endpoint,
             &record.relay_id,
+            &record.relay_mldsa65_public_key,
             &record.descriptor_commit,
             &record.tls_server_name,
             &record.relay_tls_spki_sha256,

@@ -54,6 +54,7 @@ import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.nexus.UaidBindingsQuery;
 import org.hyperledger.iroha.android.nexus.UaidBindingsResponse;
+import org.hyperledger.iroha.android.nexus.UaidManifestCountMode;
 import org.hyperledger.iroha.android.nexus.UaidManifestQuery;
 import org.hyperledger.iroha.android.nexus.UaidManifestQuery.UaidManifestStatusFilter;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse;
@@ -86,6 +87,7 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 public final class HttpClientTransportTests {
   private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(780);
   private static final String VALID_ED25519_PUBLIC_KEY_HEX = TestEd25519Keys.publicKeyHex(0x22);
+  private static final String VALID_MLDSA65_PUBLIC_KEY_HEX = "ab".repeat(1_952);
   private static final String ED25519_IDENTITY_KEY_HEX = "01" + "00".repeat(31);
   private static final NetworkId OTHER_NETWORK_ID =
       NetworkId.parse(
@@ -112,7 +114,7 @@ public final class HttpClientTransportTests {
     uaidPortfolioRequestParsesResponse();
     uaidPortfolioRequestSupportsQuery();
     uaidPortfolioQueryRejectsPaddedSelectorsBeforeDispatch();
-    uaidPathLiteralRejectsPaddedInputBeforeDispatch();
+    uaidPathLiteralRejectsNoncanonicalInputBeforeDispatch();
     uaidRequestsRespectBasePath();
     uaidBindingsRequestParsesResponse();
     uaidManifestsRequestSupportsQuery();
@@ -155,6 +157,7 @@ public final class HttpClientTransportTests {
     contractCallBoundaryConsumesSharedRustArgumentRecordFixture();
     callContractRejectsInvalidEntrypointOrGas();
     callContractResponseRequiresOperationReceipt();
+    contractAndMultisigTransactionHashesRequireIrohaHashOfMarker();
     proposeMultisigRequestParsesResponse();
     proposeMultisigRejectsAdversarialRequestShapes();
     multisigResponseParserRejectsMalformedFields();
@@ -685,7 +688,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             new ScriptedExecutor(
-                new TransportResponse(202, statusPayload(hashHex, "Queued"), "", Map.of()),
+                new TransportResponse(200, statusPayload(hashHex, "Queued"), "", Map.of()),
                 new TransportResponse(200, statusPayload(hashHex, "Applied"), "", Map.of())),
             ClientConfig.builder()
                 .setBaseUri(URI.create("https://status-telemetry.test:8080"))
@@ -864,9 +867,9 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
     final UaidPortfolioResponse response =
-        transport.getUaidPortfolio("UAID:" + hex.toUpperCase()).join();
+        transport.getUaidPortfolio("uaid:" + hex).join();
     assert response.uaid().equals("uaid:" + hex)
-        : "UAID literal must be normalised";
+        : "UAID literal must be preserved";
     assert response.totals().accounts() == 2 : "Accounts total should parse";
     assert response.totals().positions() == 3 : "Positions total should parse";
     assert response.dataspaces().size() == 1 : "Expected one dataspace entry";
@@ -885,8 +888,6 @@ public final class HttpClientTransportTests {
     assert (assetDefinitionId + "#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV").equals(asset.assetId())
         : "Asset ID mismatch";
     assert assetDefinitionId.equals(asset.assetDefinitionId()) : "Asset definition mismatch";
-    assert assetDefinitionId.equals(asset.asset()) : "Legacy asset accessor mismatch";
-    assert asset.scope() == null : "Modern portfolio payload must not require legacy scope";
     assert "42".equals(asset.quantity()) : "Asset quantity mismatch";
 
     final TransportRequest request = executor.lastRequest();
@@ -923,8 +924,8 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
     final UaidPortfolioQuery query =
-        UaidPortfolioQuery.builder().setAsset(assetDefinitionId).setScope("global").build();
-    transport.getUaidPortfolio("uaid:" + hex.toUpperCase(), query).join();
+        UaidPortfolioQuery.builder().setAssetId(assetDefinitionId).build();
+    transport.getUaidPortfolio("uaid:" + hex, query).join();
 
     final TransportRequest request = executor.lastRequest();
     assert request != null : "UAID request must be captured";
@@ -934,10 +935,9 @@ public final class HttpClientTransportTests {
         .equals(
             "https://torii.example/v1/accounts/uaid%3A"
                 + hex
-                + "/portfolio?asset="
-                + assetDefinitionId
-                + "&scope=global")
-        : "UAID portfolio query must include asset and scope filters";
+                + "/portfolio?asset_id="
+                + assetDefinitionId)
+        : "UAID portfolio query must include the exact asset_id filter";
   }
 
   private static void uaidPortfolioQueryRejectsPaddedSelectorsBeforeDispatch() {
@@ -962,7 +962,7 @@ public final class HttpClientTransportTests {
     transport
         .getUaidPortfolio(
             "uaid:" + hex,
-            UaidPortfolioQuery.builder().setAsset(assetDefinitionId).setScope("global").build())
+            UaidPortfolioQuery.builder().setAssetId(assetDefinitionId).build())
         .join();
     final TransportRequest before = executor.lastRequest();
 
@@ -970,7 +970,7 @@ public final class HttpClientTransportTests {
         () ->
             transport.getUaidPortfolio(
                 "uaid:" + hex,
-                UaidPortfolioQuery.builder().setAsset(" " + assetDefinitionId).build()),
+                UaidPortfolioQuery.builder().setAssetId(" " + assetDefinitionId).build()),
         "UAID portfolio asset selector must reject leading whitespace");
     assert executor.lastRequest() == before
         : "Padded asset selector must fail before sending an HTTP request";
@@ -979,22 +979,13 @@ public final class HttpClientTransportTests {
         () ->
             transport.getUaidPortfolio(
                 "uaid:" + hex,
-                UaidPortfolioQuery.builder().setAsset(assetDefinitionId + " ").build()),
+                UaidPortfolioQuery.builder().setAssetId(assetDefinitionId + " ").build()),
         "UAID portfolio asset selector must reject trailing whitespace");
     assert executor.lastRequest() == before
         : "Padded asset selector must fail before sending an HTTP request";
-
-    expectIllegalArgument(
-        () ->
-            transport.getUaidPortfolio(
-                "uaid:" + hex,
-                UaidPortfolioQuery.builder().setAsset(assetDefinitionId).setScope(" global").build()),
-        "UAID portfolio scope selector must reject leading whitespace");
-    assert executor.lastRequest() == before
-        : "Padded scope selector must fail before sending an HTTP request";
   }
 
-  private static void uaidPathLiteralRejectsPaddedInputBeforeDispatch() {
+  private static void uaidPathLiteralRejectsNoncanonicalInputBeforeDispatch() {
     final String hex =
         "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0102030405060708090a0b0c0d0e0f11";
     final String json =
@@ -1012,23 +1003,34 @@ public final class HttpClientTransportTests {
             executor,
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
 
-    transport.getUaidPortfolio("UAID:" + hex.toUpperCase()).join();
+    transport.getUaidPortfolio("uaid:" + hex).join();
     final TransportRequest before = executor.lastRequest();
     assert before != null : "UAID positive request must be captured";
 
-    for (final String uaid : new String[] {" uaid:" + hex, "uaid:" + hex + " ", "uaid: " + hex}) {
+    for (final String uaid :
+        new String[] {
+          hex,
+          "UAID:" + hex,
+          "uaid:" + hex.toUpperCase(),
+          " uaid:" + hex,
+          "uaid:" + hex + " ",
+          "uaid: " + hex
+        }) {
       expectIllegalArgument(
           () -> transport.getUaidPortfolio(uaid),
-          "UAID path literal must reject surrounding whitespace before dispatch");
+          "UAID path literal must reject noncanonical spelling before dispatch");
       assert executor.lastRequest() == before
-          : "Padded UAID path literal must fail before sending an HTTP request";
+          : "Noncanonical UAID path literal must fail before sending an HTTP request";
     }
   }
 
   private static void uaidRequestsRespectBasePath() {
     final String hex =
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-    final String json = "{\"uaid\":\"uaid:" + hex + "\"}";
+    final String json =
+        "{\"uaid\":\"uaid:"
+            + hex
+            + "\",\"totals\":{\"accounts\":0,\"positions\":0},\"dataspaces\":[]}";
     final StubResponseExecutor executor =
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
     final ClientConfig config =
@@ -1070,7 +1072,7 @@ public final class HttpClientTransportTests {
 
     final UaidBindingsQuery query = UaidBindingsQuery.builder().build();
     final UaidBindingsResponse response =
-        transport.getUaidBindings("uaid:" + hex.toUpperCase(), query).join();
+        transport.getUaidBindings("uaid:" + hex, query).join();
     assert response.dataspaces().size() == 1 : "Expected bindings entry";
     final UaidBindingsResponse.UaidBindingsDataspace dataspace = response.dataspaces().get(0);
     assert dataspace.dataspaceId() == 7 : "Dataspace ID mismatch";
@@ -1093,10 +1095,14 @@ public final class HttpClientTransportTests {
             + hex
             + "\","
             + "\"total\":1,"
+            + "\"has_more\":false,"
+            + "\"count_mode\":\"exact\","
             + "\"manifests\":[{"
             + "\"dataspace_id\":9,"
             + "\"dataspace_alias\":\"pilot\","
-            + "\"manifest_hash\":\"deadbeef\","
+            + "\"manifest_hash\":\""
+            + "ab".repeat(32)
+            + "\","
             + "\"status\":\"Revoked\","
             + "\"lifecycle\":{"
             + "\"activated_epoch\":10,"
@@ -1105,11 +1111,13 @@ public final class HttpClientTransportTests {
             + "},"
             + "\"accounts\":[\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"],"
             + "\"manifest\":{"
-            + "\"version\":\"1\","
+            + "\"version\":1,"
             + "\"uaid\":\"uaid:"
             + hex
             + "\","
             + "\"dataspace\":9,"
+            + "\"issued_ms\":100,"
+            + "\"activation_epoch\":10,"
             + "\"entries\":[]"
             + "}"
             + "}]"
@@ -1125,16 +1133,19 @@ public final class HttpClientTransportTests {
             .setStatus(UaidManifestStatusFilter.INACTIVE)
             .setLimit(25L)
             .setOffset(5L)
+            .setCountMode(UaidManifestCountMode.EXACT)
             .build();
 
     final UaidManifestsResponse response =
         transport.getUaidManifests("uaid:" + hex, query).join();
     assert response.total() == 1 : "Total manifests must parse";
+    assert !response.hasMore() : "has_more must parse";
+    assert response.countMode() == UaidManifestCountMode.EXACT : "count_mode must parse";
     assert response.manifests().size() == 1 : "Expected manifest record";
     final UaidManifestRecord record = response.manifests().get(0);
     assert record.dataspaceId() == 9 : "Dataspace ID mismatch";
     assert "pilot".equals(record.dataspaceAlias()) : "Dataspace alias mismatch";
-    assert "deadbeef".equals(record.manifestHash()) : "Manifest hash mismatch";
+    assert "ab".repeat(32).equals(record.manifestHash()) : "Manifest hash mismatch";
     assert record.status() == UaidManifestStatus.REVOKED : "Status parsing mismatch";
     assert record.lifecycle().activatedEpoch() == 10L : "Activated epoch mismatch";
     assert record.lifecycle().expiredEpoch() == null : "Expired epoch should be null";
@@ -1142,9 +1153,11 @@ public final class HttpClientTransportTests {
     assert record.lifecycle().revocation().epoch() == 15L : "Revocation epoch mismatch";
     assert "policy".equals(record.lifecycle().revocation().reason()) : "Revocation reason mismatch";
     assert record.accounts().contains("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV") : "Accounts must surface";
-    assert record.manifestJson().contains("\"version\":\"1\"") : "Manifest JSON should be stored";
+    assert record.manifestJson().contains("\"version\":1") : "Manifest JSON should be stored";
     final Map<String, Object> manifestMap = record.manifestAsMap();
-    assert "1".equals(manifestMap.get("version")) : "Manifest map mismatch";
+    assert manifestMap.get("version") instanceof Number
+        && ((Number) manifestMap.get("version")).longValue() == 1L
+        : "Manifest map mismatch";
     assert manifestMap.get("dataspace") instanceof Number
         && ((Number) manifestMap.get("dataspace")).longValue() == 9L
         : "Manifest dataspace mismatch";
@@ -1156,7 +1169,7 @@ public final class HttpClientTransportTests {
         .equals(
             "https://torii.example/v1/space-directory/uaids/uaid%3A"
                 + hex
-                + "/manifests?dataspace=9&status=inactive&limit=25&offset=5")
+                + "/manifests?dataspace=9&status=inactive&limit=25&offset=5&count_mode=exact")
         : "Manifest URI must include encoded query parameters";
   }
 
@@ -3684,6 +3697,98 @@ public final class HttpClientTransportTests {
         "contract call response must require operation_receipt");
   }
 
+  private static void contractAndMultisigTransactionHashesRequireIrohaHashOfMarker() {
+    final String canonical = "ab".repeat(32);
+    final String evenMarker = "aa".repeat(32);
+    assert canonical.equals(
+        ContractJsonParser.parseCallResponse(
+                submittedContractResponse(canonical, canonical, canonical, canonical))
+            .txHashHex());
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseCallResponse(
+                submittedContractResponse(evenMarker, canonical, canonical, canonical)),
+        "contract transaction hash must carry the Iroha HashOf marker");
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseCallResponse(
+                submittedContractResponse(" " + canonical, canonical, canonical, canonical)),
+        "contract transaction hash must not be trimmed");
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseCallResponse(
+                submittedContractResponse(canonical, evenMarker, canonical, canonical)),
+        "contract entrypoint hash must carry the Iroha HashOf marker");
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseCallResponse(
+                submittedContractResponse(canonical, canonical, evenMarker, canonical)),
+        "receipt transaction hash must carry the Iroha HashOf marker");
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseCallResponse(
+                submittedContractResponse(canonical, canonical, canonical, evenMarker)),
+        "receipt entrypoint hash must carry the Iroha HashOf marker");
+
+    final String multisigAccountId = TestAccountIds.ed25519Authority(0x37);
+    final String validMultisig = submittedMultisigResponse(multisigAccountId, canonical, canonical);
+    assert canonical.equals(
+        ContractJsonParser.parseMultisigResponse(
+                validMultisig.getBytes(StandardCharsets.UTF_8))
+            .executedTxHashHex());
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseMultisigResponse(
+                submittedMultisigResponse(multisigAccountId, evenMarker, canonical)
+                    .getBytes(StandardCharsets.UTF_8)),
+        "multisig transaction hash must carry the Iroha HashOf marker");
+    expectRuntimeException(
+        () ->
+            ContractJsonParser.parseMultisigResponse(
+                submittedMultisigResponse(multisigAccountId, canonical, evenMarker)
+                    .getBytes(StandardCharsets.UTF_8)),
+        "multisig executed transaction hash must carry the Iroha HashOf marker");
+  }
+
+  private static byte[] submittedContractResponse(
+      final String txHash,
+      final String entrypointHash,
+      final String receiptTxHash,
+      final String receiptEntrypointHash) {
+    return ("{"
+            + "\"ok\":true,\"submitted\":true,\"dataspace\":\"router\","
+            + "\"code_hash_hex\":\""
+            + "44".repeat(32)
+            + "\",\"abi_hash_hex\":\""
+            + "55".repeat(32)
+            + "\",\"creation_time_ms\":1,\"tx_hash_hex\":\""
+            + txHash
+            + "\",\"entrypoint_hash_hex\":\""
+            + entrypointHash
+            + "\",\"operation_receipt\":{"
+            + "\"operation_kind\":\"contract_call\",\"status\":\"queued\","
+            + "\"transport\":\"torii\",\"dataspace\":\"router\","
+            + "\"tx_hash_hex\":\""
+            + receiptTxHash
+            + "\",\"entrypoint_hash_hex\":\""
+            + receiptEntrypointHash
+            + "\",\"payload_digest_hex\":\""
+            + "88".repeat(32)
+            + "\"}}")
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static String submittedMultisigResponse(
+      final String multisigAccountId, final String txHash, final String executedTxHash) {
+    return "{\"ok\":true,\"resolved_multisig_account_id\":\""
+        + multisigAccountId
+        + "\",\"submitted\":true,\"tx_hash_hex\":\""
+        + txHash
+        + "\",\"executed_tx_hash_hex\":\""
+        + executedTxHash
+        + "\"}";
+  }
+
   private static void governanceContractRequestParsesResponse() {
     final String contractAddress =
         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
@@ -5917,6 +6022,9 @@ public final class HttpClientTransportTests {
         + "\"relay_id_hex\":\""
         + VALID_ED25519_PUBLIC_KEY_HEX
         + "\","
+        + "\"relay_mldsa65_public_key_hex\":\""
+        + VALID_MLDSA65_PUBLIC_KEY_HEX
+        + "\","
         + "\"descriptor_commit_hex\":\""
         + "cd".repeat(32)
         + "\","
@@ -5962,6 +6070,9 @@ public final class HttpClientTransportTests {
         + "\"padding_budget_ms\":15,"
         + "\"relay_id_hex\":\""
         + meteringKey
+        + "\","
+        + "\"relay_mldsa65_public_key_hex\":\""
+        + VALID_MLDSA65_PUBLIC_KEY_HEX
         + "\","
         + "\"descriptor_commit_hex\":\""
         + "cd".repeat(32)
@@ -6009,6 +6120,9 @@ public final class HttpClientTransportTests {
         + "\"padding_budget_ms\":15,"
         + "\"relay_id_hex\":\""
         + VALID_ED25519_PUBLIC_KEY_HEX
+        + "\","
+        + "\"relay_mldsa65_public_key_hex\":\""
+        + VALID_MLDSA65_PUBLIC_KEY_HEX
         + "\","
         + "\"descriptor_commit_hex\":\""
         + "cd".repeat(32)

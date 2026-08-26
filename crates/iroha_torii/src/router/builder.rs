@@ -32,8 +32,6 @@ const COMPILED_ROUTE_FEATURES: &[&str] = &[
     "profiling",
     #[cfg(feature = "schema")]
     "schema",
-    #[cfg(feature = "p2p_ws")]
-    "p2p_ws",
     #[cfg(feature = "connect")]
     "connect",
     #[cfg(feature = "zk-verify-batch")]
@@ -501,9 +499,27 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
         app_state: SharedAppState,
         max_body_bytes: usize,
     ) -> CatalogMethodRouter<SharedAppState, SealedAuthentication> {
+        self.authenticated_canonical_account_body_with_missing_auth(
+            app_state,
+            max_body_bytes,
+            "canonical_authentication_required",
+            "canonical account request authentication is required",
+        )
+    }
+    /// Install canonical account authentication with a route-specific missing-auth rejection.
+    #[must_use]
+    pub(crate) fn authenticated_canonical_account_body_with_missing_auth(
+        self,
+        app_state: SharedAppState,
+        max_body_bytes: usize,
+        missing_auth_code: &'static str,
+        missing_auth_message: &'static str,
+    ) -> CatalogMethodRouter<SharedAppState, SealedAuthentication> {
         let state = crate::CanonicalAccountBodyAuthState {
             app: app_state,
             max_body_bytes,
+            missing_auth_code,
+            missing_auth_message,
         };
         let layer = axum::middleware::from_fn_with_state(
             state,
@@ -530,6 +546,8 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
             crate::CanonicalAccountBodyAuthState {
                 app: app_state.clone(),
                 max_body_bytes,
+                missing_auth_code: "canonical_authentication_required",
+                missing_auth_message: "canonical account request authentication is required",
             },
             crate::enforce_canonical_account_body_authentication,
         );
@@ -561,6 +579,8 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
             crate::CanonicalAccountBodyAuthState {
                 app: app_state.clone(),
                 max_body_bytes,
+                missing_auth_code: "canonical_authentication_required",
+                missing_auth_message: "canonical account request authentication is required",
             },
             crate::enforce_canonical_account_body_authentication,
         );

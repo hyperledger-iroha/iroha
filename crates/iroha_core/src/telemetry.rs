@@ -5526,16 +5526,10 @@ impl Telemetry {
     telemetry_atomic_enabled_metric_methods! {
     /// Record an invalid Torii address observation labeled by endpoint + reason.
     [inc_torii_address_invalid(endpoint: &'static str, reason: &'static str);]
-    /// Record the domain kind observed for a successfully parsed address.
-    [inc_torii_address_domain(endpoint: &'static str, domain_kind: &str);]
     /// Record the `account literal` selection emitted by a Torii endpoint.
     [inc_torii_account_literal(endpoint: &'static str, format: &'static str);]
     /// Record a Norito-RPC gate observation grouped by rollout stage and outcome.
     [inc_torii_norito_rpc_gate(stage: &'static str, outcome: &'static str);]
-    /// Record a Torii Local-12 selector collision categorized by endpoint + kind.
-    [inc_torii_address_collision(endpoint: &'static str, kind: &'static str);]
-    /// Record a Torii Local-12 selector collision grouped by endpoint + domain.
-    [inc_torii_address_collision_domain(endpoint: &'static str, domain: &str);]
     /// Record a DA rent quote projection for observability.
     [record_da_rent_quote(
         cluster_label: &str, storage_label: &str, gib_months: u64, rent_quote: &DaRentQuote
@@ -7206,12 +7200,6 @@ impl Actor {
         self.metrics
             .p2p_total_cap_reject_total
             .set(iroha_p2p::network::total_cap_reject_count());
-        self.metrics
-            .p2p_ws_inbound_total
-            .set(iroha_p2p::network::ws_inbound_total());
-        self.metrics
-            .p2p_ws_outbound_total
-            .set(iroha_p2p::network::ws_outbound_total());
         self.metrics
             .p2p_scion_inbound_total
             .set(iroha_p2p::network::scion_inbound_total());

@@ -204,6 +204,16 @@ impl fmt::Display for TaikaiParseError {
     }
 }
 impl std::error::Error for TaikaiParseError {}
+
+fn strip_ascii_case_prefix<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = value.get(..prefix.len())?;
+    if head.eq_ignore_ascii_case(prefix) {
+        value.get(prefix.len()..)
+    } else {
+        None
+    }
+}
+
 /// Supported track kinds for Taikai segments.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
@@ -310,8 +320,8 @@ impl FromStr for TaikaiAudioLayout {
             Ok(Self::FiveOne)
         } else if trimmed.eq_ignore_ascii_case("7.1") {
             Ok(Self::SevenOne)
-        } else if trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("custom:") {
-            let channels_str = trimmed[7..].trim();
+        } else if let Some(channels) = strip_ascii_case_prefix(trimmed, "custom:") {
+            let channels_str = channels.trim();
             if channels_str.is_empty() {
                 return Err(TaikaiParseError::InvalidAudioLayoutChannels(
                     channels_str.to_string(),
@@ -369,9 +379,9 @@ impl FromStr for TaikaiCodec {
             Ok(Self::AacLc)
         } else if trimmed.eq_ignore_ascii_case("opus") {
             Ok(Self::Opus)
-        } else if trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("custom:") {
-            let profile = trimmed[7..].trim();
-            if profile.is_empty() {
+        } else if let Some(custom_profile) = strip_ascii_case_prefix(trimmed, "custom:") {
+            let profile = custom_profile.trim();
+            if profile.is_empty() || profile.chars().any(char::is_control) {
                 return Err(TaikaiParseError::UnknownCodec(trimmed.to_string()));
             }
             Ok(Self::Custom(profile.to_string()))
@@ -654,6 +664,78 @@ pub struct CekRotationReceiptV1 {
     #[norito(default)]
     pub notes: Option<String>,
 }
+impl CekRotationReceiptV1 {
+    /// Validate the schema version and canonical KMS/key labels.
+    ///
+    /// # Errors
+    /// Returns [`CekRotationReceiptValidationError`] when the receipt version is unsupported or
+    /// a required label is empty, padded, contains control characters, the HKDF salt is all zero,
+    /// or the previous key repeats the new key.
+    pub fn validate(&self) -> Result<(), CekRotationReceiptValidationError> {
+        if self.schema_version != CEK_ROTATION_RECEIPT_VERSION_V1 {
+            return Err(
+                CekRotationReceiptValidationError::UnsupportedSchemaVersion {
+                    actual: self.schema_version,
+                },
+            );
+        }
+        validate_policy_label(&self.kms_profile, "kms_profile")?;
+        validate_policy_label(&self.new_wrap_key_label, "new_wrap_key_label")?;
+        if let Some(previous) = &self.previous_wrap_key_label {
+            validate_policy_label(previous, "previous_wrap_key_label")?;
+            if previous == &self.new_wrap_key_label {
+                return Err(CekRotationReceiptValidationError::UnchangedWrapKeyLabel);
+            }
+        }
+        if self.hkdf_salt.iter().all(|byte| *byte == 0) {
+            return Err(CekRotationReceiptValidationError::AllZeroHkdfSalt);
+        }
+        Ok(())
+    }
+}
+/// Validation errors for [`CekRotationReceiptV1`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum CekRotationReceiptValidationError {
+    /// The decoded receipt advertises an unsupported schema version.
+    #[error("unsupported CEK rotation receipt schema version {actual} (expected 1)")]
+    UnsupportedSchemaVersion {
+        /// Version found in the decoded receipt.
+        actual: u16,
+    },
+    /// A required policy label is empty.
+    #[error("CEK rotation receipt field `{field}` must not be empty")]
+    EmptyField {
+        /// Name of the malformed field.
+        field: &'static str,
+    },
+    /// A policy label is not in its canonical single-line form.
+    #[error(
+        "CEK rotation receipt field `{field}` must be trimmed and contain no control characters"
+    )]
+    NonCanonicalField {
+        /// Name of the malformed field.
+        field: &'static str,
+    },
+    /// The receipt carries an inert all-zero HKDF salt.
+    #[error("CEK rotation receipt HKDF salt must not be all zero")]
+    AllZeroHkdfSalt,
+    /// The previous and new wrap-key labels are identical.
+    #[error("CEK rotation receipt previous and new wrap-key labels must differ")]
+    UnchangedWrapKeyLabel,
+}
+
+fn validate_policy_label(
+    value: &str,
+    field: &'static str,
+) -> Result<(), CekRotationReceiptValidationError> {
+    if value.trim().is_empty() {
+        return Err(CekRotationReceiptValidationError::EmptyField { field });
+    }
+    if value.trim() != value || value.chars().any(char::is_control) {
+        return Err(CekRotationReceiptValidationError::NonCanonicalField { field });
+    }
+    Ok(())
+}
 /// Schema version for [`ReplicationProofTokenV1`].
 pub const REPLICATION_PROOF_TOKEN_VERSION_V1: u16 = 1;
 /// Norito envelope linking GAR, CEK receipts, and rollout evidence.
@@ -687,6 +769,105 @@ pub struct ReplicationProofTokenV1 {
     /// Optional governance notes or ticket references.
     #[norito(default)]
     pub notes: Option<String>,
+}
+impl ReplicationProofTokenV1 {
+    /// Validate the schema version, validity interval, evidence commitments, and policy labels.
+    ///
+    /// # Errors
+    /// Returns [`ReplicationProofTokenValidationError`] when a decoded token violates a v1
+    /// invariant.
+    pub fn validate(&self) -> Result<(), ReplicationProofTokenValidationError> {
+        if self.schema_version != REPLICATION_PROOF_TOKEN_VERSION_V1 {
+            return Err(
+                ReplicationProofTokenValidationError::UnsupportedSchemaVersion {
+                    actual: self.schema_version,
+                },
+            );
+        }
+        if self.valid_from_unix >= self.valid_until_unix {
+            return Err(
+                ReplicationProofTokenValidationError::InvalidValidityWindow {
+                    valid_from_unix: self.valid_from_unix,
+                    valid_until_unix: self.valid_until_unix,
+                },
+            );
+        }
+        for (field, digest) in [
+            ("gar_digest", &self.gar_digest),
+            ("cek_receipt_digest", &self.cek_receipt_digest),
+            (
+                "distribution_bundle_digest",
+                &self.distribution_bundle_digest,
+            ),
+        ] {
+            if digest.iter().all(|byte| *byte == 0) {
+                return Err(ReplicationProofTokenValidationError::AllZeroEvidenceDigest { field });
+            }
+        }
+        let mut seen = BTreeSet::new();
+        for (index, label) in self.policy_labels.iter().enumerate() {
+            if label.trim().is_empty() {
+                return Err(ReplicationProofTokenValidationError::EmptyPolicyLabel { index });
+            }
+            if label.trim() != label || label.chars().any(char::is_control) {
+                return Err(
+                    ReplicationProofTokenValidationError::NonCanonicalPolicyLabel { index },
+                );
+            }
+            if !seen.insert(label.as_str()) {
+                return Err(ReplicationProofTokenValidationError::DuplicatePolicyLabel {
+                    label: label.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+/// Validation errors for [`ReplicationProofTokenV1`].
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ReplicationProofTokenValidationError {
+    /// The decoded token advertises an unsupported schema version.
+    #[error("unsupported replication proof token schema version {actual} (expected 1)")]
+    UnsupportedSchemaVersion {
+        /// Version found in the decoded token.
+        actual: u16,
+    },
+    /// The validity interval is empty or reversed.
+    #[error(
+        "replication proof token validity window is invalid: valid-from ({valid_from_unix}) must be less than valid-until ({valid_until_unix})"
+    )]
+    InvalidValidityWindow {
+        /// Inclusive validity start supplied by the token.
+        valid_from_unix: u64,
+        /// Exclusive validity end supplied by the token.
+        valid_until_unix: u64,
+    },
+    /// A required evidence commitment is the all-zero sentinel rather than a digest.
+    #[error("replication proof token evidence digest `{field}` must not be all zero")]
+    AllZeroEvidenceDigest {
+        /// Name of the malformed digest field.
+        field: &'static str,
+    },
+    /// A policy-label entry is empty.
+    #[error("replication proof token policy label at index {index} must not be empty")]
+    EmptyPolicyLabel {
+        /// Zero-based index of the malformed label.
+        index: usize,
+    },
+    /// A policy-label entry is padded or contains control characters.
+    #[error(
+        "replication proof token policy label at index {index} must be trimmed and contain no control characters"
+    )]
+    NonCanonicalPolicyLabel {
+        /// Zero-based index of the malformed label.
+        index: usize,
+    },
+    /// A policy label is repeated.
+    #[error("replication proof token contains duplicate policy label `{label}`")]
+    DuplicatePolicyLabel {
+        /// Repeated policy label.
+        label: String,
+    },
 }
 /// Inclusive sequence window used for Taikai routing manifests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash, Default)]
@@ -968,6 +1149,9 @@ pub struct TaikaiSegmentSigningBodyV1 {
     pub metadata: ExtraMetadata,
 }
 impl TaikaiSegmentSigningBodyV1 {
+    /// Current Taikai Segment Signing Manifest body version.
+    pub const VERSION: u16 = 1;
+
     /// Construct a signing body descriptor.
     #[allow(clippy::too_many_arguments)]
     #[must_use]
@@ -1340,7 +1524,14 @@ mod tests {
         );
         assert!(TaikaiAudioLayout::from_str("unknown").is_err());
         assert!(TaikaiCodec::from_str("custom:").is_err());
+        assert!(TaikaiCodec::from_str("custom:foo\nbar").is_err());
         assert!(TaikaiResolution::from_str("1920").is_err());
+    }
+
+    #[test]
+    fn parsing_helpers_reject_non_ascii_labels_without_panicking() {
+        assert!(TaikaiCodec::from_str("映像コーデック").is_err());
+        assert!(TaikaiAudioLayout::from_str("ステレオ配置").is_err());
     }
     fn sample_alias_binding() -> TaikaiAliasBinding {
         TaikaiAliasBinding {
@@ -1461,7 +1652,7 @@ mod tests {
         let publisher_account = AccountId::new(kp.public_key().clone());
         let alias_binding = sample_alias_binding();
         let body = TaikaiSegmentSigningBodyV1::new(
-            1,
+            TaikaiSegmentSigningBodyV1::VERSION,
             digest_from(0x10),
             digest_from(0x11),
             digest_from(0x12),
@@ -1546,19 +1737,87 @@ mod tests {
     fn cek_rotation_receipt_round_trips() {
         let receipt = sample_cek_receipt();
         assert_eq!(receipt.schema_version, CEK_ROTATION_RECEIPT_VERSION_V1);
+        receipt.validate().expect("receipt validates");
         let encoded = norito::to_bytes(&receipt).expect("encode receipt");
         let decoded =
             norito::decode_from_bytes::<CekRotationReceiptV1>(&encoded).expect("receipt decodes");
         assert_eq!(decoded, receipt);
     }
     #[test]
+    fn cek_rotation_receipt_validation_rejects_malformed_decoded_labels() {
+        let mut receipt = sample_cek_receipt();
+        receipt.kms_profile = "kms/default\nforged".to_string();
+        assert!(matches!(
+            receipt.validate(),
+            Err(CekRotationReceiptValidationError::NonCanonicalField {
+                field: "kms_profile"
+            })
+        ));
+
+        let mut receipt = sample_cek_receipt();
+        receipt.previous_wrap_key_label = Some(receipt.new_wrap_key_label.clone());
+        assert_eq!(
+            receipt.validate(),
+            Err(CekRotationReceiptValidationError::UnchangedWrapKeyLabel)
+        );
+
+        let mut receipt = sample_cek_receipt();
+        receipt.hkdf_salt = [0; 32];
+        assert_eq!(
+            receipt.validate(),
+            Err(CekRotationReceiptValidationError::AllZeroHkdfSalt)
+        );
+    }
+    #[test]
     fn replication_proof_token_round_trips() {
         let token = sample_replication_proof_token();
         assert_eq!(token.schema_version, REPLICATION_PROOF_TOKEN_VERSION_V1);
+        token.validate().expect("token validates");
         let encoded = norito::to_bytes(&token).expect("encode token");
         let decoded =
             norito::decode_from_bytes::<ReplicationProofTokenV1>(&encoded).expect("token decodes");
         assert_eq!(decoded, token);
+    }
+    #[test]
+    fn replication_proof_token_validation_rejects_malformed_decoded_values() {
+        let mut token = sample_replication_proof_token();
+        token.schema_version = REPLICATION_PROOF_TOKEN_VERSION_V1 + 1;
+        assert!(matches!(
+            token.validate(),
+            Err(ReplicationProofTokenValidationError::UnsupportedSchemaVersion { actual: 2 })
+        ));
+
+        let mut token = sample_replication_proof_token();
+        token.policy_labels.push("canary".to_string());
+        assert!(matches!(
+            token.validate(),
+            Err(ReplicationProofTokenValidationError::DuplicatePolicyLabel { .. })
+        ));
+
+        let mut token = sample_replication_proof_token();
+        token.policy_labels[0] = "canary\nverified".to_string();
+        assert!(matches!(
+            token.validate(),
+            Err(ReplicationProofTokenValidationError::NonCanonicalPolicyLabel { index: 0 })
+        ));
+
+        for field in [
+            "gar_digest",
+            "cek_receipt_digest",
+            "distribution_bundle_digest",
+        ] {
+            let mut token = sample_replication_proof_token();
+            match field {
+                "gar_digest" => token.gar_digest = [0; 32],
+                "cek_receipt_digest" => token.cek_receipt_digest = [0; 32],
+                "distribution_bundle_digest" => token.distribution_bundle_digest = [0; 32],
+                _ => unreachable!("test enumerates every RPT digest field"),
+            }
+            assert_eq!(
+                token.validate(),
+                Err(ReplicationProofTokenValidationError::AllZeroEvidenceDigest { field })
+            );
+        }
     }
     #[test]
     fn segment_window_validation_rejects_invalid_range() {

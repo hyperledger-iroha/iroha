@@ -315,8 +315,7 @@ impl SecretSeed {
     }
 
     fn clear(&mut self) {
-        self.0.fill(0);
-        std::hint::black_box(&mut self.0);
+        zeroize::Zeroize::zeroize(&mut self.0);
     }
 }
 
@@ -349,8 +348,7 @@ fn read_seed_file(path: &Path) -> Result<SecretSeed, Box<dyn Error>> {
         Ok(raw) => decode_seed(raw),
         Err(error) => Err(format!("private key seed file is not UTF-8: {error}").into()),
     };
-    bytes.fill(0);
-    std::hint::black_box(bytes.as_mut_slice());
+    bytes.clear();
     result
 }
 fn request_body(record: &VpnSettlementSpoolRecord) -> Result<Vec<u8>, Box<dyn Error>> {

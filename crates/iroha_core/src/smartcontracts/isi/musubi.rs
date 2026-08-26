@@ -2512,6 +2512,7 @@ fn namespace_owner_and_generation(
                 binding.namespace.dataspace_segment(),
                 state_transaction.block_unix_timestamp_ms(),
             )
+            .map_err(|error| invariant(error.to_string()))?
             .ok_or_else(|| {
                 invariant(format!(
                     "Musubi namespace dataspace '{}' has no active SNS owner",

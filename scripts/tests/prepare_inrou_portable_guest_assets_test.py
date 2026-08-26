@@ -278,40 +278,6 @@ def test_verify_signed_sums_uses_gpgv_with_all_keyrings(
     ]
 
 
-def test_download_optional_signature_returns_false_for_missing_signature(
-    monkeypatch, tmp_path: Path
-) -> None:
-    def fake_download(url: str, destination: Path) -> None:
-        raise urllib.error.HTTPError(url, 404, "not found", {}, None)
-
-    monkeypatch.setattr(MODULE, "download", fake_download)
-
-    assert (
-        MODULE.download_optional_signature(
-            "https://example.invalid/SHA512SUMS.sign",
-            tmp_path / "SHA512SUMS.sign",
-        )
-        is False
-    )
-
-
-def test_download_optional_signature_returns_true_when_download_succeeds(
-    monkeypatch, tmp_path: Path
-) -> None:
-    calls = []
-
-    def fake_download(url: str, destination: Path) -> None:
-        calls.append((url, destination))
-        destination.write_bytes(b"signature")
-
-    monkeypatch.setattr(MODULE, "download", fake_download)
-    destination = tmp_path / "SHA512SUMS.sign"
-
-    assert MODULE.download_optional_signature("https://example.invalid/sig", destination) is True
-    assert calls == [("https://example.invalid/sig", destination)]
-    assert destination.read_bytes() == b"signature"
-
-
 def test_download_reuses_existing_destination_without_network(monkeypatch, tmp_path: Path) -> None:
     destination = tmp_path / "asset.tar.xz"
     destination.write_bytes(b"existing")
@@ -435,59 +401,6 @@ def test_remove_cached_download_rejects_symlink(tmp_path: Path) -> None:
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("symlinked cached download was removed")
     assert target.read_bytes() == b"keep"
-
-
-def test_verify_debian_sums_signature_skips_gpg_when_signature_missing(
-    monkeypatch, tmp_path: Path
-) -> None:
-    monkeypatch.setattr(MODULE, "download_optional_signature", lambda *_args: False)
-
-    def fail_find_gpg_tool() -> str:
-        raise AssertionError("gpg should not be required when falling back to pinned hash")
-
-    monkeypatch.setattr(MODULE, "find_gpg_tool", fail_find_gpg_tool)
-
-    assert (
-        MODULE.verify_debian_sums_signature_if_available(
-            "https://example.invalid",
-            tmp_path / "SHA512SUMS",
-            tmp_path / "SHA512SUMS.sign",
-            None,
-        )
-        is False
-    )
-
-
-def test_verify_debian_sums_signature_verifies_when_signature_exists(
-    monkeypatch, tmp_path: Path
-) -> None:
-    calls = []
-    keyring = tmp_path / "archive.gpg"
-    keyring.write_bytes(b"keyring")
-
-    monkeypatch.setattr(MODULE, "download_optional_signature", lambda *_args: True)
-    monkeypatch.setattr(MODULE, "find_gpg_tool", lambda: "/usr/bin/gpgv")
-    monkeypatch.setattr(MODULE, "resolve_debian_keyrings", lambda configured: [keyring])
-
-    def fake_verify_signed_sums(
-        sums_path: Path,
-        signature_path: Path,
-        keyrings: list[Path],
-        gpg_tool: str,
-    ) -> None:
-        calls.append((sums_path, signature_path, keyrings, gpg_tool))
-
-    monkeypatch.setattr(MODULE, "verify_signed_sums", fake_verify_signed_sums)
-    sums = tmp_path / "SHA512SUMS"
-    signature = tmp_path / "SHA512SUMS.sign"
-
-    assert (
-        MODULE.verify_debian_sums_signature_if_available(
-            "https://example.invalid", sums, signature, keyring
-        )
-        is True
-    )
-    assert calls == [(sums, signature, [keyring], "/usr/bin/gpgv")]
 
 
 def test_verify_pinned_archive_accepts_matching_digest(
@@ -628,25 +541,6 @@ def test_verify_archive_rejects_checksum_mismatch(tmp_path: Path) -> None:
         assert str(archive) in str(error)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("archive with mismatched SHA512SUMS digest was accepted")
-
-
-def test_download_optional_signature_propagates_non_404_http_errors(
-    monkeypatch, tmp_path: Path
-) -> None:
-    def fake_download(url: str, destination: Path) -> None:
-        raise urllib.error.HTTPError(url, 500, "server error", {}, None)
-
-    monkeypatch.setattr(MODULE, "download", fake_download)
-
-    try:
-        MODULE.download_optional_signature(
-            "https://example.invalid/SHA512SUMS.sign",
-            tmp_path / "SHA512SUMS.sign",
-        )
-    except urllib.error.HTTPError as error:
-        assert error.code == 500
-    else:  # pragma: no cover - defensive assertion
-        raise AssertionError("non-404 signature download error was swallowed")
 
 
 def test_extract_disk_rejects_archive_without_disk_raw(tmp_path: Path) -> None:
@@ -878,7 +772,7 @@ def test_dump_boot_file_replaces_existing_destination(monkeypatch, tmp_path: Pat
     ]
 
 
-def test_main_orchestrates_unsigned_pinned_asset_flow(monkeypatch, tmp_path: Path) -> None:
+def test_main_orchestrates_signed_and_pinned_asset_flow(monkeypatch, tmp_path: Path) -> None:
     output_dir = tmp_path / "assets"
     keyring = tmp_path / "archive.gpg"
     calls = []
@@ -896,21 +790,38 @@ def test_main_orchestrates_unsigned_pinned_asset_flow(monkeypatch, tmp_path: Pat
     )
     monkeypatch.setattr(MODULE, "host_asset_arch", lambda: ("amd64", "x86_64", "rootfs-x86_64"))
     monkeypatch.setattr(MODULE, "find_tool", lambda name: f"/tools/{name}")
+    monkeypatch.setattr(
+        MODULE,
+        "find_gpg_tool",
+        lambda: calls.append(("find_gpg",)) or "/tools/gpgv",
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "resolve_debian_keyrings",
+        lambda configured: calls.append(("resolve_keyrings", configured)) or [keyring],
+    )
 
     def record_download(url: str, destination: Path) -> None:
         calls.append(("download", url, destination.name))
 
     monkeypatch.setattr(MODULE, "download", record_download)
-
-    def fake_verify_signature(base_url: str, sums_path: Path, signature_path: Path, configured: Path) -> bool:
-        calls.append(("verify_signature", base_url, sums_path.name, signature_path.name, configured))
-        return False
-
-    monkeypatch.setattr(MODULE, "verify_debian_sums_signature_if_available", fake_verify_signature)
+    monkeypatch.setattr(
+        MODULE,
+        "verify_signed_sums",
+        lambda sums, signature, keyrings, verifier: calls.append(
+            (
+                "verify_signature",
+                sums.name,
+                signature.name,
+                keyrings,
+                verifier,
+            )
+        ),
+    )
     monkeypatch.setattr(
         MODULE,
         "verify_archive",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("verified flow should not run")),
+        lambda archive, sums: calls.append(("verify_archive", archive.name, sums.name)),
     )
     monkeypatch.setattr(
         MODULE,
@@ -922,7 +833,11 @@ def test_main_orchestrates_unsigned_pinned_asset_flow(monkeypatch, tmp_path: Pat
         "extract_disk",
         lambda archive, disk, force: calls.append(("extract_disk", archive.name, disk.name, force)),
     )
-    monkeypatch.setattr(MODULE, "root_partition_range", lambda disk: calls.append(("root_range", disk.name)) or (64, 128))
+    monkeypatch.setattr(
+        MODULE,
+        "root_partition_range",
+        lambda disk: calls.append(("root_range", disk.name)) or (64, 128),
+    )
     monkeypatch.setattr(
         MODULE,
         "copy_range",
@@ -940,7 +855,9 @@ def test_main_orchestrates_unsigned_pinned_asset_flow(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(
         MODULE,
         "newest_boot_file",
-        lambda debugfs, rootfs, prefix: calls.append(("newest_boot_file", debugfs, rootfs.name, prefix))
+        lambda debugfs, rootfs, prefix: calls.append(
+            ("newest_boot_file", debugfs, rootfs.name, prefix)
+        )
         or f"{prefix}cloud",
     )
     monkeypatch.setattr(
@@ -963,9 +880,13 @@ def test_main_orchestrates_unsigned_pinned_asset_flow(monkeypatch, tmp_path: Pat
     archive_name = MODULE.debian_archive_name("amd64")
     assert output_dir.is_dir()
     assert calls == [
+        ("find_gpg",),
+        ("resolve_keyrings", keyring),
         ("download", "https://images.example/base/SHA512SUMS", "SHA512SUMS"),
-        ("verify_signature", "https://images.example/base", "SHA512SUMS", "SHA512SUMS.sign", keyring),
+        ("download", "https://images.example/base/SHA512SUMS.sign", "SHA512SUMS.sign"),
+        ("verify_signature", "SHA512SUMS", "SHA512SUMS.sign", [keyring], "/tools/gpgv"),
         ("download", f"https://images.example/base/{archive_name}", archive_name),
+        ("verify_archive", archive_name, "SHA512SUMS"),
         ("verify_pinned", archive_name),
         ("extract_disk", archive_name, "disk.raw", True),
         ("root_range", "disk.raw"),
@@ -973,7 +894,13 @@ def test_main_orchestrates_unsigned_pinned_asset_flow(monkeypatch, tmp_path: Pat
         ("patch_rootfs", "rootfs-x86_64.ext4", "rootfs-x86_64", "/tools/debugfs", "/tools/tune2fs"),
         ("newest_boot_file", "/tools/debugfs", "rootfs-x86_64.ext4", "vmlinuz-"),
         ("newest_boot_file", "/tools/debugfs", "rootfs-x86_64.ext4", "initrd.img-"),
-        ("dump_boot_file", "/tools/debugfs", "rootfs-x86_64.ext4", "vmlinuz-cloud", "vmlinux-x86_64"),
+        (
+            "dump_boot_file",
+            "/tools/debugfs",
+            "rootfs-x86_64.ext4",
+            "vmlinuz-cloud",
+            "vmlinux-x86_64",
+        ),
         (
             "dump_boot_file",
             "/tools/debugfs",
@@ -981,11 +908,18 @@ def test_main_orchestrates_unsigned_pinned_asset_flow(monkeypatch, tmp_path: Pat
             "initrd.img-cloud",
             "initrd-x86_64.img",
         ),
-        ("write_env", output_dir.resolve(), "vmlinux-x86_64", "rootfs-x86_64.ext4", "initrd-x86_64.img", True),
+        (
+            "write_env",
+            output_dir.resolve(),
+            "vmlinux-x86_64",
+            "rootfs-x86_64.ext4",
+            "initrd-x86_64.img",
+            True,
+        ),
     ]
 
 
-def test_main_requires_pinned_digest_even_when_signature_is_available(
+def test_main_requires_pinned_digest_after_mandatory_signature_verification(
     monkeypatch, tmp_path: Path
 ) -> None:
     output_dir = tmp_path / "assets"
@@ -1004,8 +938,24 @@ def test_main_requires_pinned_digest_even_when_signature_is_available(
     )
     monkeypatch.setattr(MODULE, "host_asset_arch", lambda: ("arm64", "aarch64", "rootfs-aarch64"))
     monkeypatch.setattr(MODULE, "find_tool", lambda name: f"/tools/{name}")
-    monkeypatch.setattr(MODULE, "download", lambda url, destination: calls.append(("download", url, destination.name)))
-    monkeypatch.setattr(MODULE, "verify_debian_sums_signature_if_available", lambda *_args: True)
+    monkeypatch.setattr(MODULE, "find_gpg_tool", lambda: "/tools/gpgv")
+    monkeypatch.setattr(
+        MODULE,
+        "resolve_debian_keyrings",
+        lambda _configured: [tmp_path / "debian.gpg"],
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "download",
+        lambda url, destination: calls.append(("download", url, destination.name)),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "verify_signed_sums",
+        lambda sums, signature, keyrings, verifier: calls.append(
+            ("verify_signature", sums.name, signature.name, keyrings[0].name, verifier)
+        ),
+    )
     monkeypatch.setattr(
         MODULE,
         "verify_archive",
@@ -1043,9 +993,62 @@ def test_main_requires_pinned_digest_even_when_signature_is_available(
     archive_name = MODULE.debian_archive_name("arm64")
     assert calls == [
         ("download", "https://images.example/base/SHA512SUMS", "SHA512SUMS"),
+        ("download", "https://images.example/base/SHA512SUMS.sign", "SHA512SUMS.sign"),
+        ("verify_signature", "SHA512SUMS", "SHA512SUMS.sign", "debian.gpg", "/tools/gpgv"),
         ("download", f"https://images.example/base/{archive_name}", archive_name),
-        ("verify_pinned", archive_name),
         ("verify_archive", archive_name, "SHA512SUMS"),
+        ("verify_pinned", archive_name),
         ("extract_disk", True),
         ("copy_range", True),
+    ]
+
+
+def test_main_rejects_missing_debian_sums_signature(monkeypatch, tmp_path: Path) -> None:
+    output_dir = tmp_path / "assets"
+    requested_urls = []
+
+    monkeypatch.setattr(
+        MODULE,
+        "parse_args",
+        lambda: MODULE.argparse.Namespace(
+            output_dir=output_dir,
+            force=False,
+            print_env=False,
+            image_base_url="https://images.example/base",
+            debian_keyring=None,
+        ),
+    )
+    monkeypatch.setattr(MODULE, "host_asset_arch", lambda: ("amd64", "x86_64", "rootfs-x86_64"))
+    monkeypatch.setattr(MODULE, "find_tool", lambda name: f"/tools/{name}")
+    monkeypatch.setattr(MODULE, "find_gpg_tool", lambda: "/tools/gpgv")
+    monkeypatch.setattr(
+        MODULE,
+        "resolve_debian_keyrings",
+        lambda _configured: [tmp_path / "debian.gpg"],
+    )
+
+    def reject_signature(url: str, _destination: Path) -> None:
+        requested_urls.append(url)
+        if url.endswith("/SHA512SUMS.sign"):
+            raise urllib.error.HTTPError(url, 404, "not found", {}, None)
+
+    monkeypatch.setattr(MODULE, "download", reject_signature)
+    monkeypatch.setattr(
+        MODULE,
+        "verify_signed_sums",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("missing signature must fail before GPG verification")
+        ),
+    )
+
+    try:
+        MODULE.main()
+    except urllib.error.HTTPError as error:
+        assert error.code == 404
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("missing Debian SHA512SUMS signature was accepted")
+
+    assert requested_urls == [
+        "https://images.example/base/SHA512SUMS",
+        "https://images.example/base/SHA512SUMS.sign",
     ]

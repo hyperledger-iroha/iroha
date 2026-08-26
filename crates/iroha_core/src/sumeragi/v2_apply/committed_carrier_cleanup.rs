@@ -7,7 +7,7 @@ fn finalize_startup_committed_canonical_carriers(
     kura: &Kura,
     network_id: NetworkId,
     authorized_commit_groups: Vec<(
-        Vec<crate::queue::LaneQueueReservationKeyV2>,
+        Vec<crate::queue::LaneQueueReservationKeyV1>,
         AutonomousLaneQueueCarrierCleanupAuthorization,
     )>,
 ) -> Result<usize, V2ReservationLifecycleError> {

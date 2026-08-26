@@ -512,6 +512,11 @@ fn validate_config_admission(config: &PopConfig) -> Result<(), PopValidationErro
 pub fn validate_config(config: &PopConfig) -> Result<(), PopValidationError> {
     validate_config_admission(config)?;
     let mut errors = BoundedDiagnostics::new(CONFIG_VALIDATION_MAX_DIAGNOSTICS_V1);
+    let service_names: BTreeSet<&str> = config
+        .services
+        .iter()
+        .map(|service| service.name.as_str())
+        .collect();
     if config.metadata.name.trim().is_empty() {
         errors.push("metadata.name must not be empty".to_string());
     }
@@ -568,6 +573,19 @@ pub fn validate_config(config: &PopConfig) -> Result<(), PopValidationError> {
     }
     if config.promotion.stages.is_empty() {
         errors.push("promotion policy must contain at least one stage".to_string());
+    } else {
+        for stage in &config.promotion.stages {
+            for gate in &stage.gates {
+                if let Some(service) = &gate.service
+                    && !service_names.contains(service.as_str())
+                {
+                    errors.push(format!(
+                        "promotion gate `{}` in stage `{}` references unknown service `{service}`",
+                        gate.kind, stage.name
+                    ));
+                }
+            }
+        }
     }
     if config.sigstore.fulcio_url.trim().is_empty() {
         errors.push("sigstore.fulcio_url must not be empty".to_string());
@@ -583,6 +601,12 @@ pub fn validate_config(config: &PopConfig) -> Result<(), PopValidationError> {
             if !seen.insert((&check.service, &check.name)) {
                 errors.push(format!(
                     "duplicate health check `{}` for service `{}`",
+                    check.name, check.service
+                ));
+            }
+            if !service_names.contains(check.service.as_str()) {
+                errors.push(format!(
+                    "health check `{}` references unknown service `{}`",
                     check.name, check.service
                 ));
             }
@@ -717,6 +741,19 @@ pub enum HealthError {
 fn validate_health_inputs(config: &PopConfig, report: &HealthReport) -> Result<(), HealthError> {
     validate_config_admission(config)
         .map_err(|error| HealthError::InvalidInput(error.to_string()))?;
+    let configured_services: BTreeSet<&str> = config
+        .services
+        .iter()
+        .map(|service| service.name.as_str())
+        .collect();
+    for check in &config.health.checks {
+        if !configured_services.contains(check.service.as_str()) {
+            return Err(HealthError::InvalidInput(format!(
+                "health check `{}` references unknown service `{}`",
+                check.name, check.service
+            )));
+        }
+    }
     admit_count(
         "health report services",
         report.services.len(),
@@ -1374,6 +1411,49 @@ mod tests {
         assert!(
             message.contains("edge-gateway"),
             "error should mention missing edge-gateway role, got {message}"
+        );
+    }
+    #[test]
+    fn validation_rejects_health_check_for_unknown_service() {
+        let mut config = build_template(&TemplateOptions::default());
+        config.health.checks[0].service = "missing-service".to_string();
+
+        let error = validate_config(&config)
+            .expect_err("health checks for unknown services must fail validation");
+        let message = error.to_string();
+        assert!(
+            message.contains("edge-http") && message.contains("missing-service"),
+            "error should identify the health check and unknown service, got {message}"
+        );
+    }
+    #[test]
+    fn health_evaluation_rejects_check_for_unknown_service() {
+        let mut config = build_template(&TemplateOptions::default());
+        config.health.checks[0].service = "missing-service".to_string();
+        let report = HealthReport {
+            generated_at: "2026-01-02T03:04:05Z".to_string(),
+            services: Vec::new(),
+        };
+
+        let error = evaluate_health(&config, &report)
+            .expect_err("health evaluation must reject undeclared service references");
+        assert!(
+            matches!(error, HealthError::InvalidInput(ref message) if
+                message.contains("edge-http") && message.contains("missing-service")),
+            "error should identify the health check and unknown service, got {error}"
+        );
+    }
+    #[test]
+    fn validation_rejects_promotion_gate_for_unknown_service() {
+        let mut config = build_template(&TemplateOptions::default());
+        config.promotion.stages[0].gates[0].service = Some("missing-service".to_string());
+
+        let error = validate_config(&config)
+            .expect_err("promotion gates for unknown services must fail validation");
+        let message = error.to_string();
+        assert!(
+            message.contains("sigstore-attestation") && message.contains("missing-service"),
+            "error should identify the promotion gate and unknown service, got {message}"
         );
     }
     #[test]

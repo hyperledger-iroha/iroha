@@ -55,14 +55,12 @@ if [ -n "${IROHA_INROU_PORTABLE_INITRD_IMAGE:-}" ] && [ ! -f "${IROHA_INROU_PORT
   exit 1
 fi
 
-export IROHA_RUN_IGNORED=1
-export IROHA_INROU_PORTABLE=1
 export CARGO_TARGET_DIR
 
 cd "$ROOT_DIR"
 
-echo "+ cargo test --locked -p irohad --bin iroha3d build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay -- --nocapture"
-cargo test --locked -p irohad --bin iroha3d build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay -- --nocapture
+echo "+ cargo test --locked -p irohad --bin iroha3d build_inrou_user_data_projects_isolated_portable_block_mounts -- --nocapture"
+cargo test --locked -p irohad --bin iroha3d build_inrou_user_data_projects_isolated_portable_block_mounts -- --nocapture
 
 echo "+ cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_root_disk_is_a_standalone_authenticated_copy -- --nocapture"
 cargo test --locked -p irohad --bin iroha3d ensure_inrou_portable_root_disk_is_a_standalone_authenticated_copy -- --nocapture

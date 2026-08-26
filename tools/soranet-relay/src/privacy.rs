@@ -21,7 +21,7 @@ use norito::json;
 use std::{
     collections::{BTreeMap, VecDeque},
     fmt,
-    sync::Mutex,
+    sync::{Mutex, MutexGuard},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 /// Percentiles captured in RTT exports.
@@ -98,6 +98,11 @@ fn drain_event_ndjson(events: &mut VecDeque<SoranetPrivacyEventV1>) -> String {
         body.push('\n');
     }
     body
+}
+fn recover_privacy_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 /// Aggregator configuration knobs used by the privacy telemetry layer.
 #[derive(Debug, Clone, Copy)]
@@ -287,25 +292,16 @@ impl PrivacyEventBuffer {
     }
     /// Drain buffered events, serialising them as newline-delimited JSON.
     pub fn drain_ndjson(&self) -> String {
-        let mut guard = self
-            .events
-            .lock()
-            .expect("privacy event buffer mutex poisoned");
+        let mut guard = recover_privacy_lock(&self.events);
         drain_event_ndjson(&mut guard)
     }
     /// Return the number of buffered privacy events without draining them.
     pub fn queue_depth(&self) -> usize {
-        let guard = self
-            .events
-            .lock()
-            .expect("privacy event buffer mutex poisoned");
+        let guard = recover_privacy_lock(&self.events);
         guard.len()
     }
     fn push(&self, event: SoranetPrivacyEventV1) {
-        let mut guard = self
-            .events
-            .lock()
-            .expect("privacy event buffer mutex poisoned");
+        let mut guard = recover_privacy_lock(&self.events);
         if self.max_events == 0 {
             return;
         }
@@ -337,10 +333,7 @@ impl ProxyPolicyEventBuffer {
             ),
             mode,
         };
-        let mut guard = self
-            .events
-            .lock()
-            .expect("proxy policy buffer mutex poisoned");
+        let mut guard = recover_privacy_lock(&self.events);
         if self.max_events == 0 {
             return;
         }
@@ -351,18 +344,12 @@ impl ProxyPolicyEventBuffer {
     }
     /// Drain buffered downgrade events as NDJSON body.
     pub fn drain_ndjson(&self) -> String {
-        let mut guard = self
-            .events
-            .lock()
-            .expect("proxy policy buffer mutex poisoned");
+        let mut guard = recover_privacy_lock(&self.events);
         drain_event_ndjson(&mut guard)
     }
     /// Current number of downgrade events awaiting proxy remediation.
     pub fn queue_depth(&self) -> usize {
-        let guard = self
-            .events
-            .lock()
-            .expect("proxy policy buffer mutex poisoned");
+        let guard = recover_privacy_lock(&self.events);
         guard.len()
     }
 }
@@ -778,10 +765,7 @@ impl PrivacyAggregator {
     /// Render Prometheus metrics for completed buckets as of the supplied timestamp.
     pub fn render_prometheus(&self, mode: RelayMode, now: SystemTime) -> String {
         let bucket_secs = self.config.bucket_secs;
-        let mut state = self
-            .state
-            .lock()
-            .expect("soranet privacy aggregator mutex poisoned");
+        let mut state = recover_privacy_lock(&self.state);
         let current_idx = bucket_index(now, bucket_secs);
         state.flush_ready(current_idx, &self.config);
         let mut output = BoundedText::new(PRIVACY_PROMETHEUS_MAX_BYTES_V1);
@@ -794,10 +778,7 @@ impl PrivacyAggregator {
     where
         F: FnMut(&mut BucketStats),
     {
-        let mut state = self
-            .state
-            .lock()
-            .expect("soranet privacy aggregator mutex poisoned");
+        let mut state = recover_privacy_lock(&self.state);
         let bucket_idx = bucket_index(when, self.config.bucket_secs);
         if state
             .finalized_through
@@ -1080,9 +1061,48 @@ impl From<PrivacyTelemetryConfig> for PrivacyConfig {
 mod tests {
     use super::*;
     use crate::config::GAR_CATEGORY_MAX_BYTES_V1;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    fn poison<T>(mutex: &Mutex<T>) {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = mutex.lock().expect("unpoisoned fixture mutex");
+            panic!("poison observability fixture mutex");
+        }));
+        assert!(result.is_err());
+    }
+
     fn base_time() -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(1_000)
     }
+
+    #[test]
+    fn poisoned_privacy_observability_locks_recover_without_panicking() {
+        let mode = SoranetPrivacyModeV1::Entry;
+        let when = base_time();
+
+        let events = PrivacyEventBuffer::new(2);
+        poison(&events.events);
+        events.record_handshake_success(mode, when, None, None);
+        assert_eq!(events.queue_depth(), 1);
+        assert!(!events.drain_ndjson().is_empty());
+
+        let proxy = ProxyPolicyEventBuffer::new(2);
+        poison(&proxy.events);
+        proxy.record_downgrade(mode, when);
+        assert_eq!(proxy.queue_depth(), 1);
+        assert!(!proxy.drain_ndjson().is_empty());
+
+        let aggregator = PrivacyAggregator::new(PrivacyConfig {
+            bucket_secs: 1,
+            min_handshakes: 1,
+            ..PrivacyConfig::default()
+        });
+        poison(&aggregator.state);
+        aggregator.record_circuit_accepted(when, None, None);
+        let output = aggregator.render_prometheus(RelayMode::Entry, when + Duration::from_secs(2));
+        assert!(output.contains("soranet_privacy_circuit_events_total"));
+    }
+
     #[test]
     fn renders_metrics_when_threshold_met() {
         let config = PrivacyConfig {

@@ -88,21 +88,11 @@ fn soracloud_runtime_json_deserialize_applies_explicit_overrides() {
             "hf":{
                 "hub_base_url":"https://mirror.hf.test",
                 "api_base_url":"https://mirror.hf.test/api",
-                "inference_base_url":"https://router.hf.test/hf-inference/models",
                 "request_timeout_ms":21000,
-                "local_execution_enabled":false,
-                "local_runner_program":"python3.12",
-                "local_runner_timeout_ms":45000,
-                "model_host_heartbeat_ttl_ms":18000,
                 "import_max_files":48,
                 "import_max_file_bytes":777777,
                 "import_max_total_bytes":9999999,
-                "import_file_allowlist":["config.json","*.safetensors"],
-                "inference_credential_provider":{
-                    "handle":"kms://soracloud/hf-inference-primary",
-                    "revision":7,
-                    "policy_digest_hex":"a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
-                }
+                "import_file_allowlist":["config.json","*.safetensors"]
             }
         }"#;
     let parsed: SoracloudRuntime =
@@ -130,71 +120,6 @@ fn soracloud_runtime_json_deserialize_applies_explicit_overrides() {
         30_000
     );
     assert!(parsed.egress.default_allow);
-    let credential_provider = parsed
-        .hf
-        .inference_credential_provider
-        .as_ref()
-        .expect("credential-provider binding");
-    assert_eq!(
-        credential_provider.handle,
-        "kms://soracloud/hf-inference-primary"
-    );
-    assert_eq!(credential_provider.revision, 7);
-    assert_eq!(
-        credential_provider.policy_digest_hex,
-        "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
-    );
-}
-#[test]
-fn soracloud_runtime_rejects_raw_hf_inference_credentials() {
-    let mut table = base_table();
-    let runtime = table
-        .entry("soracloud_runtime")
-        .or_insert_with(|| Value::Table(Table::new()))
-        .as_table_mut()
-        .expect("soracloud_runtime table");
-    let mut hf = Table::new();
-    hf.insert(
-        "inference_token".into(),
-        Value::String("must-not-enter-config".to_owned()),
-    );
-    runtime.insert("hf".into(), Value::Table(hf));
-    assert!(
-        actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
-        "the removed raw-token field must not be accepted as a TOML alias"
-    );
-    let error = norito::json::from_json::<SoracloudRuntimeHuggingFace>(
-        r#"{"inference_token":"must-not-enter-config"}"#,
-    )
-    .expect_err("the removed raw-token field must not be accepted as a JSON alias");
-    assert!(error.to_string().contains("inference_token"));
-}
-#[test]
-fn soracloud_runtime_rejects_retired_hf_bridge_fallback_switch() {
-    let mut table = base_table();
-    let runtime = table
-        .entry("soracloud_runtime")
-        .or_insert_with(|| Value::Table(Table::new()))
-        .as_table_mut()
-        .expect("soracloud_runtime table");
-    let mut hf = Table::new();
-    hf.insert(
-        "allow_inference_bridge_fallback".into(),
-        Value::Boolean(true),
-    );
-    runtime.insert("hf".into(), Value::Table(hf));
-    let _ = actual::Root::from_toml_source(TomlSource::inline(table))
-        .expect_err("retired HF bridge fallback switch must be an unknown TOML field");
-    let error = norito::json::from_json::<SoracloudRuntimeHuggingFace>(
-        r#"{"allow_inference_bridge_fallback":true}"#,
-    )
-    .expect_err("retired HF bridge fallback switch must be an unknown JSON field");
-    assert!(
-        error
-            .to_string()
-            .contains("allow_inference_bridge_fallback"),
-        "{error}"
-    );
 }
 #[test]
 fn soracloud_runtime_parse_rejects_removed_legacy_runtime_section() {
@@ -240,27 +165,17 @@ fn soracloud_runtime_json_deserialize_rejects_removed_legacy_runtime_field() {
             "hf":{
                 "hub_base_url":"https://mirror.hf.test",
                 "api_base_url":"https://mirror.hf.test/api",
-                "inference_base_url":"https://router.hf.test/hf-inference/models",
                 "request_timeout_ms":21000,
-                "local_execution_enabled":false,
-                "local_runner_program":"python3.12",
-                "local_runner_timeout_ms":45000,
-                "model_host_heartbeat_ttl_ms":18000,
                 "import_max_files":48,
                 "import_max_file_bytes":777777,
                 "import_max_total_bytes":9999999,
-                "import_file_allowlist":["config.json","*.safetensors"],
-                "inference_credential_provider":{
-                    "handle":"kms://soracloud/hf-inference-primary",
-                    "revision":7,
-                    "policy_digest_hex":"a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7"
-                }
+                "import_file_allowlist":["config.json","*.safetensors"]
             }
         }"#
-        .replace(
-            "\"__REMOVED_FIELD__\":{}",
-            &format!("\"{removed_field}\":{{}}"),
-        );
+    .replace(
+        "\"__REMOVED_FIELD__\":{}",
+        &format!("\"{removed_field}\":{{}}"),
+    );
     let error = norito::json::from_json::<SoracloudRuntime>(&json)
         .expect_err("removed legacy runtime JSON field must be rejected");
     assert!(error.to_string().contains(&removed_field));
@@ -345,12 +260,12 @@ fn nexus_hf_shared_leases_parse_applies_explicit_overrides() {
 fn nexus_uploaded_models_defaults_apply() {
     let actual = load_root(base_table());
     assert_eq!(
-        actual.nexus.uploaded_models.chunk_plaintext_bytes,
-        defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES
+        actual.nexus.uploaded_models.max_plaintext_bytes_per_model,
+        defaults::nexus::uploaded_models::MAX_PLAINTEXT_BYTES_PER_MODEL
     );
     assert_eq!(
-        actual.nexus.uploaded_models.max_session_token_budget,
-        defaults::nexus::uploaded_models::MAX_SESSION_TOKEN_BUDGET
+        actual.nexus.uploaded_models.max_chunk_count_per_model,
+        defaults::nexus::uploaded_models::MAX_CHUNK_COUNT_PER_MODEL
     );
 }
 #[test]
@@ -362,26 +277,21 @@ fn nexus_uploaded_models_parse_applies_explicit_overrides() {
         .as_table_mut()
         .expect("nexus table");
     let mut uploaded_models = Table::new();
-    uploaded_models.insert("chunk_plaintext_bytes".into(), Value::Integer(2_097_152));
     uploaded_models.insert(
-        "max_active_private_sessions_per_apartment".into(),
-        Value::Integer(6),
+        "max_plaintext_bytes_per_model".into(),
+        Value::Integer(2_097_152),
     );
-    uploaded_models.insert("max_session_token_budget".into(), Value::Integer(4_096));
+    uploaded_models.insert("max_chunk_count_per_model".into(), Value::Integer(4_096));
     nexus.insert("uploaded_models".into(), Value::Table(uploaded_models));
     let actual = load_root(table);
     assert_eq!(
-        actual.nexus.uploaded_models.chunk_plaintext_bytes,
+        actual.nexus.uploaded_models.max_plaintext_bytes_per_model,
         2_097_152
     );
     assert_eq!(
-        actual
-            .nexus
-            .uploaded_models
-            .max_active_private_sessions_per_apartment,
-        6
+        actual.nexus.uploaded_models.max_chunk_count_per_model,
+        4_096
     );
-    assert_eq!(actual.nexus.uploaded_models.max_session_token_budget, 4_096);
 }
 #[test]
 fn tiered_state_parse_accepts_da_store_root() {

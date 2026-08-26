@@ -12,11 +12,7 @@ async fn ballot_zk_v1_ballotproof_rejects_noncanonical_owner_hint_in_raw_json() 
         backend: "halo2/ipa".into(),
         envelope_bytes: vec![1u8, 2, 3, 4],
         root_hint: None,
-        owner: Some(
-            AccountId::parse_encoded(&owner_canonical)
-                .expect("valid account id")
-                .into_account_id(),
-        ),
+        owner: Some(AccountId::parse_encoded(&owner_canonical).expect("valid account id")),
         nullifier: None,
         amount: Some(200_u64.into()),
         duration_blocks: Some(256),
@@ -68,11 +64,7 @@ async fn ballot_zk_v1_ballotproof_rejects_partial_lock_hints() {
         backend: "halo2/ipa".into(),
         envelope_bytes: vec![1u8, 2, 3, 4],
         root_hint: None,
-        owner: Some(
-            AccountId::parse_encoded(ACCOUNT_AUTHORITY)
-                .expect("valid account id")
-                .into_account_id(),
-        ),
+        owner: Some(AccountId::parse_encoded(ACCOUNT_AUTHORITY).expect("valid account id")),
         nullifier: None,
         amount: None,
         duration_blocks: None,

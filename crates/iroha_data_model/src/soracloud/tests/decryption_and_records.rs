@@ -78,6 +78,108 @@ fn decryption_request_validate_rejects_zero_prehash_digest_sentinels() {
     assert_zero_prehash_digest_error(&error, "governance_tx_hash");
 }
 #[test]
+fn fhe_stable_identifiers_and_paths_require_exact_text() {
+    let mut job = sample_fhe_job_spec();
+    job.job_id.push(' ');
+    assert!(job.validate().is_err(), "padded FHE job ID was accepted");
+
+    let mut job = sample_fhe_job_spec();
+    job.inputs[0].state_key.insert(0, ' ');
+    assert!(
+        job.validate().is_err(),
+        "padded FHE input state key was accepted",
+    );
+
+    let mut job = sample_fhe_job_spec();
+    job.output_state_key.push(' ');
+    assert!(
+        job.validate().is_err(),
+        "padded FHE output state key was accepted",
+    );
+
+    let mut request = sample_decryption_request();
+    request.request_id.push(' ');
+    assert!(
+        request.validate().is_err(),
+        "padded decryption request ID was accepted",
+    );
+
+    let mut query = sample_ciphertext_query_spec();
+    query.state_key_prefix.push(' ');
+    assert!(
+        query.validate().is_err(),
+        "padded ciphertext query prefix was accepted",
+    );
+
+    let mut result = sample_ciphertext_query_response();
+    result.metadata_level = CiphertextQueryMetadataLevelV1::Standard;
+    result.results[0].state_key = Some("/state/private/patient-1".into());
+    result.results[0]
+        .state_key
+        .as_mut()
+        .expect("sample state key")
+        .push(' ');
+    assert!(
+        result.validate().is_err(),
+        "padded ciphertext result state key was accepted",
+    );
+
+    let mut record = sample_ciphertext_state_record();
+    record.state_key = "//state/private".into();
+    assert!(
+        record.validate().is_err(),
+        "empty ciphertext-state path components were accepted",
+    );
+
+    let mut job = sample_fhe_job_spec();
+    job.inputs[0].state_key = "/state/../private".into();
+    assert!(
+        job.validate().is_err(),
+        "parent FHE input path components were accepted",
+    );
+
+    let mut job = sample_fhe_job_spec();
+    job.output_state_key = "/state/./result".into();
+    assert!(
+        job.validate().is_err(),
+        "current-directory FHE output path components were accepted",
+    );
+
+    let mut request = sample_decryption_request();
+    request.state_key = "/state\\private".into();
+    assert!(
+        request.validate().is_err(),
+        "backslash decryption state paths were accepted",
+    );
+
+    let mut query = sample_ciphertext_query_spec();
+    query.state_key_prefix = "/state/private?alias=1".into();
+    assert!(
+        query.validate().is_err(),
+        "query-decorated ciphertext prefixes were accepted",
+    );
+
+    let mut result = sample_ciphertext_query_response();
+    result.metadata_level = CiphertextQueryMetadataLevelV1::Standard;
+    result.results[0].state_key = Some("/state/private/patient-1".into());
+    *result.results[0]
+        .state_key
+        .as_mut()
+        .expect("sample state key") = "/state//private".into();
+    assert!(
+        result.validate().is_err(),
+        "empty ciphertext result path components were accepted",
+    );
+}
+#[test]
+fn decryption_request_preserves_meaningful_free_form_justification() {
+    let mut request = sample_decryption_request();
+    request.justification = "  preserve this exact audit explanation  ".into();
+    request
+        .validate()
+        .expect("meaningful free-form justification must preserve surrounding bytes");
+}
+#[test]
 fn ciphertext_query_spec_validate_rejects_max_results_over_limit() {
     let mut spec = sample_ciphertext_query_spec();
     spec.max_results = NonZeroU16::new(500).expect("nonzero");
@@ -173,11 +275,11 @@ fn soracloud_host_request_envelope_validate_rejects_payload_operation_mismatch()
     let request = SoracloudHostRequestEnvelopeV1 {
         schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
         operation: SoracloudHostOperationV1::ReadConfig,
-        payload: SoracloudHostRequestPayloadV1::EgressFetch(SoracloudEgressFetchRequestV1 {
-            url: "https://example.invalid/data".to_string(),
-            max_bytes: 1024,
-            expected_hash: None,
-        }),
+        payload: SoracloudHostRequestPayloadV1::ReadSecretEnvelope(
+            SoracloudReadSecretEnvelopeRequestV1 {
+                secret_name: "secret/main".to_string(),
+            },
+        ),
     };
     let error = request
         .validate()
@@ -192,21 +294,75 @@ fn soracloud_host_request_envelope_validate_rejects_payload_operation_mismatch()
     ));
 }
 #[test]
+fn soracloud_host_stable_names_and_paths_require_exact_text() {
+    assert!(
+        SoracloudReadConfigRequestV1 {
+            config_name: " config/main".into(),
+        }
+        .validate()
+        .is_err(),
+    );
+    assert!(
+        SoracloudReadSecretEnvelopeRequestV1 {
+            secret_name: "secret/main ".into(),
+        }
+        .validate()
+        .is_err(),
+    );
+    assert!(
+        SoracloudReadCommittedStateRequestV1 {
+            binding_name: sample_name("state"),
+            state_key: "/state/key ".into(),
+        }
+        .validate()
+        .is_err(),
+    );
+    assert!(
+        SoracloudAppendJournalRequestV1 {
+            artifact_path: " /journal/entry".into(),
+            payload_bytes: Vec::new(),
+        }
+        .validate()
+        .is_err(),
+    );
+    for state_key in [
+        "//state/key",
+        "/state/./key",
+        "/state/../key",
+        "/state/key?alias=1",
+        "/state\\key",
+    ] {
+        assert!(
+            SoracloudReadCommittedStateRequestV1 {
+                binding_name: sample_name("state"),
+                state_key: state_key.into(),
+            }
+            .validate()
+            .is_err(),
+            "noncanonical state path {state_key:?} must fail closed",
+        );
+    }
+    for artifact_path in [
+        "//journal/entry",
+        "/journal/./entry",
+        "/journal/../entry",
+        "/journal/entry#alias",
+        "/journal\\entry",
+    ] {
+        assert!(
+            SoracloudAppendJournalRequestV1 {
+                artifact_path: artifact_path.into(),
+                payload_bytes: Vec::new(),
+            }
+            .validate()
+            .is_err(),
+            "noncanonical artifact path {artifact_path:?} must fail closed",
+        );
+    }
+}
+#[test]
 fn soracloud_host_request_envelope_validate_rejects_zero_prehash_digest_sentinels() {
     let zero_digest = zero_prehash_statement_hash();
-    let request = SoracloudHostRequestEnvelopeV1 {
-        schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
-        operation: SoracloudHostOperationV1::EgressFetch,
-        payload: SoracloudHostRequestPayloadV1::EgressFetch(SoracloudEgressFetchRequestV1 {
-            url: "https://example.invalid/data".to_string(),
-            max_bytes: 1024,
-            expected_hash: Some(zero_digest),
-        }),
-    };
-    let error = request
-        .validate()
-        .expect_err("egress expected hash placeholder must fail admission");
-    assert_zero_prehash_digest_error(&error, "expected_hash");
     let request = SoracloudHostRequestEnvelopeV1 {
         schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
         operation: SoracloudHostOperationV1::EmitStateMutation,
@@ -308,39 +464,6 @@ fn soracloud_host_response_envelope_validate_rejects_zero_prehash_digest_sentine
             artifact_hash: zero_digest,
         },)
     );
-    assert_response_digest_rejects!(
-        "body_hash",
-        SoracloudHostOperationV1::EgressFetch,
-        SoracloudHostResponsePayloadV1::EgressFetch(SoracloudEgressFetchResponseV1 {
-            status_code: 200,
-            content_type: Some("application/octet-stream".to_string()),
-            body: b"abc".to_vec(),
-            body_hash: zero_digest,
-        })
-    );
-}
-#[test]
-fn soracloud_host_response_envelope_validate_rejects_body_hash_mismatch() {
-    let response = SoracloudHostResponseEnvelopeV1 {
-        schema_version: SORACLOUD_HOST_RESPONSE_VERSION_V1,
-        operation: SoracloudHostOperationV1::EgressFetch,
-        payload: SoracloudHostResponsePayloadV1::EgressFetch(SoracloudEgressFetchResponseV1 {
-            status_code: 200,
-            content_type: Some("application/octet-stream".to_string()),
-            body: b"abc".to_vec(),
-            body_hash: sample_hash(47),
-        }),
-    };
-    let error = response
-        .validate()
-        .expect_err("egress body hash must match response body");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "body_hash",
-            ..
-        }
-    ));
 }
 #[test]
 fn secret_envelope_validate_rejects_empty_ciphertext() {
@@ -403,6 +526,48 @@ fn ciphertext_state_metadata_validate_rejects_zero_prehash_commitment_sentinel()
         }
     ));
     assert!(error.to_string().contains("zero prehash sentinel"));
+}
+#[test]
+fn ciphertext_state_metadata_rejects_noncanonical_public_text() {
+    for field in ["content_type", "policy_tag", "tags"] {
+        let mut record = sample_ciphertext_state_record();
+        match field {
+            "content_type" => record.metadata.content_type = " application/octet-stream".into(),
+            "policy_tag" => record.metadata.policy_tag = Some("policy ".into()),
+            "tags" => record.metadata.tags = vec![" padded".into()],
+            _ => unreachable!(),
+        }
+        assert!(
+            record.metadata.validate().is_err(),
+            "noncanonical {field} text was accepted",
+        );
+    }
+
+    let mut duplicate = sample_ciphertext_state_record();
+    duplicate.metadata.tags = vec!["exact".into(), "exact".into()];
+    let error = duplicate
+        .metadata
+        .validate()
+        .expect_err("exact duplicate tags must fail");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField { field: "tags", .. }
+    ));
+}
+#[test]
+fn secret_envelope_rejects_noncanonical_key_id() {
+    let mut envelope = sample_secret_envelope();
+    envelope.key_id.push(' ');
+    let error = envelope
+        .validate()
+        .expect_err("padded secret key identifier must fail");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "key_id",
+            ..
+        }
+    ));
 }
 #[test]
 fn ciphertext_state_record_validate_rejects_payload_size_mismatch() {
@@ -623,7 +788,7 @@ fn uploaded_model_bundle_validation_rejects_wrapped_key_recipient_mismatch() {
     bundle.wrapped_bundle_key.recipient_key_id = "other-recipient".to_string();
     let error = bundle
         .validate()
-        .expect_err("wrapped key must target the advertised upload recipient");
+        .expect_err("wrapped key must target the recorded upload recipient");
     assert!(matches!(
         error,
         SoracloudManifestError::InvalidField {
@@ -632,6 +797,35 @@ fn uploaded_model_bundle_validation_rejects_wrapped_key_recipient_mismatch() {
             ..
         }
     ));
+}
+#[test]
+fn uploaded_model_v1_rejects_noncanonical_identifier_text() {
+    let mut recipient = sample_uploaded_model_encryption_recipient();
+    recipient.key_id.push(' ');
+    let error = recipient
+        .validate()
+        .expect_err("recipient key identifiers must not be normalized");
+    assert_soracloud_invalid_field(error, "key_id");
+
+    let mut wrapped_key = sample_uploaded_model_wrapped_key();
+    wrapped_key.recipient_key_id.insert(0, ' ');
+    let error = wrapped_key
+        .validate()
+        .expect_err("wrapped-key recipient identifiers must not be normalized");
+    assert_soracloud_invalid_field(error, "recipient_key_id");
+
+    for mutate in [
+        |bundle: &mut SoraUploadedModelBundleV1| bundle.model_id.push(' '),
+        |bundle: &mut SoraUploadedModelBundleV1| bundle.weight_version.insert(0, ' '),
+        |bundle: &mut SoraUploadedModelBundleV1| bundle.family.push('\n'),
+        |bundle: &mut SoraUploadedModelBundleV1| bundle.decryption_policy_ref.push(' '),
+    ] {
+        let mut bundle = sample_uploaded_model_bundle();
+        mutate(&mut bundle);
+        bundle
+            .validate()
+            .expect_err("uploaded-model identifiers must use exact V1 text");
+    }
 }
 #[test]
 fn uploaded_model_recipient_validation_rejects_x25519_length_drift() {
@@ -852,102 +1046,6 @@ fn uploaded_model_bundle_validation_rejects_adversarial_modalities() {
     }
 }
 #[test]
-fn private_model_artifact_ref_validation_rejects_zero_prehash_artifact_hash_sentinel() {
-    let mut artifact = sample_private_model_artifact_ref("input", 0x11);
-    artifact.artifact_hash = zero_prehash_statement_hash();
-    let error = artifact
-        .validate()
-        .expect_err("private artifact hash placeholder must fail admission");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            manifest: "sora private model artifact ref",
-            field: "artifact_hash",
-            ..
-        }
-    ));
-    assert!(error.to_string().contains("zero prehash sentinel"));
-}
-#[test]
-fn private_uploaded_model_execution_receipt_validation_rejects_zero_prehash_commitments() {
-    let zero_digest = zero_prehash_statement_hash();
-    macro_rules! assert_receipt_digest_rejects {
-        ($field:literal, $assign:expr) => {{
-            let mut receipt = sample_private_uploaded_model_execution_receipt();
-            $assign(&mut receipt, zero_digest);
-            let error = receipt
-                .validate()
-                .expect_err("private receipt placeholder commitment must fail admission");
-            assert!(matches!(
-                error,
-                SoracloudManifestError::InvalidField {
-                    manifest: "sora private uploaded model execution receipt",
-                    field: $field,
-                    ..
-                }
-            ));
-            assert!(error.to_string().contains("zero prehash sentinel"));
-        }};
-    }
-    assert_receipt_digest_rejects!(
-        "receipt_id",
-        |receipt: &mut SoraPrivateUploadedModelExecutionReceiptV1, value| {
-            receipt.receipt_id = value;
-        }
-    );
-    assert_receipt_digest_rejects!(
-        "model_bundle_root",
-        |receipt: &mut SoraPrivateUploadedModelExecutionReceiptV1, value| {
-            receipt.model_bundle_root = value;
-        }
-    );
-    assert_receipt_digest_rejects!(
-        "input_commitment",
-        |receipt: &mut SoraPrivateUploadedModelExecutionReceiptV1, value| {
-            receipt.input_commitment = value;
-        }
-    );
-    assert_receipt_digest_rejects!(
-        "output_commitment",
-        |receipt: &mut SoraPrivateUploadedModelExecutionReceiptV1, value| {
-            receipt.output_commitment = value;
-        }
-    );
-    assert_receipt_digest_rejects!(
-        "request_commitment",
-        |receipt: &mut SoraPrivateUploadedModelExecutionReceiptV1, value| {
-            receipt.request_commitment = value;
-        }
-    );
-    assert_receipt_digest_rejects!(
-        "result_commitment",
-        |receipt: &mut SoraPrivateUploadedModelExecutionReceiptV1, value| {
-            receipt.result_commitment = value;
-        }
-    );
-}
-#[test]
-fn private_uploaded_model_execution_receipt_round_trips_and_validates() {
-    let mut receipt = sample_private_uploaded_model_execution_receipt();
-    receipt.validate().expect("valid private receipt");
-    let encoded = norito::to_bytes(&receipt).expect("encode private receipt");
-    let decoded: SoraPrivateUploadedModelExecutionReceiptV1 =
-        norito::decode_from_bytes(&encoded).expect("decode private receipt");
-    assert_eq!(decoded, receipt);
-    receipt.output_artifact.artifact_role = "plaintext".to_string();
-    let error = receipt
-        .validate()
-        .expect_err("output artifact must stay role-bound");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            manifest: "sora private uploaded model execution receipt",
-            field: "output_artifact.artifact_role",
-            ..
-        }
-    ));
-}
-#[test]
 fn hf_source_record_validation_accepts_consistent_state() {
     sample_hf_source_record().validate().expect("valid source");
 }
@@ -956,8 +1054,8 @@ fn hf_source_record_validation_requires_full_lowercase_commit_oid() {
     for mutable_or_noncanonical in [
         "main",
         "4f9d72c",
-        "4F9D72C4F9D72C4F9D72C4F9D72C4F9D72C4F9D",
-        "4f9d72c4f9d72c4f9d72c4f9d72c4f9d72c4f9g",
+        "4F9D72C4F9D72C4F9D72C4F9D72C4F9D72C4F9DA",
+        "4f9d72c4f9d72c4f9d72c4f9d72c4f9d72c4f9dg",
     ] {
         let mut source = sample_hf_source_record();
         source.resolved_revision = mutable_or_noncanonical.to_owned();
@@ -1162,10 +1260,9 @@ fn model_artifact_audit_event_validation_rejects_empty_consumed_version() {
     let error = event.validate().expect_err("must reject empty version");
     assert!(matches!(
         error,
-        SoracloudManifestError::InvalidField {
+        SoracloudManifestError::EmptyField {
             manifest: "sora model artifact audit event",
             field: "consumed_by_version",
-            ..
         }
     ));
 }

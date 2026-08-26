@@ -39,10 +39,12 @@ const SAMPLE_ACCOUNT_ID = sampleAccountId();
 const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(780)}`;
 const SAMPLE_VPN_RELAY_ID_HEX =
   "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+const SAMPLE_VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX = "55".repeat(1_952);
 
 function sampleVpnTrustPayload(spki = "ab".repeat(32)) {
   return {
     relay_id_hex: SAMPLE_VPN_RELAY_ID_HEX,
+    relay_mldsa65_public_key_hex: SAMPLE_VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX,
     descriptor_commit_hex: "cd".repeat(32),
     tls_server_name: "relay.example",
     relay_tls_spki_sha256_hex: spki,
@@ -54,6 +56,7 @@ function sampleVpnTrustPayload(spki = "ab".repeat(32)) {
 function sampleVpnTrustModel(spki = "ab".repeat(32)) {
   return {
     relayIdHex: SAMPLE_VPN_RELAY_ID_HEX,
+    relayMldsa65PublicKeyHex: SAMPLE_VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX,
     descriptorCommitHex: "cd".repeat(32),
     tlsServerName: "relay.example",
     relayTlsSpkiSha256Hex: spki,
@@ -361,6 +364,7 @@ test("unavailable VPN profile accepts only the explicit empty trust tuple", asyn
     available: false,
     relay_endpoint: "",
     relay_id_hex: "",
+    relay_mldsa65_public_key_hex: "",
     descriptor_commit_hex: "",
     tls_server_name: "",
     relay_tls_spki_sha256_hex: "",
@@ -380,11 +384,17 @@ test("unavailable VPN profile accepts only the explicit empty trust tuple", asyn
   assert.equal(profile.available, false);
   assert.equal(profile.relayEndpoint, "");
   assert.equal(profile.relayIdHex, "");
+  assert.equal(profile.relayMldsa65PublicKeyHex, "");
 });
 
 test("available VPN profile rejects malformed trust tuple values", async () => {
   const invalidValues = [
     ["relay_id_hex", "00".repeat(32)],
+    ["relay_mldsa65_public_key_hex", ""],
+    ["relay_mldsa65_public_key_hex", "55".repeat(1_951)],
+    ["relay_mldsa65_public_key_hex", "AA".repeat(1_952)],
+    ["relay_mldsa65_public_key_hex", `${"55".repeat(1_951)}5\n`],
+    ["relay_mldsa65_public_key_hex", "00".repeat(1_952)],
     ["descriptor_commit_hex", "00".repeat(32)],
     ["descriptor_commit_hex", `0x${"cd".repeat(32)}`],
     ["tls_server_name", "Relay.Example"],
@@ -404,6 +414,31 @@ test("available VPN profile rejects malformed trust tuple values", async () => {
     });
 
     await assert.rejects(() => client.getVpnProfile(), undefined, field);
+  }
+});
+
+test("VPN quote and session reject malformed ML-DSA-65 relay keys", async () => {
+  const responseCases = [
+    ["quote", sampleVpnQuotePayload],
+    ["session", sampleVpnSessionPayload],
+  ];
+  const invalidKeys = [
+    "",
+    "55".repeat(1_951),
+    "AA".repeat(1_952),
+    `${"55".repeat(1_951)}5\n`,
+    "00".repeat(1_952),
+  ];
+  for (const [kind, payloadFactory] of responseCases) {
+    for (const invalidKey of invalidKeys) {
+      const payload = payloadFactory();
+      payload.relay_mldsa65_public_key_hex = invalidKey;
+      await assert.rejects(
+        () => parseVpnTestResponse(kind, payload),
+        /relay_mldsa65_public_key_hex/u,
+        `${kind}.${invalidKey.length}`,
+      );
+    }
   }
 });
 
@@ -614,6 +649,7 @@ test("VPN session responses reject unknown fields and noncanonical IDs or hashes
     ["overlong session id", (payload) => { payload.session_id = "ab".repeat(32); }],
     ["uppercase quote id", (payload) => { payload.quote_id = payload.quote_id.toUpperCase(); }],
     ["prefixed payment hash", (payload) => { payload.payment_tx_hash = `0X${payload.payment_tx_hash}`; }],
+    ["unmarked payment hash", (payload) => { payload.payment_tx_hash = "ee".repeat(32); }],
     ["uppercase SPKI hash", (payload) => {
       payload.relay_tls_spki_sha256_hex = payload.relay_tls_spki_sha256_hex.toUpperCase();
     }],
@@ -622,7 +658,7 @@ test("VPN session responses reject unknown fields and noncanonical IDs or hashes
   for (const [caseName, mutate] of invalidResponses) {
     await assert.rejects(
       () => requestSession(mutate),
-      /contains unsupported fields|exact lowercase (?:16|32)-byte hex string/u,
+      /contains unsupported fields|exact lowercase (?:16|32)-byte hex string|canonical Iroha hash marker/u,
       caseName,
     );
   }
@@ -630,6 +666,9 @@ test("VPN session responses reject unknown fields and noncanonical IDs or hashes
 
 test("VPN response parsers require every OpenAPI field", async () => {
   const cases = [
+    ["profile", sampleVpnProfilePayload(), "relay_mldsa65_public_key_hex"],
+    ["quote", sampleVpnQuotePayload(), "relay_mldsa65_public_key_hex"],
+    ["session", sampleVpnSessionPayload(), "relay_mldsa65_public_key_hex"],
     ["profile", sampleVpnProfilePayload(), "relay_tls_spki_sha256_hex"],
     ["quote", sampleVpnQuotePayload(), "open_lease_instruction"],
     ["session", sampleVpnSessionPayload(), "route_pushes"],

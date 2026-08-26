@@ -19,7 +19,7 @@ class RegisterKaigiRelayInstruction(
     init {
         require(relayId.isNotBlank()) { "relayId must not be blank" }
         require(hpkePublicKeyBase64.isNotBlank()) { "hpkePublicKeyBase64 must not be blank" }
-        require(bandwidthClass in 0..0xFF) { "bandwidthClass must be between 0 and 255" }
+        require(bandwidthClass in 1..0xFF) { "bandwidthClass must be between 1 and 255" }
     }
 
     override fun equals(other: Any?): Boolean {

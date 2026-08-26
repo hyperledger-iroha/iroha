@@ -488,17 +488,7 @@ fn parse_torii_space_directory_uaid_literal(
     raw: &str,
 ) -> Result<iroha_data_model::nexus::UniversalAccountId, Error> {
     use core::str::FromStr as _;
-    let trimmed = raw.trim();
-    let hex_portion = match trimmed.get(..5) {
-        Some(prefix) if prefix.eq_ignore_ascii_case("uaid:") => trimmed[5..].trim(),
-        _ => trimmed,
-    };
-    if hex_portion.len() != 64 || !hex_portion.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::InvalidSingularParameters,
-        )));
-    }
-    iroha_data_model::nexus::UniversalAccountId::from_str(hex_portion).map_err(|_| {
+    iroha_data_model::nexus::UniversalAccountId::from_str(raw).map_err(|_| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::InvalidSingularParameters,
         ))

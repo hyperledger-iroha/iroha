@@ -18,11 +18,9 @@ from iroha_python.client import (
 )
 from iroha_python.crypto import NetworkId
 
-
 NETWORK_ID = NetworkId.from_bytes(bytes([0xA5]) * 32)
 FOREIGN_NETWORK_ID = NetworkId.from_bytes(bytes([0xA7]) * 32)
 ACCOUNT_ID = AccountAddress.from_account(
-    domain="query-auth",
     public_key=bytes([0x31]) * 32,
 ).to_i105(0x02F1)
 ACCOUNT_HEADER = AccountAddress.parse_encoded(

@@ -411,9 +411,7 @@ mod tests {
     const INITIATOR: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const COUNTERPARTY: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
     fn parse_account(raw: &str) -> AccountId {
-        AccountId::parse_encoded(raw)
-            .expect("valid account")
-            .into_account_id()
+        AccountId::parse_encoded(raw).expect("valid account")
     }
     fn seeded_account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

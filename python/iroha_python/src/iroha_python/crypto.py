@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Dict, Final, Iterable, Mapping, Optional, TypeAlias, Union
@@ -219,6 +220,8 @@ __all__ = [
     "canonical_genesis_header_hash_v1",
     "canonical_signed_transaction_hash_v1",
     "signed_transaction_envelope_from_versioned_v1",
+    "verify_prepared_transaction_context_v1",
+    "verify_account_onboarding_receipt_v1",
     "inspect_privacy_exact12_action_driver_transaction_context_v1",
     "privacy_vega_device_authentication_digest_v1",
     "inspect_signed_privacy_zk_ace_transfer_action_v1",
@@ -1037,12 +1040,12 @@ class Ed25519KeyPair:
 
         return load_ed25519_keypair_from_hex(private_key_hex)
 
-    def default_account_id(
-        self, domain: str, discriminant: int = _DEFAULT_I105_DISCRIMINANT
+    def account_id(
+        self, *, discriminant: int = _DEFAULT_I105_DISCRIMINANT
     ) -> str:
-        """Return the canonical I105 account id using the public key and `domain`."""
+        """Return the canonical domainless I105 account id for the public key."""
 
-        return ed25519_public_key_account_id(self.public_key, domain, discriminant=discriminant)
+        return ed25519_public_key_account_id(self.public_key, discriminant=discriminant)
 
 
 @dataclass(frozen=True)
@@ -1338,20 +1341,12 @@ def ed25519_public_key_multihash(public_key: bytes) -> str:
 
 def ed25519_public_key_account_id(
     public_key: bytes,
-    domain: str,
     *,
     discriminant: int = _DEFAULT_I105_DISCRIMINANT,
 ) -> str:
-    """Return the canonical domainless I105 account id for ``public_key``.
+    """Return the canonical domainless I105 account id for ``public_key``."""
 
-    ``domain`` is validated for compatibility with existing callers but is not
-    encoded into the account identity.
-    """
-
-    domain = domain.strip()
-    if not domain or "@" in domain:
-        raise ValueError("domain must be a non-empty string without '@'")
-    address = AccountAddress.from_account(domain=domain, public_key=public_key)
+    address = AccountAddress.from_account(public_key=public_key)
     return address.to_i105(discriminant)
 
 
@@ -2242,13 +2237,9 @@ def privacy_exact12_capability_manifest_v1(
         raise ValueError("native Exact12 capability manifest decode failed") from None
     returned = getattr(manifest, "canonical_archive", None)
     if not isinstance(returned, (bytes, bytearray, memoryview)):
-        raise RuntimeError(
-            "native Exact12 capability manifest omitted its canonical archive"
-        )
+        raise RuntimeError("native Exact12 capability manifest omitted its canonical archive")
     if bytes(returned) != canonical:
-        raise RuntimeError(
-            "native Exact12 capability manifest changed the Torii archive bytes"
-        )
+        raise RuntimeError("native Exact12 capability manifest changed the Torii archive bytes")
     return manifest
 
 
@@ -2328,6 +2319,81 @@ def signed_transaction_envelope_from_versioned_v1(
         raise ValueError("invalid canonical signed transaction") from None
     if not isinstance(result, SignedTransactionEnvelope):
         raise RuntimeError("native signed transaction envelope returned an invalid result")
+    return result
+
+
+def verify_prepared_transaction_context_v1(
+    signed_transaction_versioned: bytes | bytearray | memoryview,
+    network_id: NetworkId,
+    expected_authority: str,
+    binding_json: str,
+    operation: str,
+    semantic_hash_hex: str,
+    fee_payment_json: str,
+    operation_context_json: str,
+) -> SignedTransactionEnvelope:
+    """Authenticate one prepared transaction's exact V1 public and semantic context."""
+
+    if not isinstance(
+        signed_transaction_versioned,
+        (bytes, bytearray, memoryview),
+    ):
+        raise TypeError("signed_transaction_versioned must be bytes-like")
+    network_id = _require_network_id(network_id)
+    try:
+        result = _crypto.verify_prepared_transaction_context_v1(
+            bytes(signed_transaction_versioned),
+            network_id,
+            expected_authority,
+            binding_json,
+            operation,
+            semantic_hash_hex,
+            fee_payment_json,
+            operation_context_json,
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing verify_prepared_transaction_context_v1; "
+            "rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError("invalid prepared transaction context") from None
+    if not isinstance(result, SignedTransactionEnvelope):
+        raise RuntimeError("native prepared transaction verifier returned an invalid result")
+    return result
+
+
+def verify_account_onboarding_receipt_v1(
+    receipt_json: str,
+    network_id: NetworkId,
+    expected_authority: str,
+    expected_account_id: str,
+    expected_alias: str,
+    expected_permissions_json: str,
+) -> str:
+    """Authenticate an exact canonical V1 onboarding receipt and complete request."""
+
+    if not isinstance(receipt_json, str):
+        raise TypeError("receipt_json must be a string")
+    network_id = _require_network_id(network_id)
+    try:
+        result = _crypto.verify_account_onboarding_receipt_v1(
+            receipt_json,
+            network_id,
+            expected_authority,
+            expected_account_id,
+            expected_alias,
+            expected_permissions_json,
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "iroha_python._crypto is missing verify_account_onboarding_receipt_v1; "
+            "rebuild the extension"
+        ) from exc
+    except Exception:
+        raise ValueError("invalid account onboarding receipt") from None
+    if not isinstance(result, str) or re.fullmatch(r"[0-9a-f]{64}", result) is None:
+        raise RuntimeError("native onboarding receipt verifier returned an invalid hash")
     return result
 
 

@@ -903,23 +903,6 @@ struct TestLocalReadRuntime {
         iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
     >,
     captured_requests: Arc<std::sync::Mutex<Vec<SoracloudLocalReadRequest>>>,
-    captured_proxy_failures: Arc<
-        std::sync::Mutex<
-            Vec<(
-                SoracloudLocalReadRequest,
-                String,
-                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
-            )>,
-        >,
-    >,
-    captured_reconcile_requests: Arc<
-        std::sync::Mutex<
-            Vec<(
-                SoracloudLocalReadRequest,
-                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
-            )>,
-        >,
-    >,
 }
 impl TestLocalReadRuntime {
     fn with_result(
@@ -937,8 +920,6 @@ impl TestLocalReadRuntime {
             local_peer_id,
             result,
             captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-            captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
-            captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -977,37 +958,6 @@ impl TestLocalReadRuntime {
         self.captured_requests = captured;
         self
     }
-
-    fn capturing_proxy_failures(
-        mut self,
-        captured: Arc<
-            std::sync::Mutex<
-                Vec<(
-                    SoracloudLocalReadRequest,
-                    String,
-                    iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
-                )>,
-            >,
-        >,
-    ) -> Self {
-        self.captured_proxy_failures = captured;
-        self
-    }
-
-    fn capturing_reconcile_requests(
-        mut self,
-        captured: Arc<
-            std::sync::Mutex<
-                Vec<(
-                    SoracloudLocalReadRequest,
-                    iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
-                )>,
-            >,
-        >,
-    ) -> Self {
-        self.captured_reconcile_requests = captured;
-        self
-    }
 }
 impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestLocalReadRuntime {
     fn snapshot(&self) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
@@ -1018,46 +968,6 @@ impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestLocalRead
     }
     fn local_peer_id(&self) -> Option<String> {
         self.local_peer_id.clone()
-    }
-    fn report_generated_hf_proxy_failure(
-        &self,
-        request: &SoracloudLocalReadRequest,
-        target_peer_id: &str,
-        error: &iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
-    ) {
-        self.captured_proxy_failures
-            .lock()
-            .expect("proxy failure capture lock")
-            .push((request.clone(), target_peer_id.to_owned(), error.clone()));
-    }
-    fn request_generated_hf_reconcile(
-        &self,
-        request: &SoracloudLocalReadRequest,
-        error: &iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
-    ) {
-        self.captured_reconcile_requests
-            .lock()
-            .expect("reconcile capture lock")
-            .push((request.clone(), error.clone()));
-    }
-    fn request_generated_hf_proxy_responder_reconcile(
-        &self,
-        request: &SoracloudLocalReadRequest,
-        responder_peer_id: &str,
-        expected_peer_id: &str,
-    ) {
-        self.captured_reconcile_requests
-                .lock()
-                .expect("reconcile capture lock")
-                .push((
-                    request.clone(),
-                    iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                        SoracloudRuntimeExecutionErrorKind::Unavailable,
-                        format!(
-                            "unexpected proxy responder `{responder_peer_id}` answered request intended for authoritative primary `{expected_peer_id}`"
-                        ),
-                    ),
-                ));
     }
 }
 impl iroha_core::soracloud_runtime::SoracloudRuntime for TestLocalReadRuntime {
@@ -1112,6 +1022,150 @@ impl iroha_core::soracloud_runtime::SoracloudRuntime for TestLocalReadRuntime {
             ),
         )
     }
+}
+#[derive(Clone)]
+struct BlockingLocalReadRuntime {
+    started: Arc<std::sync::atomic::AtomicBool>,
+    finished: Arc<std::sync::atomic::AtomicBool>,
+    release: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+}
+struct BlockingLocalReadReleaseGuard {
+    release: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+}
+impl BlockingLocalReadReleaseGuard {
+    fn new(release: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>) -> Self {
+        Self { release }
+    }
+    fn release(&self) {
+        let (release, released) = self.release.as_ref();
+        *release
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        released.notify_all();
+    }
+}
+impl Drop for BlockingLocalReadReleaseGuard {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for BlockingLocalReadRuntime {
+    fn snapshot(&self) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
+        iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default()
+    }
+    fn state_dir(&self) -> PathBuf {
+        PathBuf::from("/tmp/soracloud/blocking-local-read-test")
+    }
+}
+impl iroha_core::soracloud_runtime::SoracloudRuntime for BlockingLocalReadRuntime {
+    fn execute_local_read(
+        &self,
+        _request: SoracloudLocalReadRequest,
+    ) -> Result<
+        iroha_core::soracloud_runtime::SoracloudLocalReadResponse,
+        iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+    > {
+        self.started.store(true, Ordering::SeqCst);
+        let (release, released) = self.release.as_ref();
+        let mut can_finish = release.lock().expect("blocking runtime release lock");
+        while !*can_finish {
+            can_finish = released
+                .wait(can_finish)
+                .expect("blocking runtime release wait");
+        }
+        self.finished.store(true, Ordering::SeqCst);
+        Err(
+            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                "blocking local-read test completed",
+            ),
+        )
+    }
+    fn execute_ordered_mailbox(
+        &self,
+        _request: iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionRequest,
+    ) -> Result<
+        iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionResult,
+        iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+    > {
+        unreachable!("blocking local-read test does not execute mailboxes")
+    }
+    fn execute_apartment(
+        &self,
+        _request: iroha_core::soracloud_runtime::SoracloudApartmentExecutionRequest,
+    ) -> Result<
+        iroha_core::soracloud_runtime::SoracloudApartmentExecutionResult,
+        iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+    > {
+        unreachable!("blocking local-read test does not execute apartments")
+    }
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancelled_soracloud_local_read_keeps_blocking_capacity_until_worker_stops() {
+    let admission = Arc::new(tokio::sync::Semaphore::new(1));
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let release = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let release_guard = BlockingLocalReadReleaseGuard::new(Arc::clone(&release));
+    let runtime: iroha_core::soracloud_runtime::SharedSoracloudRuntime =
+        Arc::new(BlockingLocalReadRuntime {
+            started: Arc::clone(&started),
+            finished: Arc::clone(&finished),
+            release: Arc::clone(&release),
+        });
+    let request = SoracloudLocalReadRequest {
+        observed_height: 1,
+        observed_block_hash: None,
+        service_name: "blocking_service".to_owned(),
+        service_version: "1.0.0".to_owned(),
+        handler_name: "query".to_owned(),
+        handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+        request_method: "POST".to_owned(),
+        request_path: "/query".to_owned(),
+        handler_path: "/query".to_owned(),
+        request_query: None,
+        request_headers: std::collections::BTreeMap::new(),
+        request_body: Vec::new(),
+        request_commitment: Hash::new(b"blocking-local-read"),
+    };
+
+    let first = tokio::spawn(execute_soracloud_local_read_off_reactor_with_admission(
+        Arc::clone(&admission),
+        Arc::clone(&runtime),
+        request.clone(),
+    ));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !started.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("blocking local-read worker must start");
+    first.abort();
+    assert!(
+        first
+            .await
+            .expect_err("cancelled local-read task must stop awaiting its worker")
+            .is_cancelled()
+    );
+
+    let saturated = execute_soracloud_local_read_off_reactor_with_admission(
+        Arc::clone(&admission),
+        Arc::clone(&runtime),
+        request,
+    )
+    .await
+    .expect_err("detached blocking work must retain its admission permit");
+    assert!(saturated.message.contains("capacity is saturated"));
+
+    release_guard.release();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !finished.load(Ordering::SeqCst) || admission.available_permits() != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("stopped blocking work must eventually release capacity");
 }
 #[derive(Clone)]
 struct TestMailboxRuntime {
@@ -1216,14 +1270,13 @@ fn sample_soracloud_runtime_snapshot(
                 secret_generation: 0,
                 quota_class: None,
                 service_lease_status: None,
-                lease_expires_sequence: None,
+                lease_expires_height: None,
                 remaining_runtime_balance: None,
                 config_entry_count: 0,
                 secret_entry_count: 0,
                 config_exports: vec![],
                 supports_host_read_config: true,
                 supports_host_read_secret_envelope: true,
-                supports_private_secret_payload_reads: false,
                 materialization_dir: "/tmp/soracloud/runtime/web_portal/1.0.0".to_string(),
                 config_materialization_dir: "/tmp/soracloud/runtime/web_portal/1.0.0/configs"
                     .to_string(),
@@ -1297,17 +1350,16 @@ fn seed_public_soracloud_world() -> World {
             config_exports: Vec::new(),
             capabilities: iroha_data_model::soracloud::SoraCapabilityPolicyV1 {
                 network: iroha_data_model::soracloud::SoraNetworkPolicyV1::Isolated,
-                allow_wallet_signing: false,
                 allow_state_writes: true,
                 allow_model_inference: false,
                 allow_model_training: false,
             },
             resources: iroha_data_model::soracloud::SoraResourceLimitsV1 {
                 cpu_millis: std::num::NonZeroU32::new(500).expect("cpu"),
-                memory_bytes: std::num::NonZeroU64::new(16 * 1024 * 1024).expect("memory"),
+                memory_bytes: std::num::NonZeroU64::new(128 * 1024 * 1024).expect("memory"),
                 ephemeral_storage_bytes: std::num::NonZeroU64::new(16 * 1024 * 1024)
                     .expect("storage"),
-                max_open_files: std::num::NonZeroU32::new(256).expect("files"),
+                max_open_files_per_process: std::num::NonZeroU32::new(256).expect("files"),
                 max_tasks: std::num::NonZeroU16::new(16).expect("tasks"),
             },
             lifecycle: iroha_data_model::soracloud::SoraLifecycleHooksV1 {
@@ -1380,14 +1432,14 @@ fn seed_public_soracloud_world() -> World {
                     }),
                 },
                 iroha_data_model::soracloud::SoraServiceHandlerV1 {
-                    handler_name: "private_update".parse().expect("handler"),
-                    class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::PrivateUpdate,
-                    entrypoint: "apply_private_update".to_owned(),
-                    route_path: Some("/private/update".to_owned()),
+                    handler_name: "ciphertext_update".parse().expect("handler"),
+                    class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update,
+                    entrypoint: "apply_ciphertext_update".to_owned(),
+                    route_path: Some("/ciphertext/update".to_owned()),
                     certified_response:
                         iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
                     mailbox: Some(iroha_data_model::soracloud::SoraMailboxContractV1 {
-                        queue_name: "private_updates".parse().expect("queue"),
+                        queue_name: "ciphertext_updates".parse().expect("queue"),
                         max_pending_messages: std::num::NonZeroU32::new(128)
                             .expect("pending limit"),
                         max_message_bytes: std::num::NonZeroU64::new(65_536)
@@ -1433,158 +1485,6 @@ fn seed_public_soracloud_world() -> World {
         );
     world
 }
-fn seed_generated_hf_public_world(primary_peer_id: &str) -> (World, String, String) {
-    use iroha_data_model::{
-        asset::AssetDefinitionId,
-        soracloud::{
-            SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
-            SORA_HF_SHARED_LEASE_POOL_VERSION_V1, SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-            SoraHfBackendFamilyV1, SoraHfModelFormatV1, SoraHfPlacementHostAssignmentV1,
-            SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
-            SoraHfPlacementStatusV1, SoraHfResourceProfileV1, SoraHfSharedLeaseMemberStatusV1,
-            SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1,
-            SoraServiceDeploymentStateV1,
-        },
-        sorafs::pin_registry::StorageClass,
-    };
-    let mut world = World::new();
-    let service_name: Name = "hf_router".parse().expect("service");
-    let service_name_string = service_name.as_ref().to_owned();
-    let source_id = Hash::new(b"generated-hf-source");
-    let pool_id = Hash::new(b"generated-hf-pool");
-    let bundle = iroha_core::soracloud_runtime::build_soracloud_hf_generated_service_bundle(
-        service_name.clone(),
-        &source_id.to_string(),
-        "openai/gpt-oss",
-        "main",
-        "gpt-oss",
-    );
-    let service_version = bundle.service.service_version.clone();
-    let member_account =
-        checked_torii_test_account_id(0x39, "derive generated-HF member fixture key");
-    let primary_validator =
-        checked_torii_test_account_id(0x3a, "derive generated-HF primary validator fixture key");
-    let replica_validator =
-        checked_torii_test_account_id(0x3b, "derive generated-HF replica validator fixture key");
-    let replica_peer_id =
-        checked_torii_test_peer_id(0x3c, "derive generated-HF replica peer fixture key")
-            .to_string();
-    world.soracloud_service_revisions_mut_for_testing().insert(
-        (service_name_string.clone(), service_version.clone()),
-        bundle.clone(),
-    );
-    world
-        .soracloud_service_deployments_mut_for_testing()
-        .insert(
-            service_name,
-            SoraServiceDeploymentStateV1 {
-                schema_version: SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-                service_name: bundle.service.service_name.clone(),
-                current_service_version: service_version.clone(),
-                current_service_manifest_hash: bundle.service_manifest_hash(),
-                current_container_manifest_hash: bundle.container_manifest_hash(),
-                revision_count: 1,
-                process_generation: 1,
-                process_started_sequence: 1,
-                active_rollout: None,
-                last_rollout: None,
-                config_generation: 0,
-                secret_generation: 0,
-                service_configs: std::collections::BTreeMap::new(),
-                service_secrets: std::collections::BTreeMap::new(),
-                fhe_policy_records: BTreeMap::new(),
-                service_lease: None,
-                lease_volume_states: Vec::new(),
-            },
-        );
-    world
-        .soracloud_hf_shared_lease_pools_mut_for_testing()
-        .insert(
-            pool_id,
-            SoraHfSharedLeasePoolV1 {
-                schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
-                pool_id,
-                source_id,
-                storage_class: StorageClass::Warm,
-                lease_asset_definition_id: AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("wonderland", "universal").expect("domain"),
-                    "xor".parse().expect("asset"),
-                ),
-                base_fee: "0.00001".parse().expect("base fee"),
-                lease_term_ms: 60_000,
-                window_started_at_ms: 1,
-                window_expires_at_ms: 60_001,
-                active_member_count: 1,
-                status: SoraHfSharedLeaseStatusV1::Active,
-                queued_next_window: None,
-            },
-        );
-    world
-        .soracloud_hf_shared_lease_members_mut_for_testing()
-        .insert(
-            (pool_id.to_string(), member_account.to_string()),
-            SoraHfSharedLeaseMemberV1 {
-                schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
-                pool_id,
-                source_id,
-                account_id: member_account,
-                status: SoraHfSharedLeaseMemberStatusV1::Active,
-                joined_at_ms: 1,
-                updated_at_ms: 1,
-                total_paid: "0.00001".parse().expect("total paid"),
-                total_refunded: Quantity::zero(),
-                last_charge: "0.00001".parse().expect("last charge"),
-                total_compute_paid: "0.000005".parse().expect("total compute paid"),
-                total_compute_refunded: Quantity::zero(),
-                last_compute_charge: "0.000005".parse().expect("last compute charge"),
-                service_bindings: std::collections::BTreeSet::from([service_name_string.clone()]),
-                apartment_bindings: std::collections::BTreeSet::new(),
-            },
-        );
-    world.soracloud_hf_placements_mut_for_testing().insert(
-        pool_id,
-        SoraHfPlacementRecordV1 {
-            schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-            placement_id: Hash::new(b"generated-hf-placement"),
-            source_id,
-            pool_id,
-            status: SoraHfPlacementStatusV1::Ready,
-            selection_seed_hash: Hash::new(b"generated-hf-seed"),
-            resource_profile: SoraHfResourceProfileV1 {
-                required_model_bytes: 1_024,
-                backend_family: SoraHfBackendFamilyV1::Transformers,
-                model_format: SoraHfModelFormatV1::Safetensors,
-                selected_weight_file_count: 1,
-                weight_selection_commitment: Hash::new(b"generated-hf-weight-selection"),
-                disk_cache_bytes_floor: 2_048,
-                ram_bytes_floor: 2_048,
-                vram_bytes_floor: 0,
-            },
-            eligible_validator_count: 2,
-            adaptive_target_host_count: 2,
-            assigned_hosts: vec![
-                SoraHfPlacementHostAssignmentV1 {
-                    validator_account_id: primary_validator,
-                    peer_id: primary_peer_id.to_owned(),
-                    role: SoraHfPlacementHostRoleV1::Primary,
-                    status: SoraHfPlacementHostStatusV1::Warm,
-                    host_class: "gpu.large".to_owned(),
-                },
-                SoraHfPlacementHostAssignmentV1 {
-                    validator_account_id: replica_validator,
-                    peer_id: replica_peer_id,
-                    role: SoraHfPlacementHostRoleV1::Replica,
-                    status: SoraHfPlacementHostStatusV1::Warm,
-                    host_class: "gpu.large".to_owned(),
-                },
-            ],
-            total_reservation_fee: "0.000005".parse().expect("total reservation fee"),
-            last_rebalance_at_ms: 1,
-            last_error: None,
-        },
-    );
-    (world, service_name_string, service_version)
-}
 fn hosted_http_runtime_plan(
     materialization_dir: &Path,
     service_name: &str,
@@ -1626,14 +1526,13 @@ fn hosted_http_runtime_plan(
         secret_generation: 0,
         quota_class: Some("taira-open".to_owned()),
         service_lease_status: Some(iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active),
-        lease_expires_sequence: Some(100),
+        lease_expires_height: Some(100),
         remaining_runtime_balance: Some("50".parse().expect("runtime balance")),
         config_entry_count: 0,
         secret_entry_count: 0,
         config_exports: Vec::new(),
         supports_host_read_config: true,
         supports_host_read_secret_envelope: true,
-        supports_private_secret_payload_reads: false,
         materialization_dir: materialization_dir.display().to_string(),
         config_materialization_dir: materialization_dir.join("configs").display().to_string(),
         effective_env: BTreeMap::new(),
@@ -1663,6 +1562,12 @@ fn hosted_http_runtime_replica_plan(
 ) -> SoracloudRuntimeReplicaPlan {
     SoracloudRuntimeReplicaPlan {
         replica_slot,
+        lease_started_height: 1,
+        placement_incarnation: Hash::new(Encode::encode(&("placement", replica_slot))).to_string(),
+        host_availability:
+            iroha_data_model::soracloud::SoraInrouReplicaHostAvailabilityV1::Available,
+        validator_account_id: ALICE_ID.to_string(),
+        peer_id: PeerId::from(iroha_test_samples::ALICE_KEYPAIR.public_key().clone()).to_string(),
         materialization_dir: materialization_dir
             .join("replicas")
             .join(format!("replica-{replica_slot:04}"))
@@ -1677,7 +1582,6 @@ fn hosted_http_runtime_replica_plan(
 fn test_inrou_manifest() -> iroha_data_model::soracloud::SoraInrouManifestV1 {
     iroha_data_model::soracloud::SoraInrouManifestV1 {
         schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
-        guest_os: iroha_data_model::soracloud::SoraInrouGuestOsV1::DebianSlim,
         guest_images: std::collections::BTreeMap::from([
             (
                 iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
@@ -1685,8 +1589,13 @@ fn test_inrou_manifest() -> iroha_data_model::soracloud::SoraInrouManifestV1 {
                     kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
                     rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
                     initrd_image_path: None,
-                    distribution: Default::default(),
-                    published_artifact: None,
+                    published_artifact:
+                        iroha_data_model::soracloud::SoraPublishedInrouGuestImageArtifactV1 {
+                            manifest_digest_hex: "31".repeat(32),
+                            content_cid:
+                                "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
+                                    .to_owned(),
+                        },
                 },
             ),
             (
@@ -1695,13 +1604,16 @@ fn test_inrou_manifest() -> iroha_data_model::soracloud::SoraInrouManifestV1 {
                     kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
                     rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
                     initrd_image_path: None,
-                    distribution: Default::default(),
-                    published_artifact: None,
+                    published_artifact:
+                        iroha_data_model::soracloud::SoraPublishedInrouGuestImageArtifactV1 {
+                            manifest_digest_hex: "32".repeat(32),
+                            content_cid:
+                                "bafyr6ibsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgi"
+                                    .to_owned(),
+                        },
                 },
             ),
         ]),
-        bootstrap_user_data_path: None,
-        ssh_authorized_keys: vec!["ssh-ed25519 test-key torii-tests".to_owned()],
     }
 }
 fn seed_authoritative_hosted_http_revision(
@@ -1721,11 +1633,18 @@ fn seed_authoritative_hosted_http_revision(
             |(replica_slot, validator_account_id, peer_id, _health_status)| {
                 iroha_data_model::soracloud::SoraInrouReplicaPlacementV1 {
                     replica_slot: *replica_slot,
+                    economic_clock:
+                        iroha_data_model::soracloud::SoraServiceLeaseClockV1::CanonicalBlockHeight,
+                    lease_started_height: 1,
+                    placement_incarnation: iroha_crypto::Hash::new(Encode::encode(&(
+                        "placement",
+                        *replica_slot,
+                    ))),
+                    host_availability:
+                        iroha_data_model::soracloud::SoraInrouReplicaHostAvailabilityV1::Available,
                     validator_account_id: validator_account_id.clone(),
                     peer_id: peer_id.clone(),
                     selected_guest_isa: iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
-                    selected_geography_tag: None,
-                    selection_latency_ms: None,
                 }
             },
         )
@@ -1766,6 +1685,7 @@ fn seed_authoritative_hosted_http_revision(
                     service_name: bundle.service.service_name.clone(),
                     service_version: bundle.service.service_version.clone(),
                     replica_slot: *replica_slot,
+                    placement_incarnation: placement.placement_incarnation,
                     validator_account_id: validator_account_id.clone(),
                     peer_id: peer_id.clone(),
                     selected_guest_isa: placement.selected_guest_isa,
@@ -1850,19 +1770,21 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas(
 fn hosted_http_service_lease_state(
     status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1,
     prepaid_runtime_balance: Quantity,
-    lease_expires_sequence: u64,
+    lease_expires_height: u64,
 ) -> iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
     iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
         schema_version: iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
+        economic_clock: iroha_data_model::soracloud::SoraServiceLeaseClockV1::CanonicalBlockHeight,
         status,
         quota_class: "taira-open".to_owned(),
+        replica_count: std::num::NonZeroU16::new(1).expect("nonzero"),
         deployment_deposit: "1".parse().expect("deployment deposit"),
         prepaid_runtime_balance,
-        runtime_price_per_sequence: "0.00025".parse().expect("runtime price"),
-        storage_price_per_gib_sequence: "0.000025".parse().expect("storage price"),
+        runtime_price_per_block: "0.00025".parse().expect("runtime price"),
+        storage_price_per_gib_block: "0.000025".parse().expect("storage price"),
         egress_price_per_mib: "0.000005".parse().expect("egress price"),
-        lease_started_sequence: 0,
-        lease_expires_sequence,
+        lease_started_height: 1,
+        lease_expires_height,
         reporting_epoch: 1,
         settled_egress_bytes: 0,
         egress_reporter_checkpoints: Vec::new(),
@@ -1873,10 +1795,52 @@ fn hosted_http_service_lease_state(
 fn hosted_http_rollout_local_peer_id() -> PeerId {
     checked_torii_test_peer_id(0x3e, "derive hosted-http rollout peer fixture key")
 }
+fn seed_hosted_http_rollout_public_lane_validator(
+    app: &SharedAppState,
+    validator: &AccountId,
+    peer_id: &PeerId,
+) {
+    let next_height = app
+        .state
+        .latest_block_header_fast()
+        .map_or(1, |header| header.height().get().saturating_add(1));
+    let header = BlockHeader::new(
+        NonZeroU64::new(next_height).expect("non-zero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = app.state.block(header);
+    let mut tx = block.transaction();
+    tx.world_mut_for_testing()
+        .public_lane_validators_mut_for_testing()
+        .insert(
+            (iroha_data_model::nexus::LaneId::SINGLE, validator.clone()),
+            iroha_data_model::nexus::PublicLaneValidatorRecord {
+                lane_id: iroha_data_model::nexus::LaneId::SINGLE,
+                validator: validator.clone(),
+                peer_id: peer_id.clone(),
+                stake_account: validator.clone(),
+                total_stake: Quantity::from(1_u64),
+                self_stake: Quantity::from(1_u64),
+                metadata: iroha_data_model::metadata::Metadata::default(),
+                status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+    tx.apply();
+    block
+        .commit()
+        .expect("commit hosted-http public-lane validator fixture");
+}
 fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
     temp: &tempfile::TempDir,
     baseline_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
-    candidate_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
+    _candidate_health: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
     baseline_local_replicas: Vec<SoracloudRuntimeReplicaPlan>,
     candidate_local_replicas: Vec<SoracloudRuntimeReplicaPlan>,
     snapshot_local_peer_id: Option<String>,
@@ -1911,7 +1875,7 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
             volume_name: "index_state".parse().expect("volume"),
             kind: iroha_data_model::soracloud::SoraLeaseVolumeKindV1::ServiceLeaseVolume,
             storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
-            mount_path: "/var/lib/ton-indexer".to_owned(),
+            mount_path: "/var/lib/soracloud/volumes/index_state".to_owned(),
             max_total_bytes: std::num::NonZeroU64::new(1024 * 1024).expect("bytes"),
         },
     ];
@@ -1937,27 +1901,13 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
                 schema_version:
                     iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
                 service_name: service_name.parse().expect("service"),
-                current_service_version: candidate_version.to_owned(),
-                current_service_manifest_hash: candidate_bundle.service_manifest_hash(),
-                current_container_manifest_hash: candidate_bundle.container_manifest_hash(),
+                current_service_version: baseline_version.to_owned(),
+                current_service_manifest_hash: baseline_bundle.service_manifest_hash(),
+                current_container_manifest_hash: baseline_bundle.container_manifest_hash(),
                 revision_count: 2,
                 process_generation: 1,
                 process_started_sequence: 1,
-                active_rollout: Some(iroha_data_model::soracloud::SoraServiceRolloutStateV1 {
-                    schema_version:
-                        iroha_data_model::soracloud::SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
-                    rollout_handle: "rollout-2026-03".to_owned(),
-                    baseline_version: Some(baseline_version.to_owned()),
-                    candidate_version: candidate_version.to_owned(),
-                    canary_percent: 20,
-                    traffic_percent: 20,
-                    stage: iroha_data_model::soracloud::SoraRolloutStageV1::Canary,
-                    health_failures: 0,
-                    max_health_failures: 3,
-                    health_window_secs: 60,
-                    created_sequence: 1,
-                    updated_sequence: 1,
-                }),
+                active_rollout: None,
                 last_rollout: None,
                 config_generation: 0,
                 secret_generation: 0,
@@ -2006,37 +1956,22 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
         &candidate_assignments,
     );
     let baseline_dir = temp.path().join("service-baseline");
-    let candidate_dir = temp.path().join("service-canary");
     let mut snapshot = iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default();
     snapshot.local_peer_id = snapshot_local_peer_id;
     snapshot.services.insert(
         service_name.to_owned(),
-        BTreeMap::from([
-            (
-                baseline_version.to_owned(),
-                hosted_http_runtime_plan(
-                    &baseline_dir,
-                    service_name,
-                    baseline_version,
-                    iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active,
-                    80,
-                    baseline_health,
-                    baseline_local_replicas,
-                ),
+        BTreeMap::from([(
+            baseline_version.to_owned(),
+            hosted_http_runtime_plan(
+                &baseline_dir,
+                service_name,
+                baseline_version,
+                iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active,
+                100,
+                baseline_health,
+                baseline_local_replicas,
             ),
-            (
-                candidate_version.to_owned(),
-                hosted_http_runtime_plan(
-                    &candidate_dir,
-                    service_name,
-                    candidate_version,
-                    iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::CanaryCandidate,
-                    20,
-                    candidate_health,
-                    candidate_local_replicas,
-                ),
-            ),
-        ]),
+        )]),
     );
     let runtime = TestLocalReadRuntime {
         snapshot,
@@ -2049,32 +1984,17 @@ fn seed_public_hosted_http_rollout_app_with_local_replicas_and_snapshot_peer_id(
             ),
         ),
         captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
     let mut app = mk_app_state_for_tests_with_world(world);
+    seed_hosted_http_rollout_public_lane_validator(
+        &app,
+        &local_validator_account_id,
+        &local_peer_id,
+    );
     let app_mut = Arc::get_mut(&mut app).expect("unique app state");
     app_mut.local_peer_id = Some(local_peer_id);
     app_mut.soracloud_runtime = Some(Arc::new(runtime));
     app
-}
-fn hosted_http_rollout_test_ip<P>(
-    service_name: &str,
-    method: &HttpMethod,
-    uri: &axum::http::Uri,
-    predicate: P,
-) -> IpAddr
-where
-    P: Fn(u8) -> bool,
-{
-    for octet in 1..=254 {
-        let ip = IpAddr::from([203, 0, 113, octet]);
-        let bucket = super::hosted_http_rollout_bucket(service_name, Some(ip), method, uri);
-        if predicate(bucket) {
-            return ip;
-        }
-    }
-    panic!("failed to find a rollout bucket match for hosted-http routing test");
 }
 fn hosted_http_baseline_replica_test_ip<P>(
     service_name: &str,
@@ -2088,9 +2008,6 @@ where
 {
     for octet in 1..=254 {
         let ip = IpAddr::from([198, 51, 100, octet]);
-        if super::hosted_http_rollout_bucket(service_name, Some(ip), method, uri) < 20 {
-            continue;
-        }
         let digest = super::hosted_http_request_hash(
             "soracloud:hosted-http-replica:v1",
             service_name,
@@ -2369,12 +2286,12 @@ async fn travel_split_topology_fixture(mode: TravelSplitVaultMode) -> TravelSpli
         },
         TravelSplitVaultMode::OrderedMailbox => iroha_data_model::soracloud::SoraServiceHandlerV1 {
             handler_name: "preferences_put".parse().expect("handler"),
-            class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::PrivateUpdate,
+            class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update,
             entrypoint: "store_user_preferences".to_owned(),
             route_path: Some("/v1/user/preferences".to_owned()),
             certified_response: iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
             mailbox: Some(iroha_data_model::soracloud::SoraMailboxContractV1 {
-                queue_name: "private_updates".parse().expect("queue"),
+                queue_name: "user_updates".parse().expect("queue"),
                 max_pending_messages: std::num::NonZeroU32::new(128).expect("pending"),
                 max_message_bytes: std::num::NonZeroU64::new(131_072).expect("bytes"),
                 retention_blocks: std::num::NonZeroU32::new(64).expect("retention"),
@@ -2510,8 +2427,6 @@ async fn soracloud_public_split_app_routes_hosted_live_and_local_vault_on_one_no
             runtime_receipt: None,
         }),
         captured_requests: Arc::clone(&captured_requests),
-        captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
     let mut app = mk_app_state_for_tests_with_world(world);
     let app_mut = Arc::get_mut(&mut app).expect("unique app state");

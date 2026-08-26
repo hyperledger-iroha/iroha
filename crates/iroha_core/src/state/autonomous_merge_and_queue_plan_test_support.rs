@@ -4,7 +4,7 @@
 )]
 fn autonomous_merge_source_for_queue_plan_admission_test(
     state: &State,
-    binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     entrypoint: TransactionEntrypoint,
     routing_plan: crate::queue::RoutingPlan,
     activation_validator_keypairs: &[KeyPair],
@@ -74,8 +74,8 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
     };
     proposal.proposal_hash = proposal.computed_proposal_hash();
 
-    let reservation = crate::queue::LaneQueueReservationKeyV2 {
-        version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+    let reservation = crate::queue::LaneQueueReservationKeyV1 {
+        version: crate::queue::LaneQueueReservationKeyV1::VERSION,
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: binding.canonical_hash(),
         routing_plan_digest: routing_plan.digest(),
@@ -239,7 +239,7 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
     }
 }
 fn seed_exact_queue_plan_admission_state_for_test(state: &State, certificate: &[u8]) {
-    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
         &state.network_id,
         certificate,
     )
@@ -260,7 +260,7 @@ fn seed_exact_queue_plan_admission_state_for_test(state: &State, certificate: &[
 }
 fn seed_pending_queue_plan_binding_state_for_test(
     state: &State,
-    binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
 ) {
     state
         .install_queue_plan_pending_binding_for_test(binding)
@@ -295,7 +295,7 @@ fn queue_plan_pending_obligation_for_test(
     state: &State,
     certificate: &[u8],
 ) -> QueuePlanPendingObligationV1 {
-    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
         &state.network_id,
         certificate,
     )

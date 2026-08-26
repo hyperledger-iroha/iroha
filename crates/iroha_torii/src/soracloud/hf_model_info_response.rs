@@ -310,10 +310,10 @@ mod tests {
     fn weight_selection_uses_shared_authenticated_precedence_and_sorted_set() {
         let model_info = norito::json!({
             "siblings": [
-                {"rfilename": "fallback.safetensors", "lfs": {"sha256": "33".repeat(32), "size": 3}},
-                {"rfilename": "shard-2.GGUF", "lfs": {"sha256": "22".repeat(32), "size": 2}},
+                {"rfilename": "fallback.safetensors", "lfs": {"sha256": ("33".repeat(32)), "size": 3}},
+                {"rfilename": "shard-2.gguf", "lfs": {"sha256": ("22".repeat(32)), "size": 2}},
                 {"rfilename": "notes.txt"},
-                {"rfilename": "shard-1.gguf", "lfs": {"sha256": "11".repeat(32), "size": 1}}
+                {"rfilename": "shard-1.gguf", "lfs": {"sha256": ("11".repeat(32)), "size": 1}}
             ]
         });
         let config = config_with_limit(1024);
@@ -335,7 +335,7 @@ mod tests {
                 .iter()
                 .map(|weight| weight.path.as_str())
                 .collect::<Vec<_>>(),
-            ["shard-1.gguf", "shard-2.GGUF"]
+            ["shard-1.gguf", "shard-2.gguf"]
         );
         assert!(
             derive_weight_selection(
@@ -349,12 +349,28 @@ mod tests {
         );
     }
     #[test]
+    fn weight_selection_rejects_uppercase_artifact_suffix() {
+        let model_info = norito::json!({
+            "siblings": [
+                {"rfilename": "model.GGUF", "lfs": {"sha256": ("11".repeat(32)), "size": 1}}
+            ]
+        });
+        let error =
+            derive_weight_selection(&model_info, &config_with_limit(1024), REPO_ID, REVISION)
+                .expect_err("uppercase GGUF compatibility spelling must be rejected");
+        assert!(
+            error
+                .message
+                .contains("must use an exact canonical lowercase file extension")
+        );
+    }
+    #[test]
     fn weight_selection_deduplicates_then_enforces_the_import_file_cap() {
         let model_info = norito::json!({
             "siblings": [
-                {"rfilename": "same.gguf", "lfs": {"sha256": "11".repeat(32), "size": 1}},
-                {"rfilename": "same.gguf", "lfs": {"sha256": "11".repeat(32), "size": 1}},
-                {"rfilename": "second.gguf", "lfs": {"sha256": "22".repeat(32), "size": 1}}
+                {"rfilename": "same.gguf", "lfs": {"sha256": ("11".repeat(32)), "size": 1}},
+                {"rfilename": "same.gguf", "lfs": {"sha256": ("11".repeat(32)), "size": 1}},
+                {"rfilename": "second.gguf", "lfs": {"sha256": ("22".repeat(32)), "size": 1}}
             ]
         });
         let mut config = config_with_limit(1024);

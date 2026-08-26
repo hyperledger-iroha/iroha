@@ -64,48 +64,30 @@ fn revoke_permission_invalidates_trigger_cache() {
     );
 }
 #[test]
-fn trigger_permission_payload_with_whitespace_decodes() {
-    let (registrar, _) = gen_account_in("wonderland");
-    let domain: Domain = Domain::new(wonderland_domain_id()).build(&registrar);
-    let registrar_account = new_wonderland_account(&registrar).build(&registrar);
-    let world = World::with([domain], [registrar_account], []);
-    let kura = Kura::blank_kura_for_testing();
-    let query = crate::query::store::LiveQueryStore::start_test();
-    let state = State::new(world, kura, query);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-    let trigger_id: TriggerId = "trigger_alpha".parse().unwrap();
+fn trigger_permission_payload_with_whitespace_is_rejected() {
     let raw_payload = "{  \"trigger\"  :   \"trigger_alpha\" }";
-    let permission = iroha_data_model::permission::Permission::new(
-        "CanExecuteTrigger".into(),
-        Json::from_raw_json(raw_payload.to_owned()).expect("valid permission JSON fixture"),
-    );
-    stx.world
-        .account_permissions
-        .insert(registrar.clone(), BTreeSet::from([permission]));
-    assert!(
-        stx.can_execute_trigger_for(&registrar, &trigger_id),
-        "Norito decoder should handle non-canonical JSON payloads"
-    );
-    assert!(stx.can_execute_trigger_for(&registrar, &trigger_id));
+    Json::from_raw_json(raw_payload.to_owned())
+        .expect_err("permission payload aliases must fail at the Json boundary");
 }
 #[test]
-fn permission_deserialized_from_json_matches_canonical_permission() {
-    let stored: Permission = norito::json::from_str(
-        r#"{
+fn permission_deserialization_rejects_alias_and_matches_canonical_payload() {
+    let alias = r#"{
             "name": "CanManageAccountAlias",
             "payload": { "scope": { "scope": "dataspace", "value": 0 } }
-        }"#,
+        }"#;
+    norito::json::from_str::<Permission>(alias)
+        .expect_err("noncanonical nested Json payload must fail closed");
+    let stored: Permission = norito::json::from_str(
+        r#"{"name":"CanManageAccountAlias","payload":{"scope":{"scope":"dataspace","value":0}}}"#,
     )
-    .expect("deserialize permission");
+    .expect("deserialize permission with canonical payload");
     let target = Permission::from(CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
     });
     let permissions = BTreeSet::from([stored]);
     assert!(
         permissions.contains(&target),
-        "deserialized permissions should use canonical JSON payloads: stored={}, target={}",
+        "deserialized canonical permission should match the typed permission: stored={}, target={}",
         permissions
             .first()
             .expect("stored permission")

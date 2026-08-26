@@ -1019,13 +1019,46 @@ public sealed class TransactionBuilderTests
             }
 
             statusPollCount++;
+            Assert.Contains("scope=global", request.RequestUri.Query, StringComparison.Ordinal);
             var body = statusPollCount switch
             {
                 1 => $$"""
                     {
                       "hash": "{{transactionHashHex}}",
                       "status": { "kind": "Queued" },
-                      "scope": "auto",
+                      "scope": "global",
+                      "resolved_from": "queue"
+                    }
+                    """,
+                2 => $$"""
+                    {
+                      "hash": "{{transactionHashHex}}",
+                      "status": { "kind": "Committed" },
+                      "scope": "global",
+                      "resolved_from": "cache"
+                    }
+                    """,
+                3 => $$"""
+                    {
+                      "hash": "{{transactionHashHex}}",
+                      "status": { "kind": "Applied", "block_height": 10 },
+                      "scope": "global",
+                      "resolved_from": "cache"
+                    }
+                    """,
+                4 => $$"""
+                    {
+                      "hash": "{{transactionHashHex}}",
+                      "status": { "kind": "Rejected" },
+                      "scope": "global",
+                      "resolved_from": "cache"
+                    }
+                    """,
+                5 => $$"""
+                    {
+                      "hash": "{{transactionHashHex}}",
+                      "status": { "kind": "Expired" },
+                      "scope": "global",
                       "resolved_from": "queue"
                     }
                     """,
@@ -1033,7 +1066,7 @@ public sealed class TransactionBuilderTests
                     {
                       "hash": "{{transactionHashHex}}",
                       "status": { "kind": "Applied", "block_height": 11 },
-                      "scope": "auto",
+                      "scope": "global",
                       "resolved_from": "state"
                     }
                     """,
@@ -1066,6 +1099,60 @@ public sealed class TransactionBuilderTests
         Assert.Equal(PipelineTransactionState.Applied, status.State);
         Assert.Equal((ulong)11, status.BlockHeight);
         Assert.True(status.IsTerminal);
+        Assert.True(status.IsSuccess);
+        Assert.Equal(6, statusPollCount);
+    }
+
+    [Fact]
+    public void PipelineSubmitOptionsDoesNotExposeFinalityPolicy()
+    {
+        var properties = typeof(PipelineSubmitOptions).GetProperties()
+            .Select(static property => property.Name)
+            .ToArray();
+
+        Assert.DoesNotContain("Scope", properties);
+        Assert.DoesNotContain("SuccessStates", properties);
+        Assert.DoesNotContain("FailureStates", properties);
+        Assert.Equal(["PollInterval", "Timeout"], properties.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task LedgerClientWaitFailsOnlyOnAuthoritativeRejectedOrExpired()
+    {
+        const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
+        foreach (var kind in new[] { "Rejected", "Expired" })
+        {
+            using var handler = new RecordingHandler(request =>
+            {
+                Assert.Contains("scope=global", request.RequestUri!.Query, StringComparison.Ordinal);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent($$"""
+                        {
+                          "hash": "{{transactionHash}}",
+                          "status": { "kind": "{{kind}}" },
+                          "scope": "global",
+                          "resolved_from": "state"
+                        }
+                        """),
+                };
+            });
+            using var client = new IrohaClient(
+                new Uri("https://torii.example"),
+                new HttpClient(handler));
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                client.Ledger.WaitForAsync(
+                    transactionHash,
+                    new PipelineSubmitOptions
+                    {
+                        PollInterval = TimeSpan.FromMilliseconds(1),
+                        Timeout = TimeSpan.FromSeconds(1),
+                    },
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains(kind, error.Message, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

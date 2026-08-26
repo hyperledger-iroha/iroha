@@ -103,9 +103,7 @@ fn sanitize_account_id(id: &AccountId) -> AccountId {
         return id.clone();
     }
     let sanitized = sanitize_account_id_str(&raw);
-    AccountId::parse_encoded(&sanitized)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("sanitized AccountId should parse")
+    AccountId::parse_encoded(&sanitized).expect("sanitized AccountId should parse")
 }
 fn sanitize_account_id_str(s: &str) -> String {
     if s.chars().any(char::is_whitespace) {

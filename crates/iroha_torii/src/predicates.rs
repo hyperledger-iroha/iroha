@@ -62,7 +62,6 @@ pub fn build_tx_predicate(expr: &FilterExpr) -> CP<CommittedTransaction> {
     fn parse_acc(s: &str) -> Option<iroha_data_model::account::AccountId> {
         iroha_data_model::account::AccountId::parse_encoded(s)
             .ok()
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .filter(|account| account.to_string() == s)
     }
     fn parse_hash(

@@ -4,23 +4,24 @@ use crate::{
     boilerplate::*,
     puzzle_work_admission::{
         DEFAULT_INBOUND_VERIFY_CAPACITY, DEFAULT_OUTBOUND_MINT_CAPACITY,
-        SoranetPuzzleWorkAdmission, run_soranet_puzzle_work,
+        SoranetPuzzleWorkAdmission, run_soranet_admission_work,
     },
 };
 use bytes::{Buf, BufMut, BytesMut};
+use iroha_config::parameters::actual::SoranetPow as ActualSoranetPow;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 use iroha_crypto::soranet::pow::TicketRevocationStoreLimits;
 use iroha_crypto::soranet::{
     handshake::{
-        HarnessError, RuntimeParams, build_client_hello, client_handle_relay_hello,
-        parse_capabilities, process_client_hello, validate_client_capability_vector,
+        HarnessError, RelayAuthenticationSignerV1, RelayAuthenticationVerifierV1, RuntimeParams,
+        build_client_hello, client_handle_relay_hello, parse_capabilities, process_client_hello,
+        validate_client_capability_vector,
     },
     pow::{
-        self, ChallengeBinding as PowBinding, Parameters as PowParameters, SignedTicket,
-        Ticket as PowTicket, TicketRevocationStore,
+        self, ChallengeBinding as PowBinding, Parameters as PowParameters, Ticket as PowTicket,
+        TicketRevocationStore,
     },
     puzzle::{self, ChallengeBinding as PuzzleBinding, Parameters as PuzzleParameters},
-    token::{AdmissionToken, DecodeError as AdmissionTokenDecodeError},
 };
 use iroha_data_model::peer::PeerId;
 use message::*;
@@ -37,14 +38,13 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     net::SocketAddr,
     sync::{
-        Arc, Mutex, Weak,
+        Arc, Mutex, MutexGuard, Weak,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::SystemTime,
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::TcpStream,
     sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch},
     time::Duration,
 };
@@ -54,6 +54,14 @@ fn test_network_id(seed: &str) -> iroha_data_model::NetworkId {
     iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
         iroha_crypto::Hash::new(seed.as_bytes()),
     ))
+}
+#[cfg(test)]
+fn test_ticket_revocation_store() -> Arc<Mutex<TicketRevocationStore>> {
+    let limits = TicketRevocationStoreLimits::new(1_024, Duration::from_secs(900))
+        .expect("test replay-store limits must be valid");
+    let store = TicketRevocationStore::in_memory(limits)
+        .expect("test in-memory replay store must be available");
+    Arc::new(Mutex::new(store))
 }
 /// Max length of a handshake message in bytes excluding the length prefix.
 ///
@@ -170,11 +178,63 @@ where
     }
     Ok(challenge)
 }
+/// Bound pending ticket identities to the hard ceiling for inbound crypto work.
+const MAX_PENDING_TICKET_REPLAYS: usize = ActualSoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION;
+
+struct PendingTicketReplays {
+    fingerprints: Mutex<HashSet<[u8; 32]>>,
+}
+impl std::fmt::Debug for PendingTicketReplays {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PendingTicketReplays")
+            .field("fingerprints", &"[REDACTED]")
+            .field("capacity", &MAX_PENDING_TICKET_REPLAYS)
+            .finish()
+    }
+}
+struct PendingTicketReplayReservation {
+    pending: Arc<PendingTicketReplays>,
+    fingerprint: [u8; 32],
+    active: bool,
+}
+impl PendingTicketReplayReservation {
+    fn release(&mut self) -> Result<(), &'static str> {
+        if !self.active {
+            return Ok(());
+        }
+        let mut fingerprints = self
+            .pending
+            .fingerprints
+            .lock()
+            .map_err(|_| "pending_lock_poisoned")?;
+        if !fingerprints.remove(&self.fingerprint) {
+            return Err("pending_reservation_missing");
+        }
+        self.active = false;
+        Ok(())
+    }
+}
+impl std::fmt::Debug for PendingTicketReplayReservation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PendingTicketReplayReservation")
+            .field("fingerprint", &"[REDACTED]")
+            .field("active", &self.active)
+            .finish()
+    }
+}
+impl Drop for PendingTicketReplayReservation {
+    fn drop(&mut self) {
+        let _ = self.release();
+        self.fingerprint.fill(0);
+        std::hint::black_box(&mut self.fingerprint[..]);
+    }
+}
 /// Runtime configuration shared across `SoraNet` handshake attempts.
 #[derive(Debug, Clone)]
 pub struct SoranetHandshakeConfig {
     descriptor_commit: Arc<Vec<u8>>,
-    relay_id: Arc<Vec<u8>>,
     client_capabilities: Arc<Vec<u8>>,
     relay_capabilities: Arc<Vec<u8>>,
     trust_gossip: bool,
@@ -185,10 +245,8 @@ pub struct SoranetHandshakeConfig {
     pow_params: Arc<PowParameters>,
     pow_ticket_ttl: Duration,
     puzzle_params: Option<Arc<PuzzleParameters>>,
-    signed_ticket_public_key: Option<Arc<Vec<u8>>>,
-    admission_token: Option<Arc<AdmissionToken>>,
-    revocation_store: Option<Arc<Mutex<TicketRevocationStore>>>,
-    revocation_store_error: Option<Arc<str>>,
+    revocation_store: Arc<Mutex<TicketRevocationStore>>,
+    pending_ticket_replays: Arc<PendingTicketReplays>,
     puzzle_work_admission: Arc<SoranetPuzzleWorkAdmission>,
 }
 impl SoranetHandshakeConfig {
@@ -205,8 +263,7 @@ impl SoranetHandshakeConfig {
         puzzle_params: Option<PuzzleParameters>,
         pow_ticket_ttl: Duration,
         signed_ticket_public_key: Option<Vec<u8>>,
-        revocation_store: Option<Arc<Mutex<TicketRevocationStore>>>,
-        revocation_store_error: Option<String>,
+        revocation_store: Arc<Mutex<TicketRevocationStore>>,
     ) -> Result<Self, Error> {
         if MlKemSuite::from_kem_id(kem_id).is_none() {
             return Err(Error::HandshakeSoranet(format!(
@@ -242,8 +299,13 @@ impl SoranetHandshakeConfig {
         parse_capabilities(&relay_capabilities).map_err(|error| {
             Error::HandshakeSoranet(format!("invalid SoraNet relay capability vector: {error}"))
         })?;
+        if signed_ticket_public_key.is_some() {
+            return Err(Error::HandshakeSoranet(
+                "delegated signed-ticket credentials are not supported by the direct P2P handshake; use the transcript-bound self-minted Argon2 policy"
+                    .to_owned(),
+            ));
+        }
         Ok(Self {
-            relay_id: Arc::new(descriptor_commit.clone()),
             descriptor_commit: Arc::new(descriptor_commit),
             client_capabilities: Arc::new(client_capabilities),
             relay_capabilities: Arc::new(relay_capabilities),
@@ -255,10 +317,10 @@ impl SoranetHandshakeConfig {
             pow_params: Arc::new(pow_params),
             pow_ticket_ttl,
             puzzle_params: puzzle_params.map(Arc::new),
-            signed_ticket_public_key: signed_ticket_public_key.map(Arc::new),
-            admission_token: None,
             revocation_store,
-            revocation_store_error: revocation_store_error.map(Arc::from),
+            pending_ticket_replays: Arc::new(PendingTicketReplays {
+                fingerprints: Mutex::new(HashSet::new()),
+            }),
             puzzle_work_admission: Arc::new(SoranetPuzzleWorkAdmission::new(
                 DEFAULT_OUTBOUND_MINT_CAPACITY,
                 DEFAULT_INBOUND_VERIFY_CAPACITY,
@@ -284,48 +346,98 @@ impl SoranetHandshakeConfig {
     fn pow_binding<'a>(&'a self, transcript_hash: &'a [u8; 32]) -> PowBinding<'a> {
         PowBinding::new(
             self.descriptor_commit.as_slice(),
-            self.relay_id.as_slice(),
+            transcript_hash,
             transcript_hash,
         )
     }
     fn puzzle_binding<'a>(&'a self, transcript_hash: &'a [u8; 32]) -> PuzzleBinding<'a> {
         PuzzleBinding::new(
             self.descriptor_commit.as_slice(),
-            self.relay_id.as_slice(),
+            transcript_hash,
             transcript_hash,
         )
     }
-    fn enforce_revocation(&self, ticket: &PowTicket) -> Result<(), ChallengeVerifyError> {
-        let inc_revocation_metric = |reason: &str| {
-            if let Some(metrics) = iroha_telemetry::metrics::global() {
-                metrics.inc_soranet_pow_revocation_store(reason);
-            }
-        };
-        if let Some(error) = self.revocation_store_error.as_ref() {
-            iroha_logger::error!(
-                error = %error,
-                "soranet pow revocation store unavailable; rejecting ticket"
-            );
-            inc_revocation_metric("unavailable");
-            return Err(ChallengeVerifyError::RevocationStore(error.to_string()));
-        }
-        let Some(store) = self.revocation_store.as_ref() else {
-            return Ok(());
-        };
-        let now = SystemTime::now();
-        let mut guard = store.lock().map_err(|_| {
+    fn lock_revocation_store(
+        &self,
+    ) -> Result<MutexGuard<'_, TicketRevocationStore>, ChallengeVerifyError> {
+        self.revocation_store.lock().map_err(|_| {
             iroha_logger::error!("soranet pow revocation store lock poisoned");
-            inc_revocation_metric("lock_poisoned");
+            if let Some(metrics) = iroha_telemetry::metrics::global() {
+                metrics.inc_soranet_pow_revocation_store("lock_poisoned");
+            }
             ChallengeVerifyError::RevocationStore("lock_poisoned".to_string())
-        })?;
-        pow::record_revocation(ticket, Some(&mut guard), now).map_err(|err| match err {
+        })
+    }
+    fn map_pow_verification_error(&self, error: pow::Error) -> ChallengeVerifyError {
+        match error {
             pow::Error::Replay => ChallengeVerifyError::Replay,
             pow::Error::RevocationStore(message) => {
                 iroha_logger::warn!(error = %message, "soranet pow revocation store error");
-                inc_revocation_metric(&message);
+                if let Some(metrics) = iroha_telemetry::metrics::global() {
+                    metrics.inc_soranet_pow_revocation_store(&message);
+                }
                 ChallengeVerifyError::RevocationStore(message)
             }
             other => ChallengeVerifyError::Pow(other),
+        }
+    }
+    fn reserve_ticket_replay(
+        &self,
+        ticket: &PowTicket,
+        now: SystemTime,
+    ) -> Result<PendingTicketReplayReservation, ChallengeVerifyError> {
+        let fingerprint = ticket.revocation_fingerprint();
+        let mut store_guard = self.lock_revocation_store()?;
+        if store_guard
+            .is_ticket_payload_revoked(ticket, now)
+            .map_err(|error| {
+                self.map_pow_verification_error(pow::Error::RevocationStore(error.to_string()))
+            })?
+        {
+            return Err(ChallengeVerifyError::Replay);
+        }
+        let mut pending = self
+            .pending_ticket_replays
+            .fingerprints
+            .lock()
+            .map_err(|_| {
+                self.map_pow_verification_error(pow::Error::RevocationStore(
+                    "pending_lock_poisoned".to_owned(),
+                ))
+            })?;
+        if pending.contains(&fingerprint) {
+            return Err(ChallengeVerifyError::Replay);
+        }
+        if pending.len() >= MAX_PENDING_TICKET_REPLAYS {
+            return Err(self.map_pow_verification_error(pow::Error::RevocationStore(
+                "pending_capacity".to_owned(),
+            )));
+        }
+        pending.try_reserve(1).map_err(|_| {
+            self.map_pow_verification_error(pow::Error::RevocationStore(
+                "pending_allocation".to_owned(),
+            ))
+        })?;
+        pending.insert(fingerprint);
+        Ok(PendingTicketReplayReservation {
+            pending: Arc::clone(&self.pending_ticket_replays),
+            fingerprint,
+            active: true,
+        })
+    }
+    fn commit_ticket_replay(
+        &self,
+        ticket: &PowTicket,
+        mut reservation: PendingTicketReplayReservation,
+        now: SystemTime,
+    ) -> Result<(), ChallengeVerifyError> {
+        {
+            let mut store_guard = self.lock_revocation_store()?;
+            pow::record_revocation(ticket, Some(&mut *store_guard), now)
+                .map_err(|error| self.map_pow_verification_error(error))?;
+        }
+        reservation.release().map_err(|reason| {
+            self.map_pow_verification_error(pow::Error::RevocationStore(reason.to_owned()))
         })
     }
     fn admission_for_difficulty(&self, difficulty: u8) -> ChallengeAdmission {
@@ -359,8 +471,7 @@ impl SoranetHandshakeConfig {
             None,
             Duration::from_secs(60),
             None,
-            None,
-            None,
+            test_ticket_revocation_store(),
         )
         .expect("built-in SoraNet handshake defaults must be valid")
     }
@@ -379,34 +490,22 @@ impl SoranetHandshakeConfig {
                 .map(|value| value.as_ref().as_slice()),
         }
     }
-    pub(crate) fn pow_required(&self) -> bool {
-        if self.admission_token.is_some() {
-            return false;
-        }
+    /// Whether an inbound peer must present the configured puzzle credential.
+    ///
+    /// Outbound self-minting policy must never weaken this local listener policy.
+    pub(crate) fn inbound_pow_required(&self) -> bool {
         self.pow_required && (self.pow_params.difficulty() > 0 || self.puzzle_params.is_some())
     }
-    fn requires_memory_hard_puzzle_verification(&self) -> bool {
-        self.pow_required()
-            && self.puzzle_params.is_some()
-            && self.signed_ticket_public_key.is_none()
+    fn outbound_pow_required(&self) -> bool {
+        self.inbound_pow_required()
+    }
+    fn requires_blocking_ticket_verification(&self) -> bool {
+        self.inbound_pow_required() && self.puzzle_params.is_some()
     }
     /// Removes expired revocations from the backing store and returns the number of entries purged.
     #[allow(dead_code)]
     pub(crate) fn purge_expired_revocations(&self) -> Result<usize, ChallengeVerifyError> {
-        if let Some(error) = self.revocation_store_error.as_ref() {
-            iroha_logger::error!(
-                error = %error,
-                "soranet pow revocation store unavailable; purge skipped"
-            );
-            return Err(ChallengeVerifyError::RevocationStore(error.to_string()));
-        }
-        let Some(store) = self.revocation_store.as_ref() else {
-            return Ok(0);
-        };
-        let mut guard = store.lock().map_err(|_| {
-            iroha_logger::error!("soranet pow revocation store lock poisoned");
-            ChallengeVerifyError::RevocationStore("lock_poisoned".to_string())
-        })?;
+        let mut guard = self.lock_revocation_store()?;
         guard.purge_expired(SystemTime::now()).map_err(|err| {
             iroha_logger::error!(
                 error = %err,
@@ -418,43 +517,15 @@ impl SoranetHandshakeConfig {
     /// Returns the number of active revocation fingerprints currently tracked.
     #[must_use]
     #[allow(dead_code)]
-    pub(crate) fn active_revocations(&self) -> usize {
-        if self.revocation_store_error.is_some() {
-            return 0;
-        }
-        let Some(store) = self.revocation_store.as_ref() else {
-            return 0;
-        };
-        let Ok(mut guard) = store.lock() else {
-            return 0;
-        };
-        match guard.len(SystemTime::now()) {
-            Ok(len) => len,
-            Err(error) => {
-                iroha_logger::error!(
-                    %error,
-                    "soranet pow revocation store unavailable while counting active entries"
-                );
-                0
-            }
-        }
-    }
-    /// Decode and attach an admission token to the handshake configuration.
-    ///
-    /// The caller-owned encoded buffer is wiped before this method returns.
-    ///
-    /// # Errors
-    /// Returns [`AdmissionTokenDecodeError`] when `token` is not a canonical
-    /// `SoraNet` admission-token frame.
-    pub fn set_admission_token(
-        &mut self,
-        mut token: Vec<u8>,
-    ) -> Result<(), AdmissionTokenDecodeError> {
-        let decoded = AdmissionToken::decode(&token);
-        token.fill(0);
-        token.clear();
-        self.admission_token = Some(Arc::new(decoded?));
-        Ok(())
+    pub(crate) fn active_revocations(&self) -> Result<usize, ChallengeVerifyError> {
+        let mut guard = self.lock_revocation_store()?;
+        guard.len(SystemTime::now()).map_err(|error| {
+            iroha_logger::error!(
+                %error,
+                "soranet pow revocation store unavailable while counting active entries"
+            );
+            ChallengeVerifyError::RevocationStore(error.to_string())
+        })
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn pow_parameters(&self) -> PowParameters {
@@ -470,7 +541,7 @@ impl SoranetHandshakeConfig {
     }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn admission_summary(&self) -> Option<ChallengeAdmission> {
-        if !self.pow_required() {
+        if !self.inbound_pow_required() {
             return None;
         }
         Some(self.admission_for_difficulty(self.pow_params.difficulty()))
@@ -480,15 +551,7 @@ impl SoranetHandshakeConfig {
         transcript_hash: &[u8; 32],
         rng: &mut R,
     ) -> Result<Option<MintedChallenge>, ChallengeMintError> {
-        if let Some(token) = self.admission_token.as_ref() {
-            let mut frames = Vec::with_capacity(1);
-            frames.push(token.try_encode()?);
-            return Ok(Some(MintedChallenge {
-                frames,
-                admission: None,
-            }));
-        }
-        if !self.pow_required() {
+        if !self.outbound_pow_required() {
             return Ok(None);
         }
         let ttl = self.effective_ticket_ttl();
@@ -512,67 +575,10 @@ impl SoranetHandshakeConfig {
         bytes: &[u8],
         transcript_hash: &[u8; 32],
     ) -> Result<Option<ChallengeAdmission>, ChallengeVerifyError> {
-        if !self.pow_required() {
+        if !self.inbound_pow_required() {
             return Ok(None);
-        }
-        if let Some(public_key) = self.signed_ticket_public_key.as_deref() {
-            let signed = SignedTicket::decode(bytes).map_err(ChallengeVerifyError::Pow)?;
-            return self.verify_signed_ticket_decoded(&signed, public_key, transcript_hash);
         }
         self.verify_unsigned_ticket_bytes(bytes, transcript_hash)
-    }
-    /// Verify a signed ticket using the configured binding and revocation store.
-    ///
-    /// The caller must supply the relay's ML-DSA public key used to issue the ticket.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn verify_signed_ticket(
-        &self,
-        bytes: &[u8],
-        public_key: &[u8],
-        transcript_hash: &[u8; 32],
-    ) -> Result<Option<ChallengeAdmission>, ChallengeVerifyError> {
-        if !self.pow_required() {
-            return Ok(None);
-        }
-        let signed = SignedTicket::decode(bytes).map_err(ChallengeVerifyError::Pow)?;
-        self.verify_signed_ticket_decoded(&signed, public_key, transcript_hash)
-    }
-    fn verify_signed_ticket_decoded(
-        &self,
-        signed: &SignedTicket,
-        public_key: &[u8],
-        transcript_hash: &[u8; 32],
-    ) -> Result<Option<ChallengeAdmission>, ChallengeVerifyError> {
-        if let Some(error) = self.revocation_store_error.as_ref() {
-            return Err(ChallengeVerifyError::RevocationStore(error.to_string()));
-        }
-        let mut store = self
-            .revocation_store
-            .as_ref()
-            .map(|store| store.lock())
-            .transpose()
-            .map_err(|_| {
-                iroha_logger::error!("soranet pow revocation store lock poisoned");
-                ChallengeVerifyError::RevocationStore("lock_poisoned".to_string())
-            })?;
-        let binding = self.pow_binding(transcript_hash);
-        let admission = self.admission_for_difficulty(signed.ticket.difficulty);
-        pow::verify_signed_ticket(
-            signed,
-            public_key,
-            &binding,
-            self.pow_params.as_ref(),
-            store.as_deref_mut(),
-        )
-        .map_err(|err| match err {
-            pow::Error::Replay => ChallengeVerifyError::Replay,
-            pow::Error::RevocationStore(message) => {
-                iroha_logger::warn!(error = %message, "soranet pow revocation store error");
-                ChallengeVerifyError::RevocationStore(message)
-            }
-            other => ChallengeVerifyError::Pow(other),
-        })?;
-        Ok(Some(admission))
     }
     fn verify_unsigned_ticket_bytes(
         &self,
@@ -580,32 +586,36 @@ impl SoranetHandshakeConfig {
         transcript_hash: &[u8; 32],
     ) -> Result<Option<ChallengeAdmission>, ChallengeVerifyError> {
         let ticket = PowTicket::parse(bytes).map_err(ChallengeVerifyError::Pow)?;
+        let now = SystemTime::now();
+        // Reserve the canonical identity while holding the store only for its
+        // durable preflight. The RAII guard excludes concurrent duplicates but
+        // leaves distinct ML-DSA/Argon2 work free to run in parallel.
+        let reservation = self.reserve_ticket_replay(&ticket, now)?;
         let admission = self
             .puzzle_params
             .as_ref()
             .map_or_else(
                 || {
                     let binding = self.pow_binding(transcript_hash);
-                    pow::verify(&ticket, &binding, self.pow_params.as_ref())
+                    pow::verify_at(&ticket, &binding, self.pow_params.as_ref(), now)
                         .map_err(ChallengeVerifyError::Pow)
                 },
                 |params| {
                     let binding = self.puzzle_binding(transcript_hash);
-                    puzzle::verify(&ticket, &binding, params.as_ref())
+                    puzzle::verify_at(&ticket, &binding, params.as_ref(), now)
                         .map_err(ChallengeVerifyError::Puzzle)
                 },
             )
             .map(|()| self.admission_for_difficulty(ticket.difficulty))?;
-        self.enforce_revocation(&ticket)?;
+        // Re-check revocation/expiry at commit time so slow Argon2 work cannot
+        // accept a ticket that expired after its initial verification instant.
+        self.commit_ticket_replay(&ticket, reservation, SystemTime::now())?;
         Ok(Some(admission))
     }
 }
 /// Errors encountered while minting `SoraNet` handshake challenges.
 #[derive(Debug, Error)]
 pub enum ChallengeMintError {
-    /// Configured admission token could not be encoded.
-    #[error("admission token encoding failed: {0}")]
-    TokenEncode(#[from] iroha_crypto::soranet::token::EncodeError),
     /// Underlying `PoW` ticket minting failure.
     #[error("pow ticket mint failed: {0}")]
     Pow(#[from] pow::MintError),
@@ -632,7 +642,7 @@ pub enum ChallengeVerifyError {
 /// Admission policy snapshot returned alongside minted or verified tickets.
 #[derive(Debug, Clone, Copy)]
 pub struct ChallengeAdmission {
-    /// Effective `PoW` parameters (including adaptive difficulty).
+    /// Effective static first-release `PoW` parameters.
     pub pow: PowParameters,
     /// Ticket TTL after applying policy clamps.
     pub ticket_ttl: Duration,
@@ -641,10 +651,18 @@ pub struct ChallengeAdmission {
 }
 /// Minted ticket bytes alongside the admission policy summary.
 pub struct MintedChallenge {
-    /// Handshake frames (token, puzzle) to send before the client hello.
+    /// Self-minted puzzle ticket frames to send before the client hello.
     pub frames: Vec<Vec<u8>>,
     /// Admission policy applied when minting the ticket.
     pub admission: Option<ChallengeAdmission>,
+}
+fn clear_sensitive_vec(bytes: &mut Vec<u8>) {
+    // Initialize the existing spare allocation before clearing so a caller
+    // cannot leave an earlier, truncated credential resident in capacity.
+    bytes.resize(bytes.capacity(), 0);
+    bytes.fill(0);
+    std::hint::black_box(bytes.as_mut_slice());
+    bytes.clear();
 }
 impl std::fmt::Debug for MintedChallenge {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -659,10 +677,49 @@ impl std::fmt::Debug for MintedChallenge {
 impl MintedChallenge {
     fn clear_sensitive_bytes(&mut self) {
         for frame in &mut self.frames {
-            frame.fill(0);
-            frame.clear();
+            clear_sensitive_vec(frame);
         }
         self.frames.clear();
+    }
+}
+impl Drop for MintedChallenge {
+    fn drop(&mut self) {
+        self.clear_sensitive_bytes();
+    }
+}
+
+/// One raw inbound admission credential retained across asynchronous work.
+struct SensitiveHandshakeFrame(Vec<u8>);
+impl SensitiveHandshakeFrame {
+    fn clear(&mut self) {
+        clear_sensitive_vec(&mut self.0);
+    }
+}
+impl From<Vec<u8>> for SensitiveHandshakeFrame {
+    fn from(frame: Vec<u8>) -> Self {
+        Self(frame)
+    }
+}
+impl AsRef<[u8]> for SensitiveHandshakeFrame {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+impl std::ops::Deref for SensitiveHandshakeFrame {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::fmt::Debug for SensitiveHandshakeFrame {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SensitiveHandshakeFrame([REDACTED])")
+    }
+}
+impl Drop for SensitiveHandshakeFrame {
+    fn drop(&mut self) {
+        self.clear();
     }
 }
 async fn mint_handshake_challenge(
@@ -673,13 +730,13 @@ async fn mint_handshake_challenge(
     // The ordinary hashcash loop is cheap and preserves the existing direct
     // path. Only the configured memory-hard Argon2 puzzle needs blocking-pool
     // isolation and direction-aware process admission.
-    if !config.pow_required() || config.puzzle_params.is_none() {
+    if !config.outbound_pow_required() || config.puzzle_params.is_none() {
         let minted = config
             .mint_challenge_ticket(&transcript_hash, &mut rng)
             .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
         return Ok((minted, rng));
     }
-    run_soranet_puzzle_work(
+    run_soranet_admission_work(
         config.puzzle_work_admission.outbound_mint_gate(),
         move || {
             let minted = config
@@ -692,7 +749,7 @@ async fn mint_handshake_challenge(
 }
 async fn verify_handshake_challenge(
     config: Arc<SoranetHandshakeConfig>,
-    ticket: Vec<u8>,
+    ticket: SensitiveHandshakeFrame,
     transcript_hash: [u8; 32],
 ) -> Result<Option<ChallengeAdmission>, Error> {
     verify_handshake_challenge_with_gate(
@@ -705,18 +762,18 @@ async fn verify_handshake_challenge(
 }
 async fn verify_handshake_challenge_with_gate(
     config: Arc<SoranetHandshakeConfig>,
-    ticket: Vec<u8>,
+    ticket: SensitiveHandshakeFrame,
     transcript_hash: [u8; 32],
     gate: Arc<Semaphore>,
 ) -> Result<Option<ChallengeAdmission>, Error> {
-    // Ordinary hashcash and signed-ticket verification are cheap. The
-    // configured memory-hard Argon2 verifier must never run on a peer task.
-    if !config.requires_memory_hard_puzzle_verification() {
+    // Ordinary hashcash is cheap. Argon2 and ML-DSA verification must never
+    // run on a peer task, and both share the bounded inbound work gate.
+    if !config.requires_blocking_ticket_verification() {
         return config
             .verify_challenge_ticket(&ticket, &transcript_hash)
             .map_err(|error| Error::HandshakeSoranet(error.to_string()));
     }
-    run_soranet_puzzle_work(gate, move || {
+    run_soranet_admission_work(gate, move || {
         config
             .verify_challenge_ticket(&ticket, &transcript_hash)
             .map_err(|error| Error::HandshakeSoranet(error.to_string()))
@@ -797,71 +854,118 @@ fn observe_handshake_ms(ms: u64) {
 }
 // Pre-handshake magic/version used to quickly reject garbage before entering
 // the cryptographic handshake. The initiator's preface also carries the fresh
-// challenge which authorizes exactly one responder delegation.
+// challenge and its exact observation of the underlying transport binding.
 const PRE_MAGIC: &[u8; 4] = b"I2P2";
-const PRE_VERSION: u8 = 3;
+const PRE_VERSION: u8 = 5;
 const SORANET_TRANSPORT_DELEGATION_CHALLENGE_BYTES: usize = 32;
-const MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES: usize = 512;
-const SORANET_TRANSPORT_DELEGATION_SIGNATURE_DOMAIN: &[u8] =
-    b"iroha:p2p:soranet-transport-delegation:v3|";
+const ML_DSA_65_PUBLIC_KEY_BYTES: usize = 1_952;
+/// Exact first-release allocation ceiling for one complete V5 certificate and proof frame.
+const MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES: usize = 4_493;
+const SORANET_TRANSPORT_CERTIFICATE_SIGNATURE_DOMAIN: &[u8] =
+    b"iroha:p2p:soranet-transport-certificate:v5|";
+const SORANET_TRANSPORT_CERTIFICATE_DIGEST_DOMAIN: &[u8] =
+    b"iroha:p2p:soranet-transport-certificate-digest:v5|";
+const SORANET_TRANSPORT_PROOF_SIGNATURE_DOMAIN: &[u8] = b"iroha:p2p:soranet-transport-proof:v5|";
 const SORANET_TRANSPORT_DELEGATION_BINDING_DOMAIN: &[u8] =
-    b"iroha:p2p:soranet-transport-delegation-binding:v3|";
+    b"iroha:p2p:soranet-transport-delegation-binding:v5|";
 type SoranetTransportDelegationChallenge = [u8; SORANET_TRANSPORT_DELEGATION_CHALLENGE_BYTES];
 #[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
-struct SoranetTransportDelegationStatementV3 {
+struct SoranetTransportCertificateV5 {
     p2p_preface_version: u8,
-    challenge: SoranetTransportDelegationChallenge,
     network_id: iroha_data_model::NetworkId,
     node_id: PeerId,
     transport_public_key: iroha_crypto::PublicKey,
+    relay_authentication_mldsa65_public_key: iroha_crypto::PublicKey,
 }
 #[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
-struct SignedSoranetTransportDelegationV3 {
-    statement: SoranetTransportDelegationStatementV3,
+struct SignedSoranetTransportCertificateV5 {
+    certificate: SoranetTransportCertificateV5,
     node_signature: Vec<u8>,
 }
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+struct SoranetTransportProofStatementV5 {
+    certificate_digest: [u8; iroha_crypto::Hash::LENGTH],
+    challenge: SoranetTransportDelegationChallenge,
+    transport_binding: Option<TransportBinding>,
+}
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+struct SignedSoranetTransportProofV5 {
+    statement: SoranetTransportProofStatementV5,
+    transport_signature: Vec<u8>,
+}
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+struct SignedSoranetTransportDelegationV5 {
+    certificate: SignedSoranetTransportCertificateV5,
+    proof: SignedSoranetTransportProofV5,
+}
+/// Process-lifetime BLS authorization and dual online-authentication signer.
 #[derive(Debug)]
-struct LocalSoranetTransportDelegationV3 {
+pub(crate) struct LocalSoranetTransportCertificateV5 {
+    signed_certificate: SignedSoranetTransportCertificateV5,
+    digest: [u8; iroha_crypto::Hash::LENGTH],
+    relay_authentication_signer: Arc<RelayAuthenticationSignerV1>,
+}
+#[derive(Debug)]
+struct LocalSoranetTransportDelegationV5 {
     canonical_signed_frame: Vec<u8>,
     binding: [u8; iroha_crypto::Hash::LENGTH],
 }
 #[derive(Debug)]
-struct VerifiedSoranetTransportDelegationV3 {
-    transport_public_key: iroha_crypto::PublicKey,
+struct VerifiedSoranetTransportDelegationV5 {
+    relay_authentication_verifier: RelayAuthenticationVerifierV1,
     binding: [u8; iroha_crypto::Hash::LENGTH],
 }
-fn soranet_transport_delegation_signature_payload_v3(
-    statement: &SoranetTransportDelegationStatementV3,
-) -> Vec<u8> {
-    let statement = statement.encode();
-    let mut payload = Vec::with_capacity(
-        SORANET_TRANSPORT_DELEGATION_SIGNATURE_DOMAIN
-            .len()
-            .saturating_add(statement.len()),
-    );
-    payload.extend_from_slice(SORANET_TRANSPORT_DELEGATION_SIGNATURE_DOMAIN);
-    payload.extend_from_slice(&statement);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ClientPreHandshakeV5 {
+    challenge: SoranetTransportDelegationChallenge,
+    transport_binding: Option<TransportBinding>,
+}
+fn domain_separated_payload<T: Encode>(domain: &[u8], value: &T) -> Vec<u8> {
+    let encoded = value.encode();
+    let mut payload = Vec::with_capacity(domain.len().saturating_add(encoded.len()));
+    payload.extend_from_slice(domain);
+    payload.extend_from_slice(&encoded);
     payload
 }
-fn soranet_transport_delegation_binding_v3(
-    canonical_signed_frame: &[u8],
-) -> [u8; iroha_crypto::Hash::LENGTH] {
-    let mut preimage = Vec::with_capacity(
-        SORANET_TRANSPORT_DELEGATION_BINDING_DOMAIN
-            .len()
-            .saturating_add(canonical_signed_frame.len()),
-    );
-    preimage.extend_from_slice(SORANET_TRANSPORT_DELEGATION_BINDING_DOMAIN);
-    preimage.extend_from_slice(canonical_signed_frame);
+fn soranet_transport_certificate_signature_payload_v5(
+    certificate: &SoranetTransportCertificateV5,
+) -> Vec<u8> {
+    domain_separated_payload(SORANET_TRANSPORT_CERTIFICATE_SIGNATURE_DOMAIN, certificate)
+}
+fn soranet_transport_proof_signature_payload_v5(
+    statement: &SoranetTransportProofStatementV5,
+) -> Vec<u8> {
+    domain_separated_payload(SORANET_TRANSPORT_PROOF_SIGNATURE_DOMAIN, statement)
+}
+fn domain_separated_hash(domain: &[u8], bytes: &[u8]) -> [u8; iroha_crypto::Hash::LENGTH] {
+    let mut preimage = Vec::with_capacity(domain.len().saturating_add(bytes.len()));
+    preimage.extend_from_slice(domain);
+    preimage.extend_from_slice(bytes);
     iroha_crypto::Hash::new(preimage).into()
 }
-/// Sign one exact, challenge-bound delegation for one inbound connection.
-fn sign_soranet_transport_delegation_v3(
+fn soranet_transport_certificate_digest_v5(
+    canonical_signed_certificate: &[u8],
+) -> [u8; iroha_crypto::Hash::LENGTH] {
+    domain_separated_hash(
+        SORANET_TRANSPORT_CERTIFICATE_DIGEST_DOMAIN,
+        canonical_signed_certificate,
+    )
+}
+fn soranet_transport_delegation_binding_v5(
+    canonical_signed_frame: &[u8],
+) -> [u8; iroha_crypto::Hash::LENGTH] {
+    domain_separated_hash(
+        SORANET_TRANSPORT_DELEGATION_BINDING_DOMAIN,
+        canonical_signed_frame,
+    )
+}
+/// Construct the process-lifetime V5 certificate and dual-authentication signer.
+pub(crate) fn create_soranet_transport_certificate_v5(
     node_key_pair: &iroha_crypto::KeyPair,
-    soranet_transport_key_pair: &iroha_crypto::KeyPair,
+    soranet_transport_key_pair: Arc<iroha_crypto::KeyPair>,
+    relay_authentication_mldsa65_key_pair: Arc<iroha_crypto::KeyPair>,
     network_id: &iroha_data_model::NetworkId,
-    challenge: SoranetTransportDelegationChallenge,
-) -> Result<LocalSoranetTransportDelegationV3, crate::Error> {
+) -> Result<Arc<LocalSoranetTransportCertificateV5>, crate::Error> {
     use crate::SoranetTransportDelegationError as DelegationError;
     if node_key_pair.algorithm() != iroha_crypto::Algorithm::BlsNormal {
         return Err(DelegationError::LocalNodeAlgorithmMismatch {
@@ -875,22 +979,111 @@ fn sign_soranet_transport_delegation_v3(
         }
         .into());
     }
-    let statement = SoranetTransportDelegationStatementV3 {
+    if relay_authentication_mldsa65_key_pair.algorithm() != iroha_crypto::Algorithm::MlDsa {
+        return Err(Error::HandshakeSoranet(format!(
+            "local SoraNet online-authentication identity must be ML-DSA-65, found {:?}",
+            relay_authentication_mldsa65_key_pair.algorithm()
+        )));
+    }
+    let (_, mldsa65_public_key_payload) = relay_authentication_mldsa65_key_pair
+        .public_key()
+        .try_to_bytes()
+        .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
+    if mldsa65_public_key_payload.len() != ML_DSA_65_PUBLIC_KEY_BYTES {
+        return Err(Error::HandshakeSoranet(format!(
+            "local ML-DSA-65 public key is {} bytes; expected {ML_DSA_65_PUBLIC_KEY_BYTES}",
+            mldsa65_public_key_payload.len()
+        )));
+    }
+    let certificate = SoranetTransportCertificateV5 {
         p2p_preface_version: PRE_VERSION,
-        challenge,
         network_id: network_id.clone(),
         node_id: PeerId::from(node_key_pair.public_key().clone()),
         transport_public_key: soranet_transport_key_pair.public_key().clone(),
+        relay_authentication_mldsa65_public_key: relay_authentication_mldsa65_key_pair
+            .public_key()
+            .clone(),
     };
-    let signature_payload = soranet_transport_delegation_signature_payload_v3(&statement);
+    let signature_payload = soranet_transport_certificate_signature_payload_v5(&certificate);
     let node_signature =
         iroha_crypto::Signature::try_new(node_key_pair.private_key(), &signature_payload)
             .map_err(|error| DelegationError::DelegationSigning(error.to_string()))?
             .payload()
             .to_vec();
-    let signed = SignedSoranetTransportDelegationV3 {
-        statement,
+    let signed_certificate = SignedSoranetTransportCertificateV5 {
+        certificate,
         node_signature,
+    };
+    let canonical_signed_certificate = norito::encode_canonical(&signed_certificate)
+        .map_err(|error| DelegationError::DelegationEncoding(error.to_string()))?;
+    if canonical_signed_certificate.is_empty() {
+        return Err(
+            DelegationError::DelegationEncoding("empty canonical certificate".to_owned()).into(),
+        );
+    }
+    if canonical_signed_certificate.len() > MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES {
+        return Err(DelegationError::FrameTooLarge {
+            found: canonical_signed_certificate.len(),
+            max: MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES,
+        }
+        .into());
+    }
+    let digest = soranet_transport_certificate_digest_v5(&canonical_signed_certificate);
+    let relay_authentication_signer = RelayAuthenticationSignerV1::try_new(
+        soranet_transport_key_pair,
+        relay_authentication_mldsa65_key_pair,
+        digest,
+    )
+    .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
+    Ok(Arc::new(LocalSoranetTransportCertificateV5 {
+        signed_certificate,
+        digest,
+        relay_authentication_signer: Arc::new(relay_authentication_signer),
+    }))
+}
+/// Sign one cheap challenge/binding proof with the cached Ed25519 transport key.
+fn sign_soranet_transport_delegation_v5(
+    certificate: &LocalSoranetTransportCertificateV5,
+    soranet_transport_key_pair: &iroha_crypto::KeyPair,
+    challenge: SoranetTransportDelegationChallenge,
+    transport_binding: Option<TransportBinding>,
+) -> Result<LocalSoranetTransportDelegationV5, crate::Error> {
+    use crate::SoranetTransportDelegationError as DelegationError;
+    if soranet_transport_key_pair.algorithm() != iroha_crypto::Algorithm::Ed25519 {
+        return Err(DelegationError::LocalTransportAlgorithmMismatch {
+            found: soranet_transport_key_pair.algorithm(),
+        }
+        .into());
+    }
+    if &certificate
+        .signed_certificate
+        .certificate
+        .transport_public_key
+        != soranet_transport_key_pair.public_key()
+    {
+        return Err(Error::HandshakeSoranet(
+            "cached SoraNet certificate does not authorize the local transport key".to_owned(),
+        ));
+    }
+    let statement = SoranetTransportProofStatementV5 {
+        certificate_digest: certificate.digest,
+        challenge,
+        transport_binding,
+    };
+    let signature_payload = soranet_transport_proof_signature_payload_v5(&statement);
+    let transport_signature = iroha_crypto::Signature::try_new(
+        soranet_transport_key_pair.private_key(),
+        &signature_payload,
+    )
+    .map_err(|error| DelegationError::DelegationSigning(error.to_string()))?
+    .payload()
+    .to_vec();
+    let signed = SignedSoranetTransportDelegationV5 {
+        certificate: certificate.signed_certificate.clone(),
+        proof: SignedSoranetTransportProofV5 {
+            statement,
+            transport_signature,
+        },
     };
     let canonical_signed_frame = norito::encode_canonical(&signed)
         .map_err(|error| DelegationError::DelegationEncoding(error.to_string()))?;
@@ -904,30 +1097,32 @@ fn sign_soranet_transport_delegation_v3(
         }
         .into());
     }
-    let binding = soranet_transport_delegation_binding_v3(&canonical_signed_frame);
-    Ok(LocalSoranetTransportDelegationV3 {
+    let binding = soranet_transport_delegation_binding_v5(&canonical_signed_frame);
+    Ok(LocalSoranetTransportDelegationV5 {
         canonical_signed_frame,
         binding,
     })
 }
-fn verify_soranet_transport_delegation_v3(
+fn verify_soranet_transport_delegation_v5(
     canonical_signed_frame: &[u8],
     expected_network_id: &iroha_data_model::NetworkId,
     expected_peer_id: &PeerId,
     expected_challenge: &SoranetTransportDelegationChallenge,
-) -> Result<VerifiedSoranetTransportDelegationV3, crate::SoranetTransportDelegationError> {
+    expected_transport_binding: Option<TransportBinding>,
+) -> Result<VerifiedSoranetTransportDelegationV5, crate::Error> {
     use crate::SoranetTransportDelegationError as DelegationError;
     const ED25519_PUBLIC_KEY_BYTES: usize = 32;
     if canonical_signed_frame.is_empty() {
-        return Err(DelegationError::EmptyFrame);
+        return Err(DelegationError::EmptyFrame.into());
     }
     if canonical_signed_frame.len() > MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES {
         return Err(DelegationError::FrameTooLarge {
             found: canonical_signed_frame.len(),
             max: MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES,
-        });
+        }
+        .into());
     }
-    let signed: SignedSoranetTransportDelegationV3 = norito::decode_canonical_with_limits(
+    let signed: SignedSoranetTransportDelegationV5 = norito::decode_canonical_with_limits(
         canonical_signed_frame,
         norito::DecodeLimits::new(
             MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES.saturating_mul(8),
@@ -938,26 +1133,35 @@ fn verify_soranet_transport_delegation_v3(
         ),
     )
     .map_err(|error| DelegationError::NonCanonicalEncoding(error.to_string()))?;
-    if signed.statement.p2p_preface_version != PRE_VERSION {
+    if signed.certificate.certificate.p2p_preface_version != PRE_VERSION {
         return Err(DelegationError::UnsupportedVersion {
             expected: PRE_VERSION,
-            found: signed.statement.p2p_preface_version,
-        });
+            found: signed.certificate.certificate.p2p_preface_version,
+        }
+        .into());
     }
-    if &signed.statement.challenge != expected_challenge {
+    if &signed.proof.statement.challenge != expected_challenge {
         return Err(DelegationError::ChallengeMismatch {
             expected: *expected_challenge,
-            found: signed.statement.challenge,
-        });
+            found: signed.proof.statement.challenge,
+        }
+        .into());
     }
-    if &signed.statement.network_id != expected_network_id {
+    if signed.proof.statement.transport_binding != expected_transport_binding {
+        return Err(Error::HandshakeSoranet(
+            "SoraNet transport proof binding mismatch".to_owned(),
+        ));
+    }
+    if &signed.certificate.certificate.network_id != expected_network_id {
         return Err(DelegationError::NetworkMismatch {
             expected: expected_network_id.clone(),
-            found: signed.statement.network_id,
-        });
+            found: signed.certificate.certificate.network_id,
+        }
+        .into());
     }
     let node_algorithm = signed
-        .statement
+        .certificate
+        .certificate
         .node_id
         .public_key()
         .try_algorithm()
@@ -965,49 +1169,114 @@ fn verify_soranet_transport_delegation_v3(
     if node_algorithm != iroha_crypto::Algorithm::BlsNormal {
         return Err(DelegationError::NodeAlgorithmMismatch {
             found: node_algorithm,
-        });
+        }
+        .into());
     }
-    if &signed.statement.node_id != expected_peer_id {
+    if &signed.certificate.certificate.node_id != expected_peer_id {
         return Err(DelegationError::PeerMismatch {
             expected: expected_peer_id.clone(),
-            found: signed.statement.node_id,
-        });
+            found: signed.certificate.certificate.node_id,
+        }
+        .into());
     }
     let (transport_algorithm, transport_public_key) = signed
-        .statement
+        .certificate
+        .certificate
         .transport_public_key
         .try_to_bytes()
         .map_err(|error| DelegationError::NonCanonicalEncoding(error.to_string()))?;
     if transport_algorithm != iroha_crypto::Algorithm::Ed25519 {
         return Err(DelegationError::TransportAlgorithmMismatch {
             found: transport_algorithm,
-        });
+        }
+        .into());
     }
     if transport_public_key.len() != ED25519_PUBLIC_KEY_BYTES {
         return Err(DelegationError::TransportKeyLength {
             expected: ED25519_PUBLIC_KEY_BYTES,
             found: transport_public_key.len(),
-        });
+        }
+        .into());
+    }
+    let (relay_authentication_algorithm, relay_authentication_public_key) = signed
+        .certificate
+        .certificate
+        .relay_authentication_mldsa65_public_key
+        .try_to_bytes()
+        .map_err(|error| DelegationError::NonCanonicalEncoding(error.to_string()))?;
+    if relay_authentication_algorithm != iroha_crypto::Algorithm::MlDsa {
+        return Err(Error::HandshakeSoranet(format!(
+            "delegated online-authentication identity must be ML-DSA-65, found {relay_authentication_algorithm:?}"
+        )));
+    }
+    if relay_authentication_public_key.len() != ML_DSA_65_PUBLIC_KEY_BYTES {
+        return Err(Error::HandshakeSoranet(format!(
+            "delegated ML-DSA-65 public key is {} bytes; expected {ML_DSA_65_PUBLIC_KEY_BYTES}",
+            relay_authentication_public_key.len()
+        )));
     }
     let expected_signature_len = iroha_crypto::Algorithm::BlsNormal.signature_payload_len();
-    if signed.node_signature.len() != expected_signature_len {
+    if signed.certificate.node_signature.len() != expected_signature_len {
         return Err(DelegationError::NodeSignatureLength {
             expected: expected_signature_len,
-            found: signed.node_signature.len(),
-        });
+            found: signed.certificate.node_signature.len(),
+        }
+        .into());
     }
-    let signature = iroha_crypto::Signature::try_from_bytes(&signed.node_signature)
+    let signature = iroha_crypto::Signature::try_from_bytes(&signed.certificate.node_signature)
         .map_err(|_| DelegationError::MalformedNodeSignature)?;
-    let signature_payload = soranet_transport_delegation_signature_payload_v3(&signed.statement);
+    let signature_payload =
+        soranet_transport_certificate_signature_payload_v5(&signed.certificate.certificate);
     signature
         .verify(expected_peer_id.public_key(), &signature_payload)
         .map_err(|_| DelegationError::InvalidNodeSignature)?;
-    Ok(VerifiedSoranetTransportDelegationV3 {
-        transport_public_key: signed.statement.transport_public_key,
-        binding: soranet_transport_delegation_binding_v3(canonical_signed_frame),
+    let canonical_certificate = norito::encode_canonical(&signed.certificate)
+        .map_err(|error| DelegationError::NonCanonicalEncoding(error.to_string()))?;
+    let certificate_digest = soranet_transport_certificate_digest_v5(&canonical_certificate);
+    if signed.proof.statement.certificate_digest != certificate_digest {
+        return Err(Error::HandshakeSoranet(
+            "SoraNet transport proof certificate digest mismatch".to_owned(),
+        ));
+    }
+    let expected_transport_signature_len = iroha_crypto::Algorithm::Ed25519.signature_payload_len();
+    if signed.proof.transport_signature.len() != expected_transport_signature_len {
+        return Err(Error::HandshakeSoranet(format!(
+            "SoraNet transport proof signature is {} bytes; expected {expected_transport_signature_len}",
+            signed.proof.transport_signature.len()
+        )));
+    }
+    let transport_signature = iroha_crypto::Signature::try_from_bytes(
+        &signed.proof.transport_signature,
+    )
+    .map_err(|_| {
+        Error::HandshakeSoranet("SoraNet transport proof signature is malformed".to_owned())
+    })?;
+    let proof_payload = soranet_transport_proof_signature_payload_v5(&signed.proof.statement);
+    transport_signature
+        .verify(
+            &signed.certificate.certificate.transport_public_key,
+            &proof_payload,
+        )
+        .map_err(|_| {
+            Error::HandshakeSoranet(
+                "SoraNet transport proof signature verification failed".to_owned(),
+            )
+        })?;
+    let relay_authentication_verifier = RelayAuthenticationVerifierV1::try_new(
+        signed.certificate.certificate.transport_public_key,
+        signed
+            .certificate
+            .certificate
+            .relay_authentication_mldsa65_public_key,
+        certificate_digest,
+    )
+    .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
+    Ok(VerifiedSoranetTransportDelegationV5 {
+        relay_authentication_verifier,
+        binding: soranet_transport_delegation_binding_v5(canonical_signed_frame),
     })
 }
-async fn write_soranet_transport_delegation_v3<W>(
+async fn write_soranet_transport_delegation_v5<W>(
     write: &mut W,
     canonical_signed_frame: &[u8],
 ) -> Result<(), crate::Error>
@@ -1036,12 +1305,13 @@ where
     write.flush().await?;
     Ok(())
 }
-async fn read_and_verify_soranet_transport_delegation_v3<R>(
+async fn read_and_verify_soranet_transport_delegation_v5<R>(
     read: &mut R,
     expected_network_id: &iroha_data_model::NetworkId,
     expected_peer_id: &PeerId,
     expected_challenge: &SoranetTransportDelegationChallenge,
-) -> Result<VerifiedSoranetTransportDelegationV3, crate::Error>
+    expected_transport_binding: Option<TransportBinding>,
+) -> Result<VerifiedSoranetTransportDelegationV5, crate::Error>
 where
     R: AsyncRead + Unpin,
 {
@@ -1060,17 +1330,18 @@ where
     }
     let mut payload = vec![0_u8; len];
     read.read_exact(&mut payload).await?;
-    verify_soranet_transport_delegation_v3(
+    verify_soranet_transport_delegation_v5(
         &payload,
         expected_network_id,
         expected_peer_id,
         expected_challenge,
+        expected_transport_binding,
     )
-    .map_err(crate::Error::from)
 }
 async fn write_client_pre_handshake_header<W>(
     write: &mut W,
     challenge: &SoranetTransportDelegationChallenge,
+    transport_binding: Option<TransportBinding>,
 ) -> std::io::Result<()>
 where
     W: AsyncWrite + Unpin,
@@ -1078,18 +1349,26 @@ where
     write.write_all(PRE_MAGIC).await?;
     write.write_all(&[PRE_VERSION]).await?;
     write.write_all(challenge).await?;
+    match transport_binding {
+        Some(binding) => {
+            write.write_all(&[1]).await?;
+            write.write_all(&binding).await?;
+        }
+        None => write.write_all(&[0]).await?,
+    }
     write.flush().await?;
     Ok(())
 }
 async fn read_and_verify_client_pre_handshake_header<R>(
     read: &mut R,
-) -> std::io::Result<SoranetTransportDelegationChallenge>
+) -> std::io::Result<ClientPreHandshakeV5>
 where
     R: AsyncRead + Unpin,
 {
     let mut magic = [0u8; 4];
     let mut ver = [0u8; 1];
     let mut challenge = [0u8; SORANET_TRANSPORT_DELEGATION_CHALLENGE_BYTES];
+    let mut binding_tag = [0u8; 1];
     read.read_exact(&mut magic).await?;
     read.read_exact(&mut ver).await?;
     if &magic != PRE_MAGIC || ver[0] != PRE_VERSION {
@@ -1099,7 +1378,32 @@ where
         ));
     }
     read.read_exact(&mut challenge).await?;
-    Ok(challenge)
+    if challenge.iter().all(|byte| *byte == 0) || challenge.iter().all(|byte| *byte == challenge[0])
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "degenerate pre-handshake challenge",
+        ));
+    }
+    read.read_exact(&mut binding_tag).await?;
+    let transport_binding = match binding_tag[0] {
+        0 => None,
+        1 => {
+            let mut binding = [0u8; iroha_crypto::Hash::LENGTH];
+            read.read_exact(&mut binding).await?;
+            Some(binding)
+        }
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid pre-handshake transport-binding tag",
+            ));
+        }
+    };
+    Ok(ClientPreHandshakeV5 {
+        challenge,
+        transport_binding,
+    })
 }
 async fn write_server_pre_handshake_header<W>(write: &mut W) -> std::io::Result<()>
 where
@@ -1152,6 +1456,27 @@ where
     let mut payload = vec![0u8; len as usize];
     read.read_exact(&mut payload).await?;
     Ok(payload)
+}
+
+fn soranet_admission_transcript(
+    client_hello: &[u8],
+    transport_delegation_binding: &[u8; iroha_crypto::Hash::LENGTH],
+) -> [u8; iroha_crypto::Hash::LENGTH] {
+    const DOMAIN: &[u8] = b"iroha:p2p:soranet-admission:v5|";
+    let hello_transcript = pow::derive_admission_transcript(client_hello);
+    let mut preimage = Vec::with_capacity(
+        DOMAIN
+            .len()
+            .saturating_add(hello_transcript.len())
+            .saturating_add(transport_delegation_binding.len()),
+    );
+    preimage.extend_from_slice(DOMAIN);
+    preimage.extend_from_slice(&hello_transcript);
+    // This hashes the complete canonical v5 certificate+proof frame, which in
+    // turn authenticates the exact server PeerId, transport key, fresh
+    // challenge, and underlying TLS/QUIC/WSS observation.
+    preimage.extend_from_slice(transport_delegation_binding);
+    iroha_crypto::Hash::new(preimage).into()
 }
 mod post_channel {
     use tokio::sync::mpsc;
@@ -2831,7 +3156,7 @@ pub mod handles {
         peer_addr: SocketAddr,
         peer_id: iroha_data_model::prelude::PeerId,
         our_public_address: SocketAddr,
-        key_pair: KeyPair,
+        key_pair: Arc<KeyPair>,
         connection_id: ConnectionId,
         service_message_sender: mpsc::Sender<ServiceMessage<T>>,
         idle_timeout: Duration,
@@ -2846,11 +3171,8 @@ pub mod handles {
         outbound_post_byte_budgets: OutboundPostByteBudgets,
         inbound_frame_byte_budgets: InboundFrameByteBudgets,
         quic_enabled: bool,
-        tls_enabled: bool,
-        tls_fallback_to_plain: bool,
         prefer_scion: bool,
         local_scion_supported: bool,
-        prefer_ws_fallback: bool,
         trust_gossip: bool,
         max_frame_bytes: usize,
         relay_role: RelayRole,
@@ -2881,11 +3203,8 @@ pub mod handles {
             crypto_caps,
             soranet_handshake,
             quic_enabled,
-            tls_enabled,
-            tls_fallback_to_plain,
             prefer_scion,
             local_scion_supported,
-            prefer_ws_fallback,
             trust_gossip,
             relay_role,
             dial_timeout,
@@ -2915,8 +3234,9 @@ pub mod handles {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn connected_from<T: Pload + crate::network::message::ClassifyTopic, E: Enc>(
         our_public_address: SocketAddr,
-        key_pair: KeyPair,
-        soranet_transport_key_pair: KeyPair,
+        key_pair: Arc<KeyPair>,
+        soranet_transport_key_pair: Arc<KeyPair>,
+        soranet_transport_certificate: Arc<LocalSoranetTransportCertificateV5>,
         connection: Connection,
         service_message_sender: mpsc::Sender<ServiceMessage<T>>,
         idle_timeout: Duration,
@@ -2945,6 +3265,7 @@ pub mod handles {
             our_public_address,
             key_pair,
             soranet_transport_key_pair,
+            soranet_transport_certificate,
             connection,
             network_id,
             consensus_caps,
@@ -12863,11 +13184,6 @@ mod run {
         fn message_sender_rejects_oversized_frame_quic() {
             assert_large_payload_rejected(256);
         }
-        #[cfg(feature = "p2p_ws")]
-        #[test]
-        fn message_sender_rejects_oversized_frame_ws() {
-            assert_large_payload_rejected(256);
-        }
     }
 }
 mod state {
@@ -13331,7 +13647,7 @@ mod state {
         pub peer_addr: SocketAddr,
         pub peer_id: iroha_data_model::prelude::PeerId,
         pub our_public_address: SocketAddr,
-        pub key_pair: KeyPair,
+        pub key_pair: Arc<KeyPair>,
         pub connection_id: ConnectionId,
         pub network_id: iroha_data_model::NetworkId,
         pub consensus_caps: Option<ConsensusHandshakeCaps>,
@@ -13339,11 +13655,8 @@ mod state {
         pub crypto_caps: Option<crate::CryptoHandshakeCaps>,
         pub soranet_handshake: Arc<SoranetHandshakeConfig>,
         pub quic_enabled: bool,
-        pub tls_enabled: bool,
-        pub tls_fallback_to_plain: bool,
         pub prefer_scion: bool,
         pub local_scion_supported: bool,
-        pub prefer_ws_fallback: bool,
         pub trust_gossip: bool,
         pub relay_role: RelayRole,
         pub dial_timeout: Duration,
@@ -13382,11 +13695,8 @@ mod state {
                 crypto_caps,
                 soranet_handshake,
                 quic_enabled,
-                tls_enabled,
-                tls_fallback_to_plain,
                 prefer_scion,
                 local_scion_supported,
-                prefer_ws_fallback,
                 trust_gossip,
                 relay_role,
                 dial_timeout,
@@ -13399,89 +13709,23 @@ mod state {
                 quic_dialer,
             }: Self,
         ) -> Result<ConnectedTo, crate::Error> {
-            #[cfg(feature = "p2p_ws")]
-            async fn dial_ws(
-                peer_addr: &iroha_primitives::addr::SocketAddr,
-                endpoint: &str,
-                opts: &crate::transport::TcpConnectOptions,
-                connection_id: ConnectionId,
-                dial_timeout: Duration,
-                tls_enabled: bool,
-            ) -> Option<Connection> {
-                // Avoid probing WSS first unless TLS is explicitly enabled. Some WS bridges (tests,
-                // sidecars) accept a single connection and will tear down the listener after a
-                // failed handshake, making subsequent WS attempts fail with connection refused.
-                let order = if tls_enabled {
-                    [true, false]
-                } else {
-                    [false, true]
-                };
-                for use_wss in order {
-                    let url = if use_wss {
-                        format!("wss://{endpoint}/p2p")
-                    } else {
-                        format!("ws://{endpoint}/p2p")
-                    };
-                    let res = tokio::time::timeout(dial_timeout, async {
-                        let stream = crate::transport::connect(peer_addr, opts).await?;
-                        match stream {
-                            crate::transport::TcpConnectStream::Plain(tcp) => {
-                                let ws =
-                                    crate::transport::ws::connect_with_stream(url, tcp).await?;
-                                let (r, w) = tokio::io::split(ws);
-                                Ok::<_, std::io::Error>(Connection::from_split(connection_id, r, w))
-                            }
-                            #[cfg(feature = "p2p_tls")]
-                            crate::transport::TcpConnectStream::Tls(tls) => {
-                                let ws =
-                                    crate::transport::ws::connect_with_stream(url, tls).await?;
-                                let (r, w) = tokio::io::split(ws);
-                                Ok::<_, std::io::Error>(Connection::from_split(connection_id, r, w))
-                            }
-                        }
-                    })
-                    .await;
-                    if let Ok(Ok(conn)) = res {
-                        crate::network::inc_ws_outbound();
-                        return Some(conn);
-                    }
-                }
-                None
-            }
-            async fn dial_tcp_plain(
-                peer_addr: &iroha_primitives::addr::SocketAddr,
-                opts: &crate::transport::TcpConnectOptions,
-                dial_timeout: Duration,
-            ) -> Result<crate::transport::TcpConnectStream, crate::Error> {
-                match tokio::time::timeout(dial_timeout, crate::transport::connect(peer_addr, opts))
-                    .await
-                {
-                    Ok(Ok(stream)) => Ok(stream),
-                    Ok(Err(e)) => Err(e.into()),
-                    Err(_) => Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "dial timeout",
-                    )
-                    .into()),
-                }
-            }
-            async fn dial_tcp_like(
+            async fn dial_tls(
                 peer_addr: &iroha_primitives::addr::SocketAddr,
                 opts: &crate::transport::TcpConnectOptions,
                 dial_timeout: Duration,
                 connection_id: ConnectionId,
-                tls_enabled: bool,
-                tls_fallback_to_plain: bool,
             ) -> Result<Connection, crate::Error> {
-                if tls_enabled && !cfg!(feature = "p2p_tls") && !tls_fallback_to_plain {
+                #[cfg(not(feature = "p2p_tls"))]
+                {
+                    let _ = (peer_addr, opts, dial_timeout, connection_id);
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
-                        "TLS-only dialing requested but this build does not include iroha_p2p/p2p_tls",
+                        "first-release P2P requires a build with iroha_p2p/p2p_tls",
                     )
                     .into());
                 }
                 #[cfg(feature = "p2p_tls")]
-                if tls_enabled {
+                {
                     let sni_host = match peer_addr {
                         iroha_primitives::addr::SocketAddr::Host(host) => host.host.as_ref(),
                         _ => "iroha-p2p",
@@ -13492,7 +13736,7 @@ mod state {
                             crate::transport::TcpConnectStream::Plain(tcp) => {
                                 let tls = crate::transport::tls::connect_tls(sni_host, tcp).await?;
                                 let transport_binding =
-                                    Some(crate::transport::tls_peer_certificate_fingerprint(&tls)?);
+                                    crate::transport::tls_peer_certificate_fingerprint(&tls)?;
                                 let (read_half, write_half) = tokio::io::split(tls);
                                 Ok::<_, std::io::Error>(Connection::from_split_with_binding(
                                     connection_id,
@@ -13505,7 +13749,7 @@ mod state {
                                 let tls =
                                     crate::transport::tls::connect_tls(sni_host, proxy_tls).await?;
                                 let transport_binding =
-                                    Some(crate::transport::tls_peer_certificate_fingerprint(&tls)?);
+                                    crate::transport::tls_peer_certificate_fingerprint(&tls)?;
                                 let (read_half, write_half) = tokio::io::split(tls);
                                 Ok::<_, std::io::Error>(Connection::from_split_with_binding(
                                     connection_id,
@@ -13518,44 +13762,13 @@ mod state {
                     })
                     .await;
                     match tls {
-                        Ok(Ok(conn)) => return Ok(conn),
-                        Ok(Err(e)) => {
-                            if tls_fallback_to_plain {
-                                iroha_logger::warn!(
-                                    %e,
-                                    addr=%peer_addr,
-                                    "TLS dial failed; falling back to TCP"
-                                );
-                            } else {
-                                return Err(e.into());
-                            }
-                        }
-                        Err(_) => {
-                            let err = std::io::Error::new(
-                                std::io::ErrorKind::TimedOut,
-                                "tls dial timeout",
-                            );
-                            if tls_fallback_to_plain {
-                                iroha_logger::warn!(
-                                    addr=%peer_addr,
-                                    timeout=?dial_timeout,
-                                    "TLS dial timed out; falling back to TCP"
-                                );
-                            } else {
-                                return Err(err.into());
-                            }
-                        }
-                    }
-                }
-                let stream = dial_tcp_plain(peer_addr, opts, dial_timeout).await?;
-                match stream {
-                    crate::transport::TcpConnectStream::Plain(tcp) => {
-                        Ok(Connection::new(connection_id, tcp))
-                    }
-                    #[cfg(feature = "p2p_tls")]
-                    crate::transport::TcpConnectStream::Tls(tls) => {
-                        let (read_half, write_half) = tokio::io::split(tls);
-                        Ok(Connection::from_split(connection_id, read_half, write_half))
+                        Ok(Ok(conn)) => Ok(conn),
+                        Ok(Err(error)) => Err(error.into()),
+                        Err(_) => Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "tls dial timeout",
+                        )
+                        .into()),
                     }
                 }
             }
@@ -13605,7 +13818,7 @@ mod state {
                     let res = tokio::time::timeout(remaining, async {
                         let conn = dialer.connect(target, QUIC_SERVER_NAME).await?;
                         let transport_binding =
-                            Some(crate::transport::quic_peer_certificate_fingerprint(&conn)?);
+                            crate::transport::quic_peer_certificate_fingerprint(&conn)?;
                         let remote = conn.remote_address();
                         let (send_hi, recv_hi) = conn
                             .open_bi()
@@ -13649,21 +13862,6 @@ mod state {
                     })
                     .into())
             }
-            #[cfg(feature = "p2p_ws")]
-            fn ws_endpoint(peer_addr: &iroha_primitives::addr::SocketAddr) -> String {
-                match peer_addr {
-                    iroha_primitives::addr::SocketAddr::Ipv4(addr) => {
-                        format!("{}:{}", addr.ip, addr.port)
-                    }
-                    iroha_primitives::addr::SocketAddr::Ipv6(addr) => {
-                        // URLs require brackets around IPv6 literals.
-                        format!("[{}]:{}", addr.ip, addr.port)
-                    }
-                    iroha_primitives::addr::SocketAddr::Host(addr) => {
-                        format!("{}:{}", addr.host.as_ref(), addr.port)
-                    }
-                }
-            }
             let tcp_opts = crate::transport::TcpConnectOptions {
                 proxy: proxy_policy,
                 proxy_tls_verify,
@@ -13671,40 +13869,6 @@ mod state {
                 tcp_nodelay,
                 tcp_keepalive,
             };
-            #[cfg(feature = "p2p_ws")]
-            let mut ws_tried = false;
-            #[cfg(not(feature = "p2p_ws"))]
-            let ws_tried = true;
-            #[cfg(feature = "p2p_ws")]
-            if prefer_ws_fallback {
-                ws_tried = true;
-                let endpoint = ws_endpoint(&peer_addr);
-                if let Some(conn) = dial_ws(
-                    &peer_addr,
-                    &endpoint,
-                    &tcp_opts,
-                    connection_id,
-                    dial_timeout,
-                    tls_enabled,
-                )
-                .await
-                {
-                    return Ok(ConnectedTo {
-                        our_public_address,
-                        expected_peer_id: peer_id.clone(),
-                        key_pair,
-                        connection: conn,
-                        network_id,
-                        consensus_caps,
-                        confidential_caps,
-                        crypto_caps,
-                        soranet_handshake,
-                        local_scion_supported,
-                        trust_gossip,
-                        relay_role,
-                    });
-                }
-            }
             if prefer_scion {
                 #[cfg(feature = "quic")]
                 if let Some(dialer) = &quic_dialer {
@@ -13736,15 +13900,8 @@ mod state {
                     }
                 }
             }
-            let tcp_fut = dial_tcp_like(
-                &peer_addr,
-                &tcp_opts,
-                dial_timeout,
-                connection_id,
-                tls_enabled,
-                tls_fallback_to_plain,
-            );
-            tokio::pin!(tcp_fut);
+            let tls_fut = dial_tls(&peer_addr, &tcp_opts, dial_timeout, connection_id);
+            tokio::pin!(tls_fut);
             let connection_result: Result<Connection, crate::Error> = {
                 #[cfg(feature = "quic")]
                 {
@@ -13760,8 +13917,8 @@ mod state {
                                 res = &mut quic_fut => match res {
                                     Ok(conn) => Ok(conn),
                                     Err(e) => {
-                                        iroha_logger::warn!(%e, addr=%peer_addr, "QUIC dial failed; falling back to TCP-like");
-                                        tcp_fut.await
+                                        iroha_logger::warn!(%e, addr=%peer_addr, "QUIC dial failed; falling back to TLS");
+                                        tls_fut.await
                                     }
                                 },
                                 () = &mut stagger => {
@@ -13782,10 +13939,10 @@ mod state {
                                                     }
                                                 }
                                             },
-                                            res = &mut tcp_fut, if tcp_err.is_none() => match res {
+                                            res = &mut tls_fut, if tcp_err.is_none() => match res {
                                                 Ok(conn) => break Ok(conn),
                                                 Err(e) => {
-                                                    iroha_logger::debug!(%e, addr=%peer_addr, "TCP-like dial failed while racing QUIC");
+                                                    iroha_logger::debug!(%e, addr=%peer_addr, "TLS dial failed while racing QUIC");
                                                     if let Err(err) = Self::record_raced_dial_error(
                                                         &mut tcp_err,
                                                         quic_err.is_some(),
@@ -13805,53 +13962,20 @@ mod state {
                                 }
                             }
                         } else {
-                            tcp_fut.await
+                            tls_fut.await
                         }
                     } else {
-                        tcp_fut.await
+                        tls_fut.await
                     }
                 }
                 #[cfg(not(feature = "quic"))]
                 {
-                    tcp_fut.await
+                    tls_fut.await
                 }
             };
             let connection = match connection_result {
                 Ok(conn) => conn,
                 Err(err) => {
-                    #[cfg(feature = "p2p_ws")]
-                    if !ws_tried {
-                        let should_try_ws = prefer_ws_fallback
-                            || matches!(peer_addr, iroha_primitives::addr::SocketAddr::Host(_));
-                        if should_try_ws {
-                            let endpoint = ws_endpoint(&peer_addr);
-                            if let Some(conn) = dial_ws(
-                                &peer_addr,
-                                &endpoint,
-                                &tcp_opts,
-                                connection_id,
-                                dial_timeout,
-                                tls_enabled,
-                            )
-                            .await
-                            {
-                                return Ok(ConnectedTo {
-                                    our_public_address,
-                                    expected_peer_id: peer_id.clone(),
-                                    key_pair,
-                                    connection: conn,
-                                    network_id,
-                                    consensus_caps,
-                                    confidential_caps,
-                                    crypto_caps,
-                                    soranet_handshake,
-                                    local_scion_supported,
-                                    trust_gossip,
-                                    relay_role,
-                                });
-                            }
-                        }
-                    }
                     crate::network::inc_dns_resolution_fail();
                     return Err(err);
                 }
@@ -13876,11 +14000,7 @@ mod state {
     mod dial_policy_tests {
         use super::*;
         use std::{sync::Arc, time::Duration};
-        fn connecting_to(
-            peer_addr: std::net::SocketAddr,
-            tls_enabled: bool,
-            tls_fallback_to_plain: bool,
-        ) -> Connecting {
+        fn connecting_to(peer_addr: std::net::SocketAddr) -> Connecting {
             let our_public_address: std::net::SocketAddr = "127.0.0.1:0".parse().expect("addr");
             Connecting {
                 peer_addr: peer_addr.into(),
@@ -13888,7 +14008,7 @@ mod state {
                     KeyPair::random().public_key().clone(),
                 ),
                 our_public_address: our_public_address.into(),
-                key_pair: KeyPair::random(),
+                key_pair: Arc::new(KeyPair::random()),
                 connection_id: 0,
                 network_id: test_network_id("test-chain"),
                 consensus_caps: None,
@@ -13896,11 +14016,8 @@ mod state {
                 crypto_caps: None,
                 soranet_handshake: Arc::new(SoranetHandshakeConfig::defaults()),
                 quic_enabled: false,
-                tls_enabled,
-                tls_fallback_to_plain,
                 prefer_scion: false,
                 local_scion_supported: true,
-                prefer_ws_fallback: false,
                 trust_gossip: false,
                 relay_role: RelayRole::Disabled,
                 dial_timeout: Duration::from_millis(200),
@@ -13945,8 +14062,7 @@ mod state {
         #[tokio::test(flavor = "current_thread")]
         async fn scion_preference_uses_standard_strategy_when_unavailable() {
             let addr: std::net::SocketAddr = "127.0.0.1:1".parse().expect("addr");
-            let mut connecting =
-                connecting_to(addr, /*tls_enabled=*/ false, /*fallback=*/ true);
+            let mut connecting = connecting_to(addr);
             connecting.prefer_scion = true;
             let res = Connecting::connect_to(connecting).await;
             assert!(matches!(
@@ -13958,10 +14074,9 @@ mod state {
         }
         #[cfg(not(feature = "p2p_tls"))]
         #[tokio::test(flavor = "current_thread")]
-        async fn tls_only_dial_requires_p2p_tls_feature_when_no_fallback() {
+        async fn mandatory_tls_dial_requires_p2p_tls_feature() {
             let addr: std::net::SocketAddr = "127.0.0.1:1".parse().expect("addr");
-            let connecting =
-                connecting_to(addr, /*tls_enabled=*/ true, /*fallback=*/ false);
+            let connecting = connecting_to(addr);
             let res = Connecting::connect_to(connecting).await;
             assert!(matches!(
                 res,
@@ -13970,7 +14085,7 @@ mod state {
         }
         #[cfg(feature = "p2p_tls")]
         #[tokio::test(flavor = "current_thread")]
-        async fn tls_dial_falls_back_to_plain_when_enabled() {
+        async fn tls_failure_never_falls_back_to_plain_tcp() {
             use tokio::net::TcpListener;
             let listener = match TcpListener::bind("127.0.0.1:0").await {
                 Ok(listener) => listener,
@@ -13990,16 +14105,8 @@ mod state {
                     });
                 }
             });
-            let ok = Connecting::connect_to(connecting_to(
-                addr, /*tls_enabled=*/ true, /*fallback=*/ true,
-            ))
-            .await;
-            assert!(ok.is_ok(), "TLS failure should fall back to TCP");
-            let err = Connecting::connect_to(connecting_to(
-                addr, /*tls_enabled=*/ true, /*fallback=*/ false,
-            ))
-            .await;
-            assert!(err.is_err(), "TLS-only should not fall back to TCP");
+            let result = Connecting::connect_to(connecting_to(addr)).await;
+            assert!(result.is_err(), "TLS failure must not fall back to TCP");
             accept_task.abort();
         }
     }
@@ -14007,7 +14114,7 @@ mod state {
     pub(super) struct ConnectedTo {
         our_public_address: SocketAddr,
         expected_peer_id: iroha_data_model::prelude::PeerId,
-        key_pair: KeyPair,
+        key_pair: Arc<KeyPair>,
         connection: Connection,
         network_id: iroha_data_model::NetworkId,
         consensus_caps: Option<ConsensusHandshakeCaps>,
@@ -14023,7 +14130,7 @@ mod state {
         pub(super) fn for_transport_delegation_test(
             our_public_address: SocketAddr,
             expected_peer_id: iroha_data_model::prelude::PeerId,
-            key_pair: KeyPair,
+            key_pair: Arc<KeyPair>,
             connection: Connection,
             network_id: iroha_data_model::NetworkId,
             soranet_handshake: Arc<SoranetHandshakeConfig>,
@@ -14064,11 +14171,15 @@ mod state {
             // KEM work. Failure to seed the CSPRNG fails the handshake closed.
             let mut rng = soranet_handshake_rng()?;
             let delegation_challenge = generate_soranet_transport_delegation_challenge(&mut rng)?;
-            // Initiator sends magic + v3 + challenge; responder confirms only
-            // magic + v3 before returning the challenge-bound delegation.
-            if let Err(e) =
-                write_client_pre_handshake_header(&mut connection.write, &delegation_challenge)
-                    .await
+            // Initiator sends v5, its fresh challenge, and its exact transport
+            // observation. The responder authenticates all three before the
+            // initiator releases any admission credential.
+            if let Err(e) = write_client_pre_handshake_header(
+                &mut connection.write,
+                &delegation_challenge,
+                connection.transport_binding,
+            )
+            .await
             {
                 return Err(crate::Error::from(e));
             }
@@ -14079,19 +14190,26 @@ mod state {
                 }
                 return Err(crate::Error::from(e));
             }
-            let verified_transport_delegation = read_and_verify_soranet_transport_delegation_v3(
+            let verified_transport_delegation = read_and_verify_soranet_transport_delegation_v5(
                 &mut connection.read,
                 &network_id,
                 &expected_peer_id,
                 &delegation_challenge,
+                connection.transport_binding,
             )
             .await?;
+            if connection.transport_binding.is_none() {
+                return Err(Error::HandshakeSoranet(
+                    "first-release SoraNet P2P requires TLS or QUIC channel binding".to_owned(),
+                ));
+            }
             let runtime_params = soranet_handshake.runtime_params();
             // The admission credential commits to the final serialized hello,
             // so build it once and send those exact bytes after the ticket.
             let (client_hello, client_state) = build_client_hello(&runtime_params, &mut rng)
                 .map_err(|err| Error::HandshakeSoranet(err.to_string()))?;
-            let admission_transcript = pow::derive_admission_transcript(&client_hello);
+            let admission_transcript =
+                soranet_admission_transcript(&client_hello, &verified_transport_delegation.binding);
             let (minted, _resumed_rng) =
                 mint_handshake_challenge(Arc::clone(&soranet_handshake), admission_transcript, rng)
                     .await?;
@@ -14111,7 +14229,7 @@ mod state {
             let secrets = match client_handle_relay_hello(
                 client_state,
                 &relay_hello,
-                &verified_transport_delegation.transport_public_key,
+                &verified_transport_delegation.relay_authentication_verifier,
                 &runtime_params,
             ) {
                 Ok(success) => success,
@@ -14182,8 +14300,9 @@ mod state {
     /// Peer that is being connected from
     pub(super) struct ConnectedFrom {
         pub our_public_address: SocketAddr,
-        pub key_pair: KeyPair,
-        pub soranet_transport_key_pair: KeyPair,
+        pub key_pair: Arc<KeyPair>,
+        pub soranet_transport_key_pair: Arc<KeyPair>,
+        pub soranet_transport_certificate: Arc<LocalSoranetTransportCertificateV5>,
         pub connection: Connection,
         pub network_id: iroha_data_model::NetworkId,
         pub consensus_caps: Option<ConsensusHandshakeCaps>,
@@ -14201,6 +14320,7 @@ mod state {
                 our_public_address,
                 key_pair,
                 soranet_transport_key_pair,
+                soranet_transport_certificate,
                 mut connection,
                 network_id,
                 consensus_caps,
@@ -14212,34 +14332,45 @@ mod state {
                 relay_role,
             }: Self,
         ) -> Result<SendKey<E>, crate::Error> {
-            // Reject malformed fixed headers before invoking the long-term BLS
-            // signer. A valid header supplies the exact per-connection nonce.
-            let delegation_challenge =
+            let client_preface =
                 match read_and_verify_client_pre_handshake_header(&mut connection.read).await {
-                    Ok(challenge) => challenge,
+                    Ok(preface) => preface,
                     Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
                         return Err(crate::Error::HandshakeBadPreface);
                     }
                     Err(e) => return Err(crate::Error::from(e)),
                 };
+            let proof_transport_binding = connection
+                .validate_client_transport_binding(client_preface.transport_binding)
+                .map_err(|_| crate::Error::HandshakeBadPreface)?;
+            if proof_transport_binding.is_none() {
+                return Err(Error::HandshakeSoranet(
+                    "first-release SoraNet P2P requires TLS or QUIC channel binding".to_owned(),
+                ));
+            }
             if let Err(e) = write_server_pre_handshake_header(&mut connection.write).await {
                 return Err(crate::Error::from(e));
             }
-            let local_transport_delegation = sign_soranet_transport_delegation_v3(
-                &key_pair,
+            // The process-lifetime BLS certificate is cached at Network
+            // startup. An unauthenticated connection therefore triggers only a
+            // cheap Ed25519 proof over its nonce and exact transport binding.
+            let local_transport_delegation = sign_soranet_transport_delegation_v5(
+                &soranet_transport_certificate,
                 &soranet_transport_key_pair,
-                &network_id,
-                delegation_challenge,
+                client_preface.challenge,
+                proof_transport_binding,
             )?;
-            write_soranet_transport_delegation_v3(
+            write_soranet_transport_delegation_v5(
                 &mut connection.write,
                 &local_transport_delegation.canonical_signed_frame,
             )
             .await?;
             let runtime_params = soranet_handshake.runtime_params();
             let mut rng = soranet_handshake_rng()?;
-            let ticket = if soranet_handshake.pow_required() {
-                Some(read_handshake_frame(&mut connection.read).await?)
+            let ticket = if soranet_handshake.inbound_pow_required() {
+                Some(SensitiveHandshakeFrame::from(
+                    read_handshake_frame(&mut connection.read).await?,
+                ))
             } else {
                 None
             };
@@ -14247,7 +14378,10 @@ mod state {
             // commitment before `process_client_hello` performs ML-KEM work.
             let client_hello = read_handshake_frame(&mut connection.read).await?;
             if let Some(ticket) = ticket {
-                let admission_transcript = pow::derive_admission_transcript(&client_hello);
+                let admission_transcript = soranet_admission_transcript(
+                    &client_hello,
+                    &local_transport_delegation.binding,
+                );
                 verify_handshake_challenge(
                     Arc::clone(&soranet_handshake),
                     ticket,
@@ -14258,7 +14392,7 @@ mod state {
             let (relay_hello, secrets) = match process_client_hello(
                 &client_hello,
                 &runtime_params,
-                &soranet_transport_key_pair,
+                &soranet_transport_certificate.relay_authentication_signer,
                 &mut rng,
             ) {
                 Ok(success) => success,
@@ -14347,7 +14481,7 @@ mod state {
     pub(super) struct SendKey<E: Enc> {
         pub(super) our_public_address: SocketAddr,
         pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
-        pub(super) key_pair: KeyPair,
+        pub(super) key_pair: Arc<KeyPair>,
         pub(super) connection: Connection,
         pub(super) cryptographer: Cryptographer<E>,
         pub(super) network_id: iroha_data_model::NetworkId,
@@ -14380,7 +14514,7 @@ mod state {
             Self {
                 our_public_address,
                 expected_peer_id,
-                key_pair,
+                key_pair: Arc::new(key_pair),
                 connection,
                 cryptographer,
                 network_id,
@@ -15299,7 +15433,7 @@ pub mod message {
         /// left its final receiver, so its reply tenure may now retire.
         ReplyRouteDeliveryDrained(ConnectionId),
         /// Ask the network actor if an inbound connection should be accepted,
-        /// applying caps and per‑IP throttle identically to TCP accepts.
+        /// applying caps and per-IP throttle identically to TLS/QUIC accepts.
         /// If accepted, the network actor should insert the `conn_id` into
         /// `incoming_pending` and reply `true`.
         InboundAsk {
@@ -15313,16 +15447,6 @@ pub mod message {
         /// Release a pre-authentication slot whose accepted transport failed or
         /// whose handoff future was cancelled before a peer actor took ownership.
         InboundCancelled(ConnectionId),
-        /// Provide an externally accepted inbound stream (e.g., via Torii `/p2p`).
-        /// The network actor will spawn a peer in `ConnectedFrom` state.
-        InboundStream {
-            /// Connection id allocated by the caller (should be unique).
-            conn_id: ConnectionId,
-            /// Reader half of the stream.
-            read: Box<dyn AsyncRead + Send + Unpin>,
-            /// Writer half of the stream.
-            write: Box<dyn AsyncWrite + Send + Unpin>,
-        },
     }
 }
 mod cryptographer {
@@ -15438,56 +15562,50 @@ mod cryptographer {
 pub type ConnectionId = u64;
 /// Hash-sized binding for authenticated transport sessions.
 pub type TransportBinding = [u8; iroha_crypto::Hash::LENGTH];
-/// P2P connection
-pub struct Connection {
+/// Authenticated P2P connection assembled by the crate's TLS or QUIC transports.
+pub(crate) struct Connection {
     /// A unique connection id
-    pub id: ConnectionId,
+    pub(crate) id: ConnectionId,
     /// Reader half of the stream
-    pub read: Box<dyn AsyncRead + Send + Unpin>,
+    pub(crate) read: Box<dyn AsyncRead + Send + Unpin>,
     /// Writer half of the stream
-    pub write: Box<dyn AsyncWrite + Send + Unpin>,
+    pub(crate) write: Box<dyn AsyncWrite + Send + Unpin>,
     /// Optional low-priority reader half (e.g., second QUIC stream).
-    pub read_low: Option<Box<dyn AsyncRead + Send + Unpin>>,
+    pub(crate) read_low: Option<Box<dyn AsyncRead + Send + Unpin>>,
     /// Optional low-priority writer half (e.g., second QUIC stream).
-    pub write_low: Option<Box<dyn AsyncWrite + Send + Unpin>>,
+    pub(crate) write_low: Option<Box<dyn AsyncWrite + Send + Unpin>>,
     /// QUIC connection handle (only set when the underlying transport is QUIC).
-    pub quic: Option<crate::transport::QuicConnection>,
+    pub(crate) quic: Option<crate::transport::QuicConnection>,
     /// Remote addr, for logging purpose.
-    pub remote_addr: Option<SocketAddr>,
-    /// Optional certificate fingerprint for TLS/QUIC channel binding.
-    pub transport_binding: Option<TransportBinding>,
+    pub(crate) remote_addr: Option<SocketAddr>,
+    /// Listener-observed TLS/QUIC channel binding; mandatory outside negative-path tests.
+    pub(crate) transport_binding: Option<TransportBinding>,
 }
 impl Connection {
-    /// Instantiate new connection from `connection_id` and `stream`.
-    pub fn new(id: ConnectionId, stream: TcpStream) -> Self {
-        let remote_addr = stream.peer_addr().ok();
-        let (read_half, write_half) = stream.into_split();
-        Connection {
-            id,
-            read: Box::new(read_half),
-            write: Box::new(write_half),
-            read_low: None,
-            write_low: None,
-            quic: None,
-            remote_addr,
-            transport_binding: None,
-        }
-    }
-    /// Instantiate a connection from arbitrary read/write halves.
-    pub fn from_split<R, W>(id: ConnectionId, read: R, write: W) -> Self
+    /// Instantiate an intentionally unbound connection for negative-path tests.
+    #[cfg(test)]
+    pub(crate) fn from_split<R, W>(id: ConnectionId, read: R, write: W) -> Self
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
     {
-        Self::from_split_with_binding(id, read, write, None)
+        Self {
+            id,
+            read: Box::new(read),
+            write: Box::new(write),
+            read_low: None,
+            write_low: None,
+            quic: None,
+            remote_addr: None,
+            transport_binding: None,
+        }
     }
-    /// Instantiate a connection from arbitrary read/write halves with an optional
-    /// transport certificate binding.
-    pub fn from_split_with_binding<R, W>(
+    /// Instantiate a TLS connection with its mandatory certificate binding.
+    pub(crate) fn from_split_with_binding<R, W>(
         id: ConnectionId,
         read: R,
         write: W,
-        transport_binding: Option<TransportBinding>,
+        transport_binding: TransportBinding,
     ) -> Self
     where
         R: AsyncRead + Send + Unpin + 'static,
@@ -15501,12 +15619,24 @@ impl Connection {
             write_low: None,
             quic: None,
             remote_addr: None,
-            transport_binding,
+            transport_binding: Some(transport_binding),
         }
+    }
+    fn validate_client_transport_binding(
+        &self,
+        claimed: Option<TransportBinding>,
+    ) -> std::io::Result<Option<TransportBinding>> {
+        if claimed != self.transport_binding {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "client-observed transport binding does not match the accepted transport",
+            ));
+        }
+        Ok(self.transport_binding)
     }
     /// Instantiate connection from QUIC streams.
     #[cfg(feature = "quic")]
-    pub fn from_quic(
+    pub(crate) fn from_quic(
         id: ConnectionId,
         quic: quinn::Connection,
         send_hi: quinn::SendStream,
@@ -15514,7 +15644,7 @@ impl Connection {
         send_low: Option<quinn::SendStream>,
         recv_low: Option<quinn::RecvStream>,
         remote_addr: Option<SocketAddr>,
-        transport_binding: Option<TransportBinding>,
+        transport_binding: TransportBinding,
     ) -> Self {
         Connection {
             id,
@@ -15530,7 +15660,7 @@ impl Connection {
             }),
             quic: Some(quic),
             remote_addr,
-            transport_binding,
+            transport_binding: Some(transport_binding),
         }
     }
 }

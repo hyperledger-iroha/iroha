@@ -877,7 +877,7 @@ async fn zk_ivm_prove_job_completes_and_does_not_expose_gas_used() {
         .expect("fixture should include verifying key commitment");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        "halo2/ipa:ivm-execution-v1",
+        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         fixture.schema_hash,
@@ -1140,7 +1140,7 @@ async fn zk_ivm_prove_job_loads_vk_bytes_from_disk_when_inline_missing() {
     std::fs::write(&pk_path, &pk_bytes).expect("write proving key bytes");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        "halo2/ipa:ivm-execution-v1",
+        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         fixture.schema_hash,
@@ -1253,7 +1253,7 @@ async fn zk_ivm_prove_job_rejects_non_archive_proving_key_bytes() {
         .expect("fixture should include verifying key commitment");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        "halo2/ipa:ivm-execution-v1",
+        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         fixture.schema_hash,
@@ -1363,7 +1363,7 @@ async fn zk_ivm_prove_job_rejects_mismatched_client_proved_payload() {
         .expect("fixture should include verifying key commitment");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        "halo2/ipa:ivm-execution-v1",
+        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         fixture.schema_hash,
@@ -1488,7 +1488,7 @@ async fn zk_ivm_derive_returns_proved_payload_without_gas_used() {
         .expect("fixture should include verifying key commitment");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        "halo2/ipa:ivm-execution-v1",
+        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         schema_hash,
@@ -1845,7 +1845,7 @@ async fn zk_ivm_prove_rejects_vk_schema_hash_mismatch() {
         .expect("fixture should include verifying key commitment");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        "halo2/ipa:ivm-execution-v1",
+        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         [0xAA; 32],
@@ -1927,7 +1927,7 @@ async fn zk_ivm_prove_rejects_when_queue_full() {
         .expect("fixture should include verifying key commitment");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        "halo2/ipa:ivm-execution-v1",
+        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         fixture.schema_hash,
@@ -2012,7 +2012,7 @@ async fn zk_ivm_prove_delete_cancels_and_frees_capacity_slot() {
         .expect("fixture should include verifying key commitment");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        "halo2/ipa:ivm-execution-v1",
+        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         fixture.schema_hash,

@@ -1,10 +1,10 @@
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProxySignedQueryReplayScope {
     Client,
     RouteScanDeferred,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn decode_verified_proxy_signed_query(
     query_bytes: &[u8],
     request_kind: &'static str,
@@ -51,7 +51,7 @@ fn decode_verified_proxy_signed_query(
     }
     .map_err(IntoResponse::into_response)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn reject_proxy_client_continuation(
     request: &iroha_data_model::query::QueryRequestWithAuthority,
     request_kind: &'static str,
@@ -68,7 +68,7 @@ fn reject_proxy_client_continuation(
     }
     Ok(())
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn validate_proxy_signed_query_route(
     authority: &AccountId,
     authorized_routes: &[RoutingDecision],

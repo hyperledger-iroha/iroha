@@ -51,13 +51,11 @@ bundle containing only `app/server.mjs` with mode 0755. Guest images under
 them as immutable SoraFS artifacts and records the artifact refs in the Inrou
 manifest submitted to the control plane.
 
-SSH access is disabled by default with `ssh_authorized_keys: []`. Add a real,
-trusted public key only when SSH access is intentionally required. Before
-deploy, stage guest assets at:
+Inrou V1 exposes no SSH access field or login path. Before deploy, stage guest
+assets at:
 
-Outbound network access is isolated by default. If the service needs egress,
-declare a nonempty allowlist whose hostnames resolve only to public endpoints;
-unrestricted `Open` egress is not supported by Inrou V1.
+The networking policy must be `Isolated`; first-release Inrou workloads cannot
+request outbound egress.
 
 - `http-service/inrou/x86_64/vmlinux`
 - `http-service/inrou/x86_64/rootfs.ext4`
@@ -78,11 +76,9 @@ iroha soracloud service build --container ./container_manifest.json --service ./
 iroha soracloud service build --container ./container_manifest.json --service ./service_manifest.json
 ```
 
-The root scripts resolve `IROHA_BIN`, then `iroha` from `PATH`, then explicit source checkout settings (`IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`), so hosted-service
-workspaces can target a local `iroha_cli` checkout without requiring a
-globally installed source wrapper. If you are driving the fallback through
-`IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`, set `IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to
-keep Cargo package and artifact state isolated from other local builds.
+Root scripts require an absolute, non-symlinked `IROHA_BIN` and its exact
+`IROHA_BIN_SHA256`. Supply an operator-qualified CLI built from the same
+revision as the workspace; there is no `PATH` lookup or source-build fallback.
 
 ## Doctor the service workspace
 
@@ -107,6 +103,12 @@ volume name with punctuation normalized to underscores.
 
 The manifest also declares a `PersistentRootLeaseVolume` mounted at `/` so the
 Inrou guest keeps its mutable root disk on lease-backed storage.
+
+Inrou materializes both that root volume and every non-root lease volume as a
+separate disk for each replica. These directories persist replica-local state;
+they are never shared or multi-attached between replica slots. Use a separately
+authenticated distributed service or protocol when replicas must coordinate
+shared application state.
 
 ## Deploy
 
@@ -152,8 +154,7 @@ iroha soracloud service rollout --container ./container_manifest.json --service 
 Other service-bound Soracloud commands, including `hf deploy`,
 `hf status`, `hf lease-renew`, `hf lease-leave`, `training-job-*`,
 `model artifact-*`, `model weight-*`,
-`model upload-encryption-recipient`, `model upload-register`, and
-`model upload-status`, also accept the same `--container` plus
+`model upload-register`, and `model upload-status`, also accept the same `--container` plus
 `--service` manifest pair instead of a manual `--service-name` where a
 service name applies. The manifest-pair forms of those commands, plus
 `config-*`, `secret-*`, `rollback`, and `rollout`, also attach the same

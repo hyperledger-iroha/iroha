@@ -656,7 +656,7 @@ pub mod query {
     };
     use eyre::Result;
     use iroha_data_model::{
-        account::{AccountId, ParsedAccountId},
+        account::AccountId,
         query::{
             dsl::{CompoundPredicate, EvaluatePredicate},
             error::QueryExecutionFail as Error,
@@ -691,11 +691,9 @@ pub mod query {
             .and_then(|raw| raw.parse::<RepoAgreementId>().ok())
     }
     fn account_id_from_value(value: &Value) -> Option<AccountId> {
-        value.as_str().and_then(|raw| {
-            AccountId::parse_encoded(raw)
-                .map(ParsedAccountId::into_account_id)
-                .ok()
-        })
+        value
+            .as_str()
+            .and_then(|raw| AccountId::parse_encoded(raw).ok())
     }
     fn intersect_candidate_ids(
         best: &mut Option<BTreeSet<RepoAgreementId>>,
@@ -929,7 +927,6 @@ mod tests {
         AssetDefinitionId,
         AccountId,
     ) {
-        crate::test_alias::ensure();
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);

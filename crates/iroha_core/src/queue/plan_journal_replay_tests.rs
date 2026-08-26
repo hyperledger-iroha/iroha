@@ -23,8 +23,8 @@ fn prepared_replay_rejects_same_length_content_tamper_before_callback() {
         .expect("prepare callback replay snapshot");
     let replacement_position = u64::try_from(
         raw_bootstrap_frame().len()
-            + raw_frame(&QueuePlanJournalFrameV4::Put(first)).len()
-            + raw_frame(&QueuePlanJournalFrameV4::Put(second)).len(),
+            + raw_frame(&QueuePlanJournalFrameV1::Put(first)).len()
+            + raw_frame(&QueuePlanJournalFrameV1::Put(second)).len(),
     )
     .expect("replacement position fits u64");
     let payload_position = replacement_position
@@ -183,14 +183,14 @@ fn prepared_replay_rejects_valid_historical_remove_rewrite_before_callback() {
     let path = dir.path().join("changed-historical-remove.norito");
     let first = record("historical-remove-first");
     let second = record("historical-remove-second");
-    let first_put = raw_frame(&QueuePlanJournalFrameV4::Put(first.clone()));
-    let second_put = raw_frame(&QueuePlanJournalFrameV4::Put(second.clone()));
-    let original_remove = raw_frame(&QueuePlanJournalFrameV4::Remove {
+    let first_put = raw_frame(&QueuePlanJournalFrameV1::Put(first.clone()));
+    let second_put = raw_frame(&QueuePlanJournalFrameV1::Put(second.clone()));
+    let original_remove = raw_frame(&QueuePlanJournalFrameV1::Remove {
         entrypoint_hash: first.entrypoint_hash,
         plan_digest: first.plan_digest(),
         claim_digest: first.claim_digest().expect("hash first claim"),
     });
-    let changed_remove = raw_frame(&QueuePlanJournalFrameV4::Remove {
+    let changed_remove = raw_frame(&QueuePlanJournalFrameV1::Remove {
         entrypoint_hash: second.entrypoint_hash,
         plan_digest: second.plan_digest(),
         claim_digest: second.claim_digest().expect("hash second claim"),
@@ -255,7 +255,7 @@ fn prepared_replay_rejects_valid_historical_remove_rewrite_before_callback() {
     );
 }
 #[test]
-fn compaction_preserves_live_fifo_order_and_uses_v4_frames() {
+fn compaction_preserves_live_fifo_order_and_uses_v1_frames() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("compact.norito");
     let first = record("compact-first");
@@ -297,16 +297,16 @@ fn compaction_preserves_live_fifo_order_and_uses_v4_frames() {
     assert_eq!(
         read_frames(&path, compact_limits).expect("read compacted frames"),
         vec![
-            QueuePlanJournalFrameV4::Put(first),
-            QueuePlanJournalFrameV4::Put(third),
-            QueuePlanJournalFrameV4::Put(fourth),
+            QueuePlanJournalFrameV1::Put(first),
+            QueuePlanJournalFrameV1::Put(third),
+            QueuePlanJournalFrameV1::Put(fourth),
         ]
     );
     assert!(
         fs::read(&path)
             .expect("read compacted journal bytes")
             .starts_with(&raw_bootstrap_frame()),
-        "compaction must retain the exact durable V4 bootstrap as the first frame"
+        "compaction must retain the exact durable V1 bootstrap as the first frame"
     );
     assert!(!path.with_extension("tmp").exists());
 }
@@ -351,21 +351,21 @@ fn compaction_recovery_validates_atomic_remove_batch_prefix() {
     let first = record("compact-remove-batch-first");
     let second = record("compact-remove-batch-second");
     let exact_removals = vec![
-        QueuePlanJournalRemovalV4 {
+        QueuePlanJournalRemovalV1 {
             entrypoint_hash: first.entrypoint_hash.clone(),
             plan_digest: first.plan_digest(),
             claim_digest: first.claim_digest().expect("hash first claim"),
         },
-        QueuePlanJournalRemovalV4 {
+        QueuePlanJournalRemovalV1 {
             entrypoint_hash: second.entrypoint_hash.clone(),
             plan_digest: second.plan_digest(),
             claim_digest: second.claim_digest().expect("hash second claim"),
         },
     ];
     let mut canonical = raw_bootstrap_frame();
-    canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(first.clone())));
-    canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(second.clone())));
-    canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::RemoveBatch(
+    canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV1::Put(first.clone())));
+    canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV1::Put(second.clone())));
+    canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV1::RemoveBatch(
         exact_removals.clone(),
     )));
     let valid_dir = tempfile::tempdir().expect("valid tempdir");
@@ -384,15 +384,15 @@ fn compaction_recovery_validates_atomic_remove_batch_prefix() {
     assert!(!valid_path.with_extension("tmp").exists());
     let absent = record("compact-remove-batch-absent");
     let mut invalid_removals = exact_removals;
-    invalid_removals[1] = QueuePlanJournalRemovalV4 {
+    invalid_removals[1] = QueuePlanJournalRemovalV1 {
         entrypoint_hash: absent.entrypoint_hash.clone(),
         plan_digest: absent.plan_digest(),
         claim_digest: absent.claim_digest().expect("hash absent claim"),
     };
     let mut invalid_canonical = raw_bootstrap_frame();
-    invalid_canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(first)));
-    invalid_canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(second)));
-    invalid_canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::RemoveBatch(
+    invalid_canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV1::Put(first)));
+    invalid_canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV1::Put(second)));
+    invalid_canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV1::RemoveBatch(
         invalid_removals,
     )));
     let invalid_dir = tempfile::tempdir().expect("invalid tempdir");
@@ -424,17 +424,17 @@ fn recognized_compaction_prefixes_are_reconciled_against_canonical_state() {
     let second = record("compact-prefix-second");
     let replacement = with_single_route(first.clone(), 71, 73);
     let mut canonical = raw_bootstrap_frame();
-    canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(first)));
-    canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(second.clone())));
-    canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(
+    canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV1::Put(first)));
+    canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV1::Put(second.clone())));
+    canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV1::Put(
         replacement.clone(),
     )));
     let mut compacted = raw_bootstrap_frame();
-    compacted.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(
+    compacted.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV1::Put(
         replacement.clone(),
     )));
     let second_position = compacted.len();
-    compacted.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(second.clone())));
+    compacted.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV1::Put(second.clone())));
     let header = usize::try_from(FRAME_HEADER_BYTES).expect("frame header");
     let bootstrap_len = raw_bootstrap_frame().len();
     let mut cuts = vec![
@@ -479,7 +479,7 @@ fn recognized_compaction_prefixes_are_reconciled_against_canonical_state() {
 fn staged_compaction_temp_tears_are_durably_discarded_against_canonical_state() {
     let expected_record = record("compact-staged-tear");
     let bootstrap = raw_bootstrap_frame();
-    let put = raw_frame(&QueuePlanJournalFrameV4::Put(expected_record.clone()));
+    let put = raw_frame(&QueuePlanJournalFrameV1::Put(expected_record.clone()));
     let mut canonical = bootstrap.clone();
     canonical.extend_from_slice(&put);
     let header = usize::try_from(FRAME_HEADER_BYTES).expect("header");
@@ -541,10 +541,10 @@ fn staged_compaction_temp_tears_are_durably_discarded_against_canonical_state() 
 #[test]
 fn committed_corrupt_compaction_temp_is_retained_and_fails_closed() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("compact-unexpected-v4.norito");
+    let path = dir.path().join("compact-unexpected-v1.norito");
     let canonical_record = record("compact-expected");
     let mut canonical = raw_bootstrap_frame();
-    canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(canonical_record)));
+    canonical.extend_from_slice(&raw_frame(&QueuePlanJournalFrameV1::Put(canonical_record)));
     let mut unexpected = canonical.clone();
     let put_payload_offset = raw_bootstrap_frame()
         .len()
@@ -552,10 +552,10 @@ fn committed_corrupt_compaction_temp_is_retained_and_fails_closed() {
         .expect("Put payload offset");
     unexpected[put_payload_offset] ^= 0x80;
     fs::write(&path, &canonical).expect("write canonical");
-    fs::write(path.with_extension("tmp"), &unexpected).expect("write unexpected V4 temp");
+    fs::write(path.with_extension("tmp"), &unexpected).expect("write unexpected V1 temp");
     let error = QueuePlanJournal::open_with_limits(&path, limits(1), true)
         .err()
-        .expect("unrelated canonical V4 temp must fail closed");
+        .expect("unrelated canonical V1 temp must fail closed");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert!(
         error
@@ -574,8 +574,8 @@ fn orphaned_compaction_prefixes_cannot_recreate_a_missing_canonical_path() {
     let first = record("compact-orphaned-first");
     let second = record("compact-orphaned-second");
     let bootstrap = raw_bootstrap_frame();
-    let first_put = raw_frame(&QueuePlanJournalFrameV4::Put(first));
-    let second_put = raw_frame(&QueuePlanJournalFrameV4::Put(second));
+    let first_put = raw_frame(&QueuePlanJournalFrameV1::Put(first));
+    let second_put = raw_frame(&QueuePlanJournalFrameV1::Put(second));
     let mut first_of_two = bootstrap.clone();
     first_of_two.extend_from_slice(&first_put);
     let mut apparently_complete = first_of_two.clone();
@@ -862,7 +862,7 @@ fn prepared_replay_rejects_snapshot_length_extension_before_streaming() {
         .open(&path)
         .expect("open concurrent append handle");
     concurrent
-        .write_all(&raw_frame(&QueuePlanJournalFrameV4::Put(appended)))
+        .write_all(&raw_frame(&QueuePlanJournalFrameV1::Put(appended)))
         .expect("extend replay snapshot");
     concurrent.sync_all().expect("publish extension");
     let mut callbacks = 0_usize;

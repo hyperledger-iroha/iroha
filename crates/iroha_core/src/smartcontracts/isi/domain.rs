@@ -179,29 +179,45 @@ pub mod isi {
         }
         Ok(())
     }
-    fn purge_stale_account_label_state(
+    pub(super) fn purge_stale_account_label_state(
         state_transaction: &mut StateTransaction<'_, '_>,
         label: &AccountAlias,
-    ) {
-        if let Some(existing_owner) = state_transaction.world.account_aliases.get(label).cloned()
-            && state_transaction.world.account(&existing_owner).is_err()
+    ) -> Result<(), InstructionExecutionError> {
+        let existing_binding_owner = state_transaction.world.account_aliases.get(label).cloned();
+        let existing_rekey_record = state_transaction
+            .world
+            .account_rekey_records
+            .get(label)
+            .cloned();
+        let stale_binding_owner = existing_binding_owner
+            .as_ref()
+            .filter(|existing_owner| state_transaction.world.account(existing_owner).is_err());
+        let stale_rekey_record = existing_rekey_record.as_ref().filter(|record| {
+            state_transaction
+                .world
+                .account(&record.active_account_id)
+                .is_err()
+        });
+        if existing_binding_owner.is_some() != stale_binding_owner.is_some()
+            || existing_rekey_record.is_some() != stale_rekey_record.is_some()
         {
+            return Ok(());
+        }
+        if stale_rekey_record.is_some() {
+            crate::smartcontracts::isi::kaigi::ensure_kaigi_account_rekey_records_can_be_removed(
+                state_transaction,
+                &BTreeSet::from([label.clone()]),
+                "purging stale account-label state",
+            )?;
+        }
+        if let Some(existing_owner) = stale_binding_owner {
             warn!(
                 "purging stale account alias binding label={:?} missing_owner={}",
                 label, existing_owner
             );
             state_transaction.world.remove_account_alias_binding(label);
         }
-        if let Some(record) = state_transaction
-            .world
-            .account_rekey_records
-            .get(label)
-            .cloned()
-            && state_transaction
-                .world
-                .account(&record.active_account_id)
-                .is_err()
-        {
+        if let Some(record) = stale_rekey_record {
             warn!(
                 "purging stale account rekey record label={:?} missing_owner={}",
                 label, record.active_account_id
@@ -211,6 +227,7 @@ pub mod isi {
                 .account_rekey_records
                 .remove(label.clone());
         }
+        Ok(())
     }
     /// Reject a primary-alias change while recovery state still depends on the alias.
     ///
@@ -279,16 +296,16 @@ pub mod isi {
             return Ok(());
         };
         for existing_alias in state_transaction.world.bound_account_aliases(account) {
-            if existing_alias == *requested_alias
-                || crate::sns::resolve_active_account_alias(
-                    &state_transaction.world,
-                    &state_transaction.nexus.dataspace_catalog,
-                    &existing_alias,
-                    state_transaction.block_unix_timestamp_ms(),
-                )
-                .as_ref()
-                    != Some(account)
-            {
+            let resolved = crate::sns::resolve_active_account_alias(
+                &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
+                &existing_alias,
+                state_transaction.block_unix_timestamp_ms(),
+            )
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(error.to_string().into())
+            })?;
+            if existing_alias == *requested_alias || resolved.as_ref() != Some(account) {
                 continue;
             }
             let Some(existing_home) = sbp_retail_fi_home_domain(
@@ -389,9 +406,6 @@ pub mod isi {
         authority: &AccountId,
         alias: &ContractAlias,
     ) -> Result<(), InstructionExecutionError> {
-        if state_transaction.replay_compatibility {
-            return Ok(());
-        }
         let (label, domain, dataspace) =
             resolve_contract_alias_components(state_transaction, alias)?;
         let account_alias = AccountAlias::new_in_dataspace(label, domain, dataspace);
@@ -408,9 +422,6 @@ pub mod isi {
         contract_address: &ContractAddress,
         alias: &ContractAlias,
     ) -> Result<(), InstructionExecutionError> {
-        if state_transaction.replay_compatibility {
-            return Ok(());
-        }
         let dataspace = contract_address.dataspace_id().map_err(|err| {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 err.to_string().into(),
@@ -548,8 +559,7 @@ pub mod isi {
         alias: &AssetDefinitionAlias,
     ) -> Result<(), InstructionExecutionError> {
         // Genesis is the trusted namespace bootstrap. Every post-genesis mutation must carry the
-        // independent asset-definition-alias capability; replay compatibility deliberately does
-        // not bypass this first-release authorization boundary.
+        // independent asset-definition-alias capability under the single first-release policy.
         if state_transaction._curr_block.is_genesis() {
             return Ok(());
         }
@@ -977,6 +987,9 @@ pub mod isi {
         now_ms: u64,
     ) -> Result<AccountId, Error> {
         crate::block::parse_account_literal_with_world(world, dataspace_catalog, raw, now_ms)
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(error.to_string().into())
+            })?
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
@@ -1027,6 +1040,10 @@ pub mod isi {
                 }
                 .into());
             }
+            crate::smartcontracts::isi::kaigi::ensure_account_id_is_not_retired_rekey_predecessor(
+                state_transaction,
+                &account_id,
+            )?;
             if crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(
                 state_transaction,
                 &account_id,
@@ -1078,7 +1095,7 @@ pub mod isi {
                     ));
                 }
                 ensure_account_alias_lease(state_transaction, &account_id, label)?;
-                purge_stale_account_label_state(state_transaction, label);
+                purge_stale_account_label_state(state_transaction, label)?;
                 if state_transaction.world.account_aliases.get(label).is_some()
                     || state_transaction
                         .world
@@ -1195,6 +1212,10 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
+            crate::smartcontracts::isi::kaigi::ensure_kaigi_account_can_unregister(
+                state_transaction,
+                &account_id,
+            )?;
             if let Some((program_id, _)) =
                 state_transaction
                     .world
@@ -2907,6 +2928,12 @@ pub mod isi {
                 key,
                 value,
             } = self;
+            if crate::smartcontracts::isi::kaigi::is_reserved_kaigi_metadata_key(&key) {
+                return Err(Error::InvariantViolation(
+                    format!("domain metadata key `{key}` is reserved for native Kaigi state")
+                        .into(),
+                ));
+            }
             crate::smartcontracts::limits::enforce_json_size(
                 state_transaction,
                 &value,
@@ -2934,6 +2961,15 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let domain_id = self.object().clone();
+            if crate::smartcontracts::isi::kaigi::is_reserved_kaigi_metadata_key(self.key()) {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "domain metadata key `{}` is reserved for native Kaigi state",
+                        self.key()
+                    )
+                    .into(),
+                ));
+            }
             let domain = state_transaction.world.domain_mut(&domain_id)?;
             let value = domain
                 .metadata_mut()
@@ -3218,9 +3254,7 @@ pub mod query {
                     }
                 }
                 "owner" | "owned_by" | "account" | "account_id" => {
-                    if let Ok(account_id) = AccountId::parse_encoded(raw)
-                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                    {
+                    if let Ok(account_id) = AccountId::parse_encoded(raw) {
                         self.owners.insert(account_id.subject_id());
                     }
                 }
@@ -3939,6 +3973,211 @@ mod tests {
                 algorithm
             );
         }
+    }
+    #[test]
+    fn generic_domain_metadata_isis_cannot_mutate_native_kaigi_state() {
+        use iroha_data_model::kaigi::{
+            KaigiRelayAllowlist, kaigi_metadata_key, kaigi_relay_allowlist_key,
+            kaigi_relay_feedback_key, kaigi_relay_metadata_key,
+        };
+
+        let authority = (*ALICE_ID).clone();
+        let domain_id = DomainId::try_new("kaigi", "universal").expect("domain id");
+        let mut state = test_state();
+        seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let call_name: Name = "protected".parse().expect("call name");
+        let reserved_keys = [
+            kaigi_metadata_key(&call_name).expect("call metadata key"),
+            kaigi_relay_metadata_key(&authority).expect("relay metadata key"),
+            kaigi_relay_feedback_key(&authority).expect("relay feedback key"),
+        ];
+
+        for key in reserved_keys {
+            let error = SetKeyValue::domain(
+                domain_id.clone(),
+                key.clone(),
+                Json::new("forged Kaigi state"),
+            )
+            .execute(&authority, &mut transaction)
+            .expect_err("generic metadata set must reject native Kaigi keys");
+            assert!(instruction_error_contains(
+                &error,
+                "reserved for native Kaigi state"
+            ));
+            assert!(
+                transaction
+                    .world
+                    .domain(&domain_id)
+                    .expect("domain")
+                    .metadata()
+                    .get(&key)
+                    .is_none(),
+                "rejected set must not mutate {key}"
+            );
+
+            transaction
+                .world
+                .domain_mut(&domain_id)
+                .expect("domain")
+                .metadata_mut()
+                .insert(key.clone(), Json::new("pre-existing native state"));
+            let error = RemoveKeyValue::domain(domain_id.clone(), key.clone())
+                .execute(&authority, &mut transaction)
+                .expect_err("generic metadata remove must reject native Kaigi keys");
+            assert!(instruction_error_contains(
+                &error,
+                "reserved for native Kaigi state"
+            ));
+            assert!(
+                transaction
+                    .world
+                    .domain(&domain_id)
+                    .expect("domain")
+                    .metadata()
+                    .get(&key)
+                    .is_some(),
+                "rejected removal must preserve {key}"
+            );
+        }
+
+        let allowlist_key = kaigi_relay_allowlist_key().expect("allowlist metadata key");
+        let allowlist = Json::try_new(KaigiRelayAllowlist::default()).expect("allowlist JSON");
+        SetKeyValue::domain(domain_id.clone(), allowlist_key.clone(), allowlist)
+            .execute(&authority, &mut transaction)
+            .expect("domain governance must retain the relay allowlist metadata path");
+        RemoveKeyValue::domain(domain_id, allowlist_key)
+            .execute(&authority, &mut transaction)
+            .expect("domain governance must be able to remove the relay allowlist");
+    }
+    #[test]
+    fn unregister_account_rejects_active_kaigi_host_atomically() {
+        use iroha_data_model::kaigi::{KaigiId, KaigiRecord, NewKaigi, kaigi_metadata_key};
+
+        let authority = (*ALICE_ID).clone();
+        let domain_id = DomainId::try_new("kaigi-host", "universal").expect("domain id");
+        let host = AccountId::new(checked_keypair().public_key().clone());
+        let call_name: Name = "active-call".parse().expect("call name");
+        let call = KaigiId::new(domain_id.clone(), call_name.clone());
+        let record = KaigiRecord::from_new(&NewKaigi::with_defaults(call.clone(), host.clone()), 1);
+        let key = kaigi_metadata_key(&call_name).expect("Kaigi metadata key");
+        let value = Json::try_new(record).expect("Kaigi record JSON");
+
+        let mut state = test_state();
+        seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
+        seed_account(&mut state, &host, &domain_id);
+        state
+            .world
+            .domain_mut(&domain_id)
+            .expect("Kaigi domain")
+            .metadata_mut()
+            .insert(key.clone(), value.clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        assert!(transaction.world.take_external_events().is_empty());
+
+        let error = Unregister::account(host.clone())
+            .execute(&authority, &mut transaction)
+            .expect_err("an active Kaigi host must remain registered");
+
+        assert!(instruction_error_contains(
+            &error,
+            "referenced by active Kaigi"
+        ));
+        assert!(
+            transaction.world.accounts.get(&host).is_some(),
+            "rejected account removal must preserve the host"
+        );
+        assert_eq!(
+            transaction
+                .world
+                .domain(&domain_id)
+                .expect("Kaigi domain")
+                .metadata()
+                .get(&key),
+            Some(&value),
+            "rejected account removal must preserve the active Kaigi record"
+        );
+        assert!(
+            transaction.world.take_external_events().is_empty(),
+            "rejected account removal must not emit events"
+        );
+    }
+    #[test]
+    fn stale_alias_purge_preserves_kaigi_rekey_continuity_atomically() {
+        use iroha_data_model::{
+            account::rekey::AccountAliasDomain,
+            kaigi::{KaigiId, KaigiRecord, NewKaigi, kaigi_metadata_key},
+        };
+
+        let authority = (*ALICE_ID).clone();
+        let alias_domain = DomainId::try_new("identity", "universal").expect("alias domain");
+        let call_domain = DomainId::try_new("calls", "universal").expect("call domain");
+        let predecessor = AccountId::new(checked_keypair().public_key().clone());
+        let terminal = AccountId::new(checked_keypair().public_key().clone());
+        let missing_alias_owner = AccountId::new(checked_keypair().public_key().clone());
+        let alias = AccountAlias::new(
+            "continuity".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(alias_domain.name().clone())),
+            DataSpaceId::UNIVERSAL,
+        );
+        let history = AccountRekeyRecord::new(alias.clone(), predecessor.clone())
+            .repoint_for_account_id_rekey(terminal.clone())
+            .expect("canonical account-id rekey")
+            .reassign_alias_to_account(missing_alias_owner.clone())
+            .expect("independent alias reassignment");
+        let call_name: Name = "active-call".parse().expect("call name");
+        let call = KaigiId::new(call_domain.clone(), call_name.clone());
+        let record = KaigiRecord::from_new(&NewKaigi::with_defaults(call, predecessor.clone()), 1);
+
+        let mut state = test_state();
+        for domain in [&alias_domain, &call_domain] {
+            seed_domain(&mut state, domain, &authority);
+        }
+        seed_account(&mut state, &authority, &call_domain);
+        seed_account(&mut state, &terminal, &alias_domain);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        transaction
+            .world
+            .insert_account_alias_binding(alias.clone(), missing_alias_owner.clone());
+        transaction
+            .world
+            .account_rekey_records
+            .insert(alias.clone(), history.clone());
+        transaction
+            .world
+            .domain_mut(&call_domain)
+            .expect("call domain")
+            .metadata_mut()
+            .insert(
+                kaigi_metadata_key(&call_name).expect("Kaigi metadata key"),
+                Json::try_new(record).expect("Kaigi record JSON"),
+            );
+
+        let error = super::isi::purge_stale_account_label_state(&mut transaction, &alias)
+            .expect_err("stale cleanup must not erase required Kaigi continuity");
+        assert!(instruction_error_contains(
+            &error,
+            "history is required by native Kaigi state"
+        ));
+        assert_eq!(
+            transaction.world.account_aliases.get(&alias),
+            Some(&missing_alias_owner),
+            "failed purge must preserve the forward binding"
+        );
+        assert_eq!(
+            transaction.world.account_rekey_records.get(&alias),
+            Some(&history),
+            "failed purge must preserve the continuity record"
+        );
     }
     fn seed_domain(state: &mut State, domain_id: &DomainId, owner: &AccountId) {
         let domain = Domain {
@@ -5233,7 +5472,7 @@ mod tests {
         );
     }
     #[test]
-    fn account_alias_mutations_reject_expired_leases_even_during_replay() {
+    fn account_alias_mutations_reject_expired_leases() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
@@ -5248,7 +5487,6 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        tx.replay_compatibility = true;
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
         Register::account(Account::new(existing_id.clone()))
             .execute(&authority, &mut tx)
@@ -5260,7 +5498,7 @@ mod tests {
             Account::new(registration_id.clone()).with_label(Some(registration_alias.clone())),
         )
         .execute(&authority, &mut tx)
-        .expect_err("replay must not bypass an expired registration lease");
+        .expect_err("an expired registration lease must reject");
         assert!(
             instruction_error_contains(&registration_err, "active SNS lease"),
             "unexpected registration error: {registration_err}"
@@ -5268,7 +5506,7 @@ mod tests {
         let binding_err =
             EnsureTestAccountAliasBinding::bind(existing_id.clone(), binding_alias.clone(), None)
                 .execute(&authority, &mut tx)
-                .expect_err("replay must not bypass an expired binding lease");
+                .expect_err("an expired binding lease must reject");
         let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             binding_message,
         )) = &binding_err
@@ -5282,7 +5520,7 @@ mod tests {
         let primary_err =
             CasTestPrimaryAccountAlias::bind(existing_id.clone(), primary_alias.clone(), None)
                 .execute(&authority, &mut tx)
-                .expect_err("replay must not bypass an expired primary-alias lease");
+                .expect_err("an expired primary-alias lease must reject");
         let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             primary_message,
         )) = &primary_err
@@ -9170,7 +9408,7 @@ mod tests {
         }
     }
     #[test]
-    fn replay_allows_legacy_global_asset_definition_in_restricted_dataspace() {
+    fn global_asset_definition_in_restricted_dataspace_always_rejects() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let paynet = DataSpaceId::new(7);
@@ -9198,10 +9436,13 @@ mod tests {
         install_dataspace_catalog_with_lane(&mut tx, paynet, "paynet", LaneVisibility::Restricted);
         tx.current_dataspace_id = Some(paynet);
         tx.world.current_dataspace_id = Some(paynet);
-        tx.replay_compatibility = true;
-        Register::asset_definition(new_definition)
+        let error = Register::asset_definition(new_definition)
             .execute(&authority, &mut tx)
-            .expect("replay must preserve legacy committed registration");
+            .expect_err("restricted dataspaces must reject global asset definitions");
+        assert!(
+            error.to_string().contains("restricted dataspace"),
+            "unexpected invariant error: {error}"
+        );
     }
     #[test]
     fn register_global_asset_definition_allows_public_alias_home_on_authoritative_route() {

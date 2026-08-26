@@ -189,14 +189,6 @@ pub fn validate_genesis_block(
 ) -> Result<(), block::InvalidGenesisError> {
     block::check_genesis_block(block, genesis_account)
 }
-#[cfg(test)]
-/// Test-only helpers shared across core modules.
-pub mod test_alias {
-    /// Historical helper retained for callers; account alias resolvers are no longer installed.
-    pub fn ensure() {
-        // No-op by design.
-    }
-}
 use core::time::Duration;
 use gossiper::TransactionGossip;
 use iroha_data_model::{events::EventBox, prelude::*};
@@ -232,11 +224,11 @@ pub const MAX_LANE_DRAIN_VOTE_WIRE_BYTES: usize = lane_consensus::MAX_LANE_DRAIN
 /// frames without exposing the general network decoder to an attacker-sized
 /// signature allocation.
 pub const MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES: usize = 32 * 1024;
-const NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG: u32 = 4;
-const NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG: u32 = 17;
-const NETWORK_MESSAGE_TORII_PROXY_RESPONSE_TAG: u32 = 18;
-const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_PUBLICATION_TAG: u32 = 20;
-const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_CERTIFICATE_TAG: u32 = 21;
+const NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG: u32 = 3;
+const NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG: u32 = 13;
+const NETWORK_MESSAGE_TORII_PROXY_RESPONSE_TAG: u32 = 14;
+const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_PUBLICATION_TAG: u32 = 16;
+const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_CERTIFICATE_TAG: u32 = 17;
 /// Hard Norito frame bound for one QueuePlan admission-certificate handoff.
 pub const MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES: usize =
     iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES + 64 * 1024;
@@ -410,12 +402,9 @@ fn inbound_sumeragi_topic(
     match tag {
         // Keep these discriminants synchronized with `BlockMessage`. They are
         // inspected before allocating or decoding the nested consensus value.
-        16 | 19 | 21 | 22 | 25..=28 => Ok(Topic::Consensus),
-        20 | 29 => Ok(Topic::ConsensusPayload),
-        30 => inbound_consensus_v2_topic(field, flags),
-        0..=15 | 17..=18 | 23..=24 => Err(norito::core::Error::Message(
-            "retired global Sumeragi v1 block discriminant".to_owned(),
-        )),
+        0 | 1 | 3..=8 => Ok(Topic::Consensus),
+        2 | 9 => Ok(Topic::ConsensusPayload),
+        10 => inbound_consensus_v2_topic(field, flags),
         _ => Err(norito::core::Error::Message(
             "unknown Sumeragi block discriminant".to_owned(),
         )),
@@ -487,61 +476,55 @@ pub enum NetworkMessage {
     #[codec(index = 0)]
     SumeragiBlock(Arc<BlockMessageWire>),
     /// Lane settlement relay envelope (NX-4).
-    #[codec(index = 2)]
+    #[codec(index = 1)]
     LaneRelay(Box<LaneRelayEnvelope>),
     /// Merge committee signature share for merge-ledger quorum certificates.
-    #[codec(index = 3)]
+    #[codec(index = 2)]
     MergeCommitteeSignature(Arc<MergeCommitteeSignature>),
     /// Lane-committee signature share for an automatic drain certificate.
-    #[codec(index = 4)]
+    #[codec(index = 3)]
     LaneDrainVote(Box<crate::lane_consensus::LaneDrainVoteV1>),
     /// Authenticated request/chunk traffic for a block-referenced certified merge sidecar.
-    #[codec(index = 5)]
+    #[codec(index = 4)]
     CertifiedMergeSidecar(Arc<CertifiedMergeSidecarMessage>),
     /// Native AMX participant attestation control-plane message.
-    #[codec(index = 6)]
+    #[codec(index = 5)]
     NativeAmx(Arc<native_amx::NativeAmxMessage>),
     /// Transaction gossiper message.
-    #[codec(index = 8)]
+    #[codec(index = 6)]
     TransactionGossiper(Arc<TransactionGossip>),
     /// Peer address gossip message.
-    #[codec(index = 9)]
+    #[codec(index = 7)]
     PeersGossiper(Box<PeersGossip>),
     /// Peer trust gossip message.
-    #[codec(index = 10)]
+    #[codec(index = 8)]
     PeerTrustGossip(Box<PeerTrustGossip>),
     /// Health check message.
-    #[codec(index = 11)]
+    #[codec(index = 9)]
     Health,
     /// Network Time Service: time synchronization ping.
-    #[codec(index = 12)]
+    #[codec(index = 10)]
     TimePing(Box<crate::time::TimePing>),
     /// Network Time Service: time synchronization pong.
-    #[codec(index = 13)]
+    #[codec(index = 11)]
     TimePong(Box<crate::time::TimePong>),
     /// Iroha Connect (WalletConnect-style) authenticated P2P control message.
-    #[codec(index = 14)]
+    #[codec(index = 12)]
     Connect(Box<connect_proto::ConnectP2pMessage>),
-    /// Soracloud local-read proxy request routed to the authoritative primary host.
-    #[codec(index = 15)]
-    SoracloudLocalReadProxyRequest(Box<soracloud_runtime::SoracloudLocalReadProxyRequestV1>),
-    /// Soracloud local-read proxy response returned to the ingress node.
-    #[codec(index = 16)]
-    SoracloudLocalReadProxyResponse(Box<soracloud_runtime::SoracloudLocalReadProxyResponseV1>),
     /// Torii proxy request routed across bounded Torii ingress proxy hops.
-    #[codec(index = 17)]
-    ToriiProxyRequest(Arc<torii_proxy::ToriiProxyRequestV6>),
+    #[codec(index = 13)]
+    ToriiProxyRequest(Arc<torii_proxy::ToriiProxyRequestV1>),
     /// Torii proxy response returned to the ingress node.
-    #[codec(index = 18)]
+    #[codec(index = 14)]
     ToriiProxyResponse(Box<torii_proxy::ToriiProxyResponseV1>),
     /// Norito Streaming control-plane frame.
-    #[codec(index = 19)]
+    #[codec(index = 15)]
     StreamingControl(Box<ControlFrame>),
     /// Certified QueuePlan admission disseminated to every live authoritative validator.
-    #[codec(index = 20)]
+    #[codec(index = 16)]
     QueuePlanAdmissionPublication(Arc<torii_proxy::QueuePlanAdmissionPublicationV1>),
     /// Exact Kura-durable QueuePlan admission certificate handed to the global leader.
-    #[codec(index = 21)]
+    #[codec(index = 17)]
     QueuePlanAdmissionCertificate(Arc<Vec<u8>>),
 }
 impl NetworkMessage {
@@ -551,9 +534,7 @@ impl NetworkMessage {
     pub const fn is_torii_proxy_control_message(&self) -> bool {
         matches!(
             self,
-            Self::SoracloudLocalReadProxyRequest(_)
-                | Self::SoracloudLocalReadProxyResponse(_)
-                | Self::ToriiProxyRequest(_)
+            Self::ToriiProxyRequest(_)
                 | Self::ToriiProxyResponse(_)
                 | Self::QueuePlanAdmissionPublication(_)
         )
@@ -637,9 +618,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             | NetworkMessage::LaneDrainVote(_)
             | NetworkMessage::NativeAmx(_)
             | NetworkMessage::QueuePlanAdmissionCertificate(_) => T::Consensus,
-            NetworkMessage::SoracloudLocalReadProxyRequest(_)
-            | NetworkMessage::SoracloudLocalReadProxyResponse(_)
-            | NetworkMessage::ToriiProxyRequest(_)
+            NetworkMessage::ToriiProxyRequest(_)
             | NetworkMessage::ToriiProxyResponse(_)
             | NetworkMessage::QueuePlanAdmissionPublication(_)
             | NetworkMessage::StreamingControl(_) => T::Control,
@@ -658,9 +637,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     fn subscriber_route(&self) -> iroha_p2p::network::message::SubscriberRoute {
         use iroha_p2p::network::message::SubscriberRoute;
         match self {
-            Self::SoracloudLocalReadProxyRequest(_)
-            | Self::SoracloudLocalReadProxyResponse(_)
-            | Self::ToriiProxyRequest(_)
+            Self::ToriiProxyRequest(_)
             | Self::ToriiProxyResponse(_)
             | Self::QueuePlanAdmissionPublication(_) => SubscriberRoute::ToriiProxy,
             Self::Connect(_) => SubscriberRoute::Connect,
@@ -694,31 +671,26 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
     ) -> Result<Option<iroha_p2p::network::message::Topic>, norito::core::Error> {
         use iroha_p2p::network::message::Topic;
         let (tag, remaining) = inbound_enum_parts(payload)?;
-        if tag == 11 {
+        if tag == 9 {
             if !remaining.is_empty() {
                 return Err(norito::core::Error::LengthMismatch);
             }
             return Ok(Some(Topic::Health));
         }
-        let field = if matches!(tag, 0 | 5 | 8 | 20) {
+        let field = if matches!(tag, 0 | 4 | 6 | 16) {
             inbound_owned_enum_field(remaining, flags)?
         } else {
             inbound_enum_field(remaining, flags)?
         };
         let topic = match tag {
             0 => inbound_sumeragi_topic(field)?,
-            1 => {
-                return Err(norito::core::Error::Message(
-                    "retired global Sumeragi v1 control-flow discriminant".to_owned(),
-                ));
-            }
-            2..=4 | 6 | 21 => Topic::Consensus,
-            5 => inbound_certified_merge_sidecar_topic(field, flags)?,
-            8 => inbound_transaction_gossip_topic(field, flags)?,
-            9 => Topic::PeerGossip,
-            10 => Topic::TrustGossip,
-            12..=14 => Topic::Health,
-            15..=20 => Topic::Control,
+            1..=3 | 5 | 17 => Topic::Consensus,
+            4 => inbound_certified_merge_sidecar_topic(field, flags)?,
+            6 => inbound_transaction_gossip_topic(field, flags)?,
+            7 => Topic::PeerGossip,
+            8 => Topic::TrustGossip,
+            10..=12 => Topic::Health,
+            13..=16 => Topic::Control,
             _ => {
                 return Err(norito::core::Error::Message(
                     "unknown core network-message discriminant".to_owned(),
@@ -742,7 +714,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 let (_, remaining) = inbound_enum_parts(payload)?;
                 let framed = inbound_owned_enum_field(remaining, flags)?;
                 let (block_tag, _, _) = inbound_sumeragi_enum_field(framed)?;
-                if block_tag != 16 {
+                if block_tag != 0 {
                     return Ok(None);
                 }
                 if framed_len > MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES {
@@ -927,13 +899,9 @@ pub mod role {
                     .ok_or(iroha_data_model::ParseError::new(
                         "RoleIdWithOwner must be formatted as `account|role`",
                     ))?;
-            let account = AccountId::parse_encoded(account_raw)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .map_err(|_| {
-                    iroha_data_model::ParseError::new(
-                        "Invalid account component in RoleIdWithOwner",
-                    )
-                })?;
+            let account = AccountId::parse_encoded(account_raw).map_err(|_| {
+                iroha_data_model::ParseError::new("Invalid account component in RoleIdWithOwner")
+            })?;
             let id = role_raw.parse().map_err(|_| {
                 iroha_data_model::ParseError::new("Invalid role component in RoleIdWithOwner")
             })?;
@@ -1032,12 +1000,6 @@ mod tests {
         gossiper::{GossipPlane, GossipRoute, GossipTransaction, TransactionGossip},
         queue::{RoutingDecision, RoutingPlan},
         role::RoleIdWithOwner,
-        soracloud_runtime::{
-            SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
-            SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1, SoracloudLocalReadProxyOutcomeV1,
-            SoracloudLocalReadProxyRequestV1, SoracloudLocalReadProxyResponseV1,
-            SoracloudLocalReadRequest,
-        },
         sumeragi::message::{
             BlockMessage, BlockMessageWire, KURA_REPLICA_ADVERT_VERSION_V1, KuraReplicaAdvertV1,
         },
@@ -1046,10 +1008,10 @@ mod tests {
             TORII_PROXY_NETWORK_MESSAGE_OVERHEAD_BYTES_V1,
             TORII_PROXY_REQUEST_MAX_DECODE_ALLOCATED_BYTES_V1,
             TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1, TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1,
-            TORII_PROXY_REQUEST_VERSION_V6, TORII_PROXY_RESPONSE_MAX_ENCODED_BYTES_V1,
+            TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_MAX_ENCODED_BYTES_V1,
             TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV6,
-            ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiProxyTransactionAdmissionV2,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV1,
+            ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiProxyTransactionAdmissionV1,
             ToriiReadEndpointV1, ToriiReadProxyRequestV1, ToriiRouteHintV1, ToriiRoutingPlanHintV1,
         },
     };
@@ -1142,7 +1104,7 @@ mod tests {
         ));
     }
     #[test]
-    fn first_release_network_tags_have_no_peer_genesis_protocol_gap() {
+    fn first_release_network_tags_are_contiguous() {
         use iroha_primitives::unique_vec::UniqueVec;
         use iroha_torii_shared::connect::{ConnectP2pMessageV1, ConnectSessionTerminatedV1};
         use norito::streaming::{ControlErrorFrame, ErrorCode};
@@ -1152,7 +1114,7 @@ mod tests {
                     peers: UniqueVec::new(),
                     peer_capabilities: BTreeMap::new(),
                 })),
-                9,
+                7,
                 NetworkTopic::PeerGossip,
                 SubscriberRoute::General,
             ),
@@ -1161,19 +1123,19 @@ mod tests {
                     network_id: test_network_id(b"trust-gossip-wire-tag"),
                     trust: Vec::new(),
                 })),
-                10,
+                8,
                 NetworkTopic::TrustGossip,
                 SubscriberRoute::General,
             ),
             (
                 NetworkMessage::Health,
-                11,
+                9,
                 NetworkTopic::Health,
                 SubscriberRoute::General,
             ),
             (
                 NetworkMessage::TimePing(Box::new(crate::time::TimePing { id: 1, t1_ms: 2 })),
-                12,
+                10,
                 NetworkTopic::Health,
                 SubscriberRoute::General,
             ),
@@ -1183,7 +1145,7 @@ mod tests {
                     t2_ms: 2,
                     t3_ms: 3,
                 })),
-                13,
+                11,
                 NetworkTopic::Health,
                 SubscriberRoute::General,
             ),
@@ -1194,7 +1156,7 @@ mod tests {
                         reason: "closed".to_owned(),
                     },
                 ))),
-                14,
+                12,
                 NetworkTopic::Health,
                 SubscriberRoute::Connect,
             ),
@@ -1205,7 +1167,7 @@ mod tests {
                         message: "invalid frame".to_owned(),
                     },
                 ))),
-                19,
+                15,
                 NetworkTopic::Control,
                 SubscriberRoute::General,
             ),
@@ -1256,20 +1218,20 @@ mod tests {
             NetworkTopic::TxGossipRestricted
         );
         for (tag, expected) in [
-            (2_u32, NetworkTopic::Consensus),
+            (1_u32, NetworkTopic::Consensus),
+            (2, NetworkTopic::Consensus),
             (3, NetworkTopic::Consensus),
-            (4, NetworkTopic::Consensus),
-            (6, NetworkTopic::Consensus),
-            (9, NetworkTopic::PeerGossip),
-            (10, NetworkTopic::TrustGossip),
+            (5, NetworkTopic::Consensus),
+            (7, NetworkTopic::PeerGossip),
+            (8, NetworkTopic::TrustGossip),
+            (10, NetworkTopic::Health),
+            (11, NetworkTopic::Health),
             (12, NetworkTopic::Health),
-            (13, NetworkTopic::Health),
-            (14, NetworkTopic::Health),
+            (13, NetworkTopic::Control),
+            (14, NetworkTopic::Control),
             (15, NetworkTopic::Control),
             (16, NetworkTopic::Control),
-            (17, NetworkTopic::Control),
-            (18, NetworkTopic::Control),
-            (19, NetworkTopic::Control),
+            (17, NetworkTopic::Consensus),
         ] {
             let (mut payload, flags) =
                 norito::codec::encode_with_header_flags(&SingleFieldNetworkMessage::Field(0));
@@ -1283,25 +1245,15 @@ mod tests {
             );
         }
         let flags = ncore::default_encode_flags();
-        for (tag, label) in [(1_u32, "control-flow"), (7, "block-sync")] {
-            let (mut retired, retired_flags) =
-                norito::codec::encode_with_header_flags(&SingleFieldNetworkMessage::Field(0));
-            retired[..core::mem::size_of::<u32>()].copy_from_slice(&tag.to_le_bytes());
-            assert!(
-                <NetworkMessage as ClassifyTopic>::inbound_topic(&retired, retired_flags).is_err(),
-                "the retired global-v1 {label} tag must fail before ingress admission"
-            );
-            let mut retired_cursor = retired.as_slice();
-            assert!(
-                <NetworkMessage as norito::codec::Decode>::decode(&mut retired_cursor).is_err(),
-                "the retired global-v1 {label} tag must fail typed decode"
-            );
-        }
+        assert!(
+            <NetworkMessage as ClassifyTopic>::inbound_topic(&18_u32.to_le_bytes(), flags).is_err(),
+            "the first tag after the compact first-release range must fail before typed decode"
+        );
         assert!(
             <NetworkMessage as ClassifyTopic>::inbound_topic(&99_u32.to_le_bytes(), flags).is_err(),
             "unknown network-message tags must fail before typed decode"
         );
-        let mut trailing_health = 11_u32.to_le_bytes().to_vec();
+        let mut trailing_health = 9_u32.to_le_bytes().to_vec();
         trailing_health.push(0);
         assert!(
             <NetworkMessage as ClassifyTopic>::inbound_topic(&trailing_health, flags).is_err(),
@@ -1309,36 +1261,30 @@ mod tests {
         );
     }
     #[test]
-    fn raw_lane_tags_keep_capacity_classes_and_retired_tags_fail_closed() {
-        for tag in [19, 21, 22, 25, 26, 27, 28] {
+    fn raw_block_message_tags_keep_exact_capacity_classes() {
+        for tag in [0, 1, 3, 4, 5, 6, 7, 8] {
             assert_eq!(
                 raw_sumeragi_topic_for_synthetic_tag(tag).expect("classify lane control tag"),
                 NetworkTopic::Consensus,
-                "lane control discriminant {tag} must stay on reliable consensus transport"
+                "block-message control discriminant {tag} must stay on reliable consensus transport"
             );
         }
-        for tag in [20, 29] {
+        for tag in [2, 9] {
             assert_eq!(
                 raw_sumeragi_topic_for_synthetic_tag(tag).expect("classify lane payload tag"),
                 NetworkTopic::ConsensusPayload,
                 "lane payload discriminant {tag} must use the bounded payload corridor"
             );
         }
-        for tag in [
-            0_u32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 23, 24,
-        ] {
-            assert!(
-                raw_sumeragi_topic_for_synthetic_tag(tag).is_err(),
-                "retired global-v1 discriminant {tag} must fail before ingress capacity admission"
-            );
-        }
-        assert!(
-            raw_sumeragi_topic_for_synthetic_tag(30).is_err(),
-            "a malformed global-v2 field must fail closed"
+        assert_eq!(
+            raw_sumeragi_topic_for_synthetic_tag(10)
+                .expect("classify canonical global-v2 safety message"),
+            NetworkTopic::ConsensusSafety,
+            "global-v2 discriminant must preserve its inner protocol topic"
         );
         assert!(
-            raw_sumeragi_topic_for_synthetic_tag(31).is_err(),
-            "an unknown block-message tag must fail closed"
+            raw_sumeragi_topic_for_synthetic_tag(11).is_err(),
+            "the first tag after the compact block-message range must fail closed"
         );
     }
     #[test]
@@ -1439,7 +1385,7 @@ mod tests {
             NetworkTopic::Consensus,
             "lane-drain traffic must not share the authoritative v2 safety topic"
         );
-        assert_eq!(raw_network_tag(&message), 4);
+        assert_eq!(raw_network_tag(&message), 3);
         let encoded = norito::to_bytes(&message).expect("encode lane-drain vote message");
         let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
             .expect("decode lane-drain vote message");
@@ -1764,7 +1710,7 @@ mod tests {
         };
         assert_shared_carrier_wire_compatible(request_payload.as_ref());
         assert_eq!(request_message.topic(), NetworkTopic::Consensus);
-        assert_eq!(raw_network_tag(&request_message), 5);
+        assert_eq!(raw_network_tag(&request_message), 4);
         assert_eq!(raw_network_topic(&request_message), NetworkTopic::Consensus);
         let request_hash = HashOf::new(&request_message);
         let encoded = norito::to_bytes(&request_message).expect("encode sidecar request");
@@ -1930,48 +1876,15 @@ mod tests {
         assert_eq!(decoded_chunk, &chunk);
     }
     #[test]
-    fn torii_proxy_control_message_classification_covers_shared_proxy_variants() {
-        let soracloud_request = NetworkMessage::SoracloudLocalReadProxyRequest(Box::new(
-            SoracloudLocalReadProxyRequestV1 {
-                schema_version: SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
-                request_id: Hash::prehashed([0x11; 32]),
-                request: SoracloudLocalReadRequest {
-                    observed_height: 1,
-                    observed_block_hash: None,
-                    service_name: "svc".to_owned(),
-                    service_version: "1.0.0".to_owned(),
-                    handler_name: "read".to_owned(),
-                    handler_class: crate::soracloud_runtime::SoracloudLocalReadKind::Query,
-                    request_method: "GET".to_owned(),
-                    request_path: "/v1/soracloud/test".to_owned(),
-                    handler_path: "/test".to_owned(),
-                    request_query: None,
-                    request_headers: BTreeMap::new(),
-                    request_body: Vec::new(),
-                    request_commitment: Hash::prehashed([0x12; 32]),
-                },
-            },
-        ));
-        let soracloud_response = NetworkMessage::SoracloudLocalReadProxyResponse(Box::new(
-            SoracloudLocalReadProxyResponseV1 {
-                schema_version: SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1,
-                request_id: Hash::prehashed([0x13; 32]),
-                outcome: SoracloudLocalReadProxyOutcomeV1::Err(
-                    crate::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                        crate::soracloud_runtime::SoracloudRuntimeExecutionErrorKind::Unavailable,
-                        "proxy unavailable",
-                    ),
-                ),
-            },
-        ));
-        let torii_request = NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV6 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+    fn torii_proxy_control_message_classification_covers_current_variants() {
+        let torii_request = NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV1 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V1,
             request_id: Hash::prehashed([0x14; 32]),
             deadline_unix_ms: 1_900_000_000_000,
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV4::Read(ToriiReadProxyRequestV1 {
+            request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::SINGLE,
@@ -1998,18 +1911,14 @@ mod tests {
                 certificate: vec![0x16],
             },
         ));
-        assert!(soracloud_request.is_torii_proxy_control_message());
-        assert!(soracloud_response.is_torii_proxy_control_message());
         assert!(torii_request.is_torii_proxy_control_message());
         assert!(torii_response.is_torii_proxy_control_message());
         assert!(queue_plan_publication.is_torii_proxy_control_message());
         assert!(!NetworkMessage::Health.is_torii_proxy_control_message());
         for (message, expected_tag) in [
-            (&soracloud_request, 15),
-            (&soracloud_response, 16),
-            (&torii_request, 17),
-            (&torii_response, 18),
-            (&queue_plan_publication, 20),
+            (&torii_request, 13),
+            (&torii_response, 14),
+            (&queue_plan_publication, 16),
         ] {
             assert_eq!(raw_network_tag(message), expected_tag);
             assert_eq!(message.topic(), NetworkTopic::Control);
@@ -2068,17 +1977,17 @@ mod tests {
         #[derive(Encode)]
         #[norito(schema_name = "iroha_core::NetworkMessage")]
         enum BoxToriiProxyCarrier {
-            #[codec(index = 17)]
-            Request(Box<ToriiProxyRequestV6>),
+            #[codec(index = 13)]
+            Request(Box<ToriiProxyRequestV1>),
         }
-        let request = ToriiProxyRequestV6 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+        let request = ToriiProxyRequestV1 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V1,
             request_id: Hash::prehashed([0x24; 32]),
             deadline_unix_ms: 1_900_000_000_000,
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV4::Read(ToriiReadProxyRequestV1 {
+            request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::SINGLE,
@@ -2091,7 +2000,7 @@ mod tests {
             }),
         };
         let boxed = ncore::to_bytes(&BoxToriiProxyCarrier::Request(Box::new(request.clone())))
-            .expect("encode historical Box proxy carrier");
+            .expect("encode Box proxy carrier");
         let shared = ncore::to_bytes(&NetworkMessage::ToriiProxyRequest(Arc::new(request)))
             .expect("encode Arc proxy carrier");
         assert_eq!(
@@ -2201,17 +2110,17 @@ mod tests {
             .with_instructions([Log::new(Level::INFO, "P".repeat(TRANSACTION_BODY_BYTES))])
             .sign(keypair.private_key());
         let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-        let message = NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV6 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+        let message = NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV1 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V1,
             request_id: Hash::new(b"ten-mib-torii-proxy-submit-request"),
             deadline_unix_ms: 1_900_000_000_000,
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV4::SubmitTransaction {
+            request: ToriiProxyRequestKindV1::SubmitTransaction {
                 transaction: TransactionEntrypoint::External(transaction),
                 expected_plan: ToriiRoutingPlanHintV1::from(RoutingPlan::single(route)),
-                admission: ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+                admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
                 admission_binding: None,
             },
         }));
@@ -2233,7 +2142,7 @@ mod tests {
         let NetworkMessage::ToriiProxyRequest(decoded) = decoded else {
             panic!("decoded proxy submission changed its network-message variant");
         };
-        let ToriiProxyRequestKindV4::SubmitTransaction { transaction, .. } = &decoded.request
+        let ToriiProxyRequestKindV1::SubmitTransaction { transaction, .. } = &decoded.request
         else {
             panic!("decoded proxy submission changed its request kind");
         };
@@ -2439,7 +2348,7 @@ mod tests {
             plane: GossipPlane::Public,
         };
         let msg = NetworkMessage::TransactionGossiper(Arc::new(gossip));
-        assert_eq!(raw_network_tag(&msg), 8);
+        assert_eq!(raw_network_tag(&msg), 6);
         assert_eq!(raw_network_topic(&msg), NetworkTopic::TxGossip);
         let bytes = msg.encode();
         let (decoded, used) = <NetworkMessage as ncore::DecodeFromSlice>::decode_from_slice(&bytes)

@@ -625,10 +625,10 @@ fn encode_leaf_atom(
         EntrypointValueKindV1::AccountId => {
             let raw = value.as_str().ok_or(VMError::DecodeError)?;
             let parsed = AccountId::parse_encoded(raw).map_err(|_| VMError::DecodeError)?;
-            if parsed.canonical() != raw {
+            if parsed.to_string() != raw {
                 return Err(VMError::DecodeError);
             }
-            let account_id = parsed.into_account_id();
+            let account_id = parsed;
             encoded_pointer(
                 PointerType::AccountId,
                 canonical_norito_frame(&account_id).map_err(|_| VMError::NoritoInvalid)?,

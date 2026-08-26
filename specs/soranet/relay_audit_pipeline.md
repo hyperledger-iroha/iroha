@@ -114,6 +114,10 @@ cooldowns in effect. Combine these with the compliance spool, where each
 the enforced scope, cooldown, burst limit, and observation window for downstream
 analytics.
 
+The helper fails closed if the requested relay mode is absent or any of the four
+core handshake counters are missing, and rejects non-positive circuit or
+cooldown settings instead of producing a healthy-looking empty report.
+
 ## CLI Overrides for Staging
 
 When experimenting in staging environments, the relay binary now exposes knobs

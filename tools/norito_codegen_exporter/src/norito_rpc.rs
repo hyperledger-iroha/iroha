@@ -1448,11 +1448,9 @@ fn build_instruction(raw: &RawInstruction) -> Result<InstructionBox> {
         .with_context(|| format!("failed to decode wire instruction '{}'", raw.wire_name))
 }
 fn parse_account_id(value: &str) -> Result<AccountId> {
-    let account = AccountId::parse_encoded(value)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .with_context(|| {
-            format!("account id '{value}' must be a canonical I105-encoded literal")
-        })?;
+    let account = AccountId::parse_encoded(value).with_context(|| {
+        format!("account id '{value}' must be a canonical I105-encoded literal")
+    })?;
     if account.to_string() != value {
         bail!("account id '{value}' must use its exact canonical I105 encoding");
     }

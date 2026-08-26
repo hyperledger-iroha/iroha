@@ -11,23 +11,31 @@ def _section(start: str, end: str) -> str:
     return SOURCE.split(start, 1)[1].split(end, 1)[0]
 
 
-def test_identity_preflight_runs_before_any_canary_publication() -> None:
-    run = _section("impl Run for InrouCanary", "fn ensure_canonical_taira_client_identity")
+def test_identity_preflight_runs_before_exact_canary_preparation() -> None:
+    run = _section("fn run_inrou_canary_exact", "fn require_inrou_binding_current")
     ordered_calls = [
+        "validate_inrou_canary_timeout",
         "ensure_canonical_taira_client_identity",
+        "normalize_root_url",
+        "args.binding",
+        "args.prepared_action",
+        "require_inrou_binding_current",
         "preflight_taira_network_identity",
-        "run_taira_inrou_canary_deployment",
-        "verify_inrou_canary",
+        "prove_inrou_predecessor_applied",
+        "prepare_taira_inrou_canary_operation",
+        "write_prepared_envelope",
     ]
     positions = [run.index(call) for call in ordered_calls]
     assert positions == sorted(positions)
 
 
-def test_timeout_validation_runs_before_any_canary_publication() -> None:
-    run = _section("impl Run for InrouCanary", "fn ensure_canonical_taira_client_identity")
-    assert run.index("validate_inrou_canary_timeout") < run.index(
-        "run_taira_inrou_canary_deployment"
-    )
+def test_aggregate_canary_mutation_paths_are_absent() -> None:
+    for retired in (
+        "run_taira_inrou_canary_deployment",
+        "find_applied_taira_inrou_mutation",
+        "TairaInrouCanaryDeployment",
+    ):
+        assert retired not in SOURCE
 
 
 def test_identity_preflight_binds_the_remote_puzzle_to_configured_taira() -> None:

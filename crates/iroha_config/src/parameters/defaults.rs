@@ -159,12 +159,16 @@ pub mod soracloud_runtime {
     pub const INROU_PORTABLE_VM_UID: Option<NonZeroU32> = None;
     /// Dedicated QEMU primary gid. `None` keeps PortableVM hosting fail-closed until configured.
     pub const INROU_PORTABLE_VM_GID: Option<NonZeroU32> = None;
-    /// Disabled-profile fallback aggregate CPU ceiling in millicores.
+    /// Disabled-profile fallback aggregate physical CPU ceiling, including VMM overhead.
     pub const INROU_MAX_CPU_MILLIS: NonZeroU32 = nonzero!(8_000_u32);
-    /// Disabled-profile fallback aggregate memory ceiling in bytes.
+    /// Disabled-profile fallback aggregate physical memory ceiling, including VMM overhead.
     pub const INROU_MAX_MEMORY_BYTES: NonZeroU64 = nonzero!(8_u64 * 1024 * 1024 * 1024);
     /// Disabled-profile fallback aggregate writable-storage ceiling in bytes.
     pub const INROU_MAX_STORAGE_BYTES: NonZeroU64 = nonzero!(64_u64 * 1024 * 1024 * 1024);
+    /// Maximum immutable operator-preseeded guest-image bytes materialized for one host ISA.
+    pub const INROU_GUEST_IMAGE_MAX_BYTES: NonZeroU64 = nonzero!(4_u64 * 1024 * 1024 * 1024);
+    /// Hard production ceiling for one immutable Inrou guest-image artifact.
+    pub const INROU_GUEST_IMAGE_MAX_BYTES_LIMIT: u64 = 16 * 1024 * 1024 * 1024;
     /// Maximum compressed size accepted for one Inrou bundle archive.
     pub const INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES: NonZeroU64 =
         nonzero!(512_u64 * 1024 * 1024);
@@ -194,7 +198,8 @@ pub mod soracloud_runtime {
     pub const INROU_STOP_GRACE_MS: u64 = 10_000;
     /// Minimum operator lifecycle grace accepted for Inrou microVMs.
     pub const INROU_LIFECYCLE_GRACE_MIN_MS: u64 = 100;
-    /// Maximum operator lifecycle grace, matching the public 600-second manifest bound.
+    /// Maximum operator lifecycle grace, matching
+    /// [`iroha_data_model::soracloud::SORA_INROU_LIFECYCLE_GRACE_MAX_SECS_V1`].
     pub const INROU_LIFECYCLE_GRACE_MAX_MS: u64 = 600_000;
     /// Default outbound egress posture for the embedded runtime manager.
     pub const EGRESS_DEFAULT_ALLOW: bool = false;
@@ -208,25 +213,12 @@ pub mod soracloud_runtime {
         pub const HUB_BASE_URL: &str = "https://huggingface.co";
         /// Default Hugging Face Hub API base URL used for model metadata lookups.
         pub const API_BASE_URL: &str = "https://huggingface.co/api";
-        /// Default HF Inference base URL used for `/infer` forwarding when bridge fallback is enabled.
-        pub const INFERENCE_BASE_URL: &str = "https://router.huggingface.co/hf-inference/models";
         /// Default per-request timeout when talking to Hugging Face surfaces.
         pub const REQUEST_TIMEOUT_MS: u64 = 15_000;
         /// Maximum redirects followed by the local Hugging Face importer.
         pub const IMPORT_MAX_REDIRECTS: u8 = 4;
         /// Hard maximum number of configured cross-origin redirect origins.
         pub const IMPORT_REDIRECT_ALLOWED_ORIGINS_LIMIT: usize = 32;
-        /// Whether generated HF services may execute through a host-local runner.
-        ///
-        /// Host-local model execution is unavailable in V1 until it is routed
-        /// through the authenticated Inrou isolation and resource corridor.
-        pub const LOCAL_EXECUTION_ENABLED: bool = false;
-        /// Reserved local runner program; host-local execution is unavailable in V1.
-        pub const LOCAL_RUNNER_PROGRAM: &str = "python3";
-        /// Default timeout applied to one local runner invocation.
-        pub const LOCAL_RUNNER_TIMEOUT_MS: u64 = 120_000;
-        /// Default TTL for runtime-originated authoritative model-host heartbeats.
-        pub const MODEL_HOST_HEARTBEAT_TTL_MS: u64 = 30_000;
         /// Default maximum number of Hub files imported into the shared local cache for one source.
         pub const IMPORT_MAX_FILES: u32 = 32;
         /// Hard maximum number of Hub files imported for one source.
@@ -243,10 +235,6 @@ pub mod soracloud_runtime {
         pub const MODEL_INFO_MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
         /// Hard maximum in-memory Hugging Face model-info response.
         pub const MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT: u64 = 16 * 1024 * 1024;
-        /// Default maximum in-memory Hugging Face inference response.
-        pub const INFERENCE_MAX_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
-        /// Hard maximum in-memory Hugging Face inference response.
-        pub const INFERENCE_MAX_RESPONSE_BYTES_LIMIT: u64 = 64 * 1024 * 1024;
         /// Default file-selection allowlist used by the HF importer.
         pub fn import_file_allowlist() -> Vec<String> {
             vec![
@@ -1050,8 +1038,8 @@ pub mod streaming {
     /// Defaults applied to SoraNet circuit integration for streaming routes.
     pub mod soranet {
         use iroha_config_base::util::Bytes;
-        /// Enable automatic SoraNet provisioning for streaming routes by default.
-        pub const ENABLED: bool = true;
+        /// Filesystem exit publication is disabled until RouteOpen proof and durable revocation exist.
+        pub const ENABLED: bool = false;
         /// Default exit relay multiaddr used when none is provided in manifests.
         pub const EXIT_MULTIADDR: &str = "/dns/torii/udp/9443/quic";
         /// Default low-latency padding budget (milliseconds) applied to circuits.
@@ -1060,9 +1048,9 @@ pub mod streaming {
         pub const ACCESS_KIND: &str = "authenticated";
         /// Domain separator hashed into blinded channel identifiers when deriving defaults.
         pub const CHANNEL_SALT: &str = "iroha.soranet.channel.seed.v1";
-        /// Directory used to spool SoraNet privacy route updates before relays ingest them.
+        /// Reserved legacy spool path; V1 never creates or writes it.
         pub const PROVISION_SPOOL_DIR: &str = "./storage/streaming/soranet_routes";
-        /// Maximum on-disk footprint for the SoraNet provisioning spool (0 = unlimited).
+        /// Reserved spool budget; unused while V1 publication is disabled.
         pub const PROVISION_SPOOL_MAX_BYTES: Bytes<u64> = Bytes(0);
         /// Default segment window (inclusive) used when provisioning privacy routes.
         pub const PROVISION_WINDOW_SEGMENTS: u64 = 4;
@@ -2236,8 +2224,6 @@ pub mod torii {
     pub const SORACLOUD_MUTATION_MAX_INFLIGHT: NonZeroUsize = nonzero!(64usize);
     /// Maximum body size for signed Soracloud control-plane mutations before signature verification.
     pub const SORACLOUD_MUTATION_MAX_BODY_BYTES: Bytes<u64> = Bytes(8 * 1024 * 1024);
-    /// Maximum body size for signed Soracloud uploaded-model upload mutations before signature verification.
-    pub const SORACLOUD_UPLOAD_MAX_BODY_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
     /// Steady-state proof endpoint rate (requests per minute). None disables.
     pub const PROOF_RATE_PER_MIN: Option<u32> = Some(120);
     /// Burst tokens for proof endpoints (requests).
@@ -3207,20 +3193,12 @@ pub mod nexus {
         /// Slash ratio applied when a host advert is provably self-contradictory.
         pub const ADVERT_CONTRADICTION_SLASH_BPS: u16 = 1_000;
     }
-    /// Uploaded private-model admission defaults.
+    /// Encrypted uploaded-model registry admission defaults.
     pub mod uploaded_models {
-        /// Plaintext chunk size admitted before envelope encryption.
-        pub const CHUNK_PLAINTEXT_BYTES: u64 = 4 * 1024 * 1024;
         /// Maximum plaintext bytes admitted for one uploaded model.
         pub const MAX_PLAINTEXT_BYTES_PER_MODEL: u64 = 64 * 1024 * 1024 * 1024;
         /// Maximum encrypted chunk count admitted for one uploaded model.
         pub const MAX_CHUNK_COUNT_PER_MODEL: u32 = 16_384;
-        /// Maximum concurrent private sessions admitted for one apartment.
-        pub const MAX_ACTIVE_PRIVATE_SESSIONS_PER_APARTMENT: u32 = 4;
-        /// Maximum text token budget admitted for one private session.
-        pub const MAX_SESSION_TOKEN_BUDGET: u32 = 16_384;
-        /// Maximum image budget admitted for one private session.
-        pub const MAX_SESSION_IMAGE_BUDGET: u16 = 8;
     }
     /// Lane compliance configuration defaults.
     pub mod compliance {
@@ -3343,7 +3321,6 @@ pub mod nexus {
                 super::super::common::chain_discriminant(),
             );
             AccountId::parse_encoded(SPONSOR_VAULT_CUSTODY_ACCOUNT_ID)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .expect("default sponsor vault custody account must be canonical I105")
         }
         /// Fee asset definition identifier (string form).
@@ -4369,7 +4346,6 @@ pub mod governance {
                 super::super::common::chain_discriminant(),
             );
             AccountId::parse_encoded(&treasury_account())
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .expect("default SoraFS pin fee treasury account")
         }
     }

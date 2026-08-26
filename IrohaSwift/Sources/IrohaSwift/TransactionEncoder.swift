@@ -62,6 +62,32 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
     }
 }
 
+/// Canonicalizes one explicit `DomainId` label without attaching domain state
+/// to an account address.
+func canonicalizeDomainIdLabel(_ raw: String) -> String? {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty,
+          trimmed == raw,
+          trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+          !trimmed.contains("@"),
+          !trimmed.contains("#"),
+          !trimmed.contains("$") else {
+        return nil
+    }
+    let lowered = trimmed.lowercased()
+    for scalar in lowered.unicodeScalars {
+        guard scalar.isASCII else {
+            return nil
+        }
+        let value = scalar.value
+        let isAlphaNum = (value >= 48 && value <= 57) || (value >= 97 && value <= 122)
+        if !isAlphaNum && value != 45 && value != 95 && value != 46 {
+            return nil
+        }
+    }
+    return lowered
+}
+
 struct TransactionInputValidator {
     struct NamedAccountId {
         let field: String
@@ -239,13 +265,11 @@ struct TransactionInputValidator {
         else {
             throw TransactionInputError.malformedDomainId(field: field, value: checked)
         }
-        do {
-            let name = try AccountAddress.canonicalizeDomainLabel(String(parts[0]))
-            let dataspace = try AccountAddress.canonicalizeDomainLabel(String(parts[1]))
-            return "\(name).\(dataspace)"
-        } catch {
+        guard let name = canonicalizeDomainIdLabel(String(parts[0])),
+              let dataspace = canonicalizeDomainIdLabel(String(parts[1])) else {
             throw TransactionInputError.malformedDomainId(field: field, value: checked)
         }
+        return "\(name).\(dataspace)"
     }
 
     static func sanitizeLabel(_ label: String, field: String) throws -> String {

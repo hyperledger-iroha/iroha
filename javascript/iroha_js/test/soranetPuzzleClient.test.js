@@ -104,7 +104,6 @@ test("mintPuzzleTicket requests signed tickets with transcript binding", async (
         captured = { url, init };
       },
       response: jsonResponse(200, {
-        ticket_b64: "Zm9v",
         signed_ticket_b64: "YmFy",
         signed_ticket_fingerprint_hex: "11".repeat(32),
         difficulty: 5,
@@ -121,10 +120,32 @@ test("mintPuzzleTicket requests signed tickets with transcript binding", async (
     signed: true,
   });
   const body = JSON.parse(captured.init.body);
+  assert.equal(result.ticketB64, null);
+  assert.equal(result.signedTicketB64, "YmFy");
   assert.equal(body.signed, true);
   assert.equal(body.transcript_hash_hex, "aa".repeat(32));
-  assert.equal(result.signedTicketB64, "YmFy");
   assert.equal(result.signedTicketFingerprintHex, "11".repeat(32));
+});
+
+test("mintPuzzleTicket rejects ambiguous credential responses", async () => {
+  const queue = [
+    {
+      response: jsonResponse(200, {
+        ticket_b64: "Zm9v",
+        signed_ticket_b64: "YmFy",
+        difficulty: 5,
+        ttl_secs: 120,
+        expires_at: 1_700_000_000,
+      }),
+    },
+  ];
+  const client = new SoranetPuzzleClient(BASE_URL, {
+    fetchImpl: createFetch(queue),
+  });
+  await assert.rejects(
+    () => client.mintPuzzleTicket("ab".repeat(32), { signed: true }),
+    /exactly one/,
+  );
 });
 
 test("mintPuzzleTicket rejects missing or zero transcript binding", async () => {

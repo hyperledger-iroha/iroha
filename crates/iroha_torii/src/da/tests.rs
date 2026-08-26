@@ -53,9 +53,7 @@ use iroha_primitives::numeric::XorQuantity;
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{
-    NoritoDeserialize,
-    codec::Decode,
-    from_bytes,
+    NoritoDeserialize, from_bytes,
     json::{self, Value},
     to_bytes,
 };
@@ -327,6 +325,83 @@ async fn da_spooler_executes_batch_before_ack() {
     assert_eq!(report.actions()[0].kind(), "test_artifact");
     assert!(report.actions()[0].error().is_none());
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn da_spooler_cancelled_pending_send_restores_queue_depth() {
+    let spooler = DaSpooler::spawn(
+        NonZeroUsize::new(1).expect("non-zero queue"),
+        NonZeroUsize::new(1).expect("non-zero batch"),
+        crate::routing::MaybeTelemetry::disabled(),
+    );
+    let release = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let release_for_action = Arc::clone(&release);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let mut first_batch = DaSpoolBatch::new();
+    first_batch.push(DaSpoolAction::new("blocked", move || {
+        let _ = started_tx.send(());
+        let (lock, wake) = &*release_for_action;
+        let mut released = lock.lock().expect("release lock");
+        while !*released {
+            released = wake.wait(released).expect("release wait");
+        }
+        Ok(DaSpoolActionOutput::None)
+    }));
+    let first_spooler = Arc::clone(&spooler);
+    let first = tokio::spawn(async move { first_spooler.submit(first_batch).await });
+    started_rx.await.expect("first worker action started");
+
+    let mut second_batch = DaSpoolBatch::new();
+    second_batch.push(DaSpoolAction::new("queued", || {
+        Ok(DaSpoolActionOutput::None)
+    }));
+    let second_spooler = Arc::clone(&spooler);
+    let second = tokio::spawn(async move { second_spooler.submit(second_batch).await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while spooler.queued_depth() != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("second batch must fill the bounded queue");
+
+    let mut third_batch = DaSpoolBatch::new();
+    third_batch.push(DaSpoolAction::new("cancelled", || {
+        Ok(DaSpoolActionOutput::None)
+    }));
+    let third_spooler = Arc::clone(&spooler);
+    let third = tokio::spawn(async move { third_spooler.submit(third_batch).await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while spooler.queued_depth() != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("third submit must wait behind the full queue");
+    third.abort();
+    assert!(
+        third
+            .await
+            .expect_err("third submit must cancel")
+            .is_cancelled()
+    );
+    assert_eq!(
+        spooler.queued_depth(),
+        1,
+        "cancelling a pending send must release its reserved depth"
+    );
+
+    let (lock, wake) = &*release;
+    *lock.lock().expect("release lock") = true;
+    wake.notify_all();
+    tokio::time::timeout(Duration::from_secs(2), first)
+        .await
+        .expect("first submit must finish")
+        .expect("first submit task");
+    tokio::time::timeout(Duration::from_secs(2), second)
+        .await
+        .expect("second submit must finish")
+        .expect("second submit task");
+    assert_eq!(spooler.queued_depth(), 0);
+}
 #[test]
 fn da_spool_batch_reports_action_panic_as_error() {
     let marker = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -358,6 +433,73 @@ fn da_spool_batch_reports_action_panic_as_error() {
     let response = da_spool_rejection_response(&report, ResponseFormat::Json)
         .expect("panic report must fail closed");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+#[test]
+fn da_spool_batch_skips_commit_after_artifact_error() {
+    let independent_marker = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let commit_marker = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut batch = DaSpoolBatch::new();
+    batch.push(DaSpoolAction::new("manifest", || {
+        Err("disk full".to_owned())
+    }));
+    let independent_marker_for_action = Arc::clone(&independent_marker);
+    batch.push(DaSpoolAction::new("taikai_envelope", move || {
+        independent_marker_for_action.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(DaSpoolActionOutput::None)
+    }));
+    let commit_marker_for_action = Arc::clone(&commit_marker);
+    batch.push_commit(DaSpoolAction::new("receipt_log", move || {
+        commit_marker_for_action.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(DaSpoolActionOutput::None)
+    }));
+
+    let report = batch.execute_sync();
+
+    assert_eq!(
+        independent_marker.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "independent artifact actions should still complete"
+    );
+    assert_eq!(
+        commit_marker.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "a failed artifact must prevent durable receipt publication"
+    );
+    assert_eq!(report.actions().len(), 2);
+    assert_eq!(report.actions()[0].kind(), "manifest");
+    assert_eq!(report.actions()[1].kind(), "taikai_envelope");
+}
+#[test]
+fn da_spool_batch_runs_commit_after_artifacts_succeed() {
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut batch = DaSpoolBatch::new();
+    let order_for_artifact = Arc::clone(&order);
+    batch.push(DaSpoolAction::new("taikai_envelope", move || {
+        order_for_artifact
+            .lock()
+            .expect("order lock")
+            .push("artifact");
+        Ok(DaSpoolActionOutput::None)
+    }));
+    let order_for_commit = Arc::clone(&order);
+    batch.push_commit(DaSpoolAction::new("receipt_log", move || {
+        order_for_commit.lock().expect("order lock").push("commit");
+        Ok(DaSpoolActionOutput::None)
+    }));
+
+    let report = batch.execute_sync();
+
+    assert_eq!(
+        *order.lock().expect("order lock"),
+        vec!["artifact", "commit"]
+    );
+    assert_eq!(report.actions().len(), 2);
+    assert!(
+        report
+            .actions()
+            .iter()
+            .all(|action| action.error().is_none())
+    );
 }
 #[tokio::test]
 async fn da_spooler_reports_action_panic_before_ack() {
@@ -819,9 +961,56 @@ fn taikai_availability_uses_trm_payload() {
         .expect("class");
     assert_eq!(availability, TaikaiAvailabilityClass::Warm);
 }
+
+#[test]
+fn taikai_availability_rejects_duplicate_consumed_metadata() {
+    let mut metadata = taikai_metadata();
+    metadata.items.push(MetadataEntry::new(
+        taikai::META_TAIKAI_EVENT_ID,
+        b"shadow-event".to_vec(),
+        MetadataVisibility::Public,
+    ));
+    let bytes = to_bytes(&sample_trm_manifest()).expect("encode trm");
+    let err = taikai::taikai_availability_from_metadata(&metadata, Some(&bytes))
+        .expect_err("duplicate Taikai metadata must reject before routing selection");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("metadata entry must appear at most once"),
+        "unexpected duplicate-metadata error: {}",
+        err.1
+    );
+}
+
+#[test]
+fn taikai_availability_rejects_rendition_window_that_misses_segment() {
+    let metadata = taikai_metadata();
+    let mut manifest = sample_trm_manifest();
+    manifest.renditions[0].ssm_range = TaikaiSegmentWindow::new(50, 64);
+    let bytes = to_bytes(&manifest).expect("encode trm");
+    let err = taikai::taikai_availability_from_metadata(&metadata, Some(&bytes))
+        .expect_err("out-of-window rendition must not select a retention policy");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("rendition `1080p` signing window"),
+        "unexpected error: {}",
+        err.1
+    );
+}
 #[test]
 fn taikai_ingest_tags_include_availability_and_cache_hint() {
     let mut metadata = taikai_metadata();
+    metadata.items.extend([
+        MetadataEntry::new(
+            taikai::META_TAIKAI_AVAILABILITY_CLASS,
+            b"hot".to_vec(),
+            MetadataVisibility::Public,
+        ),
+        MetadataEntry::new(
+            taikai::META_TAIKAI_AVAILABILITY_CLASS,
+            b"warm".to_vec(),
+            MetadataVisibility::Public,
+        ),
+    ]);
     let retention = RetentionPolicy {
         hot_retention_secs: 3_600,
         cold_retention_secs: 12 * 60 * 60,
@@ -849,6 +1038,15 @@ fn taikai_ingest_tags_include_availability_and_cache_hint() {
     assert_eq!(
         value_for(&metadata, taikai::META_TAIKAI_AVAILABILITY_CLASS),
         "cold"
+    );
+    assert_eq!(
+        metadata
+            .items
+            .iter()
+            .filter(|entry| entry.key == taikai::META_TAIKAI_AVAILABILITY_CLASS)
+            .count(),
+        1,
+        "server-derived tags must replace every submitted copy"
     );
     assert_eq!(value_for(&metadata, taikai::META_DA_PROOF_TIER), "warm");
     assert_eq!(
@@ -1142,6 +1340,36 @@ fn build_ssm_bytes_with_alias_council(
     publisher_algorithm: Algorithm,
     council_seeds: &[[u8; 32]],
 ) -> Vec<u8> {
+    build_ssm_bytes_with_alias_council_and_body_mutation(
+        manifest_hash,
+        alias_manifest_hash,
+        car_digest,
+        envelope_hash,
+        segment_sequence,
+        generated_at_unix,
+        expires_at_hint,
+        publisher_algorithm,
+        council_seeds,
+        |_| {},
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_ssm_bytes_with_alias_council_and_body_mutation<F>(
+    manifest_hash: BlobDigest,
+    alias_manifest_hash: BlobDigest,
+    car_digest: BlobDigest,
+    envelope_hash: BlobDigest,
+    segment_sequence: u64,
+    generated_at_unix: u64,
+    expires_at_hint: u64,
+    publisher_algorithm: Algorithm,
+    council_seeds: &[[u8; 32]],
+    mutate_body: F,
+) -> Vec<u8>
+where
+    F: FnOnce(&mut TaikaiSegmentSigningBodyV1),
+{
     let manifest_cid = canonical_manifest_root_cid(*alias_manifest_hash.as_bytes());
     let alias_proof = encode_alias_proof_bytes(
         "sora",
@@ -1159,9 +1387,9 @@ fn build_ssm_bytes_with_alias_council(
         proof: alias_proof,
     };
     let publisher = checked_random_keypair_with_algorithm(publisher_algorithm);
-    let publisher_account = ALICE_ID.clone();
-    let body = TaikaiSegmentSigningBodyV1::new(
-        1,
+    let publisher_account = AccountId::new(publisher.public_key().clone());
+    let mut body = TaikaiSegmentSigningBodyV1::new(
+        TaikaiSegmentSigningBodyV1::VERSION,
         envelope_hash,
         manifest_hash,
         car_digest,
@@ -1172,6 +1400,7 @@ fn build_ssm_bytes_with_alias_council(
         alias_binding,
         ExtraMetadata::default(),
     );
+    mutate_body(&mut body);
     let signature = checked_taikai_segment_signature(publisher.private_key(), &body);
     let manifest = TaikaiSegmentSigningManifestV1::new(body, signature);
     to_bytes(&manifest).expect("encode signing manifest")
@@ -1648,6 +1877,56 @@ fn taikai_envelope_generation_requires_metadata() {
     };
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
 }
+
+fn taikai_envelope_error_with_metadata_value(key: &str, value: &[u8]) -> (StatusCode, String) {
+    let mut request = sample_request();
+    request.metadata = taikai_metadata();
+    request
+        .metadata
+        .items
+        .iter_mut()
+        .find(|entry| entry.key == key)
+        .expect("Taikai fixture metadata entry")
+        .value = value.to_vec();
+    let canonical = normalize_payload(&request).expect("normalize payload");
+    let chunk_store = build_chunk_store(&request, canonical.as_slice());
+    let metadata = request.metadata.clone();
+    let manifest = resolve_manifest(
+        &request,
+        &chunk_store,
+        canonical.as_slice(),
+        &metadata,
+        &request.retention_policy,
+        1,
+        &DaRentPolicyV1::default(),
+    )
+    .expect("manifest");
+    match taikai_ingest::build_envelope(
+        &request,
+        &manifest,
+        &chunk_store,
+        canonical.as_slice(),
+        None,
+    ) {
+        Ok(_) => panic!("zero-valued `{key}` metadata must fail"),
+        Err(err) => err,
+    }
+}
+
+#[test]
+fn taikai_envelope_generation_rejects_zero_bitrate() {
+    let err = taikai_envelope_error_with_metadata_value(taikai::META_TAIKAI_TRACK_BITRATE, b"0");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("must be greater than zero"));
+}
+
+#[test]
+fn taikai_envelope_generation_rejects_zero_duration() {
+    let err = taikai_envelope_error_with_metadata_value(taikai::META_TAIKAI_SEGMENT_DURATION, b"0");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("must be greater than zero"));
+}
+
 #[test]
 fn taikai_envelope_generation_computes_pointers() {
     let mut request = sample_request();
@@ -1674,8 +1953,12 @@ fn taikai_envelope_generation_computes_pointers() {
         None,
     )
     .expect("taikai envelope");
-    let mut cursor = std::io::Cursor::new(&artifacts.envelope_bytes);
-    let envelope: TaikaiSegmentEnvelopeV1 = Decode::decode(&mut cursor).expect("decode envelope");
+    let envelope: TaikaiSegmentEnvelopeV1 =
+        norito::decode_from_bytes(&artifacts.envelope_bytes).expect("decode framed envelope");
+    assert_eq!(
+        artifacts.envelope_bytes,
+        to_bytes(&envelope).expect("re-encode framed envelope")
+    );
     assert_eq!(
         envelope.event_id.as_name(),
         &Name::from_str("global-keynote").unwrap()
@@ -3036,7 +3319,19 @@ fn taikai_trm_lineage_guard_rejects_invalid_manifest_digest() {
                 .expect("lineage object")
                 .insert("manifest_digest_hex".into(), Value::from("deadbeef"));
         },
-        "manifest_digest_hex must be 32-byte hex",
+        "manifest_digest_hex must be 32-byte lowercase hex",
+    );
+}
+#[test]
+fn taikai_trm_lineage_guard_rejects_noncanonical_uppercase_manifest_digest() {
+    assert_mutated_lineage_state_rejected(
+        |value| {
+            value
+                .as_object_mut()
+                .expect("lineage object")
+                .insert("manifest_digest_hex".into(), Value::from("AB".repeat(32)));
+        },
+        "manifest_digest_hex must be 32-byte lowercase hex",
     );
 }
 #[test]
@@ -3337,6 +3632,35 @@ fn take_ssm_entry_returns_payload_and_strips_metadata() {
     );
 }
 #[test]
+fn take_ssm_entry_rejects_duplicate_payloads_without_mutating_metadata() {
+    let mut metadata = taikai_metadata();
+    metadata.items.extend([
+        MetadataEntry::new(
+            taikai::META_TAIKAI_SSM,
+            vec![1, 2, 3],
+            MetadataVisibility::Public,
+        ),
+        MetadataEntry::new(
+            taikai::META_TAIKAI_SSM,
+            vec![4, 5, 6],
+            MetadataVisibility::Public,
+        ),
+    ]);
+    let err = taikai_ingest::take_ssm_entry(&mut metadata)
+        .expect_err("duplicate signing manifests must reject");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("metadata entry must appear at most once"));
+    assert_eq!(
+        metadata
+            .items
+            .iter()
+            .filter(|entry| entry.key == taikai::META_TAIKAI_SSM)
+            .count(),
+        2,
+        "rejected extraction must leave the signed request unchanged"
+    );
+}
+#[test]
 fn take_trm_entry_returns_payload_and_strips_metadata() {
     let mut metadata = taikai_metadata();
     metadata.items.push(MetadataEntry::new(
@@ -3353,6 +3677,35 @@ fn take_trm_entry_returns_payload_and_strips_metadata() {
             .items
             .iter()
             .all(|entry| entry.key != taikai::META_TAIKAI_TRM)
+    );
+}
+#[test]
+fn take_trm_entry_rejects_duplicate_payloads_without_mutating_metadata() {
+    let mut metadata = taikai_metadata();
+    metadata.items.extend([
+        MetadataEntry::new(
+            taikai::META_TAIKAI_TRM,
+            vec![9, 8, 7],
+            MetadataVisibility::Public,
+        ),
+        MetadataEntry::new(
+            taikai::META_TAIKAI_TRM,
+            vec![6, 5, 4],
+            MetadataVisibility::Public,
+        ),
+    ]);
+    let err = taikai_ingest::take_trm_entry(&mut metadata)
+        .expect_err("duplicate routing manifests must reject");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("metadata entry must appear at most once"));
+    assert_eq!(
+        metadata
+            .items
+            .iter()
+            .filter(|entry| entry.key == taikai::META_TAIKAI_TRM)
+            .count(),
+        2,
+        "rejected extraction must leave the signed request unchanged"
     );
 }
 fn taikai_ssm_validation_fixture() -> (ManifestArtifacts, taikai_ingest::EnvelopeArtifacts) {
@@ -3421,6 +3774,76 @@ fn validate_taikai_ssm_accepts_matching_payload() {
     )
     .expect("ssm valid");
     assert_eq!(outcome.alias_label, "sora/docs");
+}
+
+#[test]
+fn validate_taikai_ssm_rejects_unsupported_body_version() {
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
+    let now_secs = crate::sorafs::unix_now_secs();
+    let ssm_bytes = build_ssm_bytes_with_alias_council_and_body_mutation(
+        manifest.manifest_hash,
+        manifest.manifest_hash,
+        taikai.car_digest,
+        BlobDigest::from_hash(blake3_hash(&taikai.envelope_bytes)),
+        taikai.telemetry.segment_sequence,
+        now_secs,
+        now_secs + 600,
+        Algorithm::Ed25519,
+        &[[0x33; 32]],
+        |body| body.version = TaikaiSegmentSigningBodyV1::VERSION + 1,
+    );
+    let (_, telemetry) = telemetry_handle_for_tests();
+    let err = taikai::validate_taikai_ssm(
+        &ssm_bytes,
+        &manifest.manifest_hash,
+        &taikai.car_digest,
+        &taikai.envelope_bytes,
+        taikai.telemetry.segment_sequence,
+        &taikai_alias_cache_policy(),
+        Some(&alias_council_policy(&[[0x33; 32]], 1)),
+        &telemetry,
+    )
+    .expect_err("unknown SSM body version must fail admission");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("unsupported signing manifest version"));
+}
+
+#[test]
+fn validate_taikai_ssm_rejects_publisher_account_key_mismatch() {
+    let (manifest, taikai) = taikai_ssm_validation_fixture();
+    let now_secs = crate::sorafs::unix_now_secs();
+    let ssm_bytes = build_ssm_bytes_with_alias_council_and_body_mutation(
+        manifest.manifest_hash,
+        manifest.manifest_hash,
+        taikai.car_digest,
+        BlobDigest::from_hash(blake3_hash(&taikai.envelope_bytes)),
+        taikai.telemetry.segment_sequence,
+        now_secs,
+        now_secs + 600,
+        Algorithm::Ed25519,
+        &[[0x33; 32]],
+        |body| {
+            body.publisher_account = if AccountId::new(body.publisher_key.clone()) != *ALICE_ID {
+                ALICE_ID.clone()
+            } else {
+                BOB_ID.clone()
+            };
+        },
+    );
+    let (_, telemetry) = telemetry_handle_for_tests();
+    let err = taikai::validate_taikai_ssm(
+        &ssm_bytes,
+        &manifest.manifest_hash,
+        &taikai.car_digest,
+        &taikai.envelope_bytes,
+        taikai.telemetry.segment_sequence,
+        &taikai_alias_cache_policy(),
+        Some(&alias_council_policy(&[[0x33; 32]], 1)),
+        &telemetry,
+    )
+    .expect_err("a valid signature must not authenticate another publisher account");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("publisher account does not match"));
 }
 #[test]
 fn validate_taikai_ssm_rejects_self_asserted_alias_council() {
@@ -3780,6 +4203,22 @@ fn validate_taikai_trm_rejects_invalid_window() {
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
     assert!(
         err.1.contains("invalid routing manifest"),
+        "unexpected error message: {}",
+        err.1
+    );
+}
+
+#[test]
+fn validate_taikai_trm_rejects_rendition_window_that_misses_segment() {
+    let taikai = taikai_envelope_fixture();
+    let mut trm = sample_trm_manifest();
+    trm.renditions[0].ssm_range = TaikaiSegmentWindow::new(50, 64);
+    let trm_bytes = to_bytes(&trm).expect("encode trm");
+    let err = taikai::validate_taikai_trm(&trm_bytes, &taikai)
+        .expect_err("rendition signing window must cover the admitted segment");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(
+        err.1.contains("rendition `1080p` signing window"),
         "unexpected error message: {}",
         err.1
     );

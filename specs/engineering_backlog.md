@@ -3963,8 +3963,9 @@ redistributable schemas, and official trust/revocation bundles.
   stale proof-key artifact rejection, transcript-derived opening
 	  schedule/public-padding replay, native Merkle/FRI verifier replay,
 	  AIR-root FRI query binding, and canonical base transcript-label plus
-	  suffixed-label alias rejection, and Core rejects wrong-circuit STARK verifier
-	  keys in both canonical and native metadata payload layouts; release-audit
+	  suffixed-label alias rejection, and the governed verifier-key wire boundary
+	  accepts only the BFV-native V1 payload and rejects wrong-circuit metadata
+	  before deterministic internal Core conversion; release-audit
 	  evidence now exposes those
 	  replay-policy guarantees in its proof-profile record with field count 58,
 	  including release-prover digest domains and proof-key material/pair
@@ -4291,8 +4292,8 @@ redistributable schemas, and official trust/revocation bundles.
   mismatch checks.
   Native verifier payloads now mirror the transparent prover payload profile by
   binding their field count, backend, key format, proof system, and field
-  labels before material admission or Core canonicalization. Core's fallback
-  native-verifier canonicalization now independently rejects field-count drift,
+  labels before material admission or native-to-Core conversion. That
+  conversion independently rejects field-count drift,
   so relabeled STARK/FRI verifier payloads cannot be smuggled through the
   governed artifact path.
   The first-release arithmetic trace layout is now exposed as typed
@@ -4531,11 +4532,10 @@ redistributable schemas, and official trust/revocation bundles.
 		  material is also a public typed Norito artifact with a canonical validator
 		  and digest-from-material helper, so release tooling can reject stale
 		  contract material before accepting generated prover/verifier artifacts.
-		  Core execution prover preflight now canonicalizes
-		  governed native verifier-key payloads before matching caller-supplied
-		  verifier keys against release-prover input proof-key material or
-		  artifact-derived governed verifier keys, so native BFV verifier-key
-		  artifacts and canonical STARK boxes use the same proof-key binding path.
+		  Core execution prover preflight converts the sole governed BFV-native
+		  verifier-key wire payload into its deterministic internal STARK key before
+		  matching caller-supplied internal verifier keys against release-prover
+		  input proof-key material or artifact-derived governed verifier keys.
 	  Full-bootstrap release artifact bundles now also carry the arithmetic AIR
 	  constraint-system material as a governed artifact envelope; circuit
 	  material and artifact-bundle digests bind that envelope, bundle validation
@@ -6845,10 +6845,10 @@ redistributable schemas, and official trust/revocation bundles.
   oversized filter shapes as `ConfigError::ReplayFilter` instead of reaching
   overflow-prone arithmetic; relay incentive uptime/scheduled-uptime and
   verified-bandwidth epoch accumulators now saturate on overflow instead of
-  panicking on extreme telemetry or proof totals; relay adaptive PoW
-  success/failure window counters and difficulty-step arithmetic now saturate
-  before min/max clamping, avoiding panic-only overflow paths under extreme
-  counters or oversized adaptive-step config; P2P
+  panicking on extreme telemetry or proof totals; SoraNet relay admission now
+  uses one static configured difficulty and rejects the retired `adaptive` key
+  as unknown, removing issuer/verifier drift and the old counter/step overflow
+  surface; P2P
   QUIC/TCP happy-eyeballs dialing now records the first branch failure and
   returns the second branch failure directly when both dials fail, avoiding
   panic-only option readbacks in the fallback path; SoraNet CID
@@ -6870,8 +6870,7 @@ redistributable schemas, and official trust/revocation bundles.
   advertised fingerprint comparison; relay
   directory build and snapshot rotation now propagate fingerprint-computation
   errors with issuer context before signing or publishing a snapshot, and
-  guard-pinning fixtures derive ML-KEM public-key lengths from the advertised
-  suite instead of stale constants; snapshot
+  guard-pinning fixtures carry no static relay KEM material; snapshot
   decode also rejects empty issuer or relay sets before trust-map construction
   or relay certificate verification;
   SoraNet admission-token decode now reads fixed-width body fields and trailing
@@ -6981,19 +6980,18 @@ redistributable schemas, and official trust/revocation bundles.
   issuer public-key and detached-signature lengths plus all-zero Ed25519/ML-DSA
   signature placeholders before backend verification;
   local SRCv2 issuance reuses certificate-payload admission and ML-DSA-65
-  issuer secret-key length preflight before signing bundles; Phase 2 SRCv2
-  rollout accepts Ed25519-only relay certificates while Phase 3 remains the
-  dual-signature gate;
-  SoraNet SRCv2 certificate decode now rejects unknown ML-KEM suite ids and
-  key-material length drift for ML-DSA-65 identity keys and advertised ML-KEM
-  relay public keys, rejects all-zero ML-DSA identity and all-zero or
-  noncanonical ML-KEM relay public-key material, rejects
+  issuer secret-key length preflight before signing bundles; first-release
+  SRCv2 admission unconditionally requires both Ed25519 and ML-DSA signatures;
+  SoraNet SRCv2 certificate decode now rejects key-material length drift for
+  ML-DSA-65 identity keys and all-zero ML-DSA identity material, rejects
   malformed/noncanonical/weak Ed25519 identity
   public keys, rejects ML-DSA-65 detached signature length drift and all-zero
   Ed25519/ML-DSA signature fields, and its
-  canonical CBOR parser rejects trailing payload/bundle bytes plus non-shortest
-  integer/length encodings and duplicate nested
-  bundle/signature/endpoint/KEM-policy fields, with byte/text/exact payload
+  canonical CBOR parser rejects trailing payload/bundle bytes, non-shortest
+  integer/length encodings, reordered keys at every bundle/certificate/signature/
+  endpoint map boundary, and duplicate nested bundle/signature/endpoint fields,
+  with accepted certificate and bundle bytes required to equal their canonical
+  re-encoding and with byte/text/exact payload
   reads routed through checked cursor helpers; SRCv2 validity-duration accessors
   now use checked signed timestamp subtraction, expose a checked route for
   callers, and fail closed to `Duration::ZERO` for directly constructed inverted
@@ -7005,9 +7003,9 @@ redistributable schemas, and official trust/revocation bundles.
   closed, and relay certificate validity must cover the full snapshot window
   without being published after the snapshot; SRCv2 role/capability bitmask decode rejects unsupported
   bits instead of masking them away and validity windows fail closed when they
-  are inverted or published after expiry; KEM rotation policies reject static
-  fallback/rotation/grace metadata, staged policies without fallbacks, rolling
-  policies without nonzero cadence, and preferred/fallback suite equality;
+  are inverted or published after expiry; the first-release contiguous
+  17-field SRCv2 map rejects retired static relay KEM keys and KEM-rotation
+  metadata, and derives PQ capability from authenticated NK2/NK3 suites;
   handshake-suite preference lists and endpoint URL lists must be non-empty and
   duplicate-free, and endpoint URL strings reject empty,
   whitespace-bearing, or control-character values; endpoint tags, when present,
@@ -9464,7 +9462,7 @@ redistributable schemas, and official trust/revocation bundles.
     unstable-network, and `core_api` targets are green individually as of
     2026-05-04. The Sora governance runtime-upgrade path now hashes prepared
     transaction entrypoints from the actual canonical signed payload bytes and
-    confirms Torii status with explicit auto scope, but the full workspace
+    confirms Torii status with explicit global scope, but the full workspace
     command still needs an uncontended end-to-end pass. The static OpenAPI JSON,
     version index, and unsigned latest/current manifests are refreshed and
     verify under the explicit first-release unsigned corridor.

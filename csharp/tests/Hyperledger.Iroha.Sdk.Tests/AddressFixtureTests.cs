@@ -182,6 +182,26 @@ public sealed class AddressFixtureTests
     }
 
     [Fact]
+    public void RetiredDomainSelectorPrefixIsRejected()
+    {
+        var canonical = AccountAddress
+            .FromPublicKey(Enumerable.Repeat((byte)0x01, 32).ToArray())
+            .CanonicalBytes();
+        var selectorPrefixed = new byte[canonical.Length + 13];
+        selectorPrefixed[0] = canonical[0];
+        selectorPrefixed[1] = 0x01;
+        for (var index = 0; index < 12; index++)
+        {
+            selectorPrefixed[index + 2] = (byte)(index + 1);
+        }
+
+        canonical.AsSpan(1).CopyTo(selectorPrefixed.AsSpan(14));
+
+        Assert.Throws<AccountAddressException>(() =>
+            AccountAddress.FromCanonicalBytes(selectorPrefixed));
+    }
+
+    [Fact]
     public void CurveAlgorithmAliasesRejectConfusableOrControlLabels()
     {
         var publicKey = Enumerable.Repeat((byte)0x11, 32).ToArray();

@@ -14,17 +14,6 @@ export function assertNonBlankString(value, context) {
   return value.trim();
 }
 
-export function normalizeStatusSet(input, defaultStatuses) {
-  if (!input) {
-    return new Set(defaultStatuses.map((status) => String(status)));
-  }
-  const result = new Set();
-  for (const value of input) {
-    result.add(String(value));
-  }
-  return result;
-}
-
 export function normalizeTransactionStatusScope(value, context) {
   if (value === undefined) {
     return "global";

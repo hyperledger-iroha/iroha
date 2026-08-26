@@ -24,11 +24,11 @@ use iroha_data_model::{
     permission::Permission,
     query::error::QueryExecutionFail,
     soranet::vpn::{
-        VPN_DEFAULT_TUNNEL_MTU_BYTES, VpnAddressSlotV1, VpnExitClassV1, VpnHelperTicketV1,
-        VpnLeaseRecordV1, VpnLeaseStatusV1, VpnQuoteBodyV1, VpnQuotePolicyV1, VpnSessionReceiptV1,
-        VpnSignedQuoteV1, VpnSignedSessionReceiptV1, VpnTariffV1, VpnUsageVoucherV1,
-        derive_vpn_address_plan_v1, derive_vpn_address_slot_v1, derive_vpn_lease_id_v1,
-        derive_vpn_session_address_plan_v1, derive_vpn_session_id_v1,
+        VPN_DEFAULT_TUNNEL_MTU_BYTES, VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1, VpnAddressSlotV1,
+        VpnExitClassV1, VpnHelperTicketV1, VpnLeaseRecordV1, VpnLeaseStatusV1, VpnQuoteBodyV1,
+        VpnQuotePolicyV1, VpnSessionReceiptV1, VpnSignedQuoteV1, VpnSignedSessionReceiptV1,
+        VpnTariffV1, VpnUsageVoucherV1, derive_vpn_address_plan_v1, derive_vpn_address_slot_v1,
+        derive_vpn_lease_id_v1, derive_vpn_session_address_plan_v1, derive_vpn_session_id_v1,
         vpn_account_hash_v1 as account_hash, vpn_helper_network_policy_hash_v1,
         vpn_tariff_meter_hash_v1,
     },
@@ -59,6 +59,8 @@ const VPN_MAX_CLIENT_VOUCHER_NORITO_BYTES_V1: usize = 1_024;
 pub struct VpnRelayTrust {
     /// Exact relay Ed25519 identity advertised by the signed certificate.
     pub relay_id: [u8; 32],
+    /// Exact relay ML-DSA-65 identity advertised by the same signed certificate.
+    pub relay_mldsa65_public_key: [u8; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1],
     /// Exact signed QUIC endpoint selected for VPN traffic.
     pub relay_endpoint: String,
     /// Exact TLS DNS name selected for the endpoint.
@@ -103,6 +105,12 @@ impl VpnRelayTrust {
         let canonical_bundle = bundle
             .try_to_cbor()
             .map_err(|error| format!("VPN relay certificate encode failed: {error}"))?;
+        let relay_mldsa65_public_key = bundle
+            .certificate
+            .identity_mldsa65
+            .as_slice()
+            .try_into()
+            .map_err(|_| "VPN relay certificate has an invalid ML-DSA-65 identity width")?;
         let valid_until_unix = snapshot_valid_until_unix.min(bundle.certificate.valid_until);
         let valid_until_ms = u64::try_from(valid_until_unix)
             .ok()
@@ -110,6 +118,7 @@ impl VpnRelayTrust {
             .ok_or_else(|| "VPN relay trust validity exceeds Unix millisecond range".to_owned())?;
         Ok(Self {
             relay_id,
+            relay_mldsa65_public_key,
             relay_endpoint: endpoint.quic_multiaddr.clone(),
             tls_server_name: endpoint.tls_server_name.clone(),
             relay_tls_spki_sha256: endpoint.tls_spki_sha256,
@@ -154,6 +163,7 @@ pub struct VpnProfileResponseDto {
     pub flow_label_bits: u8,
     pub padding_budget_ms: u16,
     pub relay_id_hex: String,
+    pub relay_mldsa65_public_key_hex: String,
     pub descriptor_commit_hex: String,
     pub tls_server_name: String,
     pub relay_tls_spki_sha256_hex: String,
@@ -210,6 +220,7 @@ pub struct VpnQuoteResponseDto {
     pub flow_label_bits: u8,
     pub padding_budget_ms: u16,
     pub relay_id_hex: String,
+    pub relay_mldsa65_public_key_hex: String,
     pub descriptor_commit_hex: String,
     pub tls_server_name: String,
     pub relay_tls_spki_sha256_hex: String,
@@ -268,6 +279,7 @@ pub struct VpnSessionResponseDto {
     pub flow_label_bits: u8,
     pub padding_budget_ms: u16,
     pub relay_id_hex: String,
+    pub relay_mldsa65_public_key_hex: String,
     pub descriptor_commit_hex: String,
     pub tls_server_name: String,
     pub relay_tls_spki_sha256_hex: String,
@@ -391,6 +403,7 @@ pub(crate) struct VpnSessionRecord {
     pub flow_label_bits: u8,
     pub padding_budget_ms: u16,
     pub relay_id: [u8; 32],
+    pub relay_mldsa65_public_key: [u8; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1],
     pub descriptor_commit: [u8; 32],
     pub tls_server_name: String,
     pub relay_tls_spki_sha256: [u8; 32],
@@ -460,6 +473,7 @@ pub(crate) struct VpnQuoteRecord {
     pub flow_label_bits: u8,
     pub padding_budget_ms: u16,
     pub relay_id: [u8; 32],
+    pub relay_mldsa65_public_key: [u8; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1],
     pub descriptor_commit: [u8; 32],
     pub tls_server_name: String,
     pub relay_tls_spki_sha256: [u8; 32],
@@ -630,6 +644,9 @@ fn build_profile_at(
         relay_id_hex: trust
             .map(|trust| hex::encode(trust.relay_id))
             .unwrap_or_default(),
+        relay_mldsa65_public_key_hex: trust
+            .map(|trust| hex::encode(trust.relay_mldsa65_public_key))
+            .unwrap_or_default(),
         descriptor_commit_hex: trust
             .map(|trust| hex::encode(trust.descriptor_commit))
             .unwrap_or_default(),
@@ -704,7 +721,6 @@ fn xor_asset_definition_id() -> AssetDefinitionId {
 }
 fn parse_profile_account_id(raw: &str, field: &str) -> Result<AccountId, Error> {
     AccountId::parse_encoded(raw.trim())
-        .map(|parsed| parsed.into_account_id())
         .map_err(|err| conversion_error(format!("{field} must be a canonical account id: {err}")))
 }
 fn active_fee_per_minute(lease_fee: &Quantity, lease_secs: u64) -> Result<Quantity, Error> {
@@ -749,6 +765,7 @@ fn build_helper_ticket_hex(
         network_policy_hash: vpn_helper_network_policy_hash_v1(
             &record.relay_endpoint,
             &record.relay_id,
+            &record.relay_mldsa65_public_key,
             &record.descriptor_commit,
             &record.tls_server_name,
             &record.relay_tls_spki_sha256,
@@ -931,6 +948,11 @@ fn validate_quote_record_projection(
     );
     require_projection!("relay id", &record.relay_id, &policy.relay_id);
     require_projection!(
+        "relay ML-DSA-65 identity",
+        &record.relay_mldsa65_public_key,
+        &policy.relay_mldsa65_public_key
+    );
+    require_projection!(
         "descriptor commitment",
         &record.descriptor_commit,
         &policy.descriptor_commit
@@ -1044,6 +1066,7 @@ fn quote_response_from_record(
         flow_label_bits: record.flow_label_bits,
         padding_budget_ms: record.padding_budget_ms,
         relay_id_hex: hex::encode(record.relay_id),
+        relay_mldsa65_public_key_hex: hex::encode(record.relay_mldsa65_public_key),
         descriptor_commit_hex: hex::encode(record.descriptor_commit),
         tls_server_name: record.tls_server_name.clone(),
         relay_tls_spki_sha256_hex: hex::encode(record.relay_tls_spki_sha256),
@@ -1073,6 +1096,7 @@ fn response_from_record(record: &VpnSessionRecord) -> VpnSessionResponseDto {
         flow_label_bits: record.flow_label_bits,
         padding_budget_ms: record.padding_budget_ms,
         relay_id_hex: hex::encode(record.relay_id),
+        relay_mldsa65_public_key_hex: hex::encode(record.relay_mldsa65_public_key),
         descriptor_commit_hex: hex::encode(record.descriptor_commit),
         tls_server_name: record.tls_server_name.clone(),
         relay_tls_spki_sha256_hex: hex::encode(record.relay_tls_spki_sha256),
@@ -1792,6 +1816,7 @@ fn ensure_lease_matches_authenticated_trust(
     let policy = &record.quote_policy;
     if record.relay_id != trust.relay_id
         || policy.relay_id != trust.relay_id
+        || policy.relay_mldsa65_public_key != trust.relay_mldsa65_public_key
         || policy.relay_endpoint != trust.relay_endpoint
         || policy.descriptor_commit != trust.descriptor_commit
         || policy.tls_server_name != trust.tls_server_name
@@ -1840,6 +1865,7 @@ fn session_record_from_lease(record: &VpnLeaseRecordV1) -> Result<VpnSessionReco
         flow_label_bits: policy.flow_label_bits,
         padding_budget_ms: policy.padding_budget_ms,
         relay_id: policy.relay_id,
+        relay_mldsa65_public_key: policy.relay_mldsa65_public_key,
         descriptor_commit: policy.descriptor_commit,
         tls_server_name: policy.tls_server_name.clone(),
         relay_tls_spki_sha256: policy.relay_tls_spki_sha256,
@@ -2205,6 +2231,7 @@ pub(crate) async fn handle_create_vpn_quote(
             .map_err(|error| conversion_error(error.to_string()))?,
         relay_endpoint: profile.relay_endpoint.clone(),
         relay_id: trust.relay_id,
+        relay_mldsa65_public_key: trust.relay_mldsa65_public_key,
         descriptor_commit: trust.descriptor_commit,
         tls_server_name: trust.tls_server_name.clone(),
         relay_tls_spki_sha256: trust.relay_tls_spki_sha256,
@@ -2270,6 +2297,7 @@ pub(crate) async fn handle_create_vpn_quote(
         flow_label_bits: profile.flow_label_bits,
         padding_budget_ms: profile.padding_budget_ms,
         relay_id: trust.relay_id,
+        relay_mldsa65_public_key: trust.relay_mldsa65_public_key,
         descriptor_commit: trust.descriptor_commit,
         tls_server_name: trust.tls_server_name.clone(),
         relay_tls_spki_sha256: trust.relay_tls_spki_sha256,
@@ -2364,6 +2392,7 @@ pub(crate) async fn handle_create_vpn_session(
         flow_label_bits: quote.flow_label_bits,
         padding_budget_ms: quote.padding_budget_ms,
         relay_id: quote.relay_id,
+        relay_mldsa65_public_key: quote.relay_mldsa65_public_key,
         descriptor_commit: quote.descriptor_commit,
         tls_server_name: quote.tls_server_name,
         relay_tls_spki_sha256: quote.relay_tls_spki_sha256,

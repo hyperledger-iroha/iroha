@@ -12,7 +12,7 @@ export const KAGEMUSHA_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1";
 export const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES = 512 * 1024;
 export const KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES = 48 * 1024 * 1024;
 
-const HASH_32 = /^[0-9a-f]{64}$/u;
+const HASH_32 = /^[0-9a-f]{63}[13579bdf]$/u;
 const OPERATION_ID = /^(?!0{64}$)[0-9a-f]{64}$/u;
 const EXACT_JSON_MEDIA_TYPE =
   /^[ \t]*application\/json(?:[ \t]*;[ \t]*[!#$%&'*+\-.^_`|~0-9A-Za-z]+=(?:[!#$%&'*+\-.^_`|~0-9A-Za-z]+|"(?:[ \t!#-\[\]-~\u0080-\u00ff]|\\[ \t!-~\u0080-\u00ff])*"))*[ \t]*$/iu;
@@ -62,7 +62,7 @@ function safeUnsigned(value, context, { positive = false, maximum = Number.MAX_S
 
 function hash32(value, context, { nonzero = false } = {}) {
   if (typeof value !== "string" || !HASH_32.test(value) || (nonzero && value === "0".repeat(64))) {
-    throw new TypeError(`${context} must be ${nonzero ? "non-zero " : ""}lowercase 32-byte hexadecimal`);
+    throw new TypeError(`${context} must be ${nonzero ? "non-zero " : ""}an exact canonical lowercase 32-byte Iroha hash`);
   }
   return value;
 }

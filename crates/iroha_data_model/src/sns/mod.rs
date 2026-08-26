@@ -21,9 +21,6 @@ pub const ACCOUNT_ALIAS_SUFFIX_ID: SuffixId = 0x1001;
 pub const DOMAIN_NAME_SUFFIX_ID: SuffixId = 0x1002;
 /// Fixed suffix id for dataspace-alias lease records.
 pub const DATASPACE_ALIAS_SUFFIX_ID: SuffixId = 0x1003;
-const fn default_ownership_generation_v1() -> u64 {
-    1
-}
 /// Canonical selector payload for SNS names.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -95,8 +92,8 @@ pub struct NameRecordV1 {
     pub name_hash: [u8; 32],
     /// Account that currently controls the registration.
     pub owner: AccountId,
-    /// Monotonic ownership generation used to invalidate signed delegations after transfer.
-    #[norito(default = "default_ownership_generation_v1")]
+    /// Required monotonic ownership generation used to invalidate signed delegations after
+    /// transfer. The first-release wire layout never infers a missing generation.
     pub ownership_generation: u64,
     /// Controller descriptors (accounts, resolver templates, or external payloads).
     pub controllers: Vec<NameControllerV1>,
@@ -136,7 +133,7 @@ impl NameRecordV1 {
             selector,
             name_hash,
             owner,
-            ownership_generation: default_ownership_generation_v1(),
+            ownership_generation: 1,
             controllers,
             status: NameStatus::Active,
             pricing_class,
@@ -452,7 +449,11 @@ pub mod prelude {
 }
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "json")]
+    use super::{DOMAIN_NAME_SUFFIX_ID, NameRecordV1, NameSelectorV1};
     use super::{TokenValue, fixtures};
+    #[cfg(feature = "json")]
+    use crate::metadata::Metadata;
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
     #[derive(Encode)]
@@ -495,6 +496,33 @@ mod tests {
         assert_eq!(
             policy.pricing[0].base_price.asset_id,
             policy.payment_asset_id
+        );
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn name_record_json_requires_ownership_generation() {
+        let selector = NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, "owner.universal")
+            .expect("canonical domain-name selector");
+        let record = NameRecordV1::new(
+            selector,
+            fixtures::steward_account(),
+            Vec::new(),
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        let mut value = norito::json::to_value(&record).expect("serialize SNS name record");
+        value
+            .as_object_mut()
+            .expect("name record object")
+            .remove("ownership_generation")
+            .expect("ownership generation is encoded");
+        assert!(
+            norito::json::from_value::<NameRecordV1>(value).is_err(),
+            "the first-release SNS record must reject a missing ownership generation"
         );
     }
 }

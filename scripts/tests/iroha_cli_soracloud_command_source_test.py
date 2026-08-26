@@ -12,7 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "integration_tests/tests/iroha_cli.rs"
 PREIMAGE_SHA256 = "aa1a2f2e6113915b33107d68d255f66194bd3813f853bd031125fe4459a57d43"
-EXPECTED_SOURCE_LINES = 4_573
+EXPECTED_SOURCE_LINES = 4_458
 
 HELPER_START = "struct SoracloudCli<'a>"
 HELPER_END = "async fn wait_for_soracloud_json_command"
@@ -50,21 +50,21 @@ FUNCTION_CONTRACTS = {
         True,
     ),
     "soracloud_hf_shared_lease_commands_use_live_torii_control_plane": (
-        "f0413f835f3772a28238c546fe57a63c5cc18cae896884506522e328ba0e0449",
+        "c020bd7536e9a18a41d58d74916c7320f0319e98bcea4dc84190bd89e8d35f44",
         0,
         0,
         8,
         True,
     ),
     "soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window": (
-        "e4ae90ef3b1562f1c45444e7d1a1bc5efec1e8d71d035ecbfb18184eaecea765",
+        "cdf5441eab09da678bf66195dc171c7f352dfc2a8adb06aa047e8aacdc71bdfd",
         0,
         0,
         4,
         True,
     ),
     "soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts": (
-        "2de85b3b4a99b04aba23baec2eee7fb3e29864a42c388f9567e5ad41b2c86fb0",
+        "2a91d284a879bb4f17c8acbdd7dee330f67ef396c2c04013899fc507088d969c",
         0,
         0,
         3,
@@ -77,50 +77,50 @@ FUNCTION_CONTRACTS = {
         0,
         True,
     ),
-    "soracloud_agent_autonomy_runtime_uses_live_torii_control_plane": (
-        "e7087d328fea5c9c7c2b6b8e2332c017354b5e2ed7c74711f0c218076ec389fc",
-        5,
-        1,
+    "soracloud_agent_autonomy_controls_use_live_torii_control_plane": (
+        "19e23e795c3867868452e3393cd10642e31519980af1f26a68dd54d83df7931a",
+        4,
+        0,
         0,
         True,
     ),
     "soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_control_plane": (
-        "dece98092d6dfa9b1ffa1e0128537529b23ba2f910853d6d7ca53d0d0d1c5e80",
+        "78d34bbe876333d3f80285528b049c02019607907b73953ab45d809ff3819572",
         11,
         1,
         0,
         True,
     ),
     "soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_control_plane": (
-        "90a624fe4509e4c0347e58150c548fed393f5ad8b610fb3eeae5d0fe61b0b5dd",
-        14,
+        "0706cd742a083fd2c0885994e5229fa3e78f37cfad297386b8cd91508b4cfa8d",
+        12,
         0,
         0,
         True,
     ),
-    "soracloud_agent_autonomy_commands_require_torii_url": (
-        "14b8f5fd34d5089c7b001fec32240be6544d9b5bf72852ba6e8cf9cdf2e817b6",
+    "soracloud_agent_autonomy_control_commands_require_torii_url": (
+        "e736344d9ff873cbe995bf8961c12354ca7c8a9655c86036097e4656b2be55a1",
         0,
         0,
         0,
         False,
     ),
     "soracloud_agent_wallet_and_mailbox_commands_require_torii_url": (
-        "e540179cdbd85d69b51d02136382235b5c01c449a4a7f6ee929b34ce0276eafe",
+        "6f386b0586e44e549556602b1bd96931c352d47b70d5ca3ffb11d25dba69fd4e",
         0,
         0,
         0,
         False,
     ),
     "soracloud_agent_lease_commands_require_torii_url": (
-        "1c6f334959aa2f0efe3eb1e369058c3fe35d44a4791b1b171e22a3bab4aa4edc",
+        "1d2970a2cd62ff5a929a1e1f33d4aa85458efd26dc67f1d1445347930d16d982",
         0,
         0,
         0,
         False,
     ),
     "soracloud_hf_shared_lease_commands_require_torii_url": (
-        "0e7aaa9d29b2045fc156f877f2c766f9a70ca27884219490de371f6e671ed4c4",
+        "12e8a8c28e374669fb744a7554c3434b9af56adcb18191202aa5f3daf669f942",
         0,
         0,
         0,
@@ -145,11 +145,11 @@ REQUIRED_HELPER_TOKENS = (
 REQUIRED_SECURITY_TOKENS = (
     "!over_cap_deploy.status.success()",
     "!no_write_deploy.status.success()",
-    "!revoked_run.status.success()",
+    '.get("revoked_policy_capability_count")',
     "!expired_wallet.status.success()",
     'contains("resources.cpu_millis exceeds SCR cap")',
     'contains("binding `session_store` requires mutable writes (`ReadWrite`)")',
-    'contains("agent.autonomy.run")',
+    '"agent.autonomy.run"',
     'contains("lease expired")',
 )
 

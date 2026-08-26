@@ -24,7 +24,7 @@ use iroha_core::{
     queue::Queue,
     state::{State, World},
 };
-use iroha_crypto::{Algorithm, PublicKey, soranet::certificate::CertificateValidationPhase};
+use iroha_crypto::{Algorithm, PublicKey};
 #[cfg(test)]
 use iroha_crypto::{KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
@@ -83,8 +83,6 @@ use soranet_testnet::{
 use vote_tally::{
     BundleSummary, bundle_file_names, iroha_hash, read_summary, summary_to_json, write_bundle,
 };
-mod address_gate;
-mod address_manifest;
 mod codec;
 mod compute;
 mod compute_harness;
@@ -159,12 +157,6 @@ enum CommandKind {
     AddressVectors {
         target: JsonTarget,
         verify: bool,
-    },
-    AddressLocalGate {
-        input: PathBuf,
-        window_days: u64,
-        json_out: Option<JsonTarget>,
-        check_collisions: bool,
     },
     SoranetFixtures {
         output: PathBuf,
@@ -487,9 +479,6 @@ enum CommandKind {
     MinistryAgenda(ministry_agenda::Command),
     MinistryPanel(ministry_panel::Command),
     MinistryJury(ministry_jury::Command),
-    AddressManifestVerify {
-        options: address_manifest::VerifyOptions,
-    },
     NoritoRpcVerify {
         json_out: Option<JsonTarget>,
     },
@@ -1085,9 +1074,6 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             allow_unsigned,
             allowed_signers,
         } => verify_openapi_manifest(&spec, &manifest, allow_unsigned, Some(&allowed_signers))?,
-        CommandKind::AddressManifestVerify { options } => {
-            address_manifest::verify_manifest_bundle(&options)?;
-        }
         CommandKind::AddressVectors { target, verify } => match (target, verify) {
             (JsonTarget::Stdout, true) => {
                 return Err(
@@ -1104,17 +1090,6 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
                 verify_address_vectors(&path)?;
             }
         },
-        CommandKind::AddressLocalGate {
-            input,
-            window_days,
-            json_out,
-            check_collisions,
-        } => address_gate::run_local_gate(address_gate::LocalGateOptions {
-            input,
-            window_days,
-            json_out,
-            check_collisions,
-        })?,
         CommandKind::ZkVoteTallyBundle {
             output,
             verify,
@@ -2470,52 +2445,6 @@ where
                     .unwrap_or_else(default_openapi_allowed_signers_path),
             })
         }
-        "address-manifest" => {
-            let Some(subcommand) = args.next() else {
-                return Err("address-manifest requires a subcommand (e.g. `verify`)".into());
-            };
-            match subcommand.as_str() {
-                "verify" => {
-                    let mut bundle: Option<PathBuf> = None;
-                    let mut previous: Option<PathBuf> = None;
-                    let mut pending = args.peekable();
-                    while let Some(arg) = pending.next() {
-                        match arg.as_str() {
-                            "--bundle" => {
-                                let Some(path) = pending.next() else {
-                                    return Err("expected path after --bundle".into());
-                                };
-                                bundle = Some(normalize_path(Path::new(&path))?);
-                            }
-                            "--previous" => {
-                                let Some(path) = pending.next() else {
-                                    return Err("expected path after --previous".into());
-                                };
-                                previous = Some(normalize_path(Path::new(&path))?);
-                            }
-                            flag => {
-                                return Err(format!(
-                                    "unknown flag for address-manifest verify: {flag}"
-                                )
-                                .into());
-                            }
-                        }
-                    }
-                    let bundle = bundle
-                        .ok_or("address-manifest verify requires --bundle <manifest-directory>")?;
-                    Ok(CommandKind::AddressManifestVerify {
-                        options: address_manifest::VerifyOptions {
-                            bundle,
-                            previous_bundle: previous,
-                        },
-                    })
-                }
-                other => Err(format!(
-                    "unknown subcommand `{other}` for address-manifest; only `verify` is supported"
-                )
-                .into()),
-            }
-        }
         "compute" => {
             let Some(subcmd) = args.next() else {
                 return Err("compute requires a subcommand (slo-report|fixtures)".into());
@@ -2633,57 +2562,6 @@ where
             }
             let target = target.unwrap_or(JsonTarget::File(default_address_vectors_path()?));
             Ok(CommandKind::AddressVectors { target, verify })
-        }
-        "address-local8-gate" => {
-            let mut input: Option<PathBuf> = None;
-            let mut window_days: u64 = 30;
-            let mut json_out: Option<JsonTarget> = None;
-            let mut check_collisions = true;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--input" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --input".into());
-                        };
-                        input = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--window-days" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --window-days".into());
-                        };
-                        window_days = value.parse::<u64>().map_err(|err| {
-                            format!("failed to parse --window-days `{value}`: {err}")
-                        })?;
-                        if window_days == 0 {
-                            return Err("--window-days must be greater than zero".into());
-                        }
-                    }
-                    "--json-out" => {
-                        let Some(target) = pending.next() else {
-                            return Err("expected path or '-' after --json-out".into());
-                        };
-                        if target == "-" {
-                            json_out = Some(JsonTarget::Stdout);
-                        } else {
-                            json_out = Some(JsonTarget::File(normalize_path(Path::new(&target))?));
-                        }
-                    }
-                    "--skip-collisions" => {
-                        check_collisions = false;
-                    }
-                    flag => {
-                        return Err(format!("unknown flag for address-local8-gate: {flag}").into());
-                    }
-                }
-            }
-            let input = input.ok_or("address-local8-gate requires --input <prom-range.json>")?;
-            Ok(CommandKind::AddressLocalGate {
-                input,
-                window_days,
-                json_out,
-                check_collisions,
-            })
         }
         "zk-vote-tally-bundle" => {
             let mut output = None;
@@ -4627,10 +4505,11 @@ where
             let mut output_dir: Option<PathBuf> = None;
             let mut pop = "soranet-pop-pq".to_string();
             let mut srcv2_bundle: Option<PathBuf> = None;
+            let mut issuer_ed25519_hex: Option<String> = None;
+            let mut issuer_mldsa65_hex: Option<String> = None;
             let mut tls_bundle_dir: Option<PathBuf> = None;
             let mut trustless_config: Option<PathBuf> = None;
-            let mut canary_hosts: Vec<String> = Vec::new();
-            let mut phase = CertificateValidationPhase::Phase3RequireDual;
+            let mut at_unix: Option<i64> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -4652,6 +4531,18 @@ where
                         };
                         srcv2_bundle = Some(normalize_path(Path::new(&path))?);
                     }
+                    "--issuer-ed25519-hex" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected public key after --issuer-ed25519-hex".into());
+                        };
+                        issuer_ed25519_hex = Some(value);
+                    }
+                    "--issuer-mldsa65-hex" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected public key after --issuer-mldsa65-hex".into());
+                        };
+                        issuer_mldsa65_hex = Some(value);
+                    }
                     "--tls-bundle" => {
                         let Some(path) = pending.next() else {
                             return Err("expected directory after --tls-bundle".into());
@@ -4664,27 +4555,17 @@ where
                         };
                         trustless_config = Some(normalize_path(Path::new(&path))?);
                     }
-                    "--canary" => {
-                        let Some(host) = pending.next() else {
-                            return Err("expected host after --canary".into());
-                        };
-                        canary_hosts.push(host);
-                    }
-                    "--phase" => {
+                    "--at-unix" => {
                         let Some(value) = pending.next() else {
-                            return Err("expected phase after --phase".into());
+                            return Err("expected Unix second after --at-unix".into());
                         };
-                        phase = match value.as_str() {
-                            "1" => CertificateValidationPhase::Phase1AllowSingle,
-                            "2" => CertificateValidationPhase::Phase2PreferDual,
-                            "3" => CertificateValidationPhase::Phase3RequireDual,
-                            other => {
-                                return Err(format!(
-                                    "unknown validation phase `{other}` (expected 1|2|3)"
-                                )
-                                .into());
-                            }
-                        };
+                        let parsed = value.parse::<i64>().map_err(|error| {
+                            format!("invalid Unix second `{value}` after --at-unix: {error}")
+                        })?;
+                        if parsed < 0 {
+                            return Err("--at-unix must be non-negative".into());
+                        }
+                        at_unix = Some(parsed);
                     }
                     flag => {
                         return Err(format!("unknown flag for soranet-gateway-pq: {flag}").into());
@@ -4699,20 +4580,32 @@ where
             });
             let srcv2_bundle = srcv2_bundle
                 .ok_or_else(|| "soranet-gateway-pq requires --srcv2 <bundle>".to_string())?;
+            let issuer_ed25519_hex = issuer_ed25519_hex.ok_or_else(|| {
+                "soranet-gateway-pq requires --issuer-ed25519-hex <hex> from an independent trusted source"
+                    .to_string()
+            })?;
+            let issuer_mldsa65_hex = issuer_mldsa65_hex.ok_or_else(|| {
+                "soranet-gateway-pq requires --issuer-mldsa65-hex <hex> from an independent trusted source"
+                    .to_string()
+            })?;
             let tls_bundle_dir = tls_bundle_dir
                 .ok_or_else(|| "soranet-gateway-pq requires --tls-bundle <dir>".to_string())?;
             let trustless_config = trustless_config.ok_or_else(|| {
                 "soranet-gateway-pq requires --trustless-config <path>".to_string()
+            })?;
+            let at_unix = at_unix.ok_or_else(|| {
+                "soranet-gateway-pq requires --at-unix <unix-seconds>".to_string()
             })?;
             Ok(CommandKind::SoranetGatewayPq {
                 options: soranet_gateway_pq::GatewayPqOptions {
                     output_dir,
                     pop,
                     srcv2_bundle,
+                    issuer_ed25519_hex,
+                    issuer_mldsa65_hex,
                     tls_bundle_dir,
                     trustless_config,
-                    canary_hosts,
-                    validation_phase: phase,
+                    at_unix,
                 },
             })
         }
@@ -11542,6 +11435,7 @@ fn update_sha256_os_str_component(hasher: &mut Sha256, label: &[u8], value: &OsS
 mod acceleration_state_tests {
     use super::*;
     use serde_json::Value;
+    use soranet_pq::MlDsaSuite;
     #[test]
     fn parse_supports_acceleration_state_command() {
         let args = ["xtask", "acceleration-state", "--format", "json"];
@@ -11553,6 +11447,70 @@ mod acceleration_state_tests {
             } => {}
             _ => panic!("expected acceleration-state command"),
         }
+    }
+    #[test]
+    fn parse_gateway_pq_requires_and_routes_explicit_issuer_trust() {
+        let issuer_ed25519_hex = "11".repeat(ed25519_dalek::PUBLIC_KEY_LENGTH);
+        let issuer_mldsa65_hex = "22".repeat(MlDsaSuite::MlDsa65.public_key_len());
+        let args = vec![
+            "xtask".to_owned(),
+            "soranet-gateway-pq".to_owned(),
+            "--srcv2".to_owned(),
+            "relay.srcv2.cbor".to_owned(),
+            "--issuer-ed25519-hex".to_owned(),
+            issuer_ed25519_hex.clone(),
+            "--issuer-mldsa65-hex".to_owned(),
+            issuer_mldsa65_hex.clone(),
+            "--tls-bundle".to_owned(),
+            "tls".to_owned(),
+            "--trustless-config".to_owned(),
+            "trustless.toml".to_owned(),
+            "--at-unix".to_owned(),
+            "1734000001".to_owned(),
+        ];
+        let command = parse_command(args.into_iter()).expect("parse gateway PQ command");
+        let CommandKind::SoranetGatewayPq { options } = command else {
+            panic!("expected gateway PQ command");
+        };
+        assert_eq!(options.issuer_ed25519_hex, issuer_ed25519_hex);
+        assert_eq!(options.issuer_mldsa65_hex, issuer_mldsa65_hex);
+        assert_eq!(options.at_unix, 1_734_000_001);
+
+        let missing_time = vec![
+            "xtask".to_owned(),
+            "soranet-gateway-pq".to_owned(),
+            "--srcv2".to_owned(),
+            "relay.srcv2.cbor".to_owned(),
+            "--issuer-ed25519-hex".to_owned(),
+            issuer_ed25519_hex.clone(),
+            "--issuer-mldsa65-hex".to_owned(),
+            issuer_mldsa65_hex.clone(),
+            "--tls-bundle".to_owned(),
+            "tls".to_owned(),
+            "--trustless-config".to_owned(),
+            "trustless.toml".to_owned(),
+        ];
+        let error = match parse_command(missing_time.into_iter()) {
+            Ok(_) => panic!("certificate evaluation time must be mandatory"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("--at-unix"));
+
+        let missing_issuer = [
+            "xtask",
+            "soranet-gateway-pq",
+            "--srcv2",
+            "relay.srcv2.cbor",
+            "--tls-bundle",
+            "tls",
+            "--trustless-config",
+            "trustless.toml",
+        ];
+        let error = match parse_command(missing_issuer.into_iter().map(str::to_owned)) {
+            Ok(_) => panic!("issuer trust must be mandatory"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("--issuer-ed25519-hex"));
     }
     #[test]
     fn parse_routes_nexus_connect_fixture_to_the_closed_owner() {

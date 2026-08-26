@@ -89,10 +89,19 @@ public sealed class LedgerClient
         while (true)
         {
             timeout.Token.ThrowIfCancellationRequested();
-            var status = await torii.GetPipelineTransactionStatusAsync(transactionHashHex, effective.Scope, timeout.Token);
-            if (status is not null && status.IsTerminal)
+            var status = await torii.GetPipelineTransactionStatusAsync(
+                transactionHashHex,
+                "global",
+                timeout.Token);
+            if (status?.IsSuccess == true)
             {
                 return status;
+            }
+
+            if (status?.IsFailure == true)
+            {
+                throw new InvalidOperationException(
+                    $"Pipeline transaction {transactionHashHex} failed with exact state {status.RawKind}.");
             }
 
             await Task.Delay(effective.PollInterval, timeout.Token);

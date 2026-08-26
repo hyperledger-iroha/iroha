@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.TreeMap;
 import org.hyperledger.iroha.android.util.HashLiteral;
 
 /** Shared helpers for flattening Kaigi instruction payloads to argument maps. */
@@ -89,7 +90,7 @@ final class KaigiInstructionUtils {
   }
 
   static Long parseOptionalUnsignedLong(final String value, final String fieldName) {
-    if (value == null || value.isBlank()) {
+    if (isBlank(value)) {
       return null;
     }
     return parseUnsignedLong(value, fieldName);
@@ -109,7 +110,7 @@ final class KaigiInstructionUtils {
   }
 
   static Integer parseOptionalPositiveInt(final String value, final String fieldName) {
-    if (value == null || value.isBlank()) {
+    if (isBlank(value)) {
       return null;
     }
     return parsePositiveInt(value, fieldName);
@@ -134,7 +135,7 @@ final class KaigiInstructionUtils {
   }
 
   static String requireBase64(final String value, final String fieldName) {
-    if (value == null || value.isBlank()) {
+    if (isBlank(value)) {
       throw new IllegalArgumentException(fieldName + " must not be blank");
     }
     final String trimmed = value.trim();
@@ -165,55 +166,92 @@ final class KaigiInstructionUtils {
     }
   }
 
+  static RoomPolicy parseRoomPolicy(final Map<String, String> arguments, final String prefix) {
+    final String policyKey = prefixKey(prefix, "policy");
+    final String policy = arguments.getOrDefault(policyKey, "Authenticated");
+    final String state = arguments.get(prefixKey(prefix, "state"));
+    return new RoomPolicy(policy, state);
+  }
+
+  static void appendRoomPolicy(
+      final RoomPolicy roomPolicy, final Map<String, String> target, final String prefix) {
+    target.put(prefixKey(prefix, "policy"), roomPolicy.policy());
+    if (roomPolicy.state() != null) {
+      target.put(prefixKey(prefix, "state"), roomPolicy.state());
+    }
+  }
+
   static RelayManifest parseRelayManifest(final Map<String, String> arguments, final String prefix) {
     final String expiresKey = prefixKey(prefix, "expiry_ms");
     final Long expiryMs = parseOptionalUnsignedLong(arguments.get(expiresKey), expiresKey);
 
-    final List<RelayManifestHop> hops = new ArrayList<>();
     final String hopPrefix = prefixKey(prefix, "hop.");
-    arguments.forEach(
-        (key, value) -> {
-          if (!key.startsWith(hopPrefix)) {
-            return;
+    int hopArgumentCount = 0;
+    for (final String key : arguments.keySet()) {
+      if (key.startsWith(hopPrefix)) {
+        hopArgumentCount++;
+      }
+    }
+    final Map<Integer, RelayManifestHop> hopsByIndex = new TreeMap<>();
+    for (final Map.Entry<String, String> entry : arguments.entrySet()) {
+      final String key = entry.getKey();
+      if (!key.startsWith(hopPrefix)) {
+        continue;
+      }
+      final String tail = key.substring(hopPrefix.length());
+      final int separator = tail.indexOf('.');
+      if (separator <= 0) {
+        throw new IllegalArgumentException("Malformed relay manifest key: " + key);
+      }
+      final int index;
+      try {
+        index = Integer.parseInt(tail.substring(0, separator));
+      } catch (final NumberFormatException ex) {
+        throw new IllegalArgumentException(
+            "Relay manifest hop index must be numeric: " + key, ex);
+      }
+      if (index < 0 || index >= hopArgumentCount) {
+        throw new IllegalArgumentException("Relay manifest hop index is out of bounds: " + key);
+      }
+      final RelayManifestHop hop =
+          hopsByIndex.computeIfAbsent(index, ignored -> new RelayManifestHop());
+      final String attribute = tail.substring(separator + 1);
+      switch (attribute) {
+        case "relay_id":
+          hop.relayId = entry.getValue();
+          break;
+        case "hpke_public_key":
+          hop.hpkePublicKey = requireBase64(entry.getValue(), key);
+          break;
+        case "weight":
+          final int parsed = parseNonNegativeInt(entry.getValue(), "relay hop weight");
+          if (parsed < 1 || parsed > 0xFF) {
+            throw new IllegalArgumentException("relay hop weight must be between 1 and 255");
           }
-          final String tail = key.substring(hopPrefix.length());
-          final int separator = tail.indexOf('.');
-          if (separator <= 0) {
-            throw new IllegalArgumentException("Malformed relay manifest key: " + key);
-          }
-          final int index = Integer.parseInt(tail.substring(0, separator));
-          while (hops.size() <= index) {
-            hops.add(new RelayManifestHop());
-          }
-          final RelayManifestHop hop = hops.get(index);
-          final String attribute = tail.substring(separator + 1);
-          switch (attribute) {
-            case "relay_id":
-              hop.relayId = value;
-              break;
-            case "hpke_public_key":
-              hop.hpkePublicKey = requireBase64(value, key);
-              break;
-            case "weight":
-              final int parsed = parseNonNegativeInt(value, "relay hop weight");
-              if (parsed > 0xFF) {
-                throw new IllegalArgumentException("relay hop weight must fit in a byte");
-              }
-              hop.weight = parsed;
-              break;
-            default:
-              throw new IllegalArgumentException("Unknown relay manifest attribute: " + key);
-          }
-        });
-    if (hops.isEmpty() && expiryMs == null) {
+          hop.weight = parsed;
+          break;
+        default:
+          throw new IllegalArgumentException("Unknown relay manifest attribute: " + key);
+      }
+    }
+    if (hopsByIndex.isEmpty() && expiryMs == null) {
       return null;
     }
+    int expectedIndex = 0;
+    for (final int actualIndex : hopsByIndex.keySet()) {
+      if (actualIndex != expectedIndex) {
+        throw new IllegalArgumentException(
+            "relay manifest hop indices must be contiguous from zero");
+      }
+      expectedIndex++;
+    }
+    final List<RelayManifestHop> hops = new ArrayList<>(hopsByIndex.values());
     for (int index = 0; index < hops.size(); index++) {
       final RelayManifestHop hop = hops.get(index);
-      if (hop.relayId == null || hop.relayId.isBlank()) {
+      if (isBlank(hop.relayId)) {
         throw new IllegalArgumentException("relay_manifest.hop." + index + ".relay_id is required");
       }
-      if (hop.hpkePublicKey == null || hop.hpkePublicKey.isBlank()) {
+      if (isBlank(hop.hpkePublicKey)) {
         throw new IllegalArgumentException(
             "relay_manifest.hop." + index + ".hpke_public_key is required");
       }
@@ -221,7 +259,8 @@ final class KaigiInstructionUtils {
         throw new IllegalArgumentException("relay_manifest.hop." + index + ".weight is required");
       }
     }
-    return new RelayManifest(expiryMs, Collections.unmodifiableList(hops));
+    return validateRelayManifest(
+        new RelayManifest(expiryMs, Collections.unmodifiableList(hops)));
   }
 
   static void appendRelayManifest(
@@ -229,6 +268,7 @@ final class KaigiInstructionUtils {
     if (manifest == null) {
       return;
     }
+    validateRelayManifest(manifest);
     if (manifest.expiryMs != null) {
       target.put(prefixKey(prefix, "expiry_ms"), Long.toUnsignedString(manifest.expiryMs));
     }
@@ -239,6 +279,38 @@ final class KaigiInstructionUtils {
       target.put(baseKey + ".hpke_public_key", hop.hpkePublicKey);
       target.put(baseKey + ".weight", Integer.toUnsignedString(hop.weight));
     }
+  }
+
+  static RelayManifest validateRelayManifest(final RelayManifest manifest) {
+    if (manifest.expiryMs() == null) {
+      throw new IllegalArgumentException("relay manifest expiry_ms is required");
+    }
+    if (manifest.expiryMs() < 0) {
+      throw new IllegalArgumentException("relay manifest expiry must be non-negative");
+    }
+    if (manifest.hops().size() < 3) {
+      throw new IllegalArgumentException("relay manifest must contain at least 3 hops");
+    }
+    final java.util.Set<String> relayIds = new java.util.HashSet<>();
+    for (int index = 0; index < manifest.hops().size(); index++) {
+      final RelayManifestHop hop = manifest.hops().get(index);
+      if (isBlank(hop.relayId())) {
+        throw new IllegalArgumentException(
+            "relay_manifest.hop." + index + ".relay_id is required");
+      }
+      if (!relayIds.add(hop.relayId())) {
+        throw new IllegalArgumentException("relay manifest relay IDs must be unique");
+      }
+      requireBase64(
+          hop.hpkePublicKey(), "relay_manifest.hop." + index + ".hpke_public_key");
+      if (hop.weight() == null) {
+        throw new IllegalArgumentException("relay_manifest.hop." + index + ".weight is required");
+      }
+      if (hop.weight() < 1 || hop.weight() > 0xFF) {
+        throw new IllegalArgumentException("relay hop weight must be between 1 and 255");
+      }
+    }
+    return manifest;
   }
 
   static String prefixKey(final String prefix, final String key) {
@@ -253,7 +325,7 @@ final class KaigiInstructionUtils {
 
   static String require(final Map<String, String> arguments, final String key) {
     final String value = arguments.get(key);
-    if (value == null || value.isBlank()) {
+    if (isBlank(value)) {
       throw new IllegalArgumentException("Instruction argument '" + key + "' is required");
     }
     return value;
@@ -261,6 +333,10 @@ final class KaigiInstructionUtils {
 
   private static boolean startsWithIgnoreCase(final String value, final String prefix) {
     return value.regionMatches(true, 0, prefix, 0, prefix.length());
+  }
+
+  private static boolean isBlank(final String value) {
+    return value == null || value.trim().isEmpty();
   }
 
   /** Immutable representation of a Kaigi call identifier. */
@@ -288,7 +364,7 @@ final class KaigiInstructionUtils {
     private final String state;
 
     PrivacyMode(final String mode, final String state) {
-      if (mode == null || mode.isBlank()) {
+      if (isBlank(mode)) {
         throw new IllegalArgumentException("privacy mode must not be blank");
       }
       final String normalized = mode.trim();
@@ -296,11 +372,37 @@ final class KaigiInstructionUtils {
         throw new IllegalArgumentException("privacy mode must be Transparent or ZkRosterV1");
       }
       this.mode = normalized;
-      this.state = state == null || state.isBlank() ? null : state;
+      this.state = isBlank(state) ? null : state;
     }
 
     String mode() {
       return mode;
+    }
+
+    String state() {
+      return state;
+    }
+  }
+
+  /** Immutable room access policy descriptor. */
+  static final class RoomPolicy {
+    private final String policy;
+    private final String state;
+
+    RoomPolicy(final String policy, final String state) {
+      if (isBlank(policy)) {
+        throw new IllegalArgumentException("room policy must not be blank");
+      }
+      final String normalized = policy.trim();
+      if (!"Public".equals(normalized) && !"Authenticated".equals(normalized)) {
+        throw new IllegalArgumentException("room policy must be Public or Authenticated");
+      }
+      this.policy = normalized;
+      this.state = isBlank(state) ? null : state;
+    }
+
+    String policy() {
+      return policy;
     }
 
     String state() {
@@ -352,8 +454,8 @@ final class KaigiInstructionUtils {
     }
 
     RelayManifestHop withWeight(final int value) {
-      if (value < 0 || value > 0xFF) {
-        throw new IllegalArgumentException("relay hop weight must fit in an unsigned byte");
+      if (value < 1 || value > 0xFF) {
+        throw new IllegalArgumentException("relay hop weight must be between 1 and 255");
       }
       this.weight = value;
       return this;

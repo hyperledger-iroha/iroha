@@ -221,7 +221,7 @@ pub mod json_wrappers {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    #[norito(tag = "kind", content = "content")]
+    #[norito(tag = "kind", content = "content", deny_unknown_fields)]
     pub enum QueryRequestJson {
         /// Singular (non-iterable) query request.
         Singular(SingularQueryBox),
@@ -236,6 +236,7 @@ pub mod json_wrappers {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     pub struct QueryRequestWithAuthorityJson {
         /// Exact genesis-lineage identity for the target network.
         pub network_id: NetworkId,
@@ -260,6 +261,7 @@ pub mod json_wrappers {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     pub struct SignedQueryCanonicalJson {
         /// Signature authenticating the query payload.
         pub signature: super::model::QuerySignature,
@@ -274,7 +276,10 @@ pub mod json_wrappers {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    #[cfg_attr(feature = "json", norito(tag = "version", content = "content"))]
+    #[cfg_attr(
+        feature = "json",
+        norito(tag = "version", content = "content", deny_unknown_fields)
+    )]
     pub enum SignedQueryJson {
         /// Canonical JSON representation of a signed query.
         #[norito(rename = "canonical")]
@@ -3725,6 +3730,57 @@ mod json_roundtrip_tests {
             assert!(
                 norito::json::from_value::<SignedQueryJson>(missing).is_err(),
                 "signed-query JSON without `{field}` must fail closed"
+            );
+        }
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn signed_query_json_rejects_unknown_envelope_fields_at_every_level() {
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_test_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+        let canonical = norito::json::to_value(&SignedQueryJson::from(&signed))
+            .expect("serialize signed query JSON");
+
+        let mut candidates = Vec::new();
+        let mut outer = canonical.clone();
+        outer
+            .as_object_mut()
+            .expect("signed-query version envelope")
+            .insert("legacy".to_owned(), norito::json::Value::Null);
+        candidates.push(("version envelope", outer));
+
+        let mut signed_envelope = canonical.clone();
+        signed_envelope
+            .get_mut("content")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("signed-query content envelope")
+            .insert("legacy".to_owned(), norito::json::Value::Null);
+        candidates.push(("signed envelope", signed_envelope));
+
+        let mut authority_envelope = canonical.clone();
+        authority_envelope
+            .get_mut("content")
+            .and_then(|content| content.get_mut("payload"))
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("signed-query authority envelope")
+            .insert("legacy".to_owned(), norito::json::Value::Null);
+        candidates.push(("authority envelope", authority_envelope));
+
+        let mut request_envelope = canonical;
+        request_envelope
+            .get_mut("content")
+            .and_then(|content| content.get_mut("payload"))
+            .and_then(|payload| payload.get_mut("request"))
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("signed-query request envelope")
+            .insert("legacy".to_owned(), norito::json::Value::Null);
+        candidates.push(("request envelope", request_envelope));
+
+        for (label, candidate) in candidates {
+            assert!(
+                norito::json::from_value::<SignedQueryJson>(candidate).is_err(),
+                "unknown field in {label} must fail closed"
             );
         }
     }

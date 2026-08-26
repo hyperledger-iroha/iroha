@@ -929,8 +929,8 @@ fn assert_queue_plan_native_exact_compare_and_set() {
     // `StateBlock` owns exclusive MV storage transactions. Release this
     // overlay before opening an independent one for the conflict case.
     drop(state_block);
-    let conflicting_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV2 {
-        version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+    let conflicting_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV1 {
+        version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
         binding_hash: Hash::new(b"conflicting-cas-value"),
     };
     {
@@ -965,7 +965,7 @@ fn assert_queue_plan_native_multi_route_preflight_is_atomic() {
         1,
         0x79,
     );
-    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
         &state.network_id,
         &certificate,
     )
@@ -1067,14 +1067,14 @@ fn assert_queue_plan_native_batch_rollback_is_atomic() {
         0x7A,
     );
     let first_registry_key_for_order =
-        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
             &state.network_id,
             &first_certificate,
         )
         .expect("fixture first batch admission")
         .registry_key;
     let second_registry_key_for_order =
-        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
             &state.network_id,
             &second_certificate,
         )
@@ -1090,13 +1090,13 @@ fn assert_queue_plan_native_batch_rollback_is_atomic() {
         .map(|(_, certificate)| certificate)
         .collect::<Vec<_>>();
     let first_admission =
-        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
             &state.network_id,
             &ordered_certificates[0],
         )
         .expect("fixture first canonical batch admission");
     let second_admission =
-        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
             &state.network_id,
             &ordered_certificates[1],
         )
@@ -1278,8 +1278,8 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
     );
     let registry_key = State::queue_plan_admission_registry_marker_key(&binding.registry_key())
         .expect("fixture registry key");
-    let partial_conflict = crate::torii_proxy::QueuePlanAdmissionRegistryValueV2 {
-        version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+    let partial_conflict = crate::torii_proxy::QueuePlanAdmissionRegistryValueV1 {
+        version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
         binding_hash: Hash::new(b"partial-conflicting-queue-plan-owner"),
     };
     {
@@ -1298,7 +1298,7 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         "a conflicting hash without owner evidence is corruption, not a definitive conflict"
     );
     let conflicting_entrypoint = queue_plan_entrypoint_for_state_test(&state, tag);
-    let conflicting_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+    let conflicting_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
         &state.network_id,
         &conflicting_entrypoint,
         &routing_plan,
@@ -1440,7 +1440,7 @@ fn queue_plan_conflict_requires_pending_or_applied_owner_evidence() {
         1,
         sealed_tag,
     );
-    let sealed_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+    let sealed_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
         &state.network_id,
         &sealed_entrypoint,
         &routing_plan,
@@ -1849,7 +1849,7 @@ fn queue_plan_pending_obligation_authenticates_copies_before_counter_mutation() 
         1,
         tag,
     );
-    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
         &state.network_id,
         &certificate,
     )
@@ -1857,7 +1857,7 @@ fn queue_plan_pending_obligation_authenticates_copies_before_counter_mutation() 
     let original = State::queue_plan_pending_obligation_from_admission(&admission)
         .expect("fixture authenticated pending obligation");
     seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
-    let alternate_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+    let alternate_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
         &state.network_id,
         &queue_plan_entrypoint_for_state_test(&state, tag),
         &routing_plan,
@@ -2009,7 +2009,7 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             0x72,
         );
         let first_admission =
-            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
                 &state.network_id,
                 &first_certificate,
             )
@@ -2226,7 +2226,7 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             0x73,
         );
         let admission =
-            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
                 &state.network_id,
                 &certificate,
             )

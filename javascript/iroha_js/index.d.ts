@@ -203,16 +203,10 @@ export const AccountAddressErrorCode: {
   readonly INVALID_HEADER_VERSION: "ERR_INVALID_HEADER_VERSION";
   readonly INVALID_NORM_VERSION: "ERR_INVALID_NORM_VERSION";
   readonly INVALID_I105_DISCRIMINANT: "ERR_INVALID_I105_DISCRIMINANT";
-  readonly CANONICAL_HASH_FAILURE: "ERR_CANONICAL_HASH_FAILURE";
   readonly INVALID_LENGTH: "ERR_INVALID_LENGTH";
   readonly CHECKSUM_MISMATCH: "ERR_CHECKSUM_MISMATCH";
-  readonly INVALID_HEX_ADDRESS: "ERR_INVALID_HEX_ADDRESS";
-  readonly DOMAIN_MISMATCH: "ERR_DOMAIN_MISMATCH";
-  readonly INVALID_DOMAIN_LABEL: "ERR_INVALID_DOMAIN_LABEL";
-  readonly INVALID_REGISTRY_ID: "ERR_INVALID_REGISTRY_ID";
   readonly UNEXPECTED_NETWORK_PREFIX: "ERR_UNEXPECTED_NETWORK_PREFIX";
   readonly UNKNOWN_ADDRESS_CLASS: "ERR_UNKNOWN_ADDRESS_CLASS";
-  readonly UNKNOWN_DOMAIN_TAG: "ERR_UNKNOWN_DOMAIN_TAG";
   readonly UNEXPECTED_EXTENSION_FLAG: "ERR_UNEXPECTED_EXTENSION_FLAG";
   readonly UNKNOWN_CONTROLLER_TAG: "ERR_UNKNOWN_CONTROLLER_TAG";
   readonly INVALID_PUBLIC_KEY: "ERR_INVALID_PUBLIC_KEY";
@@ -220,7 +214,6 @@ export const AccountAddressErrorCode: {
   readonly UNEXPECTED_TRAILING_BYTES: "ERR_UNEXPECTED_TRAILING_BYTES";
   readonly I105_TOO_SHORT: "ERR_I105_TOO_SHORT";
   readonly INVALID_I105_CHAR: "ERR_INVALID_I105_CHAR";
-  readonly LOCAL_DIGEST_TOO_SHORT: "ERR_LOCAL8_DEPRECATED";
   readonly UNSUPPORTED_ADDRESS_FORMAT: "ERR_UNSUPPORTED_ADDRESS_FORMAT";
   readonly MULTISIG_MEMBER_OVERFLOW: "ERR_MULTISIG_MEMBER_OVERFLOW";
   readonly INVALID_MULTISIG_POLICY: "ERR_INVALID_MULTISIG_POLICY";
@@ -318,11 +311,9 @@ export interface InspectAccountIdOptions {
 }
 
 export interface AccountIdInspection {
-  detectedFormat: { kind: string; chainDiscriminant?: number };
   canonicalHex: string;
   i105: { value: string; chainDiscriminant: number };
   i105Warning: string;
-  warnings: string[];
 }
 
 export function inspectAccountId(
@@ -2456,6 +2447,7 @@ export interface ToriiVpnProfile {
   flowLabelBits: number;
   paddingBudgetMs: number;
   relayIdHex: string;
+  relayMldsa65PublicKeyHex: string;
   descriptorCommitHex: string;
   tlsServerName: string;
   relayTlsSpkiSha256Hex: string;
@@ -2492,6 +2484,7 @@ export interface ToriiVpnQuote {
   flowLabelBits: number;
   paddingBudgetMs: number;
   relayIdHex: string;
+  relayMldsa65PublicKeyHex: string;
   descriptorCommitHex: string;
   tlsServerName: string;
   relayTlsSpkiSha256Hex: string;
@@ -2521,6 +2514,7 @@ export interface ToriiVpnSession {
   flowLabelBits: number;
   paddingBudgetMs: number;
   relayIdHex: string;
+  relayMldsa65PublicKeyHex: string;
   descriptorCommitHex: string;
   tlsServerName: string;
   relayTlsSpkiSha256Hex: string;
@@ -2722,8 +2716,19 @@ export interface ToriiPipelineTransactionStatusStatus {
 export interface ToriiPipelineTransactionStatus {
   hash: string;
   status: ToriiPipelineTransactionStatusStatus;
-  scope: "local" | "auto" | "global";
+  scope: "local" | "global";
   resolved_from: "cache" | "queue" | "state";
+}
+
+/** Exact finality returned only after global state has applied the transaction. */
+export interface ToriiAppliedTransactionStatus
+  extends ToriiPipelineTransactionStatus {
+  status: {
+    kind: "Applied";
+    block_height: number;
+  };
+  scope: "global";
+  resolved_from: "state";
 }
 
 export interface ToriiProofEventBase {
@@ -3908,7 +3913,7 @@ export interface SoranetPuzzleConfigSnapshot {
 }
 
 export interface SoranetPuzzleTicketResponse {
-  ticketB64: string;
+  ticketB64: string | null;
   signedTicketB64: string | null;
   signedTicketFingerprintHex: string | null;
   difficulty: number;
@@ -4033,11 +4038,6 @@ export interface TransactionStatusPollOptions {
   intervalMs?: number;
   timeoutMs?: number | null;
   maxAttempts?: number | null;
-  /**
-   * Additional state-resolved failure labels. State-resolved `Rejected` and
-   * `Expired` always fail.
-   */
-  failureStatuses?: Iterable<string>;
   onStatus?: (
     status: string | null,
     payload: ToriiPipelineTransactionStatus | null,
@@ -4047,7 +4047,6 @@ export interface TransactionStatusPollOptions {
 
 /** Options for a single diagnostic status read; scope defaults to `global`. */
 export interface TransactionStatusReadOptions {
-  allowShortHash?: boolean;
   signal?: AbortSignal;
   scope?: "local" | "global";
 }
@@ -5222,6 +5221,8 @@ export interface ToriiPipelinePreflight {
     signature_batch_max_pqc: number;
     signature_batch_max_bls: number;
     overlay_max_instructions: number;
+    ivm_max_cycles_upper_bound: number;
+    ivm_admission_cycle_limit: number;
     ivm_max_decoded_instructions: number;
   };
   queue: {
@@ -5447,8 +5448,6 @@ export interface ToriiRuntimeUpgradeListItem {
   idHex: string;
   record: ToriiRuntimeUpgradeRecord;
 }
-
-export type ToriiPipelineStatus = ToriiPipelineTransactionStatus;
 
 export interface ToriiPipelineDagSnapshot {
   fingerprintHex: string;
@@ -5914,10 +5913,6 @@ export interface ToriiSumeragiNposDiagnostics {
   epoch_seed: string;
   prf_height: ToriiU64;
   prf_view: ToriiU64;
-  vrf_penalty_epoch: ToriiU64;
-  vrf_committed_no_reveal_total: ToriiU64;
-  vrf_no_participation_total: ToriiU64;
-  vrf_late_reveals_total: ToriiU64;
 }
 
 export interface ToriiSumeragiDiagnosticLaneCommitment {
@@ -6349,6 +6344,8 @@ export interface KaigiCallSignalsOptions {
   limit?: NumericLike;
   offset?: NumericLike;
   signal?: AbortSignal;
+  /** Per-call signer; falls back to `ToriiClient`'s `canonicalRequestAuth`. */
+  canonicalAuth?: CanonicalRequestAuth;
 }
 
 export interface KaigiCallRosterUpdatedEvent {
@@ -6768,7 +6765,7 @@ export interface IvmProvedContractCallResult {
   hash: string;
   signedTransaction: Buffer;
   submission: unknown;
-  status: ToriiPipelineStatus | null;
+  status: ToriiAppliedTransactionStatus | null;
   simulation: ContractCallSimulateResponse;
   metadata: { [key: string]: JsonValue };
   proved: IvmProvedPayload;
@@ -7230,7 +7227,7 @@ export type KaigiIdLike =
 
 export type KaigiPrivacyModeValue = {
   mode: "Transparent" | "ZkRosterV1";
-  state?: unknown;
+  state?: null;
 };
 
 export type KaigiPrivacyModeInput =
@@ -7247,18 +7244,25 @@ export interface KaigiRelayHopInput {
 
 export interface KaigiRelayManifestInput {
   expiryMs: NumericLike;
-  hops?: ReadonlyArray<KaigiRelayHopInput>;
+  hops: ReadonlyArray<KaigiRelayHopInput>;
 }
 
 export interface KaigiParticipantCommitmentInput {
   commitment: ArrayBufferView | ArrayBuffer | Buffer | string;
-  aliasTag?: string | null;
+  /** Clear aliases are off-chain only; native ledger instructions require null/omission. */
+  aliasTag?: null;
 }
 
 export interface KaigiParticipantNullifierInput {
   digest: ArrayBufferView | ArrayBuffer | Buffer | string;
-  issuedAtMs: NumericLike;
+  /** Clear issuance time is off-chain only; native ledger instructions require zero. */
+  issuedAtMs: 0;
 }
+
+export type KaigiRoomPolicyValue = {
+  policy: "Public" | "Authenticated";
+  state?: null;
+};
 
 export type KaigiRoomPolicyInput =
   | "public"
@@ -7267,7 +7271,8 @@ export type KaigiRoomPolicyInput =
   | "open"
   | "authenticated"
   | "auth"
-  | "protected";
+  | "protected"
+  | KaigiRoomPolicyValue;
 
 export interface CreateKaigiInput {
   id: KaigiIdLike;
@@ -7324,7 +7329,20 @@ export interface SetKaigiRelayManifestInput {
 export interface RegisterKaigiRelayInput {
   relayId: string;
   hpkePublicKey: ArrayBufferView | ArrayBuffer | Buffer | string;
-  bandwidthClass?: NumericLike;
+  bandwidthClass: NumericLike;
+}
+
+export type KaigiRelayHealthStatusInput =
+  | "Healthy"
+  | "Degraded"
+  | "Unavailable";
+
+export interface ReportKaigiRelayHealthInput {
+  callId: KaigiIdLike;
+  relayId: string;
+  status: KaigiRelayHealthStatusInput;
+  reportedAtMs: NumericLike;
+  notes?: string | null;
 }
 
 export type GovernanceVotingMode = "Zk" | "Plain";
@@ -9167,19 +9185,48 @@ export interface UaidManifestLifecycle {
   revocation: UaidManifestLifecycleRevocation | null;
 }
 
+export type UaidManifestRole = "Initiator" | "Participant";
+
+export interface UaidManifestScope {
+  dataspace?: number;
+  program?: string;
+  method?: string;
+  asset?: string;
+  role?: UaidManifestRole;
+}
+
+export type UaidManifestAllowanceWindow = "PerSlot" | "PerMinute" | "PerDay";
+
+export interface UaidManifestAllowEffect {
+  Allow: {
+    window: UaidManifestAllowanceWindow;
+    max_amount?: string;
+  };
+}
+
+export interface UaidManifestDenyEffect {
+  Deny: {
+    reason?: string;
+  };
+}
+
+export type UaidManifestEffect =
+  | UaidManifestAllowEffect
+  | UaidManifestDenyEffect;
+
 export interface UaidManifestEntry {
-  scope: Record<string, unknown>;
-  effect: Record<string, unknown>;
-  notes: string | null;
+  scope: UaidManifestScope;
+  effect: UaidManifestEffect;
+  notes?: string;
 }
 
 export interface UaidAssetPermissionManifest {
-  version: string;
+  version: 1;
   uaid: string;
   dataspace: number;
   issued_ms: number;
   activation_epoch: number;
-  expiry_epoch: number | null;
+  expiry_epoch?: number;
   entries: ReadonlyArray<UaidManifestEntry>;
 }
 
@@ -9195,13 +9242,16 @@ export interface UaidManifestRecord {
 
 export interface UaidManifestsResponse {
   uaid: string;
+  total: number;
+  has_more: boolean;
+  count_mode: ToriiCountMode;
   manifests: ReadonlyArray<UaidManifestRecord>;
 }
 
 export interface PublishSpaceDirectoryManifestRequest {
   authority: string;
-  manifest: UaidAssetPermissionManifest | Record<string, unknown>;
-  reason?: string | null;
+  manifest: UaidAssetPermissionManifest;
+  reason?: string;
 }
 
 export interface RevokeSpaceDirectoryManifestRequest {
@@ -9209,7 +9259,7 @@ export interface RevokeSpaceDirectoryManifestRequest {
   uaid: string;
   dataspaceId: number;
   revokedEpoch: number;
-  reason?: string | null;
+  reason?: string;
 }
 
 export interface UaidBindingsQueryOptions {
@@ -9218,6 +9268,10 @@ export interface UaidBindingsQueryOptions {
 
 export interface UaidManifestQueryOptions {
   dataspaceId?: number;
+  status?: "active" | "inactive" | "all";
+  limit?: number;
+  offset?: number;
+  countMode?: ToriiCountMode;
   signal?: AbortSignal;
 }
 
@@ -9378,6 +9432,18 @@ export interface RegisterKaigiRelayTransactionInput {
   networkId: NetworkId;
   authority: string;
   relay: RegisterKaigiRelayInput;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+  privateKeyAlgorithm?: string | null;
+}
+
+export interface ReportKaigiRelayHealthTransactionInput {
+  networkId: NetworkId;
+  authority: string;
+  report: ReportKaigiRelayHealthInput;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -9731,13 +9797,15 @@ export interface ToriiLedgerHeadersOptions {
   signal?: AbortSignal;
 }
 
-export interface ToriiBrowserTransactionStatusOptions
-  extends ToriiBrowserRequestOptions {
+export interface ToriiBrowserTransactionStatusOptions {
+  signal?: AbortSignal;
+  headers?: Record<string, string>;
   scope?: "local" | "global";
 }
 
-export interface ToriiBrowserTransactionStatusPollOptions
-  extends ToriiBrowserRequestOptions {
+export interface ToriiBrowserTransactionStatusPollOptions {
+  signal?: AbortSignal;
+  headers?: Record<string, string>;
   intervalMs?: number;
   timeoutMs?: number;
   maxAttempts?: number;
@@ -9849,11 +9917,11 @@ export declare class ToriiBrowserClient {
   waitForTransactionStatus(
     hashHex: string,
     options?: ToriiBrowserTransactionStatusPollOptions,
-  ): Promise<ToriiPipelineTransactionStatus>;
+  ): Promise<ToriiAppliedTransactionStatus>;
   submitTransactionAndWait(
     signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
     options: ToriiBrowserSubmitTransactionAndWaitOptions,
-  ): Promise<ToriiPipelineTransactionStatus>;
+  ): Promise<ToriiAppliedTransactionStatus>;
   getNodeCapabilities(
     options: ToriiBrowserCanonicalRequestOptions,
   ): Promise<ToriiBrowserNodeCapabilities>;
@@ -10734,23 +10802,23 @@ export declare class ToriiClient {
   waitForTransactionStatus(
     hashHex: string,
     options?: TransactionStatusPollOptions,
-  ): Promise<ToriiPipelineTransactionStatus>;
+  ): Promise<ToriiAppliedTransactionStatus>;
   submitTransactionAndWait(
     payload: VersionedSignedTransactionV1,
     options: SubmitTransactionAndWaitOptions,
-  ): Promise<ToriiPipelineTransactionStatus>;
+  ): Promise<ToriiAppliedTransactionStatus>;
   getTransactionStatusTyped(
     hashHex: string,
     options?: TransactionStatusReadOptions,
-  ): Promise<ToriiPipelineStatus | null>;
+  ): Promise<ToriiPipelineTransactionStatus | null>;
   waitForTransactionStatusTyped(
     hashHex: string,
     options?: TransactionStatusPollOptions,
-  ): Promise<ToriiPipelineStatus | null>;
+  ): Promise<ToriiAppliedTransactionStatus>;
   submitTransactionAndWaitTyped(
     payload: VersionedSignedTransactionV1,
     options: SubmitTransactionAndWaitOptions,
-  ): Promise<ToriiPipelineStatus | null>;
+  ): Promise<ToriiAppliedTransactionStatus>;
   getPipelineRecovery(
     height: number | string | bigint,
     options?: AbortSignalOptions,
@@ -10773,16 +10841,16 @@ export declare class ToriiClient {
   getConfigurationTyped(): Promise<ToriiConfigurationSnapshot | null>;
   getConfidentialGasSchedule(): Promise<ConfidentialGasSchedule | null>;
   getStatusSnapshot(options?: AbortSignalOptions): Promise<ToriiStatusSnapshot>;
-  deploySoracloudAppInfra(request: SoracloudAppInfraRequest | Record<string, unknown>, options: RequiredCanonicalRequestOptions): Promise<unknown>;
-  upgradeSoracloudAppInfra(request: SoracloudAppInfraRequest | Record<string, unknown>, options: RequiredCanonicalRequestOptions): Promise<unknown>;
+  deploySoracloudAppInfra(request: SoracloudAppInfraRequest, options: RequiredCanonicalRequestOptions): Promise<SoracloudMutationDraftResponseV1>;
+  upgradeSoracloudAppInfra(request: SoracloudAppInfraRequest, options: RequiredCanonicalRequestOptions): Promise<SoracloudMutationDraftResponseV1>;
   getSoracloudAppInfraStatus(options: RequiredCanonicalRequestOptions & {
     appName?: string;
     auditLimit?: NumericLike;
-  }): Promise<unknown>;
+  }): Promise<SoracloudAppInfraStatusResponseV1>;
   getSoracloudNamedAppInfraStatus(
     appName: string,
     options: RequiredCanonicalRequestOptions & { auditLimit?: NumericLike },
-  ): Promise<unknown>;
+  ): Promise<SoracloudAppInfraStatusResponseV1>;
   getNetworkTimeNow(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiNetworkTimeNow>;
@@ -12329,6 +12397,9 @@ export function buildSetKaigiRelayManifestTransaction(
 export function buildRegisterKaigiRelayTransaction(
   input: RegisterKaigiRelayTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
+export function buildReportKaigiRelayHealthTransaction(
+  input: ReportKaigiRelayHealthTransactionInput & FeePaymentRequired,
+): SignedTransactionResult;
 export function buildRegisterSmartContractCodeTransaction(
   input: RegisterSmartContractCodeTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
@@ -12391,7 +12462,11 @@ export function submitSignedTransaction(
         privateKey: ArrayBufferView | ArrayBuffer | Buffer;
       }
   ),
-): Promise<{ hash: string; submission: unknown; status?: unknown }>;
+): Promise<{
+  hash: string;
+  submission: unknown;
+  status?: ToriiAppliedTransactionStatus;
+}>;
 
 export const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1: 1048576;
 
@@ -12941,6 +13016,10 @@ export function buildRegisterKaigiRelayInstruction(
   relay: RegisterKaigiRelayInput,
 ): object;
 
+export function buildReportKaigiRelayHealthInstruction(
+  report: ReportKaigiRelayHealthInput,
+): object;
+
 export function buildProposeDeployContractInstruction(
   input: ProposeDeployContractInstructionInput,
 ): object;
@@ -13123,7 +13202,7 @@ export interface SoracloudHfDeployDraftInput {
   storageClass: SoracloudStorageClass;
   leaseTermMs: number | bigint | string;
   leaseAssetDefinitionId: string;
-  baseFeeNanos: number | bigint | string;
+  baseFee: QuantityInput;
 }
 
 export interface SoracloudManifestProvenance {
@@ -13131,22 +13210,46 @@ export interface SoracloudManifestProvenance {
   signature: string;
 }
 
+export interface SoracloudHfDeployPayload {
+  repo_id: string;
+  revision: string;
+  model_name: string;
+  service_name: string;
+  apartment_name: string | null;
+  storage_class: SoracloudStorageClass;
+  lease_term_ms: number;
+  lease_asset_definition_id: string;
+  base_fee: string;
+}
+
+export interface SoracloudSigningPayload<
+  TPayload,
+  TSchema extends string,
+  TLabel extends string,
+> {
+  schema: TSchema;
+  label: TLabel;
+  payload: TPayload;
+}
+
 export interface SoracloudHfDeployDraft {
-  payload: {
-    repo_id: string;
-    revision: string;
-    model_name: string;
-    service_name: string;
-    apartment_name: string | null;
-    storage_class: SoracloudStorageClass | { type: string; value?: unknown };
-    lease_term_ms: number;
-    lease_asset_definition_id: string;
-    base_fee_nanos: string;
-  };
+  payload: SoracloudHfDeployPayload;
   provenancePayloads: {
-    deploy: Record<string, unknown>;
-    generatedService: Record<string, unknown>;
-    generatedApartment: Record<string, unknown> | null;
+    deploy: SoracloudSigningPayload<
+      SoracloudHfDeployPayload,
+      "soracloud.hf.deploy.provenance.v1",
+      "hf_deploy"
+    >;
+    generatedService: SoracloudSigningPayload<
+      { service_name: string; repo_id: string; revision: string },
+      "soracloud.hf.deploy.provenance.v1",
+      "generated_service"
+    >;
+    generatedApartment: SoracloudSigningPayload<
+      { apartment_name: string; service_name: string },
+      "soracloud.hf.deploy.provenance.v1",
+      "generated_apartment"
+    > | null;
   };
 }
 
@@ -13204,18 +13307,62 @@ export interface SoracloudAppInfraDraftInput {
   services: ReadonlyArray<SoracloudAppInfraServiceInput>;
 }
 
-export interface SoracloudAppInfraDraft {
-  payload: Record<string, unknown> & {
-    schema_version: 1;
-    app_name: string;
-    app_version: string;
-    public_url: string;
-    static_site: Record<string, unknown> | null;
-    services: Array<Record<string, unknown>>;
+export interface SoracloudAppInfraRouteV1 {
+  schema_version: 1;
+  public_host: string | null;
+  path_prefix: string;
+  internal_url: string | null;
+}
+
+export interface SoracloudAppInfraStaticSiteV1 {
+  schema_version: 1;
+  public_url: string;
+  content_cid: string | null;
+  manifest_digest_hex: string | null;
+  mount_path: string;
+  api_base_path: string | null;
+}
+
+export interface SoracloudAppInfraServiceV1 {
+  schema_version: 1;
+  service_name: string;
+  service_version: string;
+  service_manifest_hash: string;
+  container_manifest_hash: string;
+  execution_plane: {
+    execution_plane: "HttpService" | "DeterministicService";
+    value: null;
   };
+  runtime: { runtime: "Inrou" | "Ivm"; value: null };
+  routes: SoracloudAppInfraRouteV1[];
+  lease_volumes: string[];
+  shard: string | null;
+}
+
+export interface SoracloudAppInfraPayload {
+  schema_version: 1;
+  app_name: string;
+  app_version: string;
+  public_url: string;
+  static_site: SoracloudAppInfraStaticSiteV1 | null;
+  services: SoracloudAppInfraServiceV1[];
+}
+
+export interface SoracloudAppInfraDraft {
+  payload: SoracloudAppInfraPayload;
   provenancePayloads: {
-    deploy: Record<string, unknown>;
-    services: Array<Record<string, unknown>>;
+    deploy: SoracloudSigningPayload<
+      SoracloudAppInfraPayload,
+      "soracloud.app.infra.provenance.v1",
+      "app_infra_deploy"
+    >;
+    services: Array<
+      SoracloudSigningPayload<
+        SoracloudAppInfraServiceV1,
+        "soracloud.app.infra.provenance.v1",
+        "app_infra_service"
+      >
+    >;
   };
 }
 
@@ -13269,6 +13416,44 @@ export interface SoracloudAppInfraRequest {
   provenance: SoracloudManifestProvenance;
 }
 
+export interface SoracloudMutationDraftResponseV1 {
+  ok: true;
+  authority: string;
+  signed_by: string;
+  tx_instructions: [SoracloudTxInstruction, ...SoracloudTxInstruction[]];
+}
+
+export interface SoracloudAppInfraStateV1 {
+  schema_version: 1;
+  app_name: string;
+  current_app_version: string;
+  current_manifest_hash: string;
+  revision_count: number;
+  deployed_sequence: number;
+  updated_sequence: number;
+  manifest: SoracloudAppInfraPayload;
+}
+
+export interface SoracloudAppInfraAuditEventV1 {
+  schema_version: 1;
+  sequence: number;
+  action: { action: "Deploy" | "Upgrade"; value: null };
+  app_name: string;
+  from_version: string | null;
+  to_version: string;
+  app_manifest_hash: string;
+  service_count: number;
+  signer: string;
+}
+
+export interface SoracloudAppInfraStatusResponseV1 {
+  schema_version: 1;
+  app_count: number;
+  audit_event_count: number;
+  apps: SoracloudAppInfraStateV1[];
+  recent_audit_events: SoracloudAppInfraAuditEventV1[];
+}
+
 export function assembleSoracloudAppInfraRequest(
   draft: SoracloudAppInfraDraft,
   provenances: { deploy: SoracloudManifestProvenance },
@@ -13294,64 +13479,80 @@ export function assembleSoracloudHfDeployRequest(
   },
 ): SoracloudHfDeployRequest;
 
-export interface SoracloudPrivateArtifactRefInput {
-  schemaVersion: number | bigint | string;
-  sorafsManifestDigest: string;
-  artifactHash: string;
-  ciphertextBytes: number | bigint | string;
-  artifactRole: "input" | "output";
-}
-
-export interface SoracloudPrivateQuantizedCpuModelInput {
-  inputLen: number | bigint | string;
-  outputLen: number | bigint | string;
-  weightsI8: number[];
-  biasI32: number[];
-  outputShift: number | bigint | string;
-  outputMin: number;
-  outputMax: number;
-}
-
-export interface SoracloudPrivateUploadedModelExecuteInput {
-  serviceName: string;
-  weightVersion: string;
-  modelId: string | null;
-  modelName: string | null;
-  bundleRoot: string | null;
-  policyId: string;
-  decryptionRequestId: string | null;
-  model: SoracloudPrivateQuantizedCpuModelInput;
-  plaintextInputI32: number[];
-  inputArtifact: SoracloudPrivateArtifactRefInput;
-  outputArtifact: SoracloudPrivateArtifactRefInput;
-  emittedSequence: number | bigint | string;
-}
-
-export interface SoracloudPrivateUploadedModelReceiptQueryInput {
-  receiptId?: string;
-  serviceName?: string;
-  modelId?: string;
-  weightVersion?: string;
-  limit?: number | bigint | string;
-  countMode?: "bounded" | "exact";
-}
-
 export interface SoracloudTxInstruction {
   wire_id: string;
+  /** Non-empty lowercase hexadecimal with an even number of digits. */
   payload_hex: string;
 }
 
-export function buildSoracloudPrivateUploadedModelExecuteRequest(
-  input: SoracloudPrivateUploadedModelExecuteInput,
-): Record<string, unknown>;
+export interface SoracloudUploadedModelEncryptionRecipientV1 {
+  schema_version: 1;
+  key_id: string;
+  key_version: number;
+  kem: { kem: "X25519HkdfSha256"; value: null };
+  aead: { aead: "Aes256Gcm"; value: null };
+  public_key_bytes: string;
+  public_key_fingerprint: string;
+}
 
-export function buildSoracloudPrivateUploadedModelReceiptQuery(
-  input?: SoracloudPrivateUploadedModelReceiptQueryInput,
-): Record<string, string>;
+export interface SoracloudUploadedModelWrappedKeyV1 {
+  schema_version: 1;
+  recipient_key_id: string;
+  recipient_key_version: number;
+  kem: { kem: "X25519HkdfSha256"; value: null };
+  aead: { aead: "Aes256Gcm"; value: null };
+  ephemeral_public_key: string;
+  nonce: string;
+  wrapped_key_ciphertext: string;
+  ciphertext_hash: string;
+  aad_digest: string;
+}
 
-export function privateUploadedModelReceiptInstruction(
-  response: Record<string, unknown>,
-): SoracloudTxInstruction;
+export interface SoracloudUploadedModelBundleV1 {
+  schema_version: 1;
+  service_name: string;
+  model_id: string;
+  weight_version: string;
+  family: string;
+  modalities: string[];
+  plaintext_root: string;
+  package_format: {
+    package_format: "NormalizedHuggingFaceSafetensorsV1";
+    value: null;
+  };
+  bundle_root: string;
+  sorafs_manifest_digest: number[];
+  chunk_count: number;
+  plaintext_bytes: number;
+  ciphertext_bytes: number;
+  chunk_manifest_root: string;
+  upload_recipient: SoracloudUploadedModelEncryptionRecipientV1;
+  wrapped_bundle_key: SoracloudUploadedModelWrappedKeyV1;
+  pricing_policy: { storage_price: unknown };
+  decryption_policy_ref: string;
+}
+
+export interface SoracloudModelArtifactStatusEntryV1 {
+  service_name: string;
+  model_name: string;
+  artifact_id: string;
+  training_job_id: string;
+  weight_version: string | null;
+  weight_artifact_hash: string;
+  dataset_ref: string;
+  training_config_hash: string;
+  reproducibility_hash: string;
+  provenance_attestation_hash: string;
+  registered_sequence: number;
+  consumed_by_version: string | null;
+  chunk_manifest_root: string | null;
+}
+
+export interface SoracloudUploadedModelStatusV1 {
+  schema_version: 1;
+  bundle: SoracloudUploadedModelBundleV1;
+  artifact: SoracloudModelArtifactStatusEntryV1 | null;
+}
 
 export class NumericV1Error extends Error {
   readonly code: string;

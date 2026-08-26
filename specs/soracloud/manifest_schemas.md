@@ -29,15 +29,22 @@ manifests. See `uploaded_private_models.md`.
 ## Hosted-service reporting epochs
 
 The hosted-service economic lease and its usage-reporting epoch are separate
-clocks. `lease_started_sequence`, `lease_expires_sequence`, prepaid balance,
-and the admitted runtime/storage/egress unit prices remain fixed for one
-economic lease. An upgrade or rollback that retains that lease must reject
-unit-price drift; a reporting rollover never renews or reprices the lease and
-never changes a leased volume's start or expiry.
+clocks. `lease_started_height` and `lease_expires_height` use canonical block
+height; reporting and unrelated Soracloud audit events cannot advance or stall
+economic billing. Every encoded lease, leased volume, reporting-epoch rollover,
+and Inrou placement carries
+`economic_clock = {"clock":"CanonicalBlockHeight"}`. First-release decoders
+reject the retired implicit audit-sequence layout instead of interpreting its
+numeric values as heights. The admitted runtime/storage/egress unit prices
+remain fixed for one economic lease. An upgrade or rollback that retains that
+lease must reject unit-price drift; a reporting rollover never renews or
+reprices the lease and never changes a leased volume's start or expiry.
 
 Every newly assigned Inrou reporter must first submit an accepted zero/open
 checkpoint for the current `reporting_epoch` before its replica may be marked
 as serving. Reporter counters are monotonic and terminal delivery is explicit.
+Reports that neither increase bytes nor change open/terminal state are rejected
+instead of consuming an audit or state transition.
 At exactly 4,096 reporter identities, the exact newly assigned active
 public-lane validator may compare-and-swap to `reporting_epoch + 1` only with a
 zero/open counter, after every old checkpoint is finalized and none of those
@@ -51,6 +58,23 @@ writes, and deliver its terminal report. A crashed or malicious reporter that
 cannot provide that terminal value intentionally stalls rollover until the
 missing usage is recovered; the protocol chooses accounting safety over an
 administrative data-loss escape hatch.
+
+## Authoritative Inrou placement
+
+An Inrou V1 replica placement is sticky for one economic lease. Reconciliation
+retains the exact validator account, peer ID, guest ISA, and
+`placement_incarnation`; it never reassigns a stateful replica to another host
+or ISA during that lease. If the original advert becomes ineligible, the
+required `host_availability` value becomes `Unavailable` and the slot fails
+closed. Only the exact original host becoming eligible again may change it back
+to `Available`. A new economic lease may select a fresh assignment.
+
+Placement records use strictly increasing, unique slot numbers bounded by
+`desired_replica_count`; sparse records are canonical when an earlier slot has
+no assignment. Runtime reconciliation removes state for unavailable or
+identity/incarnation-mismatched placements. Serving health and Torii routing
+require `Available`, the exact placement incarnation and host identity, and
+authoritative `Healthy` state.
 
 ## Scope
 
@@ -74,7 +98,7 @@ These manifests are designed for the `IVM` + custom Sora Container Runtime
   upgrade behavior.
 - `FheParamSetV1` captures governance-managed FHE parameter sets:
   deterministic backend/scheme identifiers, modulus profile, security/depth
-  bounds, and lifecycle heights (`activation`/`deprecation`/`withdraw`).
+  bounds, and lifecycle heights (`activation`/`withdraw`).
 - `FheExecutionPolicyV1` captures deterministic ciphertext execution limits:
   admitted payload sizes, input/output fan-in, depth/rotation/bootstrap caps,
   and canonical rounding mode.
@@ -138,19 +162,46 @@ Validation rejects unsupported versions with
 
 - Container manifest:
   - `bundle_path` and `entrypoint` must be non-empty.
+  - Inrou `entrypoint` values are canonical absolute portable-ASCII paths of
+    at most 256 bytes and 64 components. Guest-image member paths use the same
+    64-component limit below `/inrou/`; CLI publication also rejects missing,
+    non-regular, or empty kernel, rootfs, and initrd members before any upload.
+  - Every admitted Inrou guest-image profile must carry one concrete,
+    validation-complete `published_artifact` reference. Missing and JSON `null`
+    artifact representations are not V1 wire values. Its canonical
+    `manifest_digest_hex` is the sole storage-manifest identity; V1 has no
+    nullable or duplicate storage-identifier field.
+  - CLI source workspaces use a separate unpublished shape whose
+    `published_artifact` key is exactly JSON `null`. Publication consumes that
+    shape, installs immutable SoraFS references for every guest ISA, refreshes
+    the service's container hash, and only then constructs an admitted bundle.
+    Runtime hydration never falls back to guest files extracted from the
+    service bundle.
+  - Inrou V1 `lifecycle.start_grace_secs` and `stop_grace_secs` are each at
+    most 600 seconds. Admission rejects larger values; the runtime never clamps
+    a signed workload grace period. This ceiling does not apply to non-Inrou
+    container manifests.
   - `healthcheck_path` (if set) must start with `/`.
   - `config_exports` may reference only configs declared in
     `required_config_names`.
   - config-export env targets must use canonical environment-variable names
     (`[A-Za-z_][A-Za-z0-9_]*`).
-  - config-export file targets must stay relative, use `/` separators, and
-    must not contain empty, `.` or `..` segments.
+  - config-export file targets must stay relative, use `/` separators, use
+    only `[A-Za-z0-9._-]` within each segment, and must not contain empty, `.`
+    or `..` segments. The runtime preserves each admitted segment exactly.
   - config exports must not target the same env var or relative file path more
     than once.
 - Service manifest:
+  - every Inrou lease-volume declaration is materialized separately for each
+    replica, including non-root service and confidential volumes; V1 never
+    treats one disk image as shared or safe to multi-attach.
   - `service_version` must be non-empty.
   - `container.expected_schema_version` must match container schema v1.
-  - `rollout.canary_percent` must be `0..=100`.
+  - `rollout.canary_percent` must be `0..=100`. Deterministic IVM services may
+    use partial canaries. First-release Inrou HTTP services accept only `0` or
+    `100`: host-local lease disks have no authenticated cross-revision state
+    migration, and Torii fails closed if hosted deployment state nevertheless
+    contains an active canary.
   - `route.path_prefix` (if set) must start with `/`.
   - state binding names must be unique.
 - State binding:
@@ -178,15 +229,20 @@ Validation rejects unsupported versions with
   - `slot_count <= polynomial_modulus_degree`.
   - `max_multiplicative_depth < ciphertext_modulus_bits.len()`.
   - lifecycle height ordering must be strict:
-    `activation < deprecation < withdraw` when present.
+    `activation < withdraw` when present.
   - lifecycle status requirements:
-    - `Proposed` disallows deprecation/withdraw heights.
+    - `Proposed` disallows a withdraw height.
     - `Active` requires `activation_height`.
-    - `Deprecated` requires `activation_height` + `deprecation_height`.
     - `Withdrawn` requires `activation_height` + `withdraw_height`.
+  - V1 has no deprecated lifecycle or `deprecation_height` field; governance
+    transitions parameter sets directly from `Active` to `Withdrawn`.
 - FHE execution policy:
   - `max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
+  - Full-bootstrap verifier-key artifacts carry exactly the governed
+    BFV-native V1 payload on every build. A normalized Core STARK payload is
+    not a second wire format; `zk-stark` builds validate the native payload and
+    convert it deterministically for internal verification.
   - Bootstrap-capable policies (`max_bootstrap_count > 0`) must use exactly one
     governed mode: `bootstrap_key_zero_refresh_proof_statement_digest` for
     `RefreshOnlyV1`, or a digest-pinned, trusted-reviewer-signed full-bootstrap

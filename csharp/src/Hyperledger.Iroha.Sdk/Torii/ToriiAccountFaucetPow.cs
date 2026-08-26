@@ -32,9 +32,9 @@ public sealed record class ToriiAccountFaucetSolution
 
     public int Attempts { get; init; }
 
-    public ToriiAccountFaucetRequest ToRequest()
+    public ToriiAccountFaucetClaimV1 ToClaim()
     {
-        return new ToriiAccountFaucetRequest
+        return new ToriiAccountFaucetClaimV1
         {
             AccountId = AccountId,
             PowAnchorHeight = AnchorHeight,
@@ -45,12 +45,12 @@ public sealed record class ToriiAccountFaucetSolution
 
 public static class ToriiAccountFaucetPow
 {
-    public const string Algorithm = "scrypt-leading-zero-bits-v2";
+    public const string Algorithm = "scrypt-leading-zero-bits-v1";
 
     internal const long MaxScryptRomixMemoryBytes = 64L * 1024 * 1024;
     internal const uint MaxScryptParallelization = 16;
 
-    private static readonly byte[] DomainSeparator = Encoding.ASCII.GetBytes("iroha:accounts:faucet:pow:v3");
+    private static readonly byte[] DomainSeparator = Encoding.ASCII.GetBytes("iroha:accounts:faucet:pow:v1");
 
     public static byte[] ComputeChallenge(
         string accountId,

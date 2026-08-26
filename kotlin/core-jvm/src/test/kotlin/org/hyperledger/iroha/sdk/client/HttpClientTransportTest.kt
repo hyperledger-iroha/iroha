@@ -88,7 +88,7 @@ class HttpClientTransportTest {
             "/api/v1/accounts/$accountId/identifiers/claim-receipt",
             executor.lastRequest.uri.path,
         )
-        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null).address.canonicalHex(), executor.lastRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single())
+        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null).canonicalHex(), executor.lastRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single())
         assertEquals(
             org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy.ONE_SHOT,
             executor.lastRequest.replayPolicy,
@@ -150,7 +150,7 @@ class HttpClientTransportTest {
             config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
         )
 
-        transport.getUaidPortfolio("uaid:${hex.uppercase()}", UaidPortfolioQuery(assetId = "pkr#paynet")).join()
+        transport.getUaidPortfolio("uaid:$hex", UaidPortfolioQuery(assetId = "pkr#paynet")).join()
         assertEquals(
             "https://torii.example/v1/accounts/uaid%3A$hex/portfolio?asset_id=pkr%23paynet",
             executor.lastRequest.uri.toString(),
@@ -173,7 +173,7 @@ class HttpClientTransportTest {
     }
 
     @Test
-    fun uaidPathLiteralRejectsPaddedInputBeforeDispatch() {
+    fun uaidPathLiteralRejectsNoncanonicalInputBeforeDispatch() {
         val hex = "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0102030405060708090a0b0c0d0e0f11"
         val executor = StubResponseExecutor(
             statusCode = 200,
@@ -190,18 +190,17 @@ class HttpClientTransportTest {
             config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
         )
 
-        transport.getUaidPortfolio("UAID:${hex.uppercase()}").join()
+        transport.getUaidPortfolio("uaid:$hex").join()
         assertEquals(
             "https://torii.example/v1/accounts/uaid%3A$hex/portfolio",
             executor.lastRequest.uri.toString(),
         )
         val requestCount = executor.requestCount
 
-        for (uaid in listOf(" uaid:$hex", "uaid:$hex ", "uaid: $hex")) {
-            val error = assertFailsWith<IllegalArgumentException> {
+        for (uaid in listOf(hex, "UAID:$hex", "uaid:${hex.uppercase()}", " uaid:$hex", "uaid:$hex ", "uaid: $hex")) {
+            assertFailsWith<IllegalArgumentException> {
                 transport.getUaidPortfolio(uaid)
             }
-            assertTrue(error.message?.contains("uaid portfolio must not contain surrounding whitespace") == true)
             assertEquals(requestCount, executor.requestCount)
         }
     }
@@ -1493,6 +1492,80 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun contractAndMultisigTransactionHashesRequireIrohaHashOfMarker() {
+        val canonical = "ab".repeat(32)
+        val evenMarker = "aa".repeat(32)
+        fun contractResponse(
+            txHash: String = canonical,
+            entrypointHash: String = canonical,
+            receiptTxHash: String = canonical,
+            receiptEntrypointHash: String = canonical,
+        ): ByteArray =
+            """
+                {
+                  "ok": true,
+                  "submitted": true,
+                  "dataspace": "router",
+                  "code_hash_hex": "${"44".repeat(32)}",
+                  "abi_hash_hex": "${"55".repeat(32)}",
+                  "creation_time_ms": 1,
+                  "tx_hash_hex": "$txHash",
+                  "entrypoint_hash_hex": "$entrypointHash",
+                  "operation_receipt": {
+                    "operation_kind": "contract_call",
+                    "status": "queued",
+                    "transport": "torii",
+                    "dataspace": "router",
+                    "tx_hash_hex": "$receiptTxHash",
+                    "entrypoint_hash_hex": "$receiptEntrypointHash",
+                    "payload_digest_hex": "${"88".repeat(32)}"
+                  }
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+
+        assertEquals(canonical, ContractJsonParser.parseCallResponse(contractResponse()).txHashHex)
+        for (payload in listOf(
+            contractResponse(txHash = evenMarker),
+            contractResponse(txHash = " $canonical"),
+            contractResponse(entrypointHash = evenMarker),
+            contractResponse(receiptTxHash = evenMarker),
+            contractResponse(receiptEntrypointHash = evenMarker),
+        )) {
+            assertFailsWith<IllegalStateException> {
+                ContractJsonParser.parseCallResponse(payload)
+            }
+        }
+
+        val multisigAccountId = testMultisigAccountId()
+        fun multisigResponse(txHash: String, executedTxHash: String): ByteArray =
+            """
+                {
+                  "ok": true,
+                  "resolved_multisig_account_id": "$multisigAccountId",
+                  "submitted": true,
+                  "tx_hash_hex": "$txHash",
+                  "executed_tx_hash_hex": "$executedTxHash"
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+        assertEquals(
+            canonical,
+            ContractJsonParser.parseMultisigResponse(
+                multisigResponse(canonical, canonical),
+            ).executedTxHashHex,
+        )
+        assertFailsWith<IllegalStateException> {
+            ContractJsonParser.parseMultisigResponse(
+                multisigResponse(evenMarker, canonical),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            ContractJsonParser.parseMultisigResponse(
+                multisigResponse(canonical, evenMarker),
+            )
+        }
+    }
+
+    @Test
     fun listRamLfeProgramPoliciesParsesResponse() {
         val executor = StubResponseExecutor(
             statusCode = 200,
@@ -1825,6 +1898,7 @@ class HttpClientTransportTest {
         assertEquals(quoteId, quote.quoteId)
         assertEquals(quoteId, quote.leaseIdHex)
         assertEquals(meteringKey, quote.meteringPublicKeyHex)
+        assertEquals("55".repeat(1_952), quote.relayMldsa65PublicKeyHex)
         assertEquals("iroha_data_model::isi::vpn::OpenVpnLeaseEscrow", quote.openLeaseInstruction.wireId)
 
         val request = executor.lastRequest
@@ -2178,6 +2252,7 @@ class HttpClientTransportTest {
         val receipts = transport.listVpnReceipts(auth).join()
 
         assertEquals(sessionId, session.sessionId)
+        assertEquals("55".repeat(1_952), session.relayMldsa65PublicKeyHex)
         assertEquals(vpnHelperTicketHex(), session.helperTicketHex)
         assertEquals(1_576, session.helperTicketHex.length)
         assertTrue(fetched.isPresent)
@@ -2757,7 +2832,7 @@ class HttpClientTransportTest {
         val request = assertNotNull(executor.lastRequest)
         assertEquals("POST", request.method)
         assertEquals("https://torii.example/api/v1/aliases/setup/plan", request.uri.toString())
-        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(authority, null).address.canonicalHex(), request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(authority, null).canonicalHex(), request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
         @Suppress("UNCHECKED_CAST")
         val sent = JsonParser.parse(readBody(request)) as Map<String, Any?>
         assertEquals(1L, sent["schema_version"])
@@ -2829,7 +2904,7 @@ class HttpClientTransportTest {
             "https://torii.example/api/v1/aliases/lease/renew/plan",
             lifecycleHttpRequest.uri.toString(),
         )
-        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(authority, null).address.canonicalHex(), lifecycleHttpRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(authority, null).canonicalHex(), lifecycleHttpRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
         val lifecycleJson = readBody(lifecycleHttpRequest)
         assertFalse(lifecycleJson.contains("private_key"))
         assertFalse(lifecycleJson.contains("payment_proof"))
@@ -2891,30 +2966,6 @@ class HttpClientTransportTest {
         assertFalse(onboardingJson.contains("private_key"))
         assertFalse(onboardingJson.contains("payment_proof"))
 
-        val applyExecutor = StubResponseExecutor(
-            200,
-            """{"account_id":"$targetAccount","alias":"merchant@banka.paynet","status":"Unchanged","disposition":{"kind":"no_op","value":null}}"""
-                .toByteArray(StandardCharsets.UTF_8),
-        )
-        val applyTransport = HttpClientTransport.withExecutor(
-            applyExecutor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
-        )
-        val applyResponse = applyTransport.applySponsoredAccountOnboarding(
-            receipt,
-            token,
-            onboardingAuthority,
-            verifyingKeyNetworkId,
-        ).join()
-        assertEquals(AccountOnboardingStatusV1.UNCHANGED, applyResponse.status)
-        val applyHttpRequest = assertNotNull(applyExecutor.lastRequest)
-        assertEquals("https://torii.example/api/v1/accounts/onboard", applyHttpRequest.uri.toString())
-        assertEquals(token, applyHttpRequest.headers["X-Iroha-Onboarding-Token"]?.single())
-        val applyJson = readBody(applyHttpRequest)
-        assertTrue(applyJson.contains("\"receipt\""))
-        assertFalse(applyJson.contains(token))
-        assertFalse(applyJson.contains("private_key"))
-
         val readinessExecutor = StubResponseExecutor(
             200,
             """{"version":1,"status":{"status":"ready","value":null},"diagnostics":[]}"""
@@ -2937,107 +2988,132 @@ class HttpClientTransportTest {
     }
 
     @Test
-    fun sponsoredOnboardingApplyBindsReceiptStatusHashAndDisposition() {
-        val fixture = onboardingFixture(AliasPlanDispositionV1.CREATE)
-        val token = "onboarding-token-value-1234567890abcd"
-        val hash = "ab".repeat(32)
-        val queuedBody = onboardingApplyResponse(
-            fixture.accountId,
-            fixture.alias,
-            hash,
-            AccountOnboardingStatusV1.QUEUED,
-            AliasPlanDispositionV1.CREATE,
-        )
-        val applied = HttpClientTransport.withExecutor(
-            StubResponseExecutor(202, queuedBody),
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
-        ).applySponsoredAccountOnboarding(
-            fixture.receipt,
-            token,
-            fixture.authority,
-            fixture.receipt.body.networkId,
-        ).join()
-        assertEquals(AccountOnboardingStatusV1.QUEUED, applied.status)
-        assertEquals(hash, applied.transactionHashHex)
+    fun sponsoredOnboardingLegacyApplyResponseIsRejected() {
+        val accountId = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x22), "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        assertFailsWith<IllegalStateException> {
+            AccountOnboardingJsonParser.parsePrepareResponse(
+                """{"account_id":"$accountId","alias":"merchant@banka.paynet","status":"Unchanged","disposition":{"kind":"no_op","value":null}}"""
+                    .toByteArray(StandardCharsets.UTF_8),
+            )
+        }
+    }
 
-        val unchangedBody = onboardingApplyResponse(
-            fixture.accountId,
-            fixture.alias,
-            null,
-            AccountOnboardingStatusV1.UNCHANGED,
-            AliasPlanDispositionV1.NO_OP,
+    @Test
+    fun proofRequiredCurrentStateUsesOneAtomicPostAndClassifiesExactSnapshot() {
+        val fixture = atomicOnboardingProofFixture()
+        val canonicalAuth = applicationAuth()
+        val blockHash = AccountOnboardingBlockHashV1(verifyingKeyNetworkId.literal)
+        val responses = listOf(
+            fixture.accountId to AccountOnboardingCurrentStateV1.Outcome.APPLIED,
+            null to AccountOnboardingCurrentStateV1.Outcome.ALIAS_ABSENT,
+            testAccountId(0x49) to AccountOnboardingCurrentStateV1.Outcome.ALIAS_CONFLICT,
         )
-        val invalidResponses = listOf(
-            200 to queuedBody,
-            201 to queuedBody,
-            202 to unchangedBody,
-            200 to onboardingApplyResponse(
-                AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x43), "ed25519")
-                    .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT),
-                fixture.alias,
-                null,
-                AccountOnboardingStatusV1.UNCHANGED,
-                AliasPlanDispositionV1.NO_OP,
-            ),
-            200 to onboardingApplyResponse(
-                fixture.accountId,
-                "substituted@paynet",
-                null,
-                AccountOnboardingStatusV1.UNCHANGED,
-                AliasPlanDispositionV1.NO_OP,
-            ),
-            202 to onboardingApplyResponse(
+        responses.forEach { (target, expectedOutcome) ->
+            val response = AccountOnboardingCurrentStateResponseV1(
+                AccountOnboardingCurrentStateResponseV1.VERSION,
+                verifyingKeyNetworkId,
                 fixture.accountId,
                 fixture.alias,
-                hash,
-                AccountOnboardingStatusV1.QUEUED,
-                AliasPlanDispositionV1.REPAIR,
-            ),
-            202 to onboardingApplyResponse(
-                fixture.accountId,
-                fixture.alias,
-                null,
-                AccountOnboardingStatusV1.QUEUED,
-                AliasPlanDispositionV1.CREATE,
-            ),
+                true,
+                target,
+                BigInteger.valueOf(41),
+                blockHash,
+            )
+            val executor = StubResponseExecutor(
+                200,
+                JsonEncoder.encode(response.toJsonMap()).toByteArray(StandardCharsets.UTF_8),
+                "application/json",
+            )
+            val transport = HttpClientTransport.withExecutor(
+                executor,
+                signedClientConfig("https://torii.example/api"),
+            )
+
+            val result = transport.verifyAccountOnboardingCurrentState(
+                fixture.proofRequired,
+                fixture.request,
+                fixture.receipt,
+                fixture.binding,
+                fixture.authority,
+                verifyingKeyNetworkId,
+                canonicalAuth,
+            ).join()
+
+            assertEquals(expectedOutcome, result.outcome)
+            assertEquals(BigInteger.valueOf(41), result.blockHeight)
+            assertEquals(blockHash, result.blockHash)
+            assertEquals(1, executor.requestCount)
+            assertEquals("POST", executor.lastRequest.method)
+            assertEquals(
+                "https://torii.example/api/v1/accounts/onboarding/current-state",
+                executor.lastRequest.uri.toString(),
+            )
+            assertNull(executor.lastRequest.headers["X-Iroha-Onboarding-Token"])
+            assertNotNull(executor.lastRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT])
+            assertNotNull(executor.lastRequest.headers[CanonicalRequestSigner.HEADER_SIGNATURE])
+            assertNotNull(executor.lastRequest.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS])
+            assertNotNull(executor.lastRequest.headers[CanonicalRequestSigner.HEADER_NONCE])
+            @Suppress("UNCHECKED_CAST")
+            val sent = JsonParser.parse(readBody(executor.lastRequest)) as Map<String, Any?>
+            assertEquals(setOf("version", "account_id", "alias"), sent.keys)
+            assertEquals(fixture.accountId, sent["account_id"])
+            assertEquals(fixture.alias, sent["alias"])
+        }
+    }
+
+    @Test
+    fun proofRequiredCurrentStateRejectsSubstitutionOpenShapeAndInvalidAnchor() {
+        val fixture = atomicOnboardingProofFixture()
+        val canonicalAuth = applicationAuth()
+        val exact = linkedMapOf<String, Any?>(
+            "version" to 1,
+            "network_id" to verifyingKeyNetworkId.literal,
+            "account_id" to fixture.accountId,
+            "alias" to fixture.alias,
+            "account_exists" to true,
+            "alias_target_account_id" to fixture.accountId,
+            "observed_block_height" to 51,
+            "observed_block_hash" to verifyingKeyNetworkId.literal,
         )
-        invalidResponses.forEach { (statusCode, responseBody) ->
-            val failure = assertFailsWith<CompletionException> {
-                HttpClientTransport.withExecutor(
-                    StubResponseExecutor(statusCode, responseBody),
-                    ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
-                ).applySponsoredAccountOnboarding(
+        fun changed(field: String, value: Any?): Map<String, Any?> = LinkedHashMap(exact).also {
+            it[field] = value
+        }
+        val invalid = listOf(
+            changed("version", 2),
+            changed("network_id", otherNetworkId.literal),
+            changed("account_id", testAccountId(0x4a)),
+            changed("alias", "other@banka.paynet"),
+            changed("account_exists", false).toMutableMap().also { it["alias_target_account_id"] = null },
+            changed("observed_block_height", 0),
+            changed("observed_block_hash", verifyingKeyNetworkId.literal.lowercase()),
+            changed("alias_target_account_id", " ${fixture.accountId}"),
+            LinkedHashMap(exact).also { it["legacy_account_state"] = "Applied" },
+            LinkedHashMap(exact).also { it.remove("alias_target_account_id") },
+        )
+        invalid.forEachIndexed { index, body ->
+            val executor = StubResponseExecutor(
+                200,
+                JsonEncoder.encode(body).toByteArray(StandardCharsets.UTF_8),
+                "application/json",
+            )
+            val transport = HttpClientTransport.withExecutor(
+                executor,
+                signedClientConfig("https://torii.example/api"),
+            )
+            assertFailsWith<CompletionException>("invalid response $index") {
+                transport.verifyAccountOnboardingCurrentState(
+                    fixture.proofRequired,
+                    fixture.request,
                     fixture.receipt,
-                    token,
+                    fixture.binding,
                     fixture.authority,
-                    fixture.receipt.body.networkId,
+                    verifyingKeyNetworkId,
+                    canonicalAuth,
                 ).join()
             }
-            assertTrue(failure.cause is IllegalArgumentException)
+            assertEquals(1, executor.requestCount, "invalid response $index")
         }
-
-        val noOpFixture = onboardingFixture(AliasPlanDispositionV1.NO_OP)
-        val invalidTransition = assertFailsWith<CompletionException> {
-            HttpClientTransport.withExecutor(
-                StubResponseExecutor(
-                    202,
-                    onboardingApplyResponse(
-                        noOpFixture.accountId,
-                        noOpFixture.alias,
-                        hash,
-                        AccountOnboardingStatusV1.QUEUED,
-                        AliasPlanDispositionV1.CREATE,
-                    ),
-                ),
-                ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
-            ).applySponsoredAccountOnboarding(
-                noOpFixture.receipt,
-                token,
-                noOpFixture.authority,
-                noOpFixture.receipt.body.networkId,
-            ).join()
-        }
-        assertTrue(invalidTransition.cause is IllegalArgumentException)
     }
 
     @Test
@@ -3070,7 +3146,7 @@ class HttpClientTransportTest {
         assertEquals("merchant@banka.paynet", response.get().items.single().alias)
         val request = assertNotNull(executor.lastRequest)
         assertEquals("https://torii.example/api/v1/aliases/by-account", request.uri.toString())
-        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(account, null).address.canonicalHex(), request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single())
+        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(account, null).canonicalHex(), request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single())
         assertCanonicalSignature(request, keyPair.public, 1_700_000_000_000L, "alias-list-nonce-1")
     }
 
@@ -3251,7 +3327,7 @@ class HttpClientTransportTest {
         val authoritativeHash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         val executor = TrackingExecutor(
             expectedHash = authoritativeHash,
-            submitHeaderHash = authoritativeHash.uppercase(),
+            submitHeaderHash = authoritativeHash,
         )
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
@@ -3275,6 +3351,34 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun submitTransactionRejectsNonCanonicalReceiptHashHeaders() {
+        val transaction = sampleTransaction(0x12)
+        val localHash = SignedTransactionHasher.hashHex(transaction)
+        val invalidHeaders = listOf(
+            localHash.uppercase(),
+            " $localHash",
+            "$localHash ",
+            "0x$localHash",
+            localHash.dropLast(2),
+            localHash.dropLast(1) + "0",
+        )
+
+        for (header in invalidHeaders) {
+            val transport = HttpClientTransport.withExecutor(
+                executor = TrackingExecutor(localHash, header),
+                config = ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example/api"))
+                    .build(),
+            )
+
+            val error = assertFailsWith<CompletionException>(header) {
+                transport.submitTransaction(transaction).join()
+            }
+            assertIs<IllegalStateException>(error.cause)
+        }
+    }
+
+    @Test
     fun pipelineSuccessStatusIsNotPubliclyConfigurable() {
         val publicNames = PipelineStatusOptions::class.java.methods
             .map { it.name }
@@ -3282,6 +3386,106 @@ class HttpClientTransportTest {
 
         assertFalse("getSuccessStatuses" in publicNames)
         assertFalse("successStatuses" in publicNames)
+    }
+
+    @Test
+    fun pipelineFailureClassificationIsFixed() {
+        assertFailsWith<IllegalArgumentException> {
+            PipelineStatusOptions(intervalMillis = -1L)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PipelineStatusOptions(timeoutMillis = -1L)
+        }
+        val publicNames = PipelineStatusOptions::class.java.methods.map { it.name }.toSet()
+        assertFalse("getFailureStatuses" in publicNames)
+        assertFalse("failureStatuses" in publicNames)
+
+        for (kind in listOf("Rejected", "Expired")) {
+            val hash = "ab".repeat(32)
+            val executor = StubResponseExecutor(
+                statusCode = 200,
+                body = """{"hash":"$hash","status":{"kind":"$kind"},"scope":"global","resolved_from":"state"}"""
+                    .toByteArray(StandardCharsets.UTF_8),
+            )
+            val transport = HttpClientTransport.withExecutor(
+                executor = executor,
+                config = ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example/api"))
+                    .build(),
+            )
+
+            val error = assertFailsWith<CompletionException> {
+                transport.waitForTransactionStatus(
+                    hash,
+                    PipelineStatusOptions(
+                        intervalMillis = 0L,
+                        maxAttempts = 1,
+                    ),
+                ).join()
+            }
+            assertIs<TransactionStatusException>(error.cause)
+        }
+
+        for ((kind, statusFields) in listOf(
+            "Applied" to ",\"block_height\":7",
+            "Rejected" to "",
+            "Expired" to "",
+        )) {
+            for (source in listOf("cache", "queue")) {
+                val hash = "ab".repeat(32)
+                val executor = StubResponseExecutor(
+                    statusCode = 200,
+                    body =
+                        """{"hash":"$hash","status":{"kind":"$kind"$statusFields},"scope":"global","resolved_from":"$source"}"""
+                            .toByteArray(StandardCharsets.UTF_8),
+                )
+                val transport = HttpClientTransport.withExecutor(
+                    executor = executor,
+                    config = ClientConfig.builder()
+                        .setBaseUri(URI.create("https://torii.example/api"))
+                        .build(),
+                )
+                val error = assertFailsWith<CompletionException> {
+                    transport.waitForTransactionStatus(
+                        hash,
+                        PipelineStatusOptions(intervalMillis = 0L, maxAttempts = 1),
+                    ).join()
+                }
+                assertIs<TransactionTimeoutException>(error.cause)
+            }
+        }
+
+        val cachedApplied = linkedMapOf<String, Any>(
+            "hash" to "ab".repeat(32),
+            "status" to mapOf("kind" to "Applied", "block_height" to 7),
+            "scope" to "global",
+            "resolved_from" to "cache",
+        )
+        assertFailsWith<IllegalStateException> {
+            TransactionFinality.requireApplied(cachedApplied, "ab".repeat(32))
+        }
+    }
+
+    @Test
+    fun pipelineStatusRejectsHttp202And204() {
+        val hash = "ab".repeat(32)
+        for (statusCode in listOf(202, 204)) {
+            val transport = HttpClientTransport.withExecutor(
+                executor = StubResponseExecutor(statusCode = statusCode, body = byteArrayOf()),
+                config = ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example/api"))
+                    .build(),
+            )
+
+            val error = assertFailsWith<CompletionException> {
+                transport.waitForTransactionStatus(
+                    hash,
+                    PipelineStatusOptions(intervalMillis = 0L),
+                ).join()
+            }
+            assertIs<TransactionStatusHttpException>(error.cause)
+            assertEquals(statusCode, (error.cause as TransactionStatusHttpException).statusCode)
+        }
     }
 
     @Test
@@ -3306,6 +3510,88 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun publicPipelineStatusAcceptsOnlyExactLocalOrGlobalScopes() {
+        val hash = "ab".repeat(32)
+        val payload = linkedMapOf<String, Any>(
+            "hash" to hash,
+            "status" to mapOf("kind" to "Queued"),
+            "scope" to "local",
+            "resolved_from" to "queue",
+        )
+
+        assertEquals("local", PipelineStatusExtractor.normalizePublicStatus(payload)["scope"])
+        payload["scope"] = "auto"
+        val error = assertFailsWith<IllegalStateException> {
+            PipelineStatusExtractor.normalizePublicStatus(payload)
+        }
+        assertTrue(error.message?.contains("unsupported scope") == true)
+    }
+
+    @Test
+    fun publicPipelineStatusRejectsNonCanonicalHashRepresentations() {
+        val hash = "ab".repeat(32)
+        val payload = linkedMapOf<String, Any>(
+            "hash" to hash,
+            "status" to mapOf("kind" to "Applied", "block_height" to 7),
+            "scope" to "global",
+            "resolved_from" to "state",
+        )
+        val invalidHashes = listOf<Any>(
+            hash.uppercase(),
+            " $hash",
+            "$hash ",
+            "0x$hash",
+            hash.dropLast(2),
+            "aa".repeat(32),
+            ByteArray(32) { 0xab.toByte() },
+            List(32) { 0xab },
+        )
+
+        for (invalid in invalidHashes) {
+            payload["hash"] = invalid
+            assertFailsWith<IllegalStateException>(invalid.toString()) {
+                PipelineStatusExtractor.normalizePublicStatus(payload)
+            }
+        }
+
+        payload["hash"] = hash
+        for (invalid in listOf(
+            hash.uppercase(),
+            " $hash",
+            "$hash ",
+            "0x$hash",
+            hash.dropLast(2),
+            "aa".repeat(32),
+        )) {
+            assertFailsWith<IllegalStateException>(invalid) {
+                PipelineStatusExtractor.requireAuthoritativeStatus(payload, invalid)
+            }
+        }
+    }
+
+    @Test
+    fun waitForTransactionStatusRejectsNonCanonicalRequestHashes() {
+        val hash = "ab".repeat(32)
+        val transport = HttpClientTransport.withExecutor(
+            executor = StubResponseExecutor(statusCode = 404, body = byteArrayOf()),
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        for (invalid in listOf(
+            hash.uppercase(),
+            " $hash",
+            "$hash ",
+            "0x$hash",
+            hash.dropLast(2),
+            "aa".repeat(32),
+        )) {
+            assertFailsWith<IllegalArgumentException> {
+                transport.waitForTransactionStatus(invalid, PipelineStatusOptions()).join()
+            }
+        }
+    }
+
+    @Test
     fun transactionStatusFailureSurfaceIsMetadataOnly() {
         val error = TransactionStatusException(
             "cd".repeat(32),
@@ -3324,7 +3610,7 @@ class HttpClientTransportTest {
 
     @Test
     fun waitForTransactionStatusSaturatesOverflowingDeadline() {
-        val hash = "fe".repeat(32)
+        val hash = "fd".repeat(32)
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """{"hash":"$hash","status":{"kind":"Queued"},"scope":"global","resolved_from":"queue"}"""
@@ -3481,6 +3767,7 @@ class HttpClientTransportTest {
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
               "relay_id_hex": "$validEd25519PublicKeyHex",
+              "relay_mldsa65_public_key_hex": "${"55".repeat(1_952)}",
               "descriptor_commit_hex": "${"cd".repeat(32)}",
               "tls_server_name": "relay.example",
               "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
@@ -3514,6 +3801,7 @@ class HttpClientTransportTest {
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
               "relay_id_hex": "$meteringKey",
+              "relay_mldsa65_public_key_hex": "${"55".repeat(1_952)}",
               "descriptor_commit_hex": "${"cd".repeat(32)}",
               "tls_server_name": "relay.example",
               "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
@@ -3550,6 +3838,7 @@ class HttpClientTransportTest {
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
               "relay_id_hex": "$validEd25519PublicKeyHex",
+              "relay_mldsa65_public_key_hex": "${"55".repeat(1_952)}",
               "descriptor_commit_hex": "${"cd".repeat(32)}",
               "tls_server_name": "relay.example",
               "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
@@ -3869,19 +4158,27 @@ class HttpClientTransportTest {
         return AccountOnboardingPlanReceiptV1(body, hex(hash), hex(signer.generateSignature()))
     }
 
-    private fun onboardingFixture(disposition: AliasPlanDispositionV1): OnboardingFixture {
-        val signer = Ed25519PrivateKeyParameters(ByteArray(32) { 0x53.toByte() }, 0)
-        val authority = AccountAddress.fromAccount(signer.generatePublicKey().encoded, "ed25519")
+    private data class AtomicOnboardingProofFixture(
+        val request: AccountOnboardingPlanRequestV1,
+        val receipt: AccountOnboardingPlanReceiptV1,
+        val binding: TairaPublicResetMutationBindingV1,
+        val proofRequired: AccountOnboardingProofRequiredPrepareResponseV1,
+        val authority: String,
+        val accountId: String,
+        val alias: String,
+    )
+
+    private fun atomicOnboardingProofFixture(): AtomicOnboardingProofFixture {
+        val privateKey = Ed25519PrivateKeyParameters(ByteArray(32) { 0x53.toByte() }, 0)
+        val authority = AccountAddress.fromAccount(privateKey.generatePublicKey().encoded, "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
-        val accountId = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x42), "ed25519")
-            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
-        val alias = ResolvedAccountAliasV1(
-            AccountAliasName.parse("merchant@banka.paynet"),
-            7L,
-        )
+        val accountId = testAccountId(0x48)
+        val alias = "merchant@banka.paynet"
+        val resolvedAlias = ResolvedAccountAliasV1(AccountAliasName.parse(alias), 7L)
+        val request = AccountOnboardingPlanRequestV1(alias, accountId)
         val intent = AliasIntentV1.AccountAlias(
             AliasAccountIntentV1(
-                alias,
+                resolvedAlias,
                 accountId,
                 AccountProvisionV1.CREATE,
                 AccountAliasRoleV1.PRIMARY,
@@ -3895,61 +4192,62 @@ class HttpClientTransportTest {
             3,
             AssetDefinitionIdEncoder.encodeFromBytes(assetBytes),
             "5",
-            1_700_000_100_000L,
+            4_102_444_800_000L,
         )
         val body = AccountOnboardingPlanBodyV1(
             1,
-            AccountOnboardingPlanRequestV1(alias.canonicalName.canonicalText(), accountId),
+            request,
             authority,
             verifyingKeyNetworkId,
-            AliasPlanAnchorV1(9, "01".repeat(32)),
-            AliasPlanResourceV1(
-                intent,
-                disposition,
-                null,
-                if (disposition == AliasPlanDispositionV1.NO_OP) null else 0,
-            ),
+            AliasPlanAnchorV1(9, verifyingKeyNetworkId.literal),
+            AliasPlanResourceV1(intent, AliasPlanDispositionV1.NO_OP, null, null),
             AliasLeaseAcquisitionV1(1),
             guard,
-            if (disposition == AliasPlanDispositionV1.NO_OP) {
-                emptyList()
-            } else {
-                listOf(AliasFramedInstructionV1(EnsureAlias.WIRE_ID, byteArrayOf(4, 5, 6)))
-            },
+            emptyList(),
             null,
             guard.validUntilMs,
         )
-        return OnboardingFixture(
-            signedOnboardingReceipt(body, signer),
+        val receipt = signedOnboardingReceipt(body, privateKey)
+        val binding = TairaPublicResetMutationBindingV1(
+            authorizationSha256 = "11".repeat(32),
+            authorizationNonce = "onboarding-fixture-nonce-0000001",
+            kind = TairaPublicResetMutationBindingV1.ONBOARDING,
+            phase = "onboarding",
+            idempotencyKey = "22".repeat(32),
+            executionExpiresAtUnixMs = 4_102_444_800_000L,
+        )
+        val unsigned = AccountOnboardingProofRequiredPrepareResponseV1(
+            binding,
+            receipt.planHash.lowercase(),
+            accountId,
+            alias,
+            AliasPlanDispositionV1.NO_OP,
+            "00",
+        )
+        val digest = PreparedTransactionSignatureV1.digest(
+            PreparedTransactionSignatureV1.onboardingProofRequired(unsigned),
+        )
+        val signer = Ed25519Signer()
+        signer.init(true, privateKey)
+        signer.update(digest, 0, digest.size)
+        val proofRequired = AccountOnboardingProofRequiredPrepareResponseV1(
+            binding,
+            receipt.planHash.lowercase(),
+            accountId,
+            alias,
+            AliasPlanDispositionV1.NO_OP,
+            hex(signer.generateSignature()),
+        )
+        return AtomicOnboardingProofFixture(
+            request,
+            receipt,
+            binding,
+            proofRequired,
             authority,
             accountId,
-            alias.canonicalName.canonicalText(),
+            alias,
         )
     }
-
-    private fun onboardingApplyResponse(
-        accountId: String,
-        alias: String,
-        transactionHashHex: String?,
-        status: AccountOnboardingStatusV1,
-        disposition: AliasPlanDispositionV1,
-    ): ByteArray {
-        val response = linkedMapOf<String, Any?>(
-            "account_id" to accountId,
-            "alias" to alias,
-            "status" to status.wireValue,
-            "disposition" to disposition.toJsonMap(),
-        )
-        if (transactionHashHex != null) response["tx_hash_hex"] = transactionHashHex
-        return JsonEncoder.encode(response).toByteArray(StandardCharsets.UTF_8)
-    }
-
-    private data class OnboardingFixture(
-        val receipt: AccountOnboardingPlanReceiptV1,
-        val authority: String,
-        val accountId: String,
-        val alias: String,
-    )
 
     private fun sha256Hex(bytes: ByteArray): String =
         hex(MessageDigest.getInstance("SHA-256").digest(bytes))
@@ -4529,6 +4827,7 @@ class HttpClientTransportTest {
     private class StubResponseExecutor(
         private val statusCode: Int,
         private val body: ByteArray,
+        private val contentType: String? = null,
     ) : CapturingExecutor() {
         override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
             requestCount += 1
@@ -4536,9 +4835,9 @@ class HttpClientTransportTest {
             if (request.uri.path.endsWith("/v1/node/capabilities")) {
                 return CompletableFuture.completedFuture(compatibleCapabilitiesResponse())
             }
-            return CompletableFuture.completedFuture(
-                TransportResponse.builder().setStatusCode(statusCode).setBody(body).build(),
-            )
+            val response = TransportResponse.builder().setStatusCode(statusCode).setBody(body)
+            contentType?.let { response.addHeader("Content-Type", it) }
+            return CompletableFuture.completedFuture(response.build())
         }
     }
 
@@ -4584,7 +4883,7 @@ class HttpClientTransportTest {
                 return CompletableFuture.completedFuture(builder.build())
             }
             if (request.method == "GET") {
-                if (request.uri.query?.contains("hash=$expectedHash") == true) {
+                if (request.uri.query == "hash=$expectedHash&scope=global") {
                     observedExpectedHash = true
                 }
                 val kind = when (pollCount++) {

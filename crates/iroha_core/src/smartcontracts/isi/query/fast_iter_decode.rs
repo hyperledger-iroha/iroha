@@ -21,7 +21,7 @@ impl std::io::Write for ExactBareWriter<'_> {
         Ok(())
     }
 }
-fn decode_exact_in_scope<T>(bytes: &[u8]) -> Result<T, Error>
+pub(super) fn decode_exact_in_scope<T>(bytes: &[u8]) -> Result<T, Error>
 where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
@@ -47,13 +47,6 @@ where
         ));
     }
     Ok(value)
-}
-/// Decode an exact canonical bare payload for legacy, non-server callers.
-pub(super) fn decode_iter_query_payload_exact<T>(bytes: &[u8]) -> Option<T>
-where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
-{
-    decode_exact_in_scope(bytes).ok()
 }
 /// Cumulative decoder for the query, predicate, and selector in one Start.
 ///
@@ -131,10 +124,10 @@ mod tests {
     #[test]
     fn exact_decode_accepts_canonical_unit_and_rejects_trailing_or_short_layouts() {
         let bytes = norito::codec::Encode::encode(&FindDomains);
-        assert!(decode_iter_query_payload_exact::<FindDomains>(&bytes).is_some());
+        assert!(decode_exact_in_scope::<FindDomains>(&bytes).is_ok());
         let mut trailing = bytes.clone();
         trailing.push(0);
-        assert!(decode_iter_query_payload_exact::<FindDomains>(&trailing).is_none());
+        assert!(decode_exact_in_scope::<FindDomains>(&trailing).is_err());
         assert!(decode_exact_in_scope::<u64>(&[]).is_err());
     }
 }

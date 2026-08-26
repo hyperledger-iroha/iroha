@@ -32,7 +32,7 @@ fn address_audit_supports_csv_output() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let csv_stream = if stdout.contains("input,status,format,domain_kind,i105,canonical_hex") {
+    let csv_stream = if stdout.contains("input,status,format,i105,canonical_hex") {
         stdout.as_ref()
     } else {
         stderr.as_ref()
@@ -42,7 +42,11 @@ fn address_audit_supports_csv_output() {
         .filter(|line| !line.is_empty() && !line.starts_with("CLI started"));
     assert_eq!(
         lines.next(),
-        Some("input,status,format,domain_kind,i105,canonical_hex,error_code,error_message")
+        Some("input,status,format,i105,canonical_hex,error_code,error_message")
+    );
+    assert!(
+        !csv_stream.contains("domain_kind"),
+        "first-release CSV must not expose retired selector metadata"
     );
     let rows: Vec<&str> = lines.collect();
     assert_eq!(rows.len(), 2, "expected two CSV rows");

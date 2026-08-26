@@ -218,16 +218,10 @@ impl<T: Write> RunArgs<T> for Args {
 # p2p_proxy_tls_verify = true
 # p2p_proxy_tls_pinned_cert_der_base64 = "BASE64_DER"
 #
-# # TLS-over-TCP to peers (requires iroha_p2p/p2p_tls):
-# tls_enabled = false
-# tls_fallback_to_plain = false
-# tls_listen_address = "addr:0.0.0.0:1337#BF18"
-# tls_inbound_only = false
-#
 # Notes:
 # - When p2p_proxy_required=true, p2p_no_proxy must be empty.
 # - When p2p_proxy is https:// and p2p_proxy_tls_verify=true, a pinned cert is required.
-# - tls_inbound_only=true disables the plaintext P2P listener; inbound connections require TLS.
+# - P2P always serves TLS 1.3 on network.address; there is no plaintext listener or fallback.
 "#,
         );
         fs::write(&config_path, config_payload)

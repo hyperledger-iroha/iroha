@@ -37,9 +37,11 @@ use rand::{
     rand_core::TryCryptoRng,
     rngs::{OsRng, StdRng},
 };
-use sorafs_car::taikai::{BundleRequest, BundleSummary, bundle_segment, load_extra_metadata};
+use sorafs_car::taikai::{
+    BundleRequest, BundleSummary, bundle_segment, load_extra_metadata,
+    validate_distinct_artifact_paths,
+};
 use std::{
-    borrow::Cow,
     collections::{HashMap, HashSet},
     env,
     fmt::Write as _,
@@ -52,6 +54,7 @@ use std::{
 };
 const DEFAULT_LADDER_PRESETS_JSON: &str =
     include_str!("../../../../fixtures/taikai/ladder_presets.json");
+const TAIKAI_BUNDLE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.taikai.bundle.v1";
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Bundle a Taikai segment into a CAR archive and Norito envelope.
@@ -635,6 +638,13 @@ impl Run for CekRotateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let event_name = parse_name(&self.event_id, "event-id")?;
         let stream_name = parse_name(&self.stream_id, "stream-id")?;
+        validate_policy_output_paths(
+            "CEK receipt output",
+            &self.out,
+            "CEK receipt JSON output",
+            self.json_out.as_deref(),
+            &[],
+        )?;
         let hkdf_salt = build_cek_hkdf_salt(self.hkdf_salt.as_deref())?;
         let issued_at_unix = match self.issued_at_unix {
             Some(value) => value,
@@ -653,10 +663,15 @@ impl Run for CekRotateArgs {
             issued_at_unix,
             notes: self.notes,
         };
-        write_norito_file(&self.out, "cek rotation receipt", &receipt)?;
-        if let Some(path) = &self.json_out {
-            write_json_file(path, "cek rotation receipt", &receipt)?;
-        }
+        receipt
+            .validate()
+            .wrap_err("invalid CEK rotation receipt")?;
+        write_policy_artifacts(
+            &self.out,
+            self.json_out.as_deref(),
+            "cek rotation receipt",
+            &receipt,
+        )?;
         let output =
             build_receipt_output_value("receipt", &receipt, &self.out, self.json_out.as_deref())?;
         let text = render_receipt_text(
@@ -712,30 +727,34 @@ impl Run for RptAttestArgs {
         let event_name = parse_name(&self.event_id, "event-id")?;
         let stream_name = parse_name(&self.stream_id, "stream-id")?;
         let rendition_name = parse_name(&self.rendition_id, "rendition-id")?;
+        let event_id = TaikaiEventId::new(event_name);
+        let stream_id = TaikaiStreamId::new(stream_name);
+        validate_policy_output_paths(
+            "RPT output",
+            &self.out,
+            "RPT JSON output",
+            self.json_out.as_deref(),
+            &[
+                ("GAR input", self.gar.as_path()),
+                ("CEK receipt input", self.cek_receipt.as_path()),
+                ("distribution bundle input", self.bundle.as_path()),
+            ],
+        )?;
         let gar_digest = compute_file_digest(&self.gar)
             .wrap_err_with(|| format!("failed to hash GAR `{}`", self.gar.display()))?;
-        let cek_receipt_digest = compute_file_digest(&self.cek_receipt).wrap_err_with(|| {
-            format!(
-                "failed to hash CEK receipt `{}`",
-                self.cek_receipt.display()
-            )
-        })?;
+        let cek_receipt_digest =
+            validate_cek_receipt_binding(&self.cek_receipt, &event_id, &stream_id)?;
         let bundle_digest = compute_bundle_digest(&self.bundle)
             .wrap_err_with(|| format!("failed to hash bundle `{}`", self.bundle.display()))?;
         let policy_labels = normalize_labels(&self.policy_labels, "policy-label")?;
         let now = current_unix_timestamp()
             .wrap_err("failed to read system clock for RPT valid_from/valid_until defaults")?;
-        let valid_from = self.valid_from_unix.unwrap_or(now);
-        let valid_until = self.valid_until_unix.unwrap_or(valid_from + 86_400);
-        if valid_until <= valid_from {
-            return Err(eyre!(
-                "valid-until ({valid_until}) must be greater than valid-from ({valid_from})"
-            ));
-        }
+        let (valid_from, valid_until) =
+            resolve_rpt_validity_window(now, self.valid_from_unix, self.valid_until_unix)?;
         let rpt = ReplicationProofTokenV1 {
             schema_version: REPLICATION_PROOF_TOKEN_VERSION_V1,
-            event_id: TaikaiEventId::new(event_name),
-            stream_id: TaikaiStreamId::new(stream_name),
+            event_id,
+            stream_id,
             rendition_id: TaikaiRenditionId::new(rendition_name),
             gar_digest,
             cek_receipt_digest,
@@ -745,10 +764,13 @@ impl Run for RptAttestArgs {
             valid_until_unix: valid_until,
             notes: self.notes,
         };
-        write_norito_file(&self.out, "replication proof token", &rpt)?;
-        if let Some(path) = &self.json_out {
-            write_json_file(path, "replication proof token", &rpt)?;
-        }
+        rpt.validate().wrap_err("invalid replication proof token")?;
+        write_policy_artifacts(
+            &self.out,
+            self.json_out.as_deref(),
+            "replication proof token",
+            &rpt,
+        )?;
         let output = build_receipt_output_value("rpt", &rpt, &self.out, self.json_out.as_deref())?;
         let text = render_receipt_text(
             "Taikai replication proof token generated",
@@ -767,7 +789,7 @@ fn parse_blob_digest(value: &str, field: &str) -> Result<BlobDigest> {
     Ok(BlobDigest::new(bytes))
 }
 fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
-    let trimmed = value.trim_start_matches("0x");
+    let trimmed = value.strip_prefix("0x").unwrap_or(value);
     let bytes =
         hex::decode(trimmed).map_err(|err| eyre!("invalid {field} hex `{value}`: {err}"))?;
     if bytes.len() != 32 {
@@ -781,10 +803,14 @@ fn parse_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
     Ok(out)
 }
 fn build_cek_hkdf_salt(explicit: Option<&str>) -> Result<[u8; 32]> {
-    match explicit {
+    let salt = match explicit {
         Some(hex) => parse_hex_32(hex, "hkdf-salt"),
         None => random_cek_hkdf_salt(),
+    }?;
+    if salt.iter().all(|byte| *byte == 0) {
+        return Err(eyre!("hkdf-salt must not be all zero"));
     }
+    Ok(salt)
 }
 fn random_cek_hkdf_salt() -> Result<[u8; 32]> {
     random_cek_hkdf_salt_with_rng(&mut OsRng)
@@ -795,23 +821,390 @@ fn random_cek_hkdf_salt_with_rng<R: TryCryptoRng>(rng: &mut R) -> Result<[u8; 32
         .map_err(|err| eyre!("failed to generate Taikai CEK HKDF salt random bytes: {err}"))?;
     Ok(salt)
 }
-fn write_norito_file<T: NoritoSerialize>(path: &Path, label: &str, value: &T) -> Result<()> {
+fn validate_policy_output_paths(
+    primary_label: &str,
+    primary: &Path,
+    json_label: &str,
+    json: Option<&Path>,
+    inputs: &[(&str, &Path)],
+) -> Result<()> {
+    if let Some(json) = json {
+        validate_distinct_artifact_paths(&[(primary_label, primary), (json_label, json)])?;
+    }
+    for &(input_label, input) in inputs {
+        validate_distinct_artifact_paths(&[(primary_label, primary), (input_label, input)])?;
+        if let Some(json) = json {
+            validate_distinct_artifact_paths(&[(json_label, json), (input_label, input)])?;
+        }
+    }
+    Ok(())
+}
+fn write_policy_artifacts<T: NoritoSerialize + JsonSerialize>(
+    primary: &Path,
+    json: Option<&Path>,
+    label: &str,
+    value: &T,
+) -> Result<()> {
     let bytes = norito::to_bytes(value)
         .wrap_err_with(|| format!("failed to encode {label} as canonical Norito framing"))?;
-    fs::write(path, &bytes)
-        .wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
+    let rendered = json
+        .map(|_| {
+            norito::json::to_json_pretty(value)
+                .map_err(|err| eyre!("failed to render {label} JSON: {err}"))
+        })
+        .transpose()?;
+    let json_label = format!("{label} JSON");
+    let mut artifacts = vec![PolicyArtifactBytes {
+        target: primary,
+        label,
+        bytes: &bytes,
+    }];
+    if let (Some(path), Some(rendered)) = (json, rendered.as_ref()) {
+        artifacts.push(PolicyArtifactBytes {
+            target: path,
+            label: &json_label,
+            bytes: rendered.as_bytes(),
+        });
+    }
+    publish_policy_artifacts_with_hook(&artifacts, || Ok(()))
 }
-fn write_json_file<T: JsonSerialize>(path: &Path, label: &str, value: &T) -> Result<()> {
-    let rendered = norito::json::to_json_pretty(value)
-        .map_err(|err| eyre!("failed to render {label} JSON: {err}"))?;
-    fs::write(path, rendered.as_bytes())
-        .wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
+
+struct PolicyArtifactBytes<'a> {
+    target: &'a Path,
+    label: &'a str,
+    bytes: &'a [u8],
+}
+
+struct StagedPolicyArtifact {
+    path: Option<PathBuf>,
+}
+
+impl StagedPolicyArtifact {
+    fn publish(&mut self, target: &Path) -> std::io::Result<()> {
+        let path = self.path.as_ref().expect("staged artifact is unpublished");
+        fs::rename(path, target)?;
+        self.path = None;
+        Ok(())
+    }
+
+    fn restore(&mut self, target: &Path) -> std::io::Result<()> {
+        self.publish(target)
+    }
+}
+
+impl Drop for StagedPolicyArtifact {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+fn publish_policy_artifacts_with_hook<F>(
+    artifacts: &[PolicyArtifactBytes<'_>],
+    before_publish: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    for artifact in artifacts {
+        validate_policy_output_target(artifact.target, artifact.label)?;
+    }
+
+    let mut staged = Vec::with_capacity(artifacts.len());
+    for artifact in artifacts {
+        staged.push(stage_policy_artifact(
+            artifact.target,
+            artifact.label,
+            artifact.bytes,
+        )?);
+    }
+
+    before_publish()?;
+    for artifact in artifacts {
+        validate_policy_output_target(artifact.target, artifact.label)?;
+    }
+
+    let mut backups = Vec::with_capacity(artifacts.len());
+    for artifact in artifacts {
+        backups.push(snapshot_policy_output(artifact.target, artifact.label)?);
+    }
+
+    let mut published = 0;
+    for (index, artifact) in artifacts.iter().enumerate() {
+        if let Err(error) = staged[index].publish(artifact.target) {
+            let rollback_error = rollback_policy_artifacts(artifacts, &mut backups, published);
+            let mut message = format!(
+                "failed to atomically publish {} `{}`: {error}",
+                artifact.label,
+                artifact.target.display()
+            );
+            if let Err(rollback_error) = rollback_error {
+                let _ = write!(message, "; rollback also failed: {rollback_error}");
+            }
+            return Err(eyre!(message));
+        }
+        published += 1;
+    }
+    Ok(())
+}
+
+fn rollback_policy_artifacts(
+    artifacts: &[PolicyArtifactBytes<'_>],
+    backups: &mut [Option<StagedPolicyArtifact>],
+    published: usize,
+) -> Result<()> {
+    let mut failures = Vec::new();
+    for index in (0..published).rev() {
+        let target = artifacts[index].target;
+        let result = match backups[index].as_mut() {
+            Some(backup) => backup.restore(target),
+            None => fs::remove_file(target),
+        };
+        if let Err(error) = result {
+            failures.push(format!("`{}`: {error}", target.display()));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(eyre!(
+            "failed to restore policy artifact outputs: {}",
+            failures.join(", ")
+        ))
+    }
+}
+
+fn snapshot_policy_output(path: &Path, label: &str) -> Result<Option<StagedPolicyArtifact>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(eyre!(
+                "failed to inspect existing {label} `{}`: {error}",
+                path.display()
+            ));
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(eyre!(
+            "{label} `{}` must be a regular file and must not be a symlink",
+            path.display()
+        ));
+    }
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    set_policy_no_follow(&mut options);
+    let mut file = options
+        .open(path)
+        .wrap_err_with(|| format!("failed to open existing {label} `{}`", path.display()))?;
+    let opened_metadata = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect opened {label} `{}`", path.display()))?;
+    if !opened_metadata.is_file() {
+        return Err(eyre!(
+            "{label} `{}` changed to a non-regular file while preparing output",
+            path.display()
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .wrap_err_with(|| format!("failed to snapshot existing {label} `{}`", path.display()))?;
+    let staged = stage_policy_artifact(path, &format!("{label} rollback snapshot"), &bytes)?;
+    fs::set_permissions(
+        staged.path.as_ref().expect("snapshot remains staged"),
+        metadata.permissions(),
+    )
+    .wrap_err_with(|| {
+        format!(
+            "failed to preserve permissions for {label} `{}`",
+            path.display()
+        )
+    })?;
+    Ok(Some(staged))
+}
+
+fn validate_policy_output_target(path: &Path, label: &str) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(eyre!("{label} `{}` must not be a symlink", path.display()));
+            }
+            if !metadata.is_file() {
+                return Err(eyre!("{label} `{}` must be a regular file", path.display()));
+            }
+            if metadata.permissions().readonly() {
+                return Err(eyre!("{label} `{}` must be writable", path.display()));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(eyre!(
+                "failed to inspect {label} `{}`: {error}",
+                path.display()
+            ));
+        }
+    }
+
+    let parent = policy_output_parent(path);
+    for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(eyre!(
+                        "{label} parent `{}` must not be a symlink",
+                        ancestor.display()
+                    ));
+                }
+                if !metadata.is_dir() {
+                    return Err(eyre!(
+                        "{label} parent `{}` must be a directory",
+                        ancestor.display()
+                    ));
+                }
+            }
+            Err(error) => {
+                return Err(eyre!(
+                    "failed to inspect {label} parent `{}`: {error}",
+                    ancestor.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn stage_policy_artifact(path: &Path, label: &str, bytes: &[u8]) -> Result<StagedPolicyArtifact> {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let parent = policy_output_parent(path);
+    for _ in 0..128 {
+        let sequence = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let staged_path = parent.join(format!(
+            ".taikai-policy-{}-{sequence}.tmp",
+            std::process::id()
+        ));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        set_policy_no_follow(&mut options);
+        let mut file = match options.open(&staged_path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(eyre!(
+                    "failed to create staging file for {label} `{}`: {error}",
+                    path.display()
+                ));
+            }
+        };
+        let staged = StagedPolicyArtifact {
+            path: Some(staged_path),
+        };
+        let metadata = file.metadata().wrap_err_with(|| {
+            format!(
+                "failed to inspect staging file for {label} `{}`",
+                path.display()
+            )
+        })?;
+        if !metadata.is_file() {
+            return Err(eyre!(
+                "staging path for {label} `{}` is not a regular file",
+                path.display()
+            ));
+        }
+        file.write_all(bytes)
+            .wrap_err_with(|| format!("failed to stage {label} output `{}`", path.display()))?;
+        file.sync_all().wrap_err_with(|| {
+            format!("failed to sync staged {label} output `{}`", path.display())
+        })?;
+        drop(file);
+        return Ok(staged);
+    }
+    Err(eyre!(
+        "failed to allocate a unique staging file for {label} `{}`",
+        path.display()
+    ))
+}
+
+fn policy_output_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+#[cfg(unix)]
+fn set_policy_no_follow(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    options.custom_flags(policy_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_policy_no_follow(_options: &mut OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const fn policy_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+const fn policy_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+const fn policy_no_follow_flag() -> i32 {
+    0
 }
 fn current_unix_timestamp() -> Result<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .map_err(|err| eyre!("clock drifted before UNIX_EPOCH: {err}"))
+}
+fn resolve_rpt_validity_window(
+    now: u64,
+    valid_from: Option<u64>,
+    valid_until: Option<u64>,
+) -> Result<(u64, u64)> {
+    let valid_from = valid_from.unwrap_or(now);
+    let valid_until = match valid_until {
+        Some(value) => value,
+        None => valid_from.checked_add(86_400).ok_or_else(|| {
+            eyre!("valid-from ({valid_from}) is too large for the default window")
+        })?,
+    };
+    if valid_until <= valid_from {
+        return Err(eyre!(
+            "valid-until ({valid_until}) must be greater than valid-from ({valid_from})"
+        ));
+    }
+    Ok((valid_from, valid_until))
 }
 fn compute_file_digest(path: &Path) -> Result<[u8; 32]> {
     let metadata = fs::symlink_metadata(path)
@@ -820,16 +1213,61 @@ fn compute_file_digest(path: &Path) -> Result<[u8; 32]> {
         return Err(eyre!("`{}` is not a regular file", path.display()));
     }
     let mut hasher = Hasher::new();
-    let relative = path
-        .file_name()
-        .map_or_else(|| PathBuf::from("."), PathBuf::from);
-    hash_file_entry(path, &relative, &mut hasher)?;
+    let mut file =
+        File::open(path).wrap_err_with(|| format!("failed to open `{}`", path.display()))?;
+    let mut buffer = [0u8; 8192];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .wrap_err_with(|| format!("failed to read `{}`", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
     Ok(*hasher.finalize().as_bytes())
+}
+fn validate_cek_receipt_binding(
+    path: &Path,
+    event_id: &TaikaiEventId,
+    stream_id: &TaikaiStreamId,
+) -> Result<[u8; 32]> {
+    let metadata = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("failed to stat CEK receipt `{}`", path.display()))?;
+    if !metadata.is_file() {
+        return Err(eyre!(
+            "CEK receipt `{}` is not a regular file",
+            path.display()
+        ));
+    }
+    let bytes = fs::read(path)
+        .wrap_err_with(|| format!("failed to read CEK receipt `{}`", path.display()))?;
+    let receipt = norito::decode_from_bytes::<CekRotationReceiptV1>(&bytes).map_err(|err| {
+        eyre!(
+            "failed to decode CEK receipt `{}` as canonical framed Norito: {err}",
+            path.display()
+        )
+    })?;
+    receipt
+        .validate()
+        .wrap_err_with(|| format!("invalid CEK receipt `{}`", path.display()))?;
+    if &receipt.event_id != event_id || &receipt.stream_id != stream_id {
+        return Err(eyre!(
+            "CEK receipt `{}` scope {}/{} does not match RPT scope {}/{}",
+            path.display(),
+            receipt.event_id,
+            receipt.stream_id,
+            event_id,
+            stream_id
+        ));
+    }
+    Ok(*blake3::hash(&bytes).as_bytes())
 }
 fn compute_bundle_digest(path: &Path) -> Result<[u8; 32]> {
     let metadata = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("failed to stat `{}`", path.display()))?;
     let mut hasher = Hasher::new();
+    hasher.update(TAIKAI_BUNDLE_DIGEST_DOMAIN_V1);
     if metadata.is_file() {
         let relative = path
             .file_name()
@@ -846,10 +1284,16 @@ fn compute_bundle_digest(path: &Path) -> Result<[u8; 32]> {
     Ok(*hasher.finalize().as_bytes())
 }
 fn hash_file_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
-    update_path_marker(relative, b'F', hasher);
+    update_path_marker(relative, b'F', hasher)?;
     let mut file =
         File::open(path).wrap_err_with(|| format!("failed to open `{}`", path.display()))?;
+    let expected_len = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect `{}`", path.display()))?
+        .len();
+    hasher.update(&expected_len.to_le_bytes());
     let mut buffer = [0u8; 8192];
+    let mut actual_len = 0_u64;
     loop {
         let read = file
             .read(&mut buffer)
@@ -857,29 +1301,47 @@ fn hash_file_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<
         if read == 0 {
             break;
         }
+        actual_len = actual_len
+            .checked_add(u64::try_from(read).expect("read buffer length fits u64"))
+            .ok_or_else(|| {
+                eyre!(
+                    "bundle file length overflowed while reading `{}`",
+                    path.display()
+                )
+            })?;
         hasher.update(&buffer[..read]);
+    }
+    if actual_len != expected_len {
+        return Err(eyre!(
+            "bundle file `{}` changed length while hashing (expected {expected_len}, read {actual_len})",
+            path.display()
+        ));
     }
     Ok(())
 }
 fn hash_directory_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<()> {
-    update_path_marker(relative, b'D', hasher);
+    update_path_marker(relative, b'D', hasher)?;
     let mut entries = Vec::new();
     for entry in fs::read_dir(path)
         .wrap_err_with(|| format!("failed to read directory `{}`", path.display()))?
     {
         let entry =
             entry.wrap_err_with(|| format!("failed to iterate directory `{}`", path.display()))?;
-        entries.push(entry);
-    }
-    entries.sort_by_key(std::fs::DirEntry::file_name);
-    for entry in entries {
         let child_path = entry.path();
+        let file_name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| eyre!("bundle entry `{}` is not valid UTF-8", child_path.display()))?;
+        entries.push((file_name, child_path));
+    }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    for (file_name, child_path) in entries {
         let mut child_relative = if relative.as_os_str().is_empty() {
             PathBuf::new()
         } else {
             relative.to_path_buf()
         };
-        child_relative.push(entry.file_name());
+        child_relative.push(file_name);
         hash_path_entry(&child_path, &child_relative, hasher)?;
     }
     Ok(())
@@ -898,14 +1360,36 @@ fn hash_path_entry(path: &Path, relative: &Path, hasher: &mut Hasher) -> Result<
         ))
     }
 }
-fn update_path_marker(relative: &Path, kind: u8, hasher: &mut Hasher) {
-    let label: Cow<'_, str> = if relative.as_os_str().is_empty() {
-        Cow::Borrowed(".")
-    } else {
-        Cow::Owned(relative.to_string_lossy().into_owned())
-    };
+fn update_path_marker(relative: &Path, kind: u8, hasher: &mut Hasher) -> Result<()> {
+    let label = canonical_bundle_relative_path(relative)?;
+    let label_len = u64::try_from(label.len())
+        .map_err(|_| eyre!("bundle path is too long to hash canonically"))?;
+    hasher.update(&[kind]);
+    hasher.update(&label_len.to_le_bytes());
     hasher.update(label.as_bytes());
-    hasher.update(&[0xFF, kind]);
+    Ok(())
+}
+fn canonical_bundle_relative_path(relative: &Path) -> Result<String> {
+    if relative.as_os_str().is_empty() {
+        return Ok(".".to_string());
+    }
+    let mut label = String::new();
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Err(eyre!(
+                "bundle path `{}` is not a canonical relative path",
+                relative.display()
+            ));
+        };
+        let component = component
+            .to_str()
+            .ok_or_else(|| eyre!("bundle path `{}` is not valid UTF-8", relative.display()))?;
+        if !label.is_empty() {
+            label.push('/');
+        }
+        label.push_str(component);
+    }
+    Ok(label)
 }
 fn normalize_labels(values: &[String], field: &str) -> Result<Vec<String>> {
     let mut out = Vec::with_capacity(values.len());
@@ -2155,11 +2639,17 @@ fn derive_storage_ticket(
 ) -> StorageTicketId {
     let mut hasher = Hasher::new();
     hasher.update(digest.as_bytes());
-    hasher.update(event_id.as_name().as_ref().as_bytes());
-    hasher.update(stream_id.as_name().as_ref().as_bytes());
-    hasher.update(rendition_id.as_name().as_ref().as_bytes());
+    hash_storage_ticket_name(&mut hasher, event_id.as_name());
+    hash_storage_ticket_name(&mut hasher, stream_id.as_name());
+    hash_storage_ticket_name(&mut hasher, rendition_id.as_name());
     hasher.update(&sequence.to_le_bytes());
     StorageTicketId::from_hash(hasher.finalize())
+}
+fn hash_storage_ticket_name(hasher: &mut Hasher, name: &Name) {
+    let bytes = name.as_ref().as_bytes();
+    let length = u64::try_from(bytes.len()).expect("canonical Name length fits u64");
+    hasher.update(&length.to_le_bytes());
+    hasher.update(bytes);
 }
 fn emit_ingest_summary<C: RunContext>(
     context: &mut C,
@@ -2277,8 +2767,251 @@ mod tests {
         let hex = "aa".repeat(32);
         let digest = parse_blob_digest(&hex, "test").expect("digest");
         assert_eq!(digest.as_bytes(), &[0xaa; 32]);
+        assert_eq!(
+            parse_hex_32(&format!("0x{hex}"), "test").expect("single prefix"),
+            [0xaa; 32]
+        );
+        assert!(parse_hex_32(&format!("0x0x{hex}"), "test").is_err());
         let err = parse_blob_digest("ff", "test").unwrap_err();
         assert!(err.to_string().contains("64 hex chars"));
+    }
+    #[test]
+    fn rpt_default_validity_window_rejects_timestamp_overflow() {
+        let err = resolve_rpt_validity_window(0, Some(u64::MAX), None)
+            .expect_err("default RPT validity must not wrap");
+        assert!(err.to_string().contains("too large for the default window"));
+        assert_eq!(
+            resolve_rpt_validity_window(10, None, None).expect("default validity"),
+            (10, 86_410)
+        );
+    }
+    #[test]
+    fn policy_artifact_digest_is_independent_of_file_name() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let first = tmp.path().join("gar.jws");
+        let second = tmp.path().join("renamed-gar.jws");
+        let payload = b"signed-gar-payload";
+        fs::write(&first, payload).expect("write first payload");
+        fs::write(&second, payload).expect("write renamed payload");
+        let expected = *blake3::hash(payload).as_bytes();
+        assert_eq!(compute_file_digest(&first).expect("first digest"), expected);
+        assert_eq!(
+            compute_file_digest(&second).expect("second digest"),
+            expected
+        );
+    }
+    #[test]
+    fn bundle_digest_length_frames_file_contents() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let forged = tmp.path().join("forged");
+        let structured = tmp.path().join("structured");
+        fs::create_dir_all(&forged).expect("create forged bundle");
+        fs::create_dir_all(&structured).expect("create structured bundle");
+        let mut forged_contents = b"b".to_vec();
+        forged_contents.extend_from_slice(b"c");
+        forged_contents.extend_from_slice(&[0xFF, b'F']);
+        forged_contents.extend_from_slice(b"d");
+        fs::write(forged.join("a"), forged_contents).expect("write forged entry");
+        fs::write(structured.join("a"), b"b").expect("write structured first entry");
+        fs::write(structured.join("c"), b"d").expect("write structured second entry");
+
+        assert_ne!(
+            compute_bundle_digest(&forged).expect("forged digest"),
+            compute_bundle_digest(&structured).expect("structured digest"),
+            "file length framing must distinguish bytes that imitate a second entry"
+        );
+    }
+    #[test]
+    fn bundle_digest_matches_canonical_v1_test_vector() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bundle = tmp.path().join("bundle");
+        fs::create_dir_all(bundle.join("nested")).expect("create nested bundle");
+        fs::write(bundle.join("nested/beta"), b"BC").expect("write nested entry");
+        fs::write(bundle.join("alpha"), b"A").expect("write root entry");
+
+        assert_eq!(
+            hex::encode(compute_bundle_digest(&bundle).expect("bundle digest")),
+            "32b42aff6303e492d041c7620f8b98f3dc1ee1f613de002a35c51b428d940846"
+        );
+    }
+    #[test]
+    fn rpt_outputs_must_not_alias_or_nest_inside_inputs() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bundle = tmp.path().join("bundle");
+        fs::create_dir_all(&bundle).expect("create bundle");
+        let out = bundle.join("rpt.to");
+        let error = validate_policy_output_paths(
+            "RPT output",
+            &out,
+            "RPT JSON output",
+            None,
+            &[("distribution bundle input", bundle.as_path())],
+        )
+        .expect_err("RPT output inside its attested bundle must fail");
+        assert!(error.to_string().contains("nested paths"));
+        assert!(!out.exists());
+
+        let same = tmp.path().join("same-output");
+        let error = validate_policy_output_paths(
+            "CEK receipt output",
+            &same,
+            "CEK receipt JSON output",
+            Some(&same),
+            &[],
+        )
+        .expect_err("binary and JSON outputs must differ");
+        assert!(error.to_string().contains("distinct paths"));
+    }
+    #[test]
+    fn policy_artifact_writer_preflights_every_target_before_publishing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let primary = tmp.path().join("receipt.to");
+        let invalid_json = tmp.path().join("receipt.json");
+        fs::create_dir(&invalid_json).expect("create invalid JSON target directory");
+        let artifacts = [
+            PolicyArtifactBytes {
+                target: &primary,
+                label: "CEK receipt",
+                bytes: b"framed-norito",
+            },
+            PolicyArtifactBytes {
+                target: &invalid_json,
+                label: "CEK receipt JSON",
+                bytes: b"{}",
+            },
+        ];
+
+        let error = publish_policy_artifacts_with_hook(&artifacts, || Ok(()))
+            .expect_err("invalid second target must fail before publication");
+
+        assert!(error.to_string().contains("must be a regular file"));
+        assert!(!primary.exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn policy_artifact_writer_rejects_symlink_target_without_following_it() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let victim = tmp.path().join("victim");
+        let primary = tmp.path().join("receipt.to");
+        let json = tmp.path().join("receipt.json");
+        fs::write(&victim, b"victim-bytes").expect("write victim");
+        symlink(&victim, &primary).expect("create output symlink");
+        let artifacts = [
+            PolicyArtifactBytes {
+                target: &primary,
+                label: "RPT",
+                bytes: b"framed-norito",
+            },
+            PolicyArtifactBytes {
+                target: &json,
+                label: "RPT JSON",
+                bytes: b"{}",
+            },
+        ];
+
+        let error = publish_policy_artifacts_with_hook(&artifacts, || Ok(()))
+            .expect_err("symlink target must fail closed");
+
+        assert!(error.to_string().contains("must not be a symlink"));
+        assert_eq!(fs::read(&victim).expect("read victim"), b"victim-bytes");
+        assert!(!json.exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn policy_artifact_writer_rechecks_late_second_target_before_publishing() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let primary = tmp.path().join("receipt.to");
+        let json = tmp.path().join("receipt.json");
+        let victim = tmp.path().join("victim");
+        fs::write(&primary, b"old-primary").expect("write existing primary");
+        fs::write(&victim, b"victim-bytes").expect("write victim");
+        let artifacts = [
+            PolicyArtifactBytes {
+                target: &primary,
+                label: "CEK receipt",
+                bytes: b"new-primary",
+            },
+            PolicyArtifactBytes {
+                target: &json,
+                label: "CEK receipt JSON",
+                bytes: b"{\"new\":true}",
+            },
+        ];
+
+        let error = publish_policy_artifacts_with_hook(&artifacts, || {
+            symlink(&victim, &json).wrap_err("create late JSON output symlink")?;
+            Ok(())
+        })
+        .expect_err("late second-output substitution must fail before publication");
+
+        assert!(error.to_string().contains("must not be a symlink"));
+        assert_eq!(
+            fs::read(&primary).expect("read original primary"),
+            b"old-primary"
+        );
+        assert_eq!(fs::read(&victim).expect("read victim"), b"victim-bytes");
+        assert!(
+            fs::read_dir(tmp.path())
+                .expect("list output directory")
+                .all(|entry| !entry
+                    .expect("directory entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".taikai-policy-")),
+            "failed publication must clean every staging file"
+        );
+    }
+    #[test]
+    fn cek_receipt_binding_rejects_mismatched_rpt_scope() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let receipt_path = tmp.path().join("cek.to");
+        let receipt = CekRotationReceiptV1 {
+            schema_version: CEK_ROTATION_RECEIPT_VERSION_V1,
+            event_id: TaikaiEventId::new(Name::from_str("other-event").expect("event")),
+            stream_id: TaikaiStreamId::new(Name::from_str("stream").expect("stream")),
+            kms_profile: "kms/default".to_string(),
+            new_wrap_key_label: "wrap-v2".to_string(),
+            previous_wrap_key_label: Some("wrap-v1".to_string()),
+            hkdf_salt: [0xA5; 32],
+            effective_segment_sequence: 7,
+            issued_at_unix: 1_700_000_000,
+            notes: None,
+        };
+        fs::write(
+            &receipt_path,
+            norito::to_bytes(&receipt).expect("encode receipt"),
+        )
+        .expect("write receipt");
+        let event = TaikaiEventId::new(Name::from_str("expected-event").expect("event"));
+        let stream = TaikaiStreamId::new(Name::from_str("stream").expect("stream"));
+
+        let error = validate_cek_receipt_binding(&receipt_path, &event, &stream)
+            .expect_err("mismatched receipt scope must fail");
+        assert!(error.to_string().contains("does not match RPT scope"));
+    }
+    #[test]
+    fn storage_ticket_derivation_length_prefixes_names() {
+        let digest = BlobDigest::new([0xA5; 32]);
+        let rendition = TaikaiRenditionId::new(Name::from_str("d").expect("name"));
+        let first = derive_storage_ticket(
+            &digest,
+            &TaikaiEventId::new(Name::from_str("ab").expect("name")),
+            &TaikaiStreamId::new(Name::from_str("c").expect("name")),
+            &rendition,
+            7,
+        );
+        let second = derive_storage_ticket(
+            &digest,
+            &TaikaiEventId::new(Name::from_str("a").expect("name")),
+            &TaikaiStreamId::new(Name::from_str("bc").expect("name")),
+            &rendition,
+            7,
+        );
+        assert_ne!(first, second, "distinct Taikai identities must not collide");
     }
     #[test]
     fn ensure_codec_validation_matches_track_kind() {
@@ -2405,6 +3138,12 @@ mod tests {
     fn cek_hkdf_salt_accepts_explicit_hex() {
         let salt = build_cek_hkdf_salt(Some(&"ab".repeat(32))).expect("explicit salt");
         assert_eq!(salt, [0xAB; 32]);
+    }
+    #[test]
+    fn cek_hkdf_salt_rejects_explicit_all_zero_value() {
+        let err = build_cek_hkdf_salt(Some(&"00".repeat(32)))
+            .expect_err("all-zero explicit salt must be rejected");
+        assert!(err.to_string().contains("must not be all zero"));
     }
     #[test]
     fn cek_hkdf_salt_random_path_reads_os_entropy() {

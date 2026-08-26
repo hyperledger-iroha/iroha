@@ -384,7 +384,7 @@ fn decode_policies_are_explicit_and_cover_supported_operation_frames() {
             OPAQUE_BLOB_DECODE_POLICY_V1,
         ),
         (
-            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
+            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
             MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
             SOURCE_PLAN_DECODE_POLICY_V1,
         ),

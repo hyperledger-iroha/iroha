@@ -1476,10 +1476,10 @@ fn require_canonical_cursor_text<K: ToString>(
 impl CanonicalExplorerCursorKey for AccountId {
     fn parse_canonical_cursor_key(key: &str) -> Result<Self, ExplorerCursorError> {
         let parsed = Self::parse_encoded(key).map_err(|_| ExplorerCursorError::InvalidKey)?;
-        if parsed.canonical() != key {
+        if parsed.to_string() != key {
             return Err(ExplorerCursorError::InvalidKey);
         }
-        Ok(parsed.into_account_id())
+        Ok(parsed)
     }
 }
 impl CanonicalExplorerCursorKey for DomainId {

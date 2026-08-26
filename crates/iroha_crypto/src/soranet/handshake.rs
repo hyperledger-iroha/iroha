@@ -9,6 +9,7 @@ use crate::{
 use base64::{
     Engine as _, encoded_len as base64_encoded_len, engine::general_purpose::STANDARD as Base64,
 };
+use curve25519_dalek::montgomery::MontgomeryPoint;
 use ed25519_dalek::{Signer, SigningKey};
 use hex::FromHex;
 use hkdf::{Hkdf, HkdfExtract};
@@ -22,10 +23,10 @@ use sha3::{
     digest::{ExtendableOutput, Update, XofReader},
 };
 use soranet_pq::{
-    HedgedRngSeed, MlKemMetadata, MlKemParameters, MlKemSharedSecret, MlKemSuite,
-    decapsulate_mlkem, encapsulate_mlkem_from_os, generate_mlkem_keypair,
-    generate_mlkem_keypair_from_os, hedged_chacha20_rng, mlkem_metadata, validate_mlkem_ciphertext,
-    validate_mlkem_public_key,
+    HedgedRngSeed, MlDsaSuite, MlKemMetadata, MlKemParameters, MlKemSharedSecret, MlKemSuite,
+    decapsulate_mlkem, deterministic_chacha20_rng, encapsulate_mlkem_from_os,
+    generate_mlkem_keypair, generate_mlkem_keypair_from_os, hedged_chacha20_rng, mlkem_metadata,
+    validate_mlkem_ciphertext, validate_mlkem_public_key, verify_mldsa,
 };
 use std::{
     convert::{TryFrom, TryInto},
@@ -33,6 +34,7 @@ use std::{
     ops::Deref,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
 };
 use subtle::ConstantTimeEq as _;
 use tempfile::TempDir;
@@ -47,6 +49,9 @@ const SESSION_KEY_IKM_DOMAIN: &[u8] = b"soranet.session-key.ikm.v1";
 const NOISE_XX_DH_IKM_DOMAIN: &[u8] = b"soranet.handshake.x25519.xx.v1";
 const STEP_DOMAIN: &[u8] = b"soranet.noise.step.v1";
 const RELAY_AUTH_DOMAIN: &[u8] = b"soranet.handshake.relay-auth.v1";
+const RELAY_AUTH_MLDSA_CONTEXT: &[u8] = b"soranet.handshake.relay-auth.v1";
+const RELAY_AUTH_VERSION_V1: u8 = 1;
+const RELAY_AUTH_SCHEME_ED25519_MLDSA65_V1: u8 = 1;
 /// ALPN used by the public `SoraNet` QUIC transport.
 pub const SORANET_QUIC_ALPN: &[u8] = b"soranet/1";
 /// Placeholder TLS name used by non-VPN harnesses that do not terminate TLS.
@@ -174,11 +179,158 @@ impl fmt::Display for HandshakeSuite {
         f.write_str(self.label())
     }
 }
+/// Relay-side key custody for the mandatory first-release dual authentication tail.
+///
+/// Cloning this value only clones two [`Arc`] handles. It never serializes or
+/// duplicates either private-key payload.
+#[derive(Clone)]
+pub struct RelayAuthenticationSignerV1 {
+    ed25519_key_pair: Arc<KeyPair>,
+    mldsa65_key_pair: Arc<KeyPair>,
+    authenticated_binding_digest: [u8; TRANSCRIPT_BINDING_LEN],
+}
+impl fmt::Debug for RelayAuthenticationSignerV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RelayAuthenticationSignerV1")
+            .field("ed25519_public_key", self.ed25519_key_pair.public_key())
+            .field("mldsa65_public_key", self.mldsa65_key_pair.public_key())
+            .field(
+                "authenticated_binding_digest",
+                &hex::encode(self.authenticated_binding_digest),
+            )
+            .finish_non_exhaustive()
+    }
+}
+impl RelayAuthenticationSignerV1 {
+    /// Bind the exact Ed25519 and ML-DSA-65 identity keys to authenticated relay metadata.
+    ///
+    /// # Errors
+    /// Returns an error unless both key pairs use the required algorithms and
+    /// `authenticated_binding_digest` is nonzero.
+    pub fn try_new(
+        ed25519_key_pair: Arc<KeyPair>,
+        mldsa65_key_pair: Arc<KeyPair>,
+        authenticated_binding_digest: [u8; TRANSCRIPT_BINDING_LEN],
+    ) -> Result<Self, HarnessError> {
+        relay_authentication_public_key_payload(
+            "relay Ed25519 identity",
+            ed25519_key_pair.public_key(),
+            Algorithm::Ed25519,
+        )?;
+        relay_authentication_public_key_payload(
+            "relay ML-DSA-65 identity",
+            mldsa65_key_pair.public_key(),
+            Algorithm::MlDsa,
+        )?;
+        validate_relay_authentication_binding_digest(&authenticated_binding_digest)?;
+        Ok(Self {
+            ed25519_key_pair,
+            mldsa65_key_pair,
+            authenticated_binding_digest,
+        })
+    }
+
+    /// Build the public verifier corresponding exactly to this signer.
+    #[must_use]
+    pub fn verifier(&self) -> RelayAuthenticationVerifierV1 {
+        RelayAuthenticationVerifierV1 {
+            ed25519_public_key: self.ed25519_key_pair.public_key().clone(),
+            mldsa65_public_key: self.mldsa65_key_pair.public_key().clone(),
+            authenticated_binding_digest: self.authenticated_binding_digest,
+        }
+    }
+
+    /// Return the exact Ed25519 public identity bound by this signer.
+    #[must_use]
+    pub fn ed25519_public_key(&self) -> &PublicKey {
+        self.ed25519_key_pair.public_key()
+    }
+
+    /// Return the exact ML-DSA-65 public identity bound by this signer.
+    #[must_use]
+    pub fn mldsa65_public_key(&self) -> &PublicKey {
+        self.mldsa65_key_pair.public_key()
+    }
+
+    /// Return the authenticated metadata digest bound by both signatures.
+    #[must_use]
+    pub const fn authenticated_binding_digest(&self) -> &[u8; TRANSCRIPT_BINDING_LEN] {
+        &self.authenticated_binding_digest
+    }
+}
+/// Client-side public identity and metadata binding required for relay authentication.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RelayAuthenticationVerifierV1 {
+    ed25519_public_key: PublicKey,
+    mldsa65_public_key: PublicKey,
+    authenticated_binding_digest: [u8; TRANSCRIPT_BINDING_LEN],
+}
+impl fmt::Debug for RelayAuthenticationVerifierV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RelayAuthenticationVerifierV1")
+            .field("ed25519_public_key", &self.ed25519_public_key)
+            .field("mldsa65_public_key", &self.mldsa65_public_key)
+            .field(
+                "authenticated_binding_digest",
+                &hex::encode(self.authenticated_binding_digest),
+            )
+            .finish()
+    }
+}
+impl RelayAuthenticationVerifierV1 {
+    /// Bind exact public relay identities to authenticated relay metadata.
+    ///
+    /// # Errors
+    /// Returns an error unless the public keys use Ed25519 and ML-DSA-65
+    /// respectively and `authenticated_binding_digest` is nonzero.
+    pub fn try_new(
+        ed25519_public_key: PublicKey,
+        mldsa65_public_key: PublicKey,
+        authenticated_binding_digest: [u8; TRANSCRIPT_BINDING_LEN],
+    ) -> Result<Self, HarnessError> {
+        relay_authentication_public_key_payload(
+            "relay Ed25519 identity",
+            &ed25519_public_key,
+            Algorithm::Ed25519,
+        )?;
+        relay_authentication_public_key_payload(
+            "relay ML-DSA-65 identity",
+            &mldsa65_public_key,
+            Algorithm::MlDsa,
+        )?;
+        validate_relay_authentication_binding_digest(&authenticated_binding_digest)?;
+        Ok(Self {
+            ed25519_public_key,
+            mldsa65_public_key,
+            authenticated_binding_digest,
+        })
+    }
+
+    /// Return the exact expected Ed25519 public identity.
+    #[must_use]
+    pub const fn ed25519_public_key(&self) -> &PublicKey {
+        &self.ed25519_public_key
+    }
+
+    /// Return the exact expected ML-DSA-65 public identity.
+    #[must_use]
+    pub const fn mldsa65_public_key(&self) -> &PublicKey {
+        &self.mldsa65_public_key
+    }
+
+    /// Return the authenticated metadata digest bound by both identities.
+    #[must_use]
+    pub const fn authenticated_binding_digest(&self) -> &[u8; TRANSCRIPT_BINDING_LEN] {
+        &self.authenticated_binding_digest
+    }
+}
 /// Bounded, cryptographically parsed fields needed by a relay before admission.
 ///
 /// This view is produced by the same parser used by [`process_client_hello`],
 /// so transport runtimes do not need a second wire-format implementation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct ClientHelloMetadata {
     handshake_suite: HandshakeSuite,
     kem_id: u8,
@@ -186,7 +338,26 @@ pub struct ClientHelloMetadata {
     client_capabilities: Vec<u8>,
     resume_hash: Option<Vec<u8>>,
 }
+impl fmt::Debug for ClientHelloMetadata {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientHelloMetadata")
+            .field("handshake_suite", &self.handshake_suite)
+            .field("kem_id", &self.kem_id)
+            .field("sig_id", &self.sig_id)
+            .field("client_capabilities", &self.client_capabilities)
+            .field("resume_hash_present", &self.resume_hash.is_some())
+            .finish()
+    }
+}
 impl ClientHelloMetadata {
+    fn clear_sensitive_fields(&mut self) {
+        clear_sensitive_vec(&mut self.client_capabilities);
+        if let Some(resume_hash) = self.resume_hash.as_mut() {
+            clear_sensitive_vec(resume_hash);
+        }
+        self.resume_hash = None;
+    }
+
     /// Return the handshake suite encoded by the client frame.
     #[must_use]
     pub const fn handshake_suite(&self) -> HandshakeSuite {
@@ -212,6 +383,18 @@ impl ClientHelloMetadata {
     pub fn resume_hash(&self) -> Option<&[u8]> {
         self.resume_hash.as_deref()
     }
+}
+impl Drop for ClientHelloMetadata {
+    fn drop(&mut self) {
+        self.clear_sensitive_fields();
+    }
+}
+
+fn clear_sensitive_vec(bytes: &mut Vec<u8>) {
+    // Resizing to the existing capacity does not allocate and exposes every
+    // spare byte so the complete allocation can be scrubbed before release.
+    bytes.resize(bytes.capacity(), 0);
+    bytes.zeroize();
 }
 #[derive(Debug)]
 struct SuiteList {
@@ -935,7 +1118,9 @@ pub fn diff_capabilities(
         if !cap.required {
             continue;
         }
-        let supported = relay.iter().any(|r| r.ty == cap.ty && r.value == cap.value);
+        let supported = relay
+            .iter()
+            .any(|relay_cap| capability_payloads_match(cap, relay_cap));
         if !supported {
             warnings.push(CapabilityWarning {
                 capability_type: cap.ty,
@@ -947,6 +1132,30 @@ pub fn diff_capabilities(
         }
     }
     warnings
+}
+fn capability_payloads_match(client: &CapabilityTlv, relay: &CapabilityTlv) -> bool {
+    if client.ty != relay.ty || client.value.len() != relay.value.len() {
+        return false;
+    }
+    client
+        .value
+        .iter()
+        .zip(&relay.value)
+        .enumerate()
+        .all(|(index, (&client_byte, &relay_byte))| {
+            // Requiredness is local policy for the advertising side, not part
+            // of the capability's algorithm or transport-profile identity.
+            if index == 1
+                && matches!(
+                    client.ty,
+                    CAPABILITY_PQKEM | CAPABILITY_PQSIG | CAPABILITY_CONSTANT_RATE
+                )
+            {
+                client_byte & !CAPABILITY_REQUIRED_FLAG == relay_byte & !CAPABILITY_REQUIRED_FLAG
+            } else {
+                client_byte == relay_byte
+            }
+        })
 }
 fn capability_contains_id(caps: &[CapabilityTlv], ty: u16, id: u8) -> bool {
     caps.iter()
@@ -1034,7 +1243,6 @@ pub fn update_suite_list(
     encode_capabilities(&entries)
 }
 /// Transcript hash inputs for the Noise XX handshake.
-#[derive(Debug)]
 pub struct TranscriptInputs<'a> {
     /// Merkle commitment for the relay descriptor.
     pub descriptor_commit: &'a [u8],
@@ -1052,6 +1260,21 @@ pub struct TranscriptInputs<'a> {
     pub handshake_suite: HandshakeSuite,
     /// Optional resume hash supplied when resuming a session.
     pub resume_hash: Option<&'a [u8]>,
+}
+impl fmt::Debug for TranscriptInputs<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TranscriptInputs")
+            .field("descriptor_commit_len", &self.descriptor_commit.len())
+            .field("client_nonce", &"[REDACTED]")
+            .field("relay_nonce", &"[REDACTED]")
+            .field("capability_bytes_len", &self.capability_bytes.len())
+            .field("kem_id", &self.kem_id)
+            .field("sig_id", &self.sig_id)
+            .field("handshake_suite", &self.handshake_suite)
+            .field("resume_hash_present", &self.resume_hash.is_some())
+            .finish()
+    }
 }
 impl TranscriptInputs<'_> {
     /// Compute the transcript hash as described in the working draft.
@@ -1594,7 +1817,6 @@ impl KemProfile {
 }
 struct SimulatedKemArtifacts {
     client_public: Vec<u8>,
-    relay_public: Vec<u8>,
     ciphertext: Vec<u8>,
     confirmation: Vec<u8>,
     shared_secret: Vec<u8>,
@@ -1602,7 +1824,6 @@ struct SimulatedKemArtifacts {
 impl SimulatedKemArtifacts {
     fn zeroize_sensitive_fields(&mut self) {
         self.client_public.zeroize();
-        self.relay_public.zeroize();
         self.ciphertext.zeroize();
         self.confirmation.zeroize();
         self.shared_secret.zeroize();
@@ -1620,7 +1841,6 @@ enum KemVariant {
 }
 struct KemLabelSet {
     client: &'static [u8],
-    relay: &'static [u8],
     ciphertext: &'static [u8],
     confirmation: &'static [u8],
     shared: &'static [u8],
@@ -1664,16 +1884,71 @@ impl Drop for DeterministicHandshakeMaterial {
         self.zeroize_sensitive_fields();
     }
 }
-fn simulation_relay_identity_key(
+fn simulation_relay_authentication_signer(
     material: &DeterministicHandshakeMaterial,
-) -> Result<KeyPair, HarnessError> {
-    KeyPair::try_from_seed(material.relay_static_bytes.to_vec(), Algorithm::Ed25519).map_err(
-        |error| {
+) -> Result<RelayAuthenticationSignerV1, HarnessError> {
+    let ed25519_key_pair =
+        KeyPair::try_from_seed(material.relay_static_bytes.to_vec(), Algorithm::Ed25519).map_err(
+            |error| {
+                HarnessError::Validation(format!(
+                    "failed to derive deterministic simulation Ed25519 identity: {error}"
+                ))
+            },
+        )?;
+    let mldsa65_seed = Zeroizing::new(expand_material(
+        b"soranet.handshake.fixture.mldsa65-key.v1",
+        &[material.relay_static_bytes.as_slice()],
+        32,
+    ));
+    let mldsa65_key_pair = KeyPair::try_from_seed(mldsa65_seed.to_vec(), Algorithm::MlDsa)
+        .map_err(|error| {
             HarnessError::Validation(format!(
-                "failed to derive deterministic simulation relay identity: {error}"
+                "failed to derive deterministic simulation ML-DSA-65 identity: {error}"
             ))
-        },
+        })?;
+    let binding_digest: [u8; TRANSCRIPT_BINDING_LEN] = expand_material(
+        b"soranet.handshake.fixture.authenticated-binding.v1",
+        &[material.relay_static_public.as_slice()],
+        TRANSCRIPT_BINDING_LEN,
     )
+    .try_into()
+    .map_err(|_| {
+        HarnessError::Validation(
+            "failed to derive simulation relay authenticated binding".to_owned(),
+        )
+    })?;
+    RelayAuthenticationSignerV1::try_new(
+        Arc::new(ed25519_key_pair),
+        Arc::new(mldsa65_key_pair),
+        binding_digest,
+    )
+}
+fn simulation_relay_authentication_rng(
+    material: &DeterministicHandshakeMaterial,
+    client_hello: &[u8],
+    relay_body: &[u8],
+    transcript_hash: &[u8; TRANSCRIPT_BINDING_LEN],
+) -> Result<soranet_pq::HedgedChaCha20Rng, HarnessError> {
+    let seed: [u8; 32] = expand_material(
+        b"soranet.handshake.fixture.mldsa65-signature.v1",
+        &[
+            material.relay_static_bytes.as_slice(),
+            client_hello,
+            relay_body,
+            transcript_hash,
+        ],
+        32,
+    )
+    .try_into()
+    .map_err(|_| {
+        HarnessError::Validation(
+            "failed to derive simulation relay signature randomness".to_owned(),
+        )
+    })?;
+    Ok(deterministic_chacha20_rng(
+        HedgedRngSeed::from_entropy(seed),
+        b"soranet-handshake:fixture-relay-authentication",
+    ))
 }
 fn derive_kem_artifacts(
     variant: KemVariant,
@@ -1685,14 +1960,12 @@ fn derive_kem_artifacts(
     let labels = match variant {
         KemVariant::Primary => KemLabelSet {
             client: b"soranet.kem.client.public.v1",
-            relay: b"soranet.kem.relay.public.v1",
             ciphertext: b"soranet.kem.ciphertext.v1",
             confirmation: b"soranet.kem.confirmation.v1",
             shared: b"soranet.kem.shared.v1",
         },
         KemVariant::ForwardSecure => KemLabelSet {
             client: b"soranet.kem.fs.client.public.v1",
-            relay: b"soranet.kem.fs.relay.public.v1",
             ciphertext: b"soranet.kem.fs.ciphertext.v1",
             confirmation: b"soranet.kem.fs.confirmation.v1",
             shared: b"soranet.kem.fs.shared.v1",
@@ -1704,16 +1977,11 @@ fn derive_kem_artifacts(
         &[client_static.as_ref(), params.client_nonce],
         kem_params.public_key,
     );
-    let relay_public = expand_material(
-        labels.relay,
-        &[relay_static.as_ref(), params.relay_nonce],
-        kem_params.public_key,
-    );
     let ciphertext = expand_material(
         labels.ciphertext,
         &[
             relay_static.as_ref(),
-            relay_public.as_slice(),
+            params.relay_nonce,
             client_public.as_slice(),
         ],
         kem_params.ciphertext,
@@ -1723,7 +1991,7 @@ fn derive_kem_artifacts(
         &[
             client_static.as_ref(),
             client_public.as_slice(),
-            relay_public.as_slice(),
+            ciphertext.as_slice(),
         ],
         kem_params.shared_secret,
     );
@@ -1733,13 +2001,12 @@ fn derive_kem_artifacts(
             client_static.as_ref(),
             relay_static.as_ref(),
             client_public.as_slice(),
-            relay_public.as_slice(),
+            ciphertext.as_slice(),
         ],
         kem_params.shared_secret,
     );
     SimulatedKemArtifacts {
         client_public,
-        relay_public,
         ciphertext,
         confirmation,
         shared_secret,
@@ -1831,25 +2098,27 @@ fn build_nk2_artifacts(
     let mut relay_response = Vec::new();
     relay_response.push(HYBRID_RELAY_RESPONSE_TYPE);
     append_len_prefixed(&mut relay_response, params.relay_nonce)?;
-    relay_response.extend_from_slice(&material.relay_ephemeral_public);
+    append_len_prefixed(&mut relay_response, &material.relay_ephemeral_public)?;
     append_len_prefixed(&mut relay_response, &material.relay_static_public)?;
     append_len_prefixed(&mut relay_response, params.relay_capabilities)?;
     append_len_prefixed(&mut relay_response, params.descriptor_commit)?;
-    append_len_prefixed(&mut relay_response, &primary.relay_public)?;
     append_len_prefixed(&mut relay_response, &primary.ciphertext)?;
     append_len_prefixed(&mut relay_response, &primary.confirmation)?;
     append_len_prefixed(&mut relay_response, transcript_hash)?;
     let relay_body = relay_response.clone();
-    let relay_identity_key = simulation_relay_identity_key(material)?;
-    append_relay_authentication(
+    let relay_authentication = simulation_relay_authentication_signer(material)?;
+    let mut relay_authentication_rng =
+        simulation_relay_authentication_rng(material, &client_init, &relay_body, transcript_hash)?;
+    append_relay_authentication_with_hedged_rng(
         &mut relay_response,
         HandshakeSuite::Nk2Hybrid,
         &client_init,
         &relay_body,
         transcript_hash,
-        &relay_identity_key,
+        &relay_authentication,
         SORANET_QUIC_ALPN,
         DEFAULT_TLS_SERVER_NAME,
+        &mut relay_authentication_rng,
     )?;
     pad_to_noise_block(&mut relay_response);
     let mut telemetry_map = Map::new();
@@ -1942,13 +2211,11 @@ fn build_nk3_artifacts(
     let mut relay_response = Vec::new();
     relay_response.push(PQFS_RELAY_RESPONSE_TYPE);
     append_len_prefixed(&mut relay_response, params.relay_nonce)?;
-    relay_response.extend_from_slice(&material.relay_ephemeral_public);
+    append_len_prefixed(&mut relay_response, &material.relay_ephemeral_public)?;
     append_len_prefixed(&mut relay_response, &material.relay_static_public)?;
     append_len_prefixed(&mut relay_response, params.relay_capabilities)?;
     append_len_prefixed(&mut relay_response, params.descriptor_commit)?;
-    append_len_prefixed(&mut relay_response, &primary.relay_public)?;
     append_len_prefixed(&mut relay_response, &primary.ciphertext)?;
-    append_len_prefixed(&mut relay_response, &forward.relay_public)?;
     append_len_prefixed(&mut relay_response, &forward.ciphertext)?;
     append_len_prefixed(&mut relay_response, &primary.confirmation)?;
     append_len_prefixed(&mut relay_response, &forward.confirmation)?;
@@ -1956,16 +2223,23 @@ fn build_nk3_artifacts(
     append_len_prefixed(&mut relay_response, &fs_commitment)?;
     append_len_prefixed(&mut relay_response, &dual_mix)?;
     let relay_body = relay_response.clone();
-    let relay_identity_key = simulation_relay_identity_key(material)?;
-    append_relay_authentication(
+    let relay_authentication = simulation_relay_authentication_signer(material)?;
+    let mut relay_authentication_rng = simulation_relay_authentication_rng(
+        material,
+        &client_commit,
+        &relay_body,
+        transcript_hash,
+    )?;
+    append_relay_authentication_with_hedged_rng(
         &mut relay_response,
         HandshakeSuite::Nk3PqForwardSecure,
         &client_commit,
         &relay_body,
         transcript_hash,
-        &relay_identity_key,
+        &relay_authentication,
         SORANET_QUIC_ALPN,
         DEFAULT_TLS_SERVER_NAME,
+        &mut relay_authentication_rng,
     )?;
     pad_to_noise_block(&mut relay_response);
     let mut telemetry_map = Map::new();
@@ -2049,7 +2323,7 @@ fn validate_static_key(label: &str, key: &[u8]) -> Result<[u8; NOISE_SECRET_LEN]
     out.copy_from_slice(key);
     let repeated = [out[0]; NOISE_SECRET_LEN];
     if bool::from(out.ct_eq(&repeated)) {
-        out.fill(0);
+        out.zeroize();
         return Err(HarnessError::Validation(format!(
             "{label} static key must not be an all-zero or repeated-byte degenerate key"
         )));
@@ -2126,32 +2400,118 @@ fn derive_ed25519_signature(
     let signature = signing.sign(&digest);
     Ok(signature.to_bytes())
 }
-fn relay_identity_bytes(key_pair: &KeyPair) -> Result<Vec<u8>, HarnessError> {
-    let (algorithm, bytes) = key_pair
-        .public_key()
+fn relay_authentication_public_key_payload<'key>(
+    label: &str,
+    public_key: &'key PublicKey,
+    expected_algorithm: Algorithm,
+) -> Result<&'key [u8], HarnessError> {
+    let (algorithm, payload) = public_key
         .try_to_bytes()
-        .map_err(|error| HarnessError::Validation(format!("invalid relay identity: {error}")))?;
-    let mut encoded = Vec::with_capacity(bytes.len() + 1);
-    encoded.push(algorithm as u8);
-    encoded.extend_from_slice(bytes);
-    Ok(encoded)
+        .map_err(|error| HarnessError::Validation(format!("invalid {label}: {error}")))?;
+    if algorithm != expected_algorithm {
+        return Err(HarnessError::Validation(format!(
+            "{label} must use {expected_algorithm}, found {algorithm}"
+        )));
+    }
+    match expected_algorithm {
+        Algorithm::Ed25519 if payload.len() != 32 => {
+            return Err(HarnessError::Validation(format!(
+                "{label} must be 32 bytes, got {}",
+                payload.len()
+            )));
+        }
+        Algorithm::MlDsa => MlDsaSuite::MlDsa65
+            .validate_public_key(payload)
+            .map_err(|error| HarnessError::Validation(format!("invalid {label}: {error}")))?,
+        _ => {}
+    }
+    if payload.iter().all(|byte| *byte == 0) {
+        return Err(HarnessError::Validation(format!(
+            "{label} must not be all zero"
+        )));
+    }
+    Ok(payload)
 }
-fn parse_relay_identity(bytes: &[u8]) -> Result<PublicKey, HarnessError> {
-    if bytes.len() == 32 {
+fn validate_relay_authentication_binding_digest(
+    digest: &[u8; TRANSCRIPT_BINDING_LEN],
+) -> Result<(), HarnessError> {
+    if digest.iter().all(|byte| *byte == 0) {
         return Err(HarnessError::Validation(
-            "relay identity uses the retired untagged Ed25519 encoding; first-release V1 requires tag 0x00 followed by the 32-byte key"
-                .to_owned(),
+            "relay authenticated binding digest must not be all zero".to_owned(),
         ));
     }
-    let (&tag, payload) = bytes
-        .split_first()
-        .ok_or_else(|| HarnessError::Validation("relay identity must not be empty".to_owned()))?;
-    let algorithm = Algorithm::try_from(tag).map_err(|()| {
-        HarnessError::Validation(format!("unknown relay identity algorithm tag {tag:#04x}"))
-    })?;
-    PublicKey::from_bytes(algorithm, payload).map_err(|error| {
-        HarnessError::Validation(format!("relay {algorithm} identity is invalid: {error}"))
-    })
+    Ok(())
+}
+struct RelayAuthenticationSignaturesV1 {
+    ed25519: [u8; ED25519_SIGNATURE_LEN],
+    mldsa65: Vec<u8>,
+}
+impl RelayAuthenticationSignerV1 {
+    fn sign_digest(
+        &self,
+        digest: &[u8; TRANSCRIPT_BINDING_LEN],
+    ) -> Result<RelayAuthenticationSignaturesV1, HarnessError> {
+        let ed25519 =
+            Signature::try_new(self.ed25519_key_pair.private_key(), digest).map_err(|error| {
+                HarnessError::Validation(format!("relay Ed25519 signing failed: {error}"))
+            })?;
+        let mldsa65 = Signature::try_new_with_context(
+            self.mldsa65_key_pair.private_key(),
+            RELAY_AUTH_MLDSA_CONTEXT,
+            digest,
+        )
+        .map_err(|error| {
+            HarnessError::Validation(format!("relay ML-DSA-65 signing failed: {error}"))
+        })?;
+        RelayAuthenticationSignaturesV1::try_from_slices(ed25519.payload(), mldsa65.payload())
+    }
+
+    fn sign_digest_with_hedged_rng(
+        &self,
+        digest: &[u8; TRANSCRIPT_BINDING_LEN],
+        rng: &mut soranet_pq::HedgedChaCha20Rng,
+    ) -> Result<RelayAuthenticationSignaturesV1, HarnessError> {
+        let ed25519 =
+            Signature::try_new(self.ed25519_key_pair.private_key(), digest).map_err(|error| {
+                HarnessError::Validation(format!("relay Ed25519 signing failed: {error}"))
+            })?;
+        let mldsa65 = Signature::try_new_mldsa_with_context_and_hedged_rng(
+            self.mldsa65_key_pair.private_key(),
+            RELAY_AUTH_MLDSA_CONTEXT,
+            digest,
+            rng,
+        )
+        .map_err(|error| {
+            HarnessError::Validation(format!("relay ML-DSA-65 signing failed: {error}"))
+        })?;
+        RelayAuthenticationSignaturesV1::try_from_slices(ed25519.payload(), mldsa65.payload())
+    }
+}
+impl RelayAuthenticationSignaturesV1 {
+    fn try_from_slices(ed25519: &[u8], mldsa65: &[u8]) -> Result<Self, HarnessError> {
+        if ed25519.len() != ED25519_SIGNATURE_LEN {
+            return Err(HarnessError::Validation(format!(
+                "relay Ed25519 signature must be {ED25519_SIGNATURE_LEN} bytes, got {}",
+                ed25519.len()
+            )));
+        }
+        if ed25519.iter().all(|byte| *byte == 0) {
+            return Err(HarnessError::Validation(
+                "relay Ed25519 signature must not be all zero".to_owned(),
+            ));
+        }
+        MlDsaSuite::MlDsa65
+            .validate_signature(mldsa65)
+            .map_err(|error| {
+                HarnessError::Validation(format!("invalid relay ML-DSA-65 signature: {error}"))
+            })?;
+        let mut ed25519_bytes = [0u8; ED25519_SIGNATURE_LEN];
+        ed25519_bytes.copy_from_slice(ed25519);
+        Ok(Self {
+            ed25519: ed25519_bytes,
+            mldsa65: mldsa65.to_vec(),
+        })
+    }
 }
 fn update_relay_auth_component(hasher: &mut Sha3_256, component: &[u8]) {
     Update::update(hasher, &(component.len() as u64).to_be_bytes());
@@ -2162,21 +2522,27 @@ fn relay_auth_digest(
     client_hello: &[u8],
     relay_body: &[u8],
     transcript_hash: &[u8; 32],
-    relay_identity: &[u8],
+    ed25519_public_key: &[u8],
+    mldsa65_public_key: &[u8],
+    authenticated_binding_digest: &[u8; TRANSCRIPT_BINDING_LEN],
     transport_alpn: &[u8],
     tls_server_name: &str,
 ) -> [u8; 32] {
     let mut hasher = Sha3_256::new();
-    let version = [1u8];
+    let version = [RELAY_AUTH_VERSION_V1];
+    let scheme = [RELAY_AUTH_SCHEME_ED25519_MLDSA65_V1];
     let suite_id = [u8::from(suite)];
     for component in [
         RELAY_AUTH_DOMAIN,
         version.as_slice(),
+        scheme.as_slice(),
         suite_id.as_slice(),
         client_hello,
         relay_body,
         transcript_hash,
-        relay_identity,
+        ed25519_public_key,
+        mldsa65_public_key,
+        authenticated_binding_digest,
         transport_alpn,
         tls_server_name.as_bytes(),
     ] {
@@ -2194,35 +2560,82 @@ fn append_relay_authentication(
     client_hello: &[u8],
     relay_body: &[u8],
     transcript_hash: &[u8; 32],
-    relay_identity_key: &KeyPair,
+    signer: &RelayAuthenticationSignerV1,
     transport_alpn: &[u8],
     tls_server_name: &str,
 ) -> Result<(), HarnessError> {
-    let relay_identity = relay_identity_bytes(relay_identity_key)?;
+    let ed25519_public_key = relay_authentication_public_key_payload(
+        "relay Ed25519 identity",
+        signer.ed25519_public_key(),
+        Algorithm::Ed25519,
+    )?;
+    let mldsa65_public_key = relay_authentication_public_key_payload(
+        "relay ML-DSA-65 identity",
+        signer.mldsa65_public_key(),
+        Algorithm::MlDsa,
+    )?;
     let digest = relay_auth_digest(
         suite,
         client_hello,
         relay_body,
         transcript_hash,
-        relay_identity.as_slice(),
+        ed25519_public_key,
+        mldsa65_public_key,
+        signer.authenticated_binding_digest(),
         transport_alpn,
         tls_server_name,
     );
-    let signature = Signature::try_new(relay_identity_key.private_key(), &digest)
-        .map_err(|error| HarnessError::Validation(format!("relay signing failed: {error}")))?;
-    let algorithm = relay_identity_key
-        .public_key()
-        .try_algorithm()
-        .map_err(|error| HarnessError::Validation(format!("invalid relay identity: {error}")))?;
-    let expected_signature_len = algorithm.signature_payload_len();
-    if signature.payload().len() != expected_signature_len {
-        return Err(HarnessError::Validation(format!(
-            "relay {algorithm} signature must be {expected_signature_len} bytes, got {}",
-            signature.payload().len()
-        )));
-    }
-    append_len_prefixed(frame, &relay_identity)?;
-    append_len_prefixed(frame, signature.payload())
+    let signatures = signer.sign_digest(&digest)?;
+    append_relay_authentication_signatures(frame, &signatures);
+    Ok(())
+}
+#[allow(
+    clippy::too_many_arguments,
+    reason = "deterministic fixture authentication keeps every protocol-bound input explicit"
+)]
+fn append_relay_authentication_with_hedged_rng(
+    frame: &mut Vec<u8>,
+    suite: HandshakeSuite,
+    client_hello: &[u8],
+    relay_body: &[u8],
+    transcript_hash: &[u8; 32],
+    signer: &RelayAuthenticationSignerV1,
+    transport_alpn: &[u8],
+    tls_server_name: &str,
+    rng: &mut soranet_pq::HedgedChaCha20Rng,
+) -> Result<(), HarnessError> {
+    let ed25519_public_key = relay_authentication_public_key_payload(
+        "relay Ed25519 identity",
+        signer.ed25519_public_key(),
+        Algorithm::Ed25519,
+    )?;
+    let mldsa65_public_key = relay_authentication_public_key_payload(
+        "relay ML-DSA-65 identity",
+        signer.mldsa65_public_key(),
+        Algorithm::MlDsa,
+    )?;
+    let digest = relay_auth_digest(
+        suite,
+        client_hello,
+        relay_body,
+        transcript_hash,
+        ed25519_public_key,
+        mldsa65_public_key,
+        signer.authenticated_binding_digest(),
+        transport_alpn,
+        tls_server_name,
+    );
+    let signatures = signer.sign_digest_with_hedged_rng(&digest, rng)?;
+    append_relay_authentication_signatures(frame, &signatures);
+    Ok(())
+}
+fn append_relay_authentication_signatures(
+    frame: &mut Vec<u8>,
+    signatures: &RelayAuthenticationSignaturesV1,
+) {
+    frame.push(RELAY_AUTH_SCHEME_ED25519_MLDSA65_V1);
+    frame.extend_from_slice(&signatures.ed25519);
+    frame.extend_from_slice(&signatures.mldsa65);
 }
 #[allow(
     clippy::too_many_arguments,
@@ -2233,67 +2646,61 @@ fn verify_relay_authentication(
     client_hello: &[u8],
     relay_body: &[u8],
     transcript_hash: &[u8; 32],
-    relay_identity: &[u8],
-    signature: &[u8],
-    expected_relay_identity: &PublicKey,
+    signatures: &RelayAuthenticationSignaturesV1,
+    verifier: &RelayAuthenticationVerifierV1,
     transport_alpn: &[u8],
     tls_server_name: &str,
 ) -> Result<(), HarnessError> {
-    let parsed_relay_identity = parse_relay_identity(relay_identity)?;
-    if &parsed_relay_identity != expected_relay_identity {
-        return Err(HarnessError::Validation(
-            "relay handshake identity does not match the authenticated directory identity"
-                .to_owned(),
-        ));
-    }
-    let algorithm = expected_relay_identity.try_algorithm().map_err(|error| {
-        HarnessError::Validation(format!("invalid expected relay key: {error}"))
-    })?;
-    let expected_signature_len = algorithm.signature_payload_len();
-    if signature.len() != expected_signature_len {
-        return Err(HarnessError::Validation(format!(
-            "relay {algorithm} signature must be {expected_signature_len} bytes, got {}",
-            signature.len()
-        )));
-    }
+    let ed25519_public_key = relay_authentication_public_key_payload(
+        "expected relay Ed25519 identity",
+        verifier.ed25519_public_key(),
+        Algorithm::Ed25519,
+    )?;
+    let mldsa65_public_key = relay_authentication_public_key_payload(
+        "expected relay ML-DSA-65 identity",
+        verifier.mldsa65_public_key(),
+        Algorithm::MlDsa,
+    )?;
     let digest = relay_auth_digest(
         suite,
         client_hello,
         relay_body,
         transcript_hash,
-        relay_identity,
+        ed25519_public_key,
+        mldsa65_public_key,
+        verifier.authenticated_binding_digest(),
         transport_alpn,
         tls_server_name,
     );
-    Signature::try_from_bytes(signature)
-        .map_err(|error| HarnessError::Validation(format!("invalid relay signature: {error}")))?
-        .verify(expected_relay_identity, &digest)
+    Signature::try_from_bytes(&signatures.ed25519)
+        .map_err(|error| {
+            HarnessError::Validation(format!("invalid relay Ed25519 signature: {error}"))
+        })?
+        .verify(verifier.ed25519_public_key(), &digest)
         .map_err(|_| {
-            HarnessError::Validation("relay identity signature verification failed".into())
-        })
+            HarnessError::Validation("relay Ed25519 signature verification failed".into())
+        })?;
+    verify_mldsa(
+        MlDsaSuite::MlDsa65,
+        mldsa65_public_key,
+        RELAY_AUTH_MLDSA_CONTEXT,
+        &digest,
+        &signatures.mldsa65,
+    )
+    .map_err(|_| HarnessError::Validation("relay ML-DSA-65 signature verification failed".into()))
 }
 fn read_relay_authentication(
     cursor: &mut MessageCursor<'_>,
-) -> Result<(Vec<u8>, Vec<u8>), HarnessError> {
-    let relay_identity = cursor.read_len_prefixed()?.to_vec();
-    let relay_public_key = parse_relay_identity(&relay_identity)?;
-    let signature = cursor.read_len_prefixed()?.to_vec();
-    let algorithm = relay_public_key
-        .try_algorithm()
-        .map_err(|error| HarnessError::Validation(format!("invalid relay identity: {error}")))?;
-    let expected_signature_len = algorithm.signature_payload_len();
-    if signature.len() != expected_signature_len {
+) -> Result<RelayAuthenticationSignaturesV1, HarnessError> {
+    let scheme = cursor.read_u8()?;
+    if scheme != RELAY_AUTH_SCHEME_ED25519_MLDSA65_V1 {
         return Err(HarnessError::Validation(format!(
-            "relay {algorithm} signature must be {expected_signature_len} bytes, got {}",
-            signature.len()
+            "unsupported relay authentication scheme {scheme:#04x}"
         )));
     }
-    if signature.iter().all(|byte| *byte == 0) {
-        return Err(HarnessError::Validation(format!(
-            "relay {algorithm} signature must not be all zero"
-        )));
-    }
-    Ok((relay_identity, signature))
+    let ed25519 = cursor.read_exact(ED25519_SIGNATURE_LEN)?;
+    let mldsa65 = cursor.read_exact(MlDsaSuite::MlDsa65.signature_len())?;
+    RelayAuthenticationSignaturesV1::try_from_slices(ed25519, mldsa65)
 }
 fn validate_noise_padding(
     context: &str,
@@ -3660,9 +4067,8 @@ fn fixture_noise_state() -> RelayNoiseState {
     }
 }
 #[cfg(test)]
-fn fixture_kem_artifacts(public: &[u8], shared: &[u8], ciphertext: &[u8]) -> RuntimeKemArtifacts {
+fn fixture_kem_artifacts(shared: &[u8], ciphertext: &[u8]) -> RuntimeKemArtifacts {
     RuntimeKemArtifacts {
-        relay_public: public.to_vec(),
         shared_secret: Zeroizing::new(shared.to_vec()),
         ciphertext: ciphertext.to_vec(),
     }
@@ -3674,13 +4080,11 @@ struct HybridRelayParsed {
     relay_static_pub: [u8; NOISE_SECRET_LEN],
     relay_capabilities: Vec<u8>,
     descriptor_commit: Vec<u8>,
-    relay_kem_public: Vec<u8>,
     kem_ciphertext: Vec<u8>,
     confirmation: Vec<u8>,
     transcript_hash: [u8; 32],
     signed_relay_body: Vec<u8>,
-    relay_identity: Vec<u8>,
-    relay_signature: Vec<u8>,
+    relay_authentication: RelayAuthenticationSignaturesV1,
 }
 #[allow(dead_code)]
 struct PqfsRelayParsed {
@@ -3689,9 +4093,7 @@ struct PqfsRelayParsed {
     relay_static_pub: [u8; NOISE_SECRET_LEN],
     relay_capabilities: Vec<u8>,
     descriptor_commit: Vec<u8>,
-    primary_relay_public: Vec<u8>,
     primary_ciphertext: Vec<u8>,
-    forward_relay_public: Vec<u8>,
     forward_ciphertext: Vec<u8>,
     primary_confirmation: Vec<u8>,
     forward_confirmation: Vec<u8>,
@@ -3699,8 +4101,7 @@ struct PqfsRelayParsed {
     forward_commitment: Vec<u8>,
     dual_mix: Vec<u8>,
     signed_relay_body: Vec<u8>,
-    relay_identity: Vec<u8>,
-    relay_signature: Vec<u8>,
+    relay_authentication: RelayAuthenticationSignaturesV1,
 }
 #[allow(dead_code)]
 fn parse_hybrid_relay_response(
@@ -3728,6 +4129,7 @@ fn parse_hybrid_relay_response(
         decode_noise_public_key("relay ephemeral key", cursor.read_len_prefixed()?)?;
     let relay_static_bytes = cursor.read_len_prefixed()?.to_vec();
     let relay_static_pub = decode_noise_public_key("relay static key", &relay_static_bytes)?;
+    validate_distinct_noise_public_keys("relay", &relay_ephemeral_pub, &relay_static_pub)?;
     let relay_capabilities = cursor.read_len_prefixed()?.to_vec();
     let descriptor_commit = cursor.read_len_prefixed()?.to_vec();
     if descriptor_commit.as_slice() != expected_descriptor {
@@ -3737,9 +4139,6 @@ fn parse_hybrid_relay_response(
             hex::encode(&descriptor_commit)
         )));
     }
-    let relay_kem_public = cursor.read_len_prefixed()?.to_vec();
-    validate_mlkem_public_key(kem_suite, &relay_kem_public)
-        .map_err(|err| HarnessError::Kem(err.to_string()))?;
     let kem_ciphertext = cursor.read_len_prefixed()?.to_vec();
     validate_mlkem_ciphertext(kem_suite, &kem_ciphertext)
         .map_err(|err| HarnessError::Kem(err.to_string()))?;
@@ -3754,7 +4153,7 @@ fn parse_hybrid_relay_response(
     let mut transcript_hash = [0u8; 32];
     transcript_hash.copy_from_slice(&transcript_bytes);
     let signed_relay_body = relay_message[..cursor.pos].to_vec();
-    let (relay_identity, relay_signature) = read_relay_authentication(&mut cursor)?;
+    let relay_authentication = read_relay_authentication(&mut cursor)?;
     validate_noise_padding(
         "hybrid relay response",
         relay_message.len(),
@@ -3766,13 +4165,11 @@ fn parse_hybrid_relay_response(
         relay_static_pub,
         relay_capabilities,
         descriptor_commit,
-        relay_kem_public,
         kem_ciphertext,
         confirmation,
         transcript_hash,
         signed_relay_body,
-        relay_identity,
-        relay_signature,
+        relay_authentication,
     })
 }
 #[allow(dead_code)]
@@ -3801,6 +4198,7 @@ fn parse_pqfs_relay_response(
         decode_noise_public_key("relay ephemeral key", cursor.read_len_prefixed()?)?;
     let relay_static_bytes = cursor.read_len_prefixed()?.to_vec();
     let relay_static_pub = decode_noise_public_key("relay static key", &relay_static_bytes)?;
+    validate_distinct_noise_public_keys("relay", &relay_ephemeral_pub, &relay_static_pub)?;
     let relay_capabilities = cursor.read_len_prefixed()?.to_vec();
     let descriptor_commit = cursor.read_len_prefixed()?.to_vec();
     if descriptor_commit.as_slice() != expected_descriptor {
@@ -3810,14 +4208,8 @@ fn parse_pqfs_relay_response(
             hex::encode(&descriptor_commit)
         )));
     }
-    let primary_relay_public = cursor.read_len_prefixed()?.to_vec();
-    validate_mlkem_public_key(kem_suite, &primary_relay_public)
-        .map_err(|err| HarnessError::Kem(err.to_string()))?;
     let primary_ciphertext = cursor.read_len_prefixed()?.to_vec();
     validate_mlkem_ciphertext(kem_suite, &primary_ciphertext)
-        .map_err(|err| HarnessError::Kem(err.to_string()))?;
-    let forward_relay_public = cursor.read_len_prefixed()?.to_vec();
-    validate_mlkem_public_key(kem_suite, &forward_relay_public)
         .map_err(|err| HarnessError::Kem(err.to_string()))?;
     let forward_ciphertext = cursor.read_len_prefixed()?.to_vec();
     validate_mlkem_ciphertext(kem_suite, &forward_ciphertext)
@@ -3847,7 +4239,7 @@ fn parse_pqfs_relay_response(
     )?;
     validate_exact_field_len("dual mix", &dual_mix, kem_suite.shared_secret_len())?;
     let signed_relay_body = relay_message[..cursor.pos].to_vec();
-    let (relay_identity, relay_signature) = read_relay_authentication(&mut cursor)?;
+    let relay_authentication = read_relay_authentication(&mut cursor)?;
     validate_noise_padding(
         "pqfs relay response",
         relay_message.len(),
@@ -3859,9 +4251,7 @@ fn parse_pqfs_relay_response(
         relay_static_pub,
         relay_capabilities,
         descriptor_commit,
-        primary_relay_public,
         primary_ciphertext,
-        forward_relay_public,
         forward_ciphertext,
         primary_confirmation,
         forward_confirmation,
@@ -3869,8 +4259,7 @@ fn parse_pqfs_relay_response(
         forward_commitment,
         dual_mix,
         signed_relay_body,
-        relay_identity,
-        relay_signature,
+        relay_authentication,
     })
 }
 /// Consume the relay response and derive the session key for the negotiated suite.
@@ -3881,23 +4270,23 @@ fn parse_pqfs_relay_response(
 pub fn client_handle_relay_hello(
     state: ClientState,
     relay_hello: &[u8],
-    expected_relay_identity: &PublicKey,
+    relay_authentication: &RelayAuthenticationVerifierV1,
     params: &RuntimeParams<'_>,
 ) -> Result<SessionSecrets, HarnessError> {
     validate_runtime_params(params)?;
     match state.handshake_suite {
         HandshakeSuite::Nk2Hybrid => {
-            handle_nk2_relay_response(state, relay_hello, expected_relay_identity, params)
+            handle_nk2_relay_response(state, relay_hello, relay_authentication, params)
         }
         HandshakeSuite::Nk3PqForwardSecure => {
-            handle_nk3_relay_response(state, relay_hello, expected_relay_identity, params)
+            handle_nk3_relay_response(state, relay_hello, relay_authentication, params)
         }
     }
 }
 fn handle_nk2_relay_response(
     state: ClientState,
     relay_message: &[u8],
-    expected_relay_identity: &PublicKey,
+    relay_authentication: &RelayAuthenticationVerifierV1,
     params: &RuntimeParams<'_>,
 ) -> Result<SessionSecrets, HarnessError> {
     let ClientState {
@@ -3920,9 +4309,8 @@ fn handle_nk2_relay_response(
         &client_hello,
         &parsed.signed_relay_body,
         &parsed.transcript_hash,
-        &parsed.relay_identity,
-        &parsed.relay_signature,
-        expected_relay_identity,
+        &parsed.relay_authentication,
+        relay_authentication,
         params.transport_alpn,
         params.tls_server_name,
     )?;
@@ -4095,7 +4483,7 @@ fn decapsulate_nk3_secrets(
 fn handle_nk3_relay_response(
     state: ClientState,
     relay_message: &[u8],
-    expected_relay_identity: &PublicKey,
+    relay_authentication: &RelayAuthenticationVerifierV1,
     params: &RuntimeParams<'_>,
 ) -> Result<SessionSecrets, HarnessError> {
     let ClientState {
@@ -4126,9 +4514,8 @@ fn handle_nk3_relay_response(
         &client_hello,
         &parsed.signed_relay_body,
         &parsed.transcript_hash,
-        &parsed.relay_identity,
-        &parsed.relay_signature,
-        expected_relay_identity,
+        &parsed.relay_authentication,
+        relay_authentication,
         params.transport_alpn,
         params.tls_server_name,
     )?;
@@ -4214,13 +4601,9 @@ fn validate_client_resume_hash(
     expected_resume: Option<&[u8]>,
 ) -> Result<(), HarnessError> {
     match (expected_resume, actual_resume) {
-        (Some(expected), Some(actual)) if actual != expected => {
-            Err(HarnessError::Validation(format!(
-                "client resume hash mismatch (expected {}, got {})",
-                hex::encode(expected),
-                hex::encode(actual)
-            )))
-        }
+        (Some(expected), Some(actual)) if !constant_time_bytes_eq(actual, expected) => Err(
+            HarnessError::Validation("client resume hash mismatch".to_string()),
+        ),
         (Some(_), None) => Err(HarnessError::Validation(
             "client omitted required resume hash".to_string(),
         )),
@@ -4259,6 +4642,7 @@ fn parse_client_hello_nk2(
         decode_noise_public_key("client ephemeral key", cursor.read_exact(NOISE_SECRET_LEN)?)?;
     let client_static_bytes = cursor.read_len_prefixed()?.to_vec();
     let client_static_public = decode_noise_public_key("client static key", &client_static_bytes)?;
+    validate_distinct_noise_public_keys("client", &client_ephemeral_public, &client_static_public)?;
     let client_kem_public = cursor.read_len_prefixed()?.to_vec();
     let client_capabilities = cursor.read_len_prefixed()?.to_vec();
     let resume_hash = read_optional_resume_hash(&mut cursor)?;
@@ -4310,6 +4694,7 @@ fn parse_client_hello_nk3(
         decode_noise_public_key("client ephemeral key", cursor.read_exact(NOISE_SECRET_LEN)?)?;
     let client_static_bytes = cursor.read_len_prefixed()?.to_vec();
     let client_static_public = decode_noise_public_key("client static key", &client_static_bytes)?;
+    validate_distinct_noise_public_keys("client", &client_ephemeral_public, &client_static_public)?;
     let client_kem_public = cursor.read_len_prefixed()?.to_vec();
     let forward_kem_public = cursor.read_len_prefixed()?.to_vec();
     let client_capabilities = cursor.read_len_prefixed()?.to_vec();
@@ -4395,8 +4780,11 @@ impl RelayNoiseState {
         })
     }
 }
+/// Relay-side result of encapsulating directly to a client-provided ML-KEM key.
+///
+/// The two-flight protocol has no relay ML-KEM public-key slot: generating an
+/// unrelated key pair here would add unused protocol material.
 struct RuntimeKemArtifacts {
-    relay_public: Vec<u8>,
     shared_secret: Zeroizing<Vec<u8>>,
     ciphertext: Vec<u8>,
 }
@@ -4404,15 +4792,9 @@ impl RuntimeKemArtifacts {
     fn encapsulate(suite: MlKemSuite, client_public: &[u8]) -> Result<Self, HarnessError> {
         validate_mlkem_public_key(suite, client_public)
             .map_err(|err| HarnessError::Kem(err.to_string()))?;
-        let soranet_pq::MlKemKeyPair {
-            public_key: relay_public,
-            secret_key: _relay_secret,
-        } = generate_mlkem_keypair_from_os(suite)
-            .map_err(|err| HarnessError::Kem(err.to_string()))?;
         let (shared_secret, ciphertext) = encapsulate_mlkem_from_os(suite, client_public)
             .map_err(|err| HarnessError::Kem(err.to_string()))?;
         Ok(Self {
-            relay_public,
             shared_secret: Zeroizing::new(shared_secret.as_bytes().to_vec()),
             ciphertext: ciphertext.as_bytes().to_vec(),
         })
@@ -4507,7 +4889,7 @@ fn build_hybrid_relay_response(
     primary: &RuntimeKemArtifacts,
     confirmation: &[u8],
     transcript: &[u8; 32],
-    relay_identity_key: &KeyPair,
+    relay_authentication: &RelayAuthenticationSignerV1,
 ) -> Result<Vec<u8>, HarnessError> {
     let mut relay_response = Vec::new();
     relay_response.push(HYBRID_RELAY_RESPONSE_TYPE);
@@ -4516,7 +4898,6 @@ fn build_hybrid_relay_response(
     append_len_prefixed(&mut relay_response, &noise.static_public)?;
     append_len_prefixed(&mut relay_response, params.relay_capabilities)?;
     append_len_prefixed(&mut relay_response, params.descriptor_commit)?;
-    append_len_prefixed(&mut relay_response, &primary.relay_public)?;
     append_len_prefixed(&mut relay_response, &primary.ciphertext)?;
     append_len_prefixed(&mut relay_response, confirmation)?;
     append_len_prefixed(&mut relay_response, transcript.as_ref())?;
@@ -4527,7 +4908,7 @@ fn build_hybrid_relay_response(
         client_init,
         relay_body.as_slice(),
         transcript,
-        relay_identity_key,
+        relay_authentication,
         params.transport_alpn,
         params.tls_server_name,
     )?;
@@ -4547,7 +4928,7 @@ struct PqfsRelayResponseInputs<'ctx> {
     transcript: &'ctx [u8; 32],
     forward_commitment: &'ctx [u8],
     dual_mix: &'ctx [u8],
-    relay_identity_key: &'ctx KeyPair,
+    relay_authentication: &'ctx RelayAuthenticationSignerV1,
 }
 #[allow(dead_code)]
 fn build_pqfs_relay_response(
@@ -4564,9 +4945,7 @@ fn build_pqfs_relay_response(
     append_len_prefixed(&mut relay_response, &noise.static_public)?;
     append_len_prefixed(&mut relay_response, params.relay_capabilities)?;
     append_len_prefixed(&mut relay_response, params.descriptor_commit)?;
-    append_len_prefixed(&mut relay_response, &primary.relay_public)?;
     append_len_prefixed(&mut relay_response, &primary.ciphertext)?;
-    append_len_prefixed(&mut relay_response, &forward.relay_public)?;
     append_len_prefixed(&mut relay_response, &forward.ciphertext)?;
     append_len_prefixed(&mut relay_response, inputs.primary_confirmation)?;
     append_len_prefixed(&mut relay_response, inputs.forward_confirmation)?;
@@ -4580,7 +4959,7 @@ fn build_pqfs_relay_response(
         inputs.client_commit,
         relay_body.as_slice(),
         inputs.transcript,
-        inputs.relay_identity_key,
+        inputs.relay_authentication,
         params.transport_alpn,
         params.tls_server_name,
     )?;
@@ -4594,7 +4973,7 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
     params: &RuntimeParams<'_>,
     rng: &mut R,
     kem_suite: MlKemSuite,
-    relay_identity_key: &KeyPair,
+    relay_authentication: &RelayAuthenticationSignerV1,
 ) -> Result<(Vec<u8>, SessionSecrets), HarnessError> {
     let client_static_public = parsed.client_static_public.ok_or_else(|| {
         HarnessError::Validation("NK2 handshake requires client static key".into())
@@ -4629,7 +5008,7 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
         &primary,
         &confirmation,
         &transcript,
-        relay_identity_key,
+        relay_authentication,
     )?;
     let session = SessionSecrets {
         session_key,
@@ -4694,7 +5073,7 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
     params: &RuntimeParams<'_>,
     rng: &mut R,
     kem_suite: MlKemSuite,
-    relay_identity_key: &KeyPair,
+    relay_authentication: &RelayAuthenticationSignerV1,
 ) -> Result<(Vec<u8>, SessionSecrets), HarnessError> {
     let requirements = Nk3HandshakeRequirements::collect(&parsed)?;
     let noise = RelayNoiseState::generate(rng)?;
@@ -4735,7 +5114,7 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
         transcript: &transcript,
         forward_commitment: requirements.forward_commitment.as_slice(),
         dual_mix: confirmations.dual_mix.as_slice(),
-        relay_identity_key,
+        relay_authentication,
     };
     let relay_response = build_pqfs_relay_response(&response_inputs)?;
     let session = SessionSecrets {
@@ -4776,7 +5155,7 @@ pub fn inspect_client_hello(client_hello: &[u8]) -> Result<ClientHelloMetadata, 
 pub fn process_client_hello<R: TryCryptoRng>(
     client_hello: &[u8],
     params: &RuntimeParams<'_>,
-    key_pair: &KeyPair,
+    relay_authentication: &RelayAuthenticationSignerV1,
     rng: &mut R,
 ) -> Result<(Vec<u8>, SessionSecrets), HarnessError> {
     validate_runtime_params(params)?;
@@ -4804,12 +5183,22 @@ pub fn process_client_hello<R: TryCryptoRng>(
         });
     }
     match parsed.handshake_suite {
-        HandshakeSuite::Nk2Hybrid => {
-            process_nk2_client_hello(client_hello, parsed, params, rng, profile.suite(), key_pair)
-        }
-        HandshakeSuite::Nk3PqForwardSecure => {
-            process_nk3_client_hello(client_hello, parsed, params, rng, profile.suite(), key_pair)
-        }
+        HandshakeSuite::Nk2Hybrid => process_nk2_client_hello(
+            client_hello,
+            parsed,
+            params,
+            rng,
+            profile.suite(),
+            relay_authentication,
+        ),
+        HandshakeSuite::Nk3PqForwardSecure => process_nk3_client_hello(
+            client_hello,
+            parsed,
+            params,
+            rng,
+            profile.suite(),
+            relay_authentication,
+        ),
     }
 }
 fn validate_runtime_params(params: &RuntimeParams<'_>) -> Result<(), HarnessError> {
@@ -5145,6 +5534,23 @@ fn decode_noise_public_key(
         )));
     }
     Ok(public)
+}
+fn validate_distinct_noise_public_keys(
+    peer: &str,
+    ephemeral: &[u8; NOISE_SECRET_LEN],
+    static_key: &[u8; NOISE_SECRET_LEN],
+) -> Result<(), HarnessError> {
+    // RFC 7748 decodes X25519 u-coordinates modulo 2^255 - 19 and ignores the
+    // top bit. Compare effective points so alternate encodings of the same key
+    // cannot bypass the distinct Noise-key requirement.
+    let ephemeral_point = MontgomeryPoint(*ephemeral);
+    let static_point = MontgomeryPoint(*static_key);
+    if bool::from(ephemeral_point.ct_eq(&static_point)) {
+        return Err(HarnessError::Validation(format!(
+            "{peer} Noise static and ephemeral public keys must be distinct"
+        )));
+    }
+    Ok(())
 }
 fn noise_public_key_is_low_order(public: &[u8; NOISE_SECRET_LEN]) -> bool {
     let public_key = X25519PublicKey::from(*public);

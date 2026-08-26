@@ -352,7 +352,6 @@ named_route_policy_test!(
             application_api::SORACLOUD_MODEL_WEIGHT_STATUS_GET,
             application_api::SORACLOUD_MODEL_ARTIFACT_STATUS_GET,
             application_api::SORACLOUD_MODEL_UPLOAD_STATUS_GET,
-            application_api::SORACLOUD_MODEL_UPLOAD_PRIVATE_RECEIPTS_GET,
             application_api::SORACLOUD_HF_STATUS_GET,
             application_api::SORACLOUD_MODEL_HOST_STATUS_GET,
             application_api::SORACLOUD_AGENT_STATUS_GET,
@@ -361,7 +360,7 @@ named_route_policy_test!(
         ];
         assert_eq!(
             protected.len(),
-            16,
+            15,
             "every sensitive Soracloud GET must be classified"
         );
         assert_route_policies(
@@ -382,7 +381,6 @@ named_route_policy_test!(
         [
             application_api::SORACLOUD_SERVICES_BY_SERVICE_NAME_PUBLIC_DISCOVERY_GET,
             application_api::SORACLOUD_SERVICES_BY_SERVICE_NAME_REVISIONS_BY_SERVICE_VERSION_PUBLIC_DISCOVERY_GET,
-            application_api::SORACLOUD_MODEL_UPLOAD_ENCRYPTION_RECIPIENT_GET,
         ],
         PUBLIC_READ,
     );

@@ -1,38 +1,34 @@
 package org.hyperledger.iroha.sdk.nexus
 
-/** Helpers for canonicalizing exact UAID literals before issuing Torii requests. */
+/** Helpers for validating exact UAID literals before issuing Torii requests. */
 object UaidLiteral {
 
     /**
-     * Canonicalizes the provided exact UAID literal and returns the canonical `uaid:<hex>` form.
+     * Validates and returns the provided exact `uaid:<64 lowercase hex>` literal.
      *
-     * @param value raw UAID literal (with or without the `uaid:` prefix)
-     * @return canonical literal
+     * @param value exact canonical UAID literal
+     * @return the unchanged literal
      */
     @JvmStatic
     fun canonicalize(value: String): String = canonicalize(value, "uaid")
 
     /**
-     * Canonicalizes the provided exact UAID literal and returns the canonical `uaid:<hex>` form.
+     * Validates and returns the provided exact `uaid:<64 lowercase hex>` literal.
      *
-     * @param value raw UAID literal (with or without the `uaid:` prefix)
+     * @param value exact canonical UAID literal
      * @param context field description used in validation errors
-     * @return canonical literal
+     * @return the unchanged literal
      */
     @JvmStatic
     fun canonicalize(value: String, context: String): String {
         val literal = requireExactNonEmpty(value, context)
-        val lower = literal.lowercase()
-        val hexPortion = if (lower.startsWith("uaid:")) literal.substring("uaid:".length) else literal
-        require(hexPortion.trim() == hexPortion) { "$context must not contain surrounding whitespace" }
-        require(hexPortion.length == 64 && hexPortion.matches(Regex("(?i)[0-9a-f]{64}"))) {
-            "$context must contain 64 hex characters"
+        require(literal.matches(Regex("uaid:[0-9a-f]{64}"))) {
+            "$context must be an exact canonical uaid:<64 lowercase hex> literal"
         }
-        val lastChar = hexPortion.last()
-        require("13579bdf".indexOf(lastChar.lowercaseChar()) >= 0) {
+        require("13579bdf".indexOf(literal.last()) >= 0) {
             "$context must have least significant bit set to 1"
         }
-        return "uaid:" + hexPortion.lowercase()
+        return literal
     }
 
     private fun requireExactNonEmpty(value: String, context: String): String {

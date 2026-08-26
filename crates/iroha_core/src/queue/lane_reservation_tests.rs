@@ -378,7 +378,7 @@ fn durable_reservation_diagnostics_hash_exact_fifo_group_and_reconstruct_after_r
         let expected_binding =
             lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
                 .expect("reserved FIFO keys form one exact group");
-        let no_keys = Vec::<LaneQueueReservationKeyV2>::new();
+        let no_keys = Vec::<LaneQueueReservationKeyV1>::new();
         assert_eq!(
             lane_queue_reservation_group_binding_from_ordered_keys(no_keys.iter()),
             Err("lane queue reservation diagnostics group must not be empty")
@@ -657,12 +657,12 @@ fn durable_reservation_diagnostics_fairly_bound_routes_after_payload_free_restar
     );
 }
 fn lane_reservation_release_barrier(
-    keys: Vec<LaneQueueReservationKeyV2>,
+    keys: Vec<LaneQueueReservationKeyV1>,
     retirement_seed: &[u8],
-) -> LaneQueueReservationReleaseBarrierV3 {
+) -> LaneQueueReservationReleaseBarrierV1 {
     let first = keys.first().expect("release barrier needs a reservation");
-    LaneQueueReservationReleaseBarrierV3 {
-        version: LaneQueueReservationReleaseBarrierV3::VERSION,
+    LaneQueueReservationReleaseBarrierV1 {
+        version: LaneQueueReservationReleaseBarrierV1::VERSION,
         network_id: super::queue_test_network_id(),
         epoch: 7,
         lane_id: first.lane_id,
@@ -726,7 +726,7 @@ fn ordered_release_barrier_is_nonselectable_idempotent_and_aba_safe() {
         LaneQueueReservationOutcome::Retained
     );
     let mut expected_live = keys.clone();
-    expected_live.sort_by_key(LaneQueueReservationKeyV2::digest);
+    expected_live.sort_by_key(LaneQueueReservationKeyV1::digest);
     assert_eq!(queue.live_lane_reservations(), expected_live);
     assert_eq!(queue.queued_len(), 0);
     assert!(matches!(
@@ -950,7 +950,7 @@ fn ordered_release_restart_retains_barrier_until_explicit_evidence_gated_finaliz
                     .iter()
                     .map(|key| reservations.live_by_entrypoint[&key.entrypoint_hash].clone())
                     .collect();
-                let completion = LaneQueueReservationReleaseCompletionV5 {
+                let completion = LaneQueueReservationReleaseCompletionV1 {
                     version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
                     barrier: barrier.clone(),
                     ordered_records,
@@ -1930,7 +1930,7 @@ fn reservation_group_commit_stages_complete_commit_prefix_before_tombstones() {
     );
     assert!(queue.live_lane_reservations().is_empty());
     let mut expected_barriers = keys.clone();
-    expected_barriers.sort_by_key(LaneQueueReservationKeyV2::digest);
+    expected_barriers.sort_by_key(LaneQueueReservationKeyV1::digest);
     assert_eq!(
         queue.lane_reservation_commit_barriers(),
         expected_barriers,
@@ -2008,7 +2008,7 @@ fn reservation_group_forget_prefix_replays_and_resumes_exactly_once() {
         assert!(queue.lane_reservation_durability_faulted());
         assert!(queue.live_lane_reservations().is_empty());
         let mut expected_memory_barriers = vec![keys[1], keys[2]];
-        expected_memory_barriers.sort_by_key(LaneQueueReservationKeyV2::digest);
+        expected_memory_barriers.sort_by_key(LaneQueueReservationKeyV1::digest);
         assert_eq!(
             queue.lane_reservation_commit_barriers(),
             expected_memory_barriers,
@@ -2075,13 +2075,13 @@ fn restart_reconciliation_snapshot_is_fifo_group_complete_and_read_only() {
             )
         })
         .collect::<Vec<_>>();
-    let key_for_scope = |binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    let key_for_scope = |binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
                          scope: LaneQueueReservationScopeV1| {
         let routing_plan = binding
             .routing_plan()
             .expect("rebuild reservation fixture routing plan");
-        LaneQueueReservationKeyV2 {
-            version: LaneQueueReservationKeyV2::VERSION,
+        LaneQueueReservationKeyV1 {
+            version: LaneQueueReservationKeyV1::VERSION,
             entrypoint_hash: binding.entrypoint_hash,
             queue_plan_admission_binding_hash: binding.canonical_hash(),
             routing_plan_digest: routing_plan.digest(),
@@ -2161,7 +2161,7 @@ fn restart_reconciliation_snapshot_is_fifo_group_complete_and_read_only() {
         .copied()
         .collect::<Vec<_>>();
     let mut digest_ordered_keys = fifo_keys.clone();
-    digest_ordered_keys.sort_by_key(LaneQueueReservationKeyV2::digest);
+    digest_ordered_keys.sort_by_key(LaneQueueReservationKeyV1::digest);
     assert_ne!(
         digest_ordered_keys, fifo_keys,
         "fixture must distinguish digest order from original durable FIFO order"

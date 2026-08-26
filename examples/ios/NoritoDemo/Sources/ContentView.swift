@@ -114,14 +114,11 @@ final class DemoConnectViewModel: ObservableObject {
   struct AddressPreview: Equatable {
     let i105: String
     let i105Warning: String
-    let domain: String
-    let implicitDefault: Bool
     let networkPrefix: UInt16
   }
 
   private static func generateAddressPreview() -> AddressPreview? {
 #if canImport(IrohaSwift)
-    let sampleDomain = AccountAddress.defaultDomainName
     do {
       let sampleKey = makeSampleKeyMaterial()
       let address = try AccountAddress.fromAccount(publicKey: sampleKey, algorithm: "ed25519")
@@ -129,16 +126,12 @@ final class DemoConnectViewModel: ObservableObject {
       return AddressPreview(
         i105: formats.i105,
         i105Warning: formats.i105Warning,
-        domain: sampleDomain,
-        implicitDefault: sampleDomain == AccountAddress.defaultDomainName,
         networkPrefix: formats.networkPrefix
       )
     } catch {
       return AddressPreview(
         i105: "i105-unavailable",
         i105Warning: "Address preview unavailable: \(error.localizedDescription)",
-        domain: sampleDomain,
-        implicitDefault: sampleDomain == AccountAddress.defaultDomainName,
         networkPrefix: 42
       )
     }
@@ -798,7 +791,7 @@ struct AddressPreviewCard: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       Text("Account Address Preview").font(.headline)
-      Text(domainNote)
+      Text("Canonical domainless account identity")
         .font(.caption)
         .foregroundColor(.secondary)
 
@@ -849,13 +842,6 @@ struct AddressPreviewCard: View {
       RoundedRectangle(cornerRadius: 12)
         .fill(Color(UIColor.secondarySystemBackground))
     )
-  }
-
-  private var domainNote: String {
-    if address.implicitDefault {
-      return "Implicit default domain: \(address.domain) (no suffix required when sharing I105)."
-    }
-    return "Domain selector: \(address.domain)"
   }
 
   private func copy(value: String, label: String, warning: String?, mode: AddressCopyMode) {

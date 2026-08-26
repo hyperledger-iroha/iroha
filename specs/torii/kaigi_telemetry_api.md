@@ -18,7 +18,7 @@ the Prometheus metrics emitted by `iroha_telemetry::metrics::Metrics`.
 | `/v1/kaigi/relays/health` | GET | `app_api` + `telemetry` | Operator-signed expensive aggregation of relay health totals and per-domain metrics. | `KaigiRelayHealthSnapshotDto` |
 | `/v1/kaigi/relays/events` | GET (SSE) | `app_api` + `telemetry` | Server-Sent Events stream emitting relay registration and health update notifications. | SSE events with JSON payloads (see below) |
 
-> **Account literals (`ADDR-5`):** The list and single-relay endpoints always return canonical I105 in `relay_id` and `reported_by`, matching the Torii hard-cut account-literal contract and the metrics counters backing Local-8 cutover dashboards.
+> **Account literals (`ADDR-5`):** The list and single-relay endpoints always return canonical I105 in `relay_id` and `reported_by`, matching the Torii hard-cut account-literal contract and its invalid-input telemetry.
 
 ### Response Schemas
 

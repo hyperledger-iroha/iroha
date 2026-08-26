@@ -1192,9 +1192,8 @@ fn proposal_snapshot_body_members(
         let raw = entry
             .as_str()
             .ok_or_else(|| eyre!("invalid non-string roster member in `{body_key}`: {entry:?}"))?;
-        let account_id = iroha::data_model::account::AccountId::parse_encoded(raw)
-            .map(|parsed| parsed.into_account_id())
-            .wrap_err_with(|| {
+        let account_id =
+            iroha::data_model::account::AccountId::parse_encoded(raw).wrap_err_with(|| {
                 format!("failed to parse roster member account id `{raw}` in `{body_key}`")
             })?;
         parsed.push(account_id);

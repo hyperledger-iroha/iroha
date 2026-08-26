@@ -175,7 +175,6 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
         return try {
             val sampleKey = ByteArray(32) { index -> ((index * 13) and 0xFF).toByte() }
             val accountAddress = AccountAddress.fromAccount(
-                AccountAddress.DEFAULT_DOMAIN_NAME,
                 sampleKey,
                 "ed25519"
             )
@@ -184,16 +183,12 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
             AddressDisplay(
                 i105 = formats.i105,
                 i105Warning = formats.i105Warning,
-                defaultDomain = AccountAddress.DEFAULT_DOMAIN_NAME,
-                implicitDefault = true,
                 networkPrefix = formats.networkPrefix
             )
         } catch (ex: AccountAddressException) {
             AddressDisplay(
                 i105 = "address-unavailable",
                 i105Warning = AccountAddress.i105WarningMessage(),
-                defaultDomain = AccountAddress.DEFAULT_DOMAIN_NAME,
-                implicitDefault = true,
                 networkPrefix = AccountAddress.DEFAULT_I105_DISCRIMINANT
             )
         }
@@ -208,8 +203,6 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
     data class AddressDisplay(
         val i105: String,
         val i105Warning: String,
-        val defaultDomain: String,
-        val implicitDefault: Boolean,
         val networkPrefix: Int
     )
 

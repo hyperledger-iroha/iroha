@@ -104,6 +104,15 @@ iroha --operator-private-key-file /run/secrets/iroha/operator.key \
   --output-format text ops sumeragi diagnostics
 ```
 
+Per-epoch VRF penalty membership is not duplicated in diagnostics. Query the
+authoritative finalized report for the exact epoch; an unavailable report is a
+hard not-found result rather than an all-zero placeholder:
+
+```bash
+iroha --operator-private-key-file /run/secrets/iroha/operator.key \
+  --output-format json ops sumeragi vrf-penalties --epoch 42
+```
+
 Tip: You can combine these with `jq` for consistency checks.
 
 ### SoraFS gateway helpers

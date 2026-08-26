@@ -504,9 +504,16 @@ fn parse_account_literal(
     let raw = value
         .as_str()
         .ok_or_else(|| invalid_value(op, field, "a canonical account ID string"))?;
+    if raw.chars().next().is_some_and(char::is_whitespace)
+        || raw.chars().next_back().is_some_and(char::is_whitespace)
+    {
+        return Err(CommittedTxPredicateJsonError::NonCanonicalLiteral {
+            kind: "account ID",
+            field: field.to_owned(),
+        });
+    }
     let account = crate::account::AccountId::parse_encoded(raw)
-        .map_err(|_| invalid_value(op, field, "a canonical account ID string"))?
-        .into_account_id();
+        .map_err(|_| invalid_value(op, field, "a canonical account ID string"))?;
     if account.to_string() != raw {
         return Err(CommittedTxPredicateJsonError::NonCanonicalLiteral {
             kind: "account ID",

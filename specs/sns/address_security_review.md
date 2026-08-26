@@ -2,137 +2,66 @@
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Sora Address Security Review (ADDR-7)
+# Account Address Security Review (ADDR-7)
 
-This note records diagnostics retained for rejecting pre-release selector
-payloads. Shipping V1 account addresses are universal and selector-free; Local
-digests are not encoded in canonical I105, used as World keys, or derived from
-node configuration.
+Shipping V1 account identity is universal and domainless. An account address
+contains only its version/header and controller payload; domains and SNS labels
+are separate routing or alias records and are never encoded into `AccountId`.
+Selector-bearing formats are outside the first-release protocol.
 
-The historical controls:
+## Parser and codec invariants
 
-- quantify the collision probability for the Local digest selectors and
-  document why Local‑12 (12-byte digest) is acceptable while Local‑8 is not;
-- surface the telemetry/alerting hooks that prove Local‑8 usage has dropped to
-  zero before Local-8 enforcement is activated;
-- call out the checksum, kana/IME safeguards, and manifest immutability
-  guarantees that prevent spoofing; and
-- provide an operator checklist that ties the above controls into the existing
-  toolchain.
+- Public account-id inputs use canonical I105. Strict runtime parsers reject
+  aliases, `@domain` suffixes, public-key literals, canonical-hex literals, and
+  non-canonical I105 spellings.
+- Binary decoding consumes the exact canonical header/controller payload.
+  Selector-prefixed, truncated, or trailing bytes are rejected instead of
+  being interpreted as another address version.
+- The I105 checksum is verified before an address is admitted. Network-prefix
+  and chain-discriminant checks fail closed when a caller supplies an expected
+  value.
+- Multisignature controllers validate member ordering, weights, quorum, and
+  payload bounds before construction succeeds.
+- Alias-aware routes resolve `name@dataspace` or
+  `name@domain.dataspace` explicitly, then return the resolved canonical
+  account id. They do not relax strict `AccountId` parsing.
 
-## 1. Local digest resilience
+The normative binary and textual cases live in
+`fixtures/account/address_vectors.json`. Regenerate or verify them with
+`cargo xtask address-vectors`; Rust and SDK fixture suites must consume the
+same selector-free fixture.
 
-### 1.1 Derivation summary
+## Normalization and display controls
 
-- Test-vector tooling derives the historical Local selector by computing a keyed Blake2s MAC over the
-  canonical domain string using the static key
-  `SORA-LOCAL-K:v1` (`crates/iroha_data_model/src/account/address.rs:102`).
-- `compute_local_digest` truncates the Blake2s output to 12 bytes (96 bits) and
-  records it as diagnostic vector metadata (`compute_local_digest`,
-  `crates/iroha_data_model/src/account/address.rs:885`).
-- The result is referred to as “Local‑12”. Selector-bearing Local‑12 and Local‑8
-  payloads are both noncanonical in V1 and are rejected by strict decoding.
+Domain and alias labels use the Norm v1 spelling and UTS-46 checks documented
+in [`address_norm_v1.md`](../references/address_norm_v1.md). Normalization is
+performed on the separate label record, never on account-address bytes.
 
-### 1.2 Collision budget
+Wallets and explorers must expose one primary copy/share representation: the
+canonical I105 account id. Aliases are separately labeled metadata. See
+[`address_display_guidelines.md`](./address_display_guidelines.md) for the UX
+contract and checksum/IME safeguards.
 
-| Estimated addresses | Expected Local‑12 collisions | Expected Local‑8 collisions |
-|---------------------|------------------------------|-----------------------------|
-| 10⁶ (large testnet) | ~6.3 × 10⁻¹⁸ | ~2.7 × 10⁻⁸ |
-| 10⁷ (regional rollout) | ~6.3 × 10⁻¹⁶ | ~2.7 × 10⁻⁶ |
-| 10⁸ (global retail) | ~6.3 × 10⁻¹⁴ | ~2.7 × 10⁻⁴ |
-| 10⁹ (multi-network aggregate) | ~6.3 × 10⁻¹² | ~2.7 × 10⁻² |
+## Operational controls
 
-The values use the birthday approximation `n(n-1)/(2·2ᵇ)` with `b = 96` or `64`.
-These historical probabilities explain why Local‑8 was unsafe. They are not a
-shipping collision budget: canonical V1 account identity contains no truncated
-domain digest.
+- Torii records rejected literals in
+  `torii_address_invalid_total{endpoint,reason}`. The reason is a bounded,
+  stable parser error code; raw account input is never a metric label.
+- `AddressInvalidRatioSlo` and
+  `dashboards/grafana/address_ingest.json` expose invalid rates and top failure
+  reasons. There are no selector-kind or digest-collision counters.
+- A release is blocked when the canonical fixture drifts, an SDK accepts a
+  forbidden account-id form, or strict parser negative cases stop failing.
+- Checksum incidents follow
+  [`address_checksum_failure_runbook.md`](./address_checksum_failure_runbook.md).
 
-### 1.3 Regression artefacts
+## Review checklist
 
-- `fixtures/account/address_vectors.json` publishes selector-free canonical
-  addresses plus historical selector diagnostics and negative cases. Regenerate
-  via `cargo xtask address-vectors` to prove encoder determinism.
-- `scripts/address_local_toolkit.sh` + `specs/sns/local_to_global_toolkit.md`
-
-## 2. Telemetry & alerting
-
-- Every Torii surface feeds `torii_address_invalid_total{context,reason}`,
-  `torii_address_local8_total{context}`,
-  `torii_address_collision_total{context,kind="local12_digest"}`, and
-  `torii_address_collision_domain_total{context,domain}` by incrementing
-  the metrics inside `parse_account_literal`
-  (`crates/iroha_torii/src/routing.rs:10105`,
-  `crates/iroha_telemetry/src/metrics.rs:9352`).
-- `cargo xtask address-local8-gate --input <prom-range.json> [--window-days 30] [--json-out <path>]`
-  consumes the Prometheus range-query JSON for
-  `torii_address_local8_total` and `torii_address_collision_total`, fails when
-  any counter increases or the coverage window is shorter than the requested
-  days, and emits an optional JSON report that can be attached to governance
-  packets. Pair it with `promtool query range --output=json` or the Prometheus
-  HTTP API to harvest the 30‑day window for production/staging clusters.
-- `dashboards/grafana/address_ingest.json` charts both counters and tags the
-  Local‑8 series with the same `context` label so operators can prove a
-  sustained zero rate ahead of Local-8/Local-12 enforcement gates.
-- `dashboards/alerts/address_ingest_rules.yml` asserts that both
-  `torii_address_local8_total` and `torii_address_collision_total` stay zero
-  outside the `/tests/*` contexts; the Alertmanager template links back to the
-  Local→Global toolkit runbook.
-- `ci/check_address_normalize.sh` and `ci/check_sorafs_orchestrator_adoption.sh`
-  attach scoreboard summaries plus `torii_address_local8_total` snapshots to
-  every release candidate, making Local‑8 regressions release blocking material.
-
-## 3. Checksum, kana, and parser hardening
-
-- I105 literals use the I105 alphabet and Bech32m checksum described in
-  the Account Structure RFC (§2.2, `specs/account_structure.md`).
-- The canonical I105 representation appends the half-width Iroha poem to
-  the same alphabet (`specs/account_structure.md`) so IME/Kana inputs can be
-  rendered deterministically across locales.
-- All explicit domain and SNS alias labels run through Norm v1 (NFC + strict
-  UTS‑46 + ASCII policy)
-  (`specs/references/address_norm_v1.md:1`), preventing spoofing via
-  confusables and mixed-normalization inputs.
-- Wallet/explorer UX requirements in
-  `specs/sns/address_display_guidelines.md:1` mandate a single public
-  account-id format (canonical I105) plus explicitly labeled on-chain
-  aliases so operators can reconcile what users see with what Torii enforces.
-
-## 4. Registry immutability & tombstones
-
-- `NameRecordV1` stores both the `name_hash` selector and the
-  `last_tx_hash` pointer (`specs/sns/registry_schema.md:47`), providing a
-  deterministic audit trail across upgrades.
-- Lifecycle state is tracked via `NameStatus`, including the explicit
-  `Tombstoned(NameTombstoneStateV1)` variant that carries the governance reason
-  (`specs/sns/registry_schema.md:71`).
-- Every mutation emits a structured `RegistryEventV1`
-  (`specs/sns/registry_schema.md:129`), so gateway caches and the DNS
-  publishing pipeline can prove that sealed tombstones are never re-allocated.
-- `specs/sns/governance_playbook.md` now lists this review as required
-  evidence before activating Local-8/Local-12 enforcement or onboarding new suffixes.
-
-## 5. Operator checklist
-
-1. **Run the toolkit:** execute `scripts/address_local_toolkit.sh` (or the JS
-   `audit.json`/`normalized.txt` pair referenced in the Local→Global runbook.
-2. **Run the gate check:** export a 30‑day Prometheus range query for both
-   `torii_address_local8_total` and `torii_address_collision_total`
-   (`promtool query range --output=json ...`) and feed it to
-   `cargo xtask address-local8-gate --input <file> --json-out artifacts/address_gate.json`.
-   Attach the CLI output and JSON report to the readiness ticket; the gate must
-   be clean (no increments, no counter resets, >=30 days observed) before
-   Local-8 enforcement is activated in production.
-3. **Attach telemetry:** capture the `address_ingest` dashboard panels for
-   `torii_address_local8_total{context!~"/tests/.*"}`,
-   `torii_address_collision_total{context!~"/tests/.*",kind="local12_digest"}`,
-   and `torii_address_collision_domain_total{context!~"/tests/.*",domain=~"<target-domain>"}` plus the alert snapshot, proving 30 consecutive days of zero Local‑8
-   detections and zero collisions scoped to production/staging domains.
-4. **Document inputs:** include copies of the i105 checksum fixtures
-   (`fixtures/account/address_vectors.json`) with the readiness ticket so IME
-   behaviour can be reproduced during support escalations.
-5. **Confirm registry guarantees:** export the name registry state (selected
-   suffixes) via the registrar API and verify that tombstoned entries remain
-   immutable in both storage and replay events.
-6. **Record governance approval:** link this document and the captured artefacts
-   in the SNS governance tracker so auditors can trace how Local‑8 was
-   disabled and how address spoofing risks are mitigated.
+1. Run `cargo xtask address-vectors --verify` and the affected Rust/SDK fixture
+   suites.
+2. Confirm strict paths accept canonical I105 and reject aliases, suffixes,
+   hex, public-key literals, selector-prefixed bytes, and malformed checksums.
+3. Confirm alias-aware paths resolve through explicit on-chain alias state and
+   return a canonical domainless account id.
+4. Review the invalid-address dashboard without retaining raw user input.
+5. Attach the fixture digest and focused test results to the release record.

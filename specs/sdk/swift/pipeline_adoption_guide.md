@@ -5,20 +5,16 @@ summary: Checklist and runbook for enabling the Torii pipeline endpoints inside 
 
 # 1. Scope & Status
 
-- **Prerequisites:** `IrohaSwift` 0.9+ (supports `PipelineEndpointMode`, offline queues, and telemetry hooks); Torii nodes exposing `/v1/pipeline/transactions`, `/v1/pipeline/transactions/status`, and `/v1/pipeline/recovery/{height}`; Norito encoders wired through `SwiftTransactionEncoder`.
+- **Prerequisites:** `IrohaSwift` 0.9+, Torii nodes exposing `/v1/pipeline/transactions`, `/v1/pipeline/transactions/status`, and `/v1/pipeline/recovery/{height}`, and Norito encoders wired through `SwiftTransactionEncoder`.
 - **References:** `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`, `IrohaSwift/Sources/IrohaSwift/TxBuilder.swift`, `specs/sdk/swift/index.md` (landing page).
 - **Server validation:** Torii owners record `/v1/pipeline` staging evidence with the runbook in [`specs/torii/pipeline_staging_validation.md`](../../torii/pipeline_staging_validation.md) so SDK proofs reference the same artefacts.
 
-# 2. Endpoint Selection & Rollback Guardrails
+# 2. Exact Endpoint Contract
 
-`IrohaSDK.pipelineEndpointMode` defaults to `.pipeline` and controls the target endpoints for submits and status polls:
-
-| Mode | Submit path | Status path | When to use |
-|------|-------------|-------------|-------------|
-| `.pipeline` (default) | `/v1/pipeline/transactions` | `/v1/pipeline/transactions/status` | All production/staging Torii clusters. Required for IOS2 readiness. |
-
-
-✅ Acceptance criteria: every shipping build must leave the mode at `.pipeline`, log any temporary downgrades, and restore the default immediately after Torii recovers.
+The first-release SDK always submits to `/v1/pipeline/transactions` and reads status from
+`/v1/pipeline/transactions/status` with exact `scope=global`. There is no endpoint-mode,
+status-scope, success-policy, or failure-policy selector. Status reads accept only HTTP 200
+with the closed response body or HTTP 404 for an absent observation.
 
 # 3. One-shot Submission Semantics
 
@@ -45,15 +41,17 @@ let sdk = IrohaSDK(
 
 # 4. Polling, Classification, and Errors
 
-`submitAndWait` and `pollPipelineStatus` use `PipelineStatusPollOptions` to classify terminal states. Defaults treat `Approved`, `Committed`, and `Applied` as success and `Rejected`/`Expired` as failure. Customize the window when tighter SLAs or additional statuses are required:
+`submitAndWait` and `pollPipelineStatus` use `PipelineStatusPollOptions` only to configure
+timing. A globally scoped, state-resolved `Applied` observation with a positive block height
+is the sole success. State-resolved `Rejected` and `Expired` observations fail. Queue- or
+cache-resolved hints, including hints carrying those terminal kind names, remain pending;
+`Queued`, `Approved`, and `Committed` also remain pending.
 
 ```swift
-var pollOptions = PipelineStatusPollOptions(
+let pollOptions = PipelineStatusPollOptions(
     pollInterval: 0.5,
     timeout: 45,
-    maxAttempts: 120,
-    successStates: [.approved, .committed, .applied],
-    failureStates: [.rejected, .expired, PipelineTransactionState(kind: "FAILED_VALIDATION")]
+    maxAttempts: 120
 )
 
 let status = try await sdk.submitAndWait(
@@ -65,8 +63,10 @@ let status = try await sdk.submitAndWait(
 
 - When a transaction never reaches a terminal state within the configured attempts, the SDK throws `PipelineStatusError.timeout(hash:attempts:)` so callers can surface the stalled hash and capture `/v1/pipeline/recovery` evidence.
 - Failures (e.g., `Rejected`) yield `PipelineStatusError.failure` with the final `ToriiPipelineTransactionStatus` payload for logging and telemetry.
-- Use `ToriiClient.getTransactionStatus(hashHex:mode:)` when monitoring a hash submitted by other SDKs or CLI automation.
+- Use `ToriiClient.getTransactionStatus(hashHex:)` when monitoring a hash submitted by other SDKs or CLI automation.
 - A `404` from `/v1/pipeline/transactions/status` indicates Torii has no cached status yet (for example after a restart), so the Swift SDK treats it as "pending" and continues polling.
+- Hashes must use the exact canonical typed transaction spelling
+  `^[0-9a-f]{63}[13579bdf]$`; prefixes, whitespace, uppercase, and untyped even markers are rejected.
 
 # 5. Caller-managed Archives & Recovery Evidence
 
@@ -98,9 +98,8 @@ try archive.enqueue(envelope)
 
 To satisfy IOS2 reporting gates:
 
-1. Log `pipelineEndpointMode` and `pipelinePollOptions` at startup. Include the configuration in weekly digests and attach them to the `swift_parity_*` telemetry bundle exported by `scripts/swift_status_export.py`.
-2. When downgrades occur, annotate the Buildkite `ci/xcode-swift-parity` run and update `status.md` with the affected build numbers and hashes.
-3. Track ambiguous one-shot outcomes and their hash-reconciliation results (see `specs/sdk/swift/telemetry_redaction.md`) without logging signed bodies.
-4. Store `submitAndWait` traces together with the Torii `/v1/pipeline/transactions/status` responses—auditors must be able to associate every operator-facing alert with the hash, final status, and recovery evidence mentioned above.
+1. Log `pipelinePollOptions` at startup. Include the timing configuration in weekly digests and attach it to the `swift_parity_*` telemetry bundle exported by `scripts/swift_status_export.py`.
+2. Track ambiguous one-shot outcomes and their hash-reconciliation results (see `specs/sdk/swift/telemetry_redaction.md`) without logging signed bodies.
+3. Store `submitAndWait` traces together with the Torii `/v1/pipeline/transactions/status` responses—auditors must be able to associate every operator-facing alert with the hash, final status, and recovery evidence mentioned above.
 
 Once the above artefacts are captured, update the roadmap entry for IOS2-WB2 and the Swift section of `status.md` so reviewers can trace the adoption across docs, code, and telemetry.

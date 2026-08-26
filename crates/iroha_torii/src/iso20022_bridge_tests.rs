@@ -3668,23 +3668,21 @@ macro_rules! live_pacs008_parse_rejection_tests {
         };
     }
 #[test]
-fn parse_account_address_literal_records_error_code() {
-    let (value, observation) = super::parse_account_address_literal("not-an-address");
-    assert_eq!(value.as_deref(), Some("not-an-address"));
-    assert!(observation.error_code().is_some());
+fn parse_account_address_literal_rejects_invalid_input() {
+    let error = super::parse_account_address_literal("not-an-address")
+        .expect_err("invalid supplementary address must fail closed");
+    assert!(matches!(error, MsgError::ValidationFailed));
 }
 #[test]
-fn parse_account_address_literal_captures_domain_kind() {
+fn parse_account_address_literal_returns_canonical_bytes() {
     let key_pair = fixture_key_pair(0xAB);
     let account = AccountId::new(key_pair.public_key().clone());
     let address = AccountAddress::from_account_id(&account).expect("address");
     let i105 = address
         .to_i105_for_discriminant(iroha_data_model::account::address::chain_discriminant())
         .expect("i105 encoding");
-    let (value, observation) = super::parse_account_address_literal(&i105);
-    assert!(value.is_some());
-    assert_eq!(observation.error_code(), None);
-    assert_eq!(observation.domain_label(), Some("default"));
+    let value = super::parse_account_address_literal(&i105).expect("canonical I105 must parse");
+    assert_eq!(value, address.canonical_hex().expect("canonical hex"));
 }
 #[test]
 fn parse_account_address_literal_rejects_canonical_hex() {
@@ -3692,13 +3690,9 @@ fn parse_account_address_literal_rejects_canonical_hex() {
     let account = AccountId::new(key_pair.public_key().clone());
     let address = AccountAddress::from_account_id(&account).expect("address");
     let canonical = address.canonical_hex().expect("canonical hex");
-    let (value, observation) = super::parse_account_address_literal(&canonical);
-    assert_eq!(value.as_deref(), Some(canonical.as_str()));
-    assert_eq!(
-        observation.error_code(),
-        Some(AccountAddressError::UnsupportedAddressFormat.code_str())
-    );
-    assert_eq!(observation.domain_label(), None);
+    let error = super::parse_account_address_literal(&canonical)
+        .expect_err("canonical hex must not be retained as an unvalidated address");
+    assert!(matches!(error, MsgError::ValidationFailed));
 }
 #[test]
 fn runtime_from_config_normalises_aliases() {

@@ -418,8 +418,7 @@ Torii integration
 - `Torii::new_with_handle` accepts a `routing::MaybeTelemetry` gate that pairs the runtime `Telemetry` handle with the active `TelemetryProfile`. Use `routing::MaybeTelemetry::from_profile(runtime_handle, profile)` to construct the gate, or `routing::MaybeTelemetry::disabled()` when telemetry is unavailable.
 - `Torii::new` (when the `telemetry` feature is enabled) remains as a convenience wrapper; it now forwards to `new_with_handle` with an operator profile by default. Tests can use `routing::MaybeTelemetry::for_tests()` to obtain an in-process telemetry handle.
 
-- `torii_address_invalid_total{endpoint,reason}` increments whenever HTTP routes reject an account identifier (invalid i105 payloads, domain mismatches, etc.). Keep the `<0.1%` SLO by watching the dedicated Grafana board in `dashboards/grafana/address_ingest.json`.
-- `torii_address_collision_total{endpoint,kind="local12_digest"}` and `torii_address_collision_domain_total{endpoint,domain}` record Local‑12 selector collisions. Both feed the collision panel/alert in `dashboards/grafana/address_ingest.json` so operators can tie spikes to specific domains. Production should stay flat; any increment blocks manifest promotions until governance signs off on the fix.
+- `torii_address_invalid_total{endpoint,reason}` increments whenever HTTP routes reject an account identifier (invalid I105 payloads, checksum failures, selector-prefixed bytes, and other strict-parser failures). Keep the `<0.1%` SLO by watching the dedicated Grafana board in `dashboards/grafana/address_ingest.json`.
 
 Pipeline metrics
 - pipeline_stage_ms: Histogram of per-stage durations with label `stage` in {"access","overlays","dag","schedule","apply","layers_prep","layers_exec","layers_merge"}.
@@ -704,7 +703,7 @@ labels:
 annotations:
   summary: "Epoch commitments stalled while blocks continue"
   description: |
-    No VRF commitments observed during an active epoch. Verify validators are online and check `/v1/sumeragi/status.vrf_penalty_epoch`.
+    No VRF commitments observed during an active epoch. Verify validators are online and inspect the authoritative `/v1/sumeragi/vrf/penalties/{epoch}` report.
 ```
 
 Adjust the 140 minute window to match the governed
@@ -806,7 +805,7 @@ Norito-RPC transport telemetry requirements are captured in `specs/torii/norito_
 - `torii_http_response_bytes_total{route_id,route_template,surface,representation,error_code,content_type,method,status}` — exact response-body bytes when the body size is known.
 - `torii_norito_decode_failures_total{payload_kind,reason}` — bucketed Norito RPC decode failures (invalid magic, checksum mismatch, unsupported feature, etc.).
 - `torii_address_invalid_total{surface,reason}` — rejects grouped by Torii surface (e.g., `routing.source`, `iso_bridge.source`) and the stable address error code so SDK drift or malformed i105 literals are visible.
-- Local‑8 specific counters are retired; rely on `torii_address_invalid_total{surface,reason}` and `torii_address_collision_total{surface,kind}` to monitor address ingestion and Local‑12 safety.
+- Rely on `torii_address_invalid_total{surface,reason}` to monitor strict canonical address ingestion.
 - Existing gauges (`torii_active_connections_total{scheme}`, `torii_pre_auth_reject_total{reason}`) must include `scheme="norito_rpc"` to track transport gating.
 
 Alert rules live in `dashboards/alerts/torii_norito_rpc_rules.yml` (see companion test `dashboards/alerts/tests/torii_norito_rpc_rules.test.yml`). Highlights:

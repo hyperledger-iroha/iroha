@@ -846,7 +846,7 @@ fn non_retireable_lane_transport_messages(validator: PeerId) -> Vec<BlockMessage
     };
     let payload_hash = Hash::new(b"non-retireable lane transport payload");
     let payload = crate::lane_consensus::LaneExecutablePayloadV1 {
-        version: crate::lane_consensus::LANE_EXECUTABLE_PAYLOAD_VERSION_V2,
+        version: crate::lane_consensus::LANE_EXECUTABLE_PAYLOAD_VERSION_V1,
         network_id: crate::sumeragi::synthetic_network_id("non-retireable-lane-transport"),
         epoch: 0,
         origin_proposal: proposal,

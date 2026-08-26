@@ -39,19 +39,22 @@ isi! {
     }
 }
 isi! {
-    /// Remove a participant from an active Kaigi.
+    /// Remove a participant from an active transparent Kaigi.
+    ///
+    /// Privacy-mode departure is off-chain only in V1, so native execution rejects
+    /// every privacy artifact on this instruction.
     pub struct LeaveKaigi {
         /// Identifier of the call to leave.
         pub call_id: KaigiId,
         /// Account leaving the call.
         pub participant: AccountId,
-    /// Commitment describing the participant (privacy mode only).
+    /// Reserved privacy-leave commitment; native V1 execution requires `None`.
     pub commitment: Option<KaigiParticipantCommitment>,
-    /// Nullifier preventing duplicate leaves (privacy mode only).
+    /// Reserved privacy-leave nullifier; native V1 execution requires `None`.
     pub nullifier: Option<KaigiParticipantNullifier>,
-    /// Merkle root the participant used when generating their proof (privacy mode only).
+    /// Reserved privacy-leave roster root; native V1 execution requires `None`.
     pub roster_root: Option<Hash>,
-    /// Proof bytes attesting ownership of the commitment (privacy mode only).
+    /// Reserved privacy-leave proof; native V1 execution requires `None`.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub proof: Option<Vec<u8>>,
     }
@@ -62,6 +65,9 @@ isi! {
         /// Identifier of the call to end.
         pub call_id: KaigiId,
         /// Optional timestamp in milliseconds when the call ended.
+        ///
+        /// When supplied, it must be no earlier than call creation and no later than the
+        /// current block; omission uses the current block time.
         pub ended_at_ms: Option<u64>,
         /// Commitment describing the host (privacy mode only).
         pub commitment: Option<KaigiParticipantCommitment>,
@@ -96,11 +102,14 @@ isi! {
         /// Identifier of the call to update.
         pub call_id: KaigiId,
         /// Optional relay manifest describing the desired relay hops.
+        ///
+        /// A supplied manifest must expire strictly after the current block time.
         pub relay_manifest: Option<KaigiRelayManifest>,
     }
 }
 isi! {
-    /// Register or update a Kaigi relay within its home domain.
+    /// Register or update a Kaigi relay in the governance domain selected by
+    /// its live domain-qualified primary account alias.
     pub struct RegisterKaigiRelay {
         /// Registration payload describing the relay capabilities.
         pub relay: KaigiRelayRegistration,
@@ -116,6 +125,8 @@ isi! {
         /// Health status observed by the reporter.
         pub status: KaigiRelayHealthStatus,
         /// Timestamp (milliseconds since epoch) for when the observation occurred.
+        ///
+        /// It must not exceed the current block time or precede the stored relay feedback.
         pub reported_at_ms: u64,
         /// Optional free-form notes capturing failure context.
         pub notes: Option<String>,

@@ -935,9 +935,7 @@ mod tests {
     }
     #[test]
     fn visit_parameterized_iterable_queries_dispatches_distinct_policy_hooks() {
-        let account_id = AccountId::parse_encoded(ALICE_ACCOUNT_ID_STR)
-            .map(crate::account::ParsedAccountId::into_account_id)
-            .expect("valid account id");
+        let account_id = AccountId::parse_encoded(ALICE_ACCOUNT_ID_STR).expect("valid account id");
         let asset_definition = crate::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("valid domain id"),
             "rose".parse().expect("valid asset name"),
@@ -1005,9 +1003,7 @@ mod tests {
             proof_hash: [0x11; 32],
         };
         let manifest_hash = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
-        let account_id = AccountId::parse_encoded(ALICE_ACCOUNT_ID_STR)
-            .map(crate::account::ParsedAccountId::into_account_id)
-            .expect("valid account id");
+        let account_id = AccountId::parse_encoded(ALICE_ACCOUNT_ID_STR).expect("valid account id");
         let asset_definition: crate::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("wonderland", "universal").unwrap(),

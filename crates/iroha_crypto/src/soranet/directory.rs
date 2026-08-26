@@ -2,10 +2,7 @@
 #![allow(unexpected_cfgs)]
 use crate::{
     signature::ed25519::{Ed25519Sha512, PublicKey as Ed25519PublicKey},
-    soranet::certificate::{
-        CertificateValidationPhase, RelayCertificateBundleV2, RelayCertificateV2,
-        SRC_V2_MAX_BUNDLE_BYTES,
-    },
+    soranet::certificate::{RelayCertificateBundleV2, RelayCertificateV2, SRC_V2_MAX_BUNDLE_BYTES},
 };
 use blake3::Hasher as Blake3Hasher;
 use norito::{
@@ -392,8 +389,6 @@ pub struct GuardDirectorySnapshotV2 {
     pub valid_after_unix: i64,
     /// Valid-until timestamp (Unix seconds).
     pub valid_until_unix: i64,
-    /// Validation phase gate encoded as `u8`.
-    pub validation_phase: u8,
     /// Governance issuer records.
     #[norito(default)]
     pub issuers: Vec<GuardDirectoryIssuerV1>,
@@ -421,7 +416,7 @@ impl GuardDirectorySnapshotV2 {
     /// Returns an error if decoding or intrinsic validation fails.
     pub fn inspect_bytes(bytes: &[u8]) -> Result<Self, norito::Error> {
         let snapshot = Self::decode_bounded(bytes)?;
-        snapshot.validate(None, false)?;
+        snapshot.validate(None)?;
         Ok(snapshot)
     }
     /// Authenticate an exact snapshot artifact and validate it at a supplied time.
@@ -441,7 +436,7 @@ impl GuardDirectorySnapshotV2 {
     ) -> Result<Self, norito::Error> {
         validate_snapshot_digest(bytes, expected_snapshot_digest)?;
         let snapshot = Self::decode_bounded(bytes)?;
-        snapshot.validate(Some(at_unix), true)?;
+        snapshot.validate(Some(at_unix))?;
         Ok(snapshot)
     }
     /// Authenticate a snapshot and retain one validated relay bundle while
@@ -462,7 +457,7 @@ impl GuardDirectorySnapshotV2 {
         validate_snapshot_digest(bytes, expected_snapshot_digest)?;
         let snapshot = Self::decode_bounded(bytes)?;
         let relay = snapshot
-            .validate_and_select_relay(Some(at_unix), true, Some(relay_id))?
+            .validate_and_select_relay(Some(at_unix), Some(relay_id))?
             .ok_or_else(|| {
                 norito::Error::Message(format!(
                     "relay {} is absent from the authenticated guard directory",
@@ -509,54 +504,29 @@ impl GuardDirectorySnapshotV2 {
         }
         Ok(())
     }
-    fn validate(
-        &self,
-        at_unix: Option<i64>,
-        require_first_release_policy: bool,
-    ) -> Result<(), norito::Error> {
-        self.validate_and_select_relay(at_unix, require_first_release_policy, None)
-            .map(drop)
+    fn validate(&self, at_unix: Option<i64>) -> Result<(), norito::Error> {
+        self.validate_and_select_relay(at_unix, None).map(drop)
     }
     fn validate_and_select_relay(
         &self,
         at_unix: Option<i64>,
-        require_first_release_policy: bool,
         target_relay_id: Option<[u8; 32]>,
     ) -> Result<Option<RelayCertificateBundleV2>, norito::Error> {
         self.validate_resource_bounds()?;
-        let validation_phase = self.validate_header()?;
-        if require_first_release_policy
-            && validation_phase != CertificateValidationPhase::Phase3RequireDual
-        {
-            return Err(norito::Error::Message(format!(
-                "authenticated guard directory requires phase 3 dual signatures in the first release (got validation_phase {})",
-                self.validation_phase
-            )));
-        }
+        self.validate_header()?;
         if let Some(at_unix) = at_unix {
             self.validate_at(at_unix)?;
         }
-        let issuers_by_fingerprint = self.validate_issuers(validation_phase)?;
-        self.validate_relays(
-            validation_phase,
-            &issuers_by_fingerprint,
-            at_unix,
-            target_relay_id,
-        )
+        let issuers_by_fingerprint = self.validate_issuers()?;
+        self.validate_relays(&issuers_by_fingerprint, at_unix, target_relay_id)
     }
-    fn validate_header(&self) -> Result<CertificateValidationPhase, norito::Error> {
+    fn validate_header(&self) -> Result<(), norito::Error> {
         if self.version != GUARD_DIRECTORY_VERSION_V2 {
             return Err(norito::Error::Message(format!(
                 "guard directory snapshot version mismatch (expected {GUARD_DIRECTORY_VERSION_V2}, got {})",
                 self.version
             )));
         }
-        let validation_phase = decode_validation_phase(self.validation_phase).ok_or_else(|| {
-            norito::Error::Message(format!(
-                "guard directory snapshot validation_phase {} is not recognised",
-                self.validation_phase
-            ))
-        })?;
         if self.published_at_unix < 0 || self.valid_after_unix < 0 || self.valid_until_unix < 0 {
             return Err(norito::Error::Message(
                 "guard directory snapshot timestamps must be non-negative".to_string(),
@@ -573,7 +543,7 @@ impl GuardDirectorySnapshotV2 {
                 "guard directory snapshot published_at_unix exceeds valid_after_unix".to_string(),
             ));
         }
-        Ok(validation_phase)
+        Ok(())
     }
     fn validate_at(&self, at_unix: i64) -> Result<(), norito::Error> {
         if at_unix < 0 {
@@ -595,10 +565,7 @@ impl GuardDirectorySnapshotV2 {
         }
         Ok(())
     }
-    fn validate_issuers(
-        &self,
-        validation_phase: CertificateValidationPhase,
-    ) -> Result<IssuersByFingerprint<'_>, norito::Error> {
+    fn validate_issuers(&self) -> Result<IssuersByFingerprint<'_>, norito::Error> {
         if self.issuers.is_empty() {
             return Err(norito::Error::Message(
                 "guard directory snapshot must contain at least one issuer".to_string(),
@@ -618,9 +585,9 @@ impl GuardDirectorySnapshotV2 {
                         "guard directory issuer Ed25519 public key is invalid: {err}"
                     ))
                 })?;
-            Self::validate_issuer_mldsa65_public_key_len(validation_phase, &issuer.mldsa65_public)?;
+            validate_issuer_mldsa65_public_key_shape(&issuer.mldsa65_public)?;
             let computed =
-                try_compute_issuer_fingerprint(&issuer.ed25519_public, &issuer.mldsa65_public)?;
+                compute_issuer_fingerprint(&issuer.ed25519_public, &issuer.mldsa65_public)?;
             if computed != issuer.fingerprint {
                 return Err(norito::Error::Message(
                     "guard directory issuer fingerprint does not match advertised keys".to_string(),
@@ -633,24 +600,8 @@ impl GuardDirectorySnapshotV2 {
         }
         Ok(issuers_by_fingerprint)
     }
-    fn validate_issuer_mldsa65_public_key_len(
-        validation_phase: CertificateValidationPhase,
-        mldsa65_public: &[u8],
-    ) -> Result<(), norito::Error> {
-        if mldsa65_public.is_empty() {
-            if validation_phase != CertificateValidationPhase::Phase1AllowSingle {
-                return Err(norito::Error::Message(
-                    "guard directory issuer ML-DSA-65 public key is required for validation phase"
-                        .to_string(),
-                ));
-            }
-            return Ok(());
-        }
-        validate_issuer_mldsa65_public_key_shape(mldsa65_public)
-    }
     fn validate_relays(
         &self,
-        validation_phase: CertificateValidationPhase,
         issuers_by_fingerprint: &IssuersByFingerprint<'_>,
         at_unix: Option<i64>,
         target_relay_id: Option<[u8; 32]>,
@@ -690,8 +641,8 @@ impl GuardDirectorySnapshotV2 {
             }
             self.validate_relay_certificate_window(&bundle.certificate)?;
             let verified = at_unix.map_or_else(
-                || bundle.verify_signatures(&issuer.0, issuer.1, validation_phase),
-                |at_unix| bundle.verify_at(&issuer.0, issuer.1, validation_phase, at_unix),
+                || bundle.verify_signatures(&issuer.0, issuer.1),
+                |at_unix| bundle.verify_at(&issuer.0, issuer.1, at_unix),
             );
             verified.map_err(|err| {
                 norito::Error::Message(format!(
@@ -774,8 +725,7 @@ pub struct GuardDirectoryIssuerV1 {
     pub fingerprint: [u8; 32],
     /// Ed25519 public key.
     pub ed25519_public: [u8; 32],
-    /// Optional ML-DSA-65 public key (required for Phase 2+).
-    #[norito(default)]
+    /// Mandatory first-release ML-DSA-65 public key.
     pub mldsa65_public: Vec<u8>,
 }
 /// Relay entry embedded in guard directory snapshots.
@@ -787,22 +737,10 @@ pub struct GuardDirectoryRelayEntryV2 {
 /// Compute the canonical issuer fingerprint used by SRC v2.
 ///
 /// # Errors
-/// Returns an error if the Ed25519 public key is malformed, the non-empty
+/// Returns an error if the Ed25519 public key is malformed, the mandatory
 /// ML-DSA material is not an ML-DSA-65 public key, or the ML-DSA public-key
 /// length cannot be represented in the fingerprint's fixed `u32` length field.
 pub fn compute_issuer_fingerprint(
-    ed25519: &[u8; 32],
-    mldsa_public: &[u8],
-) -> Result<[u8; 32], norito::Error> {
-    compute_issuer_fingerprint_inner(ed25519, mldsa_public)
-}
-/// Compute the canonical issuer fingerprint used by SRC v2.
-///
-/// # Errors
-/// Returns an error if the Ed25519 public key is malformed, the non-empty
-/// ML-DSA material is not an ML-DSA-65 public key, or the ML-DSA public-key
-/// length cannot be represented in the fingerprint's fixed `u32` length field.
-pub fn try_compute_issuer_fingerprint(
     ed25519: &[u8; 32],
     mldsa_public: &[u8],
 ) -> Result<[u8; 32], norito::Error> {
@@ -839,9 +777,6 @@ fn validate_issuer_ed25519_public_key(ed25519: &[u8; 32]) -> Result<(), norito::
         })
 }
 fn validate_issuer_mldsa65_public_key_shape(mldsa_public: &[u8]) -> Result<(), norito::Error> {
-    if mldsa_public.is_empty() {
-        return Ok(());
-    }
     let expected = MlDsaSuite::MlDsa65.public_key_len();
     if mldsa_public.len() != expected {
         return Err(norito::Error::Message(format!(
@@ -856,39 +791,18 @@ fn validate_issuer_mldsa65_public_key_shape(mldsa_public: &[u8]) -> Result<(), n
     }
     Ok(())
 }
-/// Encode the validation phase to its wire representation.
-#[must_use]
-pub const fn encode_validation_phase(phase: CertificateValidationPhase) -> u8 {
-    match phase {
-        CertificateValidationPhase::Phase1AllowSingle => 1,
-        CertificateValidationPhase::Phase2PreferDual => 2,
-        CertificateValidationPhase::Phase3RequireDual => 3,
-    }
-}
-/// Decode a validation phase from its wire representation.
-#[must_use]
-pub const fn decode_validation_phase(raw: u8) -> Option<CertificateValidationPhase> {
-    match raw {
-        1 => Some(CertificateValidationPhase::Phase1AllowSingle),
-        2 => Some(CertificateValidationPhase::Phase2PreferDual),
-        3 => Some(CertificateValidationPhase::Phase3RequireDual),
-        _ => None,
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::soranet::{
         certificate::{
-            CapabilityToggle, CertificateValidationPhase, KemRotationModeV1, KemRotationPolicyV1,
-            RelayCapabilityFlagsV1, RelayCertificateV2, RelayEndpointV2, RelayRolesV2,
+            CapabilityToggle, RelayCapabilityFlagsV1, RelayCertificateV2, RelayEndpointV2,
+            RelayRolesV2,
         },
         handshake::HandshakeSuite,
     };
     use ed25519_dalek::{SECRET_KEY_LENGTH, SigningKey};
-    use soranet_pq::{
-        HedgedRngSeed, MlKemSuite, generate_mldsa_keypair_from_seed as generate_mldsa_keypair,
-    };
+    use soranet_pq::{HedgedRngSeed, generate_mldsa_keypair_from_seed as generate_mldsa_keypair};
     fn sample_issuer_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[0x11; SECRET_KEY_LENGTH])
     }
@@ -934,13 +848,6 @@ mod tests {
                 CapabilityToggle::Enabled,
                 CapabilityToggle::Disabled,
             ),
-            kem_policy: KemRotationPolicyV1 {
-                mode: KemRotationModeV1::Static,
-                preferred_suite: MlKemSuite::MlKem768.kem_id(),
-                fallback_suite: None,
-                rotation_interval_hours: 0,
-                grace_period_hours: 0,
-            },
             handshake_suites: vec![
                 HandshakeSuite::Nk3PqForwardSecure,
                 HandshakeSuite::Nk2Hybrid,
@@ -950,7 +857,6 @@ mod tests {
             valid_until: 1_734_086_400,
             directory_hash,
             issuer_fingerprint,
-            pq_kem_public: vec![0x66; MlKemSuite::MlKem768.public_key_len()],
         }
     }
     fn sample_relay_bundle(
@@ -959,21 +865,18 @@ mod tests {
         relay_id: [u8; 32],
         issuer_signing_key: &SigningKey,
         issuer_mldsa_secret_key: &[u8],
-        include_mldsa_signature: bool,
     ) -> RelayCertificateBundleV2 {
-        let mut bundle = sample_relay_certificate(directory_hash, issuer_fingerprint, relay_id)
+        sample_relay_certificate(directory_hash, issuer_fingerprint, relay_id)
             .issue(issuer_signing_key, issuer_mldsa_secret_key)
-            .expect("sample relay certificate issue");
-        if !include_mldsa_signature {
-            bundle.signatures.mldsa65 = None;
-        }
-        bundle
+            .expect("sample relay certificate issue")
     }
     fn replace_first_relay_bundle(
         snapshot: &mut GuardDirectorySnapshotV2,
         bundle: &RelayCertificateBundleV2,
     ) {
-        snapshot.relays[0].certificate = bundle.to_cbor();
+        snapshot.relays[0].certificate = bundle
+            .try_to_cbor()
+            .expect("sample relay bundle should encode");
     }
     fn mutate_first_relay_bundle(
         snapshot: &mut GuardDirectorySnapshotV2,
@@ -998,9 +901,6 @@ mod tests {
             published_at_unix: 1_734_000_000,
             valid_after_unix: 1_734_000_000,
             valid_until_unix: 1_734_086_400,
-            validation_phase: encode_validation_phase(
-                CertificateValidationPhase::Phase3RequireDual,
-            ),
             issuers: vec![GuardDirectoryIssuerV1 {
                 fingerprint,
                 ed25519_public,
@@ -1013,59 +913,11 @@ mod tests {
                     [0x99; 32],
                     &issuer_signing_key,
                     issuer_mldsa.secret_key(),
-                    true,
                 )
-                .to_cbor(),
+                .try_to_cbor()
+                .expect("sample relay bundle should encode"),
             }],
         }
-    }
-    fn sample_phase1_single_signature_snapshot() -> GuardDirectorySnapshotV2 {
-        let issuer_signing_key = sample_issuer_signing_key();
-        let issuer_mldsa = sample_mldsa_keypair(b"directory-snapshot-phase1-signer");
-        let ed25519_public = issuer_signing_key.verifying_key().to_bytes();
-        let mldsa65_public = Vec::new();
-        let fingerprint = compute_issuer_fingerprint(&ed25519_public, &mldsa65_public)
-            .expect("sample phase-1 issuer fingerprint should compute");
-        let directory_hash = [0xAB; 32];
-        GuardDirectorySnapshotV2 {
-            version: GUARD_DIRECTORY_VERSION_V2,
-            directory_hash,
-            published_at_unix: 1_734_000_000,
-            valid_after_unix: 1_734_000_000,
-            valid_until_unix: 1_734_086_400,
-            validation_phase: encode_validation_phase(
-                CertificateValidationPhase::Phase1AllowSingle,
-            ),
-            issuers: vec![GuardDirectoryIssuerV1 {
-                fingerprint,
-                ed25519_public,
-                mldsa65_public,
-            }],
-            relays: vec![GuardDirectoryRelayEntryV2 {
-                certificate: sample_relay_bundle(
-                    directory_hash,
-                    fingerprint,
-                    [0x99; 32],
-                    &issuer_signing_key,
-                    issuer_mldsa.secret_key(),
-                    false,
-                )
-                .to_cbor(),
-            }],
-        }
-    }
-    #[test]
-    fn encode_decode_validation_phase_roundtrip() {
-        for phase in [
-            CertificateValidationPhase::Phase1AllowSingle,
-            CertificateValidationPhase::Phase2PreferDual,
-            CertificateValidationPhase::Phase3RequireDual,
-        ] {
-            let raw = encode_validation_phase(phase);
-            assert_eq!(decode_validation_phase(raw), Some(phase));
-        }
-        assert_eq!(decode_validation_phase(0), None);
-        assert_eq!(decode_validation_phase(4), None);
     }
     #[test]
     fn compute_fingerprint_changes_with_keys() {
@@ -1086,20 +938,10 @@ mod tests {
         assert_ne!(fingerprint_b, fingerprint_c);
     }
     #[test]
-    fn compute_fingerprint_matches_try_helper() {
-        let ed25519 = sample_issuer_signing_key().verifying_key().to_bytes();
-        let mldsa_public = vec![0xAA; MlDsaSuite::MlDsa65.public_key_len()];
-        let via_try = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
-            .expect("canonical issuer fingerprint should compute");
-        let direct = compute_issuer_fingerprint(&ed25519, &mldsa_public)
-            .expect("canonical issuer fingerprint should compute");
-        assert_eq!(via_try, direct);
-    }
-    #[test]
     fn issuer_fingerprint_rejects_invalid_ed25519_public_key() {
         let ed25519 = [0u8; 32];
         let mldsa_public = vec![0xAA; MlDsaSuite::MlDsa65.public_key_len()];
-        let err = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
+        let err = compute_issuer_fingerprint(&ed25519, &mldsa_public)
             .expect_err("weak issuer Ed25519 public key must fail closed");
         assert!(
             err.to_string().contains("Ed25519 public key"),
@@ -1110,7 +952,7 @@ mod tests {
     fn issuer_fingerprint_rejects_invalid_mldsa_public_key_length() {
         let ed25519 = sample_issuer_signing_key().verifying_key().to_bytes();
         let mldsa_public = vec![0xAA; MlDsaSuite::MlDsa65.public_key_len() - 1];
-        let err = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
+        let err = compute_issuer_fingerprint(&ed25519, &mldsa_public)
             .expect_err("invalid issuer ML-DSA public-key length must fail closed");
         assert!(
             err.to_string().contains("ML-DSA-65 public key"),
@@ -1121,7 +963,7 @@ mod tests {
     fn issuer_fingerprint_rejects_all_zero_mldsa_public_key() {
         let ed25519 = sample_issuer_signing_key().verifying_key().to_bytes();
         let mldsa_public = vec![0u8; MlDsaSuite::MlDsa65.public_key_len()];
-        let err = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
+        let err = compute_issuer_fingerprint(&ed25519, &mldsa_public)
             .expect_err("all-zero issuer ML-DSA public key must fail closed");
         assert!(
             err.to_string().contains("all zero"),
@@ -1389,9 +1231,9 @@ mod tests {
             [0x99; 32],
             &attacker_signing_key,
             attacker_mldsa.secret_key(),
-            true,
         )
-        .to_cbor();
+        .try_to_cbor()
+        .expect("forged relay bundle should encode");
         let forged_bytes = forged.to_bytes().expect("serialize forged snapshot");
         GuardDirectorySnapshotV2::inspect_bytes(&forged_bytes)
             .expect("self-signed snapshot is structurally self-consistent");
@@ -1430,33 +1272,6 @@ mod tests {
         )
         .expect_err("valid_until is exclusive");
         assert!(expired.to_string().contains("expired"));
-    }
-    #[test]
-    fn authenticated_snapshot_rejects_pre_release_validation_phase() {
-        let mut snapshot = sample_snapshot();
-        snapshot.validation_phase =
-            encode_validation_phase(CertificateValidationPhase::Phase2PreferDual);
-        let bytes = snapshot.to_bytes().expect("serialize");
-        let digest = compute_snapshot_digest(&bytes);
-        GuardDirectorySnapshotV2::inspect_bytes(&bytes)
-            .expect("phase 2 remains available for structural diagnostics");
-        let err = GuardDirectorySnapshotV2::authenticate_bytes_at(
-            &bytes,
-            digest,
-            snapshot.valid_after_unix,
-        )
-        .expect_err("authenticated first-release snapshots must require dual signatures");
-        assert!(
-            err.to_string().contains("phase 3 dual signatures"),
-            "unexpected authentication error: {err}"
-        );
-    }
-    #[test]
-    fn snapshot_rejects_unknown_validation_phase() {
-        let mut snapshot = sample_snapshot();
-        snapshot.validation_phase = 0;
-        let bytes = snapshot.to_bytes().expect("serialize");
-        assert!(GuardDirectorySnapshotV2::inspect_bytes(&bytes).is_err());
     }
     #[test]
     fn snapshot_rejects_version_mismatch() {
@@ -1598,37 +1413,14 @@ mod tests {
         );
     }
     #[test]
-    fn snapshot_rejects_missing_mldsa65_public_key_after_phase1() {
+    fn snapshot_rejects_missing_mldsa65_public_key() {
         let mut snapshot = sample_snapshot();
         snapshot.issuers[0].mldsa65_public.clear();
-        snapshot.issuers[0].fingerprint = compute_issuer_fingerprint(
-            &snapshot.issuers[0].ed25519_public,
-            &snapshot.issuers[0].mldsa65_public,
-        )
-        .expect("sample issuer fingerprint should compute");
+        snapshot.issuers[0].fingerprint = [0xEE; 32];
         let bytes = snapshot.to_bytes().expect("serialize");
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
-            .expect_err("phase 3 requires ML-DSA-65 issuer key");
-        assert!(err.to_string().contains("required"));
-    }
-    #[test]
-    fn snapshot_allows_phase1_empty_mldsa65_public_key() {
-        let snapshot = sample_phase1_single_signature_snapshot();
-        let bytes = snapshot.to_bytes().expect("serialize");
-        GuardDirectorySnapshotV2::inspect_bytes(&bytes)
-            .expect("phase 1 may carry an issuer without ML-DSA-65 key");
-    }
-    #[test]
-    fn snapshot_phase2_accepts_single_signature_relay() {
-        let mut snapshot = sample_snapshot();
-        snapshot.validation_phase =
-            encode_validation_phase(CertificateValidationPhase::Phase2PreferDual);
-        mutate_first_relay_bundle(&mut snapshot, |bundle| {
-            bundle.signatures.mldsa65 = None;
-        });
-        let bytes = snapshot.to_bytes().expect("serialize");
-        GuardDirectorySnapshotV2::inspect_bytes(&bytes)
-            .expect("phase 2 accepts Ed25519-only relay certificates during rollout");
+            .expect_err("the first release requires an ML-DSA-65 issuer key");
+        assert!(err.to_string().contains("must be"));
     }
     #[test]
     fn snapshot_rejects_invalid_issuer_ed25519_public_key() {
@@ -1725,12 +1517,7 @@ mod tests {
     fn snapshot_rejects_bad_relay_certificate_mldsa65_signature() {
         let mut snapshot = sample_snapshot();
         mutate_first_relay_bundle(&mut snapshot, |bundle| {
-            let signature = bundle
-                .signatures
-                .mldsa65
-                .as_mut()
-                .expect("ML-DSA signature");
-            signature[0] ^= 0xFF;
+            bundle.signatures.mldsa65[0] ^= 0xFF;
         });
         let bytes = snapshot.to_bytes().expect("serialize");
         let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)

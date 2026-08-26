@@ -637,16 +637,15 @@ fn sample_bundle(
                 "api.example.test",
                 [443],
             )]),
-            allow_wallet_signing: false,
             allow_state_writes: false,
             allow_model_inference: false,
             allow_model_training: false,
         },
         resources: SoraResourceLimitsV1 {
             cpu_millis: NonZeroU32::new(500).expect("nonzero"),
-            memory_bytes: NonZeroU64::new(64 * 1024 * 1024).expect("nonzero"),
+            memory_bytes: NonZeroU64::new(128 * 1024 * 1024).expect("nonzero"),
             ephemeral_storage_bytes: NonZeroU64::new(64 * 1024 * 1024).expect("nonzero"),
-            max_open_files: NonZeroU32::new(1024).expect("nonzero"),
+            max_open_files_per_process: NonZeroU32::new(1024).expect("nonzero"),
             max_tasks: NonZeroU16::new(32).expect("nonzero"),
         },
         lifecycle: SoraLifecycleHooksV1 {
@@ -718,7 +717,6 @@ fn sample_bundle(
 fn sample_inrou_manifest() -> SoraInrouManifestV1 {
     SoraInrouManifestV1 {
         schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
-        guest_os: SoraInrouGuestOsV1::DebianSlim,
         guest_images: std::collections::BTreeMap::from([
             (
                 iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
@@ -726,8 +724,7 @@ fn sample_inrou_manifest() -> SoraInrouManifestV1 {
                     kernel_image_path: "/inrou/x86_64/vmlinux".to_string(),
                     rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_string(),
                     initrd_image_path: None,
-                    distribution: Default::default(),
-                    published_artifact: None,
+                    published_artifact: sample_inrou_published_artifact(),
                 },
             ),
             (
@@ -736,13 +733,10 @@ fn sample_inrou_manifest() -> SoraInrouManifestV1 {
                     kernel_image_path: "/inrou/aarch64/vmlinux".to_string(),
                     rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_string(),
                     initrd_image_path: None,
-                    distribution: Default::default(),
-                    published_artifact: None,
+                    published_artifact: sample_inrou_published_artifact(),
                 },
             ),
         ]),
-        bootstrap_user_data_path: None,
-        ssh_authorized_keys: vec!["ssh-ed25519 test-key soracloud-tests".to_string()],
     }
 }
 fn sample_inrou_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
@@ -758,7 +752,7 @@ fn sample_inrou_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
             volume_name: "service_state".parse().expect("valid name"),
             kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
             storage_class: StorageClass::Warm,
-            mount_path: "/var/lib/sora".to_string(),
+            mount_path: "/var/lib/soracloud/volumes/service_state".to_string(),
             max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
         },
     ]
@@ -775,6 +769,7 @@ fn sample_inrou_replica_runtime_state_for(
         service_name,
         service_version: service_version.to_string(),
         replica_slot,
+        placement_incarnation: Hash::new(b"placement-1"),
         validator_account_id,
         peer_id,
         selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
@@ -802,11 +797,13 @@ fn sample_inrou_service_placement_record_for(
         eligible_validator_count: 1,
         placements: vec![SoraInrouReplicaPlacementV1 {
             replica_slot: runtime_state.replica_slot,
+            economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+            lease_started_height: 1,
+            placement_incarnation: Hash::new(b"placement-1"),
+            host_availability: SoraInrouReplicaHostAvailabilityV1::Available,
             validator_account_id: runtime_state.validator_account_id.clone(),
             peer_id: runtime_state.peer_id.clone(),
             selected_guest_isa: runtime_state.selected_guest_isa,
-            selected_geography_tag: None,
-            selection_latency_ms: None,
         }],
         reconciled_at_ms: 1_000,
         last_error: None,
@@ -888,6 +885,21 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         require_soracloud_service_runtime_authority(&BOB_ID, &other_name, other_version, &stx,)?,
         SoracloudServiceRuntimeAuthority::AssignedValidator
     );
+    let bob_placement_key = (other_name.as_ref().to_owned(), other_version.to_owned());
+    stx.world
+        .soracloud_inrou_service_placements
+        .get_mut(&bob_placement_key)
+        .expect("Bob placement")
+        .placements[0]
+        .host_availability = SoraInrouReplicaHostAvailabilityV1::Unavailable;
+    require_soracloud_service_runtime_authority(&BOB_ID, &other_name, other_version, &stx)
+        .expect_err("an unavailable assignment must not grant runtime or receipt authority");
+    stx.world
+        .soracloud_inrou_service_placements
+        .get_mut(&bob_placement_key)
+        .expect("Bob placement")
+        .placements[0]
+        .host_availability = SoraInrouReplicaHostAvailabilityV1::Available;
     let cross_service_error =
         require_soracloud_service_runtime_authority(&BOB_ID, &victim_name, victim_version, &stx)
             .expect_err("a placement for another service must not grant runtime authority");
@@ -958,6 +970,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         reporting_epoch,
         active_service_version: victim_version.to_owned(),
         replica_slot: 1,
+        placement_incarnation: Hash::new(b"placement-1"),
         replica_accounted_egress_bytes: u64::MAX,
         finalize_reporter: false,
     }
@@ -1058,7 +1071,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         emitted_sequence: 1,
         placement_id: Some(Hash::new(b"placement")),
         selected_validator_account_id: Some(BOB_ID.clone()),
-        selected_peer_id: Some("12D3KooWRuntimeReceiptPeer".to_string()),
+        selected_peer_id: Some(PeerId::from(BOB_ID.expect_single_signatory().clone()).to_string()),
         mailbox_message_id: None,
         journal_artifact_hash: None,
         checkpoint_artifact_hash: None,
@@ -1102,90 +1115,6 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
             .soracloud_runtime_receipts
             .get(&runtime_receipt.receipt_id),
         Some(&runtime_receipt)
-    );
-    let mut private_bundle =
-        sample_uploaded_model_bundle("victim_runtime", ManifestDigest::new([0xD1; 32]));
-    private_bundle.runtime_format =
-        iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1;
-    stx.world.soracloud_uploaded_model_bundles.insert(
-        (
-            private_bundle.service_name.as_ref().to_owned(),
-            private_bundle.model_id.clone(),
-            private_bundle.weight_version.clone(),
-        ),
-        private_bundle.clone(),
-    );
-    let private_artifact = |role: &str, byte: u8| SoraPrivateModelArtifactRefV1 {
-        schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
-        sorafs_manifest_digest: ManifestDigest::new([byte; 32]),
-        artifact_hash: Hash::new([byte; 32]),
-        ciphertext_bytes: 64,
-        artifact_role: role.to_string(),
-    };
-    let private_receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
-        schema_version:
-            iroha_data_model::soracloud::SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
-        receipt_id: Hash::new(b"validator-private-runtime-receipt"),
-        service_name: private_bundle.service_name.clone(),
-        model_id: private_bundle.model_id.clone(),
-        weight_version: private_bundle.weight_version.clone(),
-        runtime_version: crate::soracloud_runtime::SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1
-            .to_string(),
-        model_manifest_digest: private_bundle.sorafs_manifest_digest,
-        model_bundle_root: private_bundle.bundle_root,
-        policy_id: private_bundle.decryption_policy_ref.clone(),
-        input_artifact: private_artifact("input", 0xD2),
-        output_artifact: private_artifact("output", 0xD3),
-        input_commitment: Hash::new(b"input-commitment"),
-        output_commitment: Hash::new(b"output-commitment"),
-        request_commitment: Hash::new(b"private-request-commitment"),
-        result_commitment: Hash::new(b"private-result-commitment"),
-        emitted_sequence: 1,
-    };
-    let private_receipt_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        receipt: private_receipt.clone(),
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect_err("private uploaded-model receipts must remain manager-only");
-    assert!(matches!(
-        private_receipt_error,
-        InstructionExecutionError::InvariantViolation(message)
-            if message.as_ref() == "not permitted: CanManageSoracloud"
-    ));
-    assert!(
-        stx.world
-            .soracloud_private_uploaded_model_execution_receipts
-            .get(&private_receipt.receipt_id)
-            .is_none()
-    );
-    isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        receipt: private_receipt.clone(),
-    }
-    .execute(&ALICE_ID, &mut stx)?;
-    assert_eq!(
-        stx.world
-            .soracloud_private_uploaded_model_execution_receipts
-            .get(&private_receipt.receipt_id),
-        Some(&private_receipt)
-    );
-    let mut colliding_private_receipt = private_receipt.clone();
-    colliding_private_receipt.result_commitment =
-        Hash::new(b"replacement-private-result-commitment");
-    let private_collision_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-        receipt: colliding_private_receipt,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("a private uploaded-model receipt identifier must be immutable");
-    assert!(matches!(
-        private_collision_error,
-        InstructionExecutionError::InvariantViolation(message)
-            if message.contains("has already been recorded")
-    ));
-    assert_eq!(
-        stx.world
-            .soracloud_private_uploaded_model_execution_receipts
-            .get(&private_receipt.receipt_id),
-        Some(&private_receipt)
     );
     let bob_victim_runtime = sample_inrou_replica_runtime_state_for(
         victim_name.clone(),
@@ -1367,7 +1296,6 @@ fn sample_fhe_param_set() -> FheParamSetV1 {
         max_multiplicative_depth: NonZeroU16::new(1).expect("nonzero"),
         lifecycle: FheParamLifecycleV1::Active,
         activation_height: Some(1),
-        deprecation_height: None,
         withdraw_height: None,
         parameter_digest,
         rns_modulus_chain_digest,

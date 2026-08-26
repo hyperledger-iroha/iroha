@@ -15,9 +15,11 @@ This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) 
 - SoraNet uses a three-hop circuit (entry, middle, exit) built on QUIC transport with additional Noise-based handshake layering.
 - Relays operate in roles: `entry`, `middle`, `exit`. Gateways may act as exit for content fetch.
 - Clients maintain guard sets (entry relays) pinned for 30 days to prevent guard enumeration.
-  Directory entries may attach endpoint `tags`; relays advertising
-  `"norito-stream"` can forward Norito RPC/streaming traffic over Torii and
-  should be preferred when constructing privacy routes.
+  Directory entries may attach endpoint `tags`; `"norito-stream"` is reserved
+  for the proof-bound exit adapter. V1 does not forward token-bearing
+  filesystem routes until RouteOpen authentication/time proofs and durable
+  revocation are implemented, so clients must not treat this tag as current
+  route availability.
 - Circuits carry fixed-size cells (1024 bytes) with padding/dummy cells to obfuscate traffic.
 
 ## Handshake Overview (SNNet-1a)
@@ -27,10 +29,14 @@ This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) 
   transport; `SNR1` uses the hybrid handshake secret so recorded application
   traffic retains the negotiated post-quantum confidentiality guarantee.
   Direction- and QUIC-stream-specific ChaCha20-Poly1305 keys are derived with
-  HKDF-SHA-256. Each record carries
+  HKDF-SHA-256. The non-clone negotiated session key is consumed by one
+  record-layer root so a safe caller cannot open a second nonce registry over
+  the same session. Each record carries
   `magic("SNR1") || sequence(u64 BE) || plaintext_len(u32 BE) || ciphertext || tag`.
   The header is authenticated as associated data, sequences start at zero and
-  must be contiguous, and plaintext is capped at 64 KiB before allocation.
+  must be contiguous, and plaintext length must be in `1..=64 KiB` before
+  allocation. Zero-length records are rejected so authenticated input always
+  makes application progress.
   Invalid, replayed, out-of-order, truncated, or unauthenticated records close
   the affected stream without exposing plaintext. Node-to-node SoraNet sessions
   use their existing equivalent ChaCha20-Poly1305 application framing.
@@ -184,7 +190,9 @@ This document satisfies **SNNet-1** (handshake, salt rotation, capability TLVs) 
 
 ## Directory Data
 - Microdescriptor fields:
-  - Relay identity (Ed25519), PQ keys, capabilities, guard flags.
+  - Relay signing identities (Ed25519 and ML-DSA-65), authenticated NK2/NK3
+    handshake-suite ordering, capabilities, and guard flags. Static relay KEM
+    keys are not directory metadata.
   - Salt epoch, blinded CID support, region info.
 - Consensus file (`consensus.car`) includes digest of salts, handshake capabilities, version.
 

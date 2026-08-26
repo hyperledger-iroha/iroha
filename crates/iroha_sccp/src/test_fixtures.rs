@@ -29,6 +29,7 @@ use iroha_data_model::{
         sccp_groth16_bn254_public_signal_schema_hash_v1, sccp_sora_taira_chain_id_hash_v1,
         sccp_v1_taira_xor_asset_definition_id,
     },
+    consensus::{NposConsensusEffects, NposMarkVrfPenaltiesAppliedAction, NposPenaltyAction},
     isi::{InstructionBox, bridge::RecordSccpMessage},
     peer::PeerId,
     transaction::{
@@ -775,6 +776,14 @@ fn exact_sccp_fixture_block(
             .expect("sign exact SCCP provisional block header"),
     );
     let mut block = SignedBlock::presigned(provisional_signature, header, vec![transaction]);
+    // Exercise the active NPoS-effects header commitment in the exact SCCP fixture.
+    block.set_npos_consensus_effects(Some(NposConsensusEffects {
+        vrf_epoch_seals: Vec::new(),
+        v2_evidence_admissions: Vec::new(),
+        penalty_actions: vec![NposPenaltyAction::MarkVrfPenaltiesApplied(
+            NposMarkVrfPenaltiesAppliedAction { epoch: 0, height },
+        )],
+    }));
     block
         .set_transaction_results(
             Vec::new(),

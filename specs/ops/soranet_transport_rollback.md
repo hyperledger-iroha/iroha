@@ -88,8 +88,8 @@ Rollback is authorised when any of the following hold and the duty officer and N
 
 ## 8. Attachments
 
-- Guard directory snapshot + verification log (`artifacts/rollback/guard_directory_pre_rollback.norito` + `soranet-directory verify` stdout).
-- Guard cache dump (`artifacts/rollback/guard_cache_pre_rollback.norito` + signature tag when `--guard-cache-key` is used).
+- Guard directory snapshot + verification log (`artifacts/rollback/guard_directory_pre_rollback.norito` + `sorafs_cli guard-directory verify --path ... --expected-snapshot-digest ...` stdout).
+- Guard cache dump (`artifacts/rollback/guard_cache_pre_rollback.norito`), retained as its mandatory authenticated version-8 envelope. Preserve the runtime key separately as secret configuration; never copy it into the incident bundle.
 - `scoreboard.json`, `summary.json`, and `adoption_report.json` emitted during the rollback.
 - Grafana JSON exports from `dashboards/grafana/sorafs_fetch_observability.json` and `dashboards/grafana/soranet_pq_ratchet.json`.
 - Incident communications (status page entry, governance memo, Alertmanager silence export).

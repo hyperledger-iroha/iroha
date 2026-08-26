@@ -22,7 +22,14 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
   private final Long scheduledStartMs;
   private final String billingAccount;
   private final KaigiInstructionUtils.PrivacyMode privacyMode;
+  private final KaigiInstructionUtils.RoomPolicy roomPolicy;
   private final KaigiInstructionUtils.RelayManifest relayManifest;
+  private final String commitment;
+  private final String commitmentAliasTag;
+  private final String nullifierDigest;
+  private final Long nullifierIssuedAtMs;
+  private final String rosterRoot;
+  private final String proofBase64;
   private final Map<String, String> arguments;
 
   private CreateKaigiInstruction(final Builder builder) {
@@ -41,7 +48,14 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
     this.scheduledStartMs = builder.scheduledStartMs;
     this.billingAccount = builder.billingAccount;
     this.privacyMode = builder.privacyMode;
+    this.roomPolicy = builder.roomPolicy;
     this.relayManifest = builder.buildRelayManifest();
+    this.commitment = builder.commitment;
+    this.commitmentAliasTag = builder.commitmentAliasTag;
+    this.nullifierDigest = builder.nullifierDigest;
+    this.nullifierIssuedAtMs = builder.nullifierIssuedAtMs;
+    this.rosterRoot = builder.rosterRoot;
+    this.proofBase64 = builder.proofBase64;
     this.arguments =
         Collections.unmodifiableMap(new LinkedHashMap<>(Objects.requireNonNull(argumentOrder)));
   }
@@ -86,8 +100,36 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
     return privacyMode;
   }
 
+  public KaigiInstructionUtils.RoomPolicy roomPolicy() {
+    return roomPolicy;
+  }
+
   public KaigiInstructionUtils.RelayManifest relayManifest() {
     return relayManifest;
+  }
+
+  public String commitment() {
+    return commitment;
+  }
+
+  public String commitmentAliasTag() {
+    return commitmentAliasTag;
+  }
+
+  public String nullifierDigest() {
+    return nullifierDigest;
+  }
+
+  public Long nullifierIssuedAtMs() {
+    return nullifierIssuedAtMs;
+  }
+
+  public String rosterRoot() {
+    return rosterRoot;
+  }
+
+  public String proofBase64() {
+    return proofBase64;
   }
 
   @Override
@@ -127,10 +169,34 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
     builder.setScheduledStartMs(scheduled);
     builder.setBillingAccount(arguments.get("billing_account"));
     builder.setPrivacyMode(KaigiInstructionUtils.parsePrivacyMode(arguments, "privacy"));
+    builder.setRoomPolicy(KaigiInstructionUtils.parseRoomPolicy(arguments, "room_policy"));
 
     final KaigiInstructionUtils.RelayManifest manifest =
         KaigiInstructionUtils.parseRelayManifest(arguments, "relay_manifest");
     builder.setRelayManifest(manifest);
+
+    if (arguments.get("commitment.alias_tag") != null) {
+      throw new IllegalArgumentException(
+          "commitment aliasTag is off-chain only and must be omitted");
+    }
+    final String commitmentValue = arguments.get("commitment.commitment");
+    if (commitmentValue != null) {
+      builder.setCommitmentLiteral(commitmentValue);
+    }
+    final String nullifier = arguments.get("nullifier.digest");
+    final Long nullifierIssuedAt =
+        KaigiInstructionUtils.parseOptionalUnsignedLong(
+            arguments.get("nullifier.issued_at_ms"), "nullifier.issued_at_ms");
+    if (nullifierIssuedAt != null && nullifierIssuedAt.longValue() != 0L) {
+      throw new IllegalArgumentException(
+          "nullifier issuedAtMs is off-chain only and must be zero when provided");
+    }
+    if (nullifier != null) {
+      builder.setNullifierDigestLiteral(nullifier);
+      builder.setNullifierIssuedAtMs(nullifierIssuedAt);
+    }
+    builder.setRosterRootLiteral(arguments.get("roster_root"));
+    builder.setProofBase64(arguments.get("proof"));
 
     return new CreateKaigiInstruction(builder, new LinkedHashMap<>(arguments));
   }
@@ -159,7 +225,15 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
         && Objects.equals(billingAccount, other.billingAccount)
         && Objects.equals(privacyMode.mode(), other.privacyMode.mode())
         && Objects.equals(privacyMode.state(), other.privacyMode.state())
-        && relayManifestEquals(relayManifest, other.relayManifest);
+        && Objects.equals(roomPolicy.policy(), other.roomPolicy.policy())
+        && Objects.equals(roomPolicy.state(), other.roomPolicy.state())
+        && relayManifestEquals(relayManifest, other.relayManifest)
+        && Objects.equals(commitment, other.commitment)
+        && Objects.equals(commitmentAliasTag, other.commitmentAliasTag)
+        && Objects.equals(nullifierDigest, other.nullifierDigest)
+        && Objects.equals(nullifierIssuedAtMs, other.nullifierIssuedAtMs)
+        && Objects.equals(rosterRoot, other.rosterRoot)
+        && Objects.equals(proofBase64, other.proofBase64);
   }
 
   @Override
@@ -177,7 +251,15 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
         billingAccount,
         privacyMode.mode(),
         privacyMode.state(),
-        relayManifestHash(relayManifest));
+        roomPolicy.policy(),
+        roomPolicy.state(),
+        relayManifestHash(relayManifest),
+        commitment,
+        commitmentAliasTag,
+        nullifierDigest,
+        nullifierIssuedAtMs,
+        rosterRoot,
+        proofBase64);
   }
 
   static boolean relayManifestEquals(
@@ -233,8 +315,16 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
     private String billingAccount;
     private KaigiInstructionUtils.PrivacyMode privacyMode =
         new KaigiInstructionUtils.PrivacyMode("Transparent", null);
+    private KaigiInstructionUtils.RoomPolicy roomPolicy =
+        new KaigiInstructionUtils.RoomPolicy("Authenticated", null);
     private Long relayManifestExpiry;
     private final List<KaigiInstructionUtils.RelayManifestHop> relayManifestHops = new ArrayList<>();
+    private String commitment;
+    private String commitmentAliasTag;
+    private String nullifierDigest;
+    private Long nullifierIssuedAtMs;
+    private String rosterRoot;
+    private String proofBase64;
 
     private Builder() {}
 
@@ -325,6 +415,21 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
       return this;
     }
 
+    public Builder setRoomPolicy(final String policy) {
+      this.roomPolicy = new KaigiInstructionUtils.RoomPolicy(policy, null);
+      return this;
+    }
+
+    public Builder setRoomPolicy(final KaigiInstructionUtils.RoomPolicy roomPolicy) {
+      this.roomPolicy = Objects.requireNonNull(roomPolicy, "roomPolicy");
+      return this;
+    }
+
+    public Builder setRoomPolicy(final String policy, final String state) {
+      this.roomPolicy = new KaigiInstructionUtils.RoomPolicy(policy, state);
+      return this;
+    }
+
     public Builder clearRelayManifest() {
       this.relayManifestExpiry = null;
       this.relayManifestHops.clear();
@@ -346,8 +451,8 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
       }
       final String normalizedKey =
           KaigiInstructionUtils.requireBase64(hpkePublicKeyBase64, "hpkePublicKey");
-      if (weight < 0 || weight > 0xFF) {
-        throw new IllegalArgumentException("relay hop weight must fit in an unsigned byte");
+      if (weight < 1 || weight > 0xFF) {
+        throw new IllegalArgumentException("relay hop weight must be between 1 and 255");
       }
       final KaigiInstructionUtils.RelayManifestHop hop =
           new KaigiInstructionUtils.RelayManifestHop()
@@ -378,6 +483,80 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
       return this;
     }
 
+    public Builder setCommitment(final byte[] commitment) {
+      this.commitment = KaigiInstructionUtils.canonicalizeOptionalHash(commitment);
+      return this;
+    }
+
+    public Builder setCommitment(final String commitmentHexOrLiteral) {
+      this.commitment = KaigiInstructionUtils.canonicalizeOptionalHash(commitmentHexOrLiteral);
+      return this;
+    }
+
+    Builder setCommitmentLiteral(final String literal) {
+      this.commitment = literal;
+      return this;
+    }
+
+    public Builder setCommitmentAliasTag(final String aliasTag) {
+      if (aliasTag != null) {
+        throw new IllegalArgumentException(
+            "commitment aliasTag is off-chain only and must be omitted");
+      }
+      this.commitmentAliasTag = null;
+      return this;
+    }
+
+    public Builder setNullifierDigest(final byte[] digest) {
+      this.nullifierDigest = KaigiInstructionUtils.canonicalizeOptionalHash(digest);
+      return this;
+    }
+
+    public Builder setNullifierDigest(final String digestHexOrLiteral) {
+      this.nullifierDigest = KaigiInstructionUtils.canonicalizeOptionalHash(digestHexOrLiteral);
+      return this;
+    }
+
+    Builder setNullifierDigestLiteral(final String literal) {
+      this.nullifierDigest = literal;
+      return this;
+    }
+
+    public Builder setNullifierIssuedAtMs(final Long issuedAtMs) {
+      if (issuedAtMs != null && issuedAtMs.longValue() != 0L) {
+        throw new IllegalArgumentException(
+            "nullifier issuedAtMs is off-chain only and must be zero when provided");
+      }
+      this.nullifierIssuedAtMs = issuedAtMs;
+      return this;
+    }
+
+    public Builder setRosterRoot(final byte[] rosterRoot) {
+      this.rosterRoot = KaigiInstructionUtils.canonicalizeOptionalHash(rosterRoot);
+      return this;
+    }
+
+    public Builder setRosterRoot(final String rosterRootHexOrLiteral) {
+      this.rosterRoot = KaigiInstructionUtils.canonicalizeOptionalHash(rosterRootHexOrLiteral);
+      return this;
+    }
+
+    Builder setRosterRootLiteral(final String literal) {
+      this.rosterRoot = literal;
+      return this;
+    }
+
+    public Builder setProof(final byte[] proofBytes) {
+      this.proofBase64 = proofBytes == null ? null : KaigiInstructionUtils.toBase64(proofBytes);
+      return this;
+    }
+
+    public Builder setProofBase64(final String proofBase64) {
+      this.proofBase64 =
+          proofBase64 == null ? null : KaigiInstructionUtils.requireBase64(proofBase64, "proof");
+      return this;
+    }
+
     public CreateKaigiInstruction build() {
       if (callId == null) {
         throw new IllegalStateException("callId must be provided");
@@ -398,7 +577,9 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
             new KaigiInstructionUtils.RelayManifestHop(
                 hop.relayId(), hop.hpkePublicKey(), hop.weight()));
       }
-      return new KaigiInstructionUtils.RelayManifest(relayManifestExpiry, Collections.unmodifiableList(copy));
+      return KaigiInstructionUtils.validateRelayManifest(
+          new KaigiInstructionUtils.RelayManifest(
+              relayManifestExpiry, Collections.unmodifiableList(copy)));
     }
 
     private Map<String, String> canonicalArguments() {
@@ -424,7 +605,23 @@ public final class CreateKaigiInstruction implements InstructionTemplate {
         args.put("billing_account", billingAccount);
       }
       KaigiInstructionUtils.appendPrivacyMode(privacyMode, args, "privacy");
+      KaigiInstructionUtils.appendRoomPolicy(roomPolicy, args, "room_policy");
       KaigiInstructionUtils.appendRelayManifest(buildRelayManifest(), args, "relay_manifest");
+      if (commitment != null) {
+        args.put("commitment.commitment", commitment);
+      }
+      if (nullifierDigest != null) {
+        args.put("nullifier.digest", nullifierDigest);
+        if (nullifierIssuedAtMs != null) {
+          args.put("nullifier.issued_at_ms", Long.toUnsignedString(nullifierIssuedAtMs));
+        }
+      }
+      if (rosterRoot != null) {
+        args.put("roster_root", rosterRoot);
+      }
+      if (proofBase64 != null) {
+        args.put("proof", proofBase64);
+      }
       return args;
     }
   }

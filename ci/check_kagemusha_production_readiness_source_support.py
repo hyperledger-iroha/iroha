@@ -1384,10 +1384,10 @@ def canary_source_errors(
    r"refresh\(&client.*?require_canary_expiry_margin.*?"
    r"now = current_unix_ms\(\).*?"
    r"verify_for_authorization_execution\(\s*&client\.network_id,\s*&client\.account,.*?"
-   r"get_transaction_status_response_auto\(transaction\.hash\(\).*?is_some\(\).*?"
+   r"get_transaction_status_response_global\(transaction\.hash\(\).*?is_some\(\).*?"
    r"CANARY_SUBMISSION_JOURNAL_FILE_NAME.*?"
    r"SubmissionJournalObservation::Absent.*?"
-   r"get_transaction_status_response_auto\(transaction\.hash\(\).*?is_some\(\).*?"
+   r"get_transaction_status_response_global\(transaction\.hash\(\).*?is_some\(\).*?"
    r"authorization\.verified\.canary_transaction\(\)\.hash\(\).*?is_some\(\).*?"
    r"publish_canary_submission_journal\(.*?"
    r"!= SubmissionJournalObservation::Matching.*?"
@@ -1445,7 +1445,7 @@ def canary_source_errors(
    r"verification_time_unix_ms = current_unix_ms\(\).*?"
    r"verify_canary_submission_journal_bytes\(.*?"
    r"require_canary_authorization_wall_margin.*?"
-   r"get_transaction_status_response_auto\(\s*"
+   r"get_transaction_status_response_global\(\s*"
    r"authorization\.verified\.canary_transaction\(\)\.hash\(\).*?is_some\(\)"),
   "structural expired-journal reconciliation and fresh precommit publication",
  )
@@ -1468,7 +1468,7 @@ def canary_source_errors(
    r"preflight_root_owned_output\(&self\.output\).*?"
    r"CANARY_SUBMISSION_JOURNAL_FILE_NAME.*?"
    r"inspect_canary_submission_journal\(.*?!= SubmissionJournalObservation::Matching.*?"
-   r"get_transaction_status_response_auto\(transaction\.hash\(\).*?"
+   r"get_transaction_status_response_global\(transaction\.hash\(\).*?"
    r"status\.kind != \"Applied\".*?scope != \"global\".*?resolved_from != \"state\".*?"
    r"collect_finalized_canary_evidence\(.*?require_canary_block_within_authorization.*?"
    r"canary_authorization: authorization\.verified\.authorization_identity\(\).*?"

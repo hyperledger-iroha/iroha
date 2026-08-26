@@ -1528,7 +1528,7 @@ fn pending_merge_entry(
 fn merge_entry_with_reservation(
     context: &wire::HeightContext,
     entrypoint: TransactionEntrypoint,
-    reservation: crate::queue::LaneQueueReservationKeyV2,
+    reservation: crate::queue::LaneQueueReservationKeyV1,
 ) -> (SignedBlock, MergeLedgerEntry) {
     merge_entry_with_reservations(context, vec![(entrypoint, reservation)])
 }
@@ -1536,7 +1536,7 @@ fn merge_entry_with_reservations(
     context: &wire::HeightContext,
     members: Vec<(
         TransactionEntrypoint,
-        crate::queue::LaneQueueReservationKeyV2,
+        crate::queue::LaneQueueReservationKeyV1,
     )>,
 ) -> (SignedBlock, MergeLedgerEntry) {
     assert!(!members.is_empty(), "merge fixture group must not be empty");
@@ -1902,7 +1902,7 @@ fn reserve_transaction_for_test(
     queue: &Queue,
     transaction: iroha_data_model::transaction::SignedTransaction,
 ) -> (
-    crate::queue::LaneQueueReservationKeyV2,
+    crate::queue::LaneQueueReservationKeyV1,
     TransactionEntrypoint,
 ) {
     reserve_transaction_for_test_with_identity(
@@ -1920,7 +1920,7 @@ fn reserve_transaction_for_test_with_identity(
     reservation_owner_hash: Hash,
     proposal_identity_hash: Hash,
 ) -> (
-    crate::queue::LaneQueueReservationKeyV2,
+    crate::queue::LaneQueueReservationKeyV1,
     TransactionEntrypoint,
 ) {
     reserve_transaction_for_lane_test_with_identity(
@@ -1942,7 +1942,7 @@ fn reserve_transaction_for_lane_test_with_identity(
     reservation_owner_hash: Hash,
     proposal_identity_hash: Hash,
 ) -> (
-    crate::queue::LaneQueueReservationKeyV2,
+    crate::queue::LaneQueueReservationKeyV1,
     TransactionEntrypoint,
 ) {
     // These fixtures exercise the strict global QueuePlan corridor, so their transaction must
@@ -1987,7 +1987,7 @@ fn reserve_transaction_for_lane_test_with_identity(
         assert_eq!(coordinator.leg.route, expected_route);
         coordinator.lane_incarnation
     };
-    let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+    let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
         state.network_id_ref(),
         accepted.entrypoint(),
         &routing_plan,
@@ -2136,7 +2136,7 @@ fn replace_recreatable_reservation_lane(
 }
 fn install_fixture_queue_plan_registry_value(
     state: &State,
-    binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
 ) {
     state
         .install_queue_plan_pending_binding_for_test(binding)
@@ -2217,7 +2217,7 @@ fn reserve_autonomous_crash_batch(
         let admission_context = queue
             .plan_admission_context_with_state(fixture.state.as_ref(), &routing_plan)
             .expect("capture autonomous crash admission context");
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
             fixture.state.network_id_ref(),
             accepted.entrypoint(),
             &routing_plan,
@@ -2483,7 +2483,7 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
         let admission_context = queue
             .plan_admission_context_with_state(fixture.state.as_ref(), &routing_plan)
             .expect("capture canonical autonomous admission context");
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
             fixture.state.network_id_ref(),
             accepted.entrypoint(),
             &routing_plan,

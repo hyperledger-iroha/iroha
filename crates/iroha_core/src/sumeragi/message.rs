@@ -24,39 +24,39 @@ use std::{collections::BTreeMap, sync::Arc};
 #[derive(Debug, Clone, Decode, Encode, FromVariant)]
 pub enum BlockMessage {
     /// Advertisement that a peer durably retains a canonical committed block body.
-    #[codec(index = 16)]
+    #[codec(index = 0)]
     KuraReplicaAdvert(#[skip_try_from] KuraReplicaAdvertV1),
     /// Standalone lane-local block proposal.
-    #[codec(index = 19)]
+    #[codec(index = 1)]
     LaneBlockProposal(#[skip_try_from] super::consensus::LaneBlockProposalV1),
     /// Producer-authenticated executable payload for a standalone lane block.
-    #[codec(index = 20)]
+    #[codec(index = 2)]
     LaneExecutablePayload(#[skip_try_from] crate::lane_consensus::LaneExecutablePayloadV1),
     /// Individual lane-committee vote authorizing the next lane-local view.
-    #[codec(index = 21)]
+    #[codec(index = 3)]
     LaneBlockNewViewVote(#[skip_try_from] crate::lane_consensus::LaneBlockNewViewVoteV1),
     /// Aggregate lane-committee certificate authorizing the next lane-local view.
-    #[codec(index = 22)]
+    #[codec(index = 4)]
     LaneBlockNewViewCertificate(
         #[skip_try_from] crate::lane_consensus::LaneBlockNewViewCertificateV1,
     ),
     /// Standalone lane-local block vote carrying a BLS signature.
-    #[codec(index = 25)]
+    #[codec(index = 5)]
     LaneBlockVote(#[skip_try_from] crate::lane_consensus::LaneBlockVoteV1),
     /// Standalone lane-local block QC aggregating lane-validator BLS signatures.
-    #[codec(index = 26)]
+    #[codec(index = 6)]
     LaneBlockQc(#[skip_try_from] super::consensus::LaneBlockQcV1),
     /// Complete Kura-backed lane certificate returned for exact proposal recovery.
-    #[codec(index = 27)]
+    #[codec(index = 7)]
     LaneBlockCertificate(#[skip_try_from] Box<super::consensus::LaneBlockCertificateV1>),
     /// Exact authenticated request for a missing historical canonical body or autonomous payload.
-    #[codec(index = 28)]
+    #[codec(index = 8)]
     LaneHistoricalRecoveryRequest(#[skip_try_from] Box<LaneHistoricalRecoveryRequestV1>),
     /// Bounded proof-carrying response to an outstanding historical recovery request.
-    #[codec(index = 29)]
+    #[codec(index = 9)]
     LaneHistoricalRecoveryResponse(#[skip_try_from] Box<LaneHistoricalRecoveryResponseV1>),
     /// Explicitly versioned global Sumeragi v2 message.
-    #[codec(index = 30)]
+    #[codec(index = 10)]
     V2(#[skip_try_from] ConsensusMessageV2),
 }
 impl BlockMessage {
@@ -318,15 +318,9 @@ impl<'a> ncore::DecodeFromSlice<'a> for BlockMessageWire {
         ))
     }
 }
-/// Current clean-break layout for lane, Native, and canonical executed-block
-/// historical recovery transport.
-///
-/// Version 1 encoded a mandatory lane certificate. Version 2 added Native
-/// participant authority. Version 3 added certificate-free recovery of an
-/// exact finality-authenticated canonical executed block. Version 4 is the
-/// coordinated clean break which carries protocol-v4 finality artifacts;
-/// older layouts are not accepted.
-pub const LANE_HISTORICAL_RECOVERY_VERSION_V4: u16 = 4;
+/// First-release layout for lane, Native, and canonical executed-block
+/// historical recovery transport. Version 1 is the only accepted layout.
+pub const LANE_HISTORICAL_RECOVERY_VERSION_V1: u16 = 1;
 /// Exact canonical executed body needed by a durable-evidence repair owner.
 ///
 /// Every field is copied from one locally verified durable finality artifact.
@@ -358,13 +352,13 @@ pub struct CanonicalExecutedBlockNeedV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub enum LaneHistoricalRecoveryKindV1 {
     /// Rehydrate the result-bearing canonical block selected by global finality.
-    #[codec(index = 1)]
+    #[codec(index = 0)]
     CanonicalBlock {
         /// Hash of the immutable V2 finality artifact expected by the requester.
         finality_artifact_hash: HashOf<V2FinalityArtifact>,
     },
     /// Rehydrate the producer-authenticated payload and origin READY sidecar.
-    #[codec(index = 2)]
+    #[codec(index = 1)]
     AutonomousPayload {
         /// View-neutral digest of the exact executable payload.
         executable_payload_hash: Hash,
@@ -373,12 +367,9 @@ pub enum LaneHistoricalRecoveryKindV1 {
         /// Hash of the matching CommitQC.
         commit_qc_hash: HashOf<LaneBlockQcV1>,
     },
-    // Codec index 3 is intentionally retired. It was the unbounded Native-only
-    // whole-block recovery corridor; current startup repair uses the generic
-    // chunked canonical executed-block dependency below.
     /// Rehydrate one pruned canonical executed block needed by a durable
     /// evidence repair owner.
-    #[codec(index = 4)]
+    #[codec(index = 2)]
     CanonicalExecutedBlock {
         /// Exact finality-authenticated body identity.
         need: Box<CanonicalExecutedBlockNeedV1>,
@@ -435,7 +426,7 @@ impl LaneHistoricalRecoveryRequestV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub enum LaneHistoricalRecoveryPayloadV1 {
     /// Result-bearing canonical block plus its complete frozen finality proof.
-    #[codec(index = 1)]
+    #[codec(index = 0)]
     CanonicalBlock {
         /// Exact canonical signed block bytes.
         block: SignedBlock,
@@ -446,7 +437,7 @@ pub enum LaneHistoricalRecoveryPayloadV1 {
     ///
     /// Signer PoPs live only in the hash-bound request, avoiding two
     /// independently mutable copies of the same historical authority.
-    #[codec(index = 2)]
+    #[codec(index = 1)]
     AutonomousPayload {
         /// Exact producer-authenticated executable payload.
         payload: crate::lane_consensus::LaneExecutablePayloadV1,
@@ -456,7 +447,7 @@ pub enum LaneHistoricalRecoveryPayloadV1 {
         commit_qc: LaneBlockQcV1,
     },
     /// One bounded chunk of an exact canonical result-bearing block wire.
-    #[codec(index = 3)]
+    #[codec(index = 2)]
     CanonicalExecutedBlockChunk {
         /// Requester's exact local finality artifact, repeated for independent
         /// response validation before accepting any chunk bytes.
@@ -670,7 +661,7 @@ mod tests {
             }),
         ))
     }
-    fn retagged_live_block_message_frame(tag: u32) -> Vec<u8> {
+    fn retagged_block_message_frame(tag: u32) -> Vec<u8> {
         let mut encoded = norito_core::to_bytes(&sample_v2_vrf_message())
             .expect("encode canonical Sumeragi v2 fixture");
         let align = norito_core::archived_payload_align::<BlockMessage>();
@@ -695,21 +686,91 @@ mod tests {
         decode_from_bytes(&bytes).expect("decode live network message")
     }
     #[test]
-    fn retired_global_v1_block_discriminants_fail_decode() {
-        for tag in [
-            0_u32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 23, 24,
-        ] {
-            let frame = retagged_live_block_message_frame(tag);
+    fn unknown_block_message_discriminants_fail_decode() {
+        for tag in [11_u32, u32::MAX] {
+            let frame = retagged_block_message_frame(tag);
             assert!(
                 norito_core::decode_from_bytes::<BlockMessage>(&frame).is_err(),
-                "retired global-v1 block discriminant {tag} must fail typed decode"
+                "unknown block-message discriminant {tag} must fail typed decode"
             );
             assert!(
                 <BlockMessageWire as norito_core::DecodeFromSlice>::decode_from_slice(&frame)
                     .is_err(),
-                "retired global-v1 block discriminant {tag} must fail cached-wire decode"
+                "unknown block-message discriminant {tag} must fail cached-wire decode"
             );
         }
+    }
+    #[test]
+    fn first_release_historical_recovery_tags_are_contiguous_and_unknown_fail_closed() {
+        fn assert_tag<T: Encode>(value: &T, expected: u32) {
+            let encoded = value.encode();
+            assert_eq!(
+                u32::from_le_bytes(encoded[..4].try_into().expect("four-byte enum tag")),
+                expected,
+                "unexpected tag for {}",
+                core::any::type_name::<T>(),
+            );
+        }
+
+        fn assert_unknown_tag_rejected<T: Decode>() {
+            let encoded = u32::MAX.encode();
+            let mut input = encoded.as_slice();
+            assert!(
+                <T as norito::codec::DecodeAll>::decode_all(&mut input).is_err(),
+                "unknown tag must fail for {}",
+                core::any::type_name::<T>(),
+            );
+        }
+
+        assert_tag(
+            &LaneHistoricalRecoveryKindV1::CanonicalBlock {
+                finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"first-release historical finality tag",
+                )),
+            },
+            0,
+        );
+        assert_tag(
+            &LaneHistoricalRecoveryKindV1::AutonomousPayload {
+                executable_payload_hash: Hash::new(b"first-release historical autonomous tag"),
+                prepare_qc_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"first-release historical prepare tag",
+                )),
+                commit_qc_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"first-release historical commit tag",
+                )),
+            },
+            1,
+        );
+        assert_tag(
+            &LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock {
+                need: Box::new(CanonicalExecutedBlockNeedV1 {
+                    height: 1,
+                    block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                        b"first-release historical block tag",
+                    )),
+                    finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
+                        b"first-release historical executed finality tag",
+                    )),
+                    execution_commitment: ExecutionCommitment::without_topups_or_merge_carrier(
+                        Hash::new(b"first-release historical parent state"),
+                        Hash::new(b"first-release historical post state"),
+                        Hash::new(b"first-release historical writes"),
+                        1,
+                        Hash::new(b"first-release historical executed wire"),
+                    ),
+                    executed_block_wire_len: 1,
+                    executed_block_wire_hash: Hash::new(
+                        b"first-release historical executed wire tag",
+                    ),
+                }),
+                chunk_index: 0,
+            },
+            2,
+        );
+
+        assert_unknown_tag_rejected::<LaneHistoricalRecoveryKindV1>();
+        assert_unknown_tag_rejected::<LaneHistoricalRecoveryPayloadV1>();
     }
     #[test]
     fn block_message_priority_is_high_for_current_protocols() {
@@ -898,7 +959,7 @@ mod tests {
         let historical_signer = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::BlsNormal)
             .expect("derive historical request signer");
         let historical_request = LaneHistoricalRecoveryRequestV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V4,
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
             requester: certificate.commit_qc.validator_set[0].clone(),
             certificate: Some(certificate.clone()),
             signer_pops: BTreeMap::from([(

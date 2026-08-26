@@ -137,7 +137,7 @@ async fn handler_post_transactions_batch(
                     accepted_transactions.push(accepted_tx);
                 }
                 let mut accepted = Vec::with_capacity(accepted_transactions.len());
-                #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+                #[cfg(feature = "connect")]
                 let mut local_route_cache = Vec::new();
                 for accepted_tx in accepted_transactions {
                     let routing_plan = app
@@ -145,7 +145,7 @@ async fn handler_post_transactions_batch(
                         .route_plan_with_state(&accepted_tx, app.state.as_ref())
                         .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
                     let routing_decision = routing_plan.coordinator_route();
-                    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+                    #[cfg(feature = "connect")]
                     if !should_execute_route_locally_cached(
                         app.as_ref(),
                         routing_decision,
@@ -789,6 +789,7 @@ fn encode_fastpq_recovery_batch(
     ))
 }
 #[derive(JsonDeserialize, crate::json_macros::JsonSerialize, Clone, Debug)]
+#[norito(deny_unknown_fields)]
 struct PipelineStatusQuery {
     #[norito(default)]
     hash: Option<String>,
@@ -1151,23 +1152,30 @@ impl PipelineStatusReadScope {
     }
 }
 fn parse_pipeline_status_scope(raw: Option<&str>) -> Result<PipelineStatusReadScope, Error> {
-    let normalized = raw
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("global")
-        .to_ascii_lowercase();
-    match normalized.as_str() {
+    let scope = raw.unwrap_or("global");
+    match scope {
         "local" => Ok(PipelineStatusReadScope::Local),
-        "global" | "auto" => Ok(PipelineStatusReadScope::Global),
+        "global" => Ok(PipelineStatusReadScope::Global),
         _ => Err(conversion_error(format!(
-            "invalid scope query parameter \"{normalized}\" (expected local|global|auto)"
+            "invalid scope query parameter \"{scope}\" (expected local|global)"
         ))),
     }
 }
 fn parse_signed_transaction_hash(raw: &str) -> Result<HashOf<SignedTransaction>, Error> {
-    raw.trim()
+    if raw.is_empty() || raw.trim() != raw {
+        return Err(conversion_error(
+            "signed transaction hash must use exact canonical lowercase text".to_owned(),
+        ));
+    }
+    let hash = raw
         .parse::<HashOf<SignedTransaction>>()
-        .map_err(|_| conversion_error("invalid signed transaction hash".to_owned()))
+        .map_err(|_| conversion_error("invalid signed transaction hash".to_owned()))?;
+    if hash.to_string() != raw {
+        return Err(conversion_error(
+            "signed transaction hash must use exact canonical lowercase text".to_owned(),
+        ));
+    }
+    Ok(hash)
 }
 fn pipeline_status_response(
     hash: &HashOf<SignedTransaction>,
@@ -1572,7 +1580,6 @@ fn execute_pipeline_status_local_read(
     let hash_raw = query
         .hash
         .as_deref()
-        .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
     let read_scope = parse_pipeline_status_scope(query.scope.as_deref())?;
@@ -1599,8 +1606,7 @@ fn pipeline_status_payload_is_authoritative_hint(
     payload: &PipelineTransactionStatusResponse,
 ) -> bool {
     match payload.status.kind.as_str() {
-        "Applied" => true,
-        "Rejected" | "Expired" => payload.resolved_from == "state",
+        "Applied" | "Rejected" | "Expired" => payload.resolved_from == "state",
         _ => false,
     }
 }
@@ -1655,7 +1661,6 @@ async fn handler_pipeline_transaction_status(
     let hash_raw = query
         .hash
         .as_deref()
-        .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
     let hash = parse_signed_transaction_hash(hash_raw)?;

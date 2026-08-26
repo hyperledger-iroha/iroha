@@ -6,6 +6,7 @@ use crate::{
 use iroha_crypto::Hash;
 use iroha_data_model::{
     HasMetadata,
+    account::rekey::{AccountAlias, AccountRekeyTransitionProvenance},
     events::{
         data::prelude::{
             KaigiRelayHealthSummary, KaigiRelayManifestSummary, KaigiRelayRegistrationSummary,
@@ -22,16 +23,19 @@ use iroha_data_model::{
     },
     kaigi::{
         KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
-        KaigiRecord, KaigiRelayAllowlist, KaigiRelayFeedback, KaigiRelayHealthStatus,
-        KaigiRelayManifest, KaigiRelayRegistration, KaigiStatus, kaigi_metadata_key,
-        kaigi_relay_allowlist_key, kaigi_relay_feedback_key, kaigi_relay_metadata_key,
+        KaigiRecord, KaigiRelayAllowlist, KaigiRelayFeedback, KaigiRelayManifest,
+        KaigiRelayRegistration, KaigiStatus, kaigi_metadata_key, kaigi_relay_allowlist_key,
+        kaigi_relay_feedback_key, kaigi_relay_metadata_key,
     },
     prelude::{AccountId, DomainId, Json, Name},
     query::error::FindError,
 };
 use mv::storage::StorageReadOnly;
 use privacy::{HostPrivacyArtifacts, PrivacyArtifacts};
-use std::{collections::BTreeSet, convert::TryFrom};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    convert::TryFrom,
+};
 mod privacy;
 /// Signature-authenticated account authorizing a Kaigi state transition.
 #[derive(Clone, Copy, Debug)]
@@ -49,6 +53,14 @@ impl<'a> KaigiAuthorization<'a> {
 enum AccessGrant {
     Default,
     PrivacyAuthorized,
+    NoRecordUpdate,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecordUpdateEffect {
+    None,
+    Roster,
+    Usage,
+    RelayManifest,
 }
 use super::super::Execute;
 trait ExecuteKaigiAuthorized {
@@ -71,12 +83,34 @@ impl ExecuteKaigiAuthorized for CreateKaigi {
             roster_root,
             proof,
         } = self;
+        if template.max_participants == Some(0) {
+            return Err(Error::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "Kaigi max_participants must be greater than zero when provided".into(),
+                ),
+            ));
+        }
+        let authority = authorization.signed_account();
+        if authority != template.host() {
+            return Err(unauthorized("only the host account may create a Kaigi"));
+        }
+        state_transaction.world.account(authority)?;
+        if resolve_active_kaigi_account(state_transaction, authority)?.as_ref() != Some(authority) {
+            return Err(Error::InvariantViolation(
+                "Kaigi host must be the unique registered terminal account-id rekey successor"
+                    .into(),
+            ));
+        }
+        if let Some(billing_account) = template.billing_account.as_ref() {
+            if authority != billing_account {
+                return Err(unauthorized(
+                    "Kaigi billing account must be the signed host until delegated billing authorization is supported",
+                ));
+            }
+            state_transaction.world.account(billing_account)?;
+        }
         match template.privacy_mode {
             KaigiPrivacyMode::Transparent => {
-                let authority = authorization.signed_account();
-                if !same_account_subject(authority, template.host()) {
-                    return Err(unauthorized("only the host account may create a Kaigi"));
-                }
                 privacy::ensure_transparent_payload(&PrivacyArtifacts {
                     subject: authority,
                     host: template.host(),
@@ -91,10 +125,6 @@ impl ExecuteKaigiAuthorized for CreateKaigi {
                     || nullifier.is_some()
                     || roster_root.is_some()
                     || proof.is_some();
-                let authority = authorization.signed_account();
-                if !same_account_subject(authority, template.host()) {
-                    return Err(unauthorized("only the host account may create a Kaigi"));
-                }
                 if has_privacy_artifacts {
                     let host_artifacts = HostPrivacyArtifacts {
                         commitment: commitment.as_ref(),
@@ -113,6 +143,7 @@ impl ExecuteKaigiAuthorized for CreateKaigi {
         }
         if let Some(manifest) = template.relay_manifest() {
             validate_relay_manifest(manifest)?;
+            ensure_manifest_relays_registered(state_transaction, manifest)?;
         }
         let key = metadata_key(template.id())?;
         let domain_id = template.id().domain_id.clone();
@@ -175,13 +206,15 @@ impl ExecuteKaigiAuthorized for JoinKaigi {
         let mut commitment = commitment;
         let mut nullifier = nullifier;
         let mut roster_root = roster_root;
-        let allow_unassociated = same_account_subject(authorization.signed_account(), &participant);
+        let allow_unassociated = authorization.signed_account() == &participant;
         apply_with_record_authorized(
             state_transaction,
             &call_id,
             authorization,
             allow_unassociated,
+            RecordUpdateEffect::Roster,
             |stx, record| {
+                stx.world.account(&participant)?;
                 process_join(
                     stx,
                     record,
@@ -231,12 +264,8 @@ impl Execute for LeaveKaigi {
             &call_id,
             authority,
             false,
+            RecordUpdateEffect::Roster,
             |stx, record| {
-                if record.privacy_mode == KaigiPrivacyMode::ZkRosterV1 {
-                    return Err(privacy_error(
-                        "privacy-mode Kaigi leave is off-chain only; use local session disconnect or host end",
-                    ));
-                }
                 process_leave(
                     stx,
                     record,
@@ -276,13 +305,28 @@ impl ExecuteKaigiAuthorized for EndKaigi {
             &call_id,
             authorization,
             false,
+            RecordUpdateEffect::None,
             move |stx, record| {
                 if record.status == KaigiStatus::Ended {
                     return Err(Error::InvariantViolation("Kaigi already ended".into()));
                 }
                 let authority = authorization.signed_account();
-                if !same_account_subject(authority, &record.host) {
+                if !accounts_share_active_lineage(stx, authority, &record.host)? {
                     return Err(unauthorized("only the host may end a Kaigi"));
+                }
+                if resolved_end < record.created_at_ms {
+                    return Err(Error::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "Kaigi end timestamp must not precede creation".into(),
+                        ),
+                    ));
+                }
+                if resolved_end > default_end_ms {
+                    return Err(Error::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "Kaigi end timestamp must not exceed the current block time".into(),
+                        ),
+                    ));
                 }
                 match record.privacy_mode {
                     KaigiPrivacyMode::Transparent => {
@@ -379,10 +423,24 @@ impl Execute for RecordKaigiUsage {
             &call_id,
             authority,
             false,
+            RecordUpdateEffect::Usage,
             |stx, record| {
-                if !same_account_subject(authority, &record.host) {
+                if !accounts_share_active_lineage(stx, authority, &record.host)? {
                     return Err(unauthorized("only the host may record usage for a Kaigi"));
                 }
+                ensure_kaigi_active(record)?;
+                let total_duration_ms = record
+                    .total_duration_ms
+                    .checked_add(duration_ms)
+                    .ok_or_else(|| usage_error("Kaigi total duration exceeds u64::MAX"))?;
+                let total_billed_gas = record
+                    .total_billed_gas
+                    .checked_add(billed_gas)
+                    .ok_or_else(|| usage_error("Kaigi total billed gas exceeds u64::MAX"))?;
+                let segments_recorded = record
+                    .segments_recorded
+                    .checked_add(1)
+                    .ok_or_else(|| usage_error("Kaigi usage segment count exceeds u32::MAX"))?;
                 match record.privacy_mode {
                     KaigiPrivacyMode::Transparent => {
                         if usage_commitment.is_some() || proof.is_some() {
@@ -410,10 +468,9 @@ impl Execute for RecordKaigiUsage {
                         record.push_usage_commitment(commitment);
                     }
                 }
-                record.total_duration_ms = record.total_duration_ms.saturating_add(duration_ms);
-                record.total_billed_gas = record.total_billed_gas.saturating_add(billed_gas);
-                record.segments_recorded = record.segments_recorded.saturating_add(1);
-                emit_usage_summary(stx, record);
+                record.total_duration_ms = total_duration_ms;
+                record.total_billed_gas = total_billed_gas;
+                record.segments_recorded = segments_recorded;
                 Ok(AccessGrant::Default)
             },
         )?;
@@ -436,52 +493,27 @@ impl Execute for SetKaigiRelayManifest {
             &call_id,
             authority,
             false,
+            RecordUpdateEffect::RelayManifest,
             |stx, record| {
-                if !same_account_subject(authority, &record.host) {
+                if !accounts_share_active_lineage(stx, authority, &record.host)? {
                     return Err(unauthorized(
                         "only the host may update the Kaigi relay manifest",
                     ));
                 }
+                ensure_kaigi_active(record)?;
                 let previous_manifest = record.relay_manifest.clone();
                 if let Some(manifest) = relay_manifest.take() {
                     validate_relay_manifest(&manifest)?;
                     ensure_manifest_relays_registered(stx, &manifest)?;
                     if previous_manifest.as_ref() == Some(&manifest) {
-                        return Ok(AccessGrant::Default);
+                        return Ok(AccessGrant::NoRecordUpdate);
                     }
                     record.set_relay_manifest(Some(manifest));
                 } else {
                     if previous_manifest.is_none() {
-                        return Ok(AccessGrant::Default);
+                        return Ok(AccessGrant::NoRecordUpdate);
                     }
                     record.set_relay_manifest(None);
-                }
-                emit_relay_manifest_summary(stx, &record.id, record.relay_manifest.as_ref());
-                #[cfg(feature = "telemetry")]
-                {
-                    let hop_count = record
-                        .relay_manifest
-                        .as_ref()
-                        .map_or(0, |m| u32::try_from(m.hops.len()).unwrap_or(u32::MAX));
-                    let action_label =
-                        match (previous_manifest.as_ref(), record.relay_manifest.as_ref()) {
-                            (_, None) => "clear",
-                            (None, Some(_)) => "set",
-                            (Some(prev), Some(next)) if prev == next => "set",
-                            (Some(_), Some(_)) => "rotate",
-                        };
-                    stx.telemetry.record_kaigi_manifest_update(
-                        &record.id.domain_id,
-                        action_label,
-                        hop_count,
-                    );
-                    if action_label == "rotate" {
-                        stx.telemetry.record_kaigi_failover(
-                            &record.id.domain_id,
-                            &record.id.call_name,
-                            hop_count,
-                        );
-                    }
                 }
                 Ok(AccessGrant::Default)
             },
@@ -496,11 +528,12 @@ impl Execute for RegisterKaigiRelay {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let registration = self.relay;
-        if !same_account_subject(authority, &registration.relay_id) {
+        if authority != &registration.relay_id {
             return Err(unauthorized(
                 "only the relay account may register or update itself",
             ));
         }
+        state_transaction.world.account(authority)?;
         if registration.hpke_public_key.is_empty() {
             return Err(relay_error(
                 "relay registration requires an HPKE public key",
@@ -557,7 +590,7 @@ impl Execute for ReportKaigiRelayHealth {
             notes,
         } = self;
         if let Some(ref text) = notes
-            && text.len() > 512
+            && text.chars().count() > 512
         {
             return Err(relay_error(
                 "relay health notes must not exceed 512 characters",
@@ -568,20 +601,24 @@ impl Execute for ReportKaigiRelayHealth {
             &call_id,
             authority,
             false,
+            RecordUpdateEffect::None,
             |stx, record| {
-                if !same_account_subject(authority, &record.host) {
+                if !accounts_share_active_lineage(stx, authority, &record.host)? {
                     return Err(unauthorized("only the host may report Kaigi relay health"));
                 }
+                ensure_kaigi_active(record)?;
                 let manifest_contains_relay =
                     record.relay_manifest.as_ref().is_some_and(|manifest| {
-                        manifest
-                            .hops
-                            .iter()
-                            .any(|hop| same_account_subject(&hop.relay_id, &relay_id))
+                        manifest.hops.iter().any(|hop| hop.relay_id == relay_id)
                     });
                 if !manifest_contains_relay {
                     return Err(relay_error(
                         "relay health updates require the relay to appear in the active manifest",
+                    ));
+                }
+                if reported_at_ms > stx.block_unix_timestamp_ms() {
+                    return Err(relay_error(
+                        "relay health report timestamp exceeds the current block time",
                     ));
                 }
                 let feedback = KaigiRelayFeedback {
@@ -592,6 +629,21 @@ impl Execute for ReportKaigiRelayHealth {
                     reported_at_ms,
                     notes: notes.clone(),
                 };
+                if let Some(current) = load_relay_feedback(stx, &relay_id)? {
+                    if feedback.reported_at_ms < current.reported_at_ms {
+                        return Err(relay_error(
+                            "relay health report is older than the latest stored feedback",
+                        ));
+                    }
+                    if feedback.reported_at_ms == current.reported_at_ms {
+                        if feedback == current {
+                            return Ok(AccessGrant::NoRecordUpdate);
+                        }
+                        return Err(relay_error(
+                            "relay health report conflicts with stored feedback at the same timestamp",
+                        ));
+                    }
+                }
                 store_relay_feedback(stx, &feedback)?;
                 emit_relay_health_summary(stx, &feedback);
                 #[cfg(feature = "telemetry")]
@@ -599,7 +651,7 @@ impl Execute for ReportKaigiRelayHealth {
                 #[cfg(feature = "telemetry")]
                 stx.telemetry
                     .record_kaigi_relay_health(&relay_domain, &relay_id, status);
-                Ok(AccessGrant::Default)
+                Ok(AccessGrant::NoRecordUpdate)
             },
         )?;
         Ok(())
@@ -610,6 +662,7 @@ fn apply_with_record<F>(
     call_id: &KaigiId,
     authority: &AccountId,
     allow_unassociated: bool,
+    update_effect: RecordUpdateEffect,
     f: F,
 ) -> Result<(), Error>
 where
@@ -620,6 +673,7 @@ where
         call_id,
         KaigiAuthorization::SignedAccount(authority),
         allow_unassociated,
+        update_effect,
         f,
     )
 }
@@ -628,6 +682,7 @@ fn apply_with_record_authorized<F>(
     call_id: &KaigiId,
     authorization: KaigiAuthorization<'_>,
     allow_unassociated: bool,
+    update_effect: RecordUpdateEffect,
     mut f: F,
 ) -> Result<(), Error>
 where
@@ -644,9 +699,16 @@ where
     let mut record: KaigiRecord = current
         .try_into_any_norito()
         .map_err(|err| Error::Conversion(err.to_string()))?;
+    if record.id != *call_id {
+        return Err(Error::InvariantViolation(
+            "stored Kaigi record identifier does not match metadata key".into(),
+        ));
+    }
+    #[cfg(feature = "telemetry")]
+    let previous_manifest = record.relay_manifest.clone();
     let authority = authorization.signed_account();
-    let mut associated =
-        same_account_subject(authority, &record.host) || record.has_participant(authority);
+    let mut associated = accounts_share_active_lineage(state_transaction, authority, &record.host)?
+        || record_has_participant_in_active_lineage(state_transaction, &record, authority)?;
     let grant: AccessGrant = f(state_transaction, &mut record)?;
     if matches!(grant, AccessGrant::PrivacyAuthorized) {
         associated = true;
@@ -654,7 +716,48 @@ where
     if !allow_unassociated && !associated {
         return Err(unauthorized("account is not associated with the Kaigi"));
     }
-    store_record(state_transaction, &domain_id, key, &record)
+    if matches!(grant, AccessGrant::NoRecordUpdate) {
+        return Ok(());
+    }
+    store_record(state_transaction, &domain_id, key, &record)?;
+    match update_effect {
+        RecordUpdateEffect::None => {}
+        RecordUpdateEffect::Roster => emit_roster_summary(state_transaction, &record),
+        RecordUpdateEffect::Usage => emit_usage_summary(state_transaction, &record),
+        RecordUpdateEffect::RelayManifest => {
+            emit_relay_manifest_summary(
+                state_transaction,
+                &record.id,
+                record.relay_manifest.as_ref(),
+            );
+            #[cfg(feature = "telemetry")]
+            {
+                let hop_count = record.relay_manifest.as_ref().map_or(0, |manifest| {
+                    u32::try_from(manifest.hops.len()).unwrap_or(u32::MAX)
+                });
+                let action_label =
+                    match (previous_manifest.as_ref(), record.relay_manifest.as_ref()) {
+                        (_, None) => "clear",
+                        (None, Some(_)) => "set",
+                        (Some(previous), Some(current)) if previous == current => "set",
+                        (Some(_), Some(_)) => "rotate",
+                    };
+                state_transaction.telemetry.record_kaigi_manifest_update(
+                    &record.id.domain_id,
+                    action_label,
+                    hop_count,
+                );
+                if action_label == "rotate" {
+                    state_transaction.telemetry.record_kaigi_failover(
+                        &record.id.domain_id,
+                        &record.id.call_name,
+                        hop_count,
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 fn store_record(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -662,7 +765,9 @@ fn store_record(
     key: Name,
     record: &KaigiRecord,
 ) -> Result<(), Error> {
-    let value = Json::try_new(record.clone()).map_err(|err| Error::Conversion(err.to_string()))?;
+    let mut stored_record = record.clone();
+    clear_ledger_visible_privacy_hints(&mut stored_record);
+    let value = Json::try_new(stored_record).map_err(|err| Error::Conversion(err.to_string()))?;
     limits::enforce_json_size(
         state_transaction,
         &value,
@@ -679,6 +784,17 @@ fn store_record(
             value,
         })));
     Ok(())
+}
+fn clear_ledger_visible_privacy_hints(record: &mut KaigiRecord) {
+    if let Some(host_commitment) = record.host_commitment.as_mut() {
+        host_commitment.alias_tag = None;
+    }
+    for commitment in &mut record.roster_commitments {
+        commitment.alias_tag = None;
+    }
+    for nullifier in &mut record.nullifier_log {
+        nullifier.issued_at_ms = 0;
+    }
 }
 fn store_relay_feedback(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -714,6 +830,341 @@ fn metadata_key(call_id: &KaigiId) -> Result<Name, Error> {
         Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
     })
 }
+/// Return whether a domain metadata key is owned by native Kaigi state.
+///
+/// The governance-managed relay allowlist deliberately remains outside these
+/// prefixes so domain governance can update it through ordinary metadata ISIs.
+pub(crate) fn is_reserved_kaigi_metadata_key(key: &Name) -> bool {
+    let literal = key.as_ref();
+    literal.starts_with("kaigi__")
+        || literal.starts_with("kaigi_relay__")
+        || literal.starts_with("kaigi_relay_feedback__")
+}
+/// Reject moving a registered relay's primary alias outside its storage domain.
+///
+/// Relay descriptors and feedback are domain metadata keyed by the relay ID. Until
+/// native relay migration/removal exists, changing the primary alias domain would
+/// strand that protected state in the previous domain.
+pub(crate) fn ensure_kaigi_relay_home_change_allowed(
+    state_transaction: &StateTransaction<'_, '_>,
+    account: &AccountId,
+    current_domain: &DomainId,
+    new_domain: Option<&DomainId>,
+) -> Result<(), Error> {
+    if new_domain == Some(current_domain) {
+        return Ok(());
+    }
+    let domain = state_transaction.world.domain(current_domain)?;
+    let relay_ids = domain
+        .metadata()
+        .iter()
+        .filter(|(key, _)| {
+            key.as_ref().starts_with("kaigi_relay__")
+                || key.as_ref().starts_with("kaigi_relay_feedback__")
+        })
+        .map(|(key, value)| {
+            if key.as_ref().starts_with("kaigi_relay_feedback__") {
+                let feedback: KaigiRelayFeedback = value
+                    .clone()
+                    .try_into_any_norito()
+                    .map_err(|err| Error::Conversion(err.to_string()))?;
+                let expected_key = kaigi_relay_feedback_key(&feedback.relay_id).map_err(|err| {
+                    Error::InvariantViolation(
+                        format!("invalid retained Kaigi relay feedback identity: {err}").into(),
+                    )
+                })?;
+                if key != &expected_key {
+                    return Err(Error::InvariantViolation(
+                        "retained Kaigi relay feedback key does not match its relay ID".into(),
+                    ));
+                }
+                Ok(feedback.relay_id)
+            } else {
+                let registration: KaigiRelayRegistration = value
+                    .clone()
+                    .try_into_any_norito()
+                    .map_err(|err| Error::Conversion(err.to_string()))?;
+                let expected_key =
+                    kaigi_relay_metadata_key(&registration.relay_id).map_err(|err| {
+                        Error::InvariantViolation(
+                            format!("invalid retained Kaigi relay registration identity: {err}")
+                                .into(),
+                        )
+                    })?;
+                if key != &expected_key {
+                    return Err(Error::InvariantViolation(
+                        "retained Kaigi relay registration key does not match its relay ID".into(),
+                    ));
+                }
+                Ok(registration.relay_id)
+            }
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    for relay_id in relay_ids {
+        if accounts_share_active_lineage(state_transaction, account, &relay_id)? {
+            return Err(relay_error(
+                "registered Kaigi relay primary alias domain is pinned while relay state exists",
+            ));
+        }
+    }
+    Ok(())
+}
+/// Reject account removal while native Kaigi state still depends on the account.
+pub(crate) fn ensure_kaigi_account_can_unregister(
+    state_transaction: &StateTransaction<'_, '_>,
+    account: &AccountId,
+) -> Result<(), Error> {
+    let aliases = state_transaction
+        .world
+        .account_aliases_by_account
+        .get(account)
+        .cloned()
+        .unwrap_or_default();
+    ensure_kaigi_account_rekey_records_can_be_removed(
+        state_transaction,
+        &aliases,
+        "unregistering the alias owner",
+    )?;
+    ensure_kaigi_account_has_no_stranded_dependencies(state_transaction, account, "unregister")
+}
+/// Reject an aliasless account-id rekey while native Kaigi state needs durable continuity.
+pub(crate) fn ensure_kaigi_account_can_rekey_without_continuity(
+    state_transaction: &StateTransaction<'_, '_>,
+    account: &AccountId,
+) -> Result<(), Error> {
+    ensure_kaigi_account_has_no_stranded_dependencies(
+        state_transaction,
+        account,
+        "rekey without durable account-alias continuity for",
+    )
+}
+fn ensure_kaigi_account_has_no_stranded_dependencies(
+    state_transaction: &StateTransaction<'_, '_>,
+    account: &AccountId,
+    operation: &str,
+) -> Result<(), Error> {
+    let entries = state_transaction
+        .world
+        .domains_iter()
+        .flat_map(|domain| {
+            domain
+                .metadata()
+                .iter()
+                .filter(|(key, _)| is_reserved_kaigi_metadata_key(key))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    for (key, value) in entries {
+        let literal = key.as_ref();
+        if literal.starts_with("kaigi__") {
+            let record: KaigiRecord = value
+                .try_into_any_norito()
+                .map_err(|err| Error::Conversion(err.to_string()))?;
+            if record.status != KaigiStatus::Active {
+                continue;
+            }
+            let is_host = accounts_share_active_lineage(state_transaction, account, &record.host)?;
+            let is_participant =
+                record_has_participant_in_active_lineage(state_transaction, &record, account)?;
+            let is_manifest_relay = if let Some(manifest) = record.relay_manifest.as_ref() {
+                let mut found = false;
+                for hop in &manifest.hops {
+                    if accounts_share_active_lineage(state_transaction, account, &hop.relay_id)? {
+                        found = true;
+                        break;
+                    }
+                }
+                found
+            } else {
+                false
+            };
+            if is_host || is_participant || is_manifest_relay {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "cannot {operation} account {account}: it is referenced by active Kaigi {}",
+                        record.id
+                    )
+                    .into(),
+                ));
+            }
+        } else if literal.starts_with("kaigi_relay_feedback__") {
+            let feedback: KaigiRelayFeedback = value
+                .try_into_any_norito()
+                .map_err(|err| Error::Conversion(err.to_string()))?;
+            let expected_key = kaigi_relay_feedback_key(&feedback.relay_id).map_err(|err| {
+                Error::InvariantViolation(
+                    format!("invalid retained Kaigi relay feedback identity: {err}").into(),
+                )
+            })?;
+            if key != expected_key {
+                return Err(Error::InvariantViolation(
+                    "retained Kaigi relay feedback key does not match its relay ID".into(),
+                ));
+            }
+            if accounts_share_active_lineage(state_transaction, account, &feedback.relay_id)? {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "cannot {operation} account {account}: it owns retained Kaigi relay feedback"
+                    )
+                    .into(),
+                ));
+            }
+        } else if literal.starts_with("kaigi_relay__") {
+            let registration: KaigiRelayRegistration = value
+                .try_into_any_norito()
+                .map_err(|err| Error::Conversion(err.to_string()))?;
+            let expected_key = kaigi_relay_metadata_key(&registration.relay_id).map_err(|err| {
+                Error::InvariantViolation(
+                    format!("invalid retained Kaigi relay registration identity: {err}").into(),
+                )
+            })?;
+            if key != expected_key {
+                return Err(Error::InvariantViolation(
+                    "retained Kaigi relay registration key does not match its relay ID".into(),
+                ));
+            }
+            if accounts_share_active_lineage(state_transaction, account, &registration.relay_id)? {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "cannot {operation} account {account}: it owns retained Kaigi relay registration"
+                    )
+                    .into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+/// Reject removal of alias continuity records still needed by native Kaigi state.
+pub(crate) fn ensure_kaigi_account_rekey_records_can_be_removed(
+    state_transaction: &StateTransaction<'_, '_>,
+    aliases: &BTreeSet<AccountAlias>,
+    operation: &str,
+) -> Result<(), Error> {
+    for alias in aliases {
+        let Some(record) = state_transaction.world.account_rekey_records.get(alias) else {
+            continue;
+        };
+        if &record.label != alias
+            || record.previous_account_ids.len() != record.transition_provenance.len()
+        {
+            return Err(Error::InvariantViolation(
+                "cannot remove malformed account-id rekey history used by Kaigi".into(),
+            ));
+        }
+        let mut sequence = record.previous_account_ids.clone();
+        sequence.push(record.active_account_id.clone());
+        for (index, provenance) in record.transition_provenance.iter().enumerate() {
+            if *provenance != AccountRekeyTransitionProvenance::AccountIdRekey {
+                continue;
+            }
+            for identity in [&sequence[index], &sequence[index + 1]] {
+                if let Err(error) = ensure_kaigi_account_has_no_stranded_dependencies(
+                    state_transaction,
+                    identity,
+                    "remove retained rekey continuity for",
+                ) {
+                    return Err(Error::InvariantViolation(
+                        format!(
+                            "cannot remove account alias {alias:?} while {operation}: its canonical account-id rekey history is required by native Kaigi state ({error})"
+                        )
+                        .into(),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+/// Reject activating an account ID retained as a canonical rekey predecessor.
+pub(crate) fn ensure_account_id_is_not_retired_rekey_predecessor(
+    state_transaction: &StateTransaction<'_, '_>,
+    account: &AccountId,
+) -> Result<(), Error> {
+    for (label, record) in state_transaction.world.account_rekey_records.iter() {
+        for (index, predecessor) in record.previous_account_ids.iter().enumerate() {
+            if predecessor != account {
+                continue;
+            }
+            let Some(provenance) = record.transition_provenance.get(index) else {
+                return Err(Error::InvariantViolation(
+                    "cannot inspect malformed retained account-id rekey history".into(),
+                ));
+            };
+            if *provenance == AccountRekeyTransitionProvenance::AccountIdRekey {
+                if label != &record.label {
+                    return Err(Error::InvariantViolation(
+                        "retained account-id rekey history key does not match its embedded alias"
+                            .into(),
+                    ));
+                }
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "cannot activate account {account}: it is retained as a retired canonical account-id rekey predecessor"
+                    )
+                    .into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+/// Reject domain removal while it contains protected native Kaigi state.
+pub(crate) fn ensure_kaigi_domain_can_unregister(
+    state_transaction: &StateTransaction<'_, '_>,
+    domain_id: &DomainId,
+) -> Result<(), Error> {
+    let domain = state_transaction.world.domain(domain_id)?;
+    if let Some((key, _)) = domain
+        .metadata()
+        .iter()
+        .find(|(key, _)| is_reserved_kaigi_metadata_key(key))
+    {
+        return Err(Error::InvariantViolation(
+            format!(
+                "cannot unregister domain {domain_id}: it contains protected native Kaigi state at metadata key {key}"
+            )
+            .into(),
+        ));
+    }
+    let account_ids = state_transaction
+        .world
+        .accounts_in_domain_iter(domain_id)
+        .map(|account| account.id().clone())
+        .collect::<Vec<_>>();
+    let mut aliases = BTreeSet::new();
+    for account_id in account_ids {
+        let Some(account_aliases) = state_transaction
+            .world
+            .account_aliases_by_account
+            .get(&account_id)
+        else {
+            continue;
+        };
+        for alias in account_aliases {
+            let alias_domain = alias
+                .domain_id(state_transaction.world.dataspace_catalog())
+                .map_err(|error| {
+                    Error::InvariantViolation(
+                        format!(
+                            "cannot inspect account alias {alias:?} before domain teardown: {error}"
+                        )
+                        .into(),
+                    )
+                })?;
+            if alias_domain.as_ref() == Some(domain_id) {
+                aliases.insert(alias.clone());
+            }
+        }
+    }
+    ensure_kaigi_account_rekey_records_can_be_removed(
+        state_transaction,
+        &aliases,
+        "unregistering its alias domain",
+    )?;
+    Ok(())
+}
 fn unauthorized(message: impl Into<String>) -> Error {
     Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
 }
@@ -723,8 +1174,177 @@ fn privacy_error(message: impl Into<String>) -> Error {
 fn relay_error(message: impl Into<String>) -> Error {
     Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
 }
-fn same_account_subject(left: &AccountId, right: &AccountId) -> bool {
-    left.subject_id() == right.subject_id()
+fn usage_error(message: impl Into<String>) -> Error {
+    Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
+}
+fn ensure_kaigi_active(record: &KaigiRecord) -> Result<(), Error> {
+    if record.status != KaigiStatus::Active {
+        return Err(Error::InvariantViolation("Kaigi is not active".into()));
+    }
+    Ok(())
+}
+fn resolve_active_kaigi_account(
+    state_transaction: &StateTransaction<'_, '_>,
+    account: &AccountId,
+) -> Result<Option<AccountId>, Error> {
+    let live = crate::sns::resolve_active_account_id_rekey_lineage(
+        &state_transaction.world,
+        state_transaction.world.dataspace_catalog(),
+        account,
+        state_transaction.block_unix_timestamp_ms(),
+    )
+    .map_err(|err| {
+        Error::InvariantViolation(
+            format!("failed to resolve Kaigi account-id rekey lineage: {err}").into(),
+        )
+    })?;
+    let persisted = resolve_persisted_kaigi_rekey_successor(state_transaction, account)?;
+    if let (Some(live), Some(persisted)) = (&live, &persisted)
+        && live != persisted
+    {
+        return Err(Error::InvariantViolation(
+            "live and persisted account-id rekey lineage resolve to different successors".into(),
+        ));
+    }
+    Ok(live.or(persisted))
+}
+fn accounts_share_active_lineage(
+    state_transaction: &StateTransaction<'_, '_>,
+    left: &AccountId,
+    right: &AccountId,
+) -> Result<bool, Error> {
+    let left_active = resolve_active_kaigi_account(state_transaction, left)?;
+    let right_active = resolve_active_kaigi_account(state_transaction, right)?;
+    Ok(left_active.is_some() && left_active == right_active)
+}
+fn resolve_persisted_kaigi_rekey_successor(
+    state_transaction: &StateTransaction<'_, '_>,
+    account: &AccountId,
+) -> Result<Option<AccountId>, Error> {
+    let graph = persisted_kaigi_rekey_graph(state_transaction)?;
+    let component = persisted_kaigi_rekey_component(&graph.neighbours, account);
+    let mut terminal = account.clone();
+    while let Some(successor) = graph.forward.get(&terminal) {
+        terminal = successor.clone();
+    }
+    let registered = component
+        .into_iter()
+        .filter(|candidate| state_transaction.world.account(candidate).is_ok())
+        .collect::<BTreeSet<_>>();
+    if registered.is_empty() {
+        return Ok(None);
+    }
+    if registered.len() != 1 || !registered.contains(&terminal) {
+        return Err(Error::InvariantViolation(
+            "persisted account-id rekey history does not have one registered terminal successor"
+                .into(),
+        ));
+    }
+    Ok(Some(terminal))
+}
+#[derive(Default)]
+struct PersistedKaigiRekeyGraph {
+    forward: BTreeMap<AccountId, AccountId>,
+    neighbours: BTreeMap<AccountId, BTreeSet<AccountId>>,
+}
+fn persisted_kaigi_rekey_graph(
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<PersistedKaigiRekeyGraph, Error> {
+    let mut graph = PersistedKaigiRekeyGraph::default();
+    let mut reverse = BTreeMap::<AccountId, AccountId>::new();
+    for (label, record) in state_transaction.world.account_rekey_records.iter() {
+        if label != &record.label {
+            return Err(Error::InvariantViolation(
+                "account-id rekey history key does not match its embedded alias".into(),
+            ));
+        }
+        if record.previous_account_ids.len() != record.transition_provenance.len() {
+            return Err(Error::InvariantViolation(
+                "malformed account-id rekey history while resolving Kaigi continuity".into(),
+            ));
+        }
+        let mut sequence = record.previous_account_ids.clone();
+        sequence.push(record.active_account_id.clone());
+        for (index, provenance) in record.transition_provenance.iter().enumerate() {
+            if *provenance != AccountRekeyTransitionProvenance::AccountIdRekey {
+                continue;
+            }
+            let predecessor = sequence[index].clone();
+            let successor = sequence[index + 1].clone();
+            if predecessor == successor
+                || graph
+                    .forward
+                    .insert(predecessor.clone(), successor.clone())
+                    .is_some_and(|existing| existing != successor)
+                || reverse
+                    .insert(successor.clone(), predecessor.clone())
+                    .is_some_and(|existing| existing != predecessor)
+            {
+                return Err(Error::InvariantViolation(
+                    "ambiguous account-id rekey history while resolving Kaigi continuity".into(),
+                ));
+            }
+            graph
+                .neighbours
+                .entry(predecessor.clone())
+                .or_default()
+                .insert(successor.clone());
+            graph
+                .neighbours
+                .entry(successor)
+                .or_default()
+                .insert(predecessor);
+        }
+    }
+    let mut completed = BTreeSet::new();
+    for start in graph.forward.keys() {
+        if completed.contains(start) {
+            continue;
+        }
+        let mut path = BTreeSet::new();
+        let mut current = start;
+        while let Some(successor) = graph.forward.get(current) {
+            if completed.contains(current) {
+                break;
+            }
+            if !path.insert(current.clone()) {
+                return Err(Error::InvariantViolation(
+                    "cyclic account-id rekey history while resolving Kaigi continuity".into(),
+                ));
+            }
+            current = successor;
+        }
+        completed.extend(path);
+    }
+    Ok(graph)
+}
+fn persisted_kaigi_rekey_component(
+    neighbours: &BTreeMap<AccountId, BTreeSet<AccountId>>,
+    account: &AccountId,
+) -> BTreeSet<AccountId> {
+    let mut frontier = vec![account.clone()];
+    let mut visited = BTreeSet::new();
+    while let Some(account) = frontier.pop() {
+        if !visited.insert(account.clone()) {
+            continue;
+        }
+        if let Some(next) = neighbours.get(&account) {
+            frontier.extend(next.iter().cloned());
+        }
+    }
+    visited
+}
+fn record_has_participant_in_active_lineage(
+    state_transaction: &StateTransaction<'_, '_>,
+    record: &KaigiRecord,
+    account: &AccountId,
+) -> Result<bool, Error> {
+    for participant in &record.participants {
+        if accounts_share_active_lineage(state_transaction, participant, account)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 fn validate_relay_manifest(manifest: &KaigiRelayManifest) -> Result<(), Error> {
     if manifest.hops.len() < 3 {
@@ -760,6 +1380,23 @@ fn ensure_manifest_relays_registered(
     state_transaction: &StateTransaction<'_, '_>,
     manifest: &KaigiRelayManifest,
 ) -> Result<(), Error> {
+    if manifest.expiry_ms <= state_transaction.block_unix_timestamp_ms() {
+        return Err(relay_error(
+            "relay manifest expiry must be greater than the current block time",
+        ));
+    }
+    let mut active_relays = BTreeSet::new();
+    for hop in &manifest.hops {
+        let active_relay = resolve_active_kaigi_account(state_transaction, &hop.relay_id)?
+            .ok_or_else(|| {
+                relay_error("relay manifest references an unregistered relay account")
+            })?;
+        if !active_relays.insert(active_relay) {
+            return Err(relay_error(
+                "relay manifest must not contain multiple identities from the same active account-id rekey lineage",
+            ));
+        }
+    }
     for hop in &manifest.hops {
         ensure_relay_allowed_by_governance(state_transaction, &hop.relay_id)?;
         let key = kaigi_relay_metadata_key(&hop.relay_id).map_err(|err| {
@@ -773,16 +1410,19 @@ fn ensure_manifest_relays_registered(
         let registration: KaigiRelayRegistration = stored
             .try_into_any_norito()
             .map_err(|err| Error::Conversion(err.to_string()))?;
+        if registration.relay_id != hop.relay_id {
+            return Err(relay_error(
+                "stored relay registration identifier does not match its metadata key",
+            ));
+        }
+        if registration.bandwidth_class == 0 {
+            return Err(relay_error(
+                "stored relay registration has an invalid zero bandwidth class",
+            ));
+        }
         if registration.hpke_public_key != hop.hpke_public_key {
             return Err(relay_error(
                 "relay HPKE public key does not match registered value",
-            ));
-        }
-        if let Some(feedback) = load_relay_feedback(state_transaction, &hop.relay_id)?
-            && feedback.status == KaigiRelayHealthStatus::Unavailable
-        {
-            return Err(relay_error(
-                "relay is marked unavailable by the latest health report",
             ));
         }
     }
@@ -794,12 +1434,19 @@ fn ensure_relay_allowed_by_governance(
 ) -> Result<(), Error> {
     let domain_id = relay_domain(state_transaction, relay_id)?;
     let allowlist = load_allowlist(state_transaction, &domain_id)?;
-    if let Some(allowlist) = allowlist
-        && !allowlist.contains(relay_id)
-    {
-        return Err(relay_error(
-            "relay is not present in the governance allowlist for its domain",
-        ));
+    if let Some(allowlist) = allowlist {
+        let mut allowed = false;
+        for allowlisted_relay in &allowlist.allowed_relays {
+            if accounts_share_active_lineage(state_transaction, allowlisted_relay, relay_id)? {
+                allowed = true;
+                break;
+            }
+        }
+        if !allowed {
+            return Err(relay_error(
+                "relay is not present in the governance allowlist for its domain",
+            ));
+        }
     }
     Ok(())
 }
@@ -836,6 +1483,11 @@ fn load_relay_feedback(
         .clone()
         .try_into_any_norito()
         .map_err(|err| Error::Conversion(err.to_string()))?;
+    if feedback.relay_id != *relay_id {
+        return Err(Error::InvariantViolation(
+            "stored Kaigi relay feedback identifier does not match metadata key".into(),
+        ));
+    }
     Ok(Some(feedback))
 }
 fn truncate_len(len: usize) -> u32 {
@@ -875,64 +1527,48 @@ fn relay_domain(
     state_transaction: &StateTransaction<'_, '_>,
     relay_id: &AccountId,
 ) -> Result<DomainId, Error> {
-    let relay_subject = relay_id.subject_id();
-    let alias_domains = state_transaction
+    let relay_subject =
+        resolve_active_kaigi_account(state_transaction, relay_id)?.ok_or_else(|| {
+            relay_error("relay account is not registered or in an active rekey lineage")
+        })?;
+    let primary_alias = state_transaction
         .world
-        .bound_account_aliases(&relay_subject)
-        .into_iter()
-        .filter(|alias| {
-            crate::sns::resolve_active_account_alias(
-                &state_transaction.world,
-                &state_transaction.nexus.dataspace_catalog,
-                alias,
-                state_transaction.block_unix_timestamp_ms(),
-            )
-            .as_ref()
-                == Some(&relay_subject)
-        })
-        .filter_map(|alias| {
-            alias
-                .domain_id(&state_transaction.nexus.dataspace_catalog)
-                .expect("bound account alias dataspace must exist in catalog")
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    if !alias_domains.is_empty() {
-        return match alias_domains.as_slice() {
-            [domain_id] => Ok(domain_id.clone()),
-            _ => Err(relay_error(
-                "relay account has aliases in multiple domains; explicit relay domain is required",
-            )),
-        };
-    }
-    let mut allowlisted_domains = Vec::new();
-    let allowlist_key = kaigi_relay_allowlist_key().map_err(|err| {
-        Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
+        .account(&relay_subject)?
+        .label()
+        .cloned()
+        .ok_or_else(|| {
+            relay_error("relay account requires an active domain-qualified primary alias")
+        })?;
+    let resolved = crate::sns::resolve_active_account_alias(
+        &state_transaction.world,
+        state_transaction.world.dataspace_catalog(),
+        &primary_alias,
+        state_transaction.block_unix_timestamp_ms(),
+    )
+    .map_err(|err| {
+        Error::InvariantViolation(
+            format!("failed to resolve relay primary account alias `{primary_alias:?}`: {err}")
+                .into(),
+        )
     })?;
-    for (_domain_id, domain) in state_transaction.world.domains().iter() {
-        let Some(stored) = domain.metadata().get(&allowlist_key) else {
-            continue;
-        };
-        let allowlist: KaigiRelayAllowlist = stored
-            .clone()
-            .try_into_any_norito()
-            .map_err(|err| Error::Conversion(err.to_string()))?;
-        if allowlist.contains(relay_id) {
-            allowlisted_domains.push(domain.id.clone());
-        }
+    if resolved.as_ref() != Some(&relay_subject) {
+        return Err(relay_error(
+            "relay account requires an active domain-qualified primary alias",
+        ));
     }
-    allowlisted_domains.sort();
-    allowlisted_domains.dedup();
-    match allowlisted_domains.as_slice() {
-        [domain_id] => Ok(domain_id.clone()),
-        [] => Err(relay_error(
-            "relay account has no domain-qualified alias; explicit relay domain is required",
-        )),
-        _ => Err(relay_error(
-            "relay account has aliases in multiple domains; explicit relay domain is required",
-        )),
-    }
+    let domain_id = primary_alias
+        .domain_id(state_transaction.world.dataspace_catalog())
+        .map_err(|err| {
+            Error::InvariantViolation(
+                format!("failed to resolve relay primary alias domain `{primary_alias:?}`: {err}")
+                    .into(),
+            )
+        })?
+        .ok_or_else(|| {
+            relay_error("relay account requires an active domain-qualified primary alias")
+        })?;
+    state_transaction.world.domain(&domain_id)?;
+    Ok(domain_id)
 }
 fn emit_relay_manifest_summary(
     stx: &mut StateTransaction<'_, '_>,
@@ -981,8 +1617,11 @@ fn process_join(
     mut roster_root: Option<iroha_crypto::Hash>,
     proof: Option<&[u8]>,
 ) -> Result<AccessGrant, Error> {
-    if record.status != KaigiStatus::Active {
-        return Err(Error::InvariantViolation("Kaigi is not active".into()));
+    ensure_kaigi_active(record)?;
+    if accounts_share_active_lineage(state_transaction, &record.host, participant)? {
+        return Err(Error::InvalidParameter(
+            InvalidParameterError::SmartContract("host is already part of the call".into()),
+        ));
     }
     match record.privacy_mode {
         KaigiPrivacyMode::Transparent => {
@@ -995,17 +1634,12 @@ fn process_join(
                 roster_root: roster_root.as_ref(),
                 proof,
             })?;
-            if !same_account_subject(authority, participant)
-                && !same_account_subject(authority, &record.host)
+            if authority != participant
+                && !accounts_share_active_lineage(state_transaction, authority, &record.host)?
             {
                 return Err(unauthorized("only the host may invite other accounts"));
             }
-            if same_account_subject(&record.host, participant) {
-                return Err(Error::InvalidParameter(
-                    InvalidParameterError::SmartContract("host is already part of the call".into()),
-                ));
-            }
-            if record.has_participant(participant) {
+            if record_has_participant_in_active_lineage(state_transaction, record, participant)? {
                 return Err(Error::InvariantViolation(
                     "participant already joined".into(),
                 ));
@@ -1018,12 +1652,11 @@ fn process_join(
                 ));
             }
             record.push_participant(participant.clone());
-            emit_roster_summary(state_transaction, record);
             Ok(AccessGrant::Default)
         }
         KaigiPrivacyMode::ZkRosterV1 => {
             let proof_subject = authorization.signed_account();
-            if !same_account_subject(proof_subject, participant) {
+            if proof_subject != participant {
                 return Err(unauthorized(
                     "signed privacy-mode joins must be submitted by the participant",
                 ));
@@ -1067,7 +1700,6 @@ fn process_join(
             }
             record.push_commitment(commitment);
             record.push_nullifier(nullifier);
-            emit_roster_summary(state_transaction, record);
             Ok(AccessGrant::PrivacyAuthorized)
         }
     }
@@ -1083,6 +1715,7 @@ fn process_leave(
     mut roster_root: Option<iroha_crypto::Hash>,
     proof: Option<&[u8]>,
 ) -> Result<AccessGrant, Error> {
+    ensure_kaigi_active(record)?;
     match record.privacy_mode {
         KaigiPrivacyMode::Transparent => {
             privacy::ensure_transparent_payload(&PrivacyArtifacts {
@@ -1093,24 +1726,40 @@ fn process_leave(
                 roster_root: roster_root.as_ref(),
                 proof,
             })?;
-            if !same_account_subject(authority, participant)
-                && !same_account_subject(authority, &record.host)
+            if !accounts_share_active_lineage(state_transaction, authority, participant)?
+                && !accounts_share_active_lineage(state_transaction, authority, &record.host)?
             {
                 return Err(unauthorized(
                     "only the host or participant may remove a participant",
                 ));
             }
-            if same_account_subject(&record.host, participant) {
+            if accounts_share_active_lineage(state_transaction, &record.host, participant)? {
                 return Err(Error::InvalidParameter(
                     InvalidParameterError::SmartContract(
                         "host cannot leave the call without ending it".into(),
                     ),
                 ));
             }
-            if !record.remove_participant(participant) {
-                return Err(Error::Find(FindError::Account(participant.clone())));
+            let mut matching_index = None;
+            for (index, stored_participant) in record.participants.iter().enumerate() {
+                if !accounts_share_active_lineage(
+                    state_transaction,
+                    stored_participant,
+                    participant,
+                )? {
+                    continue;
+                }
+                if matching_index.replace(index).is_some() {
+                    return Err(Error::InvariantViolation(
+                        "multiple Kaigi participants resolve to the same active account-id rekey lineage"
+                            .into(),
+                    ));
+                }
             }
-            emit_roster_summary(state_transaction, record);
+            let matching_index = matching_index
+                .ok_or_else(|| Error::Find(FindError::Account(participant.clone())))?;
+            let stored_participant = record.participants.remove(matching_index);
+            record.participant_metadata.remove(&stored_participant);
             Ok(AccessGrant::Default)
         }
         KaigiPrivacyMode::ZkRosterV1 => {
@@ -1156,6 +1805,29 @@ mod tests {
             }
             other => panic!("unexpected error variant {other:?}"),
         }
+    }
+    #[test]
+    fn native_kaigi_metadata_key_reservation_excludes_governance_allowlist() {
+        let (_domain, host, _) = sample_ids();
+        let call_name = Name::from_str("reserved-key").expect("call name");
+        for key in [
+            kaigi_metadata_key(&call_name).expect("call metadata key"),
+            kaigi_relay_metadata_key(&host).expect("relay metadata key"),
+            kaigi_relay_feedback_key(&host).expect("relay feedback key"),
+        ] {
+            assert!(
+                is_reserved_kaigi_metadata_key(&key),
+                "native Kaigi key {key} must be protected"
+            );
+        }
+        assert!(
+            !is_reserved_kaigi_metadata_key(
+                &kaigi_relay_allowlist_key().expect("allowlist metadata key")
+            ),
+            "domain governance must retain the ordinary allowlist update path"
+        );
+        let unrelated = Name::from_str("kaigi_topic").expect("unrelated metadata key");
+        assert!(!is_reserved_kaigi_metadata_key(&unrelated));
     }
     #[test]
     fn transparent_preconditions_accept_empty_payload() {
@@ -1252,6 +1924,233 @@ mod tests {
         duplicate.hops[2].relay_id = hop_a;
         assert!(validate_relay_manifest(&duplicate).is_err());
     }
+    #[test]
+    fn relay_manifest_rejects_two_ids_from_one_active_rekey_lineage() {
+        let (domain, retired_relay, _) = sample_ids();
+        let (active_relay, _) = gen_account_in("nexus");
+        let (third_relay, _) = gen_account_in("nexus");
+        let manifest = KaigiRelayManifest {
+            hops: vec![
+                KaigiRelayHop {
+                    relay_id: retired_relay.clone(),
+                    hpke_public_key: vec![1],
+                    weight: 1,
+                },
+                KaigiRelayHop {
+                    relay_id: active_relay.clone(),
+                    hpke_public_key: vec![2],
+                    weight: 1,
+                },
+                KaigiRelayHop {
+                    relay_id: third_relay.clone(),
+                    hpke_public_key: vec![3],
+                    weight: 1,
+                },
+            ],
+            expiry_ms: 1,
+        };
+        with_seeded_kaigi_state_transaction(&domain, &[active_relay.clone(), third_relay], |stx| {
+            seed_active_account_id_rekey_lineage(
+                stx,
+                "kaigi-relay-lineage",
+                &retired_relay,
+                &active_relay,
+            );
+            let error = ensure_manifest_relays_registered(stx, &manifest)
+                .expect_err("one relay lineage must not fill two route hops");
+            assert_smart_contract_error(error, "same active account-id rekey lineage");
+        });
+    }
+    #[test]
+    fn persisted_account_id_rekey_history_survives_alias_reassignment() {
+        use iroha_data_model::{
+            account::rekey::{AccountAlias, AccountRekeyRecord},
+            nexus::DataSpaceId,
+        };
+        let (domain, retired, _) = sample_ids();
+        let (active, _) = gen_account_in("nexus");
+        let (new_alias_owner, _) = gen_account_in("nexus");
+        with_seeded_kaigi_state_transaction(
+            &domain,
+            &[active.clone(), new_alias_owner.clone()],
+            |stx| {
+                let alias = AccountAlias::domainless(
+                    "persisted-kaigi-lineage"
+                        .parse()
+                        .expect("lineage alias label"),
+                    DataSpaceId::UNIVERSAL,
+                );
+                let history = AccountRekeyRecord::new(alias.clone(), retired.clone())
+                    .repoint_for_account_id_rekey(active.clone())
+                    .expect("canonical account-id rekey")
+                    .reassign_alias_to_account(new_alias_owner.clone())
+                    .expect("later independent alias reassignment");
+                stx.world
+                    .account_rekey_records
+                    .insert(alias.clone(), history);
+                stx.world
+                    .insert_account_alias_binding(alias.clone(), new_alias_owner.clone());
+
+                assert!(
+                    accounts_share_active_lineage(stx, &retired, &active)
+                        .expect("persisted canonical lineage"),
+                    "later alias reassignment must not erase the canonical rekey edge"
+                );
+                assert!(
+                    !accounts_share_active_lineage(stx, &retired, &new_alias_owner)
+                        .expect("independent alias owner"),
+                    "alias reassignment must never grant Kaigi lineage authority"
+                );
+                assert_eq!(
+                    resolve_active_kaigi_account(stx, &retired)
+                        .expect("resolve persisted successor"),
+                    Some(active.clone())
+                );
+                let call = KaigiId::new(
+                    domain.clone(),
+                    Name::from_str("persisted-host").expect("call name"),
+                );
+                let record = KaigiRecord::from_new(
+                    &NewKaigi::with_defaults(call.clone(), retired.clone()),
+                    0,
+                );
+                store_record(
+                    stx,
+                    &domain,
+                    kaigi_metadata_key(&call.call_name).expect("metadata key"),
+                    &record,
+                )
+                .expect("seed predecessor-hosted call");
+                let error = ensure_kaigi_account_can_unregister(stx, &active)
+                    .expect_err("the successor must remain protected after alias reassignment");
+                assert_invariant_error(error, "referenced by active Kaigi");
+                let error = Unregister::account(new_alias_owner.clone())
+                    .execute(&ALICE_ID, stx)
+                    .expect_err("alias-owner teardown must preserve the canonical rekey edge");
+                assert_invariant_error(error, "history is required by native Kaigi state");
+                assert!(stx.world.account(&new_alias_owner).is_ok());
+                assert_eq!(
+                    stx.world.account_aliases.get(&alias),
+                    Some(&new_alias_owner)
+                );
+                assert!(stx.world.account_rekey_records.get(&alias).is_some());
+            },
+        );
+    }
+    #[test]
+    fn persisted_rekey_history_rejects_a_registered_predecessor() {
+        use iroha_data_model::{
+            account::rekey::{AccountAlias, AccountRekeyRecord},
+            nexus::DataSpaceId,
+        };
+        let (domain, predecessor, _) = sample_ids();
+        let (terminal, _) = gen_account_in("nexus");
+        with_seeded_kaigi_state_transaction(
+            &domain,
+            &[predecessor.clone(), terminal.clone()],
+            |stx| {
+                let alias = AccountAlias::domainless(
+                    "resurrected-kaigi-predecessor"
+                        .parse()
+                        .expect("lineage alias label"),
+                    DataSpaceId::UNIVERSAL,
+                );
+                let history = AccountRekeyRecord::new(alias.clone(), predecessor.clone())
+                    .repoint_for_account_id_rekey(terminal.clone())
+                    .expect("canonical account-id rekey");
+                stx.world.account_rekey_records.insert(alias, history);
+
+                let error = resolve_active_kaigi_account(stx, &predecessor)
+                    .expect_err("a registered predecessor must not regain Kaigi authority");
+                assert_invariant_error(error, "one registered terminal successor");
+                let error = accounts_share_active_lineage(stx, &predecessor, &predecessor)
+                    .expect_err("same-ID comparison must not bypass lineage validation");
+                assert_invariant_error(error, "one registered terminal successor");
+                let call = KaigiId::new(
+                    domain.clone(),
+                    Name::from_str("resurrected-host-create").expect("call name"),
+                );
+                let error = CreateKaigi {
+                    call: NewKaigi::with_defaults(call.clone(), predecessor.clone()),
+                    commitment: None,
+                    nullifier: None,
+                    roster_root: None,
+                    proof: None,
+                }
+                .execute(&predecessor, stx)
+                .expect_err("a resurrected predecessor must not create stuck Kaigi state");
+                assert_invariant_error(error, "one registered terminal successor");
+                let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
+                assert!(
+                    stx.world
+                        .domain(&domain)
+                        .expect("domain")
+                        .metadata()
+                        .get(&key)
+                        .is_none()
+                );
+            },
+        );
+    }
+    #[test]
+    fn account_registration_rejects_a_retired_rekey_predecessor() {
+        use iroha_data_model::{
+            account::rekey::{AccountAlias, AccountRekeyRecord},
+            nexus::DataSpaceId,
+        };
+        let (domain, predecessor, _) = sample_ids();
+        let (terminal, _) = gen_account_in("nexus");
+        with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&terminal), |stx| {
+            let alias = AccountAlias::domainless(
+                "retired-registration".parse().expect("lineage alias label"),
+                DataSpaceId::UNIVERSAL,
+            );
+            let history = AccountRekeyRecord::new(alias.clone(), predecessor.clone())
+                .repoint_for_account_id_rekey(terminal.clone())
+                .expect("canonical account-id rekey");
+            stx.world.account_rekey_records.insert(alias, history);
+
+            let error = Register::account(Account::new(predecessor.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect_err("canonical rekey predecessors must remain retired");
+            assert_invariant_error(error, "retired canonical account-id rekey predecessor");
+            assert!(matches!(
+                stx.world.account(&predecessor),
+                Err(FindError::Account(account)) if account == predecessor
+            ));
+        });
+    }
+    #[test]
+    fn persisted_rekey_history_rejects_a_mismatched_storage_alias() {
+        use iroha_data_model::{
+            account::rekey::{AccountAlias, AccountRekeyRecord},
+            nexus::DataSpaceId,
+        };
+        let (domain, predecessor, _) = sample_ids();
+        let (terminal, _) = gen_account_in("nexus");
+        with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&terminal), |stx| {
+            let stored_alias = AccountAlias::domainless(
+                "stored-kaigi-lineage".parse().expect("stored alias label"),
+                DataSpaceId::UNIVERSAL,
+            );
+            let embedded_alias = AccountAlias::domainless(
+                "embedded-kaigi-lineage"
+                    .parse()
+                    .expect("embedded alias label"),
+                DataSpaceId::UNIVERSAL,
+            );
+            let history = AccountRekeyRecord::new(embedded_alias, predecessor.clone())
+                .repoint_for_account_id_rekey(terminal.clone())
+                .expect("canonical account-id rekey");
+            stx.world
+                .account_rekey_records
+                .insert(stored_alias, history);
+
+            let error = resolve_active_kaigi_account(stx, &predecessor)
+                .expect_err("the persisted alias key must authenticate its payload");
+            assert_invariant_error(error, "key does not match its embedded alias");
+        });
+    }
     fn sample_ids() -> (DomainId, AccountId, AccountId) {
         let domain = DomainId::try_new("nexus", "universal").expect("domain id");
         let (host, _) = gen_account_in("nexus");
@@ -1269,16 +2168,22 @@ mod tests {
     fn sample_commitment() -> KaigiParticipantCommitment {
         KaigiParticipantCommitment {
             commitment: iroha_crypto::Hash::prehashed([0x11; 32]),
-            alias_tag: Some("alice".to_string()),
+            alias_tag: None,
         }
     }
     fn sample_nullifier(tag: u8) -> KaigiParticipantNullifier {
         KaigiParticipantNullifier {
             digest: iroha_crypto::Hash::prehashed([tag; 32]),
-            issued_at_ms: 777,
+            issued_at_ms: 0,
         }
     }
-    fn with_state_transaction<F>(mut f: F)
+    fn with_state_transaction<F>(f: F)
+    where
+        F: FnMut(&mut StateTransaction<'_, '_>),
+    {
+        with_state_transaction_at(0, f);
+    }
+    fn with_state_transaction_at<F>(creation_time_ms: u64, mut f: F)
     where
         F: FnMut(&mut StateTransaction<'_, '_>),
     {
@@ -1290,7 +2195,7 @@ mod tests {
             None,
             None,
             None,
-            0,
+            creation_time_ms,
             0,
         );
         let mut block = state.block(header);
@@ -1332,6 +2237,52 @@ mod tests {
             let mut stx = block.transaction();
             f(&mut stx);
         }
+    }
+    fn seed_active_account_id_rekey_lineage(
+        stx: &mut StateTransaction<'_, '_>,
+        label: &str,
+        retired: &AccountId,
+        active: &AccountId,
+    ) {
+        use iroha_data_model::{
+            account::{
+                AccountAddress,
+                rekey::{AccountAlias, AccountRekeyRecord},
+            },
+            nexus::DataSpaceId,
+            sns::{NameControllerV1, NameRecordV1},
+        };
+        let alias = AccountAlias::domainless(
+            label.parse().expect("lineage alias label"),
+            DataSpaceId::UNIVERSAL,
+        );
+        let selector =
+            crate::sns::selector_for_account_alias(&alias, stx.world.dataspace_catalog())
+                .expect("lineage alias selector");
+        let address = AccountAddress::from_account_id(active).expect("active account address");
+        let lease = NameRecordV1::new(
+            selector.clone(),
+            active.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        stx.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&lease),
+        );
+        stx.world.account_rekey_records.insert(
+            alias.clone(),
+            AccountRekeyRecord::new(alias.clone(), retired.clone())
+                .repoint_for_account_id_rekey(active.clone())
+                .expect("canonical account-id rekey fixture"),
+        );
+        stx.world
+            .insert_account_alias_binding(alias, active.clone());
     }
     #[test]
     fn transparent_join_and_leave_updates_participants_only() {
@@ -1377,9 +2328,44 @@ mod tests {
             .expect("host can re-invite");
         });
     }
+    #[test]
+    fn record_storage_scrubs_legacy_clear_privacy_hints() {
+        let (mut record, _host, _participant) = new_record(KaigiPrivacyMode::ZkRosterV1);
+        let mut host_commitment = sample_commitment();
+        host_commitment.alias_tag = Some("host".to_owned());
+        let mut roster_commitment = sample_commitment();
+        roster_commitment.alias_tag = Some("participant".to_owned());
+        let mut nullifier = sample_nullifier(0xAA);
+        nullifier.issued_at_ms = 123;
+        record.host_commitment = Some(host_commitment);
+        record.roster_commitments.push(roster_commitment);
+        record.nullifier_log.push(nullifier);
+
+        clear_ledger_visible_privacy_hints(&mut record);
+
+        assert_eq!(
+            record
+                .host_commitment
+                .as_ref()
+                .and_then(|commitment| commitment.alias_tag.as_ref()),
+            None
+        );
+        assert!(
+            record
+                .roster_commitments
+                .iter()
+                .all(|commitment| commitment.alias_tag.is_none())
+        );
+        assert!(
+            record
+                .nullifier_log
+                .iter()
+                .all(|nullifier| nullifier.issued_at_ms == 0)
+        );
+    }
     #[cfg(feature = "kaigi_privacy_mocks")]
     #[test]
-    fn privacy_join_and_leave_updates_commitments() {
+    fn privacy_join_updates_commitments_and_leave_stays_off_chain() {
         let (mut record, _host, participant) = new_record(KaigiPrivacyMode::ZkRosterV1);
         let commitment = sample_commitment();
         let join_nullifier = sample_nullifier(0xAA);
@@ -1404,7 +2390,7 @@ mod tests {
             assert!(record.participants.is_empty());
             let leave_nullifier = sample_nullifier(0xBB);
             let leave_root = record.roster_root();
-            let leave_grant = process_leave(
+            let leave_error = process_leave(
                 stx,
                 &mut record,
                 &participant,
@@ -1414,10 +2400,10 @@ mod tests {
                 Some(leave_root),
                 Some(&leave_proof),
             )
-            .expect("privacy leave");
-            assert_eq!(leave_grant, AccessGrant::PrivacyAuthorized);
-            assert!(record.roster_commitments.is_empty());
-            assert!(record.nullifier_log.len() == 2);
+            .expect_err("privacy leave remains off-chain in the first-release profile");
+            assert_smart_contract_error(leave_error, "off-chain only");
+            assert_eq!(record.roster_commitments.len(), 1);
+            assert_eq!(record.nullifier_log.len(), 1);
             let retry_root = record.roster_root();
             let err = process_join(
                 stx,
@@ -1437,7 +2423,6 @@ mod tests {
         });
     }
     #[cfg(feature = "kaigi_privacy_mocks")]
-    #[cfg(feature = "kaigi_privacy_mocks")]
     #[test]
     fn mock_privacy_join_respects_max_participant_limit() {
         let (mut record, _host, participant) = new_record(KaigiPrivacyMode::ZkRosterV1);
@@ -1446,7 +2431,7 @@ mod tests {
         let first_nullifier = sample_nullifier(0xCC);
         let second_commitment = KaigiParticipantCommitment {
             commitment: iroha_crypto::Hash::prehashed([0x22; 32]),
-            alias_tag: Some("second".to_string()),
+            alias_tag: None,
         };
         let second_nullifier = sample_nullifier(0xDD);
         with_state_transaction(|stx| {
@@ -1486,6 +2471,7 @@ mod tests {
     fn create_kaigi_emits_roster_summary_and_manifest() {
         let (domain, host, _participant) = sample_ids();
         let call = KaigiId::new(domain.clone(), Name::from_str("relayed").unwrap());
+        let manifest = sample_manifest();
         with_state_transaction(|stx| {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
@@ -1493,10 +2479,10 @@ mod tests {
             Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host account");
-            stx.world.take_external_events();
+            register_manifest_relays(stx, &domain, &manifest);
             let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
             template.privacy_mode = KaigiPrivacyMode::ZkRosterV1;
-            template.relay_manifest = Some(sample_manifest());
+            template.relay_manifest = Some(manifest.clone());
             CreateKaigi {
                 call: template,
                 commitment: None,
@@ -1517,6 +2503,261 @@ mod tests {
             assert_eq!(relay.call, call);
             assert_eq!(relay.hop_count, 3);
             assert_eq!(relay.expiry_ms, 42);
+        });
+    }
+    #[test]
+    fn create_kaigi_requires_registered_relays() {
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("registered-relays").expect("call name"),
+        );
+        let manifest = sample_manifest();
+        with_state_transaction(|stx| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            Register::account(Account::new(host.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register host account");
+            for hop in &manifest.hops {
+                Register::account(Account::new(hop.relay_id.clone()))
+                    .execute(&ALICE_ID, stx)
+                    .expect("register relay account");
+                add_relay_to_allowlist(stx, &domain, &hop.relay_id);
+            }
+            stx.world.take_external_events();
+
+            let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
+            template.relay_manifest = Some(manifest.clone());
+            let error = CreateKaigi {
+                call: template.clone(),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("create must reject an unregistered manifest relay");
+            assert_smart_contract_error(error, "not registered");
+            let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
+            assert!(
+                stx.world
+                    .domain(&domain)
+                    .expect("domain")
+                    .metadata()
+                    .get(&key)
+                    .is_none()
+            );
+            assert!(stx.world.take_external_events().is_empty());
+
+            for hop in &manifest.hops {
+                RegisterKaigiRelay {
+                    relay: KaigiRelayRegistration {
+                        relay_id: hop.relay_id.clone(),
+                        hpke_public_key: hop.hpke_public_key.clone(),
+                        bandwidth_class: 1,
+                    },
+                }
+                .execute(&hop.relay_id, stx)
+                .expect("register relay descriptor");
+            }
+            stx.world.take_external_events();
+            CreateKaigi {
+                call: template,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("create succeeds after every relay is registered");
+        });
+    }
+    #[test]
+    fn create_kaigi_rejects_zero_participant_limit_without_mutation() {
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("zero-participant-limit").expect("call name"),
+        );
+        with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&host), |stx| {
+            let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
+            template.max_participants = Some(0);
+            let error = CreateKaigi {
+                call: template,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("zero max_participants must reject");
+            assert_smart_contract_error(error, "greater than zero");
+            let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
+            assert!(
+                stx.world
+                    .domain(&domain)
+                    .expect("domain")
+                    .metadata()
+                    .get(&key)
+                    .is_none()
+            );
+            assert!(stx.world.take_external_events().is_empty());
+        });
+    }
+    #[test]
+    fn create_kaigi_rejects_unregistered_host_without_mutation() {
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("unregistered-host").expect("call name"),
+        );
+        with_seeded_kaigi_state_transaction(&domain, &[], |stx| {
+            let error = CreateKaigi {
+                call: NewKaigi::with_defaults(call.clone(), host.clone()),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("an unregistered host must not create a Kaigi record");
+            assert!(
+                matches!(&error, Error::Find(FindError::Account(account)) if account == &host),
+                "unexpected unregistered-host rejection: {error:?}",
+            );
+            let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
+            assert!(
+                stx.world
+                    .domain(&domain)
+                    .expect("domain")
+                    .metadata()
+                    .get(&key)
+                    .is_none()
+            );
+            assert!(stx.world.take_external_events().is_empty());
+        });
+    }
+    #[test]
+    fn create_kaigi_rejects_third_party_billing_account_without_mutation() {
+        let (domain, host, billing_account) = sample_ids();
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("third-party-billing").expect("call name"),
+        );
+        with_seeded_kaigi_state_transaction(
+            &domain,
+            &[host.clone(), billing_account.clone()],
+            |stx| {
+                let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
+                template.billing_account = Some(billing_account.clone());
+                let error = CreateKaigi {
+                    call: template,
+                    commitment: None,
+                    nullifier: None,
+                    roster_root: None,
+                    proof: None,
+                }
+                .execute(&host, stx)
+                .expect_err("an unsigned billing account must not be charged");
+                assert_smart_contract_error(error, "must be the signed host");
+                let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
+                assert!(
+                    stx.world
+                        .domain(&domain)
+                        .expect("domain")
+                        .metadata()
+                        .get(&key)
+                        .is_none()
+                );
+                assert!(stx.world.take_external_events().is_empty());
+            },
+        );
+    }
+    #[test]
+    fn create_kaigi_accepts_explicit_host_billing_account() {
+        let (domain, host, _) = sample_ids();
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("host-billing").expect("call name"),
+        );
+        with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&host), |stx| {
+            let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
+            template.billing_account = Some(host.clone());
+            CreateKaigi {
+                call: template,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("the signed host may explicitly bill itself");
+            assert_eq!(
+                load_call_record(stx, &call).billing_account,
+                Some(host.clone())
+            );
+        });
+    }
+    #[test]
+    fn create_and_set_kaigi_reject_expired_relay_manifests() {
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("manifest-expiry").expect("call name"),
+        );
+        let mut manifest = sample_manifest();
+        manifest.expiry_ms = 42;
+        with_state_transaction_at(42, |stx| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            Register::account(Account::new(host.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register host account");
+            register_manifest_relays(stx, &domain, &manifest);
+
+            let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
+            template.relay_manifest = Some(manifest.clone());
+            let error = CreateKaigi {
+                call: template.clone(),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("create must reject a manifest expiring at the current block");
+            assert_smart_contract_error(error, "expiry");
+            assert!(stx.world.take_external_events().is_empty());
+
+            template
+                .relay_manifest
+                .as_mut()
+                .expect("manifest")
+                .expiry_ms = 43;
+            CreateKaigi {
+                call: template,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("future-dated manifest is admitted");
+            let current = load_call_record(stx, &call);
+            stx.world.take_external_events();
+
+            let error = SetKaigiRelayManifest {
+                call_id: call.clone(),
+                relay_manifest: Some(manifest.clone()),
+            }
+            .execute(&host, stx)
+            .expect_err("replacement must reject an expired manifest");
+            assert_smart_contract_error(error, "expiry");
+            assert_eq!(load_call_record(stx, &call), current);
+            assert!(stx.world.take_external_events().is_empty());
         });
     }
     #[test]
@@ -1572,7 +2813,7 @@ mod tests {
             .expect("create privacy-mode Kaigi");
             EndKaigi {
                 call_id: call.clone(),
-                ended_at_ms: Some(55),
+                ended_at_ms: Some(0),
                 commitment: Some(commitment.clone()),
                 nullifier: Some(create_nullifier.clone()),
                 roster_root: Some(kaigi_zk::empty_roster_root_hash()),
@@ -1582,7 +2823,7 @@ mod tests {
             .expect_err("the host-create nullifier must not be reusable");
             let copied_proof = EndKaigi {
                 call_id: call.clone(),
-                ended_at_ms: Some(55),
+                ended_at_ms: Some(0),
                 commitment: Some(commitment.clone()),
                 nullifier: Some(end_nullifier.clone()),
                 roster_root: Some(kaigi_zk::empty_roster_root_hash()),
@@ -1605,7 +2846,7 @@ mod tests {
                 .try_into_any_norito()
                 .expect("deserialize metadata");
             assert_eq!(record.status, KaigiStatus::Ended);
-            assert_eq!(record.ended_at_ms, Some(55));
+            assert_eq!(record.ended_at_ms, Some(0));
             assert!(
                 record
                     .nullifier_log
@@ -1635,7 +2876,7 @@ mod tests {
             .expect("create privacy-mode Kaigi without host commitment");
             EndKaigi {
                 call_id: call.clone(),
-                ended_at_ms: Some(55),
+                ended_at_ms: Some(0),
                 commitment: None,
                 nullifier: None,
                 roster_root: None,
@@ -1787,6 +3028,7 @@ mod tests {
             Register::account(Account::new(relay_id.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register relay account");
+            seed_relay_primary_alias_for_testing(stx, &domain, &relay_id);
             stx.world.take_external_events();
             let allowlist_key = kaigi_relay_allowlist_key().expect("allowlist key");
             let allowlist = KaigiRelayAllowlist::default();
@@ -1812,7 +3054,288 @@ mod tests {
         });
     }
     #[test]
-    fn manifest_rejects_relays_marked_unavailable() {
+    fn relay_registration_rejects_allowlist_only_domain_selection_without_mutation() {
+        let domain = DomainId::try_new("relay-home", "universal").expect("domain id");
+        let (relay_id, _) = gen_account_in("relay-home");
+        with_state_transaction(|stx| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            Register::account(Account::new(relay_id.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register relay account");
+            let allowlist_key = kaigi_relay_allowlist_key().expect("allowlist key");
+            let mut allowlist = KaigiRelayAllowlist::default();
+            allowlist.allowed_relays.insert(relay_id.clone());
+            stx.world
+                .domain_mut(&domain)
+                .expect("domain exists")
+                .metadata_mut()
+                .insert(
+                    allowlist_key,
+                    Json::try_new(allowlist).expect("serialize allowlist"),
+                );
+            stx.world.take_external_events();
+
+            let error = RegisterKaigiRelay {
+                relay: KaigiRelayRegistration {
+                    relay_id: relay_id.clone(),
+                    hpke_public_key: vec![0xAA],
+                    bandwidth_class: 1,
+                },
+            }
+            .execute(&relay_id, stx)
+            .expect_err("an allowlist must not choose an aliasless relay's home domain");
+            assert_smart_contract_error(error, "domain-qualified primary alias");
+            let registration_key = kaigi_relay_metadata_key(&relay_id).expect("registration key");
+            assert!(
+                stx.world
+                    .domain(&domain)
+                    .expect("domain exists")
+                    .metadata()
+                    .get(&registration_key)
+                    .is_none()
+            );
+            assert!(stx.world.take_external_events().is_empty());
+        });
+    }
+    #[test]
+    fn unrelated_malformed_allowlist_cannot_block_relay_registration() {
+        let home = DomainId::try_new("relay-home", "universal").expect("home domain");
+        let unrelated = DomainId::try_new("unrelated", "universal").expect("unrelated domain");
+        let (relay_id, _) = gen_account_in("relay-home");
+        with_state_transaction(|stx| {
+            for domain in [&home, &unrelated] {
+                Register::domain(Domain::new(domain.clone()))
+                    .execute(&ALICE_ID, stx)
+                    .expect("register domain");
+            }
+            Register::account(Account::new(relay_id.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register relay account");
+            add_relay_to_allowlist(stx, &home, &relay_id);
+            stx.world
+                .domain_mut(&unrelated)
+                .expect("unrelated domain exists")
+                .metadata_mut()
+                .insert(
+                    kaigi_relay_allowlist_key().expect("allowlist key"),
+                    Json::try_new("not a Kaigi relay allowlist").expect("serialize invalid value"),
+                );
+            stx.world.take_external_events();
+
+            RegisterKaigiRelay {
+                relay: KaigiRelayRegistration {
+                    relay_id: relay_id.clone(),
+                    hpke_public_key: vec![0xAA],
+                    bandwidth_class: 1,
+                },
+            }
+            .execute(&relay_id, stx)
+            .expect("only the relay's authenticated home-domain allowlist is relevant");
+            assert!(
+                stx.world
+                    .domain(&home)
+                    .expect("home domain exists")
+                    .metadata()
+                    .contains(&kaigi_relay_metadata_key(&relay_id).expect("registration key"))
+            );
+        });
+    }
+    #[test]
+    fn registered_relay_primary_alias_domain_is_pinned() {
+        let home = DomainId::try_new("relay-home", "universal").expect("home domain");
+        let other = DomainId::try_new("other-home", "universal").expect("other domain");
+        let (relay_id, _) = gen_account_in("relay-home");
+        with_state_transaction(|stx| {
+            for domain in [&home, &other] {
+                Register::domain(Domain::new(domain.clone()))
+                    .execute(&ALICE_ID, stx)
+                    .expect("register domain");
+            }
+            Register::account(Account::new(relay_id.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register relay account");
+            add_relay_to_allowlist(stx, &home, &relay_id);
+            RegisterKaigiRelay {
+                relay: KaigiRelayRegistration {
+                    relay_id: relay_id.clone(),
+                    hpke_public_key: vec![0xAA],
+                    bandwidth_class: 1,
+                },
+            }
+            .execute(&relay_id, stx)
+            .expect("register relay");
+
+            ensure_kaigi_relay_home_change_allowed(stx, &relay_id, &home, Some(&home))
+                .expect("another primary alias in the same domain preserves relay storage");
+            let error = ensure_kaigi_relay_home_change_allowed(stx, &relay_id, &home, Some(&other))
+                .expect_err("registered relay state must not be stranded in its old domain");
+            assert_smart_contract_error(error, "primary alias domain is pinned");
+            let error = ensure_kaigi_relay_home_change_allowed(stx, &relay_id, &home, None)
+                .expect_err("registered relay must not clear its domain-qualified primary alias");
+            assert_smart_contract_error(error, "primary alias domain is pinned");
+        });
+    }
+    #[test]
+    fn retained_relay_feedback_alone_pins_primary_alias_domain() {
+        let home = DomainId::try_new("relay-home", "universal").expect("home domain");
+        let other = DomainId::try_new("other-home", "universal").expect("other domain");
+        let (relay_id, _) = gen_account_in("relay-home");
+        with_seeded_kaigi_state_transaction(&home, std::slice::from_ref(&relay_id), |stx| {
+            let feedback = KaigiRelayFeedback {
+                call: KaigiId::new(
+                    home.clone(),
+                    Name::from_str("retained-feedback").expect("call name"),
+                ),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Healthy,
+                reported_at_ms: 1,
+                notes: None,
+            };
+            let key = kaigi_relay_feedback_key(&relay_id).expect("feedback key");
+            stx.world
+                .domain_mut(&home)
+                .expect("home domain")
+                .metadata_mut()
+                .insert(key, Json::try_new(feedback).expect("serialize feedback"));
+
+            let error = ensure_kaigi_relay_home_change_allowed(stx, &relay_id, &home, Some(&other))
+                .expect_err("retained feedback must pin relay storage even without a descriptor");
+            assert_smart_contract_error(error, "primary alias domain is pinned");
+        });
+    }
+    #[test]
+    fn corrupt_retained_relay_keys_fail_closed_for_alias_move_and_unregister() {
+        let home = DomainId::try_new("relay-home", "universal").expect("home domain");
+        let other = DomainId::try_new("other-home", "universal").expect("other domain");
+        let (key_relay, _) = gen_account_in("relay-home");
+        let (payload_relay, _) = gen_account_in("relay-home");
+        with_seeded_kaigi_state_transaction(
+            &home,
+            &[key_relay.clone(), payload_relay.clone()],
+            |stx| {
+                let descriptor_key = kaigi_relay_metadata_key(&key_relay).expect("descriptor key");
+                let descriptor = KaigiRelayRegistration {
+                    relay_id: payload_relay.clone(),
+                    hpke_public_key: vec![0xAA],
+                    bandwidth_class: 1,
+                };
+                stx.world
+                    .domain_mut(&home)
+                    .expect("home domain")
+                    .metadata_mut()
+                    .insert(
+                        descriptor_key.clone(),
+                        Json::try_new(descriptor).expect("serialize descriptor"),
+                    );
+                for error in [
+                    ensure_kaigi_relay_home_change_allowed(stx, &key_relay, &home, Some(&other))
+                        .expect_err("corrupt descriptor key must reject alias movement"),
+                    ensure_kaigi_account_can_unregister(stx, &key_relay)
+                        .expect_err("corrupt descriptor key must reject account removal"),
+                ] {
+                    assert_invariant_error(error, "registration key does not match its relay ID");
+                }
+                stx.world
+                    .domain_mut(&home)
+                    .expect("home domain")
+                    .metadata_mut()
+                    .remove(&descriptor_key);
+
+                let feedback_key = kaigi_relay_feedback_key(&key_relay).expect("feedback key");
+                let feedback = KaigiRelayFeedback {
+                    call: KaigiId::new(
+                        home.clone(),
+                        Name::from_str("corrupt-feedback").expect("call name"),
+                    ),
+                    relay_id: payload_relay.clone(),
+                    status: KaigiRelayHealthStatus::Healthy,
+                    reported_at_ms: 1,
+                    notes: None,
+                };
+                stx.world
+                    .domain_mut(&home)
+                    .expect("home domain")
+                    .metadata_mut()
+                    .insert(
+                        feedback_key,
+                        Json::try_new(feedback).expect("serialize feedback"),
+                    );
+                for error in [
+                    ensure_kaigi_relay_home_change_allowed(stx, &key_relay, &home, Some(&other))
+                        .expect_err("corrupt feedback key must reject alias movement"),
+                    ensure_kaigi_account_can_unregister(stx, &key_relay)
+                        .expect_err("corrupt feedback key must reject account removal"),
+                ] {
+                    assert_invariant_error(error, "feedback key does not match its relay ID");
+                }
+            },
+        );
+    }
+    #[test]
+    fn retired_relay_allowlist_entry_authorizes_only_the_active_successor_id() {
+        let home = DomainId::try_new("relay-home", "universal").expect("home domain");
+        let (retired_relay, _) = gen_account_in("relay-home");
+        let (active_relay, _) = gen_account_in("relay-home");
+        with_state_transaction(|stx| {
+            Register::domain(Domain::new(home.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            Register::account(Account::new(active_relay.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register active relay account");
+            seed_active_account_id_rekey_lineage(
+                stx,
+                "retired-relay-lineage",
+                &retired_relay,
+                &active_relay,
+            );
+            seed_relay_primary_alias_for_testing(stx, &home, &active_relay);
+            let mut allowlist = KaigiRelayAllowlist::default();
+            allowlist.allowed_relays.insert(retired_relay.clone());
+            stx.world
+                .domain_mut(&home)
+                .expect("home domain exists")
+                .metadata_mut()
+                .insert(
+                    kaigi_relay_allowlist_key().expect("allowlist key"),
+                    Json::try_new(allowlist).expect("serialize allowlist"),
+                );
+            stx.world.take_external_events();
+
+            let error = RegisterKaigiRelay {
+                relay: KaigiRelayRegistration {
+                    relay_id: retired_relay.clone(),
+                    hpke_public_key: vec![0xAA],
+                    bandwidth_class: 1,
+                },
+            }
+            .execute(&active_relay, stx)
+            .expect_err("the successor must not write a descriptor under the retired ID");
+            assert_smart_contract_error(error, "only the relay account");
+            assert!(stx.world.take_external_events().is_empty());
+
+            RegisterKaigiRelay {
+                relay: KaigiRelayRegistration {
+                    relay_id: active_relay.clone(),
+                    hpke_public_key: vec![0xAA],
+                    bandwidth_class: 1,
+                },
+            }
+            .execute(&active_relay, stx)
+            .expect("an explicit rekey successor inherits relay governance membership");
+            assert!(
+                stx.world
+                    .domain(&home)
+                    .expect("home domain exists")
+                    .metadata()
+                    .contains(&kaigi_relay_metadata_key(&active_relay).expect("registration key"))
+            );
+        });
+    }
+    #[test]
+    fn call_feedback_does_not_override_manifest_governance() {
         let (domain, host, _) = sample_ids();
         let (relay_a, _) = gen_account_in(domain.clone());
         let (relay_b, _) = gen_account_in(domain.clone());
@@ -1828,6 +3351,7 @@ mod tests {
                 Register::account(Account::new(relay.clone()))
                     .execute(&ALICE_ID, stx)
                     .expect("register relay account");
+                seed_relay_primary_alias_for_testing(stx, &domain, relay);
             }
             stx.world.take_external_events();
             let allowlist_key = kaigi_relay_allowlist_key().expect("allowlist key");
@@ -1902,14 +3426,17 @@ mod tests {
                 ],
                 expiry_ms: 100,
             };
-            let result = SetKaigiRelayManifest {
+            SetKaigiRelayManifest {
                 call_id: call,
                 relay_manifest: Some(manifest),
             }
-            .execute(&host, stx);
-            assert!(
-                matches!(result, Err(Error::InvalidParameter(_))),
-                "manifest updates must reject relays flagged as unavailable"
+            .execute(&host, stx)
+            .expect("call-scoped health feedback must not become a global manifest-admission veto");
+            assert_eq!(
+                load_relay_feedback(stx, &relay_a)
+                    .expect("load feedback")
+                    .expect("stored feedback"),
+                feedback
             );
         });
     }
@@ -1917,6 +3444,7 @@ mod tests {
     fn host_can_clear_relay_manifest() {
         let (domain, host, _participant) = sample_ids();
         let call = KaigiId::new(domain.clone(), Name::from_str("manifest-clear").unwrap());
+        let manifest = sample_manifest();
         with_state_transaction(|stx| {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
@@ -1924,9 +3452,9 @@ mod tests {
             Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
-            stx.world.take_external_events();
+            register_manifest_relays(stx, &domain, &manifest);
             let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
-            template.relay_manifest = Some(sample_manifest());
+            template.relay_manifest = Some(manifest.clone());
             CreateKaigi {
                 call: template,
                 commitment: None,
@@ -1958,6 +3486,69 @@ mod tests {
                 .try_into_any_norito()
                 .expect("deserialize metadata");
             assert!(record.relay_manifest.is_none());
+        });
+    }
+    #[test]
+    fn unchanged_relay_manifest_update_is_event_free() {
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("manifest-idempotent").unwrap(),
+        );
+        let manifest = sample_manifest();
+        with_state_transaction(|stx| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            Register::account(Account::new(host.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register host");
+            register_manifest_relays(stx, &domain, &manifest);
+            let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
+            template.relay_manifest = Some(manifest.clone());
+            CreateKaigi {
+                call: template,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("create Kaigi with relay manifest");
+            stx.world.take_external_events();
+
+            SetKaigiRelayManifest {
+                call_id: call.clone(),
+                relay_manifest: Some(manifest.clone()),
+            }
+            .execute(&host, stx)
+            .expect("repeat identical manifest");
+            assert!(
+                stx.world.take_external_events().is_empty(),
+                "an identical manifest must not emit metadata or summary events"
+            );
+
+            SetKaigiRelayManifest {
+                call_id: call.clone(),
+                relay_manifest: None,
+            }
+            .execute(&host, stx)
+            .expect("clear manifest");
+            assert!(
+                extract_manifest_summary(&stx.world.take_external_events()).is_some(),
+                "the first clear must emit a manifest summary"
+            );
+
+            SetKaigiRelayManifest {
+                call_id: call.clone(),
+                relay_manifest: None,
+            }
+            .execute(&host, stx)
+            .expect("repeat clear on an empty manifest");
+            assert!(
+                stx.world.take_external_events().is_empty(),
+                "clearing an already-empty manifest must not emit events"
+            );
         });
     }
     #[test]
@@ -2091,8 +3682,86 @@ mod tests {
         });
     }
     #[test]
+    fn manifest_rejects_corrupt_relay_registration_identity_and_bandwidth() {
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("manifest-corrupt-registration").expect("call name"),
+        );
+        let manifest = sample_manifest();
+        let relay = manifest.hops[0].clone();
+        with_state_transaction(|stx| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            Register::account(Account::new(host.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register host");
+            register_manifest_relays(stx, &domain, &manifest);
+            CreateKaigi {
+                call: NewKaigi::with_defaults(call.clone(), host.clone()),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("create kaigi");
+            let original_record = load_call_record(stx, &call);
+            stx.world.take_external_events();
+
+            let key = kaigi_relay_metadata_key(&relay.relay_id).expect("relay metadata key");
+            let corrupt_identity = KaigiRelayRegistration {
+                relay_id: manifest.hops[1].relay_id.clone(),
+                hpke_public_key: relay.hpke_public_key.clone(),
+                bandwidth_class: 1,
+            };
+            stx.world
+                .domain_mut(&domain)
+                .expect("relay domain")
+                .metadata_mut()
+                .insert(
+                    key.clone(),
+                    Json::try_new(corrupt_identity).expect("serialize corrupt registration"),
+                );
+            let error = SetKaigiRelayManifest {
+                call_id: call.clone(),
+                relay_manifest: Some(manifest.clone()),
+            }
+            .execute(&host, stx)
+            .expect_err("mismatched stored relay identity must fail closed");
+            assert_smart_contract_error(error, "identifier does not match");
+            assert_eq!(load_call_record(stx, &call), original_record);
+            assert!(stx.world.take_external_events().is_empty());
+
+            let zero_bandwidth = KaigiRelayRegistration {
+                relay_id: relay.relay_id.clone(),
+                hpke_public_key: relay.hpke_public_key.clone(),
+                bandwidth_class: 0,
+            };
+            stx.world
+                .domain_mut(&domain)
+                .expect("relay domain")
+                .metadata_mut()
+                .insert(
+                    key,
+                    Json::try_new(zero_bandwidth).expect("serialize corrupt registration"),
+                );
+            let error = SetKaigiRelayManifest {
+                call_id: call.clone(),
+                relay_manifest: Some(manifest.clone()),
+            }
+            .execute(&host, stx)
+            .expect_err("zero-bandwidth stored registration must fail closed");
+            assert_smart_contract_error(error, "zero bandwidth");
+            assert_eq!(load_call_record(stx, &call), original_record);
+            assert!(stx.world.take_external_events().is_empty());
+        });
+    }
+    #[test]
     fn transparent_join_updates_roster_summary() {
-        let (mut record, host, participant) = new_record(KaigiPrivacyMode::Transparent);
+        let (record, host, participant) = new_record(KaigiPrivacyMode::Transparent);
+        let call = record.id.clone();
         let domain = record.id.domain_id.clone();
         with_state_transaction(|stx| {
             Register::domain(Domain::new(domain.clone()))
@@ -2101,19 +3770,21 @@ mod tests {
             Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host account");
+            Register::account(Account::new(participant.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register participant account");
             stx.world.take_external_events();
             create_call(stx, &record, &host);
             stx.world.take_external_events();
-            process_join(
-                stx,
-                &mut record,
-                KaigiAuthorization::SignedAccount(&host),
-                &participant,
-                None,
-                None,
-                None,
-                None,
-            )
+            JoinKaigi {
+                call_id: call.clone(),
+                participant: participant.clone(),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
             .expect("transparent join");
             let events = stx.world.take_external_events();
             let summary = extract_roster_summary(&events).expect("roster summary event");
@@ -2122,25 +3793,103 @@ mod tests {
             assert_eq!(summary.nullifier_count, 0);
         });
     }
+    #[test]
+    fn rejected_record_write_emits_no_roster_summary() {
+        use iroha_data_model::parameter::{CustomParameter, CustomParameterId, Parameter};
+
+        let (record, host, participant) = new_record(KaigiPrivacyMode::Transparent);
+        let call = record.id.clone();
+        let domain = call.domain_id.clone();
+        with_seeded_kaigi_state_transaction(&domain, &[host.clone(), participant.clone()], |stx| {
+            create_call(stx, &record, &host);
+            let original = load_call_record(stx, &call);
+            let limit_id: CustomParameterId = "max_metadata_value_bytes"
+                .parse()
+                .expect("metadata limit parameter id");
+            stx.world
+                .parameters
+                .get_mut()
+                .set_parameter(Parameter::Custom(CustomParameter::new(
+                    limit_id,
+                    Json::new(1_u64),
+                )));
+            stx.world.take_external_events();
+
+            let error = JoinKaigi {
+                call_id: call.clone(),
+                participant: participant.clone(),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("an oversized updated record must be rejected");
+            assert_smart_contract_error(error, "Payload too large");
+            assert_eq!(load_call_record(stx, &call), original);
+            assert!(stx.world.take_external_events().is_empty());
+        });
+    }
+    #[test]
+    fn transparent_join_rejects_unregistered_participant_without_mutation() {
+        let (record, host, participant) = new_record(KaigiPrivacyMode::Transparent);
+        let call = record.id.clone();
+        let domain = call.domain_id.clone();
+        with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&host), |stx| {
+            create_call(stx, &record, &host);
+            let original = load_call_record(stx, &call);
+            stx.world.take_external_events();
+
+            let error = JoinKaigi {
+                call_id: call.clone(),
+                participant: participant.clone(),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("host must not add an account absent from world state");
+            assert!(
+                matches!(&error, Error::Find(FindError::Account(account)) if account == &participant),
+                "unexpected error: {error:?}"
+            );
+            assert_eq!(load_call_record(stx, &call), original);
+            assert!(stx.world.take_external_events().is_empty());
+        });
+    }
     #[cfg(feature = "kaigi_privacy_mocks")]
     #[test]
     fn mock_privacy_join_updates_commitment_summary() {
-        let (mut record, _host, participant) = new_record(KaigiPrivacyMode::ZkRosterV1);
+        let (record, host, participant) = new_record(KaigiPrivacyMode::ZkRosterV1);
+        let call = record.id.clone();
+        let domain = call.domain_id.clone();
         let commitment = sample_commitment();
         let join_nullifier = sample_nullifier(0xCC);
-        with_state_transaction(|stx| {
+        with_seeded_kaigi_state_transaction(&domain, &[host.clone(), participant.clone()], |stx| {
+            CreateKaigi {
+                call: NewKaigi {
+                    privacy_mode: KaigiPrivacyMode::ZkRosterV1,
+                    ..NewKaigi::with_defaults(call.clone(), host.clone())
+                },
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("create privacy Kaigi");
+            let join_root = load_call_record(stx, &call).roster_root();
             stx.world.take_external_events();
-            let join_root = record.roster_root();
-            process_join(
-                stx,
-                &mut record,
-                KaigiAuthorization::SignedAccount(&participant),
-                &participant,
-                Some(commitment.clone()),
-                Some(join_nullifier.clone()),
-                Some(join_root),
-                Some(&[1u8]),
-            )
+            JoinKaigi {
+                call_id: call.clone(),
+                participant: participant.clone(),
+                commitment: Some(commitment.clone()),
+                nullifier: Some(join_nullifier.clone()),
+                roster_root: Some(join_root),
+                proof: Some(vec![1_u8]),
+            }
+            .execute(&participant, stx)
             .expect("privacy join");
             let events = stx.world.take_external_events();
             let summary = extract_roster_summary(&events).expect("roster summary event");
@@ -2234,11 +3983,766 @@ mod tests {
             assert_eq!(summary.segments_recorded, 1);
         });
     }
+    #[test]
+    fn ended_kaigi_rejects_all_session_mutations() {
+        let (domain, host, participant) = sample_ids();
+        let call = KaigiId::new(domain.clone(), Name::from_str("ended-freeze").unwrap());
+        let manifest = sample_manifest();
+        let relay_id = manifest.hops[0].relay_id.clone();
+        with_state_transaction(|stx| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            Register::account(Account::new(host.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register host");
+            Register::account(Account::new(participant.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register participant");
+            register_manifest_relays(stx, &domain, &manifest);
+            let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
+            template.relay_manifest = Some(manifest.clone());
+            CreateKaigi {
+                call: template,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("create kaigi");
+            JoinKaigi {
+                call_id: call.clone(),
+                participant: participant.clone(),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("join participant");
+            EndKaigi {
+                call_id: call.clone(),
+                ended_at_ms: Some(0),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("end kaigi");
+            let ended_record = load_call_record(stx, &call);
+            assert_eq!(ended_record.status, KaigiStatus::Ended);
+            stx.world.take_external_events();
+
+            let leave_err = LeaveKaigi {
+                call_id: call.clone(),
+                participant: participant.clone(),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("ended Kaigi must reject leave");
+            assert_kaigi_not_active(leave_err);
+
+            let usage_err = RecordKaigiUsage {
+                call_id: call.clone(),
+                duration_ms: 1,
+                billed_gas: 1,
+                usage_commitment: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("ended Kaigi must reject usage");
+            assert_kaigi_not_active(usage_err);
+
+            let health_err = ReportKaigiRelayHealth {
+                call_id: call.clone(),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Unavailable,
+                reported_at_ms: 11,
+                notes: None,
+            }
+            .execute(&host, stx)
+            .expect_err("ended Kaigi must reject relay health reports");
+            assert_kaigi_not_active(health_err);
+
+            let manifest_err = SetKaigiRelayManifest {
+                call_id: call.clone(),
+                relay_manifest: None,
+            }
+            .execute(&host, stx)
+            .expect_err("ended Kaigi must reject relay manifest updates");
+            assert_kaigi_not_active(manifest_err);
+
+            assert_eq!(load_call_record(stx, &call), ended_record);
+            let feedback_key = kaigi_relay_feedback_key(&relay_id).expect("feedback key");
+            assert!(
+                stx.world
+                    .domain(&domain)
+                    .expect("domain")
+                    .metadata()
+                    .get(&feedback_key)
+                    .is_none()
+            );
+            assert!(stx.world.take_external_events().is_empty());
+        });
+    }
+    #[test]
+    fn record_usage_rejects_counter_overflow_without_mutating_state() {
+        let (record, host, _participant) = new_record(KaigiPrivacyMode::Transparent);
+        let call = record.id.clone();
+        let domain = call.domain_id.clone();
+        with_state_transaction(|stx| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            Register::account(Account::new(host.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register host");
+            create_call(stx, &record, &host);
+            let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
+
+            let mut stored = load_call_record(stx, &call);
+            stored.total_duration_ms = u64::MAX;
+            store_record(stx, &domain, key.clone(), &stored).expect("seed duration limit");
+            stx.world.take_external_events();
+            let err = RecordKaigiUsage {
+                call_id: call.clone(),
+                duration_ms: 1,
+                billed_gas: 0,
+                usage_commitment: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("duration overflow must reject");
+            assert_smart_contract_error(err, "total duration");
+            assert_eq!(load_call_record(stx, &call), stored);
+            assert!(stx.world.take_external_events().is_empty());
+
+            stored.total_duration_ms = 0;
+            stored.total_billed_gas = u64::MAX;
+            store_record(stx, &domain, key.clone(), &stored).expect("seed billed gas limit");
+            stx.world.take_external_events();
+            let err = RecordKaigiUsage {
+                call_id: call.clone(),
+                duration_ms: 1,
+                billed_gas: 1,
+                usage_commitment: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("billed gas overflow must reject");
+            assert_smart_contract_error(err, "total billed gas");
+            assert_eq!(load_call_record(stx, &call), stored);
+            assert!(stx.world.take_external_events().is_empty());
+
+            stored.total_billed_gas = 0;
+            stored.segments_recorded = u32::MAX;
+            store_record(stx, &domain, key, &stored).expect("seed segment count limit");
+            stx.world.take_external_events();
+            let err = RecordKaigiUsage {
+                call_id: call.clone(),
+                duration_ms: 1,
+                billed_gas: 0,
+                usage_commitment: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("segment count overflow must reject");
+            assert_smart_contract_error(err, "segment count");
+            assert_eq!(load_call_record(stx, &call), stored);
+            assert!(stx.world.take_external_events().is_empty());
+        });
+    }
+    #[test]
+    fn end_kaigi_rejects_impossible_timestamps_without_mutating_state() {
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("end-timestamp").expect("call name"),
+        );
+        with_state_transaction_at(100, |stx| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            Register::account(Account::new(host.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register host");
+            CreateKaigi {
+                call: NewKaigi::with_defaults(call.clone(), host.clone()),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("create kaigi");
+            let active = load_call_record(stx, &call);
+            stx.world.take_external_events();
+
+            for (timestamp, message) in [(99, "precede creation"), (101, "current block time")] {
+                let error = EndKaigi {
+                    call_id: call.clone(),
+                    ended_at_ms: Some(timestamp),
+                    commitment: None,
+                    nullifier: None,
+                    roster_root: None,
+                    proof: None,
+                }
+                .execute(&host, stx)
+                .expect_err("impossible end timestamp must reject");
+                assert_smart_contract_error(error, message);
+                assert_eq!(load_call_record(stx, &call), active);
+                assert!(stx.world.take_external_events().is_empty());
+            }
+
+            EndKaigi {
+                call_id: call.clone(),
+                ended_at_ms: Some(100),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("current block time is a valid end timestamp");
+            assert_eq!(load_call_record(stx, &call).ended_at_ms, Some(100));
+        });
+    }
+    #[test]
+    fn stored_record_identifier_must_match_requested_call() {
+        let (record, host, _participant) = new_record(KaigiPrivacyMode::Transparent);
+        let call = record.id.clone();
+        let domain = call.domain_id.clone();
+        with_state_transaction(|stx| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            Register::account(Account::new(host.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register host");
+            create_call(stx, &record, &host);
+
+            let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
+            let mut mismatched = load_call_record(stx, &call);
+            mismatched.id = KaigiId::new(
+                domain.clone(),
+                Name::from_str("different-call").expect("call name"),
+            );
+            stx.world
+                .domain_mut(&domain)
+                .expect("domain")
+                .metadata_mut()
+                .insert(
+                    key,
+                    Json::try_new(mismatched.clone()).expect("serialize mismatched record"),
+                );
+            stx.world.take_external_events();
+
+            let err = RecordKaigiUsage {
+                call_id: call.clone(),
+                duration_ms: 1,
+                billed_gas: 1,
+                usage_commitment: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect_err("mismatched stored identifier must reject");
+            assert_invariant_error(err, "identifier does not match metadata key");
+            assert_eq!(load_call_record(stx, &call), mismatched);
+            assert!(stx.world.take_external_events().is_empty());
+        });
+    }
+    #[test]
+    fn relay_health_reports_are_monotonic_and_idempotent() {
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("health-ordering").expect("call name"),
+        );
+        let manifest = sample_manifest();
+        let relay_id = manifest.hops[0].relay_id.clone();
+        with_state_transaction_at(20, |stx| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            Register::account(Account::new(host.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register host");
+            register_manifest_relays(stx, &domain, &manifest);
+            let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
+            template.relay_manifest = Some(manifest.clone());
+            CreateKaigi {
+                call: template,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("create kaigi");
+            stx.world.take_external_events();
+
+            let initial_record = load_call_record(stx, &call);
+            let feedback_key =
+                kaigi_relay_feedback_key(&relay_id).expect("relay feedback metadata key");
+            let corrupt_feedback = KaigiRelayFeedback {
+                relay_id: manifest.hops[1].relay_id.clone(),
+                call: call.clone(),
+                reported_by: host.clone(),
+                status: KaigiRelayHealthStatus::Healthy,
+                reported_at_ms: 1,
+                notes: None,
+            };
+            stx.world
+                .domain_mut(&domain)
+                .expect("relay domain")
+                .metadata_mut()
+                .insert(
+                    feedback_key.clone(),
+                    Json::try_new(corrupt_feedback).expect("serialize corrupt feedback"),
+                );
+            let corrupt_error = ReportKaigiRelayHealth {
+                call_id: call.clone(),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Healthy,
+                reported_at_ms: 10,
+                notes: None,
+            }
+            .execute(&host, stx)
+            .expect_err("mismatched stored relay feedback must fail closed");
+            assert_invariant_error(corrupt_error, "identifier does not match");
+            assert_eq!(load_call_record(stx, &call), initial_record);
+            assert!(stx.world.take_external_events().is_empty());
+            stx.world
+                .domain_mut(&domain)
+                .expect("relay domain")
+                .metadata_mut()
+                .remove(&feedback_key)
+                .expect("remove corrupt feedback");
+
+            let future_error = ReportKaigiRelayHealth {
+                call_id: call.clone(),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Unavailable,
+                reported_at_ms: u64::MAX,
+                notes: Some("poison".to_owned()),
+            }
+            .execute(&host, stx)
+            .expect_err("a future report must not poison feedback ordering");
+            assert_smart_contract_error(future_error, "current block time");
+            assert!(
+                load_relay_feedback(stx, &relay_id)
+                    .expect("load feedback")
+                    .is_none()
+            );
+            assert_eq!(load_call_record(stx, &call), initial_record);
+            assert!(stx.world.take_external_events().is_empty());
+
+            ReportKaigiRelayHealth {
+                call_id: call.clone(),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Healthy,
+                reported_at_ms: 10,
+                notes: Some("baseline".to_owned()),
+            }
+            .execute(&host, stx)
+            .expect("store baseline feedback");
+            let baseline_feedback = load_relay_feedback(stx, &relay_id)
+                .expect("load feedback")
+                .expect("baseline feedback");
+            let baseline_record = load_call_record(stx, &call);
+            assert!(!stx.world.take_external_events().is_empty());
+
+            ReportKaigiRelayHealth {
+                call_id: call.clone(),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Healthy,
+                reported_at_ms: 10,
+                notes: Some("baseline".to_owned()),
+            }
+            .execute(&host, stx)
+            .expect("an exact duplicate is an idempotent no-op");
+            assert_eq!(
+                load_relay_feedback(stx, &relay_id)
+                    .expect("load feedback")
+                    .expect("stored feedback"),
+                baseline_feedback
+            );
+            assert_eq!(load_call_record(stx, &call), baseline_record);
+            assert!(stx.world.take_external_events().is_empty());
+
+            let stale_error = ReportKaigiRelayHealth {
+                call_id: call.clone(),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Unavailable,
+                reported_at_ms: 9,
+                notes: Some("stale".to_owned()),
+            }
+            .execute(&host, stx)
+            .expect_err("an older report must not replace current feedback");
+            assert_smart_contract_error(stale_error, "older than the latest");
+            assert_eq!(
+                load_relay_feedback(stx, &relay_id)
+                    .expect("load feedback")
+                    .expect("stored feedback"),
+                baseline_feedback
+            );
+            assert_eq!(load_call_record(stx, &call), baseline_record);
+            assert!(stx.world.take_external_events().is_empty());
+
+            let conflict_error = ReportKaigiRelayHealth {
+                call_id: call.clone(),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Degraded,
+                reported_at_ms: 10,
+                notes: Some("conflict".to_owned()),
+            }
+            .execute(&host, stx)
+            .expect_err("equal-timestamp conflicting feedback must reject");
+            assert_smart_contract_error(conflict_error, "same timestamp");
+            assert_eq!(
+                load_relay_feedback(stx, &relay_id)
+                    .expect("load feedback")
+                    .expect("stored feedback"),
+                baseline_feedback
+            );
+            assert_eq!(load_call_record(stx, &call), baseline_record);
+            assert!(stx.world.take_external_events().is_empty());
+
+            ReportKaigiRelayHealth {
+                call_id: call.clone(),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Unavailable,
+                reported_at_ms: 11,
+                notes: Some("newer".to_owned()),
+            }
+            .execute(&host, stx)
+            .expect("newer feedback replaces the current value");
+            let latest = load_relay_feedback(stx, &relay_id)
+                .expect("load feedback")
+                .expect("latest feedback");
+            assert_eq!(latest.status, KaigiRelayHealthStatus::Unavailable);
+            assert_eq!(latest.reported_at_ms, 11);
+            assert_eq!(load_call_record(stx, &call), baseline_record);
+            assert!(!stx.world.take_external_events().is_empty());
+        });
+    }
+    #[test]
+    fn equal_timestamp_relay_health_reports_reject_across_calls() {
+        let (domain, first_host, second_host) = sample_ids();
+        let first_call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("health-call-a").expect("call name"),
+        );
+        let second_call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("health-call-b").expect("call name"),
+        );
+        let manifest = sample_manifest();
+        let relay_id = manifest.hops[0].relay_id.clone();
+        with_state_transaction_at(20, |stx| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            for host in [first_host.clone(), second_host.clone()] {
+                Register::account(Account::new(host))
+                    .execute(&ALICE_ID, stx)
+                    .expect("register host");
+            }
+            register_manifest_relays(stx, &domain, &manifest);
+            for (call, host) in [
+                (first_call.clone(), first_host.clone()),
+                (second_call.clone(), second_host.clone()),
+            ] {
+                let mut template = NewKaigi::with_defaults(call, host.clone());
+                template.relay_manifest = Some(manifest.clone());
+                CreateKaigi {
+                    call: template,
+                    commitment: None,
+                    nullifier: None,
+                    roster_root: None,
+                    proof: None,
+                }
+                .execute(&host, stx)
+                .expect("create kaigi");
+            }
+            stx.world.take_external_events();
+
+            ReportKaigiRelayHealth {
+                call_id: first_call.clone(),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Healthy,
+                reported_at_ms: 10,
+                notes: Some("first call".to_owned()),
+            }
+            .execute(&first_host, stx)
+            .expect("store first call feedback");
+            stx.world.take_external_events();
+
+            let conflict = ReportKaigiRelayHealth {
+                call_id: first_call.clone(),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Degraded,
+                reported_at_ms: 10,
+                notes: Some("same call conflict".to_owned()),
+            }
+            .execute(&first_host, stx)
+            .expect_err("same-call equal-timestamp conflict must reject");
+            assert_smart_contract_error(conflict, "same timestamp");
+            assert!(stx.world.take_external_events().is_empty());
+
+            let cross_call_conflict = ReportKaigiRelayHealth {
+                call_id: second_call.clone(),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Degraded,
+                reported_at_ms: 10,
+                notes: Some("second call".to_owned()),
+            }
+            .execute(&second_host, stx)
+            .expect_err("equal-timestamp feedback must have deterministic singleton ordering");
+            assert_smart_contract_error(cross_call_conflict, "same timestamp");
+            let latest = load_relay_feedback(stx, &relay_id)
+                .expect("load feedback")
+                .expect("stored feedback");
+            assert_eq!(latest.call, first_call);
+            assert_eq!(latest.status, KaigiRelayHealthStatus::Healthy);
+            assert!(stx.world.take_external_events().is_empty());
+        });
+    }
+    #[test]
+    fn relay_health_note_limit_counts_unicode_characters() {
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(domain.clone(), Name::from_str("unicode-health").unwrap());
+        let manifest = sample_manifest();
+        let relay_id = manifest.hops[0].relay_id.clone();
+        with_state_transaction_at(20, |stx| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            Register::account(Account::new(host.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register host");
+            register_manifest_relays(stx, &domain, &manifest);
+            let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
+            template.relay_manifest = Some(manifest.clone());
+            CreateKaigi {
+                call: template,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("create kaigi");
+            stx.world.take_external_events();
+
+            let accepted_notes = "界".repeat(512);
+            ReportKaigiRelayHealth {
+                call_id: call.clone(),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Healthy,
+                reported_at_ms: 1,
+                notes: Some(accepted_notes.clone()),
+            }
+            .execute(&host, stx)
+            .expect("512 multibyte characters must be accepted");
+            let feedback_key = kaigi_relay_feedback_key(&relay_id).expect("feedback key");
+            let stored: KaigiRelayFeedback = stx
+                .world
+                .domain(&domain)
+                .expect("domain")
+                .metadata()
+                .get(&feedback_key)
+                .expect("stored feedback")
+                .clone()
+                .try_into_any_norito()
+                .expect("decode feedback");
+            assert_eq!(stored.notes.as_deref(), Some(accepted_notes.as_str()));
+            stx.world.take_external_events();
+
+            let err = ReportKaigiRelayHealth {
+                call_id: call.clone(),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Degraded,
+                reported_at_ms: 2,
+                notes: Some("界".repeat(513)),
+            }
+            .execute(&host, stx)
+            .expect_err("513 characters must be rejected");
+            assert_smart_contract_error(err, "512 characters");
+            let unchanged: KaigiRelayFeedback = stx
+                .world
+                .domain(&domain)
+                .expect("domain")
+                .metadata()
+                .get(&feedback_key)
+                .expect("stored feedback")
+                .clone()
+                .try_into_any_norito()
+                .expect("decode feedback");
+            assert_eq!(unchanged, stored);
+            assert!(stx.world.take_external_events().is_empty());
+        });
+    }
+    #[test]
+    fn active_rekey_successor_can_end_predecessor_hosted_kaigi() {
+        let (domain, retired_host, unrelated) = sample_ids();
+        let (active_host, _) = gen_account_in("nexus");
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("rekey-host-end").expect("call name"),
+        );
+        with_seeded_kaigi_state_transaction(
+            &domain,
+            &[active_host.clone(), unrelated.clone()],
+            |stx| {
+                seed_active_account_id_rekey_lineage(
+                    stx,
+                    "kaigi-host-lineage",
+                    &retired_host,
+                    &active_host,
+                );
+                let template = NewKaigi::with_defaults(call.clone(), retired_host.clone());
+                let record = KaigiRecord::from_new(&template, 0);
+                store_record(
+                    stx,
+                    &domain,
+                    kaigi_metadata_key(&call.call_name).expect("metadata key"),
+                    &record,
+                )
+                .expect("seed predecessor-hosted call");
+                stx.world.take_external_events();
+
+                let error = EndKaigi {
+                    call_id: call.clone(),
+                    ended_at_ms: Some(0),
+                    commitment: None,
+                    nullifier: None,
+                    roster_root: None,
+                    proof: None,
+                }
+                .execute(&unrelated, stx)
+                .expect_err("unrelated account must not inherit host authority");
+                assert_smart_contract_error(error, "only the host");
+                assert_eq!(load_call_record(stx, &call), record);
+                assert!(stx.world.take_external_events().is_empty());
+
+                EndKaigi {
+                    call_id: call.clone(),
+                    ended_at_ms: Some(0),
+                    commitment: None,
+                    nullifier: None,
+                    roster_root: None,
+                    proof: None,
+                }
+                .execute(&active_host, stx)
+                .expect("active rekey successor may end predecessor-hosted call");
+                let ended = load_call_record(stx, &call);
+                assert_eq!(ended.host, retired_host, "audit identity stays historical");
+                assert_eq!(ended.status, KaigiStatus::Ended);
+                assert_eq!(ended.ended_at_ms, Some(0));
+            },
+        );
+    }
+    #[test]
+    fn active_rekey_successor_can_leave_predecessor_roster_entry() {
+        let (domain, host, retired_participant) = sample_ids();
+        let (active_participant, _) = gen_account_in("nexus");
+        let (unrelated, _) = gen_account_in("nexus");
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("rekey-participant-leave").expect("call name"),
+        );
+        with_seeded_kaigi_state_transaction(
+            &domain,
+            &[host.clone(), active_participant.clone(), unrelated.clone()],
+            |stx| {
+                seed_active_account_id_rekey_lineage(
+                    stx,
+                    "kaigi-participant-lineage",
+                    &retired_participant,
+                    &active_participant,
+                );
+                let template = NewKaigi::with_defaults(call.clone(), host.clone());
+                let mut record = KaigiRecord::from_new(&template, 0);
+                record.push_participant(retired_participant.clone());
+                record
+                    .participant_metadata
+                    .insert(retired_participant.clone(), Metadata::default());
+                store_record(
+                    stx,
+                    &domain,
+                    kaigi_metadata_key(&call.call_name).expect("metadata key"),
+                    &record,
+                )
+                .expect("seed predecessor roster entry");
+                stx.world.take_external_events();
+
+                let error = LeaveKaigi {
+                    call_id: call.clone(),
+                    participant: active_participant.clone(),
+                    commitment: None,
+                    nullifier: None,
+                    roster_root: None,
+                    proof: None,
+                }
+                .execute(&unrelated, stx)
+                .expect_err("unrelated account must not inherit participant authority");
+                assert_smart_contract_error(error, "only the host or participant");
+                assert_eq!(load_call_record(stx, &call), record);
+                assert!(stx.world.take_external_events().is_empty());
+
+                LeaveKaigi {
+                    call_id: call.clone(),
+                    participant: active_participant.clone(),
+                    commitment: None,
+                    nullifier: None,
+                    roster_root: None,
+                    proof: None,
+                }
+                .execute(&active_participant, stx)
+                .expect("active successor may remove predecessor roster entry");
+                let updated = load_call_record(stx, &call);
+                assert!(updated.participants.is_empty());
+                assert!(updated.participant_metadata.is_empty());
+                assert_eq!(updated.host, host);
+            },
+        );
+    }
+    fn register_manifest_relays(
+        stx: &mut StateTransaction<'_, '_>,
+        domain_id: &DomainId,
+        manifest: &KaigiRelayManifest,
+    ) {
+        for hop in &manifest.hops {
+            Register::account(Account::new(hop.relay_id.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register manifest relay account");
+            add_relay_to_allowlist(stx, domain_id, &hop.relay_id);
+        }
+        for hop in &manifest.hops {
+            RegisterKaigiRelay {
+                relay: KaigiRelayRegistration {
+                    relay_id: hop.relay_id.clone(),
+                    hpke_public_key: hop.hpke_public_key.clone(),
+                    bandwidth_class: 1,
+                },
+            }
+            .execute(&hop.relay_id, stx)
+            .expect("register manifest relay");
+        }
+        stx.world.take_external_events();
+    }
     fn add_relay_to_allowlist(
         stx: &mut StateTransaction<'_, '_>,
         domain_id: &DomainId,
         relay_id: &AccountId,
     ) {
+        seed_relay_primary_alias_for_testing(stx, domain_id, relay_id);
         let key = kaigi_relay_allowlist_key().expect("allowlist key");
         let domain = stx
             .world
@@ -2256,6 +4760,105 @@ mod tests {
         allowlist.allowed_relays.insert(relay_id.clone());
         let value = Json::try_new(allowlist).expect("serialize allowlist");
         domain.metadata_mut().insert(key, value);
+    }
+    fn seed_relay_primary_alias_for_testing(
+        stx: &mut StateTransaction<'_, '_>,
+        domain_id: &DomainId,
+        relay_id: &AccountId,
+    ) {
+        use iroha_data_model::{
+            account::{
+                AccountAddress,
+                rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
+            },
+            sns::{NameControllerV1, NameRecordV1},
+        };
+        if stx
+            .world
+            .account(relay_id)
+            .expect("relay account exists")
+            .label()
+            .is_some()
+        {
+            return;
+        }
+        let metadata_key = kaigi_relay_metadata_key(relay_id).expect("relay metadata key");
+        let digest = metadata_key
+            .as_ref()
+            .strip_prefix("kaigi_relay__")
+            .expect("relay metadata key prefix");
+        let label = Name::from_str(&format!("relay{}", &digest[..16])).expect("relay alias label");
+        let dataspace = stx
+            .world
+            .dataspace_catalog()
+            .by_alias(domain_id.dataspace().as_ref())
+            .expect("relay domain dataspace exists")
+            .id;
+        let alias = AccountAlias::new(
+            label,
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            dataspace,
+        );
+        let selector =
+            crate::sns::selector_for_account_alias(&alias, stx.world.dataspace_catalog())
+                .expect("relay alias selector");
+        let address = AccountAddress::from_account_id(relay_id).expect("relay account address");
+        let lease = NameRecordV1::new(
+            selector.clone(),
+            relay_id.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        stx.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&lease),
+        );
+        stx.world.account_rekey_records.insert(
+            alias.clone(),
+            AccountRekeyRecord::new(alias.clone(), relay_id.clone()),
+        );
+        stx.world
+            .account_mut(relay_id)
+            .expect("relay account exists")
+            .set_label(Some(alias.clone()));
+        stx.world
+            .insert_account_alias_binding(alias, relay_id.clone());
+    }
+    fn load_call_record(stx: &StateTransaction<'_, '_>, call_id: &KaigiId) -> KaigiRecord {
+        let key = kaigi_metadata_key(&call_id.call_name).expect("metadata key");
+        stx.world
+            .domain(&call_id.domain_id)
+            .expect("domain")
+            .metadata()
+            .get(&key)
+            .expect("record metadata")
+            .clone()
+            .try_into_any_norito()
+            .expect("deserialize record")
+    }
+    fn assert_kaigi_not_active(error: Error) {
+        assert_invariant_error(error, "Kaigi is not active");
+    }
+    fn assert_invariant_error(error: Error, expected: &str) {
+        match error {
+            Error::InvariantViolation(message) => {
+                assert!(message.contains(expected), "unexpected error: {message}");
+            }
+            other => panic!("unexpected error variant {other:?}"),
+        }
+    }
+    fn assert_smart_contract_error(error: Error, expected: &str) {
+        match error {
+            Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                assert!(message.contains(expected), "unexpected error: {message}");
+            }
+            other => panic!("unexpected error variant {other:?}"),
+        }
     }
     fn create_call(stx: &mut StateTransaction<'_, '_>, record: &KaigiRecord, host: &AccountId) {
         CreateKaigi {

@@ -192,6 +192,8 @@ mod tests {
             exit_class: VpnExitClassV1::Standard,
             relay_endpoint: "/dns/relay.example/udp/9443/quic".to_owned(),
             relay_id: [0x11; 32],
+            relay_mldsa65_public_key: [0x12;
+                crate::soranet::vpn::VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1],
             descriptor_commit: [0x22; 32],
             tls_server_name: "relay.example".to_owned(),
             relay_tls_spki_sha256: [0xAB; 32],

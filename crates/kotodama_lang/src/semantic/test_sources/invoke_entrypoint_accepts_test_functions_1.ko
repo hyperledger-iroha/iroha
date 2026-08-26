@@ -4,7 +4,7 @@
 
                 #[test]
                 fn drive_run() {
-                    let next = test::invoke_kotoage("run", Json::parse("{\"count\": 7}"));
+                    let next = test::invoke_kotoage("run", Json::parse("{\"count\":7}"));
                     test::assert_eq(actual: next, expected: 8);
                 }
             }

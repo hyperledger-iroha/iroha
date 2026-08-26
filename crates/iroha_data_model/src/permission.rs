@@ -49,7 +49,7 @@ impl norito::json::JsonDeserialize for Permission {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
-        use norito::json::{MapVisitor, Value};
+        use norito::json::MapVisitor;
         let mut visitor = MapVisitor::new(parser)?;
         let mut name: Option<Ident> = None;
         let mut payload: Option<Json> = None;
@@ -65,8 +65,7 @@ impl norito::json::JsonDeserialize for Permission {
                     if payload.is_some() {
                         return Err(norito::json::Error::duplicate_field("payload"));
                     }
-                    let value = visitor.parse_value::<Value>()?;
-                    payload = Some(Json::from_norito_value_ref(&value).map_err(|error| {
+                    payload = Some(visitor.parse_value::<Json>().map_err(|error| {
                         norito::json::Error::Message(format!(
                             "permission payload violates the Json bounds: {error}"
                         ))
@@ -100,27 +99,26 @@ mod tests {
         Ok(permission)
     }
     #[test]
-    fn permission_deserialization_canonicalizes_payload_json() {
-        let decoded: Permission = norito::json::from_str(
+    fn permission_deserialization_rejects_noncanonical_payload_json() {
+        let error = norito::json::from_str::<Permission>(
             r#"{
                 "name": "CanDoThing",
                 "payload": { "z": "\u0041", "a": 1 }
             }"#,
         )
-        .expect("deserialize permission");
-        let canonical = Permission::new(
-            "CanDoThing".into(),
-            Json::from_raw_json("{\"a\":1,\"z\":\"A\"}".to_owned())
-                .expect("valid canonical payload"),
+        .expect_err("alternate payload spelling must fail closed");
+        assert!(
+            error.to_string().contains("canonical lexical form"),
+            "{error}"
         );
-        assert_eq!(decoded.payload().get(), "{\"a\":1,\"z\":\"A\"}");
-        assert_eq!(decoded, canonical);
     }
     #[test]
-    fn permission_deserialization_canonicalizes_object_key_order() {
+    fn permission_deserialization_requires_canonical_object_key_order() {
+        deserialize_permission_with_parser(r#"{"name":"CanDoThing","payload":{"z":0,"a":1}}"#)
+            .expect_err("alternate payload key order must fail closed");
         let stored =
-            deserialize_permission_with_parser(r#"{"name":"CanDoThing","payload":{"z":0,"a":1}}"#)
-                .expect("deserialize permission");
+            deserialize_permission_with_parser(r#"{"name":"CanDoThing","payload":{"a":1,"z":0}}"#)
+                .expect("deserialize canonical permission");
         let canonical = Permission::new(
             "CanDoThing".into(),
             Json::from_raw_json("{\"a\":1,\"z\":0}".to_owned()).expect("valid canonical payload"),

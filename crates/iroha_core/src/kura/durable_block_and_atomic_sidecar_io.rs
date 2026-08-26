@@ -211,7 +211,7 @@ impl Kura {
             ));
         }
         let start_height = height.saturating_sub(1);
-        self.ensure_no_pending_rollback()?;
+        self.ensure_no_retired_rollback_intents()?;
         let mut block_store = self.block_store.lock();
         let block_store_before = match Self::block_store_tracked_bytes(&mut block_store) {
             Ok(bytes) => Some(bytes),

@@ -26,8 +26,6 @@ mod root_owned_artifact_publication;
 mod runtime_provider_broker;
 /// Deployment-owned runtime-provider registry boundary for the standard launcher.
 pub mod runtime_provider_registry;
-/// Exact external credential boundary for authenticated Hugging Face inference.
-pub mod soracloud_hf_credential;
 /// Embedded Soracloud runtime-manager reconciliation.
 #[path = "soracloud_runtime.rs"]
 mod soracloud_runtime;
@@ -100,7 +98,7 @@ use iroha_core::{
         try_read_snapshot_with_bootstrap_policy,
     },
     state::{State, World, WorldReadOnly as _},
-    streaming::{FilesystemSoranetProvisioner, ManifestPublisher, run_ticket_event_listener},
+    streaming::{ManifestPublisher, run_ticket_event_listener},
     sumeragi::{
         GenesisWithPubKey, InboundBlockMessage, LaneRelayMessage,
         ProductionTwoStageRelayRetryTraceProjection, SumeragiHandle, SumeragiIngressDisposition,
@@ -176,6 +174,7 @@ use std::{
     ffi::OsString,
     fs,
     future::Future,
+    io,
     num::NonZeroU64,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, Weak},
@@ -4279,17 +4278,14 @@ impl NetworkRelayShared {
             }
             PeersGossiper(data) => self.peers_gossiper.gossip(*data, peer),
             PeerTrustGossip(data) => self.peers_gossiper.gossip_trust(*data, peer),
-            msg @ (SoracloudLocalReadProxyRequest(_)
-            | SoracloudLocalReadProxyResponse(_)
-            | ToriiProxyRequest(_)
+            msg @ (ToriiProxyRequest(_)
             | ToriiProxyResponse(_)
             | QueuePlanAdmissionPublication(_)
             | Health
             | Connect(_)) => {
                 debug_assert!(Self::is_handled_by_dedicated_subscriber(&msg));
-                // Health frames are handled elsewhere. Connect, Soracloud local-read proxy,
-                // and Torii proxy frames go to Torii via its own subscriber tasks when those
-                // surfaces are enabled.
+                // Health frames are handled elsewhere. Connect and Torii proxy frames go to
+                // Torii via its own subscriber tasks when those surfaces are enabled.
             }
             TimePing(p) => {
                 iroha_core::time::handle_message(
@@ -4550,8 +4546,8 @@ mod network_relay_tests {
             },
         },
         torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V6, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV6,
+            TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV1,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
@@ -5589,14 +5585,14 @@ mod network_relay_tests {
         sumeragi_msg(BlockMessage::LaneBlockQc(sample_lane_block_qc(phase)))
     }
     fn torii_proxy_request_msg() -> iroha_core::NetworkMessage {
-        iroha_core::NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV6 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+        iroha_core::NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV1 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V1,
             request_id: Hash::prehashed([0x41; 32]),
             deadline_unix_ms: 1_900_000_000_000,
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV4::Read(ToriiReadProxyRequestV1 {
+            request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::SINGLE,
@@ -8987,9 +8983,6 @@ impl Iroha {
             runtime_deps.sorafs_orderbook_transaction_signer.clone();
         let soracloud_runtime_mutation_signer =
             runtime_deps.soracloud_runtime_mutation_signer.clone();
-        let soracloud_hf_inference_credential_provider = runtime_deps
-            .soracloud_hf_inference_credential_provider
-            .clone();
         let sorafs_moderation_transaction_signer =
             runtime_deps.sorafs_moderation_transaction_signer.clone();
         let sorafs_moderation_settlement_handoff =
@@ -9584,11 +9577,6 @@ impl Iroha {
         } else {
             runtime_manager
         };
-        let runtime_manager = if let Some(provider) = soracloud_hf_inference_credential_provider {
-            runtime_manager.with_hf_inference_credential_provider(provider)
-        } else {
-            runtime_manager
-        };
         let runtime_manager = if let Some(signer) = soracloud_runtime_mutation_signer {
             let runtime_mutation_sink = QueuedSoracloudRuntimeMutationSink::new(
                 Arc::clone(&queue),
@@ -10060,26 +10048,14 @@ fn configure_soranet_transport(
     streaming: &mut iroha_core::streaming::StreamingHandle,
     soranet: &iroha_config::parameters::actual::StreamingSoranet,
 ) -> ReportResult<(), StartError> {
-    if !soranet.enabled {
-        streaming.set_soranet_transport(None);
-        return Ok(());
+    streaming.set_soranet_transport(None);
+    if soranet.enabled {
+        return Err(Report::new(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "streaming.soranet.enabled cannot be enabled in V1: token-bearing filesystem exit publication requires RouteOpen proof and durable revocation tombstones",
+        ))
+        .change_context(StartError::StartP2p));
     }
-    let spool_dir = soranet.provision_spool_dir.clone();
-    fs::create_dir_all(&spool_dir).map_err(|err| {
-        Report::new(err)
-            .change_context(StartError::StartP2p)
-            .attach(format!(
-                "failed to initialize SoraNet provision spool directory {}",
-                spool_dir.display()
-            ))
-    })?;
-    let mut provisioner =
-        FilesystemSoranetProvisioner::new(spool_dir, soranet.provision_spool_max_bytes.get());
-    #[cfg(feature = "telemetry")]
-    if let Some(telemetry) = streaming.telemetry_handle() {
-        provisioner = provisioner.with_telemetry(telemetry);
-    }
-    streaming.set_soranet_transport(Some(Arc::new(provisioner)));
     Ok(())
 }
 #[cfg(feature = "telemetry")]
@@ -12676,6 +12652,7 @@ fn configure_reports(args: &Args) {
 /// The broker is not contacted when the validated configuration contains no
 /// runtime-provider bindings.
 pub fn main_entry() {
+    soracloud_runtime::dispatch_inrou_internal_launcher_if_requested();
     let _ = std::hint::black_box(BUILD_SOURCE_ID);
     if let Err(report) = run_main(None, None) {
         eprintln!("{report:?}");
@@ -12689,6 +12666,11 @@ pub fn main_entry() {
 /// another reviewed runtime. Registry selection is an explicit launcher
 /// decision; no environment or config value dynamically loads executable
 /// provider code.
+///
+/// Inrou V1 hosting is intentionally unavailable through external wrapper
+/// executables because its child self-exec dispatcher must run as the wrapper's
+/// first instruction. Use the stock `iroha3d` or `iroha3d_taira` binary for an
+/// Inrou host.
 ///
 /// # Errors
 ///
@@ -12733,6 +12715,8 @@ pub(crate) fn run_with_runtime_provider_registry_and_config_guard(
 /// daemon supervisor without requiring an unrelated runtime-provider registry. It never exposes
 /// the private routes through Torii or reads service credentials from argv or node configuration.
 /// An unexpected private-runner exit is fatal to the same supervisor that owns the node.
+/// Inrou V1 hosting remains restricted to the stock `iroha3d` and
+/// `iroha3d_taira` first-instruction launchers.
 ///
 /// # Errors
 ///
@@ -12752,6 +12736,8 @@ pub fn run_with_musubi_publication(
 /// that opaque factory into the daemon supervisor; it never exposes the private routes through
 /// Torii or reads service credentials from argv or node configuration. An unexpected private-runner
 /// exit is fatal to the same supervisor that owns the node.
+/// Inrou V1 hosting remains restricted to the stock `iroha3d` and
+/// `iroha3d_taira` first-instruction launchers.
 ///
 /// # Errors
 ///
@@ -15660,8 +15646,8 @@ mod tests {
     mod relay_ingress {
         use super::*;
         use iroha_core::torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V6, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV6,
+            TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV1,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         };
@@ -15674,14 +15660,14 @@ mod tests {
                 dataspace_id: DataSpaceId::new(0),
             };
             let request =
-                iroha_core::NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV6 {
-                    schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+                iroha_core::NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV1 {
+                    schema_version: TORII_PROXY_REQUEST_VERSION_V1,
                     request_id: Hash::new(b"torii-proxy-request"),
                     deadline_unix_ms: 1_900_000_000_000,
                     hop_count: 1,
                     max_hops: 3,
                     visited_peer_ids: Vec::new(),
-                    request: ToriiProxyRequestKindV4::Read(ToriiReadProxyRequestV1 {
+                    request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
                         endpoint: ToriiReadEndpointV1::AccountsList,
                         expected_route: route,
                         path_args: Vec::new(),

@@ -51,7 +51,7 @@ impl Kura {
     /// cannot be measured.
     pub fn persist_block_immediate_for_bench(&self, block: &Arc<SignedBlock>) -> Result<()> {
         let _write_guard = self.block_store_write_lock.lock();
-        self.ensure_no_pending_rollback()?;
+        self.ensure_no_retired_rollback_intents()?;
         let mut store = self.block_store.lock();
         let before_bytes = Self::block_store_tracked_bytes(&mut store)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();

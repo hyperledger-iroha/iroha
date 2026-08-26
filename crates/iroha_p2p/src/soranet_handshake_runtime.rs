@@ -122,8 +122,7 @@ pub fn runtime_from_handshake(
         puzzle_params,
         ticket_ttl,
         signed_ticket_public_key,
-        Some(Arc::new(Mutex::new(revocation_store))),
-        None,
+        Arc::new(Mutex::new(revocation_store)),
     )?
     .with_puzzle_work_admission(puzzle_work_admission);
     Ok(Arc::new(config))
@@ -149,14 +148,37 @@ fn validate_puzzle_work_capacities(
 
 fn validate_signed_ticket_public_key(key: Option<Vec<u8>>) -> Result<Option<Vec<u8>>, Error> {
     key.map(|key| {
-        let expected = MlDsaSuite::MlDsa44.public_key_len();
-        if key.len() != expected {
-            return Err(Error::HandshakeSoranet(format!(
-                "invalid soranet signed_ticket_public_key_hex: expected {expected} bytes (ML-DSA-44), got {}",
-                key.len()
-            )));
-        }
+        MlDsaSuite::MlDsa44
+            .validate_public_key(&key)
+            .map_err(|error| {
+                Error::HandshakeSoranet(format!(
+                    "invalid soranet signed_ticket_public_key_hex (ML-DSA-44): {error}"
+                ))
+            })?;
         Ok(key)
     })
     .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use soranet_pq::generate_mldsa_keypair_from_os;
+
+    use super::*;
+
+    #[test]
+    fn signed_ticket_public_key_rejects_inert_material() {
+        let inert = vec![0_u8; MlDsaSuite::MlDsa44.public_key_len()];
+        assert!(validate_signed_ticket_public_key(Some(inert)).is_err());
+    }
+
+    #[test]
+    fn signed_ticket_public_key_accepts_generated_material() {
+        let keypair =
+            generate_mldsa_keypair_from_os(MlDsaSuite::MlDsa44).expect("generate ML-DSA keypair");
+        let expected = keypair.public_key().to_vec();
+        let validated = validate_signed_ticket_public_key(Some(expected.clone()))
+            .expect("validate generated public key");
+        assert_eq!(validated.as_deref(), Some(expected.as_slice()));
+    }
 }

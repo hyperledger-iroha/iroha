@@ -9,12 +9,12 @@ use iroha_data_model::{
 use norito::codec::{Decode, Encode};
 use std::fmt;
 /// Schema version for deadline-bound Torii proxy requests.
-pub const TORII_PROXY_REQUEST_VERSION_V6: u16 = 6;
+pub const TORII_PROXY_REQUEST_VERSION_V1: u16 = 1;
 /// Maximum inner body admitted by a first-release Torii proxy request.
 pub const TORII_PROXY_REQUEST_MAX_INNER_BODY_BYTES_V1: usize = 64_000_000;
 /// Source-coupled allowance for the signed proxy request envelope.
 pub const TORII_PROXY_REQUEST_FRAME_OVERHEAD_BYTES_V1: usize = 8 * 1024 * 1024;
-/// Maximum encoded `ToriiProxyRequestV6`/HTTP body before relay framing.
+/// Maximum encoded `ToriiProxyRequestV1`/HTTP body before relay framing.
 pub const TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1: usize =
     TORII_PROXY_REQUEST_MAX_INNER_BODY_BYTES_V1 + TORII_PROXY_REQUEST_FRAME_OVERHEAD_BYTES_V1;
 /// Maximum enum/length framing around one proxy request or response inside `NetworkMessage`.
@@ -47,11 +47,11 @@ pub const TORII_PROXY_RESPONSE_VERSION_V1: u16 = 1;
 pub const TORII_ROUTING_PLAN_MAX_NATIVE_AMX_PARTICIPANTS_V1: usize =
     crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_LEGS;
 /// Current first-release QueuePlan global-admission binding layout.
-pub const QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2: u16 = 2;
+pub const QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1: u16 = 1;
 /// Current first-release QueuePlan authority-attestation layout.
-pub const QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2: u16 = 2;
+pub const QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1: u16 = 1;
 /// Current first-release QueuePlan admission-certificate layout.
-pub const QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2: u16 = 2;
+pub const QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1: u16 = 1;
 /// Current first-release ordinary Kagemusha lifecycle admission-binding layout.
 pub const KAGEMUSHA_LIFECYCLE_ADMISSION_BINDING_VERSION_V1: u16 = 1;
 /// Current first-release ordinary Kagemusha lifecycle authority-attestation layout.
@@ -60,13 +60,13 @@ pub const KAGEMUSHA_LIFECYCLE_ADMISSION_ATTESTATION_VERSION_V1: u16 = 1;
 pub const KAGEMUSHA_LIFECYCLE_ADMISSION_CERTIFICATE_VERSION_V1: u16 = 1;
 /// Schema version for peer-to-peer publication of a certified QueuePlan admission.
 pub const QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1: u16 = 1;
-const QUEUE_PLAN_ADMISSION_NETWORK_DOMAIN_V2: &[u8] =
-    b"iroha:torii:queue-plan-admission-network:v2\0";
-const QUEUE_PLAN_ADMISSION_BINDING_DOMAIN_V2: &[u8] =
-    b"iroha:torii:queue-plan-admission-binding:v2\0";
-const QUEUE_PLAN_ADMISSION_ATTESTATION_DOMAIN_V2: &[u8] =
-    b"iroha:torii:queue-plan-admission-attestation:v2\0";
-const QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5: &str = "torii:proxy:queue-plan-synced:v5";
+const QUEUE_PLAN_ADMISSION_NETWORK_DOMAIN_V1: &[u8] =
+    b"iroha:torii:queue-plan-admission-network:v1\0";
+const QUEUE_PLAN_ADMISSION_BINDING_DOMAIN_V1: &[u8] =
+    b"iroha:torii:queue-plan-admission-binding:v1\0";
+const QUEUE_PLAN_ADMISSION_ATTESTATION_DOMAIN_V1: &[u8] =
+    b"iroha:torii:queue-plan-admission-attestation:v1\0";
+const QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V1: &str = "torii:proxy:queue-plan-synced:v1";
 const KAGEMUSHA_LIFECYCLE_ADMISSION_NETWORK_DOMAIN_V1: &[u8] =
     b"iroha:torii:kagemusha-lifecycle-admission-network:v1\0";
 const KAGEMUSHA_LIFECYCLE_ADMISSION_BINDING_DOMAIN_V1: &[u8] =
@@ -78,7 +78,7 @@ const KAGEMUSHA_LIFECYCLE_REQUEST_DOMAIN_V1: &str = "torii:proxy:ordinary-kagemu
 #[must_use]
 pub fn queue_plan_admission_network_id_digest(network_id: &NetworkId) -> Hash {
     Hash::new_from_chunks(&[
-        QUEUE_PLAN_ADMISSION_NETWORK_DOMAIN_V2,
+        QUEUE_PLAN_ADMISSION_NETWORK_DOMAIN_V1,
         network_id.as_bytes(),
     ])
 }
@@ -109,7 +109,7 @@ pub fn queue_plan_synced_request_id_from_network_digest(
 ) -> Hash {
     Hash::new(
         norito::encode_canonical(&(
-            QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5,
+            QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V1,
             network_id_digest,
             entrypoint_hash,
         ))
@@ -193,7 +193,7 @@ pub fn validate_ordinary_kagemusha_lifecycle_entrypoint(
 }
 /// Globally unique registry key for one transaction-entrypoint admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
-pub struct QueuePlanAdmissionRegistryKeyV2 {
+pub struct QueuePlanAdmissionRegistryKeyV1 {
     /// Registry-key layout version.
     pub version: u16,
     /// Exact network that owns the entrypoint.
@@ -203,7 +203,7 @@ pub struct QueuePlanAdmissionRegistryKeyV2 {
 }
 /// Immutable value claimed by a QueuePlan global-admission registry key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
-pub struct QueuePlanAdmissionRegistryValueV2 {
+pub struct QueuePlanAdmissionRegistryValueV1 {
     /// Registry-value layout version.
     pub version: u16,
     /// Domain-separated hash of the complete admission binding.
@@ -216,7 +216,7 @@ pub struct QueuePlanAdmissionRegistryValueV2 {
 /// timestamp, network digest, and deterministic request identity. Authorities never substitute a
 /// locally sampled timestamp or independently reconstructed claim.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct QueuePlanAdmissionBindingV2 {
+pub struct QueuePlanAdmissionBindingV1 {
     /// Binding layout version.
     pub version: u16,
     /// Domain-separated exact network identity.
@@ -230,7 +230,7 @@ pub struct QueuePlanAdmissionBindingV2 {
     /// Complete canonical routing-plan digest.
     pub routing_plan_digest: Hash,
     /// Exact lifecycle, incarnation, and ordered per-leg authority context.
-    pub admission_context: crate::queue::QueuePlanAdmissionContextV2,
+    pub admission_context: crate::queue::QueuePlanAdmissionContextV1,
     /// Canonical ingress timestamp persisted identically by every authority.
     pub enqueue_timestamp_ms: u64,
     /// Exact queue-plan journal record layout.
@@ -240,7 +240,7 @@ pub struct QueuePlanAdmissionBindingV2 {
     /// Domain-separated digest of the exact canonical journal record.
     pub journal_record_digest: Hash,
 }
-impl QueuePlanAdmissionBindingV2 {
+impl QueuePlanAdmissionBindingV1 {
     /// Build the single exact binding an ingress node sends to every authority.
     ///
     /// # Errors
@@ -250,13 +250,13 @@ impl QueuePlanAdmissionBindingV2 {
         network_id: &NetworkId,
         transaction: &TransactionEntrypoint,
         routing_plan: &crate::queue::RoutingPlan,
-        admission_context: crate::queue::QueuePlanAdmissionContextV2,
+        admission_context: crate::queue::QueuePlanAdmissionContextV1,
         enqueue_timestamp_ms: u64,
     ) -> Result<Self, String> {
         admission_context.validate_for_routing_plan(routing_plan)?;
         let network_id_digest = queue_plan_admission_network_id_digest(network_id);
-        let global_admission_identity = crate::queue::QueuePlanGlobalAdmissionIdentityV2 {
-            version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
+        let global_admission_identity = crate::queue::QueuePlanGlobalAdmissionIdentityV1 {
+            version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1,
             network_id_digest,
             request_id: queue_plan_synced_request_id_from_network_digest(
                 network_id_digest,
@@ -272,7 +272,7 @@ impl QueuePlanAdmissionBindingV2 {
         )
         .map_err(|error| format!("QueuePlan journal claim cannot be encoded: {error}"))?;
         Ok(Self {
-            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
             network_id_digest: global_admission_identity.network_id_digest,
             request_id: global_admission_identity.request_id,
             entrypoint_hash: transaction.hash(),
@@ -281,7 +281,7 @@ impl QueuePlanAdmissionBindingV2 {
             admission_context,
             enqueue_timestamp_ms,
             queue_plan_journal_version: crate::queue::QUEUE_PLAN_JOURNAL_VERSION,
-            durable_admission_version: crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+            durable_admission_version: crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
             journal_record_digest,
         })
     }
@@ -291,20 +291,20 @@ impl QueuePlanAdmissionBindingV2 {
     /// Returns an error for ordinary claims without a global identity or for any inconsistent
     /// version, transaction, routing, context, or journal field.
     pub fn try_from_durable_admission(
-        durable: &crate::queue::QueuePlanDurableAdmissionV2,
+        durable: &crate::queue::QueuePlanDurableAdmissionV1,
     ) -> Result<Self, String> {
-        if durable.version != crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2 {
+        if durable.version != crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1 {
             return Err("QueuePlan durable-admission version is unsupported".to_owned());
         }
         let identity = durable
             .global_admission_identity
             .as_ref()
             .ok_or_else(|| "QueuePlan durable admission has no global identity".to_owned())?;
-        if identity.version != crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2 {
+        if identity.version != crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1 {
             return Err("QueuePlan global-admission identity version is unsupported".to_owned());
         }
         let binding = Self {
-            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
             network_id_digest: identity.network_id_digest,
             request_id: identity.request_id,
             entrypoint_hash: durable.entrypoint_hash.clone(),
@@ -321,9 +321,9 @@ impl QueuePlanAdmissionBindingV2 {
     }
     /// Return the global identity persisted inside the exact queue-plan journal record.
     #[must_use]
-    pub fn global_admission_identity(&self) -> crate::queue::QueuePlanGlobalAdmissionIdentityV2 {
-        crate::queue::QueuePlanGlobalAdmissionIdentityV2 {
-            version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
+    pub fn global_admission_identity(&self) -> crate::queue::QueuePlanGlobalAdmissionIdentityV1 {
+        crate::queue::QueuePlanGlobalAdmissionIdentityV1 {
+            version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1,
             network_id_digest: self.network_id_digest,
             request_id: self.request_id,
         }
@@ -347,7 +347,7 @@ impl QueuePlanAdmissionBindingV2 {
     /// # Errors
     /// Returns the first unsupported version, zero identity, context, routing, or journal failure.
     pub fn validate_structure(&self) -> Result<(), String> {
-        if self.version != QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2 {
+        if self.version != QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1 {
             return Err("QueuePlan admission-binding version is unsupported".to_owned());
         }
         if self.network_id_digest == Hash::prehashed([0; Hash::LENGTH])
@@ -367,13 +367,13 @@ impl QueuePlanAdmissionBindingV2 {
                     .to_owned(),
             );
         }
-        if self.admission_context.version != crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2 {
+        if self.admission_context.version != crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1 {
             return Err("QueuePlan admission-context version is unsupported".to_owned());
         }
         if self.queue_plan_journal_version != crate::queue::QUEUE_PLAN_JOURNAL_VERSION {
             return Err("QueuePlan journal version is unsupported".to_owned());
         }
-        if self.durable_admission_version != crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2 {
+        if self.durable_admission_version != crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1 {
             return Err("QueuePlan durable-admission version is unsupported".to_owned());
         }
         self.routing_plan().map(|_| ())
@@ -413,7 +413,7 @@ impl QueuePlanAdmissionBindingV2 {
     /// mismatch.
     pub(crate) fn validate_for_lane_reservation_commit(
         &self,
-        key: &crate::queue::LaneQueueReservationKeyV2,
+        key: &crate::queue::LaneQueueReservationKeyV1,
     ) -> Result<(), String> {
         key.validate().map_err(str::to_owned)?;
         self.validate_structure()?;
@@ -492,29 +492,29 @@ impl QueuePlanAdmissionBindingV2 {
     pub fn canonical_hash(&self) -> Hash {
         let bytes = norito::encode_canonical(self)
             .expect("QueuePlan admission binding must have a canonical Norito encoding");
-        Hash::new_from_chunks(&[QUEUE_PLAN_ADMISSION_BINDING_DOMAIN_V2, bytes.as_slice()])
+        Hash::new_from_chunks(&[QUEUE_PLAN_ADMISSION_BINDING_DOMAIN_V1, bytes.as_slice()])
     }
     /// Return the immutable WSV registry key for this transaction entrypoint.
     #[must_use]
-    pub fn registry_key(&self) -> QueuePlanAdmissionRegistryKeyV2 {
-        QueuePlanAdmissionRegistryKeyV2 {
-            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+    pub fn registry_key(&self) -> QueuePlanAdmissionRegistryKeyV1 {
+        QueuePlanAdmissionRegistryKeyV1 {
+            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
             network_id_digest: self.network_id_digest,
             entrypoint_hash: self.entrypoint_hash.clone(),
         }
     }
     /// Return the immutable WSV registry value for this exact binding.
     #[must_use]
-    pub fn registry_value(&self) -> QueuePlanAdmissionRegistryValueV2 {
-        QueuePlanAdmissionRegistryValueV2 {
-            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+    pub fn registry_value(&self) -> QueuePlanAdmissionRegistryValueV1 {
+        QueuePlanAdmissionRegistryValueV1 {
+            version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
             binding_hash: self.canonical_hash(),
         }
     }
 }
 /// One compact signature over a shared QueuePlan admission binding.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct QueuePlanAdmissionAttestationV2 {
+pub struct QueuePlanAdmissionAttestationV1 {
     /// Attestation layout version.
     pub version: u16,
     /// Signer's index in the exact ordered coordinator validator set.
@@ -524,13 +524,13 @@ pub struct QueuePlanAdmissionAttestationV2 {
 }
 /// Coordinator-authority evidence that one exact QueuePlan journal claim is durably replicated.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct QueuePlanAdmissionCertificateV2 {
+pub struct QueuePlanAdmissionCertificateV1 {
     /// Certificate layout version.
     pub version: u16,
     /// One canonical binding shared by every attestation.
-    pub binding: QueuePlanAdmissionBindingV2,
+    pub binding: QueuePlanAdmissionBindingV1,
     /// Strictly increasing validator-index attestations.
-    pub attestations: Vec<QueuePlanAdmissionAttestationV2>,
+    pub attestations: Vec<QueuePlanAdmissionAttestationV1>,
 }
 /// Canonical QueuePlan certificate disseminated from an ingress aggregator to validators.
 ///
@@ -540,12 +540,12 @@ pub struct QueuePlanAdmissionCertificateV2 {
 pub struct QueuePlanAdmissionPublicationV1 {
     /// Publication envelope schema version.
     pub schema_version: u16,
-    /// Exact canonical [`QueuePlanAdmissionCertificateV2`] bytes.
+    /// Exact canonical [`QueuePlanAdmissionCertificateV1`] bytes.
     pub certificate: Vec<u8>,
 }
 /// Strength required while validating a QueuePlan admission certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum QueuePlanAdmissionCertificateStrengthV2 {
+pub enum QueuePlanAdmissionCertificateStrengthV1 {
     /// A bounded nonempty subset, used for authenticated authority responses.
     Partial,
     /// Exactly the context's durability threshold, used by global admission controls.
@@ -553,22 +553,22 @@ pub enum QueuePlanAdmissionCertificateStrengthV2 {
 }
 /// Fully authenticated QueuePlan admission certificate and its registry projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ValidatedQueuePlanAdmissionCertificateV2 {
+pub struct ValidatedQueuePlanAdmissionCertificateV1 {
     /// Exact decoded certificate.
-    pub certificate: QueuePlanAdmissionCertificateV2,
+    pub certificate: QueuePlanAdmissionCertificateV1,
     /// Domain-separated binding identity.
     pub binding_hash: Hash,
     /// Immutable WSV registry key.
-    pub registry_key: QueuePlanAdmissionRegistryKeyV2,
+    pub registry_key: QueuePlanAdmissionRegistryKeyV1,
     /// Immutable WSV registry value.
-    pub registry_value: QueuePlanAdmissionRegistryValueV2,
+    pub registry_value: QueuePlanAdmissionRegistryValueV1,
     /// Exact coordinator route authorized by the binding.
     pub coordinator_route: crate::queue::RoutingDecision,
     /// Number of distinct attestations required for durable availability.
     pub durability_threshold: usize,
 }
 #[derive(Encode)]
-struct QueuePlanAdmissionAttestationPayloadV2 {
+struct QueuePlanAdmissionAttestationPayloadV1 {
     version: u16,
     binding_hash: Hash,
     validator_index: u16,
@@ -577,19 +577,19 @@ struct QueuePlanAdmissionAttestationPayloadV2 {
 ///
 /// # Errors
 /// Returns a Norito encoding error if the fixed attestation payload cannot be encoded.
-pub fn queue_plan_admission_attestation_signing_bytes_v2(
+pub fn queue_plan_admission_attestation_signing_bytes_v1(
     binding_hash: Hash,
     validator_index: u16,
 ) -> Result<Vec<u8>, norito::Error> {
-    let payload = QueuePlanAdmissionAttestationPayloadV2 {
-        version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+    let payload = QueuePlanAdmissionAttestationPayloadV1 {
+        version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
         binding_hash,
         validator_index,
     };
     let encoded = norito::encode_canonical(&payload)?;
     let mut bytes =
-        Vec::with_capacity(QUEUE_PLAN_ADMISSION_ATTESTATION_DOMAIN_V2.len() + encoded.len());
-    bytes.extend_from_slice(QUEUE_PLAN_ADMISSION_ATTESTATION_DOMAIN_V2);
+        Vec::with_capacity(QUEUE_PLAN_ADMISSION_ATTESTATION_DOMAIN_V1.len() + encoded.len());
+    bytes.extend_from_slice(QUEUE_PLAN_ADMISSION_ATTESTATION_DOMAIN_V1);
     bytes.extend_from_slice(&encoded);
     Ok(bytes)
 }
@@ -597,12 +597,12 @@ pub fn queue_plan_admission_attestation_signing_bytes_v2(
 ///
 /// # Errors
 /// Returns the first structural, network, roster, threshold, ordering, or signature failure.
-pub fn validate_queue_plan_admission_certificate_v2(
+pub fn validate_queue_plan_admission_certificate_v1(
     network_id: &NetworkId,
-    certificate: QueuePlanAdmissionCertificateV2,
-    strength: QueuePlanAdmissionCertificateStrengthV2,
-) -> Result<ValidatedQueuePlanAdmissionCertificateV2, String> {
-    validate_queue_plan_admission_certificate_for_network_digest_v2(
+    certificate: QueuePlanAdmissionCertificateV1,
+    strength: QueuePlanAdmissionCertificateStrengthV1,
+) -> Result<ValidatedQueuePlanAdmissionCertificateV1, String> {
+    validate_queue_plan_admission_certificate_for_network_digest_v1(
         queue_plan_admission_network_id_digest(network_id),
         certificate,
         strength,
@@ -612,16 +612,16 @@ pub fn validate_queue_plan_admission_certificate_v2(
 ///
 /// Torii uses this after validating the request binding against its local network and exact
 /// transaction. Consensus-facing callers should prefer
-/// [`validate_queue_plan_admission_certificate_v2`] with a trusted [`NetworkId`].
+/// [`validate_queue_plan_admission_certificate_v1`] with a trusted [`NetworkId`].
 ///
 /// # Errors
 /// Returns the first structural, network, roster, threshold, ordering, or signature failure.
-pub fn validate_queue_plan_admission_certificate_for_network_digest_v2(
+pub fn validate_queue_plan_admission_certificate_for_network_digest_v1(
     expected_network_id_digest: Hash,
-    certificate: QueuePlanAdmissionCertificateV2,
-    strength: QueuePlanAdmissionCertificateStrengthV2,
-) -> Result<ValidatedQueuePlanAdmissionCertificateV2, String> {
-    if certificate.version != QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2 {
+    certificate: QueuePlanAdmissionCertificateV1,
+    strength: QueuePlanAdmissionCertificateStrengthV1,
+) -> Result<ValidatedQueuePlanAdmissionCertificateV1, String> {
+    if certificate.version != QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1 {
         return Err("QueuePlan admission-certificate version is unsupported".to_owned());
     }
     certificate.binding.validate_structure()?;
@@ -642,7 +642,7 @@ pub fn validate_queue_plan_admission_certificate_for_network_digest_v2(
             "QueuePlan admission certificate has an empty or oversized attestation set".to_owned(),
         );
     }
-    if strength == QueuePlanAdmissionCertificateStrengthV2::Quorum
+    if strength == QueuePlanAdmissionCertificateStrengthV1::Quorum
         && attestation_count != durability_threshold
     {
         return Err(
@@ -653,7 +653,7 @@ pub fn validate_queue_plan_admission_certificate_for_network_digest_v2(
     let binding_hash = certificate.binding.canonical_hash();
     let mut previous_index = None;
     for attestation in &certificate.attestations {
-        if attestation.version != QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2 {
+        if attestation.version != QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1 {
             return Err("QueuePlan admission-attestation version is unsupported".to_owned());
         }
         if previous_index.is_some_and(|previous| previous >= attestation.validator_index) {
@@ -667,7 +667,7 @@ pub fn validate_queue_plan_admission_certificate_for_network_digest_v2(
             .validator_set
             .get(usize::from(attestation.validator_index))
             .ok_or_else(|| "QueuePlan admission attestation index is out of bounds".to_owned())?;
-        let signing_bytes = queue_plan_admission_attestation_signing_bytes_v2(
+        let signing_bytes = queue_plan_admission_attestation_signing_bytes_v1(
             binding_hash,
             attestation.validator_index,
         )
@@ -679,7 +679,7 @@ pub fn validate_queue_plan_admission_certificate_for_network_digest_v2(
     }
     let registry_key = certificate.binding.registry_key();
     let registry_value = certificate.binding.registry_value();
-    Ok(ValidatedQueuePlanAdmissionCertificateV2 {
+    Ok(ValidatedQueuePlanAdmissionCertificateV1 {
         coordinator_route: routing_plan.coordinator_route(),
         certificate,
         binding_hash,
@@ -691,15 +691,15 @@ pub fn validate_queue_plan_admission_certificate_for_network_digest_v2(
 /// Decode canonical bounded certificate bytes and require an exact durability quorum.
 ///
 /// This is the validation boundary used by merge-sidecar admission and WSV staging. Partial
-/// authority responses must use [`validate_queue_plan_admission_certificate_v2`] directly.
+/// authority responses must use [`validate_queue_plan_admission_certificate_v1`] directly.
 ///
 /// # Errors
 /// Returns an error for an empty/oversized body, bounded-decode failure, noncanonical Norito
 /// bytes, or any structural, network, quorum, roster, ordering, or signature mismatch.
-pub fn decode_and_validate_queue_plan_admission_certificate_v2(
+pub fn decode_and_validate_queue_plan_admission_certificate_v1(
     network_id: &NetworkId,
     bytes: &[u8],
-) -> Result<ValidatedQueuePlanAdmissionCertificateV2, String> {
+) -> Result<ValidatedQueuePlanAdmissionCertificateV1, String> {
     let max_bytes = iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
     if bytes.is_empty() || bytes.len() > max_bytes {
         return Err("QueuePlan admission certificate is empty or oversized".to_owned());
@@ -711,21 +711,21 @@ pub fn decode_and_validate_queue_plan_admission_certificate_v2(
         max_bytes.saturating_mul(4),
         64,
     );
-    let certificate = norito::decode_canonical_with_limits::<QueuePlanAdmissionCertificateV2>(
+    let certificate = norito::decode_canonical_with_limits::<QueuePlanAdmissionCertificateV1>(
         bytes,
         decode_limits,
     )
     .map_err(|error| format!("QueuePlan admission certificate cannot be decoded: {error}"))?;
-    validate_queue_plan_admission_certificate_v2(
+    validate_queue_plan_admission_certificate_v1(
         network_id,
         certificate,
-        QueuePlanAdmissionCertificateStrengthV2::Quorum,
+        QueuePlanAdmissionCertificateStrengthV1::Quorum,
     )
 }
 
 /// Exact request identity shared by ordinary Kagemusha lifecycle durability attestations.
 ///
-/// Unlike [`QueuePlanAdmissionBindingV2`], this binding deliberately carries no global-admission
+/// Unlike [`QueuePlanAdmissionBindingV1`], this binding deliberately carries no global-admission
 /// identity, common enqueue timestamp, or common journal digest. Each validator persists and
 /// attests its own ordinary FIFO journal claim, and the resulting certificate is transport-only:
 /// it cannot authorize QueuePlan registry publication, autonomous reservation, or merge replay.
@@ -744,7 +744,7 @@ pub struct OrdinaryKagemushaLifecycleAdmissionBindingV1 {
     /// Complete canonical routing-plan digest.
     pub routing_plan_digest: Hash,
     /// Exact lifecycle, incarnation, and ordered authority context.
-    pub admission_context: crate::queue::QueuePlanAdmissionContextV2,
+    pub admission_context: crate::queue::QueuePlanAdmissionContextV1,
 }
 
 impl OrdinaryKagemushaLifecycleAdmissionBindingV1 {
@@ -757,7 +757,7 @@ impl OrdinaryKagemushaLifecycleAdmissionBindingV1 {
         network_id: &NetworkId,
         transaction: &TransactionEntrypoint,
         routing_plan: &crate::queue::RoutingPlan,
-        admission_context: crate::queue::QueuePlanAdmissionContextV2,
+        admission_context: crate::queue::QueuePlanAdmissionContextV1,
     ) -> Result<Self, String> {
         validate_ordinary_kagemusha_lifecycle_entrypoint(transaction)?;
         admission_context.validate_for_routing_plan(routing_plan)?;
@@ -877,10 +877,10 @@ impl OrdinaryKagemushaLifecycleAdmissionBindingV1 {
         &self,
         network_id: &NetworkId,
         transaction: &TransactionEntrypoint,
-        durable: &crate::queue::QueuePlanDurableAdmissionV2,
+        durable: &crate::queue::QueuePlanDurableAdmissionV1,
     ) -> Result<(), String> {
         self.validate_for_request(network_id, transaction, &durable.routing_plan)?;
-        if durable.version != crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2 {
+        if durable.version != crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1 {
             return Err(
                 "ordinary Kagemusha lifecycle durable-admission version is unsupported".to_owned(),
             );
@@ -1642,6 +1642,8 @@ pub enum ToriiReadEndpointV1 {
     InternalAccountAssetGet,
     /// `POST /v1/contracts/deployment-state`
     ContractDeploymentState,
+    /// `POST /v1/accounts/onboarding/current-state`
+    AccountOnboardingCurrentState,
 }
 /// Canonical routed read executed on an authoritative Torii peer.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -1742,28 +1744,24 @@ pub struct ToriiHostedHttpProxyRequestV1 {
 }
 /// First-release queue admission contract for a proxied transaction.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub enum ToriiProxyTransactionAdmissionV2 {
+pub enum ToriiProxyTransactionAdmissionV1 {
     /// Acknowledge after the exact `f + 1` QueuePlan certificate is durable.
     ///
     /// This admission receipt does not claim that a later carrier has applied
     /// the binding to canonical WSV.
-    ///
-    /// Index two deliberately leaves both retired V1 tags invalid, so neither
-    /// ordinary deferred admission nor its pre-global "synced" sibling can be
-    /// reinterpreted under the first-release contract.
-    #[codec(index = 2)]
+    #[codec(index = 0)]
     QueuePlanSynced,
     /// Acknowledge only after an exact `f + 1` certificate over validator-local unbound ordinary
     /// journal claims for one exact Kagemusha lifecycle transaction.
     ///
     /// The embedded binding is transport-only and can never be interpreted as a QueuePlan global
     /// admission identity, registry entry, autonomous reservation, or merge certificate.
-    #[codec(index = 3)]
+    #[codec(index = 1)]
     OrdinaryKagemushaLifecycleDurable(OrdinaryKagemushaLifecycleAdmissionBindingV1),
 }
-/// Canonical version-4 Torii request body forwarded over the P2P control plane.
+/// Canonical first-release Torii request body forwarded over the P2P control plane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub enum ToriiProxyRequestKindV4 {
+pub enum ToriiProxyRequestKindV1 {
     /// Submit a signed transaction to the authoritative lane validator.
     #[codec(index = 0)]
     SubmitTransaction {
@@ -1772,13 +1770,13 @@ pub enum ToriiProxyRequestKindV4 {
         /// Full routing plan resolved by the ingress node.
         expected_plan: ToriiRoutingPlanHintV1,
         /// Durability boundary the route-owning peer must satisfy before acknowledging.
-        admission: ToriiProxyTransactionAdmissionV2,
+        admission: ToriiProxyTransactionAdmissionV1,
         /// Exact shared journal binding required for a durable admission.
         ///
         /// This must be present only for `QueuePlanSynced` and is revalidated by
         /// every forwarding and admitting authority. The ordinary lifecycle admission embeds its
         /// separate transport-only binding inside the admission variant instead.
-        admission_binding: Option<QueuePlanAdmissionBindingV2>,
+        admission_binding: Option<QueuePlanAdmissionBindingV1>,
     },
     /// Execute a signed query on the authoritative lane validator.
     #[codec(index = 1)]
@@ -1818,9 +1816,9 @@ pub enum ToriiProxyRequestKindV4 {
     #[codec(index = 6)]
     HostedHttp(ToriiHostedHttpProxyRequestV1),
 }
-/// Version-6 P2P Torii proxy request sent from ingress to an authoritative peer.
+/// First-release P2P Torii proxy request sent from ingress to an authoritative peer.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct ToriiProxyRequestV6 {
+pub struct ToriiProxyRequestV1 {
     /// Version of the proxy request envelope.
     pub schema_version: u16,
     /// Correlation id selected by the ingress node.
@@ -1838,7 +1836,7 @@ pub struct ToriiProxyRequestV6 {
     /// Peer ids already traversed by the request to prevent proxy loops.
     pub visited_peer_ids: Vec<PeerId>,
     /// Canonical request to execute on the authoritative peer.
-    pub request: ToriiProxyRequestKindV4,
+    pub request: ToriiProxyRequestKindV1,
 }
 /// One HTTP header preserved across the Torii proxy response snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -1872,7 +1870,6 @@ pub struct ToriiProxyResponseV1 {
 mod tests {
     use super::*;
     use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan};
-    const LEGACY_TORII_PROXY_REQUEST_VERSION_V2: u16 = 2;
     fn torii_proxy_test_network_id(seed: &[u8]) -> iroha_data_model::NetworkId {
         iroha_data_model::NetworkId::from_genesis_hash(
             HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(seed)),
@@ -1956,13 +1953,13 @@ mod tests {
             .collect::<Vec<_>>();
         let route = RoutingDecision::new(LaneId::new(7), DataSpaceId::new(11));
         let routing_plan = RoutingPlan::single(route);
-        let context = crate::queue::QueuePlanAdmissionContextV2 {
-            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+        let context = crate::queue::QueuePlanAdmissionContextV1 {
+            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
             authority_height: 0,
             proposal_height: 1,
             predecessor_block_hash: None,
             routing_plan_digest: routing_plan.digest(),
-            route_incarnations: vec![crate::queue::QueuePlanRouteIncarnationV2 {
+            route_incarnations: vec![crate::queue::QueuePlanRouteIncarnationV1 {
                 leg: RouteLeg::new(route, RouteLegRole::Coordinator),
                 lane_incarnation: Hash::new(b"ordinary-lifecycle-lane-incarnation"),
                 validator_set_hash_version:
@@ -2015,77 +2012,6 @@ mod tests {
                 .expect("sign ordinary lifecycle attestation"),
         }
     }
-    /// Frozen test-only copy of the checked-in V2 Submit body.
-    #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-    enum HistoricalToriiProxyRequestKindV1 {
-        #[codec(index = 0)]
-        SubmitTransaction {
-            transaction: TransactionEntrypoint,
-            expected_plan: ToriiRoutingPlanHintV1,
-        },
-    }
-    /// Frozen test-only copy of the checked-in V2 request envelope.
-    #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-    #[norito(schema_name = "iroha_core::torii_proxy::ToriiProxyRequestV2")]
-    struct HistoricalToriiProxyRequestV2 {
-        schema_version: u16,
-        request_id: Hash,
-        hop_count: u8,
-        max_hops: u8,
-        visited_peer_ids: Vec<PeerId>,
-        request: HistoricalToriiProxyRequestKindV1,
-    }
-    /// Frozen test-only carrier for the checked-in V2 request at the original
-    /// `NetworkMessage::ToriiProxyRequest` discriminant.
-    #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-    #[norito(schema_name = "iroha_core::NetworkMessage")]
-    enum HistoricalNetworkMessage {
-        #[codec(index = 19)]
-        ToriiProxyRequest(Box<HistoricalToriiProxyRequestV2>),
-    }
-    /// Frozen test-only copy of the transient V2-plus-boolean Submit body.
-    ///
-    /// This shape never was the checked-in V2 contract, but keeping it as an
-    /// additional negative control proves that a one-byte boolean cannot be
-    /// interpreted as the four-byte V3 admission discriminant.
-    #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-    enum TransientBoolToriiProxyRequestKindV1 {
-        #[codec(index = 0)]
-        SubmitTransaction {
-            transaction: TransactionEntrypoint,
-            expected_plan: ToriiRoutingPlanHintV1,
-            strict_durable: bool,
-        },
-    }
-    #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-    #[norito(schema_name = "iroha_core::torii_proxy::ToriiProxyRequestV2")]
-    struct TransientBoolToriiProxyRequestV2 {
-        schema_version: u16,
-        request_id: Hash,
-        hop_count: u8,
-        max_hops: u8,
-        visited_peer_ids: Vec<PeerId>,
-        request: TransientBoolToriiProxyRequestKindV1,
-    }
-    /// Frozen test-only copy of the checked-in V5 request envelope.
-    #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-    #[norito(schema_name = "iroha_core::torii_proxy::ToriiProxyRequestV5")]
-    struct HistoricalToriiProxyRequestV5 {
-        schema_version: u16,
-        request_id: Hash,
-        hop_count: u8,
-        max_hops: u8,
-        visited_peer_ids: Vec<PeerId>,
-        request: ToriiProxyRequestKindV4,
-    }
-    /// Frozen admission discriminants from the retired pre-global layout.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
-    enum ObsoleteToriiProxyTransactionAdmissionV1 {
-        #[codec(index = 0)]
-        Deferred,
-        #[codec(index = 1)]
-        QueuePlanSynced,
-    }
     fn torii_read_endpoint_wire_index(endpoint: ToriiReadEndpointV1) -> u32 {
         let encoded = norito::codec::Encode::encode(&endpoint);
         assert_eq!(
@@ -2095,11 +2021,11 @@ mod tests {
         );
         u32::from_le_bytes(encoded.try_into().expect("four-byte variant index"))
     }
-    fn torii_transaction_admission_wire_index(admission: ToriiProxyTransactionAdmissionV2) -> u32 {
+    fn torii_transaction_admission_wire_index(admission: ToriiProxyTransactionAdmissionV1) -> u32 {
         let encoded = norito::codec::Encode::encode(&admission);
         let discriminant = encoded
             .get(..4)
-            .expect("ToriiProxyTransactionAdmissionV2 starts with a u32 variant index");
+            .expect("ToriiProxyTransactionAdmissionV1 starts with a u32 variant index");
         u32::from_le_bytes(discriminant.try_into().expect("four-byte variant index"))
     }
     #[test]
@@ -2122,7 +2048,7 @@ mod tests {
             request,
             Hash::new(
                 norito::encode_canonical(&(
-                    "torii:proxy:queue-plan-synced:v5",
+                    "torii:proxy:queue-plan-synced:v1",
                     network_a_digest,
                     entrypoint_a.clone(),
                 ))
@@ -2167,20 +2093,22 @@ mod tests {
         }
     }
     #[test]
-    fn torii_transaction_admission_wire_indexes_are_stable() {
+    fn torii_transaction_admission_wire_indexes_are_contiguous() {
         assert_eq!(
             torii_transaction_admission_wire_index(
-                ToriiProxyTransactionAdmissionV2::QueuePlanSynced
+                ToriiProxyTransactionAdmissionV1::QueuePlanSynced
             ),
-            2
+            0
         );
         let (_, _, _, binding, _) = ordinary_lifecycle_admission_fixture();
         assert_eq!(
             torii_transaction_admission_wire_index(
-                ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(binding)
+                ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(binding)
             ),
-            3
+            1
         );
+        let unknown = 2_u32.to_le_bytes();
+        assert!(ToriiProxyTransactionAdmissionV1::decode(&mut unknown.as_slice()).is_err());
     }
     #[test]
     fn ordinary_kagemusha_lifecycle_scope_accepts_exact_and_rejects_near_matches() {
@@ -2429,8 +2357,8 @@ mod tests {
             None,
         )
         .expect("encode exact unbound claim");
-        let mut durable = crate::queue::QueuePlanDurableAdmissionV2 {
-            version: crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+        let mut durable = crate::queue::QueuePlanDurableAdmissionV1 {
+            version: crate::queue::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
             context: binding.admission_context.clone(),
             global_admission_identity: None,
             routing_plan,
@@ -2443,8 +2371,8 @@ mod tests {
             .validate_durable_admission(&network_id, &transaction, &durable)
             .expect("exact unbound lifecycle durable claim must validate");
         durable.global_admission_identity =
-            Some(crate::queue::QueuePlanGlobalAdmissionIdentityV2 {
-                version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
+            Some(crate::queue::QueuePlanGlobalAdmissionIdentityV1 {
+                version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1,
                 network_id_digest: binding.network_id_digest,
                 request_id: binding.request_id,
             });
@@ -2455,24 +2383,11 @@ mod tests {
                 .contains("globally unbound")
         );
     }
-    #[test]
-    fn obsolete_transaction_admission_tags_fail_closed() {
-        for obsolete in [
-            ObsoleteToriiProxyTransactionAdmissionV1::Deferred,
-            ObsoleteToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-        ] {
-            let encoded = norito::codec::Encode::encode(&obsolete);
-            assert!(
-                ToriiProxyTransactionAdmissionV2::decode(&mut encoded.as_slice()).is_err(),
-                "retired admission tag {obsolete:?} must not decode under the V2 contract"
-            );
-        }
-    }
     fn single_route_admission_fixture() -> (
         NetworkId,
         TransactionEntrypoint,
         RoutingPlan,
-        QueuePlanAdmissionBindingV2,
+        QueuePlanAdmissionBindingV1,
         iroha_crypto::KeyPair,
     ) {
         let network_id = torii_proxy_test_network_id(b"queue-plan-semantic-certificate");
@@ -2491,13 +2406,13 @@ mod tests {
         let route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(5));
         let routing_plan = RoutingPlan::single(route);
         let validator_set = vec![PeerId::new(validator.public_key().clone())];
-        let context = crate::queue::QueuePlanAdmissionContextV2 {
-            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+        let context = crate::queue::QueuePlanAdmissionContextV1 {
+            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
             authority_height: 0,
             proposal_height: 1,
             predecessor_block_hash: None,
             routing_plan_digest: routing_plan.digest(),
-            route_incarnations: vec![crate::queue::QueuePlanRouteIncarnationV2 {
+            route_incarnations: vec![crate::queue::QueuePlanRouteIncarnationV1 {
                 leg: RouteLeg::new(route, RouteLegRole::Coordinator),
                 lane_incarnation: Hash::new(b"semantic certificate incarnation"),
                 validator_set_hash_version:
@@ -2509,7 +2424,7 @@ mod tests {
             }],
         };
         let binding =
-            QueuePlanAdmissionBindingV2::new(&network_id, &transaction, &routing_plan, context, 73)
+            QueuePlanAdmissionBindingV1::new(&network_id, &transaction, &routing_plan, context, 73)
                 .expect("construct canonical admission binding");
         (network_id, transaction, routing_plan, binding, validator)
     }
@@ -2521,8 +2436,8 @@ mod tests {
             .route_incarnations
             .first()
             .expect("single-route fixture has a coordinator");
-        let key = crate::queue::LaneQueueReservationKeyV2 {
-            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+        let key = crate::queue::LaneQueueReservationKeyV1 {
+            version: crate::queue::LaneQueueReservationKeyV1::VERSION,
             entrypoint_hash: binding.entrypoint_hash.clone(),
             queue_plan_admission_binding_hash: binding.canonical_hash(),
             routing_plan_digest: binding.routing_plan_digest,
@@ -2565,7 +2480,7 @@ mod tests {
         height_two_context.predecessor_block_hash = Some(HashOf::from_untyped_unchecked(
             Hash::new(b"height-one committed predecessor"),
         ));
-        let height_two_binding = QueuePlanAdmissionBindingV2::new(
+        let height_two_binding = QueuePlanAdmissionBindingV1::new(
             &network_id,
             &transaction,
             &routing_plan,
@@ -2598,22 +2513,22 @@ mod tests {
         )
         .expect("rebind forged semantic identity into its journal digest");
         let signing_bytes =
-            queue_plan_admission_attestation_signing_bytes_v2(forged.canonical_hash(), 0)
+            queue_plan_admission_attestation_signing_bytes_v1(forged.canonical_hash(), 0)
                 .expect("encode forged certificate preimage");
-        let certificate = QueuePlanAdmissionCertificateV2 {
-            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+        let certificate = QueuePlanAdmissionCertificateV1 {
+            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
             binding: forged,
-            attestations: vec![QueuePlanAdmissionAttestationV2 {
-                version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+            attestations: vec![QueuePlanAdmissionAttestationV1 {
+                version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
                 validator_index: 0,
                 signature: Signature::try_new(validator.private_key(), &signing_bytes)
                     .expect("sign internally consistent forged certificate"),
             }],
         };
-        let error = validate_queue_plan_admission_certificate_v2(
+        let error = validate_queue_plan_admission_certificate_v1(
             &network_id,
             certificate,
-            QueuePlanAdmissionCertificateStrengthV2::Quorum,
+            QueuePlanAdmissionCertificateStrengthV1::Quorum,
         )
         .expect_err("digest-valid signatures cannot authorize a noncanonical request identity");
         assert!(
@@ -2633,29 +2548,29 @@ mod tests {
         assert_eq!(chain_a, chain_b);
         let (network_a, _, _, binding, validator) = single_route_admission_fixture();
         let signing_bytes =
-            queue_plan_admission_attestation_signing_bytes_v2(binding.canonical_hash(), 0)
+            queue_plan_admission_attestation_signing_bytes_v1(binding.canonical_hash(), 0)
                 .expect("encode exact-network attestation preimage");
-        let certificate = QueuePlanAdmissionCertificateV2 {
-            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+        let certificate = QueuePlanAdmissionCertificateV1 {
+            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
             binding,
-            attestations: vec![QueuePlanAdmissionAttestationV2 {
-                version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+            attestations: vec![QueuePlanAdmissionAttestationV1 {
+                version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
                 validator_index: 0,
                 signature: Signature::try_new(validator.private_key(), &signing_bytes)
                     .expect("sign exact-network admission certificate"),
             }],
         };
-        validate_queue_plan_admission_certificate_v2(
+        validate_queue_plan_admission_certificate_v1(
             &network_a,
             certificate.clone(),
-            QueuePlanAdmissionCertificateStrengthV2::Quorum,
+            QueuePlanAdmissionCertificateStrengthV1::Quorum,
         )
         .expect("certificate validates on its exact genesis lineage");
         let network_b = torii_proxy_test_network_id(b"queue-plan-different-genesis");
-        let error = validate_queue_plan_admission_certificate_v2(
+        let error = validate_queue_plan_admission_certificate_v1(
             &network_b,
             certificate,
-            QueuePlanAdmissionCertificateStrengthV2::Quorum,
+            QueuePlanAdmissionCertificateStrengthV1::Quorum,
         )
         .expect_err("a same-label deployment with another genesis must be rejected");
         assert!(
@@ -2667,13 +2582,13 @@ mod tests {
     fn queue_plan_certificate_boundary_is_canonical_and_ambient_independent() {
         let (network_id, _, _, binding, validator) = single_route_admission_fixture();
         let binding_hash = binding.canonical_hash();
-        let signing_bytes = queue_plan_admission_attestation_signing_bytes_v2(binding_hash, 0)
+        let signing_bytes = queue_plan_admission_attestation_signing_bytes_v1(binding_hash, 0)
             .expect("encode canonical attestation preimage");
-        let certificate = QueuePlanAdmissionCertificateV2 {
-            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+        let certificate = QueuePlanAdmissionCertificateV1 {
+            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
             binding,
-            attestations: vec![QueuePlanAdmissionAttestationV2 {
-                version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+            attestations: vec![QueuePlanAdmissionAttestationV1 {
+                version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
                 validator_index: 0,
                 signature: Signature::try_new(validator.private_key(), &signing_bytes)
                     .expect("sign canonical admission certificate"),
@@ -2682,7 +2597,7 @@ mod tests {
         let canonical =
             norito::encode_canonical(&certificate).expect("encode canonical admission certificate");
         let validated =
-            decode_and_validate_queue_plan_admission_certificate_v2(&network_id, &canonical)
+            decode_and_validate_queue_plan_admission_certificate_v1(&network_id, &canonical)
                 .expect("canonical admission certificate validates");
         assert_eq!(validated.certificate, certificate);
         let alternate_flags =
@@ -2696,7 +2611,7 @@ mod tests {
             "fixture must exercise a distinct non-canonical certificate layout"
         );
         assert!(
-            decode_and_validate_queue_plan_admission_certificate_v2(&network_id, &alternate)
+            decode_and_validate_queue_plan_admission_certificate_v1(&network_id, &alternate)
                 .is_err(),
             "alternate-layout certificate must fail closed"
         );
@@ -2708,11 +2623,11 @@ mod tests {
                 "binding identity must ignore the caller's ambient Norito layout"
             );
             assert_eq!(
-                queue_plan_admission_attestation_signing_bytes_v2(binding_hash, 0)
+                queue_plan_admission_attestation_signing_bytes_v1(binding_hash, 0)
                     .expect("encode attestation under alternate ambient layout"),
                 signing_bytes
             );
-            decode_and_validate_queue_plan_admission_certificate_v2(&network_id, &canonical)
+            decode_and_validate_queue_plan_admission_certificate_v1(&network_id, &canonical)
                 .expect("canonical certificate must validate under alternate ambient layout");
         }
     }
@@ -2752,14 +2667,14 @@ mod tests {
             .map(|signer| PeerId::new(signer.public_key().clone()))
             .collect::<Vec<_>>();
         let participant_roster = vec![PeerId::new(participant_signer.public_key().clone())];
-        let context = crate::queue::QueuePlanAdmissionContextV2 {
-            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+        let context = crate::queue::QueuePlanAdmissionContextV1 {
+            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
             authority_height: 0,
             proposal_height: 1,
             predecessor_block_hash: None,
             routing_plan_digest: routing_plan.digest(),
             route_incarnations: vec![
-                crate::queue::QueuePlanRouteIncarnationV2 {
+                crate::queue::QueuePlanRouteIncarnationV1 {
                     leg: RouteLeg::new(coordinator_route, RouteLegRole::Coordinator),
                     lane_incarnation: Hash::new(b"native-admission-coordinator-incarnation"),
                     validator_set_hash_version:
@@ -2769,7 +2684,7 @@ mod tests {
                     validator_count: 4,
                     durability_threshold: 2,
                 },
-                crate::queue::QueuePlanRouteIncarnationV2 {
+                crate::queue::QueuePlanRouteIncarnationV1 {
                     leg: RouteLeg::new(participant_route, RouteLegRole::Participant),
                     lane_incarnation: Hash::new(b"native-admission-participant-incarnation"),
                     validator_set_hash_version:
@@ -2782,7 +2697,7 @@ mod tests {
             ],
         };
         let binding =
-            QueuePlanAdmissionBindingV2::new(&network_id, &transaction, &routing_plan, context, 42)
+            QueuePlanAdmissionBindingV1::new(&network_id, &transaction, &routing_plan, context, 42)
                 .expect("build Native admission binding");
         assert_eq!(
             binding.routing_plan().expect("bound Native routing plan"),
@@ -2790,30 +2705,30 @@ mod tests {
             "participant routing evidence must remain inside the shared binding"
         );
         let sign = |validator_index: u16, signer: &iroha_crypto::KeyPair| {
-            let signing_bytes = queue_plan_admission_attestation_signing_bytes_v2(
+            let signing_bytes = queue_plan_admission_attestation_signing_bytes_v1(
                 binding.canonical_hash(),
                 validator_index,
             )
             .expect("encode attestation preimage");
-            QueuePlanAdmissionAttestationV2 {
-                version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+            QueuePlanAdmissionAttestationV1 {
+                version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
                 validator_index,
                 signature: Signature::try_new(signer.private_key(), &signing_bytes)
                     .expect("sign admission attestation"),
             }
         };
-        let certificate = QueuePlanAdmissionCertificateV2 {
-            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+        let certificate = QueuePlanAdmissionCertificateV1 {
+            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
             binding: binding.clone(),
             attestations: vec![
                 sign(0, &coordinator_signers[0]),
                 sign(1, &coordinator_signers[1]),
             ],
         };
-        let validated = validate_queue_plan_admission_certificate_v2(
+        let validated = validate_queue_plan_admission_certificate_v1(
             &network_id,
             certificate,
-            QueuePlanAdmissionCertificateStrengthV2::Quorum,
+            QueuePlanAdmissionCertificateStrengthV1::Quorum,
         )
         .expect("coordinator quorum certifies the participant-bound plan");
         assert_eq!(validated.coordinator_route, coordinator_route);
@@ -2822,31 +2737,31 @@ mod tests {
             sign(0, &participant_signer),
             sign(1, &coordinator_signers[1]),
         ];
-        let participant_certificate = QueuePlanAdmissionCertificateV2 {
-            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+        let participant_certificate = QueuePlanAdmissionCertificateV1 {
+            version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
             binding,
             attestations: participant_attestations,
         };
         assert!(
-            validate_queue_plan_admission_certificate_v2(
+            validate_queue_plan_admission_certificate_v1(
                 &network_id,
                 participant_certificate,
-                QueuePlanAdmissionCertificateStrengthV2::Quorum,
+                QueuePlanAdmissionCertificateStrengthV1::Quorum,
             )
             .is_err(),
             "participant authority must not substitute for coordinator durability quorum"
         );
     }
     #[test]
-    fn torii_proxy_v6_envelope_roundtrips_exact_deadline_bound_request() {
-        let request = ToriiProxyRequestV6 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
-            request_id: Hash::new(b"torii-proxy-v6-roundtrip"),
+    fn torii_proxy_v1_envelope_roundtrips_exact_deadline_bound_request() {
+        let request = ToriiProxyRequestV1 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V1,
+            request_id: Hash::new(b"torii-proxy-v1-roundtrip"),
             deadline_unix_ms: 1_900_000_000_000,
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV4::Read(ToriiReadProxyRequestV1 {
+            request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::new(3),
@@ -2858,182 +2773,10 @@ mod tests {
                 response_format: ToriiProxyResponseFormatV1::Json,
             }),
         };
-        let encoded = norito::to_bytes(&request).expect("encode V6 Torii proxy request");
-        let decoded = norito::decode_from_bytes::<ToriiProxyRequestV6>(&encoded)
-            .expect("decode V6 Torii proxy request");
+        let encoded = norito::to_bytes(&request).expect("encode V1 Torii proxy request");
+        let decoded = norito::decode_from_bytes::<ToriiProxyRequestV1>(&encoded)
+            .expect("decode V1 Torii proxy request");
         assert_eq!(decoded, request);
-    }
-    #[test]
-    fn historical_v5_envelope_cannot_be_accepted_as_deadline_bound_v6() {
-        let current = ToriiProxyRequestV6 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V6,
-            request_id: Hash::new(b"torii-proxy-v6-version-separation"),
-            deadline_unix_ms: 1_900_000_000_000,
-            hop_count: 1,
-            max_hops: 3,
-            visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV4::Read(ToriiReadProxyRequestV1 {
-                endpoint: ToriiReadEndpointV1::AccountsList,
-                expected_route: ToriiRouteHintV1 {
-                    lane_id: LaneId::new(3),
-                    dataspace_id: DataSpaceId::new(9),
-                },
-                path_args: Vec::new(),
-                query_string: None,
-                body: Vec::new(),
-                response_format: ToriiProxyResponseFormatV1::Json,
-            }),
-        };
-        let historical = HistoricalToriiProxyRequestV5 {
-            schema_version: 5,
-            request_id: current.request_id.clone(),
-            hop_count: current.hop_count,
-            max_hops: current.max_hops,
-            visited_peer_ids: current.visited_peer_ids.clone(),
-            request: current.request.clone(),
-        };
-        let historical_bytes =
-            norito::to_bytes(&historical).expect("encode frozen V5 proxy request");
-        assert!(
-            norito::decode_from_bytes::<ToriiProxyRequestV6>(&historical_bytes).is_err(),
-            "V5 requests without an authenticated deadline must fail closed"
-        );
-        let current_bytes = norito::to_bytes(&current).expect("encode V6 proxy request");
-        assert!(
-            norito::decode_from_bytes::<HistoricalToriiProxyRequestV5>(&current_bytes).is_err(),
-            "V6 deadline-bound requests must not decode as the retired V5 layout"
-        );
-    }
-    fn historical_v2_submit_fixture() -> HistoricalToriiProxyRequestV2 {
-        let keypair =
-            iroha_crypto::KeyPair::from_seed(vec![0x70; 32], iroha_crypto::Algorithm::Ed25519);
-        let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
-        let mut transaction_builder =
-            iroha_data_model::transaction::signed::TransactionBuilder::new(
-                torii_proxy_test_network_id(b"torii-proxy-historical-v2-fixture"),
-                authority,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            );
-        transaction_builder.set_creation_time(std::time::Duration::from_millis(41));
-        let transaction =
-            TransactionEntrypoint::External(transaction_builder.sign(keypair.private_key()));
-        HistoricalToriiProxyRequestV2 {
-            schema_version: LEGACY_TORII_PROXY_REQUEST_VERSION_V2,
-            request_id: Hash::new(b"historical-v2-submit"),
-            hop_count: 1,
-            max_hops: 3,
-            visited_peer_ids: Vec::new(),
-            request: HistoricalToriiProxyRequestKindV1::SubmitTransaction {
-                transaction,
-                expected_plan: ToriiRoutingPlanHintV1::from(RoutingPlan::single(
-                    RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-                )),
-            },
-        }
-    }
-    #[test]
-    fn historical_v2_submit_and_network_carrier_cannot_be_accepted_as_v6() {
-        let historical = historical_v2_submit_fixture();
-        let historical_bytes =
-            norito::to_bytes(&historical).expect("encode checked-in historical V2 Submit fixture");
-        assert_eq!(
-            &historical_bytes[6..22],
-            norito::core::schema_hash_for_name("iroha_core::torii_proxy::ToriiProxyRequestV2")
-                .as_slice(),
-            "fixture must carry the checked-in V2 envelope schema"
-        );
-        assert_eq!(
-            norito::decode_from_bytes::<HistoricalToriiProxyRequestV2>(&historical_bytes)
-                .expect("decode checked-in historical V2 Submit fixture"),
-            historical
-        );
-        assert!(
-            norito::decode_from_bytes::<ToriiProxyRequestV6>(&historical_bytes).is_err(),
-            "the checked-in V2 request must not decode as a V6 request"
-        );
-        let historical_network = HistoricalNetworkMessage::ToriiProxyRequest(Box::new(historical));
-        let historical_network_bytes = norito::to_bytes(&historical_network)
-            .expect("encode checked-in historical V2 network carrier");
-        assert_eq!(
-            &historical_network_bytes[6..22],
-            <crate::NetworkMessage as norito::NoritoSerialize>::schema_hash().as_slice(),
-            "the frozen carrier must use the production NetworkMessage schema"
-        );
-        assert_eq!(
-            norito::decode_from_bytes::<HistoricalNetworkMessage>(&historical_network_bytes)
-                .expect("decode checked-in historical V2 network carrier"),
-            historical_network
-        );
-        assert!(
-            norito::decode_from_bytes::<crate::NetworkMessage>(&historical_network_bytes).is_err(),
-            "the live NetworkMessage decoder must reject a nested V2 request before dispatch"
-        );
-    }
-    #[test]
-    fn legacy_v2_submit_bool_wire_cannot_be_accepted_as_v6() {
-        let keypair =
-            iroha_crypto::KeyPair::from_seed(vec![0x71; 32], iroha_crypto::Algorithm::Ed25519);
-        let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
-        let mut transaction_builder =
-            iroha_data_model::transaction::signed::TransactionBuilder::new(
-                torii_proxy_test_network_id(b"torii-proxy-legacy-v2-fixture"),
-                authority,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            );
-        transaction_builder.set_creation_time(std::time::Duration::from_millis(42));
-        let transaction =
-            TransactionEntrypoint::External(transaction_builder.sign(keypair.private_key()));
-        let expected_plan = ToriiRoutingPlanHintV1::from(RoutingPlan::single(
-            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-        ));
-        for strict_durable in [false, true] {
-            let legacy = TransientBoolToriiProxyRequestV2 {
-                schema_version: LEGACY_TORII_PROXY_REQUEST_VERSION_V2,
-                request_id: Hash::new(if strict_durable {
-                    &b"legacy-v2-strict-submit"[..]
-                } else {
-                    &b"legacy-v2-deferred-submit"[..]
-                }),
-                hop_count: 1,
-                max_hops: 3,
-                visited_peer_ids: Vec::new(),
-                request: TransientBoolToriiProxyRequestKindV1::SubmitTransaction {
-                    transaction: transaction.clone(),
-                    expected_plan: expected_plan.clone(),
-                    strict_durable,
-                },
-            };
-            let legacy_bytes =
-                norito::to_bytes(&legacy).expect("encode frozen legacy V2 Submit fixture");
-            assert_eq!(
-                &legacy_bytes[6..22],
-                norito::core::schema_hash_for_name("iroha_core::torii_proxy::ToriiProxyRequestV2")
-                    .as_slice(),
-                "fixture must carry the historical V2 envelope schema"
-            );
-            assert_eq!(
-                legacy_bytes.last().copied(),
-                Some(u8::from(strict_durable)),
-                "historical Submit must end in its one-byte strict_durable field"
-            );
-            assert_eq!(
-                norito::decode_from_bytes::<TransientBoolToriiProxyRequestV2>(&legacy_bytes)
-                    .expect("decode frozen legacy V2 Submit fixture"),
-                legacy
-            );
-            assert!(
-                norito::decode_from_bytes::<ToriiProxyRequestV6>(&legacy_bytes).is_err(),
-                "the genuine V2 frame must not decode as a V6 request"
-            );
-            let mut relabeled_as_v6 = legacy_bytes;
-            relabeled_as_v6[6..22]
-                .copy_from_slice(&<ToriiProxyRequestV6 as norito::NoritoSerialize>::schema_hash());
-            assert!(
-                norito::decode_from_bytes::<ToriiProxyRequestV6>(&relabeled_as_v6).is_err(),
-                "even a V6 schema label must not turn the legacy one-byte bool payload into the \
-                 V6 deadline/admission-binding shape; no compatibility fallback is permitted"
-            );
-        }
     }
     #[test]
     fn torii_read_endpoint_wire_indexes_match_first_release_schema() {
@@ -3064,6 +2807,10 @@ mod tests {
         assert_eq!(
             torii_read_endpoint_wire_index(ToriiReadEndpointV1::ContractDeploymentState),
             44
+        );
+        assert_eq!(
+            torii_read_endpoint_wire_index(ToriiReadEndpointV1::AccountOnboardingCurrentState),
+            45
         );
     }
     fn native_amx_participant_legs(count: usize) -> Vec<RouteLeg> {

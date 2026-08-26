@@ -149,10 +149,10 @@ use iroha_data_model::{
         SoraInrouReplicaRuntimeStateV1, SoraInrouServicePlacementRecordV1,
         SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
         SoraModelHostViolationEvidenceRecordV1, SoraModelRegistryV1, SoraModelWeightAuditEventV1,
-        SoraModelWeightVersionRecordV1, SoraPrivateUploadedModelExecutionReceiptV1,
-        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceDeploymentStateV1,
-        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraServiceStateEntryV1,
-        SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraUploadedModelBundleV1,
+        SoraModelWeightVersionRecordV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
+        SoraServiceDeploymentStateV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
+        SoraServiceStateEntryV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
+        SoraUploadedModelBundleV1,
     },
     soradns::{
         DirectoryId, DirectoryRotationPolicyV1, PendingDirectoryDraftV1, ResolverDirectoryRecordV1,
@@ -754,7 +754,6 @@ macro_rules! with_world_overlay_fields {
             soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
-            soracloud_private_uploaded_model_execution_receipts,
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
@@ -1083,19 +1082,22 @@ pub(crate) fn parse_permission_account_field(
     payload: &iroha_primitives::json::Json,
     field: &str,
     now_ms: u64,
-) -> Option<iroha_data_model::account::AccountId> {
-    let value = norito::json::parse_value(payload.get()).ok()?;
+) -> Result<Option<iroha_data_model::account::AccountId>, crate::sns::SnsError> {
+    let Ok(value) = norito::json::parse_value(payload.get()) else {
+        return Ok(None);
+    };
     let map = match value {
         norito::json::Value::Object(map) => map,
-        _ => return None,
+        _ => return Ok(None),
     };
-    let entry = map.get(field)?;
+    let Some(entry) = map.get(field) else {
+        return Ok(None);
+    };
     let literal = match entry {
         norito::json::Value::String(value) => value.as_str(),
-        _ => return None,
+        _ => return Ok(None),
     };
     crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
-        .map(Into::into)
 }
 impl AccountPermissionSummary {
     fn clear(&mut self) {
@@ -1113,7 +1115,7 @@ impl AccountPermissionSummary {
     ) {
         match permission.name() {
             "CanRegisterTrigger" => {
-                if let Some(authority) = parse_permission_account_field(
+                if let Ok(Some(authority)) = parse_permission_account_field(
                     world,
                     dataspace_catalog,
                     permission.payload(),
@@ -1569,7 +1571,7 @@ struct QueuePlanPendingObligationV1 {
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     signed_transaction_hash: Option<HashOf<SignedTransaction>>,
     binding_hash: Hash,
-    binding: crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    binding: crate::torii_proxy::QueuePlanAdmissionBindingV1,
     routes: Vec<QueuePlanPendingObligationRouteV1>,
 }
 /// Exact replicated membership witness for one pending QueuePlan obligation
@@ -1813,13 +1815,13 @@ fn preflight_canonical_merge_inner_frame(
 }
 fn decode_canonical_merge_reservation_key(
     encoded: &[u8],
-) -> Result<crate::queue::LaneQueueReservationKeyV2, MergeLedgerCommitError> {
+) -> Result<crate::queue::LaneQueueReservationKeyV1, MergeLedgerCommitError> {
     preflight_canonical_merge_inner_frame(
         encoded,
         MAX_MERGE_EXECUTION_RESERVATION_KEY_BYTES,
         "lane reservation key",
     )?;
-    let decoded = norito::decode_canonical::<crate::queue::LaneQueueReservationKeyV2>(encoded)
+    let decoded = norito::decode_canonical::<crate::queue::LaneQueueReservationKeyV1>(encoded)
         .map_err(|error| {
             MergeLedgerCommitError::ExecutionBatchInvalid(format!(
                 "encoded lane reservation key is not canonical exact framed Norito: {error}"
@@ -1878,7 +1880,7 @@ pub(crate) fn certified_merge_queue_reservation_groups(
     Vec<
         Vec<(
             HashOf<TransactionEntrypoint>,
-            crate::queue::LaneQueueReservationKeyV2,
+            crate::queue::LaneQueueReservationKeyV1,
         )>,
     >,
     MergeLedgerCommitError,
@@ -1931,7 +1933,7 @@ pub(crate) fn certified_merge_queue_reservations(
 ) -> Result<
     Vec<(
         HashOf<TransactionEntrypoint>,
-        crate::queue::LaneQueueReservationKeyV2,
+        crate::queue::LaneQueueReservationKeyV1,
     )>,
     MergeLedgerCommitError,
 > {
@@ -2817,9 +2819,9 @@ pub enum LaneLifecycleError {
     /// Relay worker requires asynchronous lane-relay-burn fee settlement.
     #[error("nexus.relay_worker.enabled requires lane-relay-burn fee settlement")]
     RelayWorkerFeeConfig,
-    /// Nexus fee asset selector must be the canonical XOR asset or XOR alias.
+    /// Nexus fee asset selector must be the exact canonical XOR asset or exact XOR alias.
     #[error(
-        "invalid nexus.fees.fee_asset_id; expected XOR canonical asset definition id or xor#universal alias"
+        "invalid nexus.fees.fee_asset_id; expected exact XOR canonical asset definition id or exact xor#universal alias"
     )]
     NexusFeeAssetIdInvalid,
     /// Nexus fee sink account literal must be non-empty.
@@ -3302,11 +3304,9 @@ impl mv::json::JsonKeyCodec for SmartContractCodeUploadKey {
                 "contract upload key has trailing components".into(),
             ));
         }
-        let authority = AccountId::parse_encoded(authority)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .map_err(|error| {
-                json::Error::Message(format!("invalid contract upload key authority: {error}"))
-            })?;
+        let authority = AccountId::parse_encoded(authority).map_err(|error| {
+            json::Error::Message(format!("invalid contract upload key authority: {error}"))
+        })?;
         let code_hash = decode_contract_upload_key_hash(code_hash)?;
         Ok(Self {
             authority,
@@ -3376,13 +3376,11 @@ impl mv::json::JsonKeyCodec for SmartContractCodeUploadChunkKey {
                 "contract upload chunk key has trailing components".into(),
             ));
         }
-        let authority = AccountId::parse_encoded(authority)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .map_err(|error| {
-                json::Error::Message(format!(
-                    "invalid contract upload chunk key authority: {error}"
-                ))
-            })?;
+        let authority = AccountId::parse_encoded(authority).map_err(|error| {
+            json::Error::Message(format!(
+                "invalid contract upload chunk key authority: {error}"
+            ))
+        })?;
         let code_hash = decode_contract_upload_key_hash(code_hash)?;
         let chunk_index = chunk_index.parse::<u32>().map_err(|error| {
             json::Error::Message(format!("invalid contract upload chunk key index: {error}"))
@@ -3954,9 +3952,6 @@ pub struct World {
     pub(crate) soracloud_mailbox_messages: Storage<Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by deterministic receipt id.
     pub(crate) soracloud_runtime_receipts: Storage<Hash, SoraRuntimeReceiptV1>,
-    /// Private uploaded-model execution receipts keyed by deterministic receipt id.
-    pub(crate) soracloud_private_uploaded_model_execution_receipts:
-        Storage<Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     #[norito(skip)]
     pub(crate) capacity_declarations: Storage<ProviderId, CapacityDeclarationRecord>,
@@ -4647,9 +4642,6 @@ pub struct WorldBlock<'world> {
     pub(crate) soracloud_mailbox_messages: StorageBlock<'world, Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by receipt id.
     pub(crate) soracloud_runtime_receipts: StorageBlock<'world, Hash, SoraRuntimeReceiptV1>,
-    /// Private uploaded-model execution receipts keyed by receipt id.
-    pub(crate) soracloud_private_uploaded_model_execution_receipts:
-        StorageBlock<'world, Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     #[norito(skip)]
     pub(crate) capacity_declarations: StorageBlock<'world, ProviderId, CapacityDeclarationRecord>,
@@ -5263,7 +5255,6 @@ impl<'world> WorldBlock<'world> {
             soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
-            soracloud_private_uploaded_model_execution_receipts,
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
@@ -5916,9 +5907,6 @@ pub struct WorldTransaction<'block, 'world> {
     /// Soracloud runtime receipts keyed by receipt id.
     pub(crate) soracloud_runtime_receipts:
         StorageTransaction<'block, 'world, Hash, SoraRuntimeReceiptV1>,
-    /// Private uploaded-model execution receipts keyed by receipt id.
-    pub(crate) soracloud_private_uploaded_model_execution_receipts:
-        StorageTransaction<'block, 'world, Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations:
         StorageTransaction<'block, 'world, ProviderId, CapacityDeclarationRecord>,
@@ -7983,9 +7971,6 @@ pub struct WorldView<'world> {
     pub(crate) soracloud_mailbox_messages: StorageView<'world, Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by receipt id.
     pub(crate) soracloud_runtime_receipts: StorageView<'world, Hash, SoraRuntimeReceiptV1>,
-    /// Private uploaded-model execution receipts keyed by receipt id.
-    pub(crate) soracloud_private_uploaded_model_execution_receipts:
-        StorageView<'world, Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations: StorageView<'world, ProviderId, CapacityDeclarationRecord>,
     /// Capacity fee ledger entries per provider.
@@ -10238,11 +10223,9 @@ mod governance_locks_map_json {
         let mut out = BTreeMap::new();
         while let Some(key) = visitor.next_key()? {
             let acc_str = key.as_str();
-            let account: AccountId = AccountId::parse_encoded(acc_str)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .map_err(|err| {
-                    json::Error::Message(format!("invalid account id `{acc_str}`: {err}"))
-                })?;
+            let account: AccountId = AccountId::parse_encoded(acc_str).map_err(|err| {
+                json::Error::Message(format!("invalid account id `{acc_str}`: {err}"))
+            })?;
             let record: GovernanceLockRecord = visitor.parse_value()?;
             if out.insert(account, record).is_some() {
                 return Err(json::Error::DuplicateField {
@@ -10306,11 +10289,9 @@ mod governance_slash_map_json {
         let mut out = BTreeMap::new();
         while let Some(key) = visitor.next_key()? {
             let acc_str = key.as_str();
-            let account: AccountId = AccountId::parse_encoded(acc_str)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .map_err(|err| {
-                    json::Error::Message(format!("invalid account id `{acc_str}`: {err}"))
-                })?;
+            let account: AccountId = AccountId::parse_encoded(acc_str).map_err(|err| {
+                json::Error::Message(format!("invalid account id `{acc_str}`: {err}"))
+            })?;
             let record: GovernanceSlashEntry = visitor.parse_value()?;
             if out.insert(account, record).is_some() {
                 return Err(json::Error::DuplicateField {
@@ -11060,7 +11041,7 @@ type AutonomousLaneDiagnosticKey = (LaneId, DataSpaceId, Hash, u64, u64, u64, Ha
 #[derive(Clone)]
 struct AutonomousLaneDiagnosticEvidence {
     row: SumeragiAutonomousLaneExecution,
-    reservation_keys: Option<Vec<crate::queue::LaneQueueReservationKeyV2>>,
+    reservation_keys: Option<Vec<crate::queue::LaneQueueReservationKeyV1>>,
     reservations_durable: bool,
     payload_durable: bool,
     availability_certified: bool,
@@ -11117,7 +11098,7 @@ impl AutonomousLaneDiagnosticEvidence {
     }
     fn from_proposal_and_reservations(
         proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
-        reservation_keys: &[crate::queue::LaneQueueReservationKeyV2],
+        reservation_keys: &[crate::queue::LaneQueueReservationKeyV1],
     ) -> Result<Self> {
         let descriptor = &proposal.descriptor;
         let transaction_count = u64::try_from(descriptor.accepted_transaction_hashes.len())
@@ -11183,7 +11164,7 @@ impl AutonomousLaneDiagnosticEvidence {
     fn key(&self) -> AutonomousLaneDiagnosticKey {
         self.row.ordering_key()
     }
-    fn exact_reservation_keys(&self) -> Option<&[crate::queue::LaneQueueReservationKeyV2]> {
+    fn exact_reservation_keys(&self) -> Option<&[crate::queue::LaneQueueReservationKeyV1]> {
         let keys = self.reservation_keys.as_deref()?;
         let count = u64::try_from(keys.len()).ok()?;
         let binding =
@@ -11954,8 +11935,9 @@ pub struct StateBlock<'state> {
     pub(crate) zk_dedup: crate::zk::DedupCache,
     /// Successful overlays (transactions, triggers, deterministic updates) committed in this block.
     committed_fragments: usize,
-    /// True while rebuilding state from already committed Kura blocks.
-    pub(crate) replay_compatibility: bool,
+    /// True only after an exact committed block has been re-executed and its
+    /// execution commitment has matched authenticated Kura finality.
+    pub(crate) authenticated_replay_commit: bool,
     /// True for the disposable full-range replay pass that must not publish external effects.
     replay_prevalidation: bool,
 }
@@ -11975,7 +11957,7 @@ impl<'state> StateBlock<'state> {
         entrypoint: &TransactionEntrypoint,
         routing_plan: &crate::queue::RoutingPlan,
         execution_height: u64,
-    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>, String> {
+    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV1>, String> {
         let parent_state = self.state_ref.query_view();
         State::pending_queue_plan_binding_for_execution(
             &parent_state,
@@ -13091,8 +13073,6 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) kagemusha_taira_canary_external_entrypoint: bool,
     /// Original block entrypoint index for the current transaction, when known.
     pub(crate) current_entrypoint_index: Option<u64>,
-    /// True while rebuilding state from already committed Kura blocks.
-    pub(crate) replay_compatibility: bool,
     /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
     pub(crate) rwa_generated_id_ordinal: u64,
     /// Deterministic per-execution ordinal shared by authority-lifecycle transitions.
@@ -16467,10 +16447,10 @@ mod storage_migration_tests {
         assert!(error.contains("continuity record points"), "{error}");
     }
     #[test]
-    fn account_rekey_rebuild_normalizes_legacy_history_as_non_authorizing() {
+    fn account_rekey_rebuild_rejects_missing_transition_provenance() {
         let mut world = World::default();
         let domain_id = DomainId::try_new("alias", "world").expect("domain id");
-        let label = alias_in_domain(&domain_id, "legacy".parse().expect("label"));
+        let label = alias_in_domain(&domain_id, "malformed".parse().expect("label"));
         let retired = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let active = AccountId::new(crate::state::checked_keypair().public_key().clone());
         world.accounts.insert(
@@ -16483,23 +16463,15 @@ mod storage_migration_tests {
             )),
         );
         world.account_aliases.insert(label.clone(), active.clone());
-        let mut legacy = AccountRekeyRecord::new(label.clone(), retired)
+        let mut malformed = AccountRekeyRecord::new(label.clone(), retired)
             .repoint_for_account_id_rekey(active)
             .expect("fixture transition");
-        legacy.transition_provenance.clear();
-        world.account_rekey_records.insert(label.clone(), legacy);
-        world
+        malformed.transition_provenance.clear();
+        world.account_rekey_records.insert(label, malformed);
+        let error = world
             .rebuild_account_rekey_records()
-            .expect("legacy record must normalize deterministically");
-        assert_eq!(
-            world
-                .account_rekey_records
-                .view()
-                .get(&label)
-                .expect("normalized record")
-                .transition_provenance,
-            vec![AccountRekeyTransitionProvenance::LegacyUnspecified]
-        );
+            .expect_err("missing provenance must fail state rebuild");
+        assert!(error.contains("malformed provenance"), "{error}");
     }
     #[test]
     fn account_rekey_rebuild_rejects_live_retired_predecessor_and_ambiguous_targets() {
@@ -16858,7 +16830,7 @@ mod custom_parameter_tests {
     #[test]
     fn npos_parameters_reject_retired_fields_and_zero_seed() {
         let mut params = Parameters::default();
-        let payload = r#"{"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","k_aggregators":3,"redundant_send_r":3,"vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40,"max_validators":31,"min_self_bond":1000,"min_nomination_bond":1,"max_nominator_concentration_pct":25,"seat_band_pct":5,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":259200,"epoch_length_blocks":3600}"#;
+        let payload = r#"{"activation_lag_blocks":1,"epoch_length_blocks":3600,"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","evidence_horizon_blocks":7200,"finality_margin_blocks":8,"k_aggregators":3,"max_entity_correlation_pct":25,"max_nominator_concentration_pct":25,"max_validators":31,"min_nomination_bond":1,"min_self_bond":1000,"redundant_send_r":3,"seat_band_pct":5,"slashing_delay_blocks":259200,"vrf_commit_window_blocks":100,"vrf_reveal_window_blocks":40}"#;
         let custom = iroha_data_model::parameter::CustomParameter::new(
             SumeragiNposParameters::parameter_id(),
             payload
@@ -17037,6 +17009,7 @@ impl DetachedStateTransactionDelta {
                 &alias,
                 now_ms,
             )
+            .map_err(|error| ValidationFail::InternalError(error.to_string()))?
             .as_ref()
                 != Some(account_id)
             {
@@ -17608,12 +17581,6 @@ impl World {
     ) -> &mut Storage<Hash, SoraRuntimeReceiptV1> {
         &mut self.soracloud_runtime_receipts
     }
-    /// Provides mutable access to private uploaded-model execution receipts for tests and API scaffolding.
-    pub fn soracloud_private_uploaded_model_execution_receipts_mut_for_testing(
-        &mut self,
-    ) -> &mut Storage<Hash, SoraPrivateUploadedModelExecutionReceiptV1> {
-        &mut self.soracloud_private_uploaded_model_execution_receipts
-    }
     /// Provides mutable access to SoraFS pin manifests for tests and API scaffolding.
     pub fn pin_manifests_mut_for_testing(
         &mut self,
@@ -17974,7 +17941,6 @@ impl World {
     }
     fn rebuild_account_rekey_records(&mut self) -> Result<(), String> {
         let mut records = BTreeMap::new();
-        let mut normalized_legacy_record = false;
         let mut active_account_id_rekey_targets = BTreeMap::<AccountId, AccountId>::new();
         let existing_records: Vec<_> = self
             .account_rekey_records
@@ -17989,7 +17955,7 @@ impl World {
             .map(|(label, account_id)| (label.clone(), account_id.clone()))
             .collect();
         let view = self.accounts.view();
-        for (label, mut record) in existing_records {
+        for (label, record) in existing_records {
             if record.label != label {
                 return Err(format!(
                     "Account rekey record {label:?} stores mismatched label {:?}",
@@ -18001,13 +17967,6 @@ impl World {
                     "Account rekey record {label:?} looks like raw PII; use UAID/opaque identifiers"
                 ));
             }
-            let original_record = record.clone();
-            record
-                .normalize_legacy_transition_provenance()
-                .map_err(|error| {
-                    format!("Account rekey record {label:?} has malformed provenance: {error}")
-                })?;
-            normalized_legacy_record |= record != original_record;
             if let Some(existing) = records.get(&label) {
                 if existing != &record {
                     return Err(format!(
@@ -18089,13 +18048,6 @@ impl World {
                     "Account-id rekey predecessor {predecessor} remains an independently live account"
                 ));
             }
-        }
-        // Current canonical records must retain the serialized MV revert map. Historical records
-        // that genuinely require the explicit legacy-provenance migration keep the established
-        // normalization behavior; signed first-release snapshots will still reject the resulting
-        // non-canonical payload at their exact round-trip check.
-        if normalized_legacy_record {
-            self.account_rekey_records = records.into_iter().collect();
         }
         Ok(())
     }
@@ -19417,9 +19369,6 @@ macro_rules! world_ro_accessors {
             storage soracloud_mailbox_messages: Hash => SoraServiceMailboxMessageV1;
             /// Soracloud runtime receipts keyed by receipt id (read-only).
             storage soracloud_runtime_receipts: Hash => SoraRuntimeReceiptV1;
-            /// Private uploaded-model execution receipts keyed by receipt id (read-only).
-            storage soracloud_private_uploaded_model_execution_receipts:
-                Hash => SoraPrivateUploadedModelExecutionReceiptV1;
         );
     };
     (agreements_and_lanes, $mode:ident) => {
@@ -20867,7 +20816,6 @@ impl<'world> WorldBlock<'world> {
             soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
-            soracloud_private_uploaded_model_execution_receipts,
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
@@ -21016,7 +20964,6 @@ impl<'world> WorldBlock<'world> {
         soracloud_inrou_service_placements.commit();
         soracloud_mailbox_messages.commit();
         soracloud_runtime_receipts.commit();
-        soracloud_private_uploaded_model_execution_receipts.commit();
         capacity_disputes.commit();
         capacity_fee_ledger.commit();
         capacity_declarations.commit();
@@ -22386,7 +22333,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
-            soracloud_private_uploaded_model_execution_receipts,
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
@@ -22549,7 +22495,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         soracloud_inrou_service_placements.apply();
         soracloud_mailbox_messages.apply();
         soracloud_runtime_receipts.apply();
-        soracloud_private_uploaded_model_execution_receipts.apply();
         capacity_disputes.apply();
         capacity_fee_ledger.apply();
         capacity_declarations.apply();
@@ -25183,7 +25128,17 @@ impl State {
             });
         crate::smartcontracts::code::initialize_contract_subject_bindings(&mut world)
             .expect("new v2 world must contain valid contract subject bindings");
-        crate::sns::seed_default_namespace_policies(&mut world);
+        let default_sns_payment_asset_id =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
+        crate::sns::try_seed_default_namespace_policies(
+            &mut world,
+            &default_sns_payment_asset_id,
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "persisted SNS namespace policy is incompatible with the first-release state: {error}"
+            ))
+        })?;
         Self::seed_reserved_universal_dataspace_name_record(&mut world);
         Self::seed_existing_domain_name_records(&mut world);
         #[cfg(feature = "telemetry")]
@@ -26115,13 +26070,15 @@ impl State {
     /// governance settings exactly so genesis pre-execution matches peer startup.
     #[must_use]
     pub fn new_with_pre_genesis_nexus_for_testing(
-        world: World,
+        mut world: World,
         mut nexus: iroha_config::parameters::actual::Nexus,
         query_handle: LiveQueryStoreHandle,
     ) -> Self {
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.configured_lane_catalog = nexus.lane_catalog.clone();
+        crate::sns::try_seed_default_namespace_policies(&mut world, &nexus.fees.fee_asset_id)
+            .expect("pre-genesis test world must use current SNS namespace policies");
         let kura = Kura::blank_kura_for_testing_with_lane_config(&nexus.lane_config);
         let mut state = Self::try_new_with_chain(
             world,
@@ -26171,6 +26128,11 @@ impl State {
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.configured_lane_catalog = nexus.lane_catalog.clone();
         let configured_fee_asset_id = nexus.fees.fee_asset_id.clone();
+        crate::sns::ensure_default_namespace_policies_match_configured(
+            &self.world.view(),
+            &configured_fee_asset_id,
+        )
+        .expect("test Nexus configuration must match current SNS namespace policies");
         let autoscale_history_cap = autoscale_sample_history_cap(&nexus.autoscale);
         *self.nexus.get_mut() = nexus;
         self.reseed_static_lane_incarnations();
@@ -26178,10 +26140,6 @@ impl State {
         trim_autoscale_sample_history(
             self.autoscale_sample_history.get_mut(),
             autoscale_history_cap,
-        );
-        crate::sns::sync_default_namespace_policy_payment_asset(
-            &mut self.world,
-            &configured_fee_asset_id,
         );
         self.nexus_storage_budget_last_check_height
             .store(0, Ordering::Relaxed);
@@ -26440,7 +26398,7 @@ impl State {
             #[cfg(feature = "zk-preverify")]
             zk_dedup: Default::default(),
             committed_fragments: 0,
-            replay_compatibility: false,
+            authenticated_replay_commit: false,
             replay_prevalidation: false,
         };
         sb.freeze_axt_block_start();
@@ -27336,7 +27294,7 @@ impl State {
             #[cfg(feature = "zk-preverify")]
             zk_dedup: Default::default(),
             committed_fragments: 0,
-            replay_compatibility: false,
+            authenticated_replay_commit: false,
             replay_prevalidation: false,
         };
         state_block.freeze_axt_block_start();
@@ -27457,7 +27415,7 @@ impl State {
             #[cfg(feature = "zk-preverify")]
             zk_dedup: Default::default(),
             committed_fragments: 0,
-            replay_compatibility: false,
+            authenticated_replay_commit: false,
             replay_prevalidation: false,
         };
         state_block.freeze_axt_block_start();
@@ -31506,7 +31464,7 @@ impl State {
         carrier_height: u64,
         validate_live_authority: bool,
     ) -> Result<
-        Vec<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2>,
+        Vec<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1>,
         MergeLedgerCommitError,
     > {
         let block_hashes = self.block_hashes.view();
@@ -31531,7 +31489,7 @@ impl State {
         validate_live_authority: bool,
         canonical_block_hash_at_height: impl Fn(u64) -> Option<HashOf<BlockHeader>>,
     ) -> Result<
-        Vec<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2>,
+        Vec<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1>,
         MergeLedgerCommitError,
     > {
         if !queue_plan_admissions_within_limits(admissions) {
@@ -31543,7 +31501,7 @@ impl State {
         let mut previous_registry_key = None;
         for bytes in admissions {
             let admission =
-                crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+                crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
                     &self.network_id,
                     bytes,
                 )
@@ -31621,13 +31579,13 @@ impl State {
         bytes: &[u8],
     ) -> Result<
         (
-            crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2,
+            crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
             QueuePlanAdmissionRegistryMatch,
         ),
         MergeLedgerCommitError,
     > {
         let admission =
-            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
                 &self.network_id,
                 bytes,
             )
@@ -31661,7 +31619,7 @@ impl State {
         carrier_height: u64,
     ) -> Result<
         (
-            crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2,
+            crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
             PendingQueuePlanAdmissionDisposition,
         ),
         MergeLedgerCommitError,
@@ -34616,8 +34574,8 @@ impl State {
                     .to_owned(),
             );
         }
-        let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
-            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+        let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV1 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
             network_id_digest: crate::torii_proxy::queue_plan_admission_network_id_digest(
                 &self.network_id,
             ),
@@ -34670,13 +34628,13 @@ impl State {
     pub(crate) fn queue_plan_pending_binding_for_entrypoint(
         &self,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
-    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>, String> {
+    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV1>, String> {
         Self::queue_plan_pending_binding_in_view(&self.view(), entrypoint_hash)
     }
     pub(crate) fn queue_plan_pending_binding_in_view(
         state_view: &impl StateReadOnlyWithTransactions,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
-    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>, String> {
+    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV1>, String> {
         if entrypoint_hash.as_ref().iter().all(|byte| *byte == 0) {
             return Err(
                 "QueuePlan pending-binding lookup contains a zero entrypoint identity".to_owned(),
@@ -34684,8 +34642,8 @@ impl State {
         }
         let network_id_digest =
             crate::torii_proxy::queue_plan_admission_network_id_digest(state_view.network_id());
-        let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
-            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+        let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV1 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
             network_id_digest,
             entrypoint_hash: entrypoint_hash.clone(),
         };
@@ -34754,7 +34712,7 @@ impl State {
     /// malformed WSV marker.
     pub fn queue_plan_admission_binding_registry_match(
         &self,
-        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     ) -> Result<QueuePlanAdmissionRegistryMatch, String> {
         binding.validate_structure()?;
         let expected_network_id_digest =
@@ -34793,7 +34751,7 @@ impl State {
         entrypoint: &TransactionEntrypoint,
         routing_plan: &crate::queue::RoutingPlan,
         execution_height: u64,
-    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>, String> {
+    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV1>, String> {
         let network_id_digest =
             crate::torii_proxy::queue_plan_admission_network_id_digest(state.network_id());
         let entrypoint_hash = entrypoint.hash();
@@ -34888,8 +34846,8 @@ impl State {
         {
             return Err("QueuePlan admission registry lookup contains a zero identity".to_owned());
         }
-        let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
-            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+        let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV1 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
             network_id_digest: crate::torii_proxy::queue_plan_admission_network_id_digest(
                 state_view.network_id(),
             ),
@@ -34933,9 +34891,9 @@ impl State {
         Ok((registry_match, Some(application_state)))
     }
     fn queue_plan_admission_registry_marker_key(
-        registry_key: &crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2,
+        registry_key: &crate::torii_proxy::QueuePlanAdmissionRegistryKeyV1,
     ) -> Result<StatePath, MergeLedgerCommitError> {
-        if registry_key.version != crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2
+        if registry_key.version != crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1
             || registry_key
                 .network_id_digest
                 .as_ref()
@@ -34964,9 +34922,9 @@ impl State {
         })
     }
     fn queue_plan_admission_registry_marker_payload(
-        registry_value: &crate::torii_proxy::QueuePlanAdmissionRegistryValueV2,
+        registry_value: &crate::torii_proxy::QueuePlanAdmissionRegistryValueV1,
     ) -> Result<Vec<u8>, MergeLedgerCommitError> {
-        if registry_value.version != crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2
+        if registry_value.version != crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1
             || registry_value
                 .binding_hash
                 .as_ref()
@@ -34992,14 +34950,14 @@ impl State {
     fn decode_exact_queue_plan_admission_registry_marker(
         key: &StatePath,
         payload: &[u8],
-    ) -> Result<crate::torii_proxy::QueuePlanAdmissionRegistryValueV2, MergeLedgerCommitError> {
+    ) -> Result<crate::torii_proxy::QueuePlanAdmissionRegistryValueV1, MergeLedgerCommitError> {
         if payload.is_empty() || payload.len() > MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES {
             return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                 "queue-plan admission registry marker `{key}` is empty or oversized"
             )));
         }
         let value = norito::decode_from_bytes::<
-            crate::torii_proxy::QueuePlanAdmissionRegistryValueV2,
+            crate::torii_proxy::QueuePlanAdmissionRegistryValueV1,
         >(payload)
         .map_err(|_| {
             MergeLedgerCommitError::ExecutionMarkerConflict(format!(
@@ -35015,7 +34973,7 @@ impl State {
         Ok(value)
     }
     fn queue_plan_pending_obligation_from_admission(
-        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2,
+        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
     ) -> Result<QueuePlanPendingObligationV1, MergeLedgerCommitError> {
         let binding = &admission.certificate.binding;
         if admission.binding_hash != binding.canonical_hash()
@@ -35029,7 +34987,7 @@ impl State {
         Self::queue_plan_pending_obligation_from_binding(binding)
     }
     fn queue_plan_pending_obligation_from_binding(
-        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     ) -> Result<QueuePlanPendingObligationV1, MergeLedgerCommitError> {
         let routes = Self::queue_plan_pending_obligation_routes_from_binding(binding)?;
         let obligation = QueuePlanPendingObligationV1 {
@@ -35045,7 +35003,7 @@ impl State {
         Ok(obligation)
     }
     fn queue_plan_pending_obligation_routes_from_binding(
-        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     ) -> Result<Vec<QueuePlanPendingObligationRouteV1>, MergeLedgerCommitError> {
         binding.validate_structure().map_err(|reason| {
             MergeLedgerCommitError::ExecutionMarkerConflict(format!(
@@ -35581,14 +35539,14 @@ impl State {
     }
     fn queue_plan_admission_application_state(
         state: &impl StateReadOnlyWithTransactions,
-        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2,
+        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
     ) -> Result<QueuePlanAdmissionApplicationState, MergeLedgerCommitError> {
         let expected = Self::queue_plan_pending_obligation_from_admission(admission)?;
         Self::queue_plan_binding_application_state(state, &admission.certificate.binding, expected)
     }
     fn queue_plan_binding_application_state(
         state: &impl StateReadOnlyWithTransactions,
-        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
         expected: QueuePlanPendingObligationV1,
     ) -> Result<QueuePlanAdmissionApplicationState, MergeLedgerCommitError> {
         let committed = state.has_entrypoint(binding.entrypoint_hash);
@@ -35644,7 +35602,7 @@ impl State {
     #[cfg(test)]
     pub(crate) fn install_queue_plan_pending_binding_for_test(
         &self,
-        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     ) -> Result<(), MergeLedgerCommitError> {
         let obligation = Self::queue_plan_pending_obligation_from_binding(binding)?;
         let registry_key = Self::queue_plan_admission_registry_marker_key(&binding.registry_key())?;
@@ -35663,12 +35621,12 @@ impl State {
     #[cfg(test)]
     pub(crate) fn replace_queue_plan_registry_owner_for_test(
         &self,
-        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
         conflicting_binding_hash: Hash,
     ) -> Result<(), MergeLedgerCommitError> {
         let registry_key = Self::queue_plan_admission_registry_marker_key(&binding.registry_key())?;
-        let conflicting_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV2 {
-            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+        let conflicting_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV1 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
             binding_hash: conflicting_binding_hash,
         };
         let mut world = self.world.block();
@@ -35681,7 +35639,7 @@ impl State {
     }
     fn stage_queue_plan_pending_obligation_in_storage(
         storage: &mut impl QueuePlanMarkerStorage,
-        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2,
+        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
     ) -> Result<(), MergeLedgerCommitError> {
         let obligation = Self::queue_plan_pending_obligation_from_admission(admission)?;
         let registry_key = Self::queue_plan_admission_registry_marker_key(&admission.registry_key)?;
@@ -35769,8 +35727,8 @@ impl State {
                 obligation_payload,
             )?
         } else {
-            let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
-                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV1 {
+                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
                 network_id_digest,
                 entrypoint_hash,
             };
@@ -35790,8 +35748,8 @@ impl State {
                 "QueuePlan pending-obligation marker `{obligation_key}` binds another entrypoint"
             )));
         }
-        let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
-            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+        let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV1 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
             network_id_digest,
             entrypoint_hash: obligation.entrypoint_hash.clone(),
         };
@@ -37581,7 +37539,7 @@ impl State {
             }
             let computed_payload_hash =
                 crate::lane_consensus::compute_lane_executable_payload_hash(
-                    crate::lane_consensus::LANE_EXECUTABLE_PAYLOAD_VERSION_V2,
+                    crate::lane_consensus::LANE_EXECUTABLE_PAYLOAD_VERSION_V1,
                     execution.autonomous_network_id,
                     execution.autonomous_epoch,
                     &execution.origin_proposal,
@@ -38126,7 +38084,7 @@ impl State {
     ) -> core::result::Result<Arc<MergeLedgerEntry>, MergeLedgerCommitError> {
         #[cfg(test)]
         {
-            return self.commit_merge_entry_legacy_for_test(entry);
+            return self.commit_merge_entry_for_test(entry);
         }
         #[cfg(not(test))]
         {
@@ -38135,7 +38093,7 @@ impl State {
         }
     }
     #[cfg(test)]
-    fn commit_merge_entry_legacy_for_test(
+    fn commit_merge_entry_for_test(
         &self,
         entry: MergeLedgerEntry,
     ) -> core::result::Result<Arc<MergeLedgerEntry>, MergeLedgerCommitError> {
@@ -38882,7 +38840,6 @@ impl State {
         if !nexus_fee_asset_selector_is_xor(&nexus.fees.fee_asset_id) {
             return Err(LaneLifecycleError::NexusFeeAssetIdInvalid);
         }
-        nexus.fees.fee_asset_id = nexus.fees.fee_asset_id.trim().to_owned();
         if nexus.fees.fee_sink_account_id.trim().is_empty() {
             return Err(LaneLifecycleError::NexusFeeSinkAccountEmpty);
         }
@@ -38970,6 +38927,15 @@ impl State {
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         let configured_fee_asset_id = nexus.fees.fee_asset_id.clone();
+        crate::sns::ensure_default_namespace_policies_match_configured(
+            &self.world.view(),
+            &configured_fee_asset_id,
+        )
+        .map_err(|error| {
+            LaneLifecycleError::Storage(format!(
+                "Nexus fee configuration does not match current SNS namespace policies: {error}"
+            ))
+        })?;
         let previous_lane_config = previous_nexus.lane_config.clone();
         let previous_lane_incarnations = self.lane_incarnations_snapshot();
         let previous_lane_incarnation_lineage = self.lane_incarnation_lineage_snapshot();
@@ -39157,10 +39123,6 @@ impl State {
         trim_autoscale_sample_history(
             &mut self.autoscale_sample_history.write(),
             autoscale_history_cap,
-        );
-        crate::sns::sync_default_namespace_policy_payment_asset(
-            &mut self.world,
-            &configured_fee_asset_id,
         );
         self.reset_lane_scoped_runtime_state(&lanes_to_reset, true);
         self.record_da_lane_reset_watermarks(&active_reset_lanes, reset_height);
@@ -42200,19 +42162,8 @@ fn ensure_autoscale_managed_created_heights_not_future(
     Ok(())
 }
 fn nexus_fee_asset_selector_is_xor(value: &str) -> bool {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let syntactically_valid = AssetDefinitionId::parse_address_literal(trimmed).is_ok()
-        || AssetDefinitionAlias::from_str(trimmed).is_ok();
-    if !syntactically_valid {
-        return false;
-    }
     let default_xor = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
-    trimmed == default_xor
-        || trimmed.eq_ignore_ascii_case("xor#universal")
-        || trimmed.eq_ignore_ascii_case("xor#universal.universal")
+    value == default_xor || value == "xor#universal"
 }
 fn ensure_autoscale_managed_lane_in_range(
     lane: LaneId,
@@ -46082,7 +46033,7 @@ impl<'state> StateBlock<'state> {
     }
     /// Capture the execution witness accumulated during this block's execution.
     pub fn capture_exec_witness(&mut self) {
-        if self.replay_compatibility {
+        if self.authenticated_replay_commit {
             let _ = crate::sumeragi::witness::drain_exec_witness();
             return;
         }
@@ -46381,7 +46332,6 @@ impl<'state> StateBlock<'state> {
             rwa_generated_id_ordinal: 0,
             lifecycle_transition_ordinal: 0,
             executor_fuel_remaining,
-            replay_compatibility: self.replay_compatibility,
             fastpq_transcripts: &mut self.fastpq_transcripts,
             pending_transfer_transcripts: Vec::new(),
             block_axt_envelopes: &mut self.axt_envelopes,
@@ -47053,8 +47003,8 @@ impl<'state> StateBlock<'state> {
                 continue;
             }
             let entrypoint_hash = entrypoint.hash();
-            let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
-                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV1 {
+                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
                 network_id_digest,
                 entrypoint_hash: entrypoint_hash.clone(),
             };
@@ -47093,7 +47043,7 @@ impl<'state> StateBlock<'state> {
     pub(crate) fn queue_plan_pending_binding_for_entrypoint(
         &self,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
-    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>, String> {
+    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV1>, String> {
         State::queue_plan_pending_binding_in_view(self, entrypoint_hash)
     }
     pub(crate) fn require_queue_plan_admission_intents_from_block(
@@ -47716,7 +47666,7 @@ impl<'state> StateBlock<'state> {
             transactions,
             commit_topology: committed_topology,
             prev_commit_topology: prev_committed_topology,
-            replay_compatibility,
+            authenticated_replay_commit,
             replay_prevalidation,
             state_write_lock,
             tiered_backend,
@@ -47877,7 +47827,7 @@ impl<'state> StateBlock<'state> {
                 return Err(TransactionsBlockError::MergeAdmission);
             }
             let durable_carrier: crate::kura::Result<Option<MergeLedgerEntry>> =
-                if replay_compatibility {
+                if authenticated_replay_commit {
                     let entry_hash = entry.canonical_hash();
                     Ok(state_ref
                         .replay_merge_carriers
@@ -47988,7 +47938,7 @@ impl<'state> StateBlock<'state> {
                         return Err(TransactionsBlockError::AutoscaleLaneLifecycle);
                     }
                 }
-                None if !replay_compatibility => {
+                None if !authenticated_replay_commit => {
                     error!(
                         block_height,
                         block = %block_header_hash,
@@ -48019,7 +47969,7 @@ impl<'state> StateBlock<'state> {
                         return Err(TransactionsBlockError::MergeAdmission);
                     }
                 }
-                None if carries_autonomous_execution && !replay_compatibility => {
+                None if carries_autonomous_execution && !authenticated_replay_commit => {
                     error!(
                         block_height,
                         block = %block_header_hash,
@@ -48382,7 +48332,7 @@ impl<'state> StateBlock<'state> {
         }
         if block_metadata_committed && !replay_prevalidation {
             state_ref.enforce_nexus_storage_budget(block_height);
-            if replay_compatibility {
+            if authenticated_replay_commit {
                 state_ref.set_query_index_status(block_height, state_ref.latest_block_hash_fast());
             } else {
                 state_ref
@@ -54144,7 +54094,7 @@ mod fastpq_tx_set_hash_tests {
         let state = State::new(World::default(), kura, query);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut state_block = state.block(header);
-        state_block.replay_compatibility = true;
+        state_block.authenticated_replay_commit = true;
         let _guard = crate::sumeragi::witness::exec_witness_guard();
         crate::sumeragi::witness::start_block();
         let delta = TransferDeltaTranscript {
@@ -55435,7 +55385,7 @@ fn replay_blocks_from_kura_range_inner(
                 finality.commit_qc.execution_commitment
             ));
         }
-        state_block.replay_compatibility = true;
+        state_block.authenticated_replay_commit = true;
         state_block.replay_prevalidation = true;
         if let Some(pending) = state_block.pending_autoscale_lifecycle.as_ref() {
             geometry.push(pending.clone());
@@ -57173,14 +57123,15 @@ impl StateTransaction<'_, '_> {
             .bound_account_aliases(asset_id.account())
             .into_iter()
             .filter(|alias| {
-                crate::sns::resolve_active_account_alias(
-                    &self.world,
-                    &self.nexus.dataspace_catalog,
-                    alias,
-                    alias_observation_time_ms,
+                matches!(
+                    crate::sns::resolve_active_account_alias(
+                        &self.world,
+                        &self.nexus.dataspace_catalog,
+                        alias,
+                        alias_observation_time_ms,
+                    ),
+                    Ok(Some(ref resolved)) if resolved == asset_id.account()
                 )
-                .as_ref()
-                    == Some(asset_id.account())
             })
             .filter_map(|alias| {
                 alias
@@ -57196,15 +57147,15 @@ impl StateTransaction<'_, '_> {
             .get(asset_id.account())
             .and_then(|value| {
                 value.as_ref().label().and_then(|label| {
-                    if crate::sns::resolve_active_account_alias(
-                        &self.world,
-                        &self.nexus.dataspace_catalog,
-                        label,
-                        alias_observation_time_ms,
-                    )
-                    .as_ref()
-                        != Some(asset_id.account())
-                    {
+                    if !matches!(
+                        crate::sns::resolve_active_account_alias(
+                            &self.world,
+                            &self.nexus.dataspace_catalog,
+                            label,
+                            alias_observation_time_ms,
+                        ),
+                        Ok(Some(ref resolved)) if resolved == asset_id.account()
+                    ) {
                         return None;
                     }
                     label

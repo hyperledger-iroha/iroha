@@ -225,17 +225,6 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
 
         @JvmStatic
         @Throws(AccountAddressException::class)
-        fun fromCanonicalHex(encoded: String): AccountAddress {
-            val body = if (encoded.startsWith("0x") || encoded.startsWith("0X")) {
-                encoded.substring(2)
-            } else {
-                encoded
-            }
-            return fromCanonicalBytes(hexToBytes(body))
-        }
-
-        @JvmStatic
-        @Throws(AccountAddressException::class)
         fun fromI105(encoded: String, expectedDiscriminant: Int?): AccountAddress {
             val canonical = decodeI105(encoded, expectedDiscriminant)
             val address = fromCanonicalBytes(canonical)
@@ -245,7 +234,7 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
 
         @JvmStatic
         @Throws(AccountAddressException::class)
-        fun parseAny(input: String, expectedPrefix: Int?): ParseResult {
+        fun parseEncoded(input: String, expectedPrefix: Int?): AccountAddress {
             val trimmed = input.trim()
             if (trimmed.isEmpty()) {
                 throw AccountAddressException(
@@ -264,12 +253,12 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
                     "canonical hex account addresses are not accepted; use canonical I105 form",
                 )
             }
-            return ParseResult(fromI105(trimmed, expectedPrefix), AccountAddressFormat.I105)
+            return fromI105(trimmed, expectedPrefix)
         }
 
         @JvmStatic
         @Throws(AccountAddressException::class)
-        fun parseEncodedIgnoringCurveSupport(input: String, expectedPrefix: Int?): ParseResult {
+        fun parseEncodedIgnoringCurveSupport(input: String, expectedPrefix: Int?): AccountAddress {
             val trimmed = input.trim()
             if (trimmed.isEmpty()) {
                 throw AccountAddressException(
@@ -292,7 +281,7 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
             parseCanonical(canonical, true)
             val address = AccountAddress(canonical)
             ensureCanonicalI105Literal(trimmed, address)
-            return ParseResult(address, AccountAddressFormat.I105)
+            return address
         }
 
         @JvmStatic
@@ -934,24 +923,4 @@ private fun bytesToHex(bytes: ByteArray): String = buildString(bytes.size * 2) {
     for (b in bytes) {
         append(String.format("%02x", b.toInt() and 0xFF))
     }
-}
-
-@Throws(AccountAddressException::class)
-private fun hexToBytes(hex: String): ByteArray {
-    if ((hex.length and 1) == 1) {
-        throw AccountAddressException(
-            AccountAddressErrorCode.INVALID_HEX_ADDRESS, "hex string must have even length",
-        )
-    }
-    val out = ByteArray(hex.length / 2)
-    for (i in out.indices) {
-        try {
-            out[i] = Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16).toByte()
-        } catch (_: NumberFormatException) {
-            throw AccountAddressException(
-                AccountAddressErrorCode.INVALID_HEX_ADDRESS, "invalid hex string",
-            )
-        }
-    }
-    return out
 }

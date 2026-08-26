@@ -5,19 +5,27 @@
 //! an optional JSON summary. Multiple renditions can be supplied via repeated `--segment` flags to
 //! cover ABR ladders in one run.
 #![allow(unexpected_cfgs)]
-use blake3::hash as blake3_hash;
-use iroha_data_model::taikai::{CekRotationReceiptV1, TaikaiSegmentEnvelopeV1};
+use iroha_data_model::taikai::{
+    CEK_ROTATION_RECEIPT_VERSION_V1, CekRotationReceiptV1, TaikaiEventId, TaikaiSegmentEnvelopeV1,
+    TaikaiStreamId,
+};
 use iroha_telemetry::metrics::Metrics;
 use norito::{
     decode_from_bytes, json,
     json::{Map, Value},
 };
+use rand::{rand_core::TryRngCore, rngs::OsRng};
+use sorafs_car::taikai::{
+    validate_distinct_artifact_paths, validate_track_metadata, verify_taikai_car,
+};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::{
     collections::HashMap,
-    env, fs, io,
-    io::Write,
+    env,
+    ffi::OsString,
+    fs, io,
+    io::{Read, Write},
     path::{Path, PathBuf},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -44,6 +52,9 @@ fn main() {
 }
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args()?;
+    run_with_args(args)
+}
+fn run_with_args(args: ParsedArgs) -> Result<(), Box<dyn std::error::Error>> {
     if args.segments.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -51,14 +62,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
+    preflight_output_collisions(&args)?;
     let metrics = Metrics::default();
     let mut summaries: Vec<Value> = Vec::new();
     let mut stream_stats: HashMap<String, StreamStats> = HashMap::new();
     let mut stream_order: Vec<String> = Vec::new();
+    let mut viewed_streams: Vec<(TaikaiEventId, TaikaiStreamId)> = Vec::new();
     for segment in &args.segments {
         let envelope = load_envelope(&segment.envelope)?;
         let car_bytes = fs::read(&segment.car)?;
         validate_car(&envelope, &car_bytes, &segment.car)?;
+        if !viewed_streams.iter().any(|(event_id, stream_id)| {
+            event_id == &envelope.event_id && stream_id == &envelope.stream_id
+        }) {
+            viewed_streams.push((envelope.event_id.clone(), envelope.stream_id.clone()));
+        }
         let render_name = envelope.rendition_id.to_string();
         let stream = envelope.stream_id.to_string();
         if !stream_stats.contains_key(&stream) {
@@ -111,7 +129,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     metrics.set_taikai_viewer_pq_health(&args.cluster, args.pq_health);
     let mut cek_summary: Option<Map> = None;
     if let Some(path) = args.cek_receipt.as_ref() {
-        let (measured_ms, age_seconds) = read_cek_receipt(path)?;
+        let observation = read_cek_receipt(path)?;
+        if !viewed_streams.iter().any(|(event_id, stream_id)| {
+            event_id == &observation.receipt.event_id && stream_id == &observation.receipt.stream_id
+        }) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "CEK rotation receipt {} targets {}/{} which is absent from the viewed segments",
+                    path.display(),
+                    observation.receipt.event_id,
+                    observation.receipt.stream_id
+                ),
+            )
+            .into());
+        }
+        let measured_ms = observation.measured_ms;
+        let age_seconds = observation.age_seconds;
         let applied_ms = args.cek_fetch_ms.unwrap_or(measured_ms);
         metrics.observe_taikai_viewer_cek_fetch_duration(&args.cluster, &args.lane, applied_ms);
         metrics.set_taikai_viewer_cek_rotation_age(&args.lane, age_seconds);
@@ -119,6 +153,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         cek.insert(
             "path".into(),
             Value::from(path.to_string_lossy().into_owned()),
+        );
+        cek.insert(
+            "event".into(),
+            Value::from(observation.receipt.event_id.to_string()),
+        );
+        cek.insert(
+            "stream".into(),
+            Value::from(observation.receipt.stream_id.to_string()),
         );
         cek.insert("duration_ms".into(), Value::from(u64::from(applied_ms)));
         cek.insert(
@@ -132,12 +174,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         metrics.inc_taikai_viewer_alert_firing(&args.cluster, alertname);
     }
     let metrics_text = metrics.try_to_string()?;
-    if let Some(path) = args.metrics_out.as_ref() {
-        write_output_bytes(path, "metrics output", metrics_text.as_bytes())?;
-    } else {
-        println!("{metrics_text}");
-    }
-    if let Some(path) = args.summary_out.as_ref() {
+    let summary_text = if args.summary_out.is_some() {
         let mut root = Map::new();
         root.insert("cluster".into(), Value::from(args.cluster));
         root.insert("lane".into(), Value::from(args.lane));
@@ -162,44 +199,281 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         root.insert("segments".into(), Value::Array(summaries));
-        let rendered = json::to_json_pretty(&Value::Object(root))?;
-        write_output_bytes(path, "summary output", rendered.as_bytes())?;
+        Some(json::to_json_pretty(&Value::Object(root))?)
+    } else {
+        None
+    };
+
+    let mut staged_outputs = Vec::with_capacity(2);
+    if let Some(path) = args.metrics_out.as_ref() {
+        staged_outputs.push(StagedOutput::prepare(
+            path,
+            "metrics output",
+            metrics_text.as_bytes(),
+        )?);
+    }
+    if let (Some(path), Some(rendered)) = (args.summary_out.as_ref(), summary_text.as_ref()) {
+        staged_outputs.push(StagedOutput::prepare(
+            path,
+            "summary output",
+            rendered.as_bytes(),
+        )?);
+    }
+    publish_staged_outputs(staged_outputs)?;
+    if args.metrics_out.is_none() {
+        println!("{metrics_text}");
     }
     Ok(())
 }
-fn write_output_bytes(path: &Path, label: &str, bytes: &[u8]) -> io::Result<()> {
-    let mut file = open_output_file(path, label)?;
-    file.write_all(bytes)
+struct StagedOutput {
+    target_path: PathBuf,
+    temporary_path: Option<PathBuf>,
+    label: String,
 }
-fn open_output_file(path: &Path, label: &str) -> io::Result<fs::File> {
-    validate_output_path(path)?;
-    ensure_parent_dir(path)?;
-    validate_output_path(path)?;
+impl StagedOutput {
+    fn prepare(path: &Path, label: &str, bytes: &[u8]) -> io::Result<Self> {
+        validate_output_path(path)?;
+        ensure_parent_dir(path)?;
+        validate_output_path(path)?;
+        let (temporary_path, mut file) = create_temporary_output(path, label)?;
+        if let Err(err) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+            drop(file);
+            let _ = fs::remove_file(&temporary_path);
+            return Err(io::Error::new(
+                err.kind(),
+                format!("failed to write {label} `{}`: {err}", path.display()),
+            ));
+        }
+        drop(file);
+        if let Err(err) = validate_output_path(path) {
+            let _ = fs::remove_file(&temporary_path);
+            return Err(err);
+        }
+        Ok(Self {
+            target_path: path.to_path_buf(),
+            temporary_path: Some(temporary_path),
+            label: label.to_owned(),
+        })
+    }
+    fn validate_target(&self) -> io::Result<()> {
+        validate_output_path(&self.target_path)
+    }
+    fn publish(&mut self) -> io::Result<()> {
+        self.validate_target()?;
+        let Some(temporary_path) = self.temporary_path.take() else {
+            return Err(io::Error::other(format!(
+                "{} `{}` has no staged temporary file",
+                self.label,
+                self.target_path.display()
+            )));
+        };
+        if let Err(err) = fs::rename(&temporary_path, &self.target_path) {
+            let _ = fs::remove_file(&temporary_path);
+            return Err(io::Error::new(
+                err.kind(),
+                format!(
+                    "failed to atomically publish {} `{}`: {err}",
+                    self.label,
+                    self.target_path.display()
+                ),
+            ));
+        }
+        Ok(())
+    }
+}
+impl Drop for StagedOutput {
+    fn drop(&mut self) {
+        if let Some(path) = self.temporary_path.take() {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+fn publish_staged_outputs(staged: Vec<StagedOutput>) -> io::Result<()> {
+    publish_staged_outputs_with_hook(staged, |_, _| Ok(()))
+}
+fn publish_staged_outputs_with_hook<F>(
+    mut staged: Vec<StagedOutput>,
+    mut before_publish: F,
+) -> io::Result<()>
+where
+    F: FnMut(usize, &mut StagedOutput) -> io::Result<()>,
+{
+    for output in &staged {
+        output.validate_target()?;
+    }
+    let mut backups = Vec::with_capacity(staged.len());
+    for output in &staged {
+        backups.push(snapshot_output(output)?);
+    }
+
+    let mut published = 0_usize;
+    for index in 0..staged.len() {
+        let result =
+            before_publish(index, &mut staged[index]).and_then(|()| staged[index].publish());
+        if let Err(err) = result {
+            let rollback_error = rollback_outputs(&staged, &mut backups, published);
+            let mut message = format!(
+                "failed to publish output transaction at {} `{}`: {err}",
+                staged[index].label,
+                staged[index].target_path.display()
+            );
+            if let Err(rollback_error) = rollback_error {
+                message.push_str(&format!("; rollback also failed: {rollback_error}"));
+            }
+            return Err(io::Error::new(err.kind(), message));
+        }
+        published += 1;
+    }
+    Ok(())
+}
+fn snapshot_output(output: &StagedOutput) -> io::Result<Option<StagedOutput>> {
+    let metadata = match fs::symlink_metadata(&output.target_path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(io::Error::new(
+                err.kind(),
+                format!(
+                    "failed to inspect existing {} `{}`: {err}",
+                    output.label,
+                    output.target_path.display()
+                ),
+            ));
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(io::Error::other(format!(
+            "{} `{}` must be a regular file and must not be a symlink",
+            output.label,
+            output.target_path.display()
+        )));
+    }
     let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.read(true);
     set_no_follow_flag(&mut options);
-    let file = options.open(path).map_err(|err| {
-        io::Error::new(
-            err.kind(),
-            format!("failed to open {label} `{}`: {err}", path.display()),
-        )
-    })?;
-    let metadata = file.metadata().map_err(|err| {
+    let mut file = options.open(&output.target_path).map_err(|err| {
         io::Error::new(
             err.kind(),
             format!(
-                "failed to inspect {label} `{}` after open: {err}",
-                path.display()
+                "failed to open existing {} `{}`: {err}",
+                output.label,
+                output.target_path.display()
             ),
         )
     })?;
-    if !metadata.is_file() {
+    if !file.metadata()?.is_file() {
         return Err(io::Error::other(format!(
-            "failed to write {label} `{}`: output must be a regular file",
-            path.display()
+            "{} `{}` changed to a non-regular file while preparing output",
+            output.label,
+            output.target_path.display()
         )));
     }
-    Ok(file)
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!(
+                "failed to snapshot existing {} `{}`: {err}",
+                output.label,
+                output.target_path.display()
+            ),
+        )
+    })?;
+    let snapshot_label = format!("{} rollback snapshot", output.label);
+    let snapshot = StagedOutput::prepare(&output.target_path, &snapshot_label, &bytes)?;
+    if let Some(path) = snapshot.temporary_path.as_ref() {
+        fs::set_permissions(path, metadata.permissions()).map_err(|err| {
+            io::Error::new(
+                err.kind(),
+                format!(
+                    "failed to preserve permissions for {} `{}`: {err}",
+                    output.label,
+                    output.target_path.display()
+                ),
+            )
+        })?;
+    }
+    Ok(Some(snapshot))
+}
+fn rollback_outputs(
+    staged: &[StagedOutput],
+    backups: &mut [Option<StagedOutput>],
+    published: usize,
+) -> io::Result<()> {
+    let mut failures = Vec::new();
+    for index in (0..published).rev() {
+        let target = &staged[index].target_path;
+        let result = match backups[index].as_mut() {
+            Some(backup) => backup.publish(),
+            None => fs::remove_file(target),
+        };
+        if let Err(err) = result {
+            failures.push(format!("`{}`: {err}", target.display()));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "failed to restore viewer outputs: {}",
+            failures.join(", ")
+        )))
+    }
+}
+#[cfg(test)]
+fn write_output_bytes(path: &Path, label: &str, bytes: &[u8]) -> io::Result<()> {
+    publish_staged_outputs(vec![StagedOutput::prepare(path, label, bytes)?])
+}
+fn create_temporary_output(path: &Path, label: &str) -> io::Result<(PathBuf, fs::File)> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} path `{}` has no file name", path.display()),
+        )
+    })?;
+    for _ in 0..16 {
+        let mut nonce = [0_u8; 16];
+        OsRng.try_fill_bytes(&mut nonce).map_err(|err| {
+            io::Error::other(format!(
+                "failed to generate temporary name for {label} `{}`: {err}",
+                path.display()
+            ))
+        })?;
+        let mut temporary_name = OsString::from(".");
+        temporary_name.push(file_name);
+        temporary_name.push(".tmp-");
+        temporary_name.push(hex::encode(nonce));
+        let temporary_path = parent.join(temporary_name);
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        set_no_follow_flag(&mut options);
+        match options.open(&temporary_path) {
+            Ok(file) => return Ok((temporary_path, file)),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(io::Error::new(
+                    err.kind(),
+                    format!(
+                        "failed to create temporary {label} beside `{}`: {err}",
+                        path.display()
+                    ),
+                ));
+            }
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "failed to allocate a unique temporary {label} beside `{}`",
+            path.display()
+        ),
+    ))
 }
 fn ensure_parent_dir(path: &Path) -> io::Result<()> {
     if let Some(parent) = path.parent()
@@ -227,9 +501,15 @@ fn validate_output_path(path: &Path) -> io::Result<()> {
                     path.display()
                 )));
             }
-            if metadata.is_dir() {
+            if !metadata.is_file() {
                 return Err(io::Error::other(format!(
-                    "output `{}` must not be a directory",
+                    "output `{}` must be a regular file",
+                    path.display()
+                )));
+            }
+            if metadata.permissions().readonly() {
+                return Err(io::Error::other(format!(
+                    "output `{}` must be writable",
                     path.display()
                 )));
             }
@@ -320,49 +600,147 @@ fn platform_no_follow_flag() -> i32 {
 }
 fn load_envelope(path: &Path) -> Result<TaikaiSegmentEnvelopeV1, Box<dyn std::error::Error>> {
     let bytes = fs::read(path)?;
-    decode_from_bytes(&bytes)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()).into())
+    let envelope: TaikaiSegmentEnvelopeV1 = decode_from_bytes(&bytes)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+    if envelope.version != TaikaiSegmentEnvelopeV1::VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "unsupported Taikai segment envelope version {} (expected {})",
+                envelope.version,
+                TaikaiSegmentEnvelopeV1::VERSION
+            ),
+        )
+        .into());
+    }
+    validate_envelope(&envelope)?;
+    Ok(envelope)
+}
+fn validate_envelope(envelope: &TaikaiSegmentEnvelopeV1) -> io::Result<()> {
+    validate_track_metadata(&envelope.track).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid Taikai track metadata: {err}"),
+        )
+    })?;
+    let duration = envelope.segment_duration.as_micros();
+    if duration == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Taikai segment duration must be greater than zero",
+        ));
+    }
+    envelope
+        .segment_start_pts
+        .as_micros()
+        .checked_add(u64::from(duration))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Taikai segment presentation interval overflows u64",
+            )
+        })?;
+    Ok(())
 }
 fn validate_car(
     envelope: &TaikaiSegmentEnvelopeV1,
     car_bytes: &[u8],
     path: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let digest = blake3_hash(car_bytes);
-    let expected = envelope.ingest.car.car_digest.as_bytes();
-    if digest.as_bytes() != expected {
+    let verified = verify_taikai_car(car_bytes).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "CAR canonical verification failed for {}: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    if verified.car_pointer.car_digest != envelope.ingest.car.car_digest {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
                 "CAR digest mismatch for {} (expected {}, got {})",
                 path.display(),
-                hex::encode(expected),
-                hex::encode(digest.as_bytes())
+                hex::encode(envelope.ingest.car.car_digest.as_bytes()),
+                hex::encode(verified.car_pointer.car_digest.as_bytes())
             ),
         )
         .into());
     }
-    let actual_size = car_bytes.len() as u64;
-    if actual_size != envelope.ingest.car.car_size_bytes {
+    if verified.car_pointer.car_size_bytes != envelope.ingest.car.car_size_bytes {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
                 "CAR size mismatch for {} (expected {} bytes, got {} bytes)",
                 path.display(),
                 envelope.ingest.car.car_size_bytes,
-                actual_size
+                verified.car_pointer.car_size_bytes
+            ),
+        )
+        .into());
+    }
+    if verified.car_pointer.cid_multibase != envelope.ingest.car.cid_multibase {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "CAR CID mismatch for {} (expected {}, got {})",
+                path.display(),
+                envelope.ingest.car.cid_multibase,
+                verified.car_pointer.cid_multibase
+            ),
+        )
+        .into());
+    }
+    if verified.chunk_root != envelope.ingest.chunk_root {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "CAR chunk root mismatch for {} (expected {}, got {})",
+                path.display(),
+                hex::encode(envelope.ingest.chunk_root.as_bytes()),
+                hex::encode(verified.chunk_root.as_bytes())
+            ),
+        )
+        .into());
+    }
+    if verified.chunk_count != envelope.ingest.chunk_count {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "CAR chunk count mismatch for {} (expected {}, got {})",
+                path.display(),
+                envelope.ingest.chunk_count,
+                verified.chunk_count
             ),
         )
         .into());
     }
     Ok(())
 }
-fn read_cek_receipt(path: &Path) -> Result<(u32, u64), Box<dyn std::error::Error>> {
+#[derive(Debug)]
+struct CekReceiptObservation {
+    receipt: CekRotationReceiptV1,
+    measured_ms: u32,
+    age_seconds: u64,
+}
+fn read_cek_receipt(path: &Path) -> Result<CekReceiptObservation, Box<dyn std::error::Error>> {
     let start = Instant::now();
     let bytes = fs::read(path)?;
     let decode_start = Instant::now();
     let receipt: CekRotationReceiptV1 = decode_from_bytes(&bytes)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
+    if receipt.schema_version != CEK_ROTATION_RECEIPT_VERSION_V1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "unsupported CEK rotation receipt version {} (expected {})",
+                receipt.schema_version, CEK_ROTATION_RECEIPT_VERSION_V1
+            ),
+        )
+        .into());
+    }
+    validate_cek_receipt(&receipt)?;
     let decode_elapsed = decode_start.elapsed();
     let duration_ms = start.elapsed().as_millis();
     let observed_ms = duration_ms.max(decode_elapsed.as_millis());
@@ -372,7 +750,16 @@ fn read_cek_receipt(path: &Path) -> Result<(u32, u64), Box<dyn std::error::Error
         .unwrap_or_default()
         .as_secs();
     let age = now.saturating_sub(receipt.issued_at_unix);
-    Ok((clamped_ms, age))
+    Ok(CekReceiptObservation {
+        receipt,
+        measured_ms: clamped_ms,
+        age_seconds: age,
+    })
+}
+fn validate_cek_receipt(receipt: &CekRotationReceiptV1) -> io::Result<()> {
+    receipt
+        .validate()
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 struct ParsedArgs {
     cluster: String,
@@ -385,6 +772,48 @@ struct ParsedArgs {
     summary_out: Option<PathBuf>,
     segments: Vec<SegmentInput>,
     alerts: Vec<String>,
+}
+fn preflight_output_collisions(args: &ParsedArgs) -> io::Result<()> {
+    let mut outputs = Vec::with_capacity(2);
+    if let Some(path) = args.metrics_out.as_deref() {
+        outputs.push(("metrics output", path));
+    }
+    if let Some(path) = args.summary_out.as_deref() {
+        outputs.push(("summary output", path));
+    }
+
+    for (_, output_path) in &outputs {
+        validate_output_path(output_path)?;
+    }
+    for (index, (left_label, left_path)) in outputs.iter().enumerate() {
+        for (right_label, right_path) in &outputs[index + 1..] {
+            require_distinct_paths(left_label, left_path, right_label, right_path)?;
+        }
+    }
+    for (output_label, output_path) in outputs {
+        for segment in &args.segments {
+            require_distinct_paths(
+                output_label,
+                output_path,
+                "segment envelope input",
+                &segment.envelope,
+            )?;
+            require_distinct_paths(output_label, output_path, "segment CAR input", &segment.car)?;
+        }
+        if let Some(cek_receipt) = args.cek_receipt.as_deref() {
+            require_distinct_paths(output_label, output_path, "CEK receipt input", cek_receipt)?;
+        }
+    }
+    Ok(())
+}
+fn require_distinct_paths(
+    left_label: &str,
+    left_path: &Path,
+    right_label: &str,
+    right_path: &Path,
+) -> io::Result<()> {
+    validate_distinct_artifact_paths(&[(left_label, left_path), (right_label, right_path)])
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))
 }
 fn parse_args() -> Result<ParsedArgs, Box<dyn std::error::Error>> {
     let mut cluster = String::from("local");
@@ -450,15 +879,13 @@ fn parse_args() -> Result<ParsedArgs, Box<dyn std::error::Error>> {
                     .parse::<u64>()?;
             }
             flag if flag.starts_with("--pq-health=") => {
-                pq_health = flag.trim_start_matches("--pq-health=").parse::<f64>()?;
+                pq_health = parse_pq_health(flag.trim_start_matches("--pq-health="))?;
             }
             "--pq-health" => {
-                pq_health = args
-                    .next()
-                    .ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::InvalidInput, "missing --pq-health value")
-                    })?
-                    .parse::<f64>()?;
+                let value = args.next().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "missing --pq-health value")
+                })?;
+                pq_health = parse_pq_health(&value)?;
             }
             flag if flag.starts_with("--cek-receipt=") => {
                 cek_receipt = Some(PathBuf::from(flag.trim_start_matches("--cek-receipt=")));
@@ -539,14 +966,64 @@ fn parse_args() -> Result<ParsedArgs, Box<dyn std::error::Error>> {
         alerts,
     })
 }
+fn parse_pq_health(raw: &str) -> Result<f64, io::Error> {
+    let value = raw.parse::<f64>().map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid --pq-health percentage `{raw}`: {err}"),
+        )
+    })?;
+    if !(0.0..=100.0).contains(&value) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("--pq-health percentage must be finite and within 0..=100, got `{raw}`"),
+        ));
+    }
+    Ok(value)
+}
 fn parse_segment(raw: &str) -> Result<SegmentInput, Box<dyn std::error::Error>> {
     let mut envelope = None;
     let mut car = None;
     for part in raw.split(',') {
-        if let Some(rest) = part.strip_prefix("envelope=") {
-            envelope = Some(PathBuf::from(rest));
-        } else if let Some(rest) = part.strip_prefix("car=") {
-            car = Some(PathBuf::from(rest));
+        let (component, value) = part.split_once('=').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid segment component `{part}`; expected NAME=PATH"),
+            )
+        })?;
+        if value.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("segment component `{component}` requires a non-empty path"),
+            )
+            .into());
+        }
+        match component {
+            "envelope" => {
+                if envelope.replace(PathBuf::from(value)).is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "segment contains duplicate envelope=PATH components",
+                    )
+                    .into());
+                }
+            }
+            "car" => {
+                if car.replace(PathBuf::from(value)).is_some() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "segment contains duplicate car=PATH components",
+                    )
+                    .into());
+                }
+            }
+            unknown => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown segment component `{unknown}`"),
+                )
+                .into());
+            }
         }
     }
     let envelope = envelope.ok_or_else(|| {
@@ -566,11 +1043,113 @@ fn parse_segment(raw: &str) -> Result<SegmentInput, Box<dyn std::error::Error>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use blake3::hash as blake3_hash;
+    use iroha_data_model::{
+        da::types::{BlobDigest, StorageTicketId},
+        name::Name,
+        taikai::{
+            SegmentDuration, SegmentTimestamp, TaikaiCarPointer, TaikaiCodec, TaikaiEventId,
+            TaikaiIngestPointer, TaikaiRenditionId, TaikaiResolution, TaikaiStreamId,
+            TaikaiTrackMetadata,
+        },
+    };
+    use sorafs_car::{CarWriter, ingest_single_file};
+    use std::str::FromStr;
     use tempfile::{TempDir, tempdir};
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
+    }
+    fn sample_envelope(car_bytes: &[u8]) -> TaikaiSegmentEnvelopeV1 {
+        let track = TaikaiTrackMetadata::video(
+            TaikaiCodec::AvcHigh,
+            8_000,
+            TaikaiResolution::new(1_920, 1_080),
+        );
+        let ingest = TaikaiIngestPointer::new(
+            BlobDigest::new([0x11; 32]),
+            StorageTicketId::new([0x22; 32]),
+            BlobDigest::new([0x33; 32]),
+            1,
+            TaikaiCarPointer::new(
+                "bafy-test-car",
+                BlobDigest::new(blake3_hash(car_bytes).into()),
+                u64::try_from(car_bytes.len()).expect("fixture length fits in u64"),
+            ),
+        );
+        TaikaiSegmentEnvelopeV1::new(
+            TaikaiEventId::new(Name::from_str("soranet-demo").expect("event name")),
+            TaikaiStreamId::new(Name::from_str("primary").expect("stream name")),
+            TaikaiRenditionId::new(Name::from_str("1080p-main").expect("rendition name")),
+            track,
+            1,
+            SegmentTimestamp::new(0),
+            SegmentDuration::new(2_000_000),
+            1_726_000_000_000,
+            ingest,
+        )
+    }
+    fn canonical_car_fixture(payload: &[u8]) -> (Vec<u8>, TaikaiSegmentEnvelopeV1) {
+        let ingest = ingest_single_file(payload).expect("build canonical CAR plan");
+        let mut car_bytes = Vec::new();
+        CarWriter::new(&ingest.plan, payload)
+            .expect("canonical CAR writer")
+            .write_to(&mut car_bytes)
+            .expect("write canonical CAR");
+        let verified = verify_taikai_car(&car_bytes).expect("verify fixture CAR");
+        let mut envelope = sample_envelope(&car_bytes);
+        envelope.ingest.car = verified.car_pointer;
+        envelope.ingest.chunk_root = verified.chunk_root;
+        envelope.ingest.chunk_count = verified.chunk_count;
+        (car_bytes, envelope)
+    }
+    fn parsed_args_fixture(temp_path: &Path) -> ParsedArgs {
+        ParsedArgs {
+            cluster: "local".to_owned(),
+            lane: "lane-a".to_owned(),
+            rebuffer_events: 0,
+            pq_health: 100.0,
+            cek_receipt: Some(temp_path.join("rotation.norito")),
+            cek_fetch_ms: None,
+            metrics_out: None,
+            summary_out: None,
+            segments: vec![SegmentInput {
+                envelope: temp_path.join("segment.norito"),
+                car: temp_path.join("segment.car"),
+            }],
+            alerts: Vec::new(),
+        }
+    }
+    fn sample_cek_receipt() -> CekRotationReceiptV1 {
+        CekRotationReceiptV1 {
+            schema_version: CEK_ROTATION_RECEIPT_VERSION_V1,
+            event_id: TaikaiEventId::new(Name::from_str("soranet-demo").expect("event name")),
+            stream_id: TaikaiStreamId::new(Name::from_str("primary").expect("stream name")),
+            kms_profile: "test-kms".to_owned(),
+            new_wrap_key_label: "wrap-v2".to_owned(),
+            previous_wrap_key_label: Some("wrap-v1".to_owned()),
+            hkdf_salt: [0x44; 32],
+            effective_segment_sequence: 1,
+            issued_at_unix: 1_726_000_000,
+            notes: None,
+        }
+    }
+    #[test]
+    fn parse_segment_rejects_unknown_duplicate_and_empty_components() {
+        for (raw, expected) in [
+            ("envelope=a,car=b,extra=c", "unknown segment component"),
+            ("envelope=a,envelope=b,car=c", "duplicate envelope=PATH"),
+            ("envelope=a,car=b,car=c", "duplicate car=PATH"),
+            ("envelope=,car=b", "requires a non-empty path"),
+            ("envelope=a,car", "expected NAME=PATH"),
+        ] {
+            let error = parse_segment(raw).expect_err("malformed segment input must be rejected");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected error for `{raw}`: {error}"
+            );
+        }
     }
     #[test]
     fn write_output_bytes_creates_parent_and_writes_all_bytes() {
@@ -578,6 +1157,78 @@ mod tests {
         let output_path = temp_path.join("nested").join("metrics.prom");
         write_output_bytes(&output_path, "metrics output", b"metric 1\n").expect("write metrics");
         assert_eq!(fs::read(&output_path).expect("read output"), b"metric 1\n");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn write_output_bytes_atomically_replaces_hard_link_without_mutating_alias() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let alias_path = temp_path.join("existing-alias.prom");
+        let output_path = temp_path.join("metrics.prom");
+        fs::write(&alias_path, b"old metric\n").expect("write existing alias");
+        fs::hard_link(&alias_path, &output_path).expect("hard-link output fixture");
+
+        write_output_bytes(&output_path, "metrics output", b"new metric\n")
+            .expect("atomically replace output");
+
+        assert_eq!(
+            fs::read(&output_path).expect("read new output"),
+            b"new metric\n"
+        );
+        assert_eq!(
+            fs::read(&alias_path).expect("read preserved alias"),
+            b"old metric\n",
+            "in-place truncation would corrupt every hard-link alias"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn publish_staged_outputs_rolls_back_after_second_rename_failure() {
+        let (_temp, temp_path) = canonical_tempdir();
+        for target_existed in [false, true] {
+            let case_dir = temp_path.join(if target_existed { "existing" } else { "new" });
+            fs::create_dir(&case_dir).expect("create case directory");
+            let metrics_path = case_dir.join("metrics.prom");
+            let summary_path = case_dir.join("summary.json");
+            if target_existed {
+                fs::write(&metrics_path, b"old metrics\n").expect("write old metrics");
+            }
+            fs::write(&summary_path, b"old summary\n").expect("write old summary");
+            let staged = vec![
+                StagedOutput::prepare(&metrics_path, "metrics output", b"new metrics\n")
+                    .expect("stage metrics"),
+                StagedOutput::prepare(&summary_path, "summary output", b"new summary\n")
+                    .expect("stage summary"),
+            ];
+
+            let error = publish_staged_outputs_with_hook(staged, |index, output| {
+                if index == 1 {
+                    fs::remove_file(
+                        output
+                            .temporary_path
+                            .as_ref()
+                            .expect("second output remains staged"),
+                    )?;
+                }
+                Ok(())
+            })
+            .expect_err("missing second staged file must fail its rename");
+            assert_eq!(error.kind(), io::ErrorKind::NotFound);
+            if target_existed {
+                assert_eq!(
+                    fs::read(&metrics_path).expect("read restored metrics"),
+                    b"old metrics\n"
+                );
+            } else {
+                assert!(
+                    !metrics_path.exists(),
+                    "rollback must remove a newly created earlier output"
+                );
+            }
+            assert_eq!(
+                fs::read(&summary_path).expect("read untouched summary"),
+                b"old summary\n"
+            );
+        }
     }
     #[cfg(unix)]
     #[test]
@@ -595,6 +1246,29 @@ mod tests {
             "unexpected error: {message}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn write_output_bytes_rejects_read_only_output() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let output_path = temp_path.join("metrics.prom");
+        fs::write(&output_path, b"unchanged\n").expect("write output fixture");
+        let mut permissions = fs::metadata(&output_path)
+            .expect("inspect output fixture")
+            .permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&output_path, permissions).expect("make output read-only");
+
+        let error = write_output_bytes(&output_path, "metrics output", b"replacement")
+            .expect_err("read-only output must be rejected");
+        assert!(
+            error.to_string().contains("must be writable"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            fs::read(&output_path).expect("read preserved output"),
+            b"unchanged\n"
+        );
     }
     #[cfg(unix)]
     #[test]
@@ -616,5 +1290,322 @@ mod tests {
             !real_dir.join("summary.json").exists(),
             "symlink parent should not receive output"
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn write_output_bytes_rejects_unix_socket_output() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let output_path = temp_path.join("metrics.sock");
+        let _listener =
+            std::os::unix::net::UnixListener::bind(&output_path).expect("bind fixture Unix socket");
+        let err = write_output_bytes(&output_path, "metrics output", b"replace")
+            .expect_err("reject Unix socket output");
+        let message = err.to_string();
+        assert!(
+            message.contains("must be a regular file"),
+            "unexpected error: {message}"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn run_preflights_bad_summary_before_writing_metrics() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let mut args = parsed_args_fixture(&temp_path);
+        let metrics_path = temp_path.join("metrics.prom");
+        let summary_path = temp_path.join("summary.sock");
+        let _listener =
+            std::os::unix::net::UnixListener::bind(&summary_path).expect("bind summary socket");
+        args.metrics_out = Some(metrics_path.clone());
+        args.summary_out = Some(summary_path);
+
+        let error = run_with_args(args).expect_err("bad summary output must fail preflight");
+        assert!(
+            error.to_string().contains("must be a regular file"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !metrics_path.exists(),
+            "metrics must not be written before all outputs pass preflight"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn run_stages_every_output_before_publishing_metrics() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let (car_bytes, envelope) = canonical_car_fixture(b"viewer staging payload");
+        let envelope_path = temp_path.join("segment.norito");
+        let car_path = temp_path.join("segment.car");
+        fs::write(
+            &envelope_path,
+            norito::to_bytes(&envelope).expect("encode envelope"),
+        )
+        .expect("write envelope");
+        fs::write(&car_path, car_bytes).expect("write CAR");
+
+        let metrics_path = temp_path.join("metrics.prom");
+        fs::write(&metrics_path, b"preserve existing metrics\n").expect("write old metrics");
+        // The target itself fits the common Unix NAME_MAX, but its hidden temporary name does
+        // not. This forces a deterministic failure only after the metrics file has been staged.
+        let summary_path = temp_path.join("s".repeat(255));
+        let mut args = parsed_args_fixture(&temp_path);
+        args.cek_receipt = None;
+        args.metrics_out = Some(metrics_path.clone());
+        args.summary_out = Some(summary_path.clone());
+
+        run_with_args(args).expect_err("second output staging must fail");
+        assert_eq!(
+            fs::read(&metrics_path).expect("read preserved metrics"),
+            b"preserve existing metrics\n",
+            "no output may be published until every target is staged"
+        );
+        assert!(!summary_path.exists());
+        let leaked_metrics_temp = fs::read_dir(&temp_path)
+            .expect("read tempdir")
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".metrics.prom.tmp-")
+            });
+        assert!(
+            !leaked_metrics_temp,
+            "failed staging must clean prior temps"
+        );
+    }
+    #[test]
+    fn output_preflight_rejects_normalized_output_aliases() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let mut args = parsed_args_fixture(&temp_path);
+        args.metrics_out = Some(temp_path.join("viewer.out"));
+        args.summary_out = Some(temp_path.join("nested").join("..").join("viewer.out"));
+
+        let error = preflight_output_collisions(&args)
+            .expect_err("normalized metrics and summary aliases must be rejected");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        let message = error.to_string();
+        assert!(
+            message.contains("metrics output")
+                && message.contains("summary output")
+                && message.contains("must use distinct paths"),
+            "unexpected error: {message}"
+        );
+    }
+    #[test]
+    fn output_preflight_rejects_every_input_path() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let mut args = parsed_args_fixture(&temp_path);
+        let collisions = [
+            ("segment envelope input", args.segments[0].envelope.clone()),
+            ("segment CAR input", args.segments[0].car.clone()),
+            (
+                "CEK receipt input",
+                args.cek_receipt.clone().expect("fixture CEK receipt"),
+            ),
+        ];
+        for (input_label, input_path) in collisions {
+            args.metrics_out = Some(input_path);
+            let error = preflight_output_collisions(&args)
+                .expect_err("output collision with an input must be rejected");
+            let message = error.to_string();
+            assert!(
+                message.contains("metrics output") && message.contains(input_label),
+                "unexpected error: {message}"
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn run_rejects_hard_link_output_alias_before_writing() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let mut args = parsed_args_fixture(&temp_path);
+        let input_path = args.segments[0].envelope.clone();
+        fs::write(&input_path, b"preserve envelope input").expect("write envelope input");
+        let output_alias = temp_path.join("metrics.prom");
+        fs::hard_link(&input_path, &output_alias).expect("create hard-link output alias");
+        args.metrics_out = Some(output_alias.clone());
+
+        let error = run_with_args(args).expect_err("hard-link input alias must be rejected");
+        assert!(
+            error.to_string().contains("must use distinct paths"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            fs::read(&input_path).expect("read preserved input"),
+            b"preserve envelope input"
+        );
+        assert_eq!(
+            fs::read(&output_alias).expect("read preserved alias"),
+            b"preserve envelope input"
+        );
+    }
+    #[test]
+    fn load_envelope_rejects_unsupported_version() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let mut envelope = sample_envelope(b"car");
+        envelope.version = TaikaiSegmentEnvelopeV1::VERSION + 1;
+        let path = temp_path.join("unsupported-envelope.norito");
+        fs::write(&path, norito::to_bytes(&envelope).expect("encode envelope"))
+            .expect("write envelope");
+        let error = load_envelope(&path).expect_err("unsupported envelope must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported Taikai segment envelope version"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn load_envelope_rejects_semantically_invalid_metadata() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let mut envelope = sample_envelope(b"car");
+        envelope.segment_duration = SegmentDuration::new(0);
+        let path = temp_path.join("zero-duration-envelope.norito");
+        fs::write(&path, norito::to_bytes(&envelope).expect("encode envelope"))
+            .expect("write envelope");
+        let error = load_envelope(&path).expect_err("zero-duration envelope must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("duration must be greater than zero"),
+            "unexpected error: {error}"
+        );
+
+        envelope.segment_duration = SegmentDuration::new(1);
+        envelope.track.average_bitrate_kbps = 0;
+        fs::write(&path, norito::to_bytes(&envelope).expect("encode envelope"))
+            .expect("write envelope");
+        let error = load_envelope(&path).expect_err("zero-bitrate envelope must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("bitrate must be greater than zero"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn read_cek_receipt_rejects_unsupported_version() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let mut receipt = sample_cek_receipt();
+        receipt.schema_version = CEK_ROTATION_RECEIPT_VERSION_V1 + 1;
+        let path = temp_path.join("unsupported-cek-receipt.norito");
+        fs::write(&path, norito::to_bytes(&receipt).expect("encode receipt"))
+            .expect("write receipt");
+        let error = read_cek_receipt(&path).expect_err("unsupported receipt must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported CEK rotation receipt version"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn read_cek_receipt_rejects_malformed_fields() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let path = temp_path.join("malformed-cek-receipt.norito");
+        let mut receipt = sample_cek_receipt();
+        receipt.new_wrap_key_label = " ".to_owned();
+        fs::write(&path, norito::to_bytes(&receipt).expect("encode receipt"))
+            .expect("write receipt");
+        let error = read_cek_receipt(&path).expect_err("blank wrap-key label must be rejected");
+        assert!(error.to_string().contains("new_wrap_key_label"));
+
+        receipt.new_wrap_key_label = "wrap-v2".to_owned();
+        receipt.hkdf_salt = [0; 32];
+        fs::write(&path, norito::to_bytes(&receipt).expect("encode receipt"))
+            .expect("write receipt");
+        let error = read_cek_receipt(&path).expect_err("zero HKDF salt must be rejected");
+        assert!(error.to_string().contains("HKDF salt"));
+    }
+    #[test]
+    fn run_rejects_cek_receipt_for_unviewed_stream() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let (car_bytes, envelope) = canonical_car_fixture(b"canonical viewer payload");
+        let envelope_path = temp_path.join("segment.norito");
+        let car_path = temp_path.join("segment.car");
+        let receipt_path = temp_path.join("rotation.norito");
+        fs::write(
+            &envelope_path,
+            norito::to_bytes(&envelope).expect("encode envelope"),
+        )
+        .expect("write envelope");
+        fs::write(&car_path, car_bytes).expect("write CAR");
+        let mut receipt = sample_cek_receipt();
+        receipt.event_id =
+            TaikaiEventId::new(Name::from_str("different-event").expect("event name"));
+        fs::write(
+            &receipt_path,
+            norito::to_bytes(&receipt).expect("encode receipt"),
+        )
+        .expect("write receipt");
+        let args = parsed_args_fixture(&temp_path);
+
+        let error = run_with_args(args).expect_err("unrelated CEK receipt must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("absent from the viewed segments"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn pq_health_requires_finite_percentage() {
+        assert_eq!(parse_pq_health("0").expect("lower bound"), 0.0);
+        assert_eq!(parse_pq_health("100").expect("upper bound"), 100.0);
+        for invalid in ["NaN", "inf", "-0.1", "100.1"] {
+            let error = parse_pq_health(invalid).expect_err("invalid percentage");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        }
+    }
+    #[test]
+    fn validate_car_rejects_noncanonical_bytes_with_matching_outer_commitments() {
+        let car_bytes = b"not a canonical CARv2 archive";
+        let envelope = sample_envelope(car_bytes);
+        let error = validate_car(&envelope, car_bytes, Path::new("noncanonical.car"))
+            .expect_err("noncanonical archive must be rejected");
+        assert!(
+            error.to_string().contains("canonical verification failed"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn validate_car_matches_every_envelope_commitment() {
+        let (car_bytes, envelope) = canonical_car_fixture(b"canonical Taikai viewer payload");
+        let path = Path::new("canonical.car");
+        validate_car(&envelope, &car_bytes, path).expect("canonical commitments match");
+
+        let mut wrong_digest = envelope.clone();
+        wrong_digest.ingest.car.car_digest = BlobDigest::new([0xAA; 32]);
+        let error = validate_car(&wrong_digest, &car_bytes, path).expect_err("digest mismatch");
+        assert!(error.to_string().contains("CAR digest mismatch"));
+
+        let mut wrong_size = envelope.clone();
+        wrong_size.ingest.car.car_size_bytes = wrong_size
+            .ingest
+            .car
+            .car_size_bytes
+            .checked_add(1)
+            .expect("fixture CAR size can increment");
+        let error = validate_car(&wrong_size, &car_bytes, path).expect_err("size mismatch");
+        assert!(error.to_string().contains("CAR size mismatch"));
+
+        let mut wrong_cid = envelope.clone();
+        wrong_cid.ingest.car.cid_multibase = "binvalid".to_owned();
+        let error = validate_car(&wrong_cid, &car_bytes, path).expect_err("CID mismatch");
+        assert!(error.to_string().contains("CAR CID mismatch"));
+
+        let mut wrong_root = envelope.clone();
+        wrong_root.ingest.chunk_root = BlobDigest::new([0xBB; 32]);
+        let error = validate_car(&wrong_root, &car_bytes, path).expect_err("chunk root mismatch");
+        assert!(error.to_string().contains("CAR chunk root mismatch"));
+
+        let mut wrong_count = envelope;
+        wrong_count.ingest.chunk_count = wrong_count
+            .ingest
+            .chunk_count
+            .checked_add(1)
+            .expect("fixture chunk count can increment");
+        let error = validate_car(&wrong_count, &car_bytes, path).expect_err("chunk count mismatch");
+        assert!(error.to_string().contains("CAR chunk count mismatch"));
     }
 }

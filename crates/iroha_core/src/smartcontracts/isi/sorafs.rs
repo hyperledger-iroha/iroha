@@ -885,7 +885,9 @@ fn enforce_provider_owner(
         dataspace_catalog,
         owner_literal,
         now_ms,
-    ) {
+    )
+    .map_err(|error| InstructionExecutionError::InvariantViolation(error.to_string().into()))?
+    {
         if same_account_subject(&owner, authority) {
             return Ok(());
         }

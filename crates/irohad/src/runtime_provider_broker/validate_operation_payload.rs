@@ -87,8 +87,6 @@ fn validate_operation_payload(
         IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher.wire_id();
     let soracloud_runtime_signer_slot =
         IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
-    let soracloud_hf_credential_slot =
-        IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id();
     let bootle_lantern_issuance_slot =
         IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id();
     match (request.binding.slot, request.operation) {
@@ -128,7 +126,6 @@ fn validate_operation_payload(
                 || slot == billing_acknowledgement_authority_slot
                 || slot == billing_epoch_witness_store_slot
                 || slot == soracloud_runtime_signer_slot
-                || slot == soracloud_hf_credential_slot
                 || slot == bootle_lantern_issuance_slot
                 || native_transaction_signer_role_for_slot(slot).is_some() =>
         {
@@ -584,24 +581,6 @@ fn validate_operation_payload(
             )
             .map_err(|_| BrokerError::Rejected)?;
         }
-        (slot, OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1)
-            if slot == soracloud_hf_credential_slot =>
-        {
-            let mut wire = decode_canonical::<SoracloudHfAuthenticatedInferenceRequestWireV1>(
-                &request.payload,
-                MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
-            )?;
-            crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceRequestV1::try_new(
-                std::mem::take(&mut wire.repo_id),
-                std::mem::take(&mut wire.resolved_revision),
-                std::mem::take(&mut wire.url),
-                std::mem::take(&mut wire.content_type),
-                wire.accept.take(),
-                std::mem::take(&mut wire.body),
-                wire.maximum_response_bytes,
-            )
-            .map_err(|_| BrokerError::Rejected)?;
-        }
         (slot, OPERATION_STREAM_TOKEN_SIGN_V1) if slot == stream_token_slot => {
             let signing = decode_canonical::<SignRequestWireV1>(
                 &request.payload,
@@ -937,10 +916,10 @@ fn validate_operation_payload(
         {
             decode_canonical::<()>(&request.payload, MAX_OPERATION_FRAME_BYTES_V1)?;
         }
-        (slot, OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2)
+        (slot, OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1)
             if slot == provider_ingest_source_slot =>
         {
-            let fetch = decode_canonical::<ProviderIngestSourceFetchRequestWireV2>(
+            let fetch = decode_canonical::<ProviderIngestSourceFetchRequestWireV1>(
                 &request.payload,
                 MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1,
             )?;

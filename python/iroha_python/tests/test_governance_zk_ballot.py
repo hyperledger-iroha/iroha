@@ -19,8 +19,8 @@ from iroha_python.sorafs import SorafsAliasPolicy
 from .helpers import RecordingSession, StubResponse
 
 
-def _canonical_owner_literal(domain: str = "wonderland") -> str:
-    address = AccountAddress.from_account(domain=domain, public_key=bytes([0x11] * 32))
+def _canonical_owner_literal() -> str:
+    address = AccountAddress.from_account(public_key=bytes([0x11] * 32))
     return address.to_i105(0x02F1)
 
 
@@ -64,8 +64,8 @@ TEST_SORAFS_ALIAS_POLICY = SorafsAliasPolicy(
 )
 
 
-def _noncanonical_owner_literal(domain: str = "wonderland") -> str:
-    address = AccountAddress.from_account(domain=domain, public_key=bytes([0x22] * 32))
+def _noncanonical_owner_literal() -> str:
+    address = AccountAddress.from_account(public_key=bytes([0x22] * 32))
     return address.canonical_hex()
 
 
@@ -227,7 +227,6 @@ def test_governance_ballot_binds_canonical_principal_before_dispatch() -> None:
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = _governance_client(session)
     other = AccountAddress.from_account(
-        domain="other",
         public_key=bytes([0x33] * 32),
     ).to_i105(0x02F1)
     mismatched_auth = ToriiCanonicalRequestAuth(

@@ -109,7 +109,7 @@ fn validate_queue_plan_gossip_certificate(
     routing_plan: &RoutingPlan,
 ) -> Result<
     (
-        crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        crate::torii_proxy::QueuePlanAdmissionBindingV1,
         QueuePlanGossipCertificateDisposition,
     ),
     String,
@@ -4152,11 +4152,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             quic_datagram_max_payload_bytes: defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
             quic_datagram_receive_buffer_bytes: defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
             quic_datagram_send_buffer_bytes: defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-            tls_enabled: false,
-            tls_fallback_to_plain: true,
-            tls_listen_address: None,
-            tls_inbound_only: false,
-            prefer_ws_fallback: false,
             p2p_queue_cap_high: defaults::network::P2P_QUEUE_CAP_HIGH,
             p2p_queue_cap_low: defaults::network::P2P_QUEUE_CAP_LOW,
             p2p_post_queue_cap: defaults::network::P2P_POST_QUEUE_CAP,
@@ -4221,7 +4216,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             max_frame_bytes_peer_gossip: defaults::network::MAX_FRAME_BYTES_PEER_GOSSIP.get(),
             max_frame_bytes_health: defaults::network::MAX_FRAME_BYTES_HEALTH.get(),
             max_frame_bytes_other: defaults::network::MAX_FRAME_BYTES_OTHER.get(),
-            tls_only_v1_3: true,
             quic_max_idle_timeout: None,
         }
     }
@@ -4353,7 +4347,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     ) -> (
         TransactionGossiper,
         SignedTransaction,
-        crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        crate::torii_proxy::QueuePlanAdmissionBindingV1,
         Vec<u8>,
         TempDir,
     ) {
@@ -4394,7 +4388,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let admission_context = queue
             .plan_admission_context_with_state(state.as_ref(), &routing_plan)
             .expect("capture exact QueuePlan gossip admission context");
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
             state.network_id_ref(),
             &entrypoint,
             &routing_plan,
@@ -4426,13 +4420,13 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                     .find(|key| key.public_key() == validator.public_key())
                     .expect("exact QueuePlan authority key is available");
                 let preimage =
-                    crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v2(
+                    crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1(
                         binding_hash,
                         validator_index,
                     )
                     .expect("encode exact QueuePlan gossip attestation");
-                crate::torii_proxy::QueuePlanAdmissionAttestationV2 {
-                    version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+                crate::torii_proxy::QueuePlanAdmissionAttestationV1 {
+                    version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
                     validator_index,
                     signature: iroha_crypto::Signature::try_new(
                         validator_key.private_key(),
@@ -4442,8 +4436,8 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 }
             })
             .collect();
-        let certificate = crate::torii_proxy::QueuePlanAdmissionCertificateV2 {
-            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+        let certificate = crate::torii_proxy::QueuePlanAdmissionCertificateV1 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
             binding: binding.clone(),
             attestations,
         };
@@ -4523,7 +4517,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
                 .expect("read exact Pending QueuePlan gossip durable claim")
                 .expect("exact Pending QueuePlan gossip must own a durable claim");
             let reconstructed =
-                crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
+                crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(
                     &durable,
                 )
                 .expect("reconstruct exact Pending QueuePlan gossip binding");

@@ -413,7 +413,6 @@ fn configured_npos_bootstrap_escrow_account_id(
             .stake_escrow_account_id
     };
     AccountId::parse_encoded(&literal)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|error| {
             eyre!(
                 "NPoS auto-bootstrap requires `nexus.staking.stake_escrow_account_id` to be a canonical account literal, found `{literal}`: {error}"

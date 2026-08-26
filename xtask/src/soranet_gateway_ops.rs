@@ -624,8 +624,6 @@ fn render_security_baseline(pop_label: &str) -> String {
     )
 }
 fn render_pq_checklist(pop_label: &str) -> Value {
-    let canary1 = format!("canary1.{pop_label}.gw.sora.id");
-    let canary2 = format!("canary2.{pop_label}.gw.sora.id");
     norito::json!({
         "pop": pop_label,
         "tls_keys": {
@@ -641,14 +639,6 @@ fn render_pq_checklist(pop_label: &str) -> Value {
             "status": "ready",
             "expect_header": "sora-cache-version",
             "notes": "Gateway rejects unknown cache versions; align with honey probes."
-        },
-        "canary_hosts": {
-            "status": "ready",
-            "hosts": [
-                canary1,
-                canary2
-            ],
-            "notes": "Use canaries for PQ cipher rollout before flipping defaults."
         }
     })
 }

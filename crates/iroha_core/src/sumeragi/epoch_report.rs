@@ -1,5 +1,5 @@
 //! In-memory snapshot store for per-epoch VRF penalties.
-//! Not consensus-critical. Used by operator endpoints.
+//! Not consensus-critical. The production Torii route reads persisted epoch records.
 use core::sync::atomic::{AtomicU64, Ordering};
 use std::{
     collections::BTreeMap,

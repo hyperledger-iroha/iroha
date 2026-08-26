@@ -216,6 +216,7 @@ class FakeTorii:
     ):
         self.submitted = []
         self.waited = []
+        self.wait_options = []
         self.submit_hash_hex = submit_hash_hex
         self.submit_result = submit_result
         self.submit_error = submit_error
@@ -227,12 +228,20 @@ class FakeTorii:
         self.submitted.append(payload)
         if self.submit_result is not None:
             return self.submit_result
-        return {"accepted": True, "hash_hex": self.submit_hash_hex} if self.submit_hash_hex else {"accepted": True}
+        return (
+            {
+                "accepted": True,
+                "payload": {"entrypoint_hash": self.submit_hash_hex},
+            }
+            if self.submit_hash_hex
+            else {"accepted": True}
+        )
 
     def wait_for_transaction_status(self, hash_hex, **_options):
         if self.wait_error is not None:
             raise self.wait_error
         self.waited.append(hash_hex)
+        self.wait_options.append(dict(_options))
         return {"status": "Applied"}
 
 
@@ -666,6 +675,52 @@ def _client_for_finalized_result(result, *, submit_result=None):
 
 
 @pytest.mark.parametrize(
+    "retired_option",
+    ["scope", "success_statuses", "additional_failure_statuses"],
+)
+def test_nexus_app_rejects_retired_transaction_wait_options_before_submission(
+    retired_option,
+):
+    client, draft, torii = _client_for_finalized_result(
+        {"signed_transaction": b"signed", "hash_hex": "c" * 64}
+    )
+
+    with pytest.raises(NexusAppError) as excinfo:
+        client.finalize_and_submit(
+            draft.signable,
+            NexusWalletSignature(FIXTURE_SIGNATURE),
+            wait_options={retired_option: "local"},
+        )
+
+    assert excinfo.value.code == "invalid_wait_options"
+    assert torii.submitted == []
+    assert torii.waited == []
+
+
+def test_nexus_app_forwards_only_current_transaction_wait_options():
+    client, draft, torii = _client_for_finalized_result(
+        {"signed_transaction": b"signed", "hash_hex": "d" * 64}
+    )
+    def callback(*_args):
+        return None
+
+    options = {
+        "interval": 0.25,
+        "timeout": 5.0,
+        "max_attempts": 4,
+        "on_status": callback,
+    }
+
+    client.finalize_and_submit(
+        draft.signable,
+        NexusWalletSignature(FIXTURE_SIGNATURE),
+        wait_options=options,
+    )
+
+    assert torii.wait_options == [options]
+
+
+@pytest.mark.parametrize(
     "finalized",
     [
         b"signed",
@@ -693,6 +748,7 @@ def test_nexus_app_requires_custom_finalizer_transaction_hash(finalized):
     [
         "a" * 63,
         "a" * 65,
+        "a" * 64,
         "g" * 64,
         "A" * 64,
         "0x" + "a" * 64,
@@ -702,6 +758,7 @@ def test_nexus_app_requires_custom_finalizer_transaction_hash(finalized):
     ids=[
         "short",
         "long",
+        "missing-marker",
         "non-hex",
         "uppercase",
         "prefixed",
@@ -725,40 +782,29 @@ def test_nexus_app_rejects_noncanonical_custom_finalizer_hash(hash_hex):
     assert torii.submitted == []
 
 
-def test_nexus_app_accepts_exact_custom_finalizer_hash_and_camel_case_fields():
-    hash_hex = "c" * 64
+def test_nexus_app_rejects_retired_custom_finalizer_camel_case_fields():
+    hash_hex = "d" * 64
     client, draft, torii = _client_for_finalized_result(
         {"signedTransaction": b"signed", "hashHex": hash_hex}
     )
 
-    receipt = client.finalize_and_submit(
-        draft.signable,
-        NexusWalletSignature(FIXTURE_SIGNATURE),
-        wait=False,
-    )
+    with pytest.raises(NexusAppError) as excinfo:
+        client.finalize_and_submit(
+            draft.signable,
+            NexusWalletSignature(FIXTURE_SIGNATURE),
+            wait=False,
+        )
 
-    assert receipt.signed_transaction == b"signed"
-    assert receipt.signed_transaction_hash_hex == hash_hex
-    assert torii.submitted == [b"signed"]
+    assert excinfo.value.code == "invalid_transaction_hash"
+    assert torii.submitted == []
 
 
-@pytest.mark.parametrize(
-    "entrypoint_alias",
-    (
-        "entrypoint_hash_hex",
-        "entrypointHashHex",
-        "entrypoint_hash",
-        "entrypointHash",
-    ),
-)
-def test_nexus_app_separates_canonical_and_signed_wire_submission_hashes(
-    entrypoint_alias,
-):
-    canonical_hash = "c" * 64
+def test_nexus_app_separates_canonical_and_signed_wire_submission_hashes():
+    canonical_hash = "b" * 64
     signed_wire_hash = "d" * 64
     submission = {
         "payload": {
-            entrypoint_alias: canonical_hash,
+            "entrypoint_hash": canonical_hash,
             "signed_transaction_hash": signed_wire_hash,
         }
     }
@@ -778,13 +824,32 @@ def test_nexus_app_separates_canonical_and_signed_wire_submission_hashes(
     assert torii.waited == [canonical_hash]
 
 
+@pytest.mark.parametrize(
+    "entrypoint_alias",
+    ("entrypoint_hash_hex", "entrypointHashHex", "entrypointHash"),
+)
+def test_nexus_app_rejects_retired_submission_hash_aliases(entrypoint_alias):
+    canonical_hash = "b" * 64
+    submission = {"payload": {entrypoint_alias: canonical_hash}}
+    client, draft, torii = _client_for_finalized_result(
+        {"signed_transaction": b"signed", "hash_hex": canonical_hash},
+        submit_result=submission,
+    )
+
+    with pytest.raises(NexusAppError) as excinfo:
+        client.finalize_and_submit(
+            draft.signable,
+            NexusWalletSignature(FIXTURE_SIGNATURE),
+        )
+
+    assert excinfo.value.code == "invalid_transaction_hash"
+    assert torii.waited == []
+
+
 def test_nexus_app_ignores_signed_wire_only_submission_hash_and_uses_local_hash():
-    canonical_hash = "c" * 64
+    canonical_hash = "b" * 64
     signed_wire_hash = "d" * 64
-    submission = {
-        "signedTransactionHash": signed_wire_hash,
-        "payload": {"signed_transaction_hash": signed_wire_hash},
-    }
+    submission = {"payload": {"signed_transaction_hash": signed_wire_hash}}
     client, draft, torii = _client_for_finalized_result(
         {"signed_transaction": b"signed", "hash_hex": canonical_hash},
         submit_result=submission,
@@ -798,6 +863,24 @@ def test_nexus_app_ignores_signed_wire_only_submission_hash_and_uses_local_hash(
     assert receipt.submission is submission
     assert receipt.signed_transaction_hash_hex == canonical_hash
     assert torii.waited == [canonical_hash]
+
+
+def test_nexus_app_rejects_noncanonical_signed_wire_receipt_hash():
+    canonical_hash = "b" * 64
+    submission = {"payload": {"signed_transaction_hash": "c" * 64}}
+    client, draft, torii = _client_for_finalized_result(
+        {"signed_transaction": b"signed", "hash_hex": canonical_hash},
+        submit_result=submission,
+    )
+
+    with pytest.raises(NexusAppError) as excinfo:
+        client.finalize_and_submit(
+            draft.signable,
+            NexusWalletSignature(FIXTURE_SIGNATURE),
+        )
+
+    assert excinfo.value.code == "invalid_transaction_hash"
+    assert torii.waited == []
 
 
 def test_nexus_app_rejects_conflicting_custom_finalizer_hash_aliases():
@@ -931,7 +1014,7 @@ def test_nexus_app_rejects_torii_hash_mismatch_and_maps_failures():
             expected_signature=FIXTURE_SIGNATURE,
             expected_signing_public_key=FIXTURE_PUBLIC_KEY,
         ),
-        torii_client=FakeTorii(submit_hash_hex="e" * 64),
+        torii_client=FakeTorii(submit_hash_hex="f" * 64),
     )
     draft = client.build_transfer_draft(
         NexusTransferInput(

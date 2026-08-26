@@ -1463,9 +1463,7 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
     use iroha_primitives::json::Json;
     let (type_id, payload) = match kind {
         DRK::Account => {
-            let id = iroha_data_model::account::AccountId::parse_encoded(raw)
-                .ok()?
-                .into_account_id();
+            let id = iroha_data_model::account::AccountId::parse_encoded(raw).ok()?;
             (
                 PointerType::AccountId,
                 ivm_abi::codec::encode_canonical_norito(&id).ok()?,
@@ -7763,7 +7761,7 @@ kotoage fn main() authorize("AssetAdmin") {{
             r#"
 seiyaku Test {{
   kotoage fn peers() authorize("Admin") {{
-    ledger::peer::register(Json::parse("{{\"public_key\":\"{public_key}\",\"pop\":[]}}"));
+    ledger::peer::register(Json::parse("{{\"pop\":[],\"public_key\":\"{public_key}\"}}"));
     ledger::peer::unregister(Json::parse("{{\"public_key\":\"{public_key}\"}}"));
   }}
 }}
@@ -7856,7 +7854,7 @@ seiyaku Test {{
     }
     #[test]
     fn manifest_trigger_decl_sets_authority() {
-        use iroha_data_model::account::{AccountId, ParsedAccountId};
+        use iroha_data_model::account::AccountId;
         let authority_literal = sample_account_literal();
         let src = format!(
             r#"
@@ -7883,11 +7881,7 @@ seiyaku Test {{
         assert_eq!(trigger.id.to_string(), "wake");
         assert_eq!(
             trigger.authority,
-            Some(
-                AccountId::parse_encoded(authority_literal.as_str())
-                    .map(ParsedAccountId::into_account_id)
-                    .expect("authority literal"),
-            )
+            Some(AccountId::parse_encoded(authority_literal.as_str()).expect("authority literal"),)
         );
     }
     #[test]
@@ -8061,7 +8055,7 @@ seiyaku Test {{
     fn manifest_trigger_decl_lowers_structured_data_filters_for_core_families() {
         use iroha_data_model::{
             DomainId,
-            account::{AccountId, ParsedAccountId},
+            account::AccountId,
             asset::AssetId,
             events::{
                 EventFilterBox,
@@ -8084,9 +8078,7 @@ seiyaku Test {{
             trigger::TriggerId,
         };
         let account_literal = sample_account_literal();
-        let account = AccountId::parse_encoded(account_literal.as_str())
-            .map(ParsedAccountId::into_account_id)
-            .expect("account");
+        let account = AccountId::parse_encoded(account_literal.as_str()).expect("account");
         let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";
         let peer: PeerId = peer_literal.parse().expect("peer");
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
@@ -15301,12 +15293,10 @@ impl Compiler {
                     unreachable!("numeric literals return above")
                 }
                 DataKey(DataKind::Account, s) => {
-                    let id = AccountId::parse_encoded(s)
-                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                        .map_err(|e| {
-                            let err = format!("invalid AccountId literal `{s}`: {e}");
-                            i18n::translate(self.lang, Message::SemanticError(&err))
-                        })?;
+                    let id = AccountId::parse_encoded(s).map_err(|e| {
+                        let err = format!("invalid AccountId literal `{s}`: {e}");
+                        i18n::translate(self.lang, Message::SemanticError(&err))
+                    })?;
                     (
                         1u16,
                         ivm_abi::codec::encode_canonical_norito(&id)
@@ -17420,22 +17410,6 @@ fn record_soracloud_request_access(
                 .reads
                 .insert(format!("soracloud:secret_envelope:{}", payload.secret_name));
         }
-        (Op::ReadSecret, Payload::ReadSecret(payload)) => {
-            access_set
-                .reads
-                .insert(format!("soracloud:node_secret:{}", payload.secret_name));
-        }
-        (Op::ReadCredential, Payload::ReadCredential(payload)) => {
-            access_set.reads.insert(format!(
-                "soracloud:node_credential:{}",
-                payload.credential_name
-            ));
-        }
-        (Op::EgressFetch, Payload::EgressFetch(payload)) => {
-            access_set
-                .reads
-                .insert(format!("soracloud:egress:{}", payload.url));
-        }
         _ => return None,
     }
     Some(())
@@ -17453,9 +17427,6 @@ fn soracloud_operation_for_syscall(
         syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE => Some(Op::EmitMailboxMessage),
         syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL => Some(Op::AppendJournal),
         syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT => Some(Op::PublishCheckpoint),
-        syscalls::SYSCALL_SORACLOUD_READ_SECRET => Some(Op::ReadSecret),
-        syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL => Some(Op::ReadCredential),
-        syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH => Some(Op::EgressFetch),
         syscalls::SYSCALL_SORACLOUD_READ_CONFIG => Some(Op::ReadConfig),
         syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => Some(Op::ReadSecretEnvelope),
         _ => None,
@@ -17831,9 +17802,7 @@ fn parse_account_temp(
     func_idx: usize,
     temp: ir::Temp,
 ) -> Option<AccountId> {
-    AccountId::parse_encoded(string_map.get(&(func_idx, temp))?)
-        .ok()
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+    AccountId::parse_encoded(string_map.get(&(func_idx, temp))?).ok()
 }
 fn collect_function_return_literal_facts(
     ir_prog: &ir::Program,

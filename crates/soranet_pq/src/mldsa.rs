@@ -13,7 +13,7 @@ use pqcrypto_traits::{
 };
 use rand_core::{RngCore, TryCryptoRng};
 use thiserror::Error;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 #[path = "mldsa_backend.rs"]
 mod backend;
 #[path = "mldsa_primitives.rs"]
@@ -172,9 +172,17 @@ impl MlDsaKeyPair {
     }
 }
 /// Detached ML-DSA signature.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MlDsaSignature {
     bytes: Vec<u8>,
+}
+impl fmt::Debug for MlDsaSignature {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MlDsaSignature")
+            .field("bytes", &"[REDACTED]")
+            .finish()
+    }
 }
 impl MlDsaSignature {
     fn try_new(suite: MlDsaSuite, bytes: Vec<u8>) -> Result<Self, MlDsaError> {
@@ -185,6 +193,26 @@ impl MlDsaSignature {
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// Transfer ownership of the raw signature bytes to the caller.
+    ///
+    /// The returned allocation is no longer guarded by [`MlDsaSignature`]'s
+    /// drop-time scrubbing, so callers should use this only when the signature
+    /// must outlive the wrapper (for example, in a serialized protocol object).
+    #[must_use]
+    pub fn into_bytes(mut self) -> Vec<u8> {
+        core::mem::take(&mut self.bytes)
+    }
+
+    fn zeroize_sensitive_fields(&mut self) {
+        self.bytes.zeroize();
+        core::hint::black_box(&self.bytes);
+    }
+}
+impl Drop for MlDsaSignature {
+    fn drop(&mut self) {
+        self.zeroize_sensitive_fields();
     }
 }
 /// Error raised by ML-DSA helpers.
@@ -725,6 +753,44 @@ mod tests {
             .expect("nonzero ML-DSA signature should be accepted");
         assert_eq!(wrapped.as_bytes(), signature.as_slice());
     }
+
+    #[test]
+    fn signature_debug_output_redacts_payload() {
+        let suite = MlDsaSuite::MlDsa44;
+        let wrapped = MlDsaSignature::try_new(suite, vec![0xA7; suite.signature_len()])
+            .expect("nonzero ML-DSA signature should be accepted");
+
+        assert_eq!(
+            format!("{wrapped:?}"),
+            "MlDsaSignature { bytes: \"[REDACTED]\" }"
+        );
+    }
+
+    #[test]
+    fn signature_scrub_erases_owned_payload() {
+        let suite = MlDsaSuite::MlDsa44;
+        let mut wrapped = MlDsaSignature::try_new(suite, vec![0xA7; suite.signature_len()])
+            .expect("nonzero ML-DSA signature should be accepted");
+
+        wrapped.zeroize_sensitive_fields();
+
+        assert!(wrapped.as_bytes().is_empty());
+    }
+
+    #[test]
+    fn signature_into_bytes_transfers_the_guarded_allocation() {
+        let suite = MlDsaSuite::MlDsa44;
+        let signature = vec![0xA7; suite.signature_len()];
+        let wrapped = MlDsaSignature::try_new(suite, signature.clone())
+            .expect("nonzero ML-DSA signature should be accepted");
+        let guarded_ptr = wrapped.as_bytes().as_ptr();
+
+        let transferred = wrapped.into_bytes();
+
+        assert_eq!(transferred, signature);
+        assert_eq!(transferred.as_ptr(), guarded_ptr);
+    }
+
     #[test]
     fn signature_constructor_rejects_all_zero_payload() {
         let suite = MlDsaSuite::MlDsa44;

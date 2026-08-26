@@ -5,29 +5,26 @@ fn iterable_query_payload_decode_is_canonical_and_variant_safe() {
         domain::prelude::{FindDomains, FindDomainsByAccountId},
     };
     let unit_payload = norito::codec::Encode::encode(&FindDomains);
-    assert!(decode_iter_query_payload_exact::<FindDomains>(&unit_payload).is_some());
+    assert!(decode_exact_in_scope::<FindDomains>(&unit_payload).is_ok());
     let mut trailing_unit_payload = unit_payload;
     trailing_unit_payload.push(0xA5);
     assert!(
-        decode_iter_query_payload_exact::<FindDomains>(&trailing_unit_payload).is_none(),
+        decode_exact_in_scope::<FindDomains>(&trailing_unit_payload).is_err(),
         "a unit query must not accept nonempty or trailing payload bytes"
     );
     let parameterized = FindDomainsByAccountId {
         id: ALICE_ID.clone(),
     };
     let parameterized_payload = norito::codec::Encode::encode(&parameterized);
+    assert!(decode_exact_in_scope::<FindDomainsByAccountId>(&parameterized_payload).is_ok());
     assert!(
-        decode_iter_query_payload_exact::<FindDomainsByAccountId>(&parameterized_payload).is_some()
-    );
-    assert!(
-        decode_iter_query_payload_exact::<FindDomains>(&parameterized_payload).is_none(),
+        decode_exact_in_scope::<FindDomains>(&parameterized_payload).is_err(),
         "a parameterized payload must not collide with the global unit query"
     );
     let mut trailing_parameterized_payload = parameterized_payload;
     trailing_parameterized_payload.push(0x5A);
     assert!(
-        decode_iter_query_payload_exact::<FindDomainsByAccountId>(&trailing_parameterized_payload)
-            .is_none(),
+        decode_exact_in_scope::<FindDomainsByAccountId>(&trailing_parameterized_payload).is_err(),
         "a parameterized query must reject trailing payload bytes"
     );
     let other_parameterized_payload = norito::codec::Encode::encode(&FindAccountsWithAsset {
@@ -37,7 +34,7 @@ fn iterable_query_payload_decode_is_canonical_and_variant_safe() {
         ),
     });
     assert!(
-        decode_iter_query_payload_exact::<FindDomains>(&other_parameterized_payload).is_none(),
+        decode_exact_in_scope::<FindDomains>(&other_parameterized_payload).is_err(),
         "another query variant's payload must not become a global domain query"
     );
 }

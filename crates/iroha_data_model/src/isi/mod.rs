@@ -332,9 +332,6 @@ impl_direct_instruction_box!(crate::isi::soracloud::ClearSoracloudInrouReplicaRu
 impl_direct_instruction_box!(crate::isi::soracloud::ReportSoracloudServiceLeaseUsage);
 impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudMailboxMessage);
 impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudRuntimeReceipt);
-impl_direct_instruction_box!(
-    crate::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt
-);
 // Allow direct boxing of runtime upgrade instructions
 impl_direct_instruction_box!(crate::isi::runtime_upgrade::ProposeRuntimeUpgrade);
 impl_direct_instruction_box!(crate::isi::runtime_upgrade::ActivateRuntimeUpgrade);
@@ -1180,7 +1177,6 @@ fn json_asset_transfer_target(
     let account_id = crate::account::AccountId::parse_encoded(
         json_required_string(params, "account_id")?.as_str(),
     )
-    .map(crate::account::ParsedAccountId::into_account_id)
     .map_err(|err| norito::json::Error::Message(err.to_string()))?;
     let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
         json_required_string(params, "asset_definition_id")?.as_str(),
@@ -2984,10 +2980,9 @@ pub mod prelude {
         soracloud::{
             AdvanceSoracloudRollout, DeploySoracloudService, MutateSoracloudState,
             RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
-            RecordSoracloudMailboxMessage, RecordSoracloudPrivateUploadedModelExecutionReceipt,
-            RecordSoracloudRuntimeReceipt, ReportSoracloudServiceLeaseUsage,
-            RollbackSoracloudService, RunSoracloudFheJob, SetSoracloudRuntimeState,
-            UpgradeSoracloudService,
+            RecordSoracloudMailboxMessage, RecordSoracloudRuntimeReceipt,
+            ReportSoracloudServiceLeaseUsage, RollbackSoracloudService, RunSoracloudFheJob,
+            SetSoracloudRuntimeState, UpgradeSoracloudService,
         },
         soradns::{
             AddReleaseSigner, PublishDirectory, RemoveReleaseSigner, RevokeResolver,

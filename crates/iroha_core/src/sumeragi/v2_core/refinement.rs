@@ -364,13 +364,13 @@ pub(crate) const IN_FLIGHT_RESERVATION_ACTION_COMPLETE_RELEASE: u8 = 8;
 pub(crate) const IN_FLIGHT_RESERVATION_ACTION_FORGET_RELEASE: u8 = 9;
 /// No selected QueuePlan conjunction is durable in the composed projection.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_ABSENT: u8 = 0;
-/// Every selected transaction has one exact live QueuePlan V4 claim.
+/// Every selected transaction has one exact live QueuePlan V1 claim.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED: u8 = 1;
-/// Every selected QueuePlan V4 claim has been durably tombstoned.
+/// Every selected QueuePlan V1 claim has been durably tombstoned.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED: u8 = 2;
 /// No reservation owner exists in the composed in-flight projection.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_RESERVATION_ABSENT: u8 = 0;
-/// The selected batch is owned by durable reservation journal V5 records.
+/// The selected batch is owned by durable reservation journal V1 records.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE: u8 = 1;
 /// Reservation Commit is durable after canonical WSV application.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED: u8 = 2;
@@ -384,10 +384,10 @@ pub(crate) const IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED: u8 = 5;
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN: u8 = 6;
 /// Aborted or recovery-orphaned work was directly restored to ordinary FIFO.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED: u8 = 7;
-/// Observe one exact selected QueuePlan V4 claim conjunction.
-pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4: u8 = 1;
-/// Fsync the selected batch's exact reservation journal V5 records.
-pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5: u8 = 2;
+/// Observe one exact selected QueuePlan V1 claim conjunction.
+pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1: u8 = 1;
+/// Fsync the selected batch's exact reservation journal V1 records.
+pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V1: u8 = 2;
 /// Persist the executable payload as an active Kura lane artifact.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA: u8 = 3;
 /// Move volatile payload custody from the producer to one replica.
@@ -412,7 +412,7 @@ pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT: u8 = 12;
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_APPLY_CARRIER: u8 = 13;
 /// Advance one reservation Commit prefix key after canonical WSV application.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED: u8 = 14;
-/// Advance one QueuePlan V4 tombstone prefix key after the full Commit prefix.
+/// Advance one QueuePlan V1 tombstone prefix key after the full Commit prefix.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE: u8 = 15;
 /// Advance one ForgetCommit prefix key after the full tombstone prefix.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT: u8 = 16;
@@ -432,7 +432,7 @@ pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO: u8 = 22;
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE: u8 = 23;
 /// Repair post-carrier evidence without changing the safety projection.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER: u8 = 24;
-/// Rebuild local reservation ownership from the already-durable V6 snapshot envelope.
+/// Rebuild local reservation ownership from the already-durable V1 snapshot envelope.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT: u8 = 25;
 /// Directly restore exact aborted/recovery-orphaned work to ordinary FIFO.
 pub(crate) const IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT: u8 = 26;
@@ -754,10 +754,10 @@ macro_rules! refinement_tag_value {
     (IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED) => {
         7u8
     };
-    (IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4) => {
+    (IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1) => {
         1u8
     };
-    (IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5) => {
+    (IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V1) => {
         2u8
     };
     (IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA) => {
@@ -973,8 +973,8 @@ assert_refinement_tag_values!(
     IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED,
     IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_FORGOTTEN,
     IN_FLIGHT_FIRST_RELEASE_RESERVATION_DIRECT_RELEASED,
-    IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4,
-    IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5,
+    IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1,
+    IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V1,
     IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA,
     IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER,
     IN_FLIGHT_FIRST_RELEASE_ACTION_SERVE_LATE_BODY,
@@ -4140,8 +4140,8 @@ macro_rules! in_flight_first_release_session_equal_body {
 }
 macro_rules! in_flight_first_release_history_equal_body {
     ($left:expr, $right:expr) => {{
-        $left.ever_queue_plan_v4 == $right.ever_queue_plan_v4
-            && $left.ever_reservation_v5 == $right.ever_reservation_v5
+        $left.ever_queue_plan_v1 == $right.ever_queue_plan_v1
+            && $left.ever_reservation_v1 == $right.ever_reservation_v1
             && $left.ever_execution_input_durable == $right.ever_execution_input_durable
             && $left.ever_ready_authorized == $right.ever_ready_authorized
             && $left.ready_signed == $right.ready_signed
@@ -4266,15 +4266,15 @@ macro_rules! production_in_flight_first_release_state_body {
             && (history.ever_ready_authorized & !validator_mask) == 0u128
             && (history.ready_signed & !validator_mask) == 0u128
             && (carrier.execution_input_durable & !carrier.kura_active) == 0u128
-            && (carrier.kura_active == 0u128 || history.ever_reservation_v5)
+            && (carrier.kura_active == 0u128 || history.ever_reservation_v1)
             && (session.ready_authorized & !carrier.execution_input_durable) == 0u128
             && (history.ready_signed & !history.ever_ready_authorized) == 0u128
             && (!carrier.ready_qc_durable
                 || in_flight_first_release_bitmap_count_body!(history.ready_signed) >= ready_quorum)
-            && (!history.ever_queue_plan_v4
+            && (!history.ever_queue_plan_v1
                 || queue.plan_state
                     != refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_ABSENT))
-            && (!history.ever_reservation_v5
+            && (!history.ever_reservation_v1
                 || queue.reservation_state
                     != refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_ABSENT))
             && (history.ever_execution_input_durable & !carrier.execution_input_durable) == 0u128
@@ -4425,7 +4425,7 @@ macro_rules! production_in_flight_first_release_transition_body {
             && production_in_flight_first_release_state_body!(after)
             && in_flight_first_release_static_equal_body!(before, after)
             && if projection.action
-                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4)
+                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1)
             {
                 projection.actor == 0u128
                     && projection.target == 0u128
@@ -4438,9 +4438,9 @@ macro_rules! production_in_flight_first_release_transition_body {
                     && after.queue.selected_count > 0u64
                     && after.queue.selected_count <= 4096u64
                     && after.queue.reservation_state == before.queue.reservation_state
-                    && !before.history.ever_queue_plan_v4
-                    && after.history.ever_queue_plan_v4
-                    && after.history.ever_reservation_v5 == before.history.ever_reservation_v5
+                    && !before.history.ever_queue_plan_v1
+                    && after.history.ever_queue_plan_v1
+                    && after.history.ever_reservation_v1 == before.history.ever_reservation_v1
                     && after.history.ever_execution_input_durable
                         == before.history.ever_execution_input_durable
                     && after.history.ever_ready_authorized == before.history.ever_ready_authorized
@@ -4457,7 +4457,7 @@ macro_rules! production_in_flight_first_release_transition_body {
                     && in_flight_first_release_decision_equal_body!(before.decision, after.decision)
                     && in_flight_first_release_release_equal_body!(before.release, after.release)
             } else if projection.action
-                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5)
+                == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V1)
             {
                 projection.actor == 0u128
                     && projection.target == 0u128
@@ -4469,8 +4469,8 @@ macro_rules! production_in_flight_first_release_transition_body {
                     && after.queue.selected_count == before.queue.selected_count
                     && after.queue.reservation_state
                         == refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE)
-                    && after.history.ever_queue_plan_v4 == before.history.ever_queue_plan_v4
-                    && after.history.ever_reservation_v5
+                    && after.history.ever_queue_plan_v1 == before.history.ever_queue_plan_v1
+                    && after.history.ever_reservation_v1
                     && after.history.ever_execution_input_durable
                         == before.history.ever_execution_input_durable
                     && after.history.ever_ready_authorized == before.history.ever_ready_authorized
@@ -4512,7 +4512,7 @@ macro_rules! production_in_flight_first_release_transition_body {
                     && projection.actor != before.producer
                     && before.session.producer_alive
                     && (before.session.bodies & before.producer) != 0u128
-                    && before.history.ever_reservation_v5
+                    && before.history.ever_reservation_v1
                     && (before.session.crashed & projection.actor) == 0u128
                     && after.session.bodies == (before.session.bodies | projection.actor)
                     && after.session.ready_authorized == before.session.ready_authorized
@@ -4555,8 +4555,8 @@ macro_rules! production_in_flight_first_release_transition_body {
                     && after.carrier.execution_input_durable
                         == (before.carrier.execution_input_durable | projection.actor)
                     && after.carrier.ready_qc_durable == before.carrier.ready_qc_durable
-                    && after.history.ever_queue_plan_v4 == before.history.ever_queue_plan_v4
-                    && after.history.ever_reservation_v5 == before.history.ever_reservation_v5
+                    && after.history.ever_queue_plan_v1 == before.history.ever_queue_plan_v1
+                    && after.history.ever_reservation_v1 == before.history.ever_reservation_v1
                     && after.history.ever_execution_input_durable
                         == (before.history.ever_execution_input_durable | projection.actor)
                     && after.history.ever_ready_authorized == before.history.ever_ready_authorized
@@ -4584,8 +4584,8 @@ macro_rules! production_in_flight_first_release_transition_body {
                         == (before.session.ready_authorized | projection.actor)
                     && after.session.crashed == before.session.crashed
                     && after.session.producer_alive == before.session.producer_alive
-                    && after.history.ever_queue_plan_v4 == before.history.ever_queue_plan_v4
-                    && after.history.ever_reservation_v5 == before.history.ever_reservation_v5
+                    && after.history.ever_queue_plan_v1 == before.history.ever_queue_plan_v1
+                    && after.history.ever_reservation_v1 == before.history.ever_reservation_v1
                     && after.history.ever_execution_input_durable
                         == before.history.ever_execution_input_durable
                     && after.history.ever_ready_authorized
@@ -4609,8 +4609,8 @@ macro_rules! production_in_flight_first_release_transition_body {
                     && projection.target == 0u128
                     && (before.session.crashed & projection.actor) == 0u128
                     && (before.session.ready_authorized & projection.actor) != 0u128
-                    && after.history.ever_queue_plan_v4 == before.history.ever_queue_plan_v4
-                    && after.history.ever_reservation_v5 == before.history.ever_reservation_v5
+                    && after.history.ever_queue_plan_v1 == before.history.ever_queue_plan_v1
+                    && after.history.ever_reservation_v1 == before.history.ever_reservation_v1
                     && after.history.ever_execution_input_durable
                         == before.history.ever_execution_input_durable
                     && after.history.ever_ready_authorized == before.history.ever_ready_authorized
@@ -4640,8 +4640,8 @@ macro_rules! production_in_flight_first_release_transition_body {
                     && after.carrier.execution_input_durable
                         == before.carrier.execution_input_durable
                     && after.carrier.ready_qc_durable
-                    && after.history.ever_queue_plan_v4 == before.history.ever_queue_plan_v4
-                    && after.history.ever_reservation_v5 == before.history.ever_reservation_v5
+                    && after.history.ever_queue_plan_v1 == before.history.ever_queue_plan_v1
+                    && after.history.ever_reservation_v1 == before.history.ever_reservation_v1
                     && after.history.ever_execution_input_durable
                         == before.history.ever_execution_input_durable
                     && after.history.ever_ready_authorized == before.history.ever_ready_authorized
@@ -4768,8 +4768,8 @@ macro_rules! production_in_flight_first_release_transition_body {
                         } else {
                             refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE)
                         }
-                    && after.history.ever_queue_plan_v4 == before.history.ever_queue_plan_v4
-                    && after.history.ever_reservation_v5 == before.history.ever_reservation_v5
+                    && after.history.ever_queue_plan_v1 == before.history.ever_queue_plan_v1
+                    && after.history.ever_reservation_v1 == before.history.ever_reservation_v1
                     && after.history.ever_execution_input_durable
                         == before.history.ever_execution_input_durable
                     && after.history.ever_ready_authorized == before.history.ever_ready_authorized
@@ -4809,8 +4809,8 @@ macro_rules! production_in_flight_first_release_transition_body {
                         }
                     && after.queue.selected_count == before.queue.selected_count
                     && after.queue.reservation_state == before.queue.reservation_state
-                    && after.history.ever_queue_plan_v4 == before.history.ever_queue_plan_v4
-                    && after.history.ever_reservation_v5 == before.history.ever_reservation_v5
+                    && after.history.ever_queue_plan_v1 == before.history.ever_queue_plan_v1
+                    && after.history.ever_reservation_v1 == before.history.ever_reservation_v1
                     && after.history.ever_execution_input_durable
                         == before.history.ever_execution_input_durable
                     && after.history.ever_ready_authorized == before.history.ever_ready_authorized
@@ -4853,8 +4853,8 @@ macro_rules! production_in_flight_first_release_transition_body {
                         } else {
                             refinement_tag_value!(IN_FLIGHT_FIRST_RELEASE_RESERVATION_COMMITTED)
                         }
-                    && after.history.ever_queue_plan_v4 == before.history.ever_queue_plan_v4
-                    && after.history.ever_reservation_v5 == before.history.ever_reservation_v5
+                    && after.history.ever_queue_plan_v1 == before.history.ever_queue_plan_v1
+                    && after.history.ever_reservation_v1 == before.history.ever_reservation_v1
                     && after.history.ever_execution_input_durable
                         == before.history.ever_execution_input_durable
                     && after.history.ever_ready_authorized == before.history.ever_ready_authorized
@@ -4919,8 +4919,8 @@ macro_rules! production_in_flight_first_release_transition_body {
                     && after.release.pending_prefix == before.release.pending_prefix + 1u64
                     && after.release.released_prefix == before.release.released_prefix
                     && after.release.fifo_restored == before.release.fifo_restored
-                    && after.history.ever_queue_plan_v4 == before.history.ever_queue_plan_v4
-                    && after.history.ever_reservation_v5 == before.history.ever_reservation_v5
+                    && after.history.ever_queue_plan_v1 == before.history.ever_queue_plan_v1
+                    && after.history.ever_reservation_v1 == before.history.ever_reservation_v1
                     && after.history.ever_execution_input_durable
                         == before.history.ever_execution_input_durable
                     && after.history.ever_ready_authorized == before.history.ever_ready_authorized
@@ -4972,8 +4972,8 @@ macro_rules! production_in_flight_first_release_transition_body {
                     && after.release.pending_prefix == before.release.pending_prefix
                     && after.release.released_prefix == before.release.released_prefix + 1u64
                     && after.release.fifo_restored == before.release.fifo_restored
-                    && after.history.ever_queue_plan_v4 == before.history.ever_queue_plan_v4
-                    && after.history.ever_reservation_v5 == before.history.ever_reservation_v5
+                    && after.history.ever_queue_plan_v1 == before.history.ever_queue_plan_v1
+                    && after.history.ever_reservation_v1 == before.history.ever_reservation_v1
                     && after.history.ever_execution_input_durable
                         == before.history.ever_execution_input_durable
                     && after.history.ever_ready_authorized == before.history.ever_ready_authorized
@@ -5066,7 +5066,7 @@ macro_rules! production_in_flight_first_release_transition_body {
                     IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT
                 )
             {
-                // A V6 snapshot envelope reconstructs process-local indexes from bytes
+                // A V1 snapshot envelope reconstructs process-local indexes from bytes
                 // already represented by the durable abstract owner. It is an
                 // exact stutter, never a new reservation acquisition.
                 projection.actor == 0u128
@@ -6104,7 +6104,7 @@ pub(crate) struct ProductionInFlightReservationTransitionProjection {
     pub(crate) before: ProductionInFlightReservationOwnerProjection,
     pub(crate) after: ProductionInFlightReservationOwnerProjection,
 }
-/// QueuePlan V4 and reservation journal V5 state in the composed carrier model.
+/// QueuePlan and reservation journal V1 state in the composed carrier model.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProductionInFlightFirstReleaseQueueProjection {
     pub(crate) plan_state: u8,
@@ -6129,15 +6129,15 @@ pub(crate) struct ProductionInFlightFirstReleaseSessionProjection {
 /// Monotonic durable history used to validate crash reconstruction and order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProductionInFlightFirstReleaseHistoryProjection {
-    pub(crate) ever_queue_plan_v4: bool,
-    pub(crate) ever_reservation_v5: bool,
+    pub(crate) ever_queue_plan_v1: bool,
+    pub(crate) ever_reservation_v1: bool,
     pub(crate) ever_execution_input_durable: u128,
     pub(crate) ever_ready_authorized: u128,
     pub(crate) ready_signed: u128,
     pub(crate) ever_ready_qc_durable: bool,
     /// Number of canonical ordered reservation keys with durable Commit records.
     pub(crate) reservation_committed_prefix: u64,
-    /// Number of canonical ordered QueuePlan V4 keys with durable tombstones.
+    /// Number of canonical ordered QueuePlan V1 keys with durable tombstones.
     pub(crate) queue_plan_tombstoned_prefix: u64,
     /// Number of canonical ordered Commit keys durably forgotten.
     pub(crate) reservation_commit_forgotten_prefix: u64,

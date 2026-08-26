@@ -1,9 +1,9 @@
 //! SNNet-15M2 beta bundle generator for the SoraGlobal Gateway CDN. Extends the M1 alpha pack with
-//! DoQ/ODoH preview configs, trustless CAR verifier wiring, PQ readiness evidence, GAR compliance
-//! rollup, and hardening baselines ahead of GA.
+//! DoQ/ODoH preview configs, trustless CAR verifier wiring, GAR compliance rollup, and hardening
+//! baselines ahead of GA. PQ readiness is qualified separately by the strict gateway PQ command.
 use crate::{
     gar, soranet_gateway, soranet_gateway_billing, soranet_gateway_hardening, soranet_gateway_ops,
-    soranet_gateway_pq, soranet_pop,
+    soranet_pop,
 };
 use blake3::Hasher as Blake3;
 use eyre::{Result, WrapErr, eyre};
@@ -53,10 +53,6 @@ struct GatewayM2Pop {
     #[norito(default)]
     trustless_config: Option<PathBuf>,
     #[norito(default)]
-    pq_bundle: Option<PathBuf>,
-    #[norito(default)]
-    tls_bundle_dir: Option<PathBuf>,
-    #[norito(default)]
     doq_listen: Option<Vec<String>>,
     #[norito(default)]
     odoh_relay: Option<String>,
@@ -102,8 +98,6 @@ struct GatewayM2PopSummary {
     beta_edge_config: String,
     ops_summary: String,
     trustless_config: String,
-    #[norito(default)]
-    pq_summary: Option<String>,
     #[norito(default)]
     hardening_summary: Option<String>,
 }
@@ -213,23 +207,6 @@ pub fn run_gateway_m2(options: GatewayM2Options) -> Result<GatewayM2Outcome> {
                 output_dir: ops_dir,
                 pop: pop.name.clone(),
             })?;
-        let mut pq_summary = None;
-        if let (Some(pq_bundle), Some(tls_dir)) = (&pop.pq_bundle, &pop.tls_bundle_dir) {
-            let pq_outcome =
-                soranet_gateway_pq::run_gateway_pq_readiness(soranet_gateway_pq::GatewayPqOptions {
-                    output_dir: beta_dir.join("pq"),
-                    pop: pop.name.clone(),
-                    srcv2_bundle: resolve_path(config_dir, pq_bundle),
-                    tls_bundle_dir: resolve_path(config_dir, tls_dir),
-                    trustless_config: trustless_config.clone(),
-                    canary_hosts: Vec::new(),
-                    validation_phase: iroha_crypto::soranet::certificate::CertificateValidationPhase::Phase3RequireDual,
-                })?;
-            pq_summary = Some(summarize_path(
-                &pq_outcome.summary_json,
-                &options.output_dir,
-            ));
-        }
         let mut hardening_summary = None;
         if let Some(harden_cfg) = &config.hardening {
             let outcome = soranet_gateway_hardening::run_gateway_hardening(
@@ -268,7 +245,6 @@ pub fn run_gateway_m2(options: GatewayM2Options) -> Result<GatewayM2Outcome> {
             beta_edge_config: summarize_path(&beta_edge_path, &options.output_dir),
             ops_summary: summarize_path(&ops_outcome.summary_path, &options.output_dir),
             trustless_config: summarize_path(&trustless_config, &options.output_dir),
-            pq_summary,
             hardening_summary,
         });
     }

@@ -128,49 +128,6 @@ class JsonParserStringTypeTest {
         }
     }
 
-    @Test
-    fun soracloudParserRejectsNonStringRequiredAndOptionalFields() {
-        val canonical = SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-            soracloudReceiptListJson(countMode = "\"exact\"", continueCursor = "\"next\"").bytes()
-        )
-        assertEquals("exact", canonical.countMode)
-        assertEquals("next", canonical.continueCursor)
-
-        assertRejects("soracloud private receipt list.count_mode") {
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                soracloudReceiptListJson(countMode = "7", continueCursor = "null").bytes()
-            )
-        }
-        assertRejects("soracloud private receipt list.continue_cursor") {
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                soracloudReceiptListJson(countMode = "\"exact\"", continueCursor = "7").bytes()
-            )
-        }
-    }
-
-    @Test
-    fun soracloudParserRejectsMissingOrMalformedHasMore() {
-        val canonical = soracloudReceiptListJson(
-            countMode = "\"exact\"",
-            continueCursor = "null",
-        )
-        assertEquals(
-            false,
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(canonical.bytes()).hasMore,
-        )
-
-        assertRejects("soracloud private receipt list.has_more") {
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                canonical.replace("\"has_more\":false", "\"has_more\":0").bytes()
-            )
-        }
-        assertRejects("soracloud private receipt list.has_more") {
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                canonical.replace("\"has_more\":false,", "").bytes()
-            )
-        }
-    }
-
     private fun identifierPolicyJson(): String =
         """
             {
@@ -213,19 +170,6 @@ class JsonParserStringTypeTest {
               "output_hash":"${"11".repeat(32)}",
               "associated_data_hash":"${"22".repeat(32)}",
               "error":$error
-            }
-        """.trimIndent()
-
-    private fun soracloudReceiptListJson(countMode: String, continueCursor: String): String =
-        """
-            {
-              "schema_version":1,
-              "receipts":[],
-              "returned_items":0,
-              "remaining_items":0,
-              "has_more":false,
-              "count_mode":$countMode,
-              "continue_cursor":$continueCursor
             }
         """.trimIndent()
 

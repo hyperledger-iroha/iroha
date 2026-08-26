@@ -1328,7 +1328,6 @@ fn main() -> Result<()> {
         .wrap_err("invalid fee payment intent")?;
     let authority = parse_account_address(&args.authority, Some(args.chain_discriminant))
         .wrap_err("failed to parse --authority as canonical account address")?
-        .address
         .to_account_id()
         .map_err(|err| eyre!(err.to_string()))
         .wrap_err("failed to decode --authority")?;

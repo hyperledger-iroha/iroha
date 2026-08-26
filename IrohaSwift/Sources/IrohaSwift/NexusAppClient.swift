@@ -256,7 +256,6 @@ public protocol NexusToriiSubmitting: AnyObject {
 extension ToriiClient: NexusToriiSubmitting {
     public func submitNexusTransaction(_ envelope: SignedTransactionEnvelope) async throws -> ToriiSubmitTransactionResponse? {
         try await submitTransaction(data: envelope.norito,
-                                    mode: .pipeline,
                                     idempotencyKey: envelope.hashHex)
     }
 

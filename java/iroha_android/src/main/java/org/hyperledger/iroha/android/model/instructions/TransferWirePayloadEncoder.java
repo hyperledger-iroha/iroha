@@ -390,7 +390,7 @@ public final class TransferWirePayloadEncoder {
           AccountIdLiteral.requireCanonicalI105Address(accountIdStr, "accountId");
       final AccountAddress address;
       try {
-        address = AccountAddress.parseEncodedIgnoringCurveSupport(canonicalAccountId, null).address;
+        address = AccountAddress.parseEncodedIgnoringCurveSupport(canonicalAccountId, null);
       } catch (AccountAddress.AccountAddressException e) {
         throw new IllegalArgumentException(
             "Failed to parse canonical I105 account identifier: " + canonicalAccountId, e);

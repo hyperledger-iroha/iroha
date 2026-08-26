@@ -626,30 +626,6 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
     / "hyperledger"
     / "iroha"
     / "android"
-    / "client"
-    / "SoracloudPrivateModelArtifactRef.java",
-    REPO_ROOT
-    / "java"
-    / "iroha_android"
-    / "src"
-    / "main"
-    / "java"
-    / "org"
-    / "hyperledger"
-    / "iroha"
-    / "android"
-    / "client"
-    / "SoracloudPrivateUploadedModelJsonParser.java",
-    REPO_ROOT
-    / "java"
-    / "iroha_android"
-    / "src"
-    / "main"
-    / "java"
-    / "org"
-    / "hyperledger"
-    / "iroha"
-    / "android"
     / "model"
     / "instructions"
     / "ApprovePinManifestInstruction.java",
@@ -780,30 +756,6 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
     / "sdk"
     / "client"
     / "HttpClientTransport.kt",
-    REPO_ROOT
-    / "kotlin"
-    / "core-jvm"
-    / "src"
-    / "main"
-    / "java"
-    / "org"
-    / "hyperledger"
-    / "iroha"
-    / "sdk"
-    / "client"
-    / "SoracloudPrivateModels.kt",
-    REPO_ROOT
-    / "kotlin"
-    / "core-jvm"
-    / "src"
-    / "main"
-    / "java"
-    / "org"
-    / "hyperledger"
-    / "iroha"
-    / "sdk"
-    / "client"
-    / "SoracloudPrivateUploadedModelJsonParser.kt",
     REPO_ROOT
     / "kotlin"
     / "core-jvm"

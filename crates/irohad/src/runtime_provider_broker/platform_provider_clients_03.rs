@@ -3387,21 +3387,6 @@ pub(super) fn resolve(
                 dependencies = dependencies.with_soracloud_runtime_mutation_signer(signer);
             }
             slot if slot
-                == IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id() =>
-            {
-                let exact_binding =
-                    soracloud_hf_credential_binding_from_wire(binding).map_err(registry_error)?;
-                let provider = Arc::new(SoracloudHfCredentialBrokerProvider {
-                    session: Arc::clone(&session),
-                    binding: binding.clone(),
-                    metadata_digest: observation.metadata_digest,
-                    exact_binding,
-                });
-                provider.live_qualification().map_err(registry_error)?;
-                dependencies =
-                    dependencies.with_soracloud_hf_inference_credential_provider(provider);
-            }
-            slot if slot
                 == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id() =>
             {
                 let source = Arc::new(ProviderIngestBrokerAuthenticatedSource {

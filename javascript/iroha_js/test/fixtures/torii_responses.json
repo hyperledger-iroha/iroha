@@ -185,7 +185,7 @@
     "portfolio": {
       "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
       "totals": {
-        "accounts": 2,
+        "accounts": 1,
         "positions": 3
       },
       "dataspaces": [
@@ -198,7 +198,7 @@
               "label": null,
               "assets": [
                 {
-                  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+                  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#34mSYn6NQ7iBn9WuFdt8iwCjCutwZEr6WMRz92XBxAp7yWwsND6KjsETDFaJKR3qfzzwUA3CT",
                   "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                   "quantity": "500"
                 }
@@ -211,16 +211,16 @@
           "dataspace_alias": "cbdc",
           "accounts": [
             {
-              "account_id": "34mSYn6NQ7iBn9WuFdt8iwCjCuqiFHCGGo3SYWifYFWaTvryjW6MR26uMcyy14xZazVHC3sYA",
+              "account_id": "34mSYn6NQ7iBn9WuFdt8iwCjCutwZEr6WMRz92XBxAp7yWwsND6KjsETDFaJKR3qfzzwUA3CT",
               "label": "primary-cbdc",
               "assets": [
                 {
-                  "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
+                  "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc#34mSYn6NQ7iBn9WuFdt8iwCjCutwZEr6WMRz92XBxAp7yWwsND6KjsETDFaJKR3qfzzwUA3CT#dataspace:11",
                   "asset_definition_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
                   "quantity": "250"
                 },
                 {
-                  "asset_id": "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o",
+                  "asset_id": "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o#34mSYn6NQ7iBn9WuFdt8iwCjCutwZEr6WMRz92XBxAp7yWwsND6KjsETDFaJKR3qfzzwUA3CT#dataspace:11",
                   "asset_definition_id": "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o",
                   "quantity": "25"
                 }
@@ -244,13 +244,16 @@
           "dataspace_id": 11,
           "dataspace_alias": "cbdc",
           "accounts": [
-            "34mSYn6NQ7iBn9WuFdt8iwCjCuqiFHCGGo3SYWifYFWaTvryjW6MR26uMcyy14xZazVHC3sYA"
+            "34mSYn6NQ7iBn9WuFdt8iwCjCutwZEr6WMRz92XBxAp7yWwsND6KjsETDFaJKR3qfzzwUA3CT"
           ]
         }
       ]
     },
     "manifests": {
       "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
+      "total": 1,
+      "has_more": false,
+      "count_mode": "exact",
       "manifests": [
         {
           "dataspace_id": 11,
@@ -263,10 +266,10 @@
             "revocation": null
           },
           "accounts": [
-            "34mSYn4TZhVv7sagGwMiLB3yZqpLGr1uT5EUMKSZ41dTTNjceDhLG89u5Rr13AoSbs59rbLyA"
+            "34mSYn6NQ7iBn9WuFdt8iwCjCutwZEr6WMRz92XBxAp7yWwsND6KjsETDFaJKR3qfzzwUA3CT"
           ],
           "manifest": {
-            "version": "V1",
+            "version": 1,
             "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
             "dataspace": 11,
             "issued_ms": 1762723200000,
@@ -293,8 +296,7 @@
                   "Deny": {
                     "reason": "maintenance"
                   }
-                },
-                "notes": null
+                }
               }
             ]
           }

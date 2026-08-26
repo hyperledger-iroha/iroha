@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
 
-DEFAULT_DOMAIN_NAME = "default"
-
 HEADER_VERSION_V1 = 0
 HEADER_NORM_VERSION_V1 = 1
 I105_SENTINEL_SORA = "sora"
@@ -130,58 +128,6 @@ class AddressHeader:
         return cls.new(version, class_, norm_version)
 
 
-@dataclass(frozen=True)
-class DomainSelector:
-    tag: int
-    payload: Optional[bytes] = None
-
-    @classmethod
-    def default(cls) -> "DomainSelector":
-        return cls(tag=0)
-
-    @classmethod
-    def local12(cls, digest: bytes) -> "DomainSelector":
-        if len(digest) != 12:
-            raise AccountAddressError("local domain digest must be 12 bytes")
-        return cls(tag=1, payload=digest)
-
-    @classmethod
-    def global_id(cls, registry_id: int) -> "DomainSelector":
-        if not 0 <= registry_id <= 0xFFFF_FFFF:
-            raise AccountAddressError("registry id out of range")
-        return cls(tag=2, payload=registry_id.to_bytes(4, "big"))
-
-    @classmethod
-    def from_domain(cls, domain: str) -> "DomainSelector":
-        _ = domain
-        return cls.default()
-
-    def encode_into(self, out: bytearray) -> None:
-        out.append(self.tag)
-        if self.payload:
-            out.extend(self.payload)
-
-    @classmethod
-    def decode(cls, data: bytes, cursor: int) -> Tuple["DomainSelector", int]:
-        if cursor >= len(data):
-            raise AccountAddressError("invalid length for address payload")
-        tag = data[cursor]
-        cursor += 1
-        if tag == 0x00:
-            return cls.default(), cursor
-        if tag == 0x01:
-            end = cursor + 12
-            if end > len(data):
-                raise AccountAddressError("invalid length for address payload")
-            return cls.local12(data[cursor:end]), end
-        if tag == 0x02:
-            end = cursor + 4
-            if end > len(data):
-                raise AccountAddressError("invalid length for address payload")
-            return cls(tag=tag, payload=data[cursor:end]), end
-        raise AccountAddressError(f"unknown domain selector tag: {tag}")
-
-
 class CurveId(IntEnum):
     ED25519 = 1
     MLDSA = 2
@@ -281,19 +227,17 @@ class ControllerPayload:
 @dataclass(frozen=True)
 class AccountAddress:
     header: AddressHeader
-    domain: DomainSelector
     controller: ControllerPayload
 
     @classmethod
     def from_account(
-        cls, *, domain: str, public_key: bytes, algorithm: str = "ed25519"
+        cls, *, public_key: bytes, algorithm: str = "ed25519"
     ) -> "AccountAddress":
-        _ = domain
         header = AddressHeader.new(
             version=HEADER_VERSION_V1, class_=AddressClass.SINGLE_KEY, norm_version=HEADER_NORM_VERSION_V1
         )
         controller = ControllerPayload.single_key(public_key, algorithm)
-        return cls(header=header, domain=DomainSelector.default(), controller=controller)
+        return cls(header=header, controller=controller)
 
     @classmethod
     def from_canonical_bytes(cls, payload: bytes) -> "AccountAddress":
@@ -304,7 +248,7 @@ class AccountAddress:
         controller, cursor = ControllerPayload.decode(payload, cursor)
         if cursor != len(payload):
             raise AccountAddressError("unexpected trailing bytes in canonical payload")
-        return cls(header=header, domain=DomainSelector.default(), controller=controller)
+        return cls(header=header, controller=controller)
 
     @classmethod
     def from_i105(
@@ -586,6 +530,5 @@ def i105_checksum_digits(canonical: bytes) -> List[int]:
 __all__ = [
     "AccountAddress",
     "AccountAddressError",
-    "DEFAULT_DOMAIN_NAME",
     "I105_WARNING",
 ]

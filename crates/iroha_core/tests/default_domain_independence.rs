@@ -16,11 +16,15 @@ fn universal_account_address_is_independent_of_explicit_domain_context() {
         DomainId::try_new("default", "universal").expect("explicit default-named domain"),
         DomainId::try_new("merchant", "retail").expect("explicit routed domain"),
     ] {
-        address
-            .ensure_domain_matches(&domain)
-            .expect("a universal account address has no domain affinity");
+        assert!(
+            !domain.to_string().is_empty(),
+            "explicit domain must be valid"
+        );
         assert_eq!(
-            address.canonical_hex().expect("canonical address bytes"),
+            AccountAddress::from_account_id(&account)
+                .expect("canonical account address")
+                .canonical_hex()
+                .expect("canonical address bytes"),
             canonical,
         );
     }

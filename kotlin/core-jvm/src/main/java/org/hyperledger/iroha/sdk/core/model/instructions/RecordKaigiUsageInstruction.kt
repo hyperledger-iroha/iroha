@@ -51,9 +51,9 @@ class RecordKaigiUsageInstruction(
         fun fromArguments(arguments: Map<String, String>): RecordKaigiUsageInstruction {
             return RecordKaigiUsageInstruction(
                 callId = KaigiInstructionUtils.parseCallId(arguments, "call"),
-                durationMs = KaigiInstructionUtils.parsePositiveInt(
+                durationMs = KaigiInstructionUtils.parseUnsignedLong(
                     KaigiInstructionUtils.require(arguments, "duration_ms"), "duration_ms",
-                ).toLong(),
+                ),
                 billedGas = KaigiInstructionUtils.parseUnsignedLong(
                     arguments.getOrDefault("billed_gas", "0"), "billed_gas",
                 ),

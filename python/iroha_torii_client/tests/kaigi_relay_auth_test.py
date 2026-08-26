@@ -38,6 +38,152 @@ def _operator_context(captured: Optional[List[bytes]] = None) -> ToriiOperatorSi
     )
 
 
+def _relay_summary_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "relay_id": "relay-alpha",
+        "domain": "kaigi.core",
+        "bandwidth_class": 3,
+        "hpke_fingerprint_hex": "ab" * 32,
+        "status": "healthy",
+        "reported_at_ms": 123,
+    }
+    payload.update(overrides)
+    return payload
+
+
+@pytest.mark.parametrize("bandwidth_class", [1, 255])
+def test_kaigi_relay_summary_accepts_u8_bandwidth_boundaries(
+    bandwidth_class: int,
+) -> None:
+    summary = ToriiClient._parse_kaigi_relay_summary(
+        _relay_summary_payload(bandwidth_class=bandwidth_class),
+        context="kaigi relay summary",
+    )
+
+    assert summary.bandwidth_class == bandwidth_class
+
+
+@pytest.mark.parametrize("bandwidth_class", [0, -1, 256])
+def test_kaigi_relay_summary_rejects_out_of_range_bandwidth(
+    bandwidth_class: int,
+) -> None:
+    with pytest.raises(RuntimeError, match=r"bandwidth_class must be within 1\.\.=255"):
+        ToriiClient._parse_kaigi_relay_summary(
+            _relay_summary_payload(bandwidth_class=bandwidth_class),
+            context="kaigi relay summary",
+        )
+
+
+def test_kaigi_relay_summary_requires_bandwidth_class() -> None:
+    payload = _relay_summary_payload()
+    del payload["bandwidth_class"]
+
+    with pytest.raises(RuntimeError, match="bandwidth_class is required"):
+        ToriiClient._parse_kaigi_relay_summary(payload, context="kaigi relay summary")
+
+
+def test_kaigi_relay_summary_rejects_boolean_bandwidth() -> None:
+    with pytest.raises(RuntimeError, match="bandwidth_class must be an integer"):
+        ToriiClient._parse_kaigi_relay_summary(
+            _relay_summary_payload(bandwidth_class=True),
+            context="kaigi relay summary",
+        )
+
+
+@pytest.mark.parametrize("reported_at_ms", [True, 1.5, -1, 1 << 64])
+def test_kaigi_relay_summary_rejects_lossy_or_out_of_range_timestamps(
+    reported_at_ms: object,
+) -> None:
+    with pytest.raises(RuntimeError, match=r"reported_at_ms must"):
+        ToriiClient._parse_kaigi_relay_summary(
+            _relay_summary_payload(reported_at_ms=reported_at_ms),
+            context="kaigi relay summary",
+        )
+
+
+@pytest.mark.parametrize("fingerprint", ["ab", ["ab"]])
+def test_kaigi_relay_summary_requires_a_32_byte_fingerprint(fingerprint: object) -> None:
+    with pytest.raises(RuntimeError, match=r"(?:64 hex characters|hex string)"):
+        ToriiClient._parse_kaigi_relay_summary(
+            _relay_summary_payload(hpke_fingerprint_hex=fingerprint),
+            context="kaigi relay summary",
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"total": 0, "items": False},
+        {"items": []},
+        {"total": 501, "items": [{}] * 501},
+    ],
+)
+def test_kaigi_relay_summary_list_rejects_malformed_or_oversized_envelopes(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(RuntimeError, match=r"(?:items|total).*(?:list|required|limit)"):
+        ToriiClient._parse_kaigi_relay_summary_list(
+            payload,
+            context="kaigi relay summary response",
+        )
+
+
+def test_kaigi_relay_detail_rejects_non_string_notes() -> None:
+    with pytest.raises(RuntimeError, match=r"notes must be a string"):
+        ToriiClient._parse_kaigi_relay_detail(
+            {
+                "relay": _relay_summary_payload(),
+                "hpke_public_key_b64": "QUJDRA==",
+                "notes": 7,
+            },
+            context="kaigi relay detail",
+        )
+
+
+@pytest.mark.parametrize("public_key", ["not-base64", "", []])
+def test_kaigi_relay_detail_requires_exact_base64_public_key(public_key: object) -> None:
+    with pytest.raises((TypeError, ValueError, RuntimeError), match=r"(?:string|empty|base64)"):
+        ToriiClient._parse_kaigi_relay_detail(
+            {
+                "relay": _relay_summary_payload(),
+                "hpke_public_key_b64": public_key,
+            },
+            context="kaigi relay detail",
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "healthy_total": 0,
+            "degraded_total": 0,
+            "unavailable_total": 0,
+            "reports_total": 0,
+            "registrations_total": 0,
+            "failovers_total": 0,
+            "domains": False,
+        },
+        {
+            "healthy_total": 0,
+            "degraded_total": 0,
+            "unavailable_total": 0,
+            "registrations_total": 0,
+            "failovers_total": 0,
+            "domains": [],
+        },
+    ],
+)
+def test_kaigi_relay_health_rejects_malformed_required_fields(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(RuntimeError, match=r"(?:domains|reports_total).*(?:list|required)"):
+        ToriiClient._parse_kaigi_relay_health_snapshot(
+            payload,
+            context="kaigi relay health snapshot",
+        )
+
+
 def test_list_kaigi_relays_parses_summary() -> None:
     signed_messages: List[bytes] = []
     session = RecordingSession()

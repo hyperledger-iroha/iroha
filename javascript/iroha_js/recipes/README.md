@@ -32,7 +32,7 @@ transactions on a live network.
 ## nexus_app_transfer.mjs
 
 - Runs the Nexus App facade from approval through canonical browser-codec
-  finalization, Torii submission, and terminal status observation.
+  finalization, Torii submission, and exact state-resolved Applied finality.
 - Uses deterministic fake Connect and Torii dependencies so the installed
   recipe is runnable offline while still checking the canonical payload and
   signed-transaction hashes.
@@ -180,7 +180,9 @@ node ./recipes/streaming.mjs \
 Environment variables:
 
 - `STREAM_FILTER_JSON` — override the default pipeline transaction filter with raw JSON.
-- `PIPELINE_STATUS` — change the default status filter (Committed/Approved/Applied/Pending, etc.).
+- `PIPELINE_STATUS` — change the diagnostic SSE event filter
+  (`Queued`/`Approved`/`Committed`/`Applied`, etc.). This does not configure
+  transaction finality; waits still require exact global, state-resolved `Applied`.
 - `STREAM_MAX_EVENTS` — stop after N events (`0` keeps the iterator running until interrupted).
 - `TORII_API_TOKEN` / `TORII_AUTH_TOKEN` — optional headers for locked-down Torii deployments.
 

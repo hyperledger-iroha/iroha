@@ -24,7 +24,8 @@ use iroha_data_model::soracloud::{
     SORA_APP_INFRA_SERVICE_REF_VERSION_V1, SORA_APP_INFRA_STATE_VERSION_V1,
     SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1, SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
     SoraAppInfraActionV1, SoraAppInfraManifestV1, SoraAppInfraServiceRefV1, SoraInrouGuestIsaV1,
-    SoraInrouReplicaPlacementV1, SoraServiceHealthStatusV1,
+    SoraInrouReplicaHostAvailabilityV1, SoraInrouReplicaPlacementV1, SoraServiceHealthStatusV1,
+    SoraServiceLeaseClockV1, SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1,
 };
 use iroha_data_model::zk::BackendTag;
 use iroha_data_model::{
@@ -1538,12 +1539,8 @@ fn axt_proof_blob_for_with_profile(
         remote_spend_claims
             .iter()
             .map(|claim| {
-                let from = AccountId::parse_encoded(&claim.from)
-                    .expect("canonical sender")
-                    .into_account_id();
-                let to = AccountId::parse_encoded(&claim.to)
-                    .expect("canonical receiver")
-                    .into_account_id();
+                let from = AccountId::parse_encoded(&claim.from).expect("canonical sender");
+                let to = AccountId::parse_encoded(&claim.to).expect("canonical receiver");
                 let amount = iroha_data_model::fastpq::normalized_numeric_to_u64(
                     claim.effective_amount.as_numeric(),
                     0,
@@ -6460,7 +6457,7 @@ state_test! { sync merge_reservation_key_boundary_requires_current_version
     let route = crate::queue::RoutingDecision::new(LaneId::new(7), DataSpaceId::new(9));
     let plan = crate::queue::RoutingPlan::single(route);
     let_row! { entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new(b"merge-reservation-entrypoint")) };
-    let_row! { key = crate::queue::LaneQueueReservationKeyV2 { version: crate::queue::LaneQueueReservationKeyV2::VERSION, entrypoint_hash, queue_plan_admission_binding_hash: Hash::new( b"merge-reservation-queue-plan-admission-binding", ), routing_plan_digest: plan.digest(), coordinator_leg: plan.coordinator_leg(), lane_id: route.lane_id, dataspace_id: route.dataspace_id, lane_incarnation: Hash::new(b"merge-reservation-incarnation"), proposal_height: 13, lane_block_height: 5, lane_block_view: 2, reservation_owner_hash: Hash::new(b"merge-reservation-owner"), proposal_identity_hash: Hash::new(b"merge-reservation-proposal"), } };
+    let_row! { key = crate::queue::LaneQueueReservationKeyV1 { version: crate::queue::LaneQueueReservationKeyV1::VERSION, entrypoint_hash, queue_plan_admission_binding_hash: Hash::new( b"merge-reservation-queue-plan-admission-binding", ), routing_plan_digest: plan.digest(), coordinator_leg: plan.coordinator_leg(), lane_id: route.lane_id, dataspace_id: route.dataspace_id, lane_incarnation: Hash::new(b"merge-reservation-incarnation"), proposal_height: 13, lane_block_height: 5, lane_block_view: 2, reservation_owner_hash: Hash::new(b"merge-reservation-owner"), proposal_identity_hash: Hash::new(b"merge-reservation-proposal"), } };
     let framed = norito::encode_canonical(&key).expect("encode current merge reservation key");
     assert_eq!(
         decode_canonical_merge_reservation_key(&framed)
@@ -6489,7 +6486,7 @@ state_test! { sync merge_reservation_key_boundary_requires_current_version
             key
         );
     }
-    for malformed_version in [0, crate::queue::LaneQueueReservationKeyV2::VERSION + 1] {
+    for malformed_version in [0, crate::queue::LaneQueueReservationKeyV1::VERSION + 1] {
         let mut malformed = key;
         malformed.version = malformed_version;
         let_row! { framed = norito::encode_canonical(&malformed) .expect("encode canonical malformed-version reservation key") };
@@ -11149,7 +11146,7 @@ state_test! { sync prospective_autoscale_retirement_blocks_block_local_queue_pla
     let mut state_block = state.block(retirement.header());
     let_row! { routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new( retired_lane_id, DataSpaceId::UNIVERSAL, )) };
     let validator_set = vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())];
-    let_row! { binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new( &state.network_id, &queue_plan_entrypoint_for_state_test(&state, 0x5B), &routing_plan, crate::queue::QueuePlanAdmissionContextV2 { version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2, authority_height: 0, proposal_height: 1, predecessor_block_hash: None, routing_plan_digest: routing_plan.digest(), route_incarnations: vec![crate::queue::QueuePlanRouteIncarnationV2 { leg: routing_plan.coordinator_leg(), lane_incarnation: retired_lane_incarnation, validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1, validator_set_hash: HashOf::new(&validator_set), validator_count: 1, durability_threshold: 1, validator_set, }], }, 123, ) .expect("block-local QueuePlan binding") };
+    let_row! { binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new( &state.network_id, &queue_plan_entrypoint_for_state_test(&state, 0x5B), &routing_plan, crate::queue::QueuePlanAdmissionContextV1 { version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1, authority_height: 0, proposal_height: 1, predecessor_block_hash: None, routing_plan_digest: routing_plan.digest(), route_incarnations: vec![crate::queue::QueuePlanRouteIncarnationV1 { leg: routing_plan.coordinator_leg(), lane_incarnation: retired_lane_incarnation, validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1, validator_set_hash: HashOf::new(&validator_set), validator_count: 1, durability_threshold: 1, validator_set, }], }, 123, ) .expect("block-local QueuePlan binding") };
     let_row! { obligation = State::queue_plan_pending_obligation_from_binding(&binding) .expect("block-local QueuePlan obligation") };
     let route = obligation.routes[0];
     let_row! { route_member = State::queue_plan_pending_route_member_from_obligation(&obligation, route) .expect("block-local route member") };
@@ -17835,14 +17832,34 @@ state_test! { sync set_nexus_rejects_non_xor_fee_asset_selector
     let_row! { err = state .set_nexus(nexus) .expect_err("Nexus fees must use the XOR selector") };
     assert!(matches!(err, LaneLifecycleError::NexusFeeAssetIdInvalid));
 }
-state_test! { sync set_nexus_normalizes_padded_fee_asset_selector
-    let mut state = blank_test_state();
-    let_row! { mut nexus = iroha_config::parameters::actual::Nexus { ..Default::default() } };
-    nexus.fees.fee_asset_id = "  xor#universal  ".to_string();
-    state
-        .set_nexus(nexus)
-        .expect("padded XOR fee selector should normalize");
-    assert_eq!(state.nexus_snapshot().fees.fee_asset_id, "xor#universal");
+state_test! { sync set_nexus_accepts_exact_current_fee_asset_selectors
+    for selector in [
+        "xor#universal".to_owned(),
+        iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    ] {
+        let mut state = blank_test_state();
+        let_row! { mut nexus = iroha_config::parameters::actual::Nexus { ..Default::default() } };
+        nexus.fees.fee_asset_id = selector.clone();
+        state
+            .set_nexus(nexus)
+            .expect("exact current XOR fee selector should be accepted");
+        assert_eq!(state.nexus_snapshot().fees.fee_asset_id, selector);
+    }
+}
+state_test! { sync set_nexus_rejects_noncanonical_xor_fee_asset_selectors
+    for selector in [
+        " xor#universal",
+        "xor#universal ",
+        "XOR#universal",
+        "xor#Universal",
+        "xor#universal.universal",
+    ] {
+        let mut state = blank_test_state();
+        let_row! { mut nexus = iroha_config::parameters::actual::Nexus { ..Default::default() } };
+        nexus.fees.fee_asset_id = selector.to_owned();
+        let_row! { err = state .set_nexus(nexus) .expect_err("noncanonical XOR fee selector must be rejected") };
+        assert!(matches!(err, LaneLifecycleError::NexusFeeAssetIdInvalid));
+    }
 }
 state_test! { sync set_nexus_rejects_empty_fee_sink_account
     let mut state = blank_test_state();
@@ -20467,7 +20484,7 @@ state_test! { sync durable_lane_diagnostics_reconstruct_after_kura_restart
 }
 fn autonomous_diagnostic_reservations(
     proposal: &LaneBlockProposalV1,
-) -> Vec<crate::queue::LaneQueueReservationKeyV2> {
+) -> Vec<crate::queue::LaneQueueReservationKeyV1> {
     let descriptor = &proposal.descriptor;
     let_row! { routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new( descriptor.lane_id, descriptor.dataspace_id, )) };
     let_row! { reservation_owner_hash = Hash::new( format!( "autonomous-diagnostic-owner:{}:{}:{}", descriptor.lane_id.as_u32(), descriptor.dataspace_id.as_u64(), descriptor.lane_block_height ) .as_bytes(), ) };
@@ -20478,8 +20495,8 @@ fn autonomous_diagnostic_reservations(
         .enumerate()
         .map(|(index, accepted_hash)| {
             let entrypoint_hash = HashOf::from_untyped_unchecked(*accepted_hash);
-            crate::queue::LaneQueueReservationKeyV2 {
-                version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+            crate::queue::LaneQueueReservationKeyV1 {
+                version: crate::queue::LaneQueueReservationKeyV1::VERSION,
                 entrypoint_hash,
                 queue_plan_admission_binding_hash: Hash::new(
                     format!("autonomous-diagnostic-admission-{index}").as_bytes(),
@@ -27977,7 +27994,7 @@ state_test! { sync replay_state_commit_defers_query_index_status_journal_persist
     let_row! { block = BlockBuilder::new(vec![dummy_accepted_transaction()]) .chain(0, None) .sign(keypair.private_key()) .unpack(|_| {}) };
     let signed: SignedBlock = block.into();
     let mut state_block = state.block(signed.header());
-    state_block.replay_compatibility = true;
+    state_block.authenticated_replay_commit = true;
     let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
     let committed = valid.commit_unchecked().unpack(|_| {});
     let _ = state_block.apply_without_execution(&committed, Vec::new());
@@ -32731,6 +32748,7 @@ fn sample_snapshot_inrou_replica_runtime(service_name: Name) -> SoraInrouReplica
         service_name,
         service_version: "1.0.0".to_owned(),
         replica_slot: 1,
+        placement_incarnation: Hash::new(b"placement-1"),
         validator_account_id: ALICE_ID.clone(),
         peer_id: PeerId::from(ALICE_KEYPAIR.public_key().clone()).to_string(),
         selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
@@ -32836,11 +32854,13 @@ fn sample_snapshot_inrou_placement(
         eligible_validator_count: 1,
         placements: vec![SoraInrouReplicaPlacementV1 {
             replica_slot: 1,
+            economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+            lease_started_height: 1,
+            placement_incarnation: Hash::new(b"placement-1"),
+            host_availability: SoraInrouReplicaHostAvailabilityV1::Available,
             validator_account_id,
             peer_id: PeerId::from(ALICE_KEYPAIR.public_key().clone()).to_string(),
             selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
-            selected_geography_tag: None,
-            selection_latency_ms: None,
         }],
         reconciled_at_ms: 1_000,
         last_error: None,
@@ -33042,6 +33062,50 @@ state_test! { sync service_deployment_restore_requires_exact_admitted_revision_b
         "unexpected rollout-revision error: {error}"
     );
 }
+state_test! { sync service_deployment_restore_rejects_lease_state_for_deterministic_active_bundle
+    let bundle = sample_snapshot_service_bundle();
+    let mut deployment = sample_snapshot_service_deployment(&bundle);
+    let economics = &bundle.service.economics;
+    deployment.service_lease = Some(SoraServiceLeaseStateV1 {
+        schema_version: iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
+        economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+        status: SoraServiceLeaseStatusV1::Active,
+        quota_class: economics.quota_class.clone(),
+        replica_count: bundle.service.replicas,
+        deployment_deposit: economics.deployment_deposit.clone(),
+        prepaid_runtime_balance: economics.prepaid_runtime_balance.clone(),
+        runtime_price_per_block: economics.runtime_price_per_block.clone(),
+        storage_price_per_gib_block: economics.storage_price_per_gib_block.clone(),
+        egress_price_per_mib: economics.egress_price_per_mib.clone(),
+        lease_started_height: 1,
+        lease_expires_height: 2,
+        reporting_epoch: 1,
+        settled_egress_bytes: 0,
+        egress_reporter_checkpoints: Vec::new(),
+        accounted_egress_bytes: 0,
+        last_status_reason: None,
+    });
+    let mut world = World::default();
+    world.soracloud_service_revisions.insert(
+        (
+            bundle.service.service_name.as_ref().to_owned(),
+            bundle.service.service_version.clone(),
+        ),
+        bundle,
+    );
+    world
+        .soracloud_service_deployments
+        .insert(deployment.service_name.clone(), deployment);
+    let snapshot = norito::json::to_value(&snapshot_state_from_world(world))
+        .expect("serialize execution-plane drift snapshot");
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("restore must reject hosted lease state under a deterministic active bundle");
+    assert!(
+        error.to_string().contains("deterministic services must not retain hosted-service lease"),
+        "unexpected execution-plane binding error: {error}"
+    );
+}
 state_test! { sync runtime_and_inrou_restore_require_authoritative_references
     let service_name: Name = "snapshot_runtime_refs".parse().expect("valid service name");
 
@@ -33128,6 +33192,36 @@ state_test! { sync runtime_and_inrou_restore_require_authoritative_references
     assert!(
         error.to_string().contains("no authoritative placement record"),
         "unexpected missing-placement error: {error}"
+    );
+
+    let mut unavailable_placement =
+        sample_snapshot_inrou_placement(service_name.clone(), "1.0.0", ALICE_ID.clone());
+    unavailable_placement.placements[0].host_availability =
+        SoraInrouReplicaHostAvailabilityV1::Unavailable;
+    let mut unavailable_runtime_world = World::default();
+    unavailable_runtime_world
+        .soracloud_inrou_service_placements
+        .insert(
+            (service_name.as_ref().to_owned(), "1.0.0".to_owned()),
+            unavailable_placement,
+        );
+    unavailable_runtime_world.soracloud_inrou_replica_runtime.insert(
+        (
+            service_name.as_ref().to_owned(),
+            "1.0.0".to_owned(),
+            "1".to_owned(),
+        ),
+        sample_snapshot_inrou_replica_runtime(service_name.clone()),
+    );
+    let unavailable_runtime =
+        norito::json::to_value(&snapshot_state_from_world(unavailable_runtime_world))
+            .expect("serialize runtime with unavailable placement snapshot");
+    let error = deserialize_state_snapshot_value(unavailable_runtime)
+        .err()
+        .expect("runtime state for an unavailable placement must fail closed");
+    assert!(
+        error.to_string().contains("which must be available"),
+        "unexpected unavailable-placement runtime error: {error}"
     );
 
     let mismatched_placement =
@@ -33400,7 +33494,7 @@ fn indexed_settled_vpn_lease(
     let_row! { asset_definition = AssetDefinitionId::derive_from_components( DomainId::parse_fully_qualified("universal.universal").expect("XOR domain"), "xor".parse().expect("XOR asset name"), ) };
     let_row! { custody_account_id = crate::smartcontracts::isi::vpn::vpn_lease_custody_account_id( network_id, &lease_id, &asset_definition, ) .expect("fixture VPN custody account") };
     let_row! { tariff = VpnTariffV1 { lease_fee: Quantity::from(10_u32), active_fee_per_minute: Quantity::from(1_u32), ingress_fee_per_mib: Quantity::from(1_u32), egress_fee_per_mib: Quantity::from(1_u32), } };
-    let_row! { policy = VpnQuotePolicyV1 { exit_class: VpnExitClassV1::Standard, relay_endpoint: "/dns/restart.test/udp/9443/quic".to_owned(), relay_id, descriptor_commit: [account_tag.wrapping_add(0x30); 32], tls_server_name: "restart.test".to_owned(), relay_tls_spki_sha256: [account_tag.wrapping_add(0x40); 32], relay_certificate_sha256: [account_tag.wrapping_add(0x50); 32], directory_snapshot_digest: [account_tag.wrapping_add(0x60); 32], relay_trust_valid_until_ms: 1_002_000, lease_secs: 1_000, meter_family: "soranet.vpn.restart".to_owned(), fee_asset_id: asset_definition.to_string(), escrow_account_id: custody_account_id.clone(), route_pushes: vec!["0.0.0.0/0".to_owned()], excluded_routes: Vec::new(), dns_servers: vec!["1.1.1.1".to_owned()], tunnel_addresses: derive_vpn_address_plan_v1(address_slot).client_tunnel_addresses, mtu_bytes: 1_280, flow_label_bits: 24, padding_budget_ms: 15, } };
+    let_row! { policy = VpnQuotePolicyV1 { exit_class: VpnExitClassV1::Standard, relay_endpoint: "/dns/restart.test/udp/9443/quic".to_owned(), relay_id, relay_mldsa65_public_key: [account_tag.wrapping_add(0x20); iroha_data_model::soranet::vpn::VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1], descriptor_commit: [account_tag.wrapping_add(0x30); 32], tls_server_name: "restart.test".to_owned(), relay_tls_spki_sha256: [account_tag.wrapping_add(0x40); 32], relay_certificate_sha256: [account_tag.wrapping_add(0x50); 32], directory_snapshot_digest: [account_tag.wrapping_add(0x60); 32], relay_trust_valid_until_ms: 1_002_000, lease_secs: 1_000, meter_family: "soranet.vpn.restart".to_owned(), fee_asset_id: asset_definition.to_string(), escrow_account_id: custody_account_id.clone(), route_pushes: vec!["0.0.0.0/0".to_owned()], excluded_routes: Vec::new(), dns_servers: vec!["1.1.1.1".to_owned()], tunnel_addresses: derive_vpn_address_plan_v1(address_slot).client_tunnel_addresses, mtu_bytes: 1_280, flow_label_bits: 24, padding_budget_ms: 15, } };
     let_row! { signed_quote = VpnSignedQuoteV1::try_sign( VpnQuoteBodyV1 { network_id: *network_id, quote_id, lease_id, session_id, address_slot, client_account_id: client.clone(), operator_account_id: operator_account_id.clone(), metering_public_key: operator_key.public_key().clone(), asset_definition: asset_definition.clone(), tariff: tariff.clone(), policy: policy.clone(), valid_after_ms: 1_000, expires_at_ms: 1_001_000, settlement_grace_ms: 60_000, }, operator_key.private_key(), ) .expect("sign fixture VPN quote") };
     let_row! { settled_at_ms = 10_000_u64 .checked_add(u64::from(account_tag) * 1_000) .and_then(|base| base.checked_add(u64::from(ordinal))) .expect("fixture VPN settlement timestamp") };
     let open_tx_hash = quote_id;

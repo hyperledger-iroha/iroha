@@ -1576,7 +1576,7 @@ impl Bus {
                         return;
                     };
                     let account = match AccountId::parse_encoded(&account_id) {
-                        Ok(parsed) if parsed.canonical() == account_id => parsed.into_account_id(),
+                        Ok(parsed) if parsed.to_string() == account_id.as_str() => parsed,
                         Ok(_) => {
                             drop(approved);
                             warn!(sid = ?hex::encode(frame.sid), "connect: rejecting approval with noncanonical account id");

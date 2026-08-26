@@ -36,6 +36,7 @@ use std::{
         unix::fs::MetadataExt as _,
     },
     sync::Arc,
+    time::Duration,
 };
 
 fn invocation_does_not_start_a_node(argument: &OsStr) -> bool {
@@ -77,6 +78,12 @@ pub const TAIRA_INROU_MAX_CPU_MILLIS_V1: u32 = 8_000;
 pub const TAIRA_INROU_MAX_MEMORY_BYTES_V1: u64 = 8 * 1024 * 1024 * 1024;
 /// Exact aggregate Inrou writable-storage ceiling for one first-release Taira validator.
 pub const TAIRA_INROU_MAX_STORAGE_BYTES_V1: u64 = 64 * 1024 * 1024 * 1024;
+/// Exact immutable Inrou guest-image ceiling for one first-release Taira validator.
+pub const TAIRA_INROU_GUEST_IMAGE_MAX_BYTES_V1: u64 = 10 * 1024 * 1024 * 1024;
+/// Exact Inrou startup grace for one first-release Taira validator.
+pub const TAIRA_INROU_START_GRACE_MS_V1: u64 = 30_000;
+/// Exact Inrou shutdown grace for one first-release Taira validator.
+pub const TAIRA_INROU_STOP_GRACE_MS_V1: u64 = 10_000;
 /// Exact Inrou egress request budget for one first-release Taira validator.
 pub const TAIRA_INROU_EGRESS_RATE_PER_MINUTE_V1: u32 = 600;
 /// Exact Inrou egress byte budget for one first-release Taira validator.
@@ -146,11 +153,17 @@ fn validate_taira_launcher_profile_v1(
             soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_MAX_EXCLUSIVE,
         ));
     }
-    if inrou.max_cpu_millis.get() != TAIRA_INROU_MAX_CPU_MILLIS_V1
+    if inrou.guest_image_max_bytes.get() != TAIRA_INROU_GUEST_IMAGE_MAX_BYTES_V1
+        || inrou.max_cpu_millis.get() != TAIRA_INROU_MAX_CPU_MILLIS_V1
         || inrou.max_memory_bytes.get() != TAIRA_INROU_MAX_MEMORY_BYTES_V1
         || inrou.max_storage_bytes.get() != TAIRA_INROU_MAX_STORAGE_BYTES_V1
     {
         return Err("Taira launcher requires the exact V1 Inrou resource ceilings".to_owned());
+    }
+    if inrou.start_grace != Duration::from_millis(TAIRA_INROU_START_GRACE_MS_V1)
+        || inrou.stop_grace != Duration::from_millis(TAIRA_INROU_STOP_GRACE_MS_V1)
+    {
+        return Err("Taira launcher requires the exact V1 Inrou lifecycle graces".to_owned());
     }
     let egress = &runtime.egress;
     if egress.default_allow
@@ -536,6 +549,7 @@ impl IrohaRuntimeProviderRegistryV1 for TairaRuntimeProviderRegistryV1 {
 /// read the descriptor. Every node-starting invocation resolves the one
 /// configured signer through [`crate::run_with_runtime_provider_registry`].
 pub fn main_entry() {
+    crate::soracloud_runtime::dispatch_inrou_internal_launcher_if_requested();
     if std::env::args_os().any(|argument| invocation_does_not_start_a_node(&argument)) {
         if let Err(report) = crate::run_with_config_guard(validate_taira_launcher_config_v1) {
             eprintln!("{report:?}");
@@ -580,12 +594,16 @@ mod tests {
         runtime.inrou.enabled = true;
         runtime.inrou.portable_vm_uid = NonZeroU32::new(70_000);
         runtime.inrou.portable_vm_gid = NonZeroU32::new(70_000);
+        runtime.inrou.guest_image_max_bytes = NonZeroU64::new(TAIRA_INROU_GUEST_IMAGE_MAX_BYTES_V1)
+            .expect("nonzero guest-image budget");
         runtime.inrou.max_cpu_millis =
             NonZeroU32::new(TAIRA_INROU_MAX_CPU_MILLIS_V1).expect("nonzero CPU budget");
         runtime.inrou.max_memory_bytes =
             NonZeroU64::new(TAIRA_INROU_MAX_MEMORY_BYTES_V1).expect("nonzero memory budget");
         runtime.inrou.max_storage_bytes =
             NonZeroU64::new(TAIRA_INROU_MAX_STORAGE_BYTES_V1).expect("nonzero storage budget");
+        runtime.inrou.start_grace = Duration::from_millis(TAIRA_INROU_START_GRACE_MS_V1);
+        runtime.inrou.stop_grace = Duration::from_millis(TAIRA_INROU_STOP_GRACE_MS_V1);
         runtime.egress.default_allow = false;
         runtime.egress.allowed_hosts.clear();
         runtime.egress.rate_per_minute = NonZeroU32::new(TAIRA_INROU_EGRESS_RATE_PER_MINUTE_V1);
@@ -707,6 +725,12 @@ mod tests {
         };
 
         let mut changed = runtime.clone();
+        changed.inrou.guest_image_max_bytes =
+            NonZeroU64::new(TAIRA_INROU_GUEST_IMAGE_MAX_BYTES_V1 + 1)
+                .expect("changed guest-image budget is nonzero");
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
         changed.inrou.max_cpu_millis = NonZeroU32::new(TAIRA_INROU_MAX_CPU_MILLIS_V1 + 1)
             .expect("changed CPU budget is nonzero");
         assert_rejected(&changed);
@@ -719,6 +743,14 @@ mod tests {
         let mut changed = runtime.clone();
         changed.inrou.max_storage_bytes = NonZeroU64::new(TAIRA_INROU_MAX_STORAGE_BYTES_V1 + 1)
             .expect("changed storage budget is nonzero");
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
+        changed.inrou.start_grace = Duration::from_millis(TAIRA_INROU_START_GRACE_MS_V1 + 1);
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
+        changed.inrou.stop_grace = Duration::from_millis(TAIRA_INROU_STOP_GRACE_MS_V1 + 1);
         assert_rejected(&changed);
 
         let mut changed = runtime.clone();

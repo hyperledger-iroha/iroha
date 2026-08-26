@@ -4,7 +4,7 @@ use crate::kura::{
 };
 fn snapshot_lifecycle_projection_fixture(
     reservation_group: LaneQueueReservationGroupBindingV1,
-    ordered_keys: Vec<LaneQueueReservationKeyV2>,
+    ordered_keys: Vec<LaneQueueReservationKeyV1>,
     recovered_state: ProductionInFlightFirstReleaseStateProjection,
     cursor_seed: &[u8],
 ) -> LaneReservationSnapshotLifecycleProjectionV1 {
@@ -18,7 +18,7 @@ fn snapshot_lifecycle_projection_fixture(
         executable_payload_hash: Hash::new(b"snapshot-planner-executable-payload"),
         cursor_sequence: 1,
         cursor_hash: Hash::new(cursor_seed),
-        cursor_phase: AutonomousLifecycleCursorPhaseKindV2::Live,
+        cursor_phase: AutonomousLifecycleCursorPhaseKindV1::Live,
         owner_generation: 1,
         source_generation: None,
         validator_set_hash_version: 1,
@@ -88,8 +88,8 @@ fn retired_release_snapshot_state_fixture(
             producer_alive: true,
         },
         history: ProductionInFlightFirstReleaseHistoryProjection {
-            ever_queue_plan_v4: true,
-            ever_reservation_v5: true,
+            ever_queue_plan_v1: true,
+            ever_reservation_v1: true,
             pending_high_water: reservation_group.reservation_count,
             released_high_water: released_prefix,
             ..ProductionInFlightFirstReleaseHistoryProjection::default()
@@ -111,7 +111,7 @@ fn retired_release_snapshot_state_fixture(
 }
 fn retired_release_lifecycle_projection_fixture(
     reservation_group: LaneQueueReservationGroupBindingV1,
-    ordered_keys: Vec<LaneQueueReservationKeyV2>,
+    ordered_keys: Vec<LaneQueueReservationKeyV1>,
     recovered_state: ProductionInFlightFirstReleaseStateProjection,
     origin_proposal_hash: Hash,
     executable_payload_hash: Hash,
@@ -131,7 +131,7 @@ fn retired_release_lifecycle_projection_fixture(
         executable_payload_hash,
         cursor_sequence: 1,
         cursor_hash: Hash::new(cursor_seed),
-        cursor_phase: AutonomousLifecycleCursorPhaseKindV2::Live,
+        cursor_phase: AutonomousLifecycleCursorPhaseKindV1::Live,
         owner_generation: 1,
         source_generation: None,
         validator_set_hash_version: 1,

@@ -63,7 +63,7 @@ public final class RecordKaigiUsageInstruction implements InstructionTemplate {
     final Builder builder = builder();
     builder.setCallId(KaigiInstructionUtils.parseCallId(arguments, "call"));
     builder.setDurationMs(
-        KaigiInstructionUtils.parsePositiveInt(arguments.get("duration_ms"), "duration_ms"));
+        KaigiInstructionUtils.parseUnsignedLong(arguments.get("duration_ms"), "duration_ms"));
     builder.setBilledGas(
         KaigiInstructionUtils.parseUnsignedLong(arguments.getOrDefault("billed_gas", "0"), "billed_gas"));
     builder.setUsageCommitmentLiteral(arguments.get("usage_commitment"));

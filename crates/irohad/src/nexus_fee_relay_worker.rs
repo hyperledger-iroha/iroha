@@ -21,8 +21,10 @@ use iroha_core::{
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Hash, KeyPair};
+#[cfg(test)]
+use iroha_data_model::nexus::AxtProofEnvelope;
 use iroha_data_model::{
-    account::{AccountId, ParsedAccountId},
+    account::AccountId,
     asset::id::AssetDefinitionId,
     isi::{
         InstructionBox,
@@ -45,8 +47,6 @@ use iroha_data_model::{
     state_path::StatePath,
     transaction::{SignedTransaction, TransactionBuilder},
 };
-#[cfg(test)]
-use iroha_data_model::nexus::AxtProofEnvelope;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_primitives::{
     json::Json,
@@ -1384,9 +1384,7 @@ fn same_worker_state_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool
     left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 fn parse_canonical_account_id(raw: &str) -> Result<AccountId> {
-    AccountId::parse_encoded(raw)
-        .map(ParsedAccountId::into_account_id)
-        .map_err(|error| eyre::eyre!("{error}"))
+    AccountId::parse_encoded(raw).map_err(|error| eyre::eyre!("{error}"))
 }
 fn worker_submission_metadata(endpoint: &'static str) -> Metadata {
     let mut metadata = Metadata::default();

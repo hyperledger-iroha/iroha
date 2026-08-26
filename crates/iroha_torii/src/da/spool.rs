@@ -118,6 +118,7 @@ impl DaSpoolActionOutcome {
 #[derive(Default)]
 pub(crate) struct DaSpoolBatch {
     actions: Vec<DaSpoolAction>,
+    commit_actions: Vec<DaSpoolAction>,
 }
 impl DaSpoolBatch {
     /// Create an empty batch.
@@ -128,18 +129,28 @@ impl DaSpoolBatch {
     pub(crate) fn push(&mut self, action: DaSpoolAction) {
         self.actions.push(action);
     }
+    /// Append a durability marker that may run only after all artifact actions succeed.
+    pub(crate) fn push_commit(&mut self, action: DaSpoolAction) {
+        self.commit_actions.push(action);
+    }
     /// Whether the batch has no actions.
     pub(crate) fn is_empty(&self) -> bool {
-        self.actions.is_empty()
+        self.actions.is_empty() && self.commit_actions.is_empty()
     }
     /// Execute the batch synchronously on the current thread.
     pub(crate) fn execute_sync(self) -> DaSpoolBatchReport {
         let started_at = Instant::now();
-        let action_reports = self
+        let mut action_reports: Vec<_> = self
             .actions
             .into_iter()
             .map(DaSpoolAction::execute)
             .collect();
+        if action_reports
+            .iter()
+            .all(|report| matches!(report.outcome, DaSpoolActionOutcome::Ok))
+        {
+            action_reports.extend(self.commit_actions.into_iter().map(DaSpoolAction::execute));
+        }
         DaSpoolBatchReport {
             action_reports,
             write_duration: started_at.elapsed(),
@@ -192,6 +203,23 @@ pub(crate) struct DaSpooler {
     depth: Arc<AtomicUsize>,
     telemetry: MaybeTelemetry,
 }
+struct PendingDepthGuard<'a> {
+    spooler: &'a DaSpooler,
+    armed: bool,
+}
+impl PendingDepthGuard<'_> {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+impl Drop for PendingDepthGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            let restored_depth = DaSpooler::decrement_depth(&self.spooler.depth, 1);
+            self.spooler.record_queue_depth(restored_depth);
+        }
+    }
+}
 impl DaSpooler {
     /// Spawn a DA spool worker.
     pub(crate) fn spawn(
@@ -227,21 +255,27 @@ impl DaSpooler {
             return report;
         };
         self.record_queue_depth(queued_depth);
+        let mut depth_guard = PendingDepthGuard {
+            spooler: self,
+            armed: true,
+        };
         let (ack, ack_rx) = oneshot::channel();
         match self.tx.send(DaSpoolJob { batch, ack }).await {
-            Ok(()) => match ack_rx.await {
-                Ok(report) => report,
-                Err(err) => {
-                    let report = DaSpoolBatchReport::worker_error(format!(
-                        "DA spool worker dropped acknowledgement: {err}"
-                    ));
-                    Self::record_report(&self.telemetry, &report);
-                    report
+            Ok(()) => {
+                depth_guard.disarm();
+                match ack_rx.await {
+                    Ok(report) => report,
+                    Err(err) => {
+                        let report = DaSpoolBatchReport::worker_error(format!(
+                            "DA spool worker dropped acknowledgement: {err}"
+                        ));
+                        Self::record_report(&self.telemetry, &report);
+                        report
+                    }
                 }
-            },
+            }
             Err(err) => {
-                let restored_depth = Self::decrement_depth(&self.depth, 1);
-                self.record_queue_depth(restored_depth);
+                drop(depth_guard);
                 let report = err.0.batch.execute_sync();
                 Self::record_report(&self.telemetry, &report);
                 report
@@ -289,6 +323,11 @@ impl DaSpooler {
     }
     fn record_queue_depth(&self, depth: usize) {
         Self::record_queue_depth_for(&self.telemetry, depth);
+    }
+    /// Return the currently reserved queue depth for cancellation regressions.
+    #[cfg(test)]
+    pub(crate) fn queued_depth(&self) -> usize {
+        self.depth.load(Ordering::Acquire)
     }
     fn try_increment_depth(depth: &AtomicUsize) -> Option<usize> {
         depth

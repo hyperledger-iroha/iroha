@@ -12,6 +12,7 @@ use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use iroha_config::parameters::actual::DaTaikaiAnchor;
 use iroha_core::da::ReplayFingerprint;
 use iroha_data_model::{
+    account::AccountId,
     da::prelude::*,
     name::Name,
     nexus::LaneId,
@@ -21,8 +22,8 @@ use iroha_data_model::{
         TaikaiAvailabilityClass, TaikaiCarPointer, TaikaiCodec, TaikaiEnvelopeIndexes,
         TaikaiEventId, TaikaiGuardPolicy, TaikaiIngestPointer, TaikaiParseError, TaikaiRenditionId,
         TaikaiRenditionRouteV1, TaikaiResolution, TaikaiRoutingManifestV1, TaikaiSegmentEnvelopeV1,
-        TaikaiSegmentSigningManifestV1, TaikaiSegmentWindow, TaikaiStreamId, TaikaiTrackKind,
-        TaikaiTrackMetadata,
+        TaikaiSegmentSigningBodyV1, TaikaiSegmentSigningManifestV1, TaikaiSegmentWindow,
+        TaikaiStreamId, TaikaiTrackKind, TaikaiTrackMetadata,
     },
 };
 use iroha_futures::supervisor::ShutdownSignal;
@@ -709,9 +710,13 @@ pub(crate) mod taikai_ingest {
         Ok(())
     }
     fn validate_manifest_digest_hex(digest: &str) -> io::Result<()> {
-        if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        if digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
             return Err(invalid_lineage_record(
-                "Taikai routing manifest lineage record manifest_digest_hex must be 32-byte hex",
+                "Taikai routing manifest lineage record manifest_digest_hex must be 32-byte lowercase hex",
             ));
         }
         let bytes = hex::decode(digest).map_err(|err| invalid_lineage_record(err.to_string()))?;
@@ -787,6 +792,12 @@ pub(crate) mod taikai_ingest {
             require_utf8(metadata, META_TAIKAI_TRACK_BITRATE)?,
             META_TAIKAI_TRACK_BITRATE,
         )?;
+        if bitrate == 0 {
+            return Err(bad_request(
+                META_TAIKAI_TRACK_BITRATE,
+                "must be greater than zero",
+            ));
+        }
         let track = match track_kind {
             TaikaiTrackKind::Video => {
                 let resolution_str = require_utf8(metadata, META_TAIKAI_TRACK_RESOLUTION)?;
@@ -851,6 +862,12 @@ pub(crate) mod taikai_ingest {
             require_utf8(metadata, META_TAIKAI_SEGMENT_DURATION)?,
             META_TAIKAI_SEGMENT_DURATION,
         )?;
+        if segment_duration == 0 {
+            return Err(bad_request(
+                META_TAIKAI_SEGMENT_DURATION,
+                "must be greater than zero",
+            ));
+        }
         let wallclock_unix_ms = parse_u64(
             require_utf8(metadata, META_TAIKAI_WALLCLOCK_MS)?,
             META_TAIKAI_WALLCLOCK_MS,
@@ -917,7 +934,8 @@ pub(crate) mod taikai_ingest {
             }
         }
         let indexes = envelope.indexes();
-        let envelope_bytes = envelope.encode();
+        let envelope_bytes = norito::to_bytes(&envelope)
+            .map_err(|err| internal_error(format!("failed to encode Taikai envelope: {err}")))?;
         let indexes_json = norito::json::to_json_pretty(&indexes)
             .map_err(|err| internal_error(format!("failed to render Taikai indexes: {err}")))?
             .into_bytes();
@@ -1501,6 +1519,12 @@ pub(crate) mod taikai_ingest {
             .parse::<u64>()
             .map_err(|err| bad_request(key, format!("invalid integer `{value}`: {err}")))
     }
+    pub(crate) fn parse_u64_metadata(
+        metadata: &ExtraMetadata,
+        key: &str,
+    ) -> Result<u64, (StatusCode, String)> {
+        parse_u64(require_utf8(metadata, key)?, key)
+    }
     fn parse_u32(value: &str, key: &str) -> Result<u32, (StatusCode, String)> {
         value
             .trim()
@@ -1532,7 +1556,7 @@ pub(crate) mod taikai_ingest {
         metadata: &'a ExtraMetadata,
         key: &str,
     ) -> Result<Option<&'a str>, (StatusCode, String)> {
-        let Some(entry) = metadata.items.iter().find(|entry| entry.key == key) else {
+        let Some(entry) = unique_metadata_entry(metadata, key)? else {
             return Ok(None);
         };
         validate_metadata_entry(entry).map_err(|message| bad_request(key, message))?;
@@ -1543,11 +1567,18 @@ pub(crate) mod taikai_ingest {
     pub(crate) fn take_ssm_entry(
         metadata: &mut ExtraMetadata,
     ) -> Result<Option<Vec<u8>>, (StatusCode, String)> {
-        if let Some(index) = metadata
+        let mut matching = metadata
             .items
             .iter()
-            .position(|entry| entry.key == META_TAIKAI_SSM)
-        {
+            .enumerate()
+            .filter(|(_, entry)| entry.key == META_TAIKAI_SSM);
+        if let Some((index, _)) = matching.next() {
+            if matching.next().is_some() {
+                return Err(bad_request(
+                    META_TAIKAI_SSM,
+                    "metadata entry must appear at most once",
+                ));
+            }
             let entry = metadata.items.remove(index);
             validate_metadata_entry(&entry)
                 .map_err(|message| bad_request(META_TAIKAI_SSM, message))?;
@@ -1564,11 +1595,18 @@ pub(crate) mod taikai_ingest {
     pub(crate) fn take_trm_entry(
         metadata: &mut ExtraMetadata,
     ) -> Result<Option<Vec<u8>>, (StatusCode, String)> {
-        if let Some(index) = metadata
+        let mut matching = metadata
             .items
             .iter()
-            .position(|entry| entry.key == META_TAIKAI_TRM)
-        {
+            .enumerate()
+            .filter(|(_, entry)| entry.key == META_TAIKAI_TRM);
+        if let Some((index, _)) = matching.next() {
+            if matching.next().is_some() {
+                return Err(bad_request(
+                    META_TAIKAI_TRM,
+                    "metadata entry must appear at most once",
+                ));
+            }
             let entry = metadata.items.remove(index);
             validate_metadata_entry(&entry)
                 .map_err(|message| bad_request(META_TAIKAI_TRM, message))?;
@@ -1586,18 +1624,25 @@ pub(crate) mod taikai_ingest {
         metadata: &'a ExtraMetadata,
         key: &str,
     ) -> Result<&'a MetadataEntry, (StatusCode, String)> {
-        let entry = metadata
-            .items
-            .iter()
-            .find(|entry| entry.key == key)
-            .ok_or_else(|| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    format!("metadata entry `{key}` is required for Taikai segments"),
-                )
-            })?;
+        let entry = unique_metadata_entry(metadata, key)?.ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("metadata entry `{key}` is required for Taikai segments"),
+            )
+        })?;
         validate_metadata_entry(entry).map_err(|message| bad_request(key, message))?;
         Ok(entry)
+    }
+    fn unique_metadata_entry<'a>(
+        metadata: &'a ExtraMetadata,
+        key: &str,
+    ) -> Result<Option<&'a MetadataEntry>, (StatusCode, String)> {
+        let mut matching = metadata.items.iter().filter(|entry| entry.key == key);
+        let first = matching.next();
+        if matching.next().is_some() {
+            return Err(bad_request(key, "metadata entry must appear at most once"));
+        }
+        Ok(first)
     }
     fn validate_metadata_entry(entry: &MetadataEntry) -> Result<(), String> {
         if entry.visibility != MetadataVisibility::Public {
@@ -1677,7 +1722,6 @@ pub(crate) mod taikai_ingest {
         });
     }
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-    use iroha_data_model::Encode;
     use tokio::{
         fs as async_fs,
         io::AsyncReadExt as _,
@@ -3041,6 +3085,16 @@ pub(crate) fn validate_taikai_ssm(
                 format!("failed to decode signing manifest: {err}"),
             )
         })?;
+    if signing_manifest.body.version != TaikaiSegmentSigningBodyV1::VERSION {
+        return Err(taikai_ingest::bad_request(
+            META_TAIKAI_SSM,
+            format!(
+                "unsupported signing manifest version {}; expected {}",
+                signing_manifest.body.version,
+                TaikaiSegmentSigningBodyV1::VERSION
+            ),
+        ));
+    }
     match signing_manifest.body.publisher_key.try_algorithm() {
         Ok(iroha_crypto::Algorithm::Ed25519) => {
             iroha_crypto::ed25519_parse_signature(signing_manifest.signature.payload()).map_err(
@@ -3073,6 +3127,14 @@ pub(crate) fn validate_taikai_ssm(
                 format!("publisher signature verification failed: {err}"),
             )
         })?;
+    if signing_manifest.body.publisher_account
+        != AccountId::new(signing_manifest.body.publisher_key.clone())
+    {
+        return Err(taikai_ingest::bad_request(
+            META_TAIKAI_SSM,
+            "publisher account does not match the account controlled by publisher_key",
+        ));
+    }
     if &signing_manifest.body.manifest_hash != manifest_hash {
         return Err(taikai_ingest::bad_request(
             META_TAIKAI_SSM,
@@ -3181,42 +3243,85 @@ pub(crate) fn taikai_availability_from_metadata(
         )
     })?;
     let event_id = taikai_ingest::parse_name(metadata, META_TAIKAI_EVENT_ID)?;
-    if manifest.event_id.as_name() != &event_id {
-        return Err(taikai_ingest::bad_request(
-            META_TAIKAI_TRM,
-            format!(
-                "manifest event_id `{}` does not match segment metadata `{}`",
-                manifest.event_id.as_name(),
-                event_id.as_ref()
-            ),
-        ));
-    }
     let stream_id = taikai_ingest::parse_name(metadata, META_TAIKAI_STREAM_ID)?;
-    if manifest.stream_id.as_name() != &stream_id {
+    let rendition_name = taikai_ingest::parse_name(metadata, META_TAIKAI_RENDITION_ID)?;
+    let sequence = taikai_ingest::parse_u64_metadata(metadata, META_TAIKAI_SEGMENT_SEQUENCE)?;
+    let route = validate_taikai_trm_binding(
+        &manifest,
+        event_id.as_ref(),
+        stream_id.as_ref(),
+        rendition_name.as_ref(),
+        sequence,
+    )?;
+    Ok(Some(route.availability_class))
+}
+
+fn validate_taikai_trm_binding<'a>(
+    manifest: &'a TaikaiRoutingManifestV1,
+    expected_event: &str,
+    expected_stream: &str,
+    expected_rendition: &str,
+    expected_sequence: u64,
+) -> Result<&'a TaikaiRenditionRouteV1, (StatusCode, String)> {
+    if manifest.version != TaikaiRoutingManifestV1::VERSION {
         return Err(taikai_ingest::bad_request(
             META_TAIKAI_TRM,
             format!(
-                "manifest stream_id `{}` does not match segment metadata `{}`",
-                manifest.stream_id.as_name(),
-                stream_id.as_ref()
+                "unsupported manifest version {}; expected {}",
+                manifest.version,
+                TaikaiRoutingManifestV1::VERSION
             ),
         ));
     }
-    let rendition_name = taikai_ingest::parse_name(metadata, META_TAIKAI_RENDITION_ID)?;
+    if let Err(err) = manifest.validate() {
+        return Err(taikai_ingest::bad_request(
+            META_TAIKAI_TRM,
+            format!("invalid routing manifest: {err}"),
+        ));
+    }
+    if manifest.event_id.as_name().as_ref() != expected_event {
+        return Err(taikai_ingest::bad_request(
+            META_TAIKAI_TRM,
+            format!(
+                "manifest event_id `{}` does not match segment metadata `{expected_event}`",
+                manifest.event_id.as_name()
+            ),
+        ));
+    }
+    if manifest.stream_id.as_name().as_ref() != expected_stream {
+        return Err(taikai_ingest::bad_request(
+            META_TAIKAI_TRM,
+            format!(
+                "manifest stream_id `{}` does not match segment metadata `{expected_stream}`",
+                manifest.stream_id.as_name()
+            ),
+        ));
+    }
     let Some(route) = manifest
         .renditions
         .iter()
-        .find(|route| route.rendition_id.as_name() == &rendition_name)
+        .find(|route| route.rendition_id.as_name().as_ref() == expected_rendition)
     else {
         return Err(taikai_ingest::bad_request(
             META_TAIKAI_TRM,
-            format!(
-                "manifest missing rendition `{}` required by this segment",
-                rendition_name.as_ref()
-            ),
+            format!("manifest missing rendition `{expected_rendition}` required by this segment"),
         ));
     };
-    Ok(Some(route.availability_class))
+    if !manifest.covers_sequence(expected_sequence) {
+        return Err(taikai_ingest::bad_request(
+            META_TAIKAI_TRM,
+            "manifest window does not cover this segment sequence",
+        ));
+    }
+    if !route.covers_sequence(expected_sequence) {
+        return Err(taikai_ingest::bad_request(
+            META_TAIKAI_TRM,
+            format!(
+                "rendition `{expected_rendition}` signing window does not cover this segment sequence"
+            ),
+        ));
+    }
+    Ok(route)
 }
 /// Apply Taikai-specific metadata tags for ingest and proof policy enforcement.
 pub(crate) fn apply_taikai_ingest_tags(
@@ -3272,37 +3377,7 @@ pub(crate) fn apply_taikai_ingest_tags(
     let event = taikai_ingest::parse_name(metadata, META_TAIKAI_EVENT_ID)?;
     let stream = taikai_ingest::parse_name(metadata, META_TAIKAI_STREAM_ID)?;
     let rendition = taikai_ingest::parse_name(metadata, META_TAIKAI_RENDITION_ID)?;
-    let sequence_entry = metadata
-        .items
-        .iter()
-        .find(|entry| entry.key == META_TAIKAI_SEGMENT_SEQUENCE)
-        .ok_or_else(|| {
-            taikai_ingest::bad_request(
-                META_TAIKAI_SEGMENT_SEQUENCE,
-                "metadata entry `taikai.segment.sequence` is required for Taikai segments",
-            )
-        })?;
-    if sequence_entry.visibility != MetadataVisibility::Public {
-        return Err(taikai_ingest::bad_request(
-            META_TAIKAI_SEGMENT_SEQUENCE,
-            "metadata visibility must be public for Taikai segments",
-        ));
-    }
-    if sequence_entry.encryption != MetadataEncryption::None {
-        return Err(taikai_ingest::bad_request(
-            META_TAIKAI_SEGMENT_SEQUENCE,
-            "metadata encryption is not supported for Taikai sequence fields",
-        ));
-    }
-    let sequence_raw = std::str::from_utf8(&sequence_entry.value).map_err(|_| {
-        taikai_ingest::bad_request(META_TAIKAI_SEGMENT_SEQUENCE, "value must be UTF-8")
-    })?;
-    let sequence = sequence_raw.parse::<u64>().map_err(|err| {
-        taikai_ingest::bad_request(
-            META_TAIKAI_SEGMENT_SEQUENCE,
-            format!("invalid u64 `{sequence_raw}`: {err}"),
-        )
-    })?;
+    let sequence = taikai_ingest::parse_u64_metadata(metadata, META_TAIKAI_SEGMENT_SEQUENCE)?;
     let mut hint = Map::new();
     hint.insert("event".into(), Value::from(event.as_ref()));
     hint.insert("stream".into(), Value::from(stream.as_ref()));
@@ -3345,9 +3420,7 @@ pub fn compute_taikai_ingest_tags(
     Ok(metadata)
 }
 fn upsert_metadata(metadata: &mut ExtraMetadata, key: &str, value: impl Into<Vec<u8>>) {
-    if let Some(index) = metadata.items.iter().position(|entry| entry.key == key) {
-        metadata.items.remove(index);
-    }
+    metadata.items.retain(|entry| entry.key != key);
     metadata.items.push(MetadataEntry::new(
         key,
         value.into(),
@@ -3378,59 +3451,13 @@ pub(crate) fn validate_taikai_trm(
             format!("failed to decode routing manifest: {err}"),
         )
     })?;
-    if manifest.version != TaikaiRoutingManifestV1::VERSION {
-        return Err(taikai_ingest::bad_request(
-            META_TAIKAI_TRM,
-            format!(
-                "unsupported manifest version {}; expected {}",
-                manifest.version,
-                TaikaiRoutingManifestV1::VERSION
-            ),
-        ));
-    }
-    if let Err(err) = manifest.validate() {
-        return Err(taikai_ingest::bad_request(
-            META_TAIKAI_TRM,
-            format!("invalid routing manifest: {err}"),
-        ));
-    }
-    if manifest.event_id.as_name().as_ref() != envelope.telemetry.event_id {
-        return Err(taikai_ingest::bad_request(
-            META_TAIKAI_TRM,
-            format!(
-                "manifest event_id `{}` does not match segment metadata `{}`",
-                manifest.event_id.as_name(),
-                envelope.telemetry.event_id
-            ),
-        ));
-    }
-    if manifest.stream_id.as_name().as_ref() != envelope.telemetry.stream_id {
-        return Err(taikai_ingest::bad_request(
-            META_TAIKAI_TRM,
-            format!(
-                "manifest stream_id `{}` does not match segment metadata `{}`",
-                manifest.stream_id.as_name(),
-                envelope.telemetry.stream_id
-            ),
-        ));
-    }
-    let expected_rendition = envelope.telemetry.rendition_id.as_str();
-    if !manifest
-        .renditions
-        .iter()
-        .any(|route| route.rendition_id.as_name().as_ref() == expected_rendition)
-    {
-        return Err(taikai_ingest::bad_request(
-            META_TAIKAI_TRM,
-            format!("manifest missing rendition `{expected_rendition}` required by this segment"),
-        ));
-    }
-    if !manifest.covers_sequence(envelope.telemetry.segment_sequence) {
-        return Err(taikai_ingest::bad_request(
-            META_TAIKAI_TRM,
-            "manifest window does not cover this segment sequence",
-        ));
-    }
+    validate_taikai_trm_binding(
+        &manifest,
+        envelope.telemetry.event_id.as_str(),
+        envelope.telemetry.stream_id.as_str(),
+        envelope.telemetry.rendition_id.as_str(),
+        envelope.telemetry.segment_sequence,
+    )?;
     Ok(manifest)
 }
 /// Record Taikai ingest latency/drift metrics for telemetry.

@@ -69,7 +69,7 @@ pub mod soranet;
 pub mod taikai_cache;
 pub mod treasury;
 pub(crate) const SORANET_PQ_RANK_STEP_WEIGHT: u32 = 250;
-pub(crate) const SORANET_PQ_CERTIFICATE_BONUS: u32 = 500;
+pub(crate) const SORANET_PQ_HANDSHAKE_BONUS: u32 = 500;
 pub(crate) const SORANET_BANDWIDTH_UNIT_BYTES: u64 = 256 * 1024; // 256 KiB per weight step.
 const DEFAULT_MAX_PROVIDERS: usize = 64;
 const HARD_MAX_PROVIDERS: usize = 256;
@@ -307,7 +307,7 @@ use compliance::{CompliancePolicy, ComplianceReason};
 use soranet::{
     CircuitEvent, CircuitId, CircuitInfo, CircuitManager, CircuitManagerConfig,
     CircuitManagerError, CircuitRotationRecord, GuardCapabilityComponents, GuardRecord, GuardSet,
-    RelayDescriptor, RelayDirectory, RelayPathHint,
+    RelayDescriptor, RelayDirectory, RelayDirectoryValidityError, RelayPathHint,
 };
 use taikai_cache::{
     CacheAdmissionError, CacheAdmissionGossip, CacheAdmissionTracker, QosClass, QosConfig,
@@ -335,13 +335,17 @@ pub mod prelude {
         fetch_via_gateway,
         incentives::{RelayRewardEngine, RewardConfig, RewardConfigError},
         provider_supports_pq, provider_supports_soranet,
-        proxy::{BrowserExtensionManifest, LocalQuicProxyConfig, LocalQuicProxyHandle},
+        proxy::{
+            BrowserExtensionManifest, LocalQuicProxyConfig, LocalQuicProxyHandle,
+            ProxyClientCapabilityHex,
+        },
         soranet::{
             CircuitEvent, CircuitId, CircuitInfo, CircuitLatencySnapshot, CircuitManager,
             CircuitManagerConfig, CircuitManagerError, CircuitRetirementReason,
-            CircuitRotationRecord, Endpoint, ExitDemotion, ExitDemotionReason, GuardCacheKey,
-            GuardCacheKeyError, GuardRecord, GuardRetention, GuardSelector, GuardSet,
-            PathHintReport, PathMetadata, RelayDescriptor, RelayDirectory, RelayPathHint,
+            CircuitRotationRecord, Endpoint, ExitDemotion, ExitDemotionReason,
+            GUARD_CACHE_MAX_BYTES_V1, GUARD_CACHE_MAX_GUARDS_V1, GuardCacheKey, GuardCacheKeyError,
+            GuardRecord, GuardRetention, GuardSelector, GuardSet, PathHintReport, PathMetadata,
+            RelayDescriptor, RelayDirectory, RelayDirectoryValidityError, RelayPathHint,
             RelayRoles,
         },
         taikai_cache::{
@@ -557,6 +561,12 @@ pub enum OrchestratorError {
     /// Circuit lifecycle manager failed to reconcile SoraNet circuits.
     #[error("failed to refresh soranet circuits: {0}")]
     Circuit(#[source] CircuitManagerError),
+    /// Sticky guard state was supplied without a current independently authenticated directory.
+    #[error("guard state requires a current independently authenticated relay directory")]
+    GuardDirectoryRequired,
+    /// The configured relay directory is not authenticated and active at fetch time.
+    #[error("relay directory is not trusted at fetch time: {0}")]
+    RelayDirectoryValidity(#[source] RelayDirectoryValidityError),
     /// Local proxy was not configured but remediation was requested.
     #[error("local proxy not configured in orchestrator config")]
     ProxyNotConfigured,
@@ -834,6 +844,9 @@ pub struct OrchestratorConfig {
     /// Supplemental path hints to refine relay path selection.
     pub relay_path_hints: Vec<RelayPathHint>,
     /// Optional guard cache used to prioritise pinned SoraNet relays.
+    ///
+    /// A guard set is sticky state, not a freshness trust anchor, and therefore
+    /// requires a current independently authenticated [`Self::relay_directory`].
     pub guard_set: Option<GuardSet>,
     /// Optional circuit manager configuration. `None` disables lifecycle management.
     pub circuit_manager: Option<CircuitManagerConfig>,
@@ -2176,6 +2189,15 @@ pub mod bindings {
         Value::Object(root)
     }
     fn taikai_cache_from_json(value: &Value) -> Result<TaikaiCacheConfig, ConfigJsonError> {
+        fn require_positive(value: u64, label: &str) -> Result<(), ConfigJsonError> {
+            if value == 0 {
+                Err(ConfigJsonError::new(format!(
+                    "{label} must be greater than zero"
+                )))
+            } else {
+                Ok(())
+            }
+        }
         let object = value
             .as_object()
             .ok_or_else(|| ConfigJsonError::new("taikai_cache must be a JSON object"))?;
@@ -2215,6 +2237,16 @@ pub mod bindings {
             .ok_or_else(|| {
                 ConfigJsonError::new("taikai_cache.cold_retention_secs must be an unsigned integer")
             })?;
+        for (value, label) in [
+            (hot_capacity, "taikai_cache.hot_capacity_bytes"),
+            (hot_retention_secs, "taikai_cache.hot_retention_secs"),
+            (warm_capacity, "taikai_cache.warm_capacity_bytes"),
+            (warm_retention_secs, "taikai_cache.warm_retention_secs"),
+            (cold_capacity, "taikai_cache.cold_capacity_bytes"),
+            (cold_retention_secs, "taikai_cache.cold_retention_secs"),
+        ] {
+            require_positive(value, label)?;
+        }
         let qos_value = object
             .get("qos")
             .ok_or_else(|| ConfigJsonError::new("taikai_cache.qos section is required"))?;
@@ -2251,6 +2283,14 @@ pub mod bindings {
                     "taikai_cache.qos.burst_multiplier must be an unsigned integer",
                 )
             })?;
+        for (value, label) in [
+            (priority_rate, "taikai_cache.qos.priority_rate_bps"),
+            (standard_rate, "taikai_cache.qos.standard_rate_bps"),
+            (bulk_rate, "taikai_cache.qos.bulk_rate_bps"),
+            (burst_multiplier, "taikai_cache.qos.burst_multiplier"),
+        ] {
+            require_positive(value, label)?;
+        }
         Ok(TaikaiCacheConfig {
             hot_capacity_bytes: hot_capacity,
             hot_retention: Duration::from_secs(hot_retention_secs),
@@ -2683,11 +2723,29 @@ impl Orchestrator {
             .as_ref()
             .map(TaikaiCacheHandle::queue_stats)
     }
+    fn validate_relay_trust_at(&self, now: SystemTime) -> Result<(), OrchestratorError> {
+        let Some(directory) = &self.config.relay_directory else {
+            return if self.config.guard_set.is_some() {
+                Err(OrchestratorError::GuardDirectoryRequired)
+            } else {
+                Ok(())
+            };
+        };
+        let now_unix = now
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        directory
+            .active_valid_until_at(now_unix)
+            .map_err(OrchestratorError::RelayDirectoryValidity)?;
+        Ok(())
+    }
     /// Refresh the circuit manager using the supplied timestamp.
     pub fn reconcile_circuits_at(
         &self,
         now: SystemTime,
     ) -> Result<Option<CircuitRefreshReport>, OrchestratorError> {
+        self.validate_relay_trust_at(now)?;
         let Some(manager) = &self.circuit_manager else {
             return Ok(None);
         };
@@ -3691,7 +3749,7 @@ struct SoranetCandidate {
     provider: FetchProvider,
     pq: PqSupport,
     guard_weight: u32,
-    has_pq_certificate: bool,
+    has_pq_handshake: bool,
     bandwidth_bytes_per_sec: u64,
     reputation_weight: u32,
     identifier: String,
@@ -3710,8 +3768,7 @@ impl SoranetCandidate {
         } else {
             descriptor_guard_weight
         };
-        let has_pq_certificate = guard_record.is_some_and(|record| record.pq_kem_public.is_some())
-            || descriptor.is_some_and(|desc| desc.is_pq_capable());
+        let has_pq_handshake = descriptor.is_some_and(RelayDescriptor::is_pq_capable);
         let guard_bandwidth = guard_record
             .map(|record| record.bandwidth_bytes_per_sec)
             .unwrap_or(0);
@@ -3747,7 +3804,7 @@ impl SoranetCandidate {
             provider,
             pq,
             guard_weight,
-            has_pq_certificate,
+            has_pq_handshake,
             bandwidth_bytes_per_sec,
             reputation_weight,
             identifier,
@@ -3756,7 +3813,7 @@ impl SoranetCandidate {
     fn capability_components(&self) -> GuardCapabilityComponents {
         GuardCapabilityComponents::from_inputs(
             self.pq_rank(),
-            self.has_pq_certificate,
+            self.has_pq_handshake,
             self.guard_weight,
             self.bandwidth_bytes_per_sec,
             self.reputation_weight,
@@ -3778,8 +3835,8 @@ impl SoranetCandidate {
         let capability = self.capability_components();
         let pq_rank_bonus =
             u32::from(capability.pq_rank()).saturating_mul(SORANET_PQ_RANK_STEP_WEIGHT);
-        let pq_certificate_bonus = if capability.has_pq_certificate() {
-            SORANET_PQ_CERTIFICATE_BONUS
+        let pq_handshake_bonus = if capability.has_pq_handshake() {
+            SORANET_PQ_HANDSHAKE_BONUS
         } else {
             0
         };
@@ -3788,7 +3845,7 @@ impl SoranetCandidate {
         let reputation_bonus = capability.reputation_weight();
         let weighted = base_weight
             .saturating_add(pq_rank_bonus)
-            .saturating_add(pq_certificate_bonus)
+            .saturating_add(pq_handshake_bonus)
             .saturating_add(guard_bonus)
             .saturating_add(bandwidth_bonus)
             .saturating_add(reputation_bonus);
@@ -4343,7 +4400,6 @@ fn eligible_providers(
 #[derive(Clone, Copy)]
 struct GuardPreference {
     position: usize,
-    pq: bool,
     weight: u32,
     bandwidth_bytes_per_sec: u64,
     reputation_weight: u32,
@@ -4361,7 +4417,6 @@ fn reorder_by_guard_set(providers: Vec<FetchProvider>, guard_set: &GuardSet) -> 
                 record.relay_id,
                 GuardPreference {
                     position,
-                    pq: record.pq_kem_public.is_some(),
                     weight: record.guard_weight,
                     bandwidth_bytes_per_sec: record.bandwidth_bytes_per_sec,
                     reputation_weight: record.reputation_weight,
@@ -4374,7 +4429,6 @@ fn reorder_by_guard_set(providers: Vec<FetchProvider>, guard_set: &GuardSet) -> 
         provider: FetchProvider,
         original_index: usize,
         pinned: bool,
-        pq: bool,
         guard_weight: u32,
         bandwidth_bytes_per_sec: u64,
         reputation: u32,
@@ -4392,50 +4446,40 @@ fn reorder_by_guard_set(providers: Vec<FetchProvider>, guard_set: &GuardSet) -> 
                 .unwrap_or(0);
             let provider_reputation = provider.weight().get();
             let preference = guard_preference_for_provider(&provider, &guard_preferences);
-            let (
-                pinned,
-                pq,
-                guard_weight,
-                bandwidth_bytes_per_sec,
-                reputation,
-                position,
-                pinned_at,
-            ) = preference
-                .map(|pref| {
-                    let bandwidth = if pref.bandwidth_bytes_per_sec > 0 {
-                        pref.bandwidth_bytes_per_sec
-                    } else {
-                        provider_bandwidth
-                    };
-                    let reputation = if pref.reputation_weight > 0 {
-                        pref.reputation_weight
-                    } else {
-                        provider_reputation
-                    };
-                    (
-                        true,
-                        pref.pq,
-                        pref.weight,
-                        bandwidth,
-                        reputation,
-                        pref.position,
-                        pref.pinned_at,
-                    )
-                })
-                .unwrap_or((
-                    false,
-                    false,
-                    0,
-                    provider_bandwidth,
-                    provider_reputation,
-                    usize::MAX,
-                    0,
-                ));
+            let (pinned, guard_weight, bandwidth_bytes_per_sec, reputation, position, pinned_at) =
+                preference
+                    .map(|pref| {
+                        let bandwidth = if pref.bandwidth_bytes_per_sec > 0 {
+                            pref.bandwidth_bytes_per_sec
+                        } else {
+                            provider_bandwidth
+                        };
+                        let reputation = if pref.reputation_weight > 0 {
+                            pref.reputation_weight
+                        } else {
+                            provider_reputation
+                        };
+                        (
+                            true,
+                            pref.weight,
+                            bandwidth,
+                            reputation,
+                            pref.position,
+                            pref.pinned_at,
+                        )
+                    })
+                    .unwrap_or((
+                        false,
+                        0,
+                        provider_bandwidth,
+                        provider_reputation,
+                        usize::MAX,
+                        0,
+                    ));
             ProviderOrdering {
                 provider,
                 original_index,
                 pinned,
-                pq,
                 guard_weight,
                 bandwidth_bytes_per_sec,
                 reputation,
@@ -4448,7 +4492,6 @@ fn reorder_by_guard_set(providers: Vec<FetchProvider>, guard_set: &GuardSet) -> 
         right
             .pinned
             .cmp(&left.pinned)
-            .then_with(|| right.pq.cmp(&left.pq))
             .then_with(|| right.guard_weight.cmp(&left.guard_weight))
             .then_with(|| {
                 right
@@ -6107,6 +6150,13 @@ mod tests {
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use futures::executor::block_on;
+    use iroha_crypto::soranet::{
+        certificate::{
+            RelayCapabilityFlagsV1, RelayCertificateBundleV2, RelayCertificateSignaturesV2,
+            RelayCertificateV2, RelayEndpointV2, RelayRolesV2,
+        },
+        handshake::HandshakeSuite,
+    };
     #[cfg(feature = "local-quic-proxy")]
     use iroha_data_model::soranet::privacy_metrics::{
         SoranetPowFailureReasonV1, SoranetPrivacyEventActiveSampleV1,
@@ -6126,6 +6176,7 @@ mod tests {
     };
     use sorafs_chunker::ChunkProfile;
     use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
+    use soranet_pq::MlDsaSuite;
     use std::{
         collections::{BTreeSet, HashMap},
         convert::TryInto,
@@ -6155,6 +6206,42 @@ mod tests {
     fn relay_id(byte: u8) -> [u8; 32] {
         [byte; 32]
     }
+    fn pq_test_bundle(relay_id: [u8; 32]) -> RelayCertificateBundleV2 {
+        RelayCertificateBundleV2 {
+            certificate: RelayCertificateV2 {
+                relay_id,
+                identity_ed25519: relay_id,
+                identity_mldsa65: vec![0x44; MlDsaSuite::MlDsa65.public_key_len()],
+                descriptor_commit: [0x22; 32],
+                roles: RelayRolesV2 {
+                    entry: true,
+                    middle: true,
+                    exit: true,
+                },
+                guard_weight: 100,
+                bandwidth_bytes_per_sec: 1_000_000,
+                reputation_weight: 100,
+                endpoints: vec![RelayEndpointV2 {
+                    quic_multiaddr: "/dns/test-relay.example/udp/443/quic".to_owned(),
+                    tls_server_name: "test-relay.example".to_owned(),
+                    tls_spki_sha256: [0xA5; 32],
+                    priority: 0,
+                    tags: Vec::new(),
+                }],
+                capability_flags: RelayCapabilityFlagsV1::default(),
+                handshake_suites: vec![HandshakeSuite::Nk3PqForwardSecure],
+                published_at: 0,
+                valid_after: 0,
+                valid_until: i64::MAX,
+                directory_hash: [0x55; 32],
+                issuer_fingerprint: [0x66; 32],
+            },
+            signatures: RelayCertificateSignaturesV2 {
+                ed25519: [0x77; 64],
+                mldsa65: vec![0x88; MlDsaSuite::MlDsa65.signature_len()],
+            },
+        }
+    }
     fn entry_descriptor(id_byte: u8, weight: u32, endpoints: Vec<Endpoint>) -> RelayDescriptor {
         RelayDescriptor {
             relay_id: relay_id(id_byte),
@@ -6163,7 +6250,6 @@ mod tests {
             reputation_weight: 0,
             roles: RelayRoles::new(true, true, true),
             endpoints,
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         }
@@ -6207,12 +6293,11 @@ mod tests {
             reputation_weight: 0,
             roles,
             endpoints: vec![Endpoint::new(format!("soranet://relay-{id:02x}"), 0)],
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
         if pq {
-            descriptor.pq_kem_public = Some(vec![id]);
+            descriptor.certificate = Some(pq_test_bundle(descriptor.relay_id));
         }
         descriptor
     }
@@ -6371,6 +6456,19 @@ mod tests {
             "teardown should return None when circuits are disabled"
         );
     }
+    #[test]
+    fn guard_state_without_current_directory_fails_closed() {
+        let config = OrchestratorConfig {
+            guard_set: Some(GuardSet::new(Vec::new())),
+            circuit_manager: None,
+            ..OrchestratorConfig::default()
+        };
+        let orchestrator = Orchestrator::new(config);
+        let error = orchestrator
+            .reconcile_circuits_at(UNIX_EPOCH + Duration::from_secs(1))
+            .expect_err("sticky guard state must not be usable without a current directory");
+        assert!(matches!(error, OrchestratorError::GuardDirectoryRequired));
+    }
     #[tokio::test(flavor = "multi_thread")]
     async fn taikai_fetch_wrapper_hedges_overdue_batches() {
         test_logger();
@@ -6432,8 +6530,7 @@ mod tests {
             guard_weight: 50,
             bandwidth_bytes_per_sec: 0,
             reputation_weight: 0,
-            pq_kem_public: Some(vec![0x42]),
-            certificate: None,
+            certificate: Some(pq_test_bundle([0xAA; 32])),
             path_metadata: PathMetadata::default(),
         };
         let guard_set = GuardSet::new(vec![guard.clone()]);
@@ -6967,6 +7064,64 @@ mod tests {
         assert!(object.contains_key("taikai_cache"));
     }
     #[test]
+    fn taikai_cache_config_json_rejects_zero_runtime_limits() {
+        let config = OrchestratorConfig {
+            taikai_cache: Some(TaikaiCacheConfig::default()),
+            ..OrchestratorConfig::default()
+        };
+        let valid = bindings::config_to_json(&config);
+        for field in [
+            "hot_capacity_bytes",
+            "hot_retention_secs",
+            "warm_capacity_bytes",
+            "warm_retention_secs",
+            "cold_capacity_bytes",
+            "cold_retention_secs",
+        ] {
+            let mut json = valid.clone();
+            json.as_object_mut()
+                .expect("config JSON object")
+                .get_mut("taikai_cache")
+                .expect("Taikai cache config")
+                .as_object_mut()
+                .expect("Taikai cache JSON object")
+                .insert(field.into(), Value::from(0_u64));
+            let error = bindings::config_from_json(&json)
+                .expect_err("zero Taikai cache limit must be rejected");
+            let message = error.to_string();
+            assert!(
+                message.contains(field) && message.contains("greater than zero"),
+                "unexpected error for {field}: {message}"
+            );
+        }
+        for field in [
+            "priority_rate_bps",
+            "standard_rate_bps",
+            "bulk_rate_bps",
+            "burst_multiplier",
+        ] {
+            let mut json = valid.clone();
+            json.as_object_mut()
+                .expect("config JSON object")
+                .get_mut("taikai_cache")
+                .expect("Taikai cache config")
+                .as_object_mut()
+                .expect("Taikai cache JSON object")
+                .get_mut("qos")
+                .expect("Taikai cache QoS config")
+                .as_object_mut()
+                .expect("Taikai cache QoS JSON object")
+                .insert(field.into(), Value::from(0_u64));
+            let error = bindings::config_from_json(&json)
+                .expect_err("zero Taikai cache QoS limit must be rejected");
+            let message = error.to_string();
+            assert!(
+                message.contains(field) && message.contains("greater than zero"),
+                "unexpected error for {field}: {message}"
+            );
+        }
+    }
+    #[test]
     fn canonical_compliance_catalog_is_valid() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let catalog_path = manifest_dir.join("../../governance/compliance/soranet_opt_outs.json");
@@ -7017,7 +7172,6 @@ mod tests {
             guard_weight: 120,
             bandwidth_bytes_per_sec: 0,
             reputation_weight: 0,
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
@@ -7664,7 +7818,6 @@ mod tests {
             guard_weight: 100,
             bandwidth_bytes_per_sec: 0,
             reputation_weight: 0,
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         }]);
@@ -7742,22 +7895,20 @@ mod tests {
             guard_weight: 300,
             bandwidth_bytes_per_sec: 6 * 1024 * 1024,
             reputation_weight: 320,
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
-        let guard_beta_pq = GuardRecord {
+        let guard_beta = GuardRecord {
             relay_id: beta_id_bytes,
             pinned_at_unix: 0,
-            endpoint: Endpoint::new("soranet://beta-pq", 0),
+            endpoint: Endpoint::new("soranet://beta", 0),
             guard_weight: 200,
             bandwidth_bytes_per_sec: 8 * 1024 * 1024,
             reputation_weight: 280,
-            pq_kem_public: Some(vec![0x01]),
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
-        let guard_set = GuardSet::new(vec![guard_alpha_classical, guard_beta_pq]);
+        let guard_set = GuardSet::new(vec![guard_alpha_classical, guard_beta]);
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
             None,
@@ -7767,7 +7918,7 @@ mod tests {
             None,
             false,
         );
-        let pq_pref: Vec<String> = providers
+        let guard_weight_pref: Vec<String> = providers
             .into_iter()
             .filter_map(|provider| {
                 provider
@@ -7775,15 +7926,17 @@ mod tests {
                     .and_then(|meta| meta.provider_id.clone())
             })
             .collect();
-        assert_eq!(pq_pref, vec![beta_id_hex.clone(), alpha_id_hex.clone()]);
-        let guard_alpha_pq = GuardRecord {
+        assert_eq!(
+            guard_weight_pref,
+            vec![alpha_id_hex.clone(), beta_id_hex.clone()]
+        );
+        let guard_alpha = GuardRecord {
             relay_id: alpha_id_bytes,
             pinned_at_unix: 10,
-            endpoint: Endpoint::new("soranet://alpha-pq", 0),
+            endpoint: Endpoint::new("soranet://alpha", 0),
             guard_weight: 150,
             bandwidth_bytes_per_sec: 7 * 1024 * 1024,
             reputation_weight: 340,
-            pq_kem_public: Some(vec![0xAA]),
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
@@ -7794,11 +7947,10 @@ mod tests {
             guard_weight: 400,
             bandwidth_bytes_per_sec: 7 * 1024 * 1024,
             reputation_weight: 360,
-            pq_kem_public: Some(vec![0xBB]),
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
-        let guard_set = GuardSet::new(vec![guard_alpha_pq.clone(), guard_beta_heavier]);
+        let guard_set = GuardSet::new(vec![guard_alpha.clone(), guard_beta_heavier]);
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
             None,
@@ -7821,14 +7973,13 @@ mod tests {
             relay_id: beta_id_bytes,
             pinned_at_unix: 20,
             endpoint: Endpoint::new("soranet://beta-peer", 0),
-            guard_weight: guard_alpha_pq.guard_weight,
-            bandwidth_bytes_per_sec: guard_alpha_pq.bandwidth_bytes_per_sec,
-            reputation_weight: guard_alpha_pq.reputation_weight,
-            pq_kem_public: guard_alpha_pq.pq_kem_public.clone(),
+            guard_weight: guard_alpha.guard_weight,
+            bandwidth_bytes_per_sec: guard_alpha.bandwidth_bytes_per_sec,
+            reputation_weight: guard_alpha.reputation_weight,
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
-        let guard_set = GuardSet::new(vec![guard_alpha_pq, guard_beta_equal]);
+        let guard_set = GuardSet::new(vec![guard_alpha, guard_beta_equal]);
         let SelectionOutcome { providers, .. } = eligible_providers(
             &scoreboard,
             None,
@@ -7857,7 +8008,6 @@ mod tests {
             guard_weight: 250,
             bandwidth_bytes_per_sec: 9 * 1024 * 1024,
             reputation_weight: 310,
-            pq_kem_public: Some(vec![0xAC]),
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
@@ -7868,7 +8018,6 @@ mod tests {
             guard_weight: 250,
             bandwidth_bytes_per_sec: 5 * 1024 * 1024,
             reputation_weight: 360,
-            pq_kem_public: Some(vec![0xBC]),
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
@@ -7904,7 +8053,7 @@ mod tests {
             None,
             false,
         );
-        let pq_sorted: Vec<String> = providers
+        let stable_sorted: Vec<String> = providers
             .into_iter()
             .filter_map(|provider| {
                 provider
@@ -7912,7 +8061,7 @@ mod tests {
                     .and_then(|meta| meta.provider_id.clone())
             })
             .collect();
-        assert_eq!(pq_sorted, vec![alpha_id_hex, beta_id_hex]);
+        assert_eq!(stable_sorted, vec![alpha_id_hex, beta_id_hex]);
     }
     #[test]
     fn guard_set_weighting_updates_provider_weights_without_directory() {
@@ -7942,7 +8091,6 @@ mod tests {
             guard_weight: 120,
             bandwidth_bytes_per_sec: 4 * 1024 * 1024,
             reputation_weight: 220,
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
@@ -7953,7 +8101,6 @@ mod tests {
             guard_weight: 240,
             bandwidth_bytes_per_sec: 9 * 1024 * 1024,
             reputation_weight: 340,
-            pq_kem_public: Some(vec![0xB1]),
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
@@ -8115,7 +8262,7 @@ mod tests {
             .expect("scoreboard");
         let mut alpha_descriptor =
             entry_descriptor(0x11, 150, vec![Endpoint::new("soranet://relay-alpha", 0)]);
-        alpha_descriptor.pq_kem_public = Some(vec![0xAA]);
+        alpha_descriptor.certificate = Some(pq_test_bundle(alpha_descriptor.relay_id));
         alpha_descriptor.bandwidth_bytes_per_sec = 9 * 1024 * 1024;
         alpha_descriptor.reputation_weight = 135;
         let mut beta_descriptor =
@@ -8196,7 +8343,7 @@ mod tests {
         assert_eq!(alpha_base, beta_base);
         let mut alpha_descriptor =
             entry_descriptor(0x66, 420, vec![Endpoint::new("soranet://relay-alpha", 0)]);
-        alpha_descriptor.pq_kem_public = Some(vec![0xAA]);
+        alpha_descriptor.certificate = Some(pq_test_bundle(alpha_descriptor.relay_id));
         alpha_descriptor.bandwidth_bytes_per_sec = 12 * 1024 * 1024;
         alpha_descriptor.reputation_weight = 185;
         let mut beta_descriptor =
@@ -8236,12 +8383,12 @@ mod tests {
             .expect("scoreboard");
         let mut first_descriptor =
             entry_descriptor(0x21, 300, vec![Endpoint::new("soranet://relay-first", 0)]);
-        first_descriptor.pq_kem_public = Some(vec![0x01]);
+        first_descriptor.certificate = Some(pq_test_bundle(first_descriptor.relay_id));
         first_descriptor.bandwidth_bytes_per_sec = 6 * 1024 * 1024;
         first_descriptor.reputation_weight = 140;
         let mut second_descriptor =
             entry_descriptor(0x11, 300, vec![Endpoint::new("soranet://relay-second", 0)]);
-        second_descriptor.pq_kem_public = Some(vec![0x02]);
+        second_descriptor.certificate = Some(pq_test_bundle(second_descriptor.relay_id));
         second_descriptor.bandwidth_bytes_per_sec = 6 * 1024 * 1024;
         second_descriptor.reputation_weight = 140;
         let directory = RelayDirectory::new(vec![first_descriptor, second_descriptor]);
@@ -8295,7 +8442,7 @@ mod tests {
             .expect("scoreboard");
         let mut pq_descriptor =
             entry_descriptor(0x91, 140, vec![Endpoint::new("soranet://pq-relay", 0)]);
-        pq_descriptor.pq_kem_public = Some(vec![0xAA]);
+        pq_descriptor.certificate = Some(pq_test_bundle(pq_descriptor.relay_id));
         pq_descriptor.bandwidth_bytes_per_sec = 6 * 1024 * 1024;
         pq_descriptor.reputation_weight = 115;
         let mut classical_descriptor = entry_descriptor(
@@ -8355,7 +8502,6 @@ mod tests {
             guard_weight: 260,
             bandwidth_bytes_per_sec: 5 * 1024 * 1024,
             reputation_weight: 210,
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
@@ -8366,7 +8512,6 @@ mod tests {
             guard_weight: 35,
             bandwidth_bytes_per_sec: 2 * 1024 * 1024,
             reputation_weight: 90,
-            pq_kem_public: None,
             certificate: None,
             path_metadata: PathMetadata::default(),
         };
@@ -8377,7 +8522,7 @@ mod tests {
         alpha_descriptor.reputation_weight = 180;
         let mut beta_descriptor =
             entry_descriptor(0xB2, 480, vec![Endpoint::new("soranet://relay-beta", 0)]);
-        beta_descriptor.pq_kem_public = Some(vec![0x02]);
+        beta_descriptor.certificate = Some(pq_test_bundle(beta_descriptor.relay_id));
         beta_descriptor.bandwidth_bytes_per_sec = 9 * 1024 * 1024;
         beta_descriptor.reputation_weight = 260;
         let directory = RelayDirectory::new(vec![alpha_descriptor, beta_descriptor]);

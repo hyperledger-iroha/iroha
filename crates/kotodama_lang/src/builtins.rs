@@ -421,9 +421,6 @@ pub enum Builtin {
     SoracloudEmitMailboxMessage,
     SoracloudAppendJournal,
     SoracloudPublishCheckpoint,
-    SoracloudReadSecret,
-    SoracloudReadCredential,
-    SoracloudEgressFetch,
     SoracloudReadConfig,
     SoracloudReadSecretEnvelope,
     AddSignatory,
@@ -686,9 +683,6 @@ impl Builtin {
             "soracloud_emit_mailbox_message" => Self::SoracloudEmitMailboxMessage,
             "soracloud_append_journal" => Self::SoracloudAppendJournal,
             "soracloud_publish_checkpoint" => Self::SoracloudPublishCheckpoint,
-            "soracloud_read_secret" => Self::SoracloudReadSecret,
-            "soracloud_read_credential" => Self::SoracloudReadCredential,
-            "soracloud_egress_fetch" => Self::SoracloudEgressFetch,
             "soracloud_read_config" => Self::SoracloudReadConfig,
             "soracloud_read_secret_envelope" => Self::SoracloudReadSecretEnvelope,
             "add_signatory" => Self::AddSignatory,
@@ -967,9 +961,6 @@ impl Builtin {
             Self::SoracloudEmitMailboxMessage => "soracloud::emit_mailbox_message",
             Self::SoracloudAppendJournal => "soracloud::append_journal",
             Self::SoracloudPublishCheckpoint => "soracloud::publish_checkpoint",
-            Self::SoracloudReadSecret => "soracloud::read_secret",
-            Self::SoracloudReadCredential => "soracloud::read_credential",
-            Self::SoracloudEgressFetch => "soracloud::egress_fetch",
             Self::SoracloudReadConfig => "soracloud::read_config",
             Self::SoracloudReadSecretEnvelope => "soracloud::read_secret_envelope",
             Self::Path => "path",
@@ -1165,9 +1156,6 @@ impl Builtin {
             | Self::SoracloudEmitMailboxMessage
             | Self::SoracloudAppendJournal
             | Self::SoracloudPublishCheckpoint
-            | Self::SoracloudReadSecret
-            | Self::SoracloudReadCredential
-            | Self::SoracloudEgressFetch
             | Self::SoracloudReadConfig
             | Self::SoracloudReadSecretEnvelope
             | Self::AddSignatory
@@ -1224,9 +1212,6 @@ impl Builtin {
             | Self::SoracloudEmitMailboxMessage
             | Self::SoracloudAppendJournal
             | Self::SoracloudPublishCheckpoint
-            | Self::SoracloudReadSecret
-            | Self::SoracloudReadCredential
-            | Self::SoracloudEgressFetch
             | Self::SoracloudReadConfig
             | Self::SoracloudReadSecretEnvelope => BuiltinAccess::Dynamic,
             Self::GetPrivateInput
@@ -1289,9 +1274,6 @@ impl Builtin {
             | Self::SoracloudEmitMailboxMessage
             | Self::SoracloudAppendJournal
             | Self::SoracloudPublishCheckpoint
-            | Self::SoracloudReadSecret
-            | Self::SoracloudReadCredential
-            | Self::SoracloudEgressFetch
             | Self::SoracloudReadConfig
             | Self::SoracloudReadSecretEnvelope
             | Self::PointerToNorito
@@ -1546,9 +1528,6 @@ impl Builtin {
             Self::SoracloudEmitMailboxMessage => &[s::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE],
             Self::SoracloudAppendJournal => &[s::SYSCALL_SORACLOUD_APPEND_JOURNAL],
             Self::SoracloudPublishCheckpoint => &[s::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT],
-            Self::SoracloudReadSecret => &[s::SYSCALL_SORACLOUD_READ_SECRET],
-            Self::SoracloudReadCredential => &[s::SYSCALL_SORACLOUD_READ_CREDENTIAL],
-            Self::SoracloudEgressFetch => &[s::SYSCALL_SORACLOUD_EGRESS_FETCH],
             Self::SoracloudReadConfig => &[s::SYSCALL_SORACLOUD_READ_CONFIG],
             Self::SoracloudReadSecretEnvelope => &[s::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE],
             Self::AddSignatory => &[s::SYSCALL_ADD_SIGNATORY],
@@ -1915,9 +1894,6 @@ impl Builtin {
             | Self::SoracloudEmitMailboxMessage
             | Self::SoracloudAppendJournal
             | Self::SoracloudPublishCheckpoint
-            | Self::SoracloudReadSecret
-            | Self::SoracloudReadCredential
-            | Self::SoracloudEgressFetch
             | Self::SoracloudReadConfig
             | Self::SoracloudReadSecretEnvelope => {
                 S::new(&["SoracloudRequest"], "SoracloudResponse")
@@ -2328,9 +2304,6 @@ mod tests {
             Builtin::SoracloudEmitMailboxMessage,
             Builtin::SoracloudAppendJournal,
             Builtin::SoracloudPublishCheckpoint,
-            Builtin::SoracloudReadSecret,
-            Builtin::SoracloudReadCredential,
-            Builtin::SoracloudEgressFetch,
             Builtin::SoracloudReadConfig,
             Builtin::SoracloudReadSecretEnvelope,
         ] {

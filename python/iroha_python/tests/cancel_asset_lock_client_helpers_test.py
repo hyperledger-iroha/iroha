@@ -39,9 +39,8 @@ class NoRequestSession:
 def account_address(seed: int, discriminant: int = 0x02F1) -> str:
     """Derive a deterministic account address for one test key."""
 
-    return Ed25519KeyPair.from_private_key(bytes([seed] * 32)).default_account_id(
-        "wonderland",
-        discriminant,
+    return Ed25519KeyPair.from_private_key(bytes([seed] * 32)).account_id(
+        discriminant=discriminant,
     )
 
 

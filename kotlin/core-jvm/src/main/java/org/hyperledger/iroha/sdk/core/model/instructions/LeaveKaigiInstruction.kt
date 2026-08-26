@@ -16,8 +16,11 @@ class LeaveKaigiInstruction(
 
     init {
         require(participant.isNotBlank()) { "participant must not be blank" }
-        if (nullifierIssuedAtMs != null) {
-            require(nullifierIssuedAtMs >= 0) { "nullifier issuedAtMs must be non-negative" }
+        require(commitmentAliasTag == null) {
+            "commitment aliasTag is off-chain only and must be omitted"
+        }
+        require(nullifierIssuedAtMs == null || nullifierIssuedAtMs == 0L) {
+            "nullifier issuedAtMs is off-chain only and must be zero when provided"
         }
     }
 
@@ -32,9 +35,6 @@ class LeaveKaigiInstruction(
         args["participant"] = participant
         if (commitment != null) {
             args["commitment.commitment"] = commitment
-            if (commitmentAliasTag != null) {
-                args["commitment.alias_tag"] = commitmentAliasTag
-            }
         }
         if (nullifierDigest != null) {
             args["nullifier.digest"] = nullifierDigest
@@ -83,17 +83,19 @@ class LeaveKaigiInstruction(
             val participant = KaigiInstructionUtils.require(arguments, "participant")
 
             val commitmentValue = arguments["commitment.commitment"]
-            val commitmentAliasTag = if (commitmentValue != null) arguments["commitment.alias_tag"] else null
+            require(arguments["commitment.alias_tag"] == null) {
+                "commitment aliasTag is off-chain only and must be omitted"
+            }
 
             val nullifierDigest = arguments["nullifier.digest"]
-            val nullifierIssuedAtMs = if (nullifierDigest != null) {
-                KaigiInstructionUtils.parseOptionalUnsignedLong(
-                    arguments["nullifier.issued_at_ms"],
-                    "nullifier.issued_at_ms",
-                )
-            } else {
-                null
+            val parsedNullifierIssuedAt = KaigiInstructionUtils.parseOptionalUnsignedLong(
+                arguments["nullifier.issued_at_ms"],
+                "nullifier.issued_at_ms",
+            )
+            require(parsedNullifierIssuedAt == null || parsedNullifierIssuedAt == 0L) {
+                "nullifier issuedAtMs is off-chain only and must be zero when provided"
             }
+            val nullifierIssuedAtMs = parsedNullifierIssuedAt.takeIf { nullifierDigest != null }
 
             val rosterRoot = arguments["roster_root"]
             val proof = arguments["proof"]
@@ -102,7 +104,7 @@ class LeaveKaigiInstruction(
                 callId = callId,
                 participant = participant,
                 commitment = commitmentValue,
-                commitmentAliasTag = commitmentAliasTag,
+                commitmentAliasTag = null,
                 nullifierDigest = nullifierDigest,
                 nullifierIssuedAtMs = nullifierIssuedAtMs,
                 rosterRoot = rosterRoot,

@@ -2,22 +2,36 @@
 use crate::{CliOutputFormat, Run, RunContext, quote_and_sign_transaction};
 use eyre::{Context, Result, eyre};
 use iroha::{
-    client::{Client as IrohaClient, TransactionWaitOptions, TransactionWaitTerminalStatus},
+    client::{
+        AccountFaucetClaimV1, AccountFaucetPreparedTransactionV1, AccountOnboardingCurrentStateV1,
+        AccountOnboardingPlanReceiptV1, AccountOnboardingPlanRequestV1,
+        AccountOnboardingPrepareResponseV1, AccountOnboardingPreparedTransactionV1,
+        AccountOnboardingProofRequiredPrepareResponseV1, Client as IrohaClient,
+        PreparedTransactionOutcomeV1, TairaPublicResetMutationBindingV1, TransactionWaitOptions,
+    },
     config::Config,
     data_model::{
         NetworkId,
         account::{AccountId, address::ChainDiscriminantGuard},
+        alias_setup::AccountAliasName,
         isi::{InstructionBox, Log},
         level::Level as LogLevel,
         metadata::Metadata,
         name::Name,
-        prelude::{FindTransactions, QueryBuilderExt, TransactionEntrypoint},
+        prelude::{FindTransactions, QueryBuilderExt, SignedTransaction, TransactionEntrypoint},
+        query::{
+            CommittedTxFilters,
+            dsl::CompoundPredicate,
+            parameters::{FetchSize, Pagination},
+        },
         transaction::{Executable, FeePaymentIntent},
     },
 };
-use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
+use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_primitives::json::Json as IrohaJson;
-use norito::json::{self, Map, Value};
+use iroha_torii_shared::{FeeQuoteResponse, PipelineTransactionStatusResponse};
+use iroha_version::codec::DecodeVersioned as _;
+use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
 use reqwest::blocking::Client as HttpClient;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
 use sha2::{Digest, Sha256};
@@ -25,6 +39,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, File},
     io::{Read as _, Write as _},
+    num::NonZeroU64,
     path::{Path, PathBuf},
     str::FromStr,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -36,11 +51,20 @@ const DEFAULT_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const DEFAULT_CHAIN_DISCRIMINANT: u16 = 369;
 const DEFAULT_GAS_ASSET_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const DEFAULT_ALIAS_PREFIX: &str = "tairarolloutcanary";
+const TAIRA_CANARY_ALIAS_SCOPE: &str = "taira.universal";
 const DEFAULT_WRITE_TTL_MS: u64 = 120_000;
 const DEFAULT_WRITE_STATUS_TIMEOUT_MS: u64 = 120_000;
-const FAUCET_POW_ALGORITHM: &str = "scrypt-leading-zero-bits-v2";
-const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v3";
-const ACCOUNT_ONBOARDING_TOKEN_HEADER: &str = "x-iroha-onboarding-token";
+const PREPARED_ENVELOPE_SCHEMA_V1: &str = "iroha.taira.prepared-mutation-envelope.v1";
+const PREPARED_BINDING_SCHEMA_V1: &str = "iroha.taira.public-reset.mutation-binding.v1";
+const PREPARED_OPERATION_SCHEMA_V1: &str = "iroha.taira.prepared-transaction.v1";
+const PREPARED_ONBOARDING_PROOF_REQUIRED_SCHEMA_V1: &str =
+    "iroha.taira.prepared-onboarding-proof-required.v1";
+const PREPARED_ENVELOPE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+const PREPARED_TRANSACTION_MAX_BYTES: usize = 1024 * 1024;
+const WRITE_CANARY_MUTATION_KIND: &str = "write_canary";
+const WRITE_CANARY_OPERATION: &str = "final_canary";
+const FAUCET_POW_ALGORITHM: &str = "scrypt-leading-zero-bits-v1";
+const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v1";
 const REQUIRED_MCP_TOOLS: &[&str] = &[
     "iroha.health",
     "iroha.musubi.queries.exact_package",
@@ -123,6 +147,8 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
 pub enum Command {
     /// Check Taira read-side health and MCP route posture.
     Doctor(Doctor),
+    /// Preflight or execute the strictly authorized compiled public reset.
+    PublicReset(crate::taira_public_reset::PublicReset),
     /// Onboard, faucet, submit, wait, and verify a signed ping canary.
     WriteCanary(WriteCanary),
     /// Generate the canonical deploy-mode Inrou canary workspace from AArch64 guest assets.
@@ -131,15 +157,21 @@ pub enum Command {
     InrouStage(InrouStage),
     /// Register an exact preseeded stage, mutate explicitly, and verify the four-replica Inrou canary.
     InrouCanary(InrouCanary),
+    /// Revalidate an exact retained stage and verify its live four-replica service without mutation.
+    InrouCheck(InrouCheck),
 }
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Self::Doctor(cmd) => cmd.run(context),
+            Self::PublicReset(_) => eyre::bail!(
+                "`taira public-reset` must be dispatched before client configuration is loaded"
+            ),
             Self::WriteCanary(cmd) => cmd.run(context),
             Self::InrouWorkspace(cmd) => cmd.run(context),
             Self::InrouStage(cmd) => cmd.run(context),
             Self::InrouCanary(cmd) => cmd.run(context),
+            Self::InrouCheck(cmd) => cmd.run(context),
         }
     }
 }
@@ -155,46 +187,431 @@ pub struct Doctor {
 }
 impl Run for Doctor {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let mut output = RunContextReportOutput { context };
+        self.run_with_output(&mut output)
+    }
+}
+impl Doctor {
+    fn run_with_output<O: ReportOutput>(&self, output: &mut O) -> Result<()> {
         let report = run_doctor(&self.public_root)?;
-        render_report(context, self.json, &report)?;
+        render_report_to(output, self.json, &report)?;
         if report_status(&report) == Some("fail") {
             eyre::bail!("Taira doctor found hard failures");
         }
         Ok(())
     }
+
+    /// Run the public read-only diagnostic without loading client configuration
+    /// or constructing any signing identity.
+    pub(super) fn run_without_client_config<W: std::io::Write>(
+        &self,
+        output_format: CliOutputFormat,
+        write: W,
+    ) -> Result<()> {
+        let mut output = WriterReportOutput {
+            write,
+            output_format,
+        };
+        self.run_with_output(&mut output)
+    }
 }
-/// Signed Taira write canary.
+type PreparedMutationBindingV1 = TairaPublicResetMutationBindingV1;
+
+#[derive(Clone, Debug, PartialEq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct FinalCanaryPreparedTransactionV1 {
+    schema: String,
+    binding: PreparedMutationBindingV1,
+    operation: String,
+    transaction_hash_hex: String,
+    signed_transaction_wire_hex: String,
+    signed_transaction_wire_sha256: String,
+    semantic_hash_hex: String,
+    fee_payment: FeePaymentIntent,
+    fee_quote: FeeQuoteResponse,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PreparedOnboardingProofRequiredV1 {
+    schema: String,
+    receipt: AccountOnboardingPlanReceiptV1,
+    result: AccountOnboardingProofRequiredPrepareResponseV1,
+}
+
+#[derive(Clone, Debug, PartialEq, JsonSerialize, JsonDeserialize)]
+#[norito(
+    tag = "kind",
+    content = "envelope",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+enum PreparedTransactionOperationV1 {
+    OnboardingPrepared(AccountOnboardingPreparedTransactionV1),
+    OnboardingProofRequired(PreparedOnboardingProofRequiredV1),
+    FaucetPrepared(AccountFaucetPreparedTransactionV1),
+    FinalCanary(FinalCanaryPreparedTransactionV1),
+}
+
+impl PreparedTransactionOperationV1 {
+    fn binding(&self) -> &PreparedMutationBindingV1 {
+        match self {
+            Self::OnboardingPrepared(operation) => &operation.binding,
+            Self::OnboardingProofRequired(operation) => &operation.result.binding,
+            Self::FaucetPrepared(operation) => &operation.binding,
+            Self::FinalCanary(operation) => &operation.binding,
+        }
+    }
+
+    const fn label(&self) -> &'static str {
+        match self {
+            Self::OnboardingPrepared(_) | Self::OnboardingProofRequired(_) => "onboarding",
+            Self::FaucetPrepared(_) => "faucet",
+            Self::FinalCanary(_) => WRITE_CANARY_OPERATION,
+        }
+    }
+
+    fn transaction_hash_hex(&self) -> Option<&str> {
+        match self {
+            Self::OnboardingPrepared(operation) => Some(&operation.transaction_hash_hex),
+            Self::OnboardingProofRequired(_) => None,
+            Self::FaucetPrepared(operation) => Some(&operation.transaction_hash_hex),
+            Self::FinalCanary(operation) => Some(&operation.transaction_hash_hex),
+        }
+    }
+
+    fn signed_transaction_wire_hex(&self) -> Option<&str> {
+        match self {
+            Self::OnboardingPrepared(operation) => Some(&operation.signed_transaction_wire_hex),
+            Self::OnboardingProofRequired(_) => None,
+            Self::FaucetPrepared(operation) => Some(&operation.signed_transaction_wire_hex),
+            Self::FinalCanary(operation) => Some(&operation.signed_transaction_wire_hex),
+        }
+    }
+
+    fn signed_transaction_wire_sha256(&self) -> Option<&str> {
+        match self {
+            Self::OnboardingPrepared(operation) => Some(&operation.signed_transaction_wire_sha256),
+            Self::OnboardingProofRequired(_) => None,
+            Self::FaucetPrepared(operation) => Some(&operation.signed_transaction_wire_sha256),
+            Self::FinalCanary(operation) => Some(&operation.signed_transaction_wire_sha256),
+        }
+    }
+
+    fn semantic_hash_hex(&self) -> &str {
+        match self {
+            Self::OnboardingPrepared(operation) => &operation.semantic_hash_hex,
+            Self::OnboardingProofRequired(operation) => &operation.result.semantic_hash_hex,
+            Self::FaucetPrepared(operation) => &operation.semantic_hash_hex,
+            Self::FinalCanary(operation) => &operation.semantic_hash_hex,
+        }
+    }
+
+    fn fee_payment(&self) -> Option<&FeePaymentIntent> {
+        match self {
+            Self::OnboardingPrepared(operation) => Some(&operation.fee_payment),
+            Self::OnboardingProofRequired(_) => None,
+            Self::FaucetPrepared(operation) => Some(&operation.fee_payment),
+            Self::FinalCanary(operation) => Some(&operation.fee_payment),
+        }
+    }
+
+    fn fee_quote(&self) -> Option<&FeeQuoteResponse> {
+        match self {
+            Self::FinalCanary(operation) => Some(&operation.fee_quote),
+            Self::OnboardingPrepared(_)
+            | Self::OnboardingProofRequired(_)
+            | Self::FaucetPrepared(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PreparedMutationEnvelopeV1 {
+    schema: String,
+    binding: PreparedMutationBindingV1,
+    public_root: String,
+    chain_id: String,
+    network_id: String,
+    authority: String,
+    operation: PreparedTransactionOperationV1,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreparedEnvelopeAction {
+    Prepare(u32),
+    Submit(u32),
+    Recover(u32),
+}
+
+/// One strictly ordered mutation in the Taira write-canary bootstrap.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteCanaryOperation {
+    /// Prepare, submit, or recover the sponsored account/alias onboarding transaction.
+    Onboarding,
+    /// Prepare, submit, or recover the faucet funding transaction.
+    Faucet,
+    /// Prepare, submit, or recover the final authority-signed log canary transaction.
+    FinalCanary,
+}
+
+impl WriteCanaryOperation {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Onboarding => "onboarding",
+            Self::Faucet => "faucet",
+            Self::FinalCanary => WRITE_CANARY_OPERATION,
+        }
+    }
+
+    const fn mutation_kind(self) -> &'static str {
+        match self {
+            Self::Onboarding => "onboarding",
+            Self::Faucet => "faucet",
+            Self::FinalCanary => WRITE_CANARY_MUTATION_KIND,
+        }
+    }
+}
+
+/// Signed Taira write canary using an exact durable prepared envelope.
 #[derive(clap::Args, Debug)]
+#[command(group(
+    clap::ArgGroup::new("prepared_action")
+        .required(true)
+        .multiple(false)
+        .args([
+            "prepare_envelope",
+            "submit_prepared_envelope_fd",
+            "recover_prepared_envelope_fd",
+        ])
+))]
 pub struct WriteCanary {
     /// Public Torii root URL.
     #[arg(long, default_value = DEFAULT_PUBLIC_ROOT)]
     pub public_root: String,
-    /// Prefix used for the generated account alias.
+    /// Prefix used for the authorization-bound account alias.
     #[arg(long, default_value = DEFAULT_ALIAS_PREFIX)]
     pub alias_prefix: String,
-    /// Faucet asset definition expected in the onboarding funding response.
+    /// Exact faucet asset definition required by the prepared funding operation.
     #[arg(long, default_value = DEFAULT_GAS_ASSET_ID)]
     pub faucet_asset_id: String,
-    /// Owner-only regular file containing the exact account-onboarding route token.
+    /// Owner-only onboarding token; required only while preparing or submitting the envelope.
     #[arg(long, value_name = "PATH")]
-    pub onboarding_token_file: PathBuf,
-    /// Persist the runtime signer config to this explicit path.
-    #[arg(long, value_name = "PATH")]
-    pub write_config: Option<PathBuf>,
-    /// Use the signer from the loaded client config instead of an ephemeral signer.
-    #[arg(long)]
+    pub onboarding_token_file: Option<PathBuf>,
+    /// Use the signer from the loaded client config; ephemeral canary identities are forbidden.
+    #[arg(long, required = true)]
     pub use_config_signer: bool,
+    /// Exact ordered child operation; each invocation handles one transaction only.
+    #[arg(long, value_enum)]
+    pub operation: WriteCanaryOperation,
+    /// Exact admitted public-reset authorization digest.
+    #[arg(long, value_parser = validate_sha256_argument)]
+    pub authorization_sha256: String,
+    /// Exact admitted public-reset authorization nonce.
+    #[arg(long, value_parser = validate_authorization_nonce_argument)]
+    pub authorization_nonce: String,
+    /// Exact write-canary phase (`pre_edge` or `post_edge`).
+    #[arg(long, value_parser = validate_write_canary_phase_argument)]
+    pub mutation_phase: String,
+    /// Exact lowercase SHA-256 idempotency key bound into the canary transaction.
+    #[arg(long, value_parser = validate_write_canary_idempotency_key)]
+    pub idempotency_key: String,
+    /// Exact signed execution expiry; preparation and submission are barred at this instant.
+    #[arg(long)]
+    pub execution_expires_at_unix_ms: u64,
+    /// Quote and sign one exact envelope without performing any ledger mutation.
+    #[arg(long, requires = "prepared_output_fd")]
+    pub prepare_envelope: bool,
+    /// Inherited writable numeric descriptor receiving canonical envelope JSON.
+    #[arg(long, value_name = "FD", requires = "prepare_envelope")]
+    pub prepared_output_fd: Option<u32>,
+    /// Submit only exact bytes read from this inherited numeric envelope descriptor.
+    #[arg(long, value_name = "FD")]
+    pub submit_prepared_envelope_fd: Option<u32>,
+    /// Read-only classify exact bytes read from this inherited numeric envelope descriptor.
+    #[arg(long, value_name = "FD")]
+    pub recover_prepared_envelope_fd: Option<u32>,
+    /// Inherited descriptor for the exact Applied predecessor envelope during preparation.
+    #[arg(long, value_name = "FD")]
+    pub prerequisite_envelope_fd: Option<u32>,
     /// Emit a stable JSON receipt.
     #[arg(long)]
     pub json: bool,
 }
 impl Run for WriteCanary {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let fee_payment = context.transaction_fee_payment()?;
-        let receipt = run_write_canary(context.config(), &self, fee_payment)?;
+        let receipt = run_write_canary_exact(context, &self)?;
         render_report(context, self.json, &receipt)?;
         ensure_write_canary_succeeded(&receipt)
     }
+}
+
+impl WriteCanary {
+    fn prepared_action(&self) -> Result<PreparedEnvelopeAction> {
+        match (
+            self.prepare_envelope,
+            self.submit_prepared_envelope_fd,
+            self.recover_prepared_envelope_fd,
+        ) {
+            (true, None, None) => Ok(PreparedEnvelopeAction::Prepare(
+                self.prepared_output_fd
+                    .ok_or_else(|| eyre!("--prepare-envelope requires --prepared-output-fd"))?,
+            )),
+            (false, Some(fd), None) => {
+                if self.prepared_output_fd.is_some() {
+                    eyre::bail!("--prepared-output-fd is valid only with --prepare-envelope");
+                }
+                Ok(PreparedEnvelopeAction::Submit(fd))
+            }
+            (false, None, Some(fd)) => {
+                if self.prepared_output_fd.is_some() {
+                    eyre::bail!("--prepared-output-fd is valid only with --prepare-envelope");
+                }
+                Ok(PreparedEnvelopeAction::Recover(fd))
+            }
+            _ => eyre::bail!(
+                "select exactly one of --prepare-envelope, --submit-prepared-envelope-fd, or --recover-prepared-envelope-fd"
+            ),
+        }
+    }
+
+    fn binding(&self) -> Result<PreparedMutationBindingV1> {
+        validate_sha256_argument(&self.authorization_sha256).map_err(|error| eyre!(error))?;
+        validate_authorization_nonce_argument(&self.authorization_nonce)
+            .map_err(|error| eyre!(error))?;
+        validate_write_canary_phase_argument(&self.mutation_phase).map_err(|error| eyre!(error))?;
+        validate_write_canary_idempotency_key(&self.idempotency_key)
+            .map_err(|error| eyre!(error))?;
+        let expected_idempotency_key = write_canary_child_idempotency_key(
+            &self.authorization_nonce,
+            &self.mutation_phase,
+            self.operation.mutation_kind(),
+        );
+        if self.idempotency_key != expected_idempotency_key {
+            eyre::bail!(
+                "idempotency key does not match the exact authorization nonce, phase, and child kind"
+            );
+        }
+        if self.execution_expires_at_unix_ms == 0 {
+            eyre::bail!("execution expiry must be a positive Unix millisecond instant");
+        }
+        Ok(PreparedMutationBindingV1 {
+            schema: PREPARED_BINDING_SCHEMA_V1.to_owned(),
+            authorization_sha256: self.authorization_sha256.clone(),
+            authorization_nonce: self.authorization_nonce.clone(),
+            kind: self.operation.mutation_kind().to_owned(),
+            phase: self.mutation_phase.clone(),
+            idempotency_key: self.idempotency_key.clone(),
+            execution_expires_at_unix_ms: self.execution_expires_at_unix_ms,
+        })
+    }
+
+    fn validate_prerequisite_action(&self, action: PreparedEnvelopeAction) -> Result<()> {
+        match (action, self.operation, self.prerequisite_envelope_fd) {
+            (PreparedEnvelopeAction::Prepare(_), WriteCanaryOperation::Onboarding, None)
+            | (
+                PreparedEnvelopeAction::Prepare(_),
+                WriteCanaryOperation::Faucet | WriteCanaryOperation::FinalCanary,
+                Some(_),
+            )
+            | (PreparedEnvelopeAction::Submit(_), _, None)
+            | (PreparedEnvelopeAction::Recover(_), _, None) => Ok(()),
+            (PreparedEnvelopeAction::Prepare(_), WriteCanaryOperation::Onboarding, Some(_)) => {
+                eyre::bail!("onboarding preparation has no predecessor envelope")
+            }
+            (
+                PreparedEnvelopeAction::Prepare(_),
+                WriteCanaryOperation::Faucet | WriteCanaryOperation::FinalCanary,
+                None,
+            ) => eyre::bail!(
+                "faucet and final-canary preparation require --prerequisite-envelope-fd"
+            ),
+            (
+                PreparedEnvelopeAction::Submit(_) | PreparedEnvelopeAction::Recover(_),
+                _,
+                Some(_),
+            ) => {
+                eyre::bail!(
+                    "--prerequisite-envelope-fd is valid only while preparing the next operation"
+                )
+            }
+        }
+    }
+
+    fn require_onboarding_token(&self) -> Result<&Path> {
+        self.onboarding_token_file.as_deref().ok_or_else(|| {
+            eyre!(
+                "the onboarding operation requires --onboarding-token-file in prepare/submit mode"
+            )
+        })
+    }
+}
+
+fn validate_sha256_argument(value: &str) -> Result<String, String> {
+    validate_lower_hex_argument(value, "SHA-256", 64)
+}
+
+fn validate_authorization_nonce_argument(value: &str) -> Result<String, String> {
+    if value.len() != 32
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+    {
+        return Err(
+            "must be exactly 32 lowercase URL-safe ASCII characters (`a-z`, `0-9`, `-`, `_`)"
+                .to_owned(),
+        );
+    }
+    Ok(value.to_owned())
+}
+
+fn validate_write_canary_phase_argument(value: &str) -> Result<String, String> {
+    let first = value.as_bytes().first().copied();
+    let last = value.as_bytes().last().copied();
+    if value.is_empty()
+        || value.len() > 64
+        || first.is_some_and(|byte| matches!(byte, b'-' | b'_'))
+        || last.is_some_and(|byte| matches!(byte, b'-' | b'_'))
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+    {
+        return Err("must be a 1..=64 byte canonical lowercase phase slug".to_owned());
+    }
+    Ok(value.to_owned())
+}
+
+fn validate_lower_hex_argument(value: &str, label: &str, length: usize) -> Result<String, String> {
+    if value.len() != length
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!(
+            "{label} must be exactly {length} lowercase hexadecimal characters"
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+fn write_canary_child_idempotency_key(
+    authorization_nonce: &str,
+    phase: &str,
+    child_kind: &str,
+) -> String {
+    let mut digest = Sha256::new();
+    for frame in [
+        b"iroha:taira:public-reset:child-idempotency:v1\0".as_slice(),
+        authorization_nonce.as_bytes(),
+        phase.as_bytes(),
+        child_kind.as_bytes(),
+    ] {
+        let length = u64::try_from(frame.len()).expect("idempotency frame length fits u64");
+        digest.update(length.to_be_bytes());
+        digest.update(frame);
+    }
+    hex::encode(digest.finalize())
 }
 /// Canonical deploy-mode Taira Inrou canary workspace generator.
 #[derive(clap::Args, Debug)]
@@ -255,7 +672,7 @@ pub struct InrouStage {
     /// Build the exact deploy or upgrade revision; no mutation mode is inferred.
     #[arg(long, value_enum)]
     pub mode: InrouCanaryMode,
-    /// Path to the canonical four-replica Inrou container manifest.
+    /// Path to the canonical strict-null, unpublished four-replica Inrou source manifest.
     #[arg(long, value_name = "PATH")]
     pub container: PathBuf,
     /// Path to the matching public HttpService manifest.
@@ -301,8 +718,177 @@ impl Run for InrouStage {
         render_report(context, self.json, &report)
     }
 }
-/// Canonical Taira Inrou preseed registration and route canary.
+const PREPARED_INROU_OPERATION_SCHEMA_V1: &str = "iroha.taira.prepared-soracloud-transaction.v1";
+
+/// One strictly ordered transaction in the Taira Inrou deployment canary.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InrouCanaryOperation {
+    /// Register the canonical service-bundle manifest.
+    BundlePin,
+    /// Register the canonical AArch64 guest-image manifest.
+    GuestPin,
+    /// Deploy or upgrade the service after both manifests are Applied.
+    ServiceMutation,
+}
+
+impl InrouCanaryOperation {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::BundlePin => "bundle_pin",
+            Self::GuestPin => "guest_pin",
+            Self::ServiceMutation => "service_mutation",
+        }
+    }
+
+    const fn mutation_kind(self) -> &'static str {
+        match self {
+            Self::BundlePin => "inrou_bundle_pin",
+            Self::GuestPin => "inrou_guest_pin",
+            Self::ServiceMutation => "inrou_canary",
+        }
+    }
+
+    const fn tagged_kind(self) -> &'static str {
+        match self {
+            Self::BundlePin => "inrou_bundle_pin",
+            Self::GuestPin => "inrou_guest_pin",
+            Self::ServiceMutation => "inrou_canary",
+        }
+    }
+
+    const fn prepared_operation(self) -> crate::soracloud::TairaInrouCanaryPreparedOperationV1 {
+        match self {
+            Self::BundlePin => crate::soracloud::TairaInrouCanaryPreparedOperationV1::BundlePin,
+            Self::GuestPin => crate::soracloud::TairaInrouCanaryPreparedOperationV1::GuestPin,
+            Self::ServiceMutation => {
+                crate::soracloud::TairaInrouCanaryPreparedOperationV1::ServiceMutation
+            }
+        }
+    }
+
+    const fn predecessor(self) -> (&'static str, &'static str) {
+        match self {
+            Self::BundlePin => ("write_canary", "final_canary"),
+            Self::GuestPin => ("inrou_bundle_pin", "bundle_pin"),
+            Self::ServiceMutation => ("inrou_guest_pin", "guest_pin"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PreparedInrouTransactionV1 {
+    schema: String,
+    binding: crate::soracloud::TairaMutationBindingV1,
+    operation: String,
+    transaction_hash_hex: String,
+    signed_transaction_wire_hex: String,
+    signed_transaction_wire_sha256: String,
+    fee_payment: FeePaymentIntent,
+    fee_quote: FeeQuoteResponse,
+}
+
+#[derive(Clone, Debug, PartialEq, JsonSerialize, JsonDeserialize)]
+#[norito(
+    tag = "kind",
+    content = "envelope",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+enum PreparedInrouOperationV1 {
+    InrouBundlePin(PreparedInrouTransactionV1),
+    InrouGuestPin(PreparedInrouTransactionV1),
+    InrouCanary(PreparedInrouTransactionV1),
+}
+
+impl PreparedInrouOperationV1 {
+    fn transaction(&self) -> &PreparedInrouTransactionV1 {
+        match self {
+            Self::InrouBundlePin(value) | Self::InrouGuestPin(value) | Self::InrouCanary(value) => {
+                value
+            }
+        }
+    }
+
+    const fn tagged_kind(&self) -> &'static str {
+        match self {
+            Self::InrouBundlePin(_) => "inrou_bundle_pin",
+            Self::InrouGuestPin(_) => "inrou_guest_pin",
+            Self::InrouCanary(_) => "inrou_canary",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PreparedInrouStageIdentityV1 {
+    service_name: String,
+    service_version: String,
+    route_host: String,
+    route_path_prefix: String,
+    healthcheck_path: String,
+    stage_mode: String,
+    bundle_hash: String,
+    bundle_content_cid: String,
+    bundle_manifest_digest_hex: String,
+    guest_content_cid: String,
+    guest_manifest_digest_hex: String,
+    container_manifest_hash: String,
+    service_manifest_hash: String,
+}
+
+impl From<&crate::soracloud::TairaInrouStageIdentity> for PreparedInrouStageIdentityV1 {
+    fn from(value: &crate::soracloud::TairaInrouStageIdentity) -> Self {
+        Self {
+            service_name: value.service_name.clone(),
+            service_version: value.service_version.clone(),
+            route_host: value.route_host.clone(),
+            route_path_prefix: value.route_path_prefix.clone(),
+            healthcheck_path: value.healthcheck_path.clone(),
+            stage_mode: value.stage_mode.clone(),
+            bundle_hash: value.bundle_hash.clone(),
+            bundle_content_cid: value.bundle_content_cid.clone(),
+            bundle_manifest_digest_hex: value.bundle_manifest_digest_hex.clone(),
+            guest_content_cid: value.guest_content_cid.clone(),
+            guest_manifest_digest_hex: value.guest_manifest_digest_hex.clone(),
+            container_manifest_hash: value.container_manifest_hash.clone(),
+            service_manifest_hash: value.service_manifest_hash.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PreparedInrouEnvelopeV1 {
+    schema: String,
+    binding: crate::soracloud::TairaMutationBindingV1,
+    public_root: String,
+    chain_id: String,
+    network_id: String,
+    authority: String,
+    stage: PreparedInrouStageIdentityV1,
+    operation: PreparedInrouOperationV1,
+}
+
+struct ValidatedPreparedInrouV1 {
+    envelope: PreparedInrouEnvelopeV1,
+    prepared: crate::soracloud::PreparedSoracloudTransactionV1,
+    envelope_bytes: Vec<u8>,
+    stage: crate::soracloud::TairaInrouStageIdentity,
+}
+
+/// Canonical Taira Inrou exact-transaction preparation and recovery.
 #[derive(clap::Args, Debug)]
+#[command(group(
+    clap::ArgGroup::new("prepared_action")
+        .required(true)
+        .multiple(false)
+        .args([
+            "prepare_envelope",
+            "submit_prepared_envelope_fd",
+            "recover_prepared_envelope_fd",
+        ])
+))]
 pub struct InrouCanary {
     /// Public Torii root URL used for mutation, status, and route probes.
     #[arg(long, default_value = DEFAULT_PUBLIC_ROOT)]
@@ -313,6 +899,39 @@ pub struct InrouCanary {
     /// Submit an explicit deploy or upgrade mutation; conflicts are never retried as another mode.
     #[arg(long, value_enum)]
     pub mode: InrouCanaryMode,
+    /// Exact ordered child operation; each invocation handles one transaction only.
+    #[arg(long, value_enum)]
+    pub operation: InrouCanaryOperation,
+    /// Exact admitted public-reset authorization digest.
+    #[arg(long, value_parser = validate_sha256_argument)]
+    pub authorization_sha256: String,
+    /// Exact admitted public-reset authorization nonce.
+    #[arg(long, value_parser = validate_authorization_nonce_argument)]
+    pub authorization_nonce: String,
+    /// Exact mutation phase; Inrou V1 is admitted only in `pre_edge`.
+    #[arg(long, value_parser = validate_write_canary_phase_argument)]
+    pub mutation_phase: String,
+    /// Exact child-kind-derived idempotency key bound into the signed transaction.
+    #[arg(long, value_parser = validate_write_canary_idempotency_key)]
+    pub idempotency_key: String,
+    /// Exact signed execution expiry; preparation and submission are barred at this instant.
+    #[arg(long)]
+    pub execution_expires_at_unix_ms: u64,
+    /// Quote and sign one exact transaction envelope without submitting it.
+    #[arg(long, requires = "prepared_output_fd")]
+    pub prepare_envelope: bool,
+    /// Inherited writable descriptor receiving canonical envelope JSON.
+    #[arg(long, value_name = "FD", requires = "prepare_envelope")]
+    pub prepared_output_fd: Option<u32>,
+    /// Submit only exact bytes read from this inherited descriptor.
+    #[arg(long, value_name = "FD")]
+    pub submit_prepared_envelope_fd: Option<u32>,
+    /// Read-only classify exact bytes read from this inherited descriptor.
+    #[arg(long, value_name = "FD")]
+    pub recover_prepared_envelope_fd: Option<u32>,
+    /// Inherited exact Applied predecessor envelope, required only while preparing.
+    #[arg(long, value_name = "FD")]
+    pub prerequisite_envelope_fd: Option<u32>,
     /// Maximum convergence time for adverts, placements, runtime health, and all four routes.
     #[arg(long, value_name = "SECS", default_value_t = 180)]
     pub timeout_secs: u64,
@@ -322,29 +941,791 @@ pub struct InrouCanary {
 }
 impl Run for InrouCanary {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let receipt = run_inrou_canary_exact(context, &self)?;
+        render_report(context, self.json, &receipt)?;
+        if report_status(&receipt) != Some("ok") {
+            eyre::bail!("Taira Inrou prepared operation found hard failures");
+        }
+        Ok(())
+    }
+}
+
+impl InrouCanary {
+    fn prepared_action(&self) -> Result<PreparedEnvelopeAction> {
+        match (
+            self.prepare_envelope,
+            self.submit_prepared_envelope_fd,
+            self.recover_prepared_envelope_fd,
+        ) {
+            (true, None, None) => Ok(PreparedEnvelopeAction::Prepare(
+                self.prepared_output_fd
+                    .ok_or_else(|| eyre!("--prepare-envelope requires --prepared-output-fd"))?,
+            )),
+            (false, Some(fd), None) if self.prepared_output_fd.is_none() => {
+                Ok(PreparedEnvelopeAction::Submit(fd))
+            }
+            (false, None, Some(fd)) if self.prepared_output_fd.is_none() => {
+                Ok(PreparedEnvelopeAction::Recover(fd))
+            }
+            _ => eyre::bail!(
+                "select exactly one prepared action and use --prepared-output-fd only with --prepare-envelope"
+            ),
+        }
+    }
+
+    fn binding(&self) -> Result<crate::soracloud::TairaMutationBindingV1> {
+        validate_sha256_argument(&self.authorization_sha256).map_err(|error| eyre!(error))?;
+        validate_authorization_nonce_argument(&self.authorization_nonce)
+            .map_err(|error| eyre!(error))?;
+        validate_write_canary_phase_argument(&self.mutation_phase).map_err(|error| eyre!(error))?;
+        if self.mutation_phase != "pre_edge" {
+            eyre::bail!("Taira Inrou prepared operations are admitted only in pre_edge");
+        }
+        validate_write_canary_idempotency_key(&self.idempotency_key)
+            .map_err(|error| eyre!(error))?;
+        let expected = write_canary_child_idempotency_key(
+            &self.authorization_nonce,
+            &self.mutation_phase,
+            self.operation.mutation_kind(),
+        );
+        if self.idempotency_key != expected {
+            eyre::bail!(
+                "idempotency key does not match the exact authorization nonce, phase, and Inrou child kind"
+            );
+        }
+        if self.execution_expires_at_unix_ms == 0 {
+            eyre::bail!("execution expiry must be a positive Unix millisecond instant");
+        }
+        Ok(crate::soracloud::TairaMutationBindingV1 {
+            authorization_sha256: self.authorization_sha256.clone(),
+            authorization_nonce: self.authorization_nonce.clone(),
+            kind: self.operation.mutation_kind().to_owned(),
+            phase: self.mutation_phase.clone(),
+            idempotency_key: self.idempotency_key.clone(),
+            execution_expires_at_unix_ms: self.execution_expires_at_unix_ms,
+        })
+    }
+
+    fn validate_prerequisite_action(&self, action: PreparedEnvelopeAction) -> Result<()> {
+        match (action, self.prerequisite_envelope_fd) {
+            (PreparedEnvelopeAction::Prepare(_), Some(_))
+            | (PreparedEnvelopeAction::Submit(_) | PreparedEnvelopeAction::Recover(_), None) => {
+                Ok(())
+            }
+            (PreparedEnvelopeAction::Prepare(_), None) => {
+                eyre::bail!("every Inrou child preparation requires --prerequisite-envelope-fd")
+            }
+            (PreparedEnvelopeAction::Submit(_) | PreparedEnvelopeAction::Recover(_), Some(_)) => {
+                eyre::bail!(
+                    "--prerequisite-envelope-fd is valid only while preparing the next Inrou child"
+                )
+            }
+        }
+    }
+}
+
+fn run_inrou_canary_exact<C: RunContext>(context: &mut C, args: &InrouCanary) -> Result<Value> {
+    validate_inrou_canary_timeout(args.timeout_secs)?;
+    ensure_canonical_taira_client_identity(context.config())?;
+    let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+    let public_root = normalize_root_url(&args.public_root)?;
+    let binding = args.binding()?;
+    let action = args.prepared_action()?;
+    args.validate_prerequisite_action(action)?;
+    match action {
+        PreparedEnvelopeAction::Prepare(output_fd) => {
+            require_inrou_binding_current(&binding)?;
+            preflight_taira_network_identity(&public_root, context.config())?;
+            prove_inrou_predecessor_applied(context.config(), args, &public_root, &binding)?;
+            let stage = crate::soracloud::load_taira_inrou_stage_identity(
+                context.config(),
+                &args.stage_dir,
+                args.mode,
+            )?;
+            let prepared = crate::soracloud::prepare_taira_inrou_canary_operation(
+                context.config(),
+                context.transaction_fee_payment()?,
+                binding.clone(),
+                &args.stage_dir,
+                &public_root,
+                None,
+                args.timeout_secs,
+                args.mode,
+                args.operation.prepared_operation(),
+            )?;
+            let envelope = make_prepared_inrou_envelope(
+                context.config(),
+                &public_root,
+                args.operation,
+                &stage,
+                prepared,
+            )?;
+            let envelope_bytes = canonical_prepared_inrou_envelope_bytes(&envelope)?;
+            write_prepared_envelope(output_fd, &envelope_bytes)?;
+            prepared_inrou_report(
+                context.config(),
+                &public_root,
+                args,
+                &envelope,
+                &envelope_bytes,
+                &stage,
+                "Prepared",
+                None,
+                None,
+                None,
+            )
+        }
+        PreparedEnvelopeAction::Submit(fd) => {
+            let validated = load_and_validate_prepared_inrou(
+                context.config(),
+                args,
+                &public_root,
+                &binding,
+                fd,
+            )?;
+            let outcome = submit_prepared_inrou_until(
+                context.config(),
+                &public_root,
+                args.timeout_secs,
+                &validated.prepared,
+                &binding,
+            );
+            report_prepared_inrou_outcome(context.config(), &public_root, args, &validated, outcome)
+        }
+        PreparedEnvelopeAction::Recover(fd) => {
+            let validated = load_and_validate_prepared_inrou(
+                context.config(),
+                args,
+                &public_root,
+                &binding,
+                fd,
+            )?;
+            let outcome = recover_prepared_inrou(
+                context.config(),
+                &public_root,
+                args.timeout_secs,
+                &validated.prepared,
+            );
+            report_prepared_inrou_outcome(context.config(), &public_root, args, &validated, outcome)
+        }
+    }
+}
+
+fn require_inrou_binding_current(binding: &crate::soracloud::TairaMutationBindingV1) -> Result<()> {
+    if current_unix_ms()? >= binding.execution_expires_at_unix_ms {
+        eyre::bail!("prepared Inrou mutation execution expiry bars a new forward effect");
+    }
+    Ok(())
+}
+
+fn make_prepared_inrou_envelope(
+    config: &Config,
+    public_root: &str,
+    operation: InrouCanaryOperation,
+    stage: &crate::soracloud::TairaInrouStageIdentity,
+    prepared: crate::soracloud::PreparedSoracloudTransactionV1,
+) -> Result<PreparedInrouEnvelopeV1> {
+    let transaction = prepared.decode_and_validate()?;
+    if prepared.operation != operation.label()
+        || prepared.binding.kind != operation.mutation_kind()
+        || transaction.authority() != &config.account
+        || transaction.network_id() != Some(&config.network_id)
+    {
+        eyre::bail!("prepared Inrou transaction differs from its exact CLI identity");
+    }
+    validate_inrou_transaction_lifetime(&transaction, &prepared.binding)?;
+    let transaction_envelope = PreparedInrouTransactionV1 {
+        schema: PREPARED_INROU_OPERATION_SCHEMA_V1.to_owned(),
+        binding: prepared.binding.clone(),
+        operation: prepared.operation.clone(),
+        transaction_hash_hex: prepared.tx_hash_hex,
+        signed_transaction_wire_sha256: hex::encode(Sha256::digest(&prepared.wire)),
+        signed_transaction_wire_hex: hex::encode(&prepared.wire),
+        fee_payment: prepared.fee_payment,
+        fee_quote: prepared.fee_quote,
+    };
+    let tagged = match operation {
+        InrouCanaryOperation::BundlePin => {
+            PreparedInrouOperationV1::InrouBundlePin(transaction_envelope)
+        }
+        InrouCanaryOperation::GuestPin => {
+            PreparedInrouOperationV1::InrouGuestPin(transaction_envelope)
+        }
+        InrouCanaryOperation::ServiceMutation => {
+            PreparedInrouOperationV1::InrouCanary(transaction_envelope)
+        }
+    };
+    Ok(PreparedInrouEnvelopeV1 {
+        schema: PREPARED_ENVELOPE_SCHEMA_V1.to_owned(),
+        binding: prepared.binding,
+        public_root: public_root.to_owned(),
+        chain_id: config.chain.to_string(),
+        network_id: config.network_id.to_string(),
+        authority: config.account.to_string(),
+        stage: stage.into(),
+        operation: tagged,
+    })
+}
+
+fn canonical_prepared_inrou_envelope_bytes(envelope: &PreparedInrouEnvelopeV1) -> Result<Vec<u8>> {
+    let mut bytes = json::to_json(envelope)
+        .wrap_err("encode canonical prepared Inrou envelope")?
+        .into_bytes();
+    bytes.push(b'\n');
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > PREPARED_ENVELOPE_MAX_BYTES {
+        eyre::bail!("prepared Inrou envelope exceeds its V1 byte bound");
+    }
+    Ok(bytes)
+}
+
+fn read_prepared_inrou_envelope(fd: u32) -> Result<(PreparedInrouEnvelopeV1, Vec<u8>)> {
+    let path = inherited_fd_path(fd)?;
+    let file = File::open(path)
+        .wrap_err_with(|| format!("failed to duplicate prepared Inrou input FD {fd}"))?;
+    let mut bytes = Vec::new();
+    file.take(PREPARED_ENVELOPE_MAX_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .wrap_err("failed to read prepared Inrou envelope")?;
+    if bytes.is_empty()
+        || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > PREPARED_ENVELOPE_MAX_BYTES
+    {
+        eyre::bail!("prepared Inrou envelope is empty or exceeds its V1 byte bound");
+    }
+    let envelope: PreparedInrouEnvelopeV1 =
+        json::from_slice(&bytes).wrap_err("prepared Inrou envelope is not canonical V1 JSON")?;
+    if canonical_prepared_inrou_envelope_bytes(&envelope)? != bytes {
+        eyre::bail!("prepared Inrou envelope bytes are not exact canonical V1 JSON");
+    }
+    Ok((envelope, bytes))
+}
+
+fn load_and_validate_prepared_inrou(
+    config: &Config,
+    args: &InrouCanary,
+    public_root: &str,
+    expected_binding: &crate::soracloud::TairaMutationBindingV1,
+    fd: u32,
+) -> Result<ValidatedPreparedInrouV1> {
+    let (envelope, envelope_bytes) = read_prepared_inrou_envelope(fd)?;
+    let stage =
+        crate::soracloud::load_taira_inrou_stage_identity(config, &args.stage_dir, args.mode)?;
+    let operation = envelope.operation.transaction();
+    if envelope.schema != PREPARED_ENVELOPE_SCHEMA_V1
+        || &envelope.binding != expected_binding
+        || envelope.public_root != public_root
+        || envelope.chain_id != config.chain.to_string()
+        || envelope.network_id != config.network_id.to_string()
+        || envelope.authority != config.account.to_string()
+        || envelope.stage != PreparedInrouStageIdentityV1::from(&stage)
+        || envelope.operation.tagged_kind() != args.operation.tagged_kind()
+        || operation.schema != PREPARED_INROU_OPERATION_SCHEMA_V1
+        || operation.binding != envelope.binding
+        || operation.operation != args.operation.label()
+    {
+        eyre::bail!("prepared Inrou envelope does not bind the exact CLI authorization and stage");
+    }
+    let wire = hex::decode(&operation.signed_transaction_wire_hex)
+        .wrap_err("prepared Inrou transaction wire is not hexadecimal")?;
+    if wire.is_empty()
+        || wire.len() > PREPARED_TRANSACTION_MAX_BYTES
+        || hex::encode(&wire) != operation.signed_transaction_wire_hex
+        || hex::encode(Sha256::digest(&wire)) != operation.signed_transaction_wire_sha256
+    {
+        eyre::bail!("prepared Inrou transaction wire is not canonical or bounded");
+    }
+    let prepared = crate::soracloud::PreparedSoracloudTransactionV1 {
+        operation: operation.operation.clone(),
+        wire,
+        tx_hash_hex: operation.transaction_hash_hex.clone(),
+        fee_payment: operation.fee_payment.clone(),
+        fee_quote: operation.fee_quote.clone(),
+        binding: operation.binding.clone(),
+    };
+    let transaction = prepared.decode_and_validate()?;
+    if transaction.authority() != &config.account
+        || transaction.network_id() != Some(&config.network_id)
+    {
+        eyre::bail!("prepared Inrou transaction has a substituted authority or network");
+    }
+    validate_inrou_transaction_lifetime(&transaction, &prepared.binding)?;
+    Ok(ValidatedPreparedInrouV1 {
+        envelope,
+        prepared,
+        envelope_bytes,
+        stage,
+    })
+}
+
+fn validate_inrou_transaction_lifetime(
+    transaction: &SignedTransaction,
+    binding: &crate::soracloud::TairaMutationBindingV1,
+) -> Result<()> {
+    let creation_ms = u64::try_from(transaction.creation_time().as_millis())
+        .wrap_err("prepared Inrou transaction creation time exceeds u64")?;
+    let ttl_ms = u64::try_from(
+        transaction
+            .time_to_live()
+            .ok_or_else(|| eyre!("prepared Inrou transaction omits its required TTL"))?
+            .as_millis(),
+    )
+    .wrap_err("prepared Inrou transaction TTL exceeds u64")?;
+    if creation_ms
+        .checked_add(ttl_ms)
+        .is_none_or(|expires| expires > binding.execution_expires_at_unix_ms)
+    {
+        eyre::bail!("prepared Inrou transaction lifetime exceeds the signed execution lease");
+    }
+    Ok(())
+}
+
+fn submit_prepared_inrou_until(
+    config: &Config,
+    public_root: &str,
+    timeout_secs: u64,
+    prepared: &crate::soracloud::PreparedSoracloudTransactionV1,
+    binding: &crate::soracloud::TairaMutationBindingV1,
+) -> crate::soracloud::PreparedSoracloudRecoveryV1 {
+    let first = recover_prepared_inrou(config, public_root, timeout_secs, prepared);
+    if !matches!(first, crate::soracloud::PreparedSoracloudRecoveryV1::Absent) {
+        return first;
+    }
+    if require_inrou_binding_current(binding).is_err() {
+        return crate::soracloud::PreparedSoracloudRecoveryV1::Rejected {
+            terminal_kind: "ExecutionExpiredBeforeSubmit".to_owned(),
+        };
+    }
+    let expected_hash = prepared.tx_hash_hex.clone();
+    match crate::soracloud::submit_prepared_soracloud_transaction(
+        config,
+        public_root,
+        timeout_secs,
+        prepared,
+    ) {
+        Ok(hash) if hex::encode(hash.as_ref()) == expected_hash => {}
+        Ok(_) => {
+            return crate::soracloud::PreparedSoracloudRecoveryV1::Rejected {
+                terminal_kind: "SubmittedHashMismatch".to_owned(),
+            };
+        }
+        Err(_) => return recover_prepared_inrou(config, public_root, timeout_secs, prepared),
+    }
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(timeout_secs))
+        .unwrap_or_else(Instant::now);
+    loop {
+        let outcome = recover_prepared_inrou(config, public_root, timeout_secs, prepared);
+        if !matches!(
+            outcome,
+            crate::soracloud::PreparedSoracloudRecoveryV1::Absent
+                | crate::soracloud::PreparedSoracloudRecoveryV1::Pending { .. }
+        ) || Instant::now() >= deadline
+        {
+            return outcome;
+        }
+        std::thread::sleep(
+            Duration::from_millis(200).min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
+}
+
+fn recover_prepared_inrou(
+    config: &Config,
+    public_root: &str,
+    timeout_secs: u64,
+    prepared: &crate::soracloud::PreparedSoracloudTransactionV1,
+) -> crate::soracloud::PreparedSoracloudRecoveryV1 {
+    crate::soracloud::recover_prepared_soracloud_transaction(
+        config,
+        public_root,
+        timeout_secs,
+        prepared,
+    )
+    .unwrap_or_else(|_| crate::soracloud::PreparedSoracloudRecoveryV1::Pending {
+        terminal_kind: "ObservationUnavailable".to_owned(),
+    })
+}
+
+fn report_prepared_inrou_outcome(
+    config: &Config,
+    public_root: &str,
+    args: &InrouCanary,
+    validated: &ValidatedPreparedInrouV1,
+    outcome: crate::soracloud::PreparedSoracloudRecoveryV1,
+) -> Result<Value> {
+    match outcome {
+        crate::soracloud::PreparedSoracloudRecoveryV1::Absent => prepared_inrou_report(
+            config,
+            public_root,
+            args,
+            &validated.envelope,
+            &validated.envelope_bytes,
+            &validated.stage,
+            "Pending",
+            None,
+            Some("Absent".to_owned()),
+            None,
+        ),
+        crate::soracloud::PreparedSoracloudRecoveryV1::Applied {
+            block_height,
+            evidence_sha256,
+        } => prepared_inrou_report(
+            config,
+            public_root,
+            args,
+            &validated.envelope,
+            &validated.envelope_bytes,
+            &validated.stage,
+            "Applied",
+            Some(block_height),
+            Some(evidence_sha256),
+            Some(validated),
+        ),
+        crate::soracloud::PreparedSoracloudRecoveryV1::Pending { terminal_kind } => {
+            prepared_inrou_report(
+                config,
+                public_root,
+                args,
+                &validated.envelope,
+                &validated.envelope_bytes,
+                &validated.stage,
+                "Pending",
+                None,
+                Some(terminal_kind),
+                None,
+            )
+        }
+        crate::soracloud::PreparedSoracloudRecoveryV1::Rejected { terminal_kind } => {
+            prepared_inrou_report(
+                config,
+                public_root,
+                args,
+                &validated.envelope,
+                &validated.envelope_bytes,
+                &validated.stage,
+                "Rejected",
+                None,
+                Some(terminal_kind),
+                None,
+            )
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepared_inrou_report(
+    config: &Config,
+    public_root: &str,
+    args: &InrouCanary,
+    envelope: &PreparedInrouEnvelopeV1,
+    envelope_bytes: &[u8],
+    stage: &crate::soracloud::TairaInrouStageIdentity,
+    outcome: &str,
+    applied_block_height: Option<u64>,
+    evidence: Option<String>,
+    applied: Option<&ValidatedPreparedInrouV1>,
+) -> Result<Value> {
+    let mut report = if args.operation == InrouCanaryOperation::ServiceMutation
+        && outcome == "Applied"
+        && applied.is_some()
+    {
+        let mut status_config = config.clone();
+        status_config.torii_api_url = Url::parse(&format!("{public_root}/"))
+            .wrap_err("failed to bind prepared Inrou status client")?;
+        status_config.torii_request_timeout = Duration::from_secs(args.timeout_secs.max(1));
+        let status_client = IrohaClient::new(status_config);
+        verify_inrou_check(public_root, &status_client, stage, args.timeout_secs)?
+    } else {
+        report_value(
+            "taira_inrou_canary",
+            "ok",
+            public_root,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Map::new(),
+        )?
+    };
+    let object = report
+        .as_object_mut()
+        .ok_or_else(|| eyre!("prepared Inrou report root is not an object"))?;
+    object.insert(
+        "command".to_owned(),
+        Value::String("taira_inrou_canary".to_owned()),
+    );
+    object.insert(
+        "authorization_sha256".to_owned(),
+        Value::String(envelope.binding.authorization_sha256.clone()),
+    );
+    object.insert(
+        "authorization_nonce".to_owned(),
+        Value::String(envelope.binding.authorization_nonce.clone()),
+    );
+    object.insert(
+        "mutation_kind".to_owned(),
+        Value::String(envelope.binding.kind.clone()),
+    );
+    object.insert(
+        "mutation_phase".to_owned(),
+        Value::String(envelope.binding.phase.clone()),
+    );
+    object.insert(
+        "idempotency_key".to_owned(),
+        Value::String(envelope.binding.idempotency_key.clone()),
+    );
+    object.insert(
+        "operation".to_owned(),
+        Value::String(envelope.operation.transaction().operation.clone()),
+    );
+    object.insert(
+        "transaction_hash_hex".to_owned(),
+        Value::String(
+            envelope
+                .operation
+                .transaction()
+                .transaction_hash_hex
+                .clone(),
+        ),
+    );
+    object.insert(
+        "prepared_envelope_sha256".to_owned(),
+        Value::String(hex::encode(Sha256::digest(envelope_bytes))),
+    );
+    object.insert(
+        "prepared_envelope_size".to_owned(),
+        Value::from(u64::try_from(envelope_bytes.len()).expect("bounded envelope")),
+    );
+    object.insert(
+        "recovery_outcome".to_owned(),
+        Value::String(outcome.to_owned()),
+    );
+    object.insert(
+        "applied_block_height".to_owned(),
+        applied_block_height.map(Value::from).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "evidence".to_owned(),
+        evidence.map(Value::String).unwrap_or(Value::Null),
+    );
+    object.insert(
+        "execution_expires_at_unix_ms".to_owned(),
+        Value::from(envelope.binding.execution_expires_at_unix_ms),
+    );
+    object.insert(
+        "fee_payment".to_owned(),
+        json::to_value(&envelope.operation.transaction().fee_payment)?,
+    );
+    object.insert(
+        "fee_quote".to_owned(),
+        json::to_value(&envelope.operation.transaction().fee_quote)?,
+    );
+    object.insert(
+        "mutation_mode".to_owned(),
+        Value::String(stage.stage_mode.clone()),
+    );
+    Ok(report)
+}
+
+fn prove_inrou_predecessor_applied(
+    config: &Config,
+    args: &InrouCanary,
+    public_root: &str,
+    binding: &crate::soracloud::TairaMutationBindingV1,
+) -> Result<()> {
+    let fd = args
+        .prerequisite_envelope_fd
+        .ok_or_else(|| eyre!("Inrou preparation is missing its predecessor envelope"))?;
+    let path = inherited_fd_path(fd)?;
+    let file = File::open(path)
+        .wrap_err_with(|| format!("failed to duplicate predecessor envelope FD {fd}"))?;
+    let mut bytes = Vec::new();
+    file.take(PREPARED_ENVELOPE_MAX_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.is_empty()
+        || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > PREPARED_ENVELOPE_MAX_BYTES
+    {
+        eyre::bail!("Inrou predecessor envelope is empty or oversized");
+    }
+    let value: Value = json::from_slice(&bytes).wrap_err("Inrou predecessor is not JSON")?;
+    let mut canonical = json::to_json(&value)?.into_bytes();
+    canonical.push(b'\n');
+    if canonical != bytes {
+        eyre::bail!("Inrou predecessor envelope is not canonical newline JSON");
+    }
+    let root = value
+        .as_object()
+        .ok_or_else(|| eyre!("Inrou predecessor envelope root is not an object"))?;
+    let predecessor_binding = root
+        .get("binding")
+        .and_then(Value::as_object)
+        .ok_or_else(|| eyre!("Inrou predecessor envelope omits its binding"))?;
+    let binding_string = |name: &str| {
+        predecessor_binding
+            .get(name)
+            .and_then(Value::as_str)
+            .ok_or_else(|| eyre!("Inrou predecessor binding omits `{name}`"))
+    };
+    let (expected_kind, expected_operation) = args.operation.predecessor();
+    if binding_string("authorization_sha256")? != binding.authorization_sha256
+        || binding_string("authorization_nonce")? != binding.authorization_nonce
+        || binding_string("kind")? != expected_kind
+        || binding_string("phase")? != binding.phase
+        || predecessor_binding
+            .get("execution_expires_at_unix_ms")
+            .and_then(Value::as_u64)
+            != Some(binding.execution_expires_at_unix_ms)
+        || root.get("public_root").and_then(Value::as_str) != Some(public_root)
+        || root.get("chain_id").and_then(Value::as_str) != Some(DEFAULT_CHAIN_ID)
+        || root.get("network_id").and_then(Value::as_str)
+            != Some(config.network_id.to_string().as_str())
+        || root.get("authority").and_then(Value::as_str)
+            != Some(config.account.to_string().as_str())
+    {
+        eyre::bail!("Inrou predecessor differs from the exact authorization and network");
+    }
+    let tagged = root
+        .get("operation")
+        .and_then(Value::as_object)
+        .ok_or_else(|| eyre!("Inrou predecessor omits its tagged operation"))?;
+    let payload = tagged
+        .get("envelope")
+        .and_then(Value::as_object)
+        .ok_or_else(|| eyre!("Inrou predecessor omits its transaction envelope"))?;
+    let expected_tag = match expected_kind {
+        "write_canary" => "final_canary",
+        "inrou_bundle_pin" => "inrou_bundle_pin",
+        "inrou_guest_pin" => "inrou_guest_pin",
+        _ => return Err(eyre!("unsupported Inrou predecessor kind")),
+    };
+    if tagged.get("kind").and_then(Value::as_str) != Some(expected_tag)
+        || payload.get("operation").and_then(Value::as_str) != Some(expected_operation)
+        || payload.get("binding") != root.get("binding")
+    {
+        eyre::bail!("Inrou predecessor operation tag or binding is invalid");
+    }
+    let wire_hex = payload
+        .get("signed_transaction_wire_hex")
+        .and_then(Value::as_str)
+        .ok_or_else(|| eyre!("Inrou predecessor omits its transaction wire"))?;
+    let wire = hex::decode(wire_hex).wrap_err("Inrou predecessor wire is not hexadecimal")?;
+    let transaction = SignedTransaction::decode_all_versioned(&wire)
+        .wrap_err("Inrou predecessor is not a versioned SignedTransaction")?;
+    transaction
+        .verify_signature()
+        .wrap_err("Inrou predecessor signature is invalid")?;
+    let transaction_hash = hex::encode(transaction.hash().as_ref());
+    if wire.is_empty()
+        || wire.len() > PREPARED_TRANSACTION_MAX_BYTES
+        || hex::encode(&wire) != wire_hex
+        || transaction.encode_wire_v1()? != wire
+        || payload.get("transaction_hash_hex").and_then(Value::as_str)
+            != Some(transaction_hash.as_str())
+        || transaction.authority() != &config.account
+        || transaction.network_id() != Some(&config.network_id)
+    {
+        eyre::bail!("Inrou predecessor transaction identity is invalid");
+    }
+    let expected_binding_json = json::to_json(
+        root.get("binding")
+            .expect("predecessor binding was validated above"),
+    )?;
+    let binding_name = Name::from_str(PREPARED_BINDING_METADATA)?;
+    if transaction
+        .metadata()
+        .get(&binding_name)
+        .and_then(|value| value.try_into_any_norito::<String>().ok())
+        .as_deref()
+        != Some(expected_binding_json.as_str())
+    {
+        eyre::bail!("Inrou predecessor transaction metadata has a substituted binding");
+    }
+    let mut status_config = config.clone();
+    status_config.torii_api_url = Url::parse(&format!("{public_root}/"))?;
+    status_config.torii_request_timeout = Duration::from_secs(args.timeout_secs.max(1));
+    let client = IrohaClient::new(status_config);
+    let status = client
+        .get_transaction_status_response_global(transaction.hash())?
+        .ok_or_else(|| eyre!("Inrou predecessor transaction is absent"))?;
+    if status.hash != transaction_hash
+        || status.scope != "global"
+        || status.status.kind != "Applied"
+        || !status.status.block_height.is_some_and(|height| height > 0)
+    {
+        eyre::bail!("Inrou predecessor has not reached exact global Applied state");
+    }
+    verify_exact_committed_transaction(&client, &transaction, &wire)?;
+    Ok(())
+}
+
+fn verify_exact_committed_transaction(
+    client: &IrohaClient,
+    expected: &SignedTransaction,
+    expected_wire: &[u8],
+) -> Result<()> {
+    let entrypoint_hash = expected.hash_as_entrypoint();
+    let one = NonZeroU64::new(1).expect("nonzero exact transaction bound");
+    let committed = client
+        .query(FindTransactions::new())
+        .filter(CompoundPredicate::from_filters(CommittedTxFilters {
+            entry_eq: Some(entrypoint_hash),
+            ..CommittedTxFilters::default()
+        }))
+        .with_pagination(Pagination::new(Some(one), 0))
+        .with_fetch_size(FetchSize::new(Some(one)))
+        .execute_all()?;
+    let [committed] = committed.as_slice() else {
+        eyre::bail!("Applied predecessor lacks one exact committed transaction proof");
+    };
+    let TransactionEntrypoint::External(transaction) = committed.entrypoint() else {
+        eyre::bail!("Applied predecessor resolves to a non-external entrypoint");
+    };
+    if committed.result().is_err()
+        || transaction.hash() != expected.hash()
+        || transaction.hash_as_entrypoint() != entrypoint_hash
+        || transaction.encode_wire_v1()? != expected_wire
+    {
+        eyre::bail!("committed predecessor differs from its exact prepared transaction");
+    }
+    Ok(())
+}
+/// Read-only verification of one retained canonical Taira Inrou stage.
+#[derive(clap::Args, Debug)]
+pub struct InrouCheck {
+    /// Public Torii root URL used only for signed status and public route reads.
+    #[arg(long, default_value = DEFAULT_PUBLIC_ROOT)]
+    pub public_root: String,
+    /// Owner-only stage created by `iroha taira inrou-stage` and retained after deployment.
+    #[arg(long, value_name = "PATH")]
+    pub stage_dir: PathBuf,
+    /// Exact revision mode encoded by the retained stage.
+    #[arg(long, value_enum)]
+    pub mode: InrouCanaryMode,
+    /// Maximum convergence time for signed status and all four route identities.
+    #[arg(long, value_name = "SECS", default_value_t = 180)]
+    pub timeout_secs: u64,
+    /// Emit a stable JSON evidence receipt.
+    #[arg(long)]
+    pub json: bool,
+}
+impl Run for InrouCheck {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         validate_inrou_canary_timeout(self.timeout_secs)?;
         ensure_canonical_taira_client_identity(context.config())?;
         let _chain_discriminant = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+        let stage = crate::soracloud::load_taira_inrou_stage_identity(
+            context.config(),
+            &self.stage_dir,
+            self.mode,
+        )?;
         let public_root = normalize_root_url(&self.public_root)?;
         preflight_taira_network_identity(&public_root, context.config())?;
         let mut status_config = context.config().clone();
         status_config.torii_api_url = Url::parse(&format!("{public_root}/"))
             .wrap_err("failed to bind the signed status client to the selected Taira root")?;
         let status_client = IrohaClient::new(status_config);
-        let deployment = crate::soracloud::run_taira_inrou_canary_deployment(
-            context.config(),
-            context.transaction_fee_payment()?,
-            self.stage_dir,
-            public_root.clone(),
-            None,
-            self.timeout_secs,
-            self.mode,
-        )?;
-        let receipt =
-            verify_inrou_canary(&public_root, &status_client, &deployment, self.timeout_secs)?;
+        let receipt = verify_inrou_check(&public_root, &status_client, &stage, self.timeout_secs)?;
         render_report(context, self.json, &receipt)?;
         if report_status(&receipt) != Some("ok") {
-            eyre::bail!("Taira Inrou canary found hard failures");
+            eyre::bail!("Taira Inrou read-only check found hard failures");
         }
         Ok(())
     }
@@ -385,13 +1766,11 @@ fn preflight_taira_network_identity(public_root: &str, config: &Config) -> Resul
 struct HttpJson {
     status: u16,
     body: Option<Value>,
-    text: String,
 }
 #[derive(Debug)]
 struct CanarySigner {
     key_pair: KeyPair,
     account_id: AccountId,
-    generated: bool,
 }
 fn run_doctor(public_root: &str) -> Result<Value> {
     let public_root = normalize_root_url(public_root)?;
@@ -410,6 +1789,7 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         let status_ok = expected_statuses.contains(&result.status);
         let semantic_error = if status_ok {
             match *name {
+                "status" => validate_public_status(result.body.as_ref()).err(),
                 "time_now" => validate_time_snapshot(result.body.as_ref()).err(),
                 _ => None,
             }
@@ -548,9 +1928,34 @@ fn run_doctor(public_root: &str) -> Result<Value> {
         Map::new(),
     )
 }
+#[derive(Clone, Debug)]
+struct InrouProbeIdentity {
+    service_name: String,
+    service_version: String,
+    route_host: String,
+    route_path_prefix: String,
+    healthcheck_path: String,
+    stage_mode: String,
+    container_manifest_hash: String,
+    service_manifest_hash: String,
+}
+impl From<&crate::soracloud::TairaInrouStageIdentity> for InrouProbeIdentity {
+    fn from(stage: &crate::soracloud::TairaInrouStageIdentity) -> Self {
+        Self {
+            service_name: stage.service_name.clone(),
+            service_version: stage.service_version.clone(),
+            route_host: stage.route_host.clone(),
+            route_path_prefix: stage.route_path_prefix.clone(),
+            healthcheck_path: stage.healthcheck_path.clone(),
+            stage_mode: stage.stage_mode.clone(),
+            container_manifest_hash: stage.container_manifest_hash.clone(),
+            service_manifest_hash: stage.service_manifest_hash.clone(),
+        }
+    }
+}
 fn validate_exact_inrou_canary_status(
     status: &Value,
-    deployment: &crate::soracloud::TairaInrouCanaryDeployment,
+    deployment: &InrouProbeIdentity,
 ) -> Result<(u64, u64), String> {
     validate_soracloud_status(Some(status))?;
     let root = status
@@ -580,9 +1985,18 @@ fn validate_exact_inrou_canary_status(
         .get("hosted_replica_count")
         .and_then(Value::as_u64)
         .ok_or_else(|| "Soracloud status is missing exact hosted_replica_count".to_owned())?;
-    if active_adverts != 4 || hosted_replicas != 4 {
+    let placed_hosts = topology
+        .get("placed_host_count")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "Soracloud status is missing exact placed_host_count".to_owned())?;
+    let unavailable_replicas = topology
+        .get("unavailable_replica_count")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "Soracloud status is missing exact unavailable_replica_count".to_owned())?;
+    if active_adverts != 4 || placed_hosts != 4 || hosted_replicas != 4 || unavailable_replicas != 0
+    {
         return Err(format!(
-            "requires exactly four Inrou hosts and placements (adverts={active_adverts}, replicas={hosted_replicas})"
+            "requires exactly four available Inrou hosts and placements (adverts={active_adverts}, placed_hosts={placed_hosts}, replicas={hosted_replicas}, unavailable_replicas={unavailable_replicas})"
         ));
     }
     let services = root
@@ -610,32 +2024,30 @@ fn validate_exact_inrou_canary_status(
     if service.get("current_version").and_then(Value::as_str)
         != Some(deployment.service_version.as_str())
     {
-        return Err(
-            "authoritative canary version does not match the submitted revision".to_owned(),
-        );
+        return Err("authoritative canary version does not match the retained stage".to_owned());
     }
     let (expected_version, expected_revision_count, expected_action) =
-        match deployment.mutation_mode.as_str() {
+        match deployment.stage_mode.as_str() {
             "deploy" => ("1.0.0", 1, "Deploy"),
             "upgrade" => ("1.0.1", 2, "Upgrade"),
             other => return Err(format!("unsupported Inrou mutation mode `{other}`")),
         };
     if deployment.service_version != expected_version {
         return Err(format!(
-            "Taira Inrou {} canary must submit exact revision `{expected_version}`, found `{}`",
-            deployment.mutation_mode, deployment.service_version
+            "Taira Inrou {} stage must encode exact revision `{expected_version}`, found `{}`",
+            deployment.stage_mode, deployment.service_version
         ));
     }
     if service.get("revision_count").and_then(Value::as_u64) != Some(expected_revision_count) {
         return Err(format!(
             "authoritative canary revision count must be {expected_revision_count} after {}",
-            deployment.mutation_mode
+            deployment.stage_mode
         ));
     }
     if !service.get("active_rollout").is_some_and(Value::is_null) {
         return Err("Taira Inrou canary must report an explicit null active_rollout".to_owned());
     }
-    match deployment.mutation_mode.as_str() {
+    match deployment.stage_mode.as_str() {
         "deploy" => {
             if !service.get("last_rollout").is_some_and(Value::is_null) {
                 return Err(
@@ -671,6 +2083,26 @@ fn validate_exact_inrou_canary_status(
         .get("latest_revision")
         .and_then(Value::as_object)
         .ok_or_else(|| "canary service is missing its latest revision".to_owned())?;
+    for (field, expected) in [
+        (
+            "container_manifest_hash",
+            deployment.container_manifest_hash.as_str(),
+        ),
+        (
+            "service_manifest_hash",
+            deployment.service_manifest_hash.as_str(),
+        ),
+    ] {
+        let actual = revision
+            .get(field)
+            .and_then(|value| json::from_value::<Hash>(value.clone()).ok())
+            .map(|hash| hash.to_string());
+        if actual.as_deref() != Some(expected) {
+            return Err(format!(
+                "authoritative {field} does not match the fully revalidated retained stage"
+            ));
+        }
+    }
     let canonical = revision.get("replicas").and_then(Value::as_u64) == Some(4)
         && revision.get("service_version").and_then(Value::as_str)
             == Some(deployment.service_version.as_str())
@@ -700,7 +2132,7 @@ fn validate_exact_inrou_canary_status(
 }
 fn exact_inrou_health_identity(
     body: &Value,
-    deployment: &crate::soracloud::TairaInrouCanaryDeployment,
+    deployment: &InrouProbeIdentity,
 ) -> Option<(u64, String, String)> {
     let object = body.as_object()?;
     if object.len() != 5 {
@@ -734,19 +2166,27 @@ fn inrou_canary_health_path(route_prefix: &str, healthcheck_path: &str) -> Strin
         healthcheck_path.trim_start_matches('/')
     )
 }
-fn verify_inrou_canary(
+struct InrouProbeObservation {
+    health_path: String,
+    active_host_adverts: u64,
+    hosted_replica_count: u64,
+    checks: Vec<Value>,
+    failures: Vec<String>,
+    replica_identities: Value,
+}
+fn probe_inrou_service(
     public_root: &str,
     status_client: &IrohaClient,
-    deployment: &crate::soracloud::TairaInrouCanaryDeployment,
+    deployment: &InrouProbeIdentity,
     timeout_secs: u64,
-) -> Result<Value> {
+) -> Result<InrouProbeObservation> {
     validate_inrou_canary_timeout(timeout_secs)?;
     let http = HttpClient::builder()
         .timeout(Duration::from_secs(timeout_secs.min(5)))
-        .user_agent("iroha-taira-inrou-canary/1")
+        .user_agent("iroha-taira-inrou-probe/1")
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .wrap_err("failed to build Taira Inrou canary HTTP client")?;
+        .wrap_err("failed to build Taira Inrou verification HTTP client")?;
     let health_path =
         inrou_canary_health_path(&deployment.route_path_prefix, &deployment.healthcheck_path);
     let health_base = join_url(public_root, &health_path)?;
@@ -870,82 +2310,113 @@ fn verify_inrou_canary(
             "public Inrou route did not reach all replicas: {last_route_error}"
         ));
     }
+    let replica_identities = Value::Array(
+        identities
+            .into_iter()
+            .map(|(slot, (identity, response_sha256))| {
+                norito::json!({
+                    "replica_slot": slot,
+                    "identity": identity,
+                    "response_sha256": response_sha256
+                })
+            })
+            .collect(),
+    );
+    Ok(InrouProbeObservation {
+        health_path,
+        active_host_adverts: active_adverts,
+        hosted_replica_count: hosted_replicas,
+        checks,
+        failures,
+        replica_identities,
+    })
+}
+fn verify_inrou_check(
+    public_root: &str,
+    status_client: &IrohaClient,
+    stage: &crate::soracloud::TairaInrouStageIdentity,
+    timeout_secs: u64,
+) -> Result<Value> {
+    let expected = InrouProbeIdentity::from(stage);
+    let observation = probe_inrou_service(public_root, status_client, &expected, timeout_secs)?;
+    let observed_at_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .wrap_err("system clock predates the Unix epoch; refusing stale-looking Inrou evidence")?
+        .as_millis();
+    let observed_at_unix_ms = u64::try_from(observed_at_unix_ms)
+        .wrap_err("Inrou evidence timestamp exceeds the V1 u64 range")?;
     let mut extra = Map::new();
     extra.insert(
         "service_name".to_owned(),
-        Value::from(deployment.service_name.clone()),
+        Value::from(stage.service_name.clone()),
     );
     extra.insert(
         "service_version".to_owned(),
-        Value::from(deployment.service_version.clone()),
-    );
-    extra.insert(
-        "mutation_mode".to_owned(),
-        Value::from(deployment.mutation_mode.clone()),
+        Value::from(stage.service_version.clone()),
     );
     extra.insert(
         "route_host".to_owned(),
-        Value::from(deployment.route_host.clone()),
+        Value::from(stage.route_host.clone()),
     );
-    extra.insert("route_path".to_owned(), Value::from(health_path));
+    extra.insert(
+        "route_path".to_owned(),
+        Value::from(observation.health_path),
+    );
     extra.insert(
         "active_host_adverts".to_owned(),
-        Value::from(active_adverts),
+        Value::from(observation.active_host_adverts),
     );
     extra.insert(
         "hosted_replica_count".to_owned(),
-        Value::from(hosted_replicas),
+        Value::from(observation.hosted_replica_count),
     );
     extra.insert(
         "bundle_hash".to_owned(),
-        Value::from(deployment.bundle_hash.clone()),
+        Value::from(stage.bundle_hash.clone()),
     );
     extra.insert(
         "bundle_content_cid".to_owned(),
-        Value::from(deployment.bundle_content_cid.clone()),
+        Value::from(stage.bundle_content_cid.clone()),
     );
     extra.insert(
         "bundle_manifest_digest_hex".to_owned(),
-        Value::from(deployment.bundle_manifest_digest_hex.clone()),
+        Value::from(stage.bundle_manifest_digest_hex.clone()),
     );
     extra.insert(
         "guest_content_cid".to_owned(),
-        Value::from(deployment.guest_content_cid.clone()),
+        Value::from(stage.guest_content_cid.clone()),
     );
     extra.insert(
         "guest_manifest_digest_hex".to_owned(),
-        Value::from(deployment.guest_manifest_digest_hex.clone()),
+        Value::from(stage.guest_manifest_digest_hex.clone()),
     );
     extra.insert(
-        "submitted_tx_hash".to_owned(),
-        Value::from(deployment.submitted_tx_hash.clone()),
+        "container_manifest_hash".to_owned(),
+        Value::from(stage.container_manifest_hash.clone()),
     );
     extra.insert(
-        "mutation_response_digest".to_owned(),
-        Value::from(deployment.mutation_response_digest.clone()),
+        "service_manifest_hash".to_owned(),
+        Value::from(stage.service_manifest_hash.clone()),
+    );
+    extra.insert(
+        "observed_at_unix_ms".to_owned(),
+        Value::from(observed_at_unix_ms),
     );
     extra.insert(
         "replica_identities".to_owned(),
-        Value::Array(
-            identities
-                .into_iter()
-                .map(|(slot, (identity, response_sha256))| {
-                    norito::json!({
-                        "replica_slot": slot,
-                        "identity": identity,
-                        "response_sha256": response_sha256
-                    })
-                })
-                .collect(),
-        ),
+        observation.replica_identities,
     );
     report_value(
-        "taira_inrou_canary",
-        if failures.is_empty() { "ok" } else { "fail" },
+        "taira_inrou_check",
+        if observation.failures.is_empty() {
+            "ok"
+        } else {
+            "fail"
+        },
         public_root,
-        checks,
+        observation.checks,
         Vec::new(),
-        failures,
+        observation.failures,
         extra,
     )
 }
@@ -955,251 +2426,1279 @@ fn validate_inrou_canary_timeout(timeout_secs: u64) -> Result<()> {
     }
     Ok(())
 }
-fn run_write_canary(
+
+const PREPARED_BINDING_METADATA: &str = "taira_public_reset_binding";
+const PREPARED_OPERATION_METADATA: &str = "taira_prepared_operation";
+const PREPARED_SEMANTIC_METADATA: &str = "taira_prepared_semantic_hash";
+
+struct ValidatedPreparedOperation {
+    envelope: PreparedMutationEnvelopeV1,
+    transaction: Option<SignedTransaction>,
+    wire: Option<Vec<u8>>,
+    envelope_bytes: Vec<u8>,
+}
+
+impl ValidatedPreparedOperation {
+    fn transaction(&self) -> Result<&SignedTransaction> {
+        self.transaction
+            .as_ref()
+            .ok_or_else(|| eyre!("the prepared operation has no transaction"))
+    }
+
+    fn wire(&self) -> Result<&[u8]> {
+        self.wire
+            .as_deref()
+            .ok_or_else(|| eyre!("the prepared operation has no transaction wire"))
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PreparedRecoveryClassification {
+    Absent,
+    Applied {
+        block_height: Option<u64>,
+        evidence: String,
+    },
+    Pending {
+        terminal_kind: String,
+    },
+    Rejected {
+        terminal_kind: String,
+    },
+}
+
+fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) -> Result<Value> {
+    if !args.use_config_signer {
+        eyre::bail!("exact prepared write-canary operations require --use-config-signer");
+    }
+    ensure_canonical_taira_client_identity(context.config())?;
+    let _guard = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
+    let public_root = normalize_root_url(&args.public_root)?;
+    let binding = args.binding()?;
+    let action = args.prepared_action()?;
+    args.validate_prerequisite_action(action)?;
+    match action {
+        PreparedEnvelopeAction::Prepare(output) => {
+            require_forward_binding_current(&binding)?;
+            prove_predecessor_applied(context.config(), args, &public_root, &binding)?;
+            let fee_payment = if args.operation == WriteCanaryOperation::FinalCanary {
+                Some(context.transaction_fee_payment()?)
+            } else {
+                None
+            };
+            let envelope = prepare_one_write_canary_operation(
+                context.config(),
+                args,
+                &public_root,
+                &binding,
+                fee_payment,
+            )?;
+            let envelope_bytes = canonical_prepared_envelope_bytes(&envelope)?;
+            write_prepared_envelope(output, &envelope_bytes)?;
+            let (outcome, evidence) = initial_prepared_report_state(&envelope.operation);
+            prepared_operation_report(
+                &public_root,
+                args,
+                &envelope,
+                &envelope_bytes,
+                outcome,
+                None,
+                evidence,
+            )
+        }
+        PreparedEnvelopeAction::Submit(fd) => {
+            let validated =
+                load_and_validate_prepared_operation(context.config(), args, &public_root, fd)?;
+            let classification =
+                submit_exact_prepared_operation(context.config(), args, &public_root, &validated)?;
+            report_prepared_classification(&public_root, args, &validated, classification)
+        }
+        PreparedEnvelopeAction::Recover(fd) => {
+            let validated =
+                load_and_validate_prepared_operation(context.config(), args, &public_root, fd)?;
+            let client = IrohaClient::new(write_canary_config(
+                context.config(),
+                &public_root,
+                &CanarySigner {
+                    account_id: context.config().account.clone(),
+                    key_pair: context.config().key_pair.clone(),
+                },
+            )?);
+            let classification = classify_exact_prepared_operation(&client, &validated)?;
+            report_prepared_classification(&public_root, args, &validated, classification)
+        }
+    }
+}
+
+fn initial_prepared_report_state(
+    operation: &PreparedTransactionOperationV1,
+) -> (&'static str, Option<String>) {
+    let proof_required_evidence = match operation {
+        PreparedTransactionOperationV1::OnboardingProofRequired(proof_required) => {
+            Some(proof_required.result.semantic_hash_hex.as_str())
+        }
+        PreparedTransactionOperationV1::OnboardingPrepared(_)
+        | PreparedTransactionOperationV1::FaucetPrepared(_)
+        | PreparedTransactionOperationV1::FinalCanary(_) => None,
+    };
+    initial_prepared_report_state_from_evidence(proof_required_evidence)
+}
+
+fn initial_prepared_report_state_from_evidence(
+    proof_required_evidence: Option<&str>,
+) -> (&'static str, Option<String>) {
+    match proof_required_evidence {
+        Some(evidence) => ("ProofRequired", Some(evidence.to_owned())),
+        None => ("Prepared", None),
+    }
+}
+
+fn prepare_one_write_canary_operation(
     config: &Config,
     args: &WriteCanary,
+    public_root: &str,
+    binding: &PreparedMutationBindingV1,
+    fee_payment: Option<FeePaymentIntent>,
+) -> Result<PreparedMutationEnvelopeV1> {
+    match args.operation {
+        WriteCanaryOperation::Onboarding => {
+            let _ = args.require_onboarding_token()?;
+            prepare_onboarding_operation(config, args, public_root, binding)
+        }
+        WriteCanaryOperation::Faucet => {
+            prepare_faucet_operation(config, args, public_root, binding)
+        }
+        WriteCanaryOperation::FinalCanary => prepare_final_canary_operation(
+            config,
+            args,
+            public_root,
+            binding,
+            fee_payment.ok_or_else(|| eyre!("final canary requires an exact fee intent"))?,
+        ),
+    }
+}
+
+fn prove_predecessor_applied(
+    config: &Config,
+    args: &WriteCanary,
+    public_root: &str,
+    current_binding: &PreparedMutationBindingV1,
+) -> Result<()> {
+    let predecessor = match args.operation {
+        WriteCanaryOperation::Onboarding => return Ok(()),
+        WriteCanaryOperation::Faucet => WriteCanaryOperation::Onboarding,
+        WriteCanaryOperation::FinalCanary => WriteCanaryOperation::Faucet,
+    };
+    let fd = args
+        .prerequisite_envelope_fd
+        .ok_or_else(|| eyre!("the next operation requires its exact predecessor envelope"))?;
+    let (envelope, envelope_bytes) = read_prepared_envelope(fd)?;
+    let mut predecessor_binding = current_binding.clone();
+    predecessor_binding.kind = predecessor.mutation_kind().to_owned();
+    predecessor_binding.idempotency_key = write_canary_child_idempotency_key(
+        &predecessor_binding.authorization_nonce,
+        &predecessor_binding.phase,
+        predecessor.mutation_kind(),
+    );
+    let wire = envelope
+        .operation
+        .signed_transaction_wire_hex()
+        .map(|wire| hex::decode(wire).wrap_err("predecessor transaction wire is not hexadecimal"))
+        .transpose()?;
+    let mut validated = validate_prepared_operation(
+        config,
+        args,
+        predecessor,
+        &predecessor_binding,
+        public_root,
+        envelope,
+        wire,
+    )?;
+    validated.envelope_bytes = envelope_bytes;
+    let signer = CanarySigner {
+        account_id: config.account.clone(),
+        key_pair: config.key_pair.clone(),
+    };
+    let client = IrohaClient::new(write_canary_config(config, public_root, &signer)?);
+    match classify_exact_prepared_operation(&client, &validated)? {
+        PreparedRecoveryClassification::Applied { .. } => Ok(()),
+        PreparedRecoveryClassification::Absent => {
+            eyre::bail!("predecessor transaction is absent; refusing to prepare the next operation")
+        }
+        PreparedRecoveryClassification::Pending { terminal_kind } => eyre::bail!(
+            "predecessor transaction is not Applied (`{terminal_kind}`); refusing to prepare the next operation"
+        ),
+        PreparedRecoveryClassification::Rejected { terminal_kind } => eyre::bail!(
+            "predecessor transaction is terminally rejected (`{terminal_kind}`); refusing to prepare the next operation"
+        ),
+    }
+}
+
+fn prepare_final_canary_operation(
+    config: &Config,
+    args: &WriteCanary,
+    public_root: &str,
+    binding: &PreparedMutationBindingV1,
     fee_payment: FeePaymentIntent,
+) -> Result<PreparedMutationEnvelopeV1> {
+    let signer = resolve_canary_signer(config)?;
+    let canary_config = write_canary_config(config, public_root, &signer)?;
+    let client = IrohaClient::new(canary_config.clone());
+    let message = prepared_canary_message(binding)?;
+    let semantic_sha256 = prepared_semantic_sha256(binding, WRITE_CANARY_OPERATION, &message)?;
+    let mut metadata = Metadata::default();
+    insert_string_metadata(&mut metadata, "taira_canary", "write-canary")?;
+    insert_string_metadata(
+        &mut metadata,
+        "taira_write_canary_idempotency_v1",
+        &binding.idempotency_key,
+    )?;
+    let binding_value = json::to_value(binding).wrap_err("serialize prepared mutation binding")?;
+    metadata.insert(
+        Name::from_str(PREPARED_BINDING_METADATA)?,
+        IrohaJson::from_norito_value_ref(&binding_value)
+            .wrap_err("encode prepared mutation binding metadata")?,
+    );
+    insert_string_metadata(
+        &mut metadata,
+        PREPARED_OPERATION_METADATA,
+        WRITE_CANARY_OPERATION,
+    )?;
+    insert_string_metadata(&mut metadata, PREPARED_SEMANTIC_METADATA, &semantic_sha256)?;
+    let instruction = Log::new(LogLevel::INFO, message);
+    let executable = Executable::Instructions(vec![InstructionBox::from(instruction)].into());
+    let (transaction, fee_quote) =
+        quote_and_sign_transaction(&client, executable, fee_payment, metadata)
+            .wrap_err("failed to quote and sign exact Taira canary transaction")?;
+    let wire = transaction
+        .encode_wire_v1()
+        .map_err(|error| eyre!("failed to encode exact Taira canary transaction: {error}"))?;
+    if wire.len() > PREPARED_TRANSACTION_MAX_BYTES {
+        eyre::bail!("prepared Taira canary transaction exceeds its V1 byte bound");
+    }
+    let prepared = IrohaClient::prepare_transaction_payload(&transaction);
+    if prepared.as_bytes() != wire {
+        eyre::bail!("prepared submission changed exact Taira canary transaction bytes");
+    }
+    let operation = FinalCanaryPreparedTransactionV1 {
+        schema: PREPARED_OPERATION_SCHEMA_V1.to_owned(),
+        binding: binding.clone(),
+        operation: WRITE_CANARY_OPERATION.to_owned(),
+        transaction_hash_hex: hex::encode(transaction.hash().as_ref()),
+        signed_transaction_wire_hex: hex::encode(&wire),
+        signed_transaction_wire_sha256: hex::encode(Sha256::digest(&wire)),
+        semantic_hash_hex: semantic_sha256,
+        fee_payment: transaction.fee_payment_intent().clone(),
+        fee_quote,
+    };
+    let envelope = PreparedMutationEnvelopeV1 {
+        schema: PREPARED_ENVELOPE_SCHEMA_V1.to_owned(),
+        binding: binding.clone(),
+        public_root: public_root.to_owned(),
+        chain_id: canary_config.chain.to_string(),
+        network_id: canary_config.network_id.to_string(),
+        authority: canary_config.account.to_string(),
+        operation: PreparedTransactionOperationV1::FinalCanary(operation),
+    };
+    validate_prepared_operation(
+        config,
+        args,
+        args.operation,
+        binding,
+        public_root,
+        envelope.clone(),
+        Some(wire),
+    )?;
+    Ok(envelope)
+}
+
+fn prepared_canary_message(binding: &PreparedMutationBindingV1) -> Result<String> {
+    validate_prepared_binding(binding)?;
+    Ok(format!(
+        "taira-public-reset-write-canary-v1:{}:{}:{}:{}",
+        binding.authorization_sha256,
+        binding.authorization_nonce,
+        binding.phase,
+        binding.idempotency_key
+    ))
+}
+
+fn prepared_semantic_sha256(
+    binding: &PreparedMutationBindingV1,
+    operation: &str,
+    semantic_identity: &str,
+) -> Result<String> {
+    validate_prepared_binding(binding)?;
+    let binding_bytes = json::to_vec(binding).wrap_err("encode prepared mutation binding")?;
+    let mut digest = Sha256::new();
+    for frame in [
+        b"iroha:taira:prepared-operation:semantic:v1\0".as_slice(),
+        binding_bytes.as_slice(),
+        operation.as_bytes(),
+        semantic_identity.as_bytes(),
+    ] {
+        let length = u64::try_from(frame.len()).expect("frame length fits u64");
+        digest.update(length.to_be_bytes());
+        digest.update(frame);
+    }
+    Ok(hex::encode(digest.finalize()))
+}
+
+fn require_forward_binding_current(binding: &PreparedMutationBindingV1) -> Result<()> {
+    let now = current_unix_ms()?;
+    if now >= binding.execution_expires_at_unix_ms {
+        eyre::bail!("prepared mutation execution expiry bars a new forward effect");
+    }
+    Ok(())
+}
+
+fn current_unix_ms() -> Result<u64> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .wrap_err("system clock is before the Unix epoch")?;
+    u64::try_from(elapsed.as_millis()).wrap_err("current Unix milliseconds exceed u64")
+}
+
+fn validate_prepared_binding(binding: &PreparedMutationBindingV1) -> Result<()> {
+    if binding.schema != PREPARED_BINDING_SCHEMA_V1 {
+        eyre::bail!("prepared mutation binding has an unsupported schema");
+    }
+    validate_sha256_argument(&binding.authorization_sha256).map_err(|error| eyre!(error))?;
+    validate_authorization_nonce_argument(&binding.authorization_nonce)
+        .map_err(|error| eyre!(error))?;
+    validate_write_canary_phase_argument(&binding.phase).map_err(|error| eyre!(error))?;
+    validate_write_canary_idempotency_key(&binding.idempotency_key)
+        .map_err(|error| eyre!(error))?;
+    if binding.execution_expires_at_unix_ms == 0 {
+        eyre::bail!("prepared mutation binding has a zero execution expiry");
+    }
+    if !matches!(
+        binding.kind.as_str(),
+        "onboarding" | "faucet" | WRITE_CANARY_MUTATION_KIND
+    ) {
+        eyre::bail!("prepared mutation binding has an unsupported operation kind");
+    }
+    Ok(())
+}
+
+fn canonical_prepared_envelope_bytes(envelope: &PreparedMutationEnvelopeV1) -> Result<Vec<u8>> {
+    let mut bytes = json::to_json(envelope)
+        .wrap_err("encode canonical prepared mutation envelope")?
+        .into_bytes();
+    bytes.push(b'\n');
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > PREPARED_ENVELOPE_MAX_BYTES {
+        eyre::bail!("prepared mutation envelope exceeds its V1 byte bound");
+    }
+    Ok(bytes)
+}
+
+fn inherited_fd_path(fd: u32) -> Result<PathBuf> {
+    if !(3..=65_535).contains(&fd) {
+        eyre::bail!("prepared-envelope descriptor must be an inherited FD in 3..=65535");
+    }
+    if Path::new("/proc/self/fd").is_dir() {
+        return Ok(PathBuf::from(format!("/proc/self/fd/{fd}")));
+    }
+    if Path::new("/dev/fd").is_dir() {
+        return Ok(PathBuf::from(format!("/dev/fd/{fd}")));
+    }
+    eyre::bail!("this platform does not expose inherited descriptor paths")
+}
+
+fn write_prepared_envelope(fd: u32, bytes: &[u8]) -> Result<()> {
+    let path = inherited_fd_path(fd)?;
+    let mut file = File::options()
+        .write(true)
+        .open(path)
+        .wrap_err_with(|| format!("failed to duplicate prepared-envelope output FD {fd}"))?;
+    file.write_all(bytes)
+        .wrap_err("failed to write canonical prepared mutation envelope")?;
+    file.flush()
+        .wrap_err("failed to flush canonical prepared mutation envelope")
+}
+
+fn read_prepared_envelope(fd: u32) -> Result<(PreparedMutationEnvelopeV1, Vec<u8>)> {
+    let path = inherited_fd_path(fd)?;
+    let file = File::open(path)
+        .wrap_err_with(|| format!("failed to duplicate prepared-envelope input FD {fd}"))?;
+    let mut bytes = Vec::new();
+    file.take(PREPARED_ENVELOPE_MAX_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .wrap_err("failed to read prepared mutation envelope")?;
+    if bytes.is_empty()
+        || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > PREPARED_ENVELOPE_MAX_BYTES
+    {
+        eyre::bail!("prepared mutation envelope is empty or exceeds its V1 byte bound");
+    }
+    let envelope: PreparedMutationEnvelopeV1 =
+        json::from_slice(&bytes).wrap_err("prepared mutation envelope is not canonical V1 JSON")?;
+    let canonical = canonical_prepared_envelope_bytes(&envelope)?;
+    if canonical != bytes {
+        eyre::bail!("prepared mutation envelope bytes are not exact canonical V1 JSON");
+    }
+    Ok((envelope, bytes))
+}
+
+fn load_and_validate_prepared_operation(
+    config: &Config,
+    args: &WriteCanary,
+    public_root: &str,
+    fd: u32,
+) -> Result<ValidatedPreparedOperation> {
+    let (envelope, envelope_bytes) = read_prepared_envelope(fd)?;
+    let wire = envelope
+        .operation
+        .signed_transaction_wire_hex()
+        .map(|wire| hex::decode(wire).wrap_err("prepared transaction wire is not hexadecimal"))
+        .transpose()?;
+    let binding = args.binding()?;
+    let mut validated = validate_prepared_operation(
+        config,
+        args,
+        args.operation,
+        &binding,
+        public_root,
+        envelope,
+        wire,
+    )?;
+    validated.envelope_bytes = envelope_bytes;
+    Ok(validated)
+}
+
+fn validate_prepared_operation(
+    config: &Config,
+    args: &WriteCanary,
+    expected_operation: WriteCanaryOperation,
+    expected_binding: &PreparedMutationBindingV1,
+    public_root: &str,
+    envelope: PreparedMutationEnvelopeV1,
+    supplied_wire: Option<Vec<u8>>,
+) -> Result<ValidatedPreparedOperation> {
+    validate_prepared_binding(&envelope.binding)?;
+    if envelope.schema != PREPARED_ENVELOPE_SCHEMA_V1
+        || &envelope.binding != expected_binding
+        || envelope.public_root != public_root
+        || envelope.chain_id != DEFAULT_CHAIN_ID
+        || envelope.network_id != config.network_id.to_string()
+        || envelope.authority != config.account.to_string()
+    {
+        eyre::bail!("prepared mutation envelope does not bind the exact CLI authorization");
+    }
+    let operation = &envelope.operation;
+    if operation.binding() != &envelope.binding
+        || operation.label() != expected_operation.label()
+        || !matches!(
+            (expected_operation, operation),
+            (
+                WriteCanaryOperation::Onboarding,
+                PreparedTransactionOperationV1::OnboardingPrepared(_)
+                    | PreparedTransactionOperationV1::OnboardingProofRequired(_)
+            ) | (
+                WriteCanaryOperation::Faucet,
+                PreparedTransactionOperationV1::FaucetPrepared(_)
+            ) | (
+                WriteCanaryOperation::FinalCanary,
+                PreparedTransactionOperationV1::FinalCanary(_)
+            )
+        )
+    {
+        eyre::bail!("prepared operation variant does not match the exact CLI operation");
+    }
+    let signer = CanarySigner {
+        account_id: config.account.clone(),
+        key_pair: config.key_pair.clone(),
+    };
+    let client = IrohaClient::new(write_canary_config(config, public_root, &signer)?);
+    let transaction = match operation {
+        PreparedTransactionOperationV1::OnboardingPrepared(prepared) => {
+            let expected_alias = build_alias(
+                &args.alias_prefix,
+                signer.key_pair.public_key(),
+                TAIRA_CANARY_ALIAS_SCOPE,
+            )?;
+            let expected_request = AccountOnboardingPlanRequestV1::try_new(
+                expected_alias.clone(),
+                &signer.account_id,
+                std::iter::empty(),
+            )?;
+            if prepared.account_id != config.account.to_string() || prepared.alias != expected_alias
+            {
+                eyre::bail!(
+                    "prepared onboarding target differs from the configured canary identity"
+                );
+            }
+            Some(client.verify_account_onboarding_prepared_transaction(
+                &expected_request,
+                prepared,
+                &prepared.receipt,
+                &prepared.binding,
+            )?)
+        }
+        PreparedTransactionOperationV1::OnboardingProofRequired(proof_required) => {
+            let expected_alias = build_alias(
+                &args.alias_prefix,
+                signer.key_pair.public_key(),
+                TAIRA_CANARY_ALIAS_SCOPE,
+            )?;
+            let expected_request = AccountOnboardingPlanRequestV1::try_new(
+                expected_alias.clone(),
+                &signer.account_id,
+                std::iter::empty(),
+            )?;
+            if proof_required.schema != PREPARED_ONBOARDING_PROOF_REQUIRED_SCHEMA_V1
+                || proof_required.result.account_id != config.account.to_string()
+                || proof_required.result.alias != expected_alias
+                || proof_required.receipt.body.request.account_id != config.account.to_string()
+                || proof_required.receipt.body.request.alias != expected_alias
+            {
+                eyre::bail!(
+                    "proof-required onboarding target differs from the configured canary identity"
+                );
+            }
+            client.verify_account_onboarding_proof_required_result(
+                &expected_request,
+                &proof_required.result,
+                &proof_required.receipt,
+                &proof_required.result.binding,
+            )?;
+            None
+        }
+        PreparedTransactionOperationV1::FaucetPrepared(prepared) => {
+            if prepared.account_id != config.account.to_string()
+                || prepared.asset_definition_id != args.faucet_asset_id
+            {
+                eyre::bail!("prepared faucet target differs from the configured canary identity");
+            }
+            Some(client.verify_account_faucet_prepared_transaction(
+                prepared,
+                &prepared.claim,
+                &prepared.binding,
+            )?)
+        }
+        PreparedTransactionOperationV1::FinalCanary(prepared) => {
+            validate_final_canary_envelope(prepared)?;
+            let wire = supplied_wire
+                .as_deref()
+                .ok_or_else(|| eyre!("prepared final canary omits its transaction wire"))?;
+            let transaction = SignedTransaction::decode_all_versioned(wire)
+                .wrap_err("prepared final canary is not a versioned SignedTransaction")?;
+            if transaction.authority() != &config.account {
+                eyre::bail!("prepared final canary has a substituted authority");
+            }
+            Some(transaction)
+        }
+    };
+    if let Some(transaction) = transaction.as_ref() {
+        let wire = supplied_wire
+            .as_deref()
+            .ok_or_else(|| eyre!("prepared transaction omits its exact wire"))?;
+        validate_prepared_transaction_closure(transaction, operation, wire, config)?;
+        validate_prepared_transaction_lifetime(transaction, &envelope.binding)?;
+    } else if supplied_wire.is_some() {
+        eyre::bail!("proof-required onboarding result must not contain transaction bytes");
+    }
+    Ok(ValidatedPreparedOperation {
+        envelope,
+        transaction,
+        wire: supplied_wire,
+        envelope_bytes: Vec::new(),
+    })
+}
+
+fn validate_final_canary_envelope(operation: &FinalCanaryPreparedTransactionV1) -> Result<()> {
+    if operation.schema != PREPARED_OPERATION_SCHEMA_V1
+        || operation.operation != WRITE_CANARY_OPERATION
+        || operation.fee_quote.intent != operation.fee_payment
+    {
+        eyre::bail!("prepared final-canary identity or fee closure is invalid");
+    }
+    Ok(())
+}
+
+fn validate_prepared_transaction_closure(
+    transaction: &SignedTransaction,
+    operation: &PreparedTransactionOperationV1,
+    wire: &[u8],
+    config: &Config,
+) -> Result<()> {
+    let transaction_hash_hex = operation
+        .transaction_hash_hex()
+        .ok_or_else(|| eyre!("prepared operation omits its transaction hash"))?;
+    let wire_hex = operation
+        .signed_transaction_wire_hex()
+        .ok_or_else(|| eyre!("prepared operation omits its transaction wire"))?;
+    let wire_sha256 = operation
+        .signed_transaction_wire_sha256()
+        .ok_or_else(|| eyre!("prepared operation omits its wire digest"))?;
+    let fee_payment = operation
+        .fee_payment()
+        .ok_or_else(|| eyre!("prepared operation omits its fee intent"))?;
+    if wire.len() > PREPARED_TRANSACTION_MAX_BYTES
+        || wire_hex.len() > PREPARED_TRANSACTION_MAX_BYTES.saturating_mul(2)
+        || hex::encode(wire) != wire_hex
+        || hex::encode(Sha256::digest(wire)) != wire_sha256
+    {
+        eyre::bail!("prepared operation exact wire or digest is invalid");
+    }
+    let canonical = transaction
+        .encode_wire_v1()
+        .map_err(|error| eyre!("failed to re-encode prepared transaction: {error}"))?;
+    if canonical != wire
+        || hex::encode(transaction.hash().as_ref()) != transaction_hash_hex
+        || transaction.network_id() != Some(&config.network_id)
+        || transaction.fee_payment_intent() != fee_payment
+    {
+        eyre::bail!("prepared operation transaction bytes do not bind its declared identity");
+    }
+    transaction
+        .verify_signature()
+        .wrap_err("prepared operation transaction signature is invalid")?;
+    let prepared = IrohaClient::prepare_transaction_payload(transaction);
+    if prepared.as_bytes() != wire || prepared.hash() != transaction.hash() {
+        eyre::bail!("prepared client payload differs from the exact signed transaction");
+    }
+    let binding_json = json::to_json(operation.binding())
+        .wrap_err("serialize expected prepared mutation binding")?;
+    let metadata = transaction.metadata();
+    let binding_name = Name::from_str(PREPARED_BINDING_METADATA)?;
+    if metadata
+        .get(&binding_name)
+        .map(IrohaJson::get)
+        .map(String::as_str)
+        != Some(binding_json.as_str())
+    {
+        eyre::bail!("prepared transaction metadata does not bind `{PREPARED_BINDING_METADATA}`");
+    }
+    for (key, expected) in [
+        (PREPARED_OPERATION_METADATA, operation.label()),
+        (PREPARED_SEMANTIC_METADATA, operation.semantic_hash_hex()),
+    ] {
+        let actual = metadata
+            .get(&Name::from_str(key)?)
+            .and_then(|value| value.try_into_any_norito::<String>().ok());
+        if actual.as_deref() != Some(expected) {
+            eyre::bail!("prepared transaction metadata does not bind `{key}`");
+        }
+    }
+    match operation {
+        PreparedTransactionOperationV1::FinalCanary(operation) => {
+            let expected_message = prepared_canary_message(&operation.binding)?;
+            let expected_semantic = prepared_semantic_sha256(
+                &operation.binding,
+                WRITE_CANARY_OPERATION,
+                &expected_message,
+            )?;
+            if operation.semantic_hash_hex != expected_semantic {
+                eyre::bail!("prepared final-canary semantic digest is invalid");
+            }
+            let idempotency_name = Name::from_str("taira_write_canary_idempotency_v1")?;
+            let canary_name = Name::from_str("taira_canary")?;
+            if metadata
+                .get(&idempotency_name)
+                .and_then(|value| value.try_into_any_norito::<String>().ok())
+                .as_deref()
+                != Some(operation.binding.idempotency_key.as_str())
+                || metadata
+                    .get(&canary_name)
+                    .and_then(|value| value.try_into_any_norito::<String>().ok())
+                    .as_deref()
+                    != Some("write-canary")
+            {
+                eyre::bail!("prepared final canary omits its exact idempotency metadata");
+            }
+            let executable_matches = match transaction.instructions() {
+                Executable::Instructions(instructions) if instructions.len() == 1 => instructions
+                    .first()
+                    .and_then(|instruction| instruction.as_any().downcast_ref::<Log>())
+                    .is_some_and(|log| log.level == LogLevel::INFO && log.msg == expected_message),
+                _ => false,
+            };
+            if !executable_matches || metadata.iter().len() != 5 {
+                eyre::bail!("prepared final-canary instruction or metadata closure is not exact");
+            }
+        }
+        PreparedTransactionOperationV1::OnboardingPrepared(_)
+        | PreparedTransactionOperationV1::FaucetPrepared(_) => {
+            if metadata.iter().len() != 3 {
+                eyre::bail!("server-prepared transaction metadata closure is not exact");
+            }
+        }
+        PreparedTransactionOperationV1::OnboardingProofRequired(_) => {
+            eyre::bail!("proof-required onboarding result cannot contain a transaction")
+        }
+    }
+    Ok(())
+}
+
+fn validate_prepared_transaction_lifetime(
+    transaction: &SignedTransaction,
+    binding: &PreparedMutationBindingV1,
+) -> Result<()> {
+    let creation_ms = u64::try_from(transaction.creation_time().as_millis())
+        .wrap_err("prepared transaction creation time exceeds u64")?;
+    let ttl_ms = u64::try_from(
+        transaction
+            .time_to_live()
+            .ok_or_else(|| eyre!("prepared transaction omits its required TTL"))?
+            .as_millis(),
+    )
+    .wrap_err("prepared transaction TTL exceeds u64")?;
+    if creation_ms
+        .checked_add(ttl_ms)
+        .is_none_or(|expires| expires > binding.execution_expires_at_unix_ms)
+    {
+        eyre::bail!("prepared transaction lifetime exceeds the signed execution lease");
+    }
+    Ok(())
+}
+
+fn submit_exact_prepared_operation(
+    config: &Config,
+    args: &WriteCanary,
+    public_root: &str,
+    validated: &ValidatedPreparedOperation,
+) -> Result<PreparedRecoveryClassification> {
+    match args.operation {
+        WriteCanaryOperation::Onboarding | WriteCanaryOperation::Faucet => {
+            submit_server_prepared_operation(config, args, public_root, validated)
+        }
+        WriteCanaryOperation::FinalCanary => {
+            let signer = CanarySigner {
+                account_id: config.account.clone(),
+                key_pair: config.key_pair.clone(),
+            };
+            let client = IrohaClient::new(write_canary_config(config, public_root, &signer)?);
+            let classification = classify_exact_prepared_operation(&client, validated)?;
+            if !submit_required_after_classification(&validated.envelope.binding, &classification)?
+            {
+                return Ok(classification);
+            }
+            let transaction = validated.transaction()?;
+            let prepared = IrohaClient::prepare_transaction_payload(transaction);
+            if prepared.as_bytes() != validated.wire()? {
+                eyre::bail!("raw submit bytes differ from the retained prepared envelope");
+            }
+            let submitted = match client.submit_prepared_transaction_payload(&prepared) {
+                Ok(submitted) => submitted,
+                Err(error) => {
+                    return match classify_exact_prepared_operation(&client, validated)? {
+                        PreparedRecoveryClassification::Absent => Err(hint_submit_error(error)),
+                        reconciled => Ok(reconciled),
+                    };
+                }
+            };
+            if submitted != transaction.hash() {
+                eyre::bail!("raw submit returned a different transaction hash");
+            }
+            let _ = client.wait_for_transaction_applied(
+                submitted,
+                TransactionWaitOptions {
+                    timeout: Duration::from_millis(DEFAULT_WRITE_STATUS_TIMEOUT_MS),
+                    poll_interval: Duration::from_millis(500),
+                },
+            );
+            match classify_exact_prepared_operation(&client, validated)? {
+                PreparedRecoveryClassification::Absent => {
+                    Ok(PreparedRecoveryClassification::Pending {
+                        terminal_kind: "AcceptedNotVisible".to_owned(),
+                    })
+                }
+                reconciled => Ok(reconciled),
+            }
+        }
+    }
+}
+
+fn classify_exact_prepared_operation(
+    client: &IrohaClient,
+    validated: &ValidatedPreparedOperation,
+) -> Result<PreparedRecoveryClassification> {
+    if let PreparedTransactionOperationV1::OnboardingProofRequired(proof_required) =
+        &validated.envelope.operation
+    {
+        let expected_account = AccountId::parse_encoded(&proof_required.result.account_id)
+            .wrap_err("prepared proof-required onboarding account is not canonical")?;
+        let alias = proof_required
+            .result
+            .alias
+            .parse::<AccountAliasName>()
+            .wrap_err("prepared proof-required onboarding alias is not canonical")?;
+        let current_state =
+            client.prove_account_onboarding_current_state(&expected_account, &alias)?;
+        return Ok(classify_proof_required_current_state(
+            &proof_required.result.semantic_hash_hex,
+            current_state,
+        ));
+    }
+    let expected_hash = validated.transaction()?.hash();
+    let Some(status) = client
+        .get_transaction_status_response_global(expected_hash)
+        .wrap_err("read-only exact prepared-transaction status lookup failed")?
+    else {
+        return Ok(PreparedRecoveryClassification::Absent);
+    };
+    if status.hash != hex::encode(expected_hash.as_ref()) || status.scope != "global" {
+        eyre::bail!("prepared-transaction status response has a mismatched identity or scope");
+    }
+    match status.status.kind.as_str() {
+        "Applied" if prepared_recovery_status_is_final_applied(&status) => {
+            let block_height = status
+                .status
+                .block_height
+                .filter(|height| *height > 0)
+                .ok_or_else(|| eyre!("Applied prepared transaction omits its block height"))?;
+            let evidence =
+                verify_exact_committed_prepared_operation(client, validated)?.to_string();
+            Ok(PreparedRecoveryClassification::Applied {
+                block_height: Some(block_height),
+                evidence,
+            })
+        }
+        "Rejected" | "Expired" if prepared_recovery_status_is_final_failure(&status) => {
+            Ok(PreparedRecoveryClassification::Rejected {
+                terminal_kind: status.status.kind,
+            })
+        }
+        "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired" => {
+            Ok(PreparedRecoveryClassification::Pending {
+                terminal_kind: status.status.kind,
+            })
+        }
+        other => Err(eyre!(
+            "prepared-transaction status response has unsupported kind `{other}`"
+        )),
+    }
+}
+
+fn prepared_recovery_status_is_final_applied(status: &PipelineTransactionStatusResponse) -> bool {
+    status.status.kind == "Applied" && status.scope == "global" && status.resolved_from == "state"
+}
+
+fn prepared_recovery_status_is_final_failure(status: &PipelineTransactionStatusResponse) -> bool {
+    matches!(status.status.kind.as_str(), "Rejected" | "Expired")
+        && status.scope == "global"
+        && status.resolved_from == "state"
+}
+
+fn classify_proof_required_current_state(
+    semantic_hash_hex: &str,
+    current_state: AccountOnboardingCurrentStateV1,
+) -> PreparedRecoveryClassification {
+    match current_state {
+        AccountOnboardingCurrentStateV1::Applied {
+            block_height: _,
+            block_hash: _,
+        } => {
+            PreparedRecoveryClassification::Applied {
+                // The durable report is not itself a state proof: every reopen and successor
+                // re-runs the atomic observation. Do not mislabel its anchor as a transaction
+                // application height or replace the authenticated semantic evidence with it.
+                block_height: None,
+                evidence: semantic_hash_hex.to_owned(),
+            }
+        }
+        AccountOnboardingCurrentStateV1::AliasConflict { .. } => {
+            PreparedRecoveryClassification::Pending {
+                terminal_kind: "OnboardingAliasConflict".to_owned(),
+            }
+        }
+        AccountOnboardingCurrentStateV1::AliasAbsent { .. } => {
+            PreparedRecoveryClassification::Pending {
+                terminal_kind: "OnboardingStateAbsent".to_owned(),
+            }
+        }
+    }
+}
+
+fn submit_required_after_classification(
+    binding: &PreparedMutationBindingV1,
+    classification: &PreparedRecoveryClassification,
+) -> Result<bool> {
+    if matches!(classification, PreparedRecoveryClassification::Absent) {
+        require_forward_binding_current(binding)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+fn verify_exact_committed_prepared_operation(
+    client: &IrohaClient,
+    validated: &ValidatedPreparedOperation,
+) -> Result<Hash> {
+    let expected_binding = json::to_json(&validated.envelope.binding)
+        .wrap_err("serialize expected committed mutation binding")?;
+    let binding_name = Name::from_str(PREPARED_BINDING_METADATA)?;
+    let operation_name = Name::from_str(PREPARED_OPERATION_METADATA)?;
+    let expected_transaction = validated.transaction()?;
+    let entrypoint_hash = expected_transaction.hash_as_entrypoint();
+    let one = NonZeroU64::new(1).expect("nonzero committed lookup bound");
+    let committed = client
+        .query(FindTransactions::new())
+        .filter(CompoundPredicate::from_filters(CommittedTxFilters {
+            entry_eq: Some(entrypoint_hash),
+            ..CommittedTxFilters::default()
+        }))
+        .with_pagination(Pagination::new(Some(one), 0))
+        .with_fetch_size(FetchSize::new(Some(one)))
+        .execute_all()
+        .wrap_err("read-only exact prepared-transaction proof query failed")?;
+    let [committed] = committed.as_slice() else {
+        eyre::bail!("Applied status lacks one exact bounded committed-transaction proof");
+    };
+    if committed.result().is_err() {
+        eyre::bail!("Applied status resolves to a failed committed transaction");
+    }
+    let TransactionEntrypoint::External(transaction) = committed.entrypoint() else {
+        eyre::bail!("Applied status resolves to a non-external transaction entrypoint");
+    };
+    let binding_matches = transaction
+        .metadata()
+        .get(&binding_name)
+        .and_then(|value| value.try_into_any_norito::<String>().ok())
+        .as_deref()
+        == Some(expected_binding.as_str());
+    let operation_matches = transaction
+        .metadata()
+        .get(&operation_name)
+        .and_then(|value| value.try_into_any_norito::<String>().ok())
+        .as_deref()
+        == Some(validated.envelope.operation.label());
+    let wire = transaction
+        .encode_wire_v1()
+        .map_err(|error| eyre!("failed to encode committed prepared transaction: {error}"))?;
+    if !binding_matches
+        || !operation_matches
+        || wire != validated.wire()?
+        || transaction.hash() != expected_transaction.hash()
+        || transaction.hash_as_entrypoint() != entrypoint_hash
+    {
+        eyre::bail!("committed proof differs from the exact prepared transaction");
+    }
+    Ok(entrypoint_hash.into())
+}
+
+fn report_prepared_classification(
+    public_root: &str,
+    args: &WriteCanary,
+    validated: &ValidatedPreparedOperation,
+    classification: PreparedRecoveryClassification,
 ) -> Result<Value> {
-    let public_root = normalize_root_url(&args.public_root)?;
-    let onboarding_token = read_onboarding_token_file(&args.onboarding_token_file)?;
-    // Account literals in both onboarding and faucet payloads must use the
-    // same I105 network discriminant as the fresh Taira genesis.  Install the
-    // guard before the first AccountId formatting operation, not only before
-    // the later signed transaction.
-    let _guard = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
-    let http = http_client()?;
-    let signer = resolve_canary_signer(config, args.use_config_signer)?;
+    match classification {
+        PreparedRecoveryClassification::Absent => prepared_operation_report(
+            public_root,
+            args,
+            &validated.envelope,
+            &validated.envelope_bytes,
+            "Pending",
+            None,
+            Some("Absent".to_owned()),
+        ),
+        PreparedRecoveryClassification::Applied {
+            block_height,
+            evidence,
+        } => prepared_operation_report(
+            public_root,
+            args,
+            &validated.envelope,
+            &validated.envelope_bytes,
+            "Applied",
+            block_height,
+            Some(evidence),
+        ),
+        PreparedRecoveryClassification::Pending { terminal_kind } => prepared_operation_report(
+            public_root,
+            args,
+            &validated.envelope,
+            &validated.envelope_bytes,
+            "Pending",
+            None,
+            Some(terminal_kind),
+        ),
+        PreparedRecoveryClassification::Rejected { terminal_kind } => prepared_operation_report(
+            public_root,
+            args,
+            &validated.envelope,
+            &validated.envelope_bytes,
+            "Rejected",
+            None,
+            Some(terminal_kind),
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepared_operation_report(
+    public_root: &str,
+    args: &WriteCanary,
+    envelope: &PreparedMutationEnvelopeV1,
+    envelope_bytes: &[u8],
+    outcome: &str,
+    applied_block_height: Option<u64>,
+    evidence: Option<String>,
+) -> Result<Value> {
+    let operation = &envelope.operation;
+    let mut extra = Map::new();
+    extra.insert(
+        "authorization_sha256".to_owned(),
+        Value::String(envelope.binding.authorization_sha256.clone()),
+    );
+    extra.insert(
+        "authorization_nonce".to_owned(),
+        Value::String(envelope.binding.authorization_nonce.clone()),
+    );
+    extra.insert(
+        "mutation_kind".to_owned(),
+        Value::String(envelope.binding.kind.clone()),
+    );
+    extra.insert(
+        "mutation_phase".to_owned(),
+        Value::String(envelope.binding.phase.clone()),
+    );
+    extra.insert(
+        "idempotency_key".to_owned(),
+        Value::String(envelope.binding.idempotency_key.clone()),
+    );
+    extra.insert(
+        "operation".to_owned(),
+        Value::String(operation.label().to_owned()),
+    );
+    extra.insert(
+        "transaction_hash_hex".to_owned(),
+        operation
+            .transaction_hash_hex()
+            .map(|hash| Value::String(hash.to_owned()))
+            .unwrap_or(Value::Null),
+    );
+    extra.insert(
+        "prepared_envelope_sha256".to_owned(),
+        Value::String(hex::encode(Sha256::digest(envelope_bytes))),
+    );
+    extra.insert(
+        "prepared_envelope_size".to_owned(),
+        Value::from(u64::try_from(envelope_bytes.len()).expect("bounded envelope size")),
+    );
+    extra.insert(
+        "recovery_outcome".to_owned(),
+        Value::String(outcome.to_owned()),
+    );
+    extra.insert(
+        "applied_block_height".to_owned(),
+        applied_block_height.map(Value::from).unwrap_or(Value::Null),
+    );
+    extra.insert(
+        "evidence".to_owned(),
+        evidence.map(Value::String).unwrap_or(Value::Null),
+    );
+    extra.insert(
+        "execution_expires_at_unix_ms".to_owned(),
+        Value::from(envelope.binding.execution_expires_at_unix_ms),
+    );
+    if args.operation == WriteCanaryOperation::FinalCanary {
+        let fee_payment = operation
+            .fee_payment()
+            .ok_or_else(|| eyre!("final canary report omits its exact fee payment"))?;
+        let fee_quote = operation
+            .fee_quote()
+            .ok_or_else(|| eyre!("final canary report omits its exact fee quote"))?;
+        extra.insert(
+            "fee_payment".to_owned(),
+            json::to_value(fee_payment).wrap_err("serialize exact fee payment")?,
+        );
+        extra.insert(
+            "fee_quote".to_owned(),
+            json::to_value(fee_quote).wrap_err("serialize exact fee quote")?,
+        );
+    }
+    report_value(
+        "taira_write_canary",
+        "ok",
+        public_root,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        extra,
+    )
+}
+
+fn prepare_onboarding_operation(
+    config: &Config,
+    args: &WriteCanary,
+    public_root: &str,
+    binding: &PreparedMutationBindingV1,
+) -> Result<PreparedMutationEnvelopeV1> {
+    let token = read_onboarding_token_file(args.require_onboarding_token()?)?;
+    let signer = resolve_canary_signer(config)?;
+    let canary_config = write_canary_config(config, public_root, &signer)?;
+    let client = IrohaClient::new(canary_config.clone());
     let alias = build_alias(
         &args.alias_prefix,
         signer.key_pair.public_key(),
-        "wonderland.universal",
+        TAIRA_CANARY_ALIAS_SCOPE,
     )?;
-    let mut warnings = Vec::new();
-    let mut checks = Vec::new();
-    let mut failures = Vec::new();
-    let onboarding_plan = plan_canary_onboarding(
-        &http,
-        &public_root,
-        &alias,
-        &signer.account_id,
-        &onboarding_token,
-    )?;
-    let onboarding_receipt =
-        validate_onboarding_plan_receipt(onboarding_plan.body.as_ref(), &signer.account_id, &alias);
-    push_check(
-        &mut checks,
-        "accounts_onboard_plan",
-        onboarding_plan.status,
-        onboarding_plan.status == 200 && onboarding_receipt.is_ok(),
-        onboarding_plan.body.as_ref().map(compact_json),
-    );
-    if onboarding_plan.status != 200 {
-        failures.push(format!(
-            "account onboarding planning failed with HTTP {}; onboarding apply was not attempted; faucet funding was not attempted",
-            onboarding_plan.status
-        ));
-        let mut extra = Map::new();
-        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
-        return report_value(
-            "taira_write_canary",
-            "fail",
-            &public_root,
-            checks,
-            warnings,
-            failures,
-            extra,
-        );
-    }
-    let onboarding_receipt = match onboarding_receipt {
-        Ok(receipt) => receipt,
-        Err(error) => {
-            failures.push(format!(
-                "account onboarding plan receipt was invalid: {error:#}"
-            ));
-            let mut extra = Map::new();
-            insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
-            return report_value(
-                "taira_write_canary",
-                "fail",
-                &public_root,
-                checks,
-                warnings,
-                failures,
-                extra,
-            );
+    let request =
+        AccountOnboardingPlanRequestV1::try_new(alias, &signer.account_id, std::iter::empty())?;
+    let receipt = client
+        .plan_account_onboarding(&request, token.as_str())
+        .wrap_err("failed to obtain an authenticated onboarding plan")?;
+    let operation = match client
+        .prepare_account_onboarding_transaction(&request, &receipt, binding, token.as_str())
+        .wrap_err("failed to prepare exact sponsored onboarding transaction")?
+    {
+        AccountOnboardingPrepareResponseV1::Prepared(prepared) => {
+            PreparedTransactionOperationV1::OnboardingPrepared(prepared)
+        }
+        AccountOnboardingPrepareResponseV1::ProofRequired(result) => {
+            PreparedTransactionOperationV1::OnboardingProofRequired(
+                PreparedOnboardingProofRequiredV1 {
+                    schema: PREPARED_ONBOARDING_PROOF_REQUIRED_SCHEMA_V1.to_owned(),
+                    receipt,
+                    result,
+                },
+            )
         }
     };
-    let onboarding_apply =
-        apply_canary_onboarding(&http, &public_root, &onboarding_receipt, &onboarding_token)?;
-    let onboarding_contract = validate_onboarding_apply_response(
-        onboarding_apply.body.as_ref(),
-        &signer.account_id,
-        &alias,
-    );
-    let onboarding_apply_ok = onboarding_contract.as_ref().is_ok_and(|result| {
-        (result.unchanged && onboarding_apply.status == 200)
-            || (!result.unchanged && onboarding_apply.status == 202)
-    });
-    push_check(
-        &mut checks,
-        "accounts_onboard",
-        onboarding_apply.status,
-        onboarding_apply_ok,
-        onboarding_apply.body.as_ref().map(compact_json),
-    );
-    let onboarding_contract = match onboarding_contract {
-        Ok(result) if onboarding_apply_ok => result,
-        Ok(_) => {
-            failures.push(format!(
-                "account onboarding apply returned incompatible HTTP {}",
-                onboarding_apply.status
-            ));
-            let mut extra = Map::new();
-            insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
-            return report_value(
-                "taira_write_canary",
-                "fail",
-                &public_root,
-                checks,
-                warnings,
-                failures,
-                extra,
-            );
-        }
-        Err(error) => {
-            failures.push(format!(
-                "account onboarding apply response was invalid: {error:#}"
-            ));
-            let mut extra = Map::new();
-            insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
-            return report_value(
-                "taira_write_canary",
-                "fail",
-                &public_root,
-                checks,
-                warnings,
-                failures,
-                extra,
-            );
-        }
+    let wire = operation
+        .signed_transaction_wire_hex()
+        .map(|wire| hex::decode(wire).wrap_err("prepared onboarding wire is not hexadecimal"))
+        .transpose()?;
+    let envelope = PreparedMutationEnvelopeV1 {
+        schema: PREPARED_ENVELOPE_SCHEMA_V1.to_owned(),
+        binding: binding.clone(),
+        public_root: public_root.to_owned(),
+        chain_id: canary_config.chain.to_string(),
+        network_id: canary_config.network_id.to_string(),
+        authority: canary_config.account.to_string(),
+        operation,
     };
-    if let Some(onboarding_tx_hash) = onboarding_contract.tx_hash_hex.as_deref() {
-        let onboarding_final = wait_for_pipeline_terminal_status(
-            &http,
-            &public_root,
-            onboarding_tx_hash,
-            Duration::from_millis(DEFAULT_WRITE_STATUS_TIMEOUT_MS),
-        )?;
-        let onboarding_terminal = pipeline_status_kind(onboarding_final.body.as_ref());
-        let onboarding_applied =
-            onboarding_final.status == 200 && onboarding_terminal.as_deref() == Some("Applied");
-        push_check(
-            &mut checks,
-            "accounts_onboard_finality",
-            onboarding_final.status,
-            onboarding_applied,
-            onboarding_final.body.as_ref().map(compact_json),
-        );
-        if onboarding_applied {
-            // Continue to faucet funding.
-        } else {
-            failures.push(format!(
-                "account onboarding transaction {onboarding_tx_hash} did not reach Applied finality; last status was {}",
-                onboarding_terminal.as_deref().unwrap_or("not_observed")
-            ));
-        }
-    } else {
-        push_check(
-            &mut checks,
-            "accounts_onboard_finality",
-            200,
-            true,
-            Some("Unchanged: no transaction submitted".to_owned()),
-        );
-    }
-    if !failures.is_empty() {
-        let mut extra = Map::new();
-        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
-        return report_value(
-            "taira_write_canary",
-            "fail",
-            &public_root,
-            checks,
-            warnings,
-            failures,
-            extra,
-        );
-    }
-    let faucet = claim_faucet(&http, &public_root, &signer.account_id, &config.network_id)?;
-    let faucet_contract = validate_faucet_response(
-        faucet.body.as_ref(),
-        &signer.account_id,
-        &args.faucet_asset_id,
-    );
-    push_check(
-        &mut checks,
-        "accounts_faucet",
-        faucet.status,
-        faucet.status == 202 && faucet_contract.is_ok(),
-        faucet.body.as_ref().map(compact_json),
-    );
-    if faucet.status != 202 {
-        failures.push(faucet_failure_hint(&faucet));
-    }
-    let faucet_tx_hash = match faucet_contract {
-        Ok(hash) if faucet.status == 202 => hash,
-        Ok(_) => String::new(),
-        Err(error) => {
-            failures.push(format!("faucet response was invalid: {error:#}"));
-            String::new()
-        }
-    };
-    if !failures.is_empty() {
-        let mut extra = Map::new();
-        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
-        return report_value(
-            "taira_write_canary",
-            "fail",
-            &public_root,
-            checks,
-            warnings,
-            failures,
-            extra,
-        );
-    }
-    let faucet_final = wait_for_pipeline_terminal_status(
-        &http,
-        &public_root,
-        &faucet_tx_hash,
-        Duration::from_millis(DEFAULT_WRITE_STATUS_TIMEOUT_MS),
+    validate_prepared_operation(
+        config,
+        args,
+        WriteCanaryOperation::Onboarding,
+        binding,
+        public_root,
+        envelope.clone(),
+        wire,
     )?;
-    let faucet_terminal = pipeline_status_kind(faucet_final.body.as_ref());
-    let faucet_applied =
-        faucet_final.status == 200 && faucet_terminal.as_deref() == Some("Applied");
-    push_check(
-        &mut checks,
-        "accounts_faucet_finality",
-        faucet_final.status,
-        faucet_applied,
-        faucet_final.body.as_ref().map(compact_json),
-    );
-    if !faucet_applied {
-        failures.push(format!(
-            "faucet transaction {faucet_tx_hash} did not reach Applied finality; last status was {}",
-            faucet_terminal.as_deref().unwrap_or("not_observed")
-        ));
-        let mut extra = Map::new();
-        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
-        return report_value(
-            "taira_write_canary",
-            "fail",
-            &public_root,
-            checks,
-            warnings,
-            failures,
-            extra,
+    Ok(envelope)
+}
+
+fn prepare_faucet_operation(
+    config: &Config,
+    args: &WriteCanary,
+    public_root: &str,
+    binding: &PreparedMutationBindingV1,
+) -> Result<PreparedMutationEnvelopeV1> {
+    let signer = resolve_canary_signer(config)?;
+    let canary_config = write_canary_config(config, public_root, &signer)?;
+    let client = IrohaClient::new(canary_config.clone());
+    let claim =
+        solve_account_faucet_claim(public_root, &signer.account_id, &canary_config.network_id)?;
+    let prepared = client
+        .prepare_account_faucet_transaction(&claim, binding)
+        .wrap_err("failed to prepare exact faucet transaction")?;
+    if prepared.asset_definition_id != args.faucet_asset_id {
+        eyre::bail!(
+            "prepared faucet asset `{}` differs from required `{}`",
+            prepared.asset_definition_id,
+            args.faucet_asset_id
         );
     }
+    let wire = hex::decode(&prepared.signed_transaction_wire_hex)
+        .wrap_err("prepared faucet wire is not hexadecimal")?;
+    let envelope = PreparedMutationEnvelopeV1 {
+        schema: PREPARED_ENVELOPE_SCHEMA_V1.to_owned(),
+        binding: binding.clone(),
+        public_root: public_root.to_owned(),
+        chain_id: canary_config.chain.to_string(),
+        network_id: canary_config.network_id.to_string(),
+        authority: canary_config.account.to_string(),
+        operation: PreparedTransactionOperationV1::FaucetPrepared(prepared),
+    };
+    validate_prepared_operation(
+        config,
+        args,
+        WriteCanaryOperation::Faucet,
+        binding,
+        public_root,
+        envelope.clone(),
+        Some(wire),
+    )?;
+    Ok(envelope)
+}
+
+fn submit_server_prepared_operation(
+    config: &Config,
+    args: &WriteCanary,
+    public_root: &str,
+    validated: &ValidatedPreparedOperation,
+) -> Result<PreparedRecoveryClassification> {
+    let signer = resolve_canary_signer(config)?;
+    let client = IrohaClient::new(write_canary_config(config, public_root, &signer)?);
+    let classification = classify_exact_prepared_operation(&client, validated)?;
+    if !submit_required_after_classification(&validated.envelope.binding, &classification)? {
+        return Ok(classification);
+    }
+    let submitted = match &validated.envelope.operation {
+        PreparedTransactionOperationV1::OnboardingPrepared(prepared) => {
+            let token = read_onboarding_token_file(args.require_onboarding_token()?)?;
+            let request = AccountOnboardingPlanRequestV1::try_new(
+                build_alias(
+                    &args.alias_prefix,
+                    signer.key_pair.public_key(),
+                    TAIRA_CANARY_ALIAS_SCOPE,
+                )?,
+                &signer.account_id,
+                std::iter::empty(),
+            )?;
+            client.submit_prepared_account_onboarding_transaction(
+                &request,
+                prepared,
+                token.as_str(),
+            )
+        }
+        PreparedTransactionOperationV1::FaucetPrepared(prepared) => {
+            client.submit_prepared_account_faucet_transaction(prepared)
+        }
+        PreparedTransactionOperationV1::OnboardingProofRequired(_) => {
+            eyre::bail!("a proof-required onboarding result must never be submitted")
+        }
+        PreparedTransactionOperationV1::FinalCanary(_) => {
+            eyre::bail!("final-canary transaction reached the server-prepared submit path")
+        }
+    };
+    let submitted = match submitted {
+        Ok(submitted) => submitted,
+        Err(error) => {
+            return match classify_exact_prepared_operation(&client, validated)? {
+                PreparedRecoveryClassification::Absent => Err(error).wrap_err(
+                    "exact server-prepared transaction submission failed before observability",
+                ),
+                reconciled => Ok(reconciled),
+            };
+        }
+    };
+    match submitted.outcome {
+        PreparedTransactionOutcomeV1::Rejected => Ok(PreparedRecoveryClassification::Rejected {
+            terminal_kind: "Rejected".to_owned(),
+        }),
+        PreparedTransactionOutcomeV1::Applied | PreparedTransactionOutcomeV1::Pending => {
+            match classify_exact_prepared_operation(&client, validated)? {
+                PreparedRecoveryClassification::Absent => {
+                    Ok(PreparedRecoveryClassification::Pending {
+                        terminal_kind: "AcceptedNotVisible".to_owned(),
+                    })
+                }
+                reconciled => Ok(reconciled),
+            }
+        }
+    }
+}
+fn write_canary_config(
+    config: &Config,
+    public_root: &str,
+    signer: &CanarySigner,
+) -> Result<Config> {
     let mut canary_config = config.clone();
     canary_config.chain = DEFAULT_CHAIN_ID.into();
     canary_config.torii_api_url = Url::parse(&format!("{public_root}/"))
@@ -1211,94 +3710,51 @@ fn run_write_canary(
     canary_config.transaction_status_timeout =
         Duration::from_millis(DEFAULT_WRITE_STATUS_TIMEOUT_MS);
     canary_config.transaction_add_nonce = false;
-    if let Some(path) = &args.write_config {
-        write_runtime_config(path, &canary_config)?;
+    Ok(canary_config)
+}
+
+trait ReportOutput {
+    fn output_format(&self) -> CliOutputFormat;
+    fn print_data(&mut self, data: &Value) -> Result<()>;
+    fn println_data(&mut self, data: String) -> Result<()>;
+}
+struct RunContextReportOutput<'a, C: RunContext> {
+    context: &'a mut C,
+}
+impl<C: RunContext> ReportOutput for RunContextReportOutput<'_, C> {
+    fn output_format(&self) -> CliOutputFormat {
+        self.context.output_format()
     }
-    let client = IrohaClient::new(canary_config.clone());
-    let mut metadata = Metadata::default();
-    insert_string_metadata(&mut metadata, "taira_canary", "write-canary")?;
-    let message = canary_message()?;
-    let instruction = Log::new(LogLevel::INFO, message.clone());
-    let executable = Executable::Instructions(vec![InstructionBox::from(instruction)].into());
-    let (transaction, fee_quote) =
-        quote_and_sign_transaction(&client, executable, fee_payment, metadata)
-            .wrap_err("failed to quote and sign Taira canary transaction")?;
-    let signed_hash = transaction.hash();
-    let entrypoint_hash = TransactionEntrypoint::External(transaction.clone()).hash();
-    client
-        .submit_transaction(&transaction)
-        .map_err(hint_submit_error)?;
-    let wait = client
-        .wait_for_transaction_terminal_status(
-            signed_hash,
-            TransactionWaitOptions {
-                timeout: Duration::from_millis(DEFAULT_WRITE_STATUS_TIMEOUT_MS),
-                poll_interval: Duration::from_millis(500),
-                terminal_statuses: vec![TransactionWaitTerminalStatus::Applied],
-            },
-        )
-        .map_err(hint_wait_error)?;
-    if wait.terminal_kind != "Applied" {
-        failures.push(format!(
-            "write canary stopped at {}; inspect /v1/pipeline/transactions/status for {}",
-            wait.terminal_kind, wait.hash
-        ));
+    fn print_data(&mut self, data: &Value) -> Result<()> {
+        self.context.print_data(data)
     }
-    let tx_query_verified = match client.query(FindTransactions).execute_all() {
-        Ok(transactions) => transactions
-            .iter()
-            .any(|tx| tx.entrypoint_hash() == &entrypoint_hash),
-        Err(err) => {
-            warnings.push(format!("transaction query verification failed: {err}"));
-            false
-        }
-    };
-    if !tx_query_verified {
-        warnings.push("write canary reached pipeline terminal status but transaction query did not return the entry yet".to_owned());
+    fn println_data(&mut self, data: String) -> Result<()> {
+        self.context.println_data(data)
     }
-    let status = if failures.is_empty() { "ok" } else { "fail" };
-    let mut extra = Map::new();
-    insert_write_receipt_identity(&mut extra, &signer, &alias, &args.faucet_asset_id);
-    extra.insert(
-        "fee_payment".into(),
-        norito::json::to_value(&fee_quote.intent).wrap_err("serialize fee payment receipt")?,
-    );
-    extra.insert(
-        "fee_quote".into(),
-        norito::json::to_value(&fee_quote).wrap_err("serialize fee quote receipt")?,
-    );
-    extra.insert("message".into(), Value::String(message));
-    extra.insert("faucet_tx_hash".into(), Value::String(faucet_tx_hash));
-    extra.insert("ping_tx_hash".into(), Value::String(wait.hash.clone()));
-    extra.insert(
-        "applied_block_height".into(),
-        wait.r#final
-            .status
-            .block_height
-            .map(Value::from)
-            .unwrap_or(Value::Null),
-    );
-    extra.insert("terminal_kind".into(), Value::String(wait.terminal_kind));
-    extra.insert("tx_query_verified".into(), Value::from(tx_query_verified));
-    if let Some(path) = &args.write_config {
-        extra.insert(
-            "config_path".into(),
-            Value::String(path.display().to_string()),
-        );
+}
+struct WriterReportOutput<W> {
+    write: W,
+    output_format: CliOutputFormat,
+}
+impl<W: std::io::Write> ReportOutput for WriterReportOutput<W> {
+    fn output_format(&self) -> CliOutputFormat {
+        self.output_format
     }
-    report_value(
-        "taira_write_canary",
-        status,
-        &public_root,
-        checks,
-        warnings,
-        failures,
-        extra,
-    )
+    fn print_data(&mut self, data: &Value) -> Result<()> {
+        let rendered = json::to_json_pretty(data).wrap_err("failed to render Taira report JSON")?;
+        writeln!(self.write, "{rendered}").wrap_err("failed to write Taira report JSON")
+    }
+    fn println_data(&mut self, data: String) -> Result<()> {
+        writeln!(self.write, "{data}").wrap_err("failed to write Taira report text")
+    }
 }
 fn render_report<C: RunContext>(context: &mut C, json: bool, report: &Value) -> Result<()> {
-    if json || context.output_format() == CliOutputFormat::Json {
-        context.print_data(report)
+    let mut output = RunContextReportOutput { context };
+    render_report_to(&mut output, json, report)
+}
+fn render_report_to<O: ReportOutput>(output: &mut O, json: bool, report: &Value) -> Result<()> {
+    if json || output.output_format() == CliOutputFormat::Json {
+        output.print_data(report)
     } else {
         let object = report
             .as_object()
@@ -1315,7 +3771,7 @@ fn render_report<C: RunContext>(context: &mut C, json: bool, report: &Value) -> 
             .get("public_root")
             .and_then(Value::as_str)
             .unwrap_or(DEFAULT_PUBLIC_ROOT);
-        context.println_data(format!("{command}: {status} ({public_root})"))?;
+        output.println_data(format!("{command}: {status} ({public_root})"))?;
         if let Some(checks) = object.get("checks").and_then(Value::as_array) {
             for check in checks {
                 let name = check.get("name").and_then(Value::as_str).unwrap_or("check");
@@ -1330,21 +3786,21 @@ fn render_report<C: RunContext>(context: &mut C, json: bool, report: &Value) -> 
                     .map(|detail| format!(" ({detail})"))
                     .unwrap_or_default();
                 let marker = if ok { "ok" } else { "fail" };
-                context.println_data(format!("  {marker} {name} HTTP {status_code}{detail}"))?;
+                output.println_data(format!("  {marker} {name} HTTP {status_code}{detail}"))?;
             }
         }
         if let Some(warnings) = object.get("warnings").and_then(Value::as_array) {
-            print_receipt_fields(context, object)?;
+            print_receipt_fields(output, object)?;
             for warning in warnings {
                 if let Some(warning) = warning.as_str() {
-                    context.println_data(format!("  warn {warning}"))?;
+                    output.println_data(format!("  warn {warning}"))?;
                 }
             }
         }
         if let Some(failures) = object.get("failures").and_then(Value::as_array) {
             for failure in failures {
                 if let Some(failure) = failure.as_str() {
-                    context.println_data(format!("  fail {failure}"))?;
+                    output.println_data(format!("  fail {failure}"))?;
                 }
             }
         }
@@ -1363,7 +3819,7 @@ fn ensure_write_canary_succeeded(report: &Value) -> Result<()> {
     }
     eyre::bail!("Taira write canary found hard failures")
 }
-fn print_receipt_fields<C: RunContext>(context: &mut C, object: &Map) -> Result<()> {
+fn print_receipt_fields<O: ReportOutput>(output: &mut O, object: &Map) -> Result<()> {
     const RECEIPT_FIELDS: &[&str] = &[
         "chain",
         "chain_discriminant",
@@ -1386,7 +3842,7 @@ fn print_receipt_fields<C: RunContext>(context: &mut C, object: &Map) -> Result<
         else {
             continue;
         };
-        context.println_data(format!("  {field}: {}", display_json_scalar(value)))?;
+        output.println_data(format!("  {field}: {}", display_json_scalar(value)))?;
     }
     Ok(())
 }
@@ -1597,7 +4053,7 @@ fn account_signed_soracloud_status(client: &IrohaClient) -> Result<HttpJson> {
     } else {
         json::from_str::<Value>(&text).ok()
     };
-    Ok(HttpJson { status, body, text })
+    Ok(HttpJson { status, body })
 }
 fn decode_http_json_response(response: reqwest::blocking::Response) -> Result<HttpJson> {
     let status = response.status().as_u16();
@@ -1612,51 +4068,14 @@ fn decode_http_json_response(response: reqwest::blocking::Response) -> Result<Ht
     Ok(HttpJson {
         status,
         body: parsed,
-        text,
     })
-}
-fn redact_sensitive_json(value: &mut Value, sensitive_value: &str) {
-    match value {
-        Value::String(text) => {
-            if text.contains(sensitive_value) {
-                *text = text.replace(sensitive_value, "<redacted>");
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                redact_sensitive_json(item, sensitive_value);
-            }
-        }
-        Value::Object(object) => {
-            let original = std::mem::take(object);
-            for (key, mut item) in original {
-                redact_sensitive_json(&mut item, sensitive_value);
-                object.insert(key.replace(sensitive_value, "<redacted>"), item);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
-    }
-}
-fn redact_http_json(response: &mut HttpJson, sensitive_value: &str) {
-    if response.text.contains(sensitive_value) {
-        response.text = response.text.replace(sensitive_value, "<redacted>");
-    }
-    if let Some(body) = &mut response.body {
-        redact_sensitive_json(body, sensitive_value);
-        response.text =
-            json::to_json(body).unwrap_or_else(|_| "\"<redacted JSON response>\"".to_owned());
-    } else if !response.text.trim().is_empty() {
-        response.text = "<invalid JSON response>".to_owned();
-    }
 }
 fn collect_status_warnings(status: Option<&Value>, warnings: &mut Vec<String>) {
     let Some(status) = status else {
         warnings.push("/status returned a non-JSON body".to_owned());
         return;
     };
-    if value_path_bool(status, &["sumeragi", "tx_queue_saturated"]).unwrap_or(false)
-        || value_path_bool(status, &["tx_queue_saturated"]).unwrap_or(false)
-    {
+    if value_path_bool(status, &["sumeragi", "tx_queue_saturated"]).unwrap_or(false) {
         warnings.push("public transaction queue reports saturation".to_owned());
     }
     if let Some(rejected) = value_path_u64(status, &["txs_rejected_recent_5m"])
@@ -1683,6 +4102,26 @@ fn value_path_u64(value: &Value, path: &[&str]) -> Option<u64> {
 }
 fn value_path_bool(value: &Value, path: &[&str]) -> Option<bool> {
     value_path(value, path).and_then(Value::as_bool)
+}
+fn validate_public_status(status: Option<&Value>) -> Result<(), String> {
+    let status = status
+        .and_then(Value::as_object)
+        .ok_or_else(|| "/status returned a non-object JSON body".to_owned())?;
+    if status.contains_key("tx_queue_saturated") {
+        return Err(
+            "/status contains retired root `tx_queue_saturated`; expected `sumeragi.tx_queue_saturated`"
+                .to_owned(),
+        );
+    }
+    status
+        .get("sumeragi")
+        .and_then(Value::as_object)
+        .and_then(|sumeragi| sumeragi.get("tx_queue_saturated"))
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            "/status field `sumeragi.tx_queue_saturated` must be a boolean".to_owned()
+        })?;
+    Ok(())
 }
 fn validate_time_snapshot(snapshot: Option<&Value>) -> Result<(), String> {
     let snapshot = snapshot
@@ -1734,35 +4173,980 @@ fn tagged_enum_name<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
     }
     object.get(field)?.as_str()
 }
+fn exact_soracloud_status_object<'a>(
+    value: &'a Value,
+    context: &str,
+    fields: &[&str],
+) -> Result<&'a Map, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("{context} must be an object"))?;
+    if let Some(field) = fields.iter().find(|field| !object.contains_key(**field)) {
+        return Err(format!("{context} is missing required field `{field}`"));
+    }
+    if let Some(field) = object
+        .keys()
+        .find(|field| !fields.contains(&field.as_str()))
+    {
+        return Err(format!("{context} contains unknown field `{field}`"));
+    }
+    Ok(object)
+}
+fn soracloud_status_field<'a>(
+    object: &'a Map,
+    field: &str,
+    context: &str,
+) -> Result<&'a Value, String> {
+    object
+        .get(field)
+        .ok_or_else(|| format!("{context} is missing required field `{field}`"))
+}
+fn soracloud_status_u64(object: &Map, field: &str, context: &str) -> Result<u64, String> {
+    soracloud_status_field(object, field, context)?
+        .as_u64()
+        .ok_or_else(|| format!("{context}.{field} must be a nonnegative integer"))
+}
+fn soracloud_status_bool(object: &Map, field: &str, context: &str) -> Result<bool, String> {
+    soracloud_status_field(object, field, context)?
+        .as_bool()
+        .ok_or_else(|| format!("{context}.{field} must be a boolean"))
+}
+fn soracloud_status_string<'a>(
+    object: &'a Map,
+    field: &str,
+    context: &str,
+) -> Result<&'a str, String> {
+    soracloud_status_field(object, field, context)?
+        .as_str()
+        .ok_or_else(|| format!("{context}.{field} must be a string"))
+}
+fn validate_soracloud_nullable_string(
+    object: &Map,
+    field: &str,
+    context: &str,
+) -> Result<(), String> {
+    let value = soracloud_status_field(object, field, context)?;
+    if value.is_null() || value.is_string() {
+        Ok(())
+    } else {
+        Err(format!("{context}.{field} must be a string or null"))
+    }
+}
+fn validate_soracloud_string_array(object: &Map, field: &str, context: &str) -> Result<(), String> {
+    let values = soracloud_status_field(object, field, context)?
+        .as_array()
+        .ok_or_else(|| format!("{context}.{field} must be an array"))?;
+    if values.iter().all(Value::is_string) {
+        Ok(())
+    } else {
+        Err(format!("{context}.{field} must contain only strings"))
+    }
+}
+fn validate_soracloud_tagged_unit<'a>(
+    value: &'a Value,
+    tag: &str,
+    variants: &[&str],
+    context: &str,
+) -> Result<&'a str, String> {
+    let object = exact_soracloud_status_object(value, context, &[tag, "value"])?;
+    if !soracloud_status_field(object, "value", context)?.is_null() {
+        return Err(format!("{context}.value must be null"));
+    }
+    let variant = soracloud_status_string(object, tag, context)?;
+    if variants.contains(&variant) {
+        Ok(variant)
+    } else {
+        Err(format!("{context}.{tag} has unknown variant `{variant}`"))
+    }
+}
+fn validate_soracloud_hash(value: &Value, context: &str) -> Result<(), String> {
+    let raw = value
+        .as_str()
+        .ok_or_else(|| format!("{context} must be a canonical hash string"))?;
+    let hash = json::from_value::<Hash>(value.clone())
+        .map_err(|_| format!("{context} must be a canonical hash string"))?;
+    if hash.to_string() != raw {
+        return Err(format!("{context} must use exact canonical hash text"));
+    }
+    Ok(())
+}
+fn validate_soracloud_nullable_hash(
+    object: &Map,
+    field: &str,
+    context: &str,
+) -> Result<(), String> {
+    let value = soracloud_status_field(object, field, context)?;
+    if value.is_null() {
+        Ok(())
+    } else {
+        validate_soracloud_hash(value, &format!("{context}.{field}"))
+    }
+}
+fn validate_soracloud_u128(value: &Value, context: &str) -> Result<(), String> {
+    let literal =
+        json::to_string(value).map_err(|_| format!("{context} must be an unsigned integer"))?;
+    let parsed = literal
+        .parse::<u128>()
+        .map_err(|_| format!("{context} must be an unsigned integer"))?;
+    if parsed.to_string() != literal {
+        return Err(format!(
+            "{context} must use exact canonical unsigned integer text"
+        ));
+    }
+    Ok(())
+}
+fn validate_canonical_soracloud_route_host(host: &str, context: &str) -> Result<(), String> {
+    if host.is_empty()
+        || host.chars().any(char::is_whitespace)
+        || host.chars().any(char::is_control)
+    {
+        return Err(format!(
+            "{context} must be an exact nonempty host without whitespace"
+        ));
+    }
+    if let Ok(address) = host.parse::<std::net::IpAddr>() {
+        if address.to_string() == host {
+            return Ok(());
+        }
+        return Err(format!("{context} must use canonical IP-literal spelling"));
+    }
+    if host
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || byte == b'.')
+    {
+        return Err(format!("{context} must use canonical IPv4 spelling"));
+    }
+    if !host.is_ascii()
+        || host.len() > 253
+        || host.bytes().any(|byte| byte.is_ascii_uppercase())
+        || host.starts_with('.')
+        || host.ends_with('.')
+        || host.split('.').any(|label| {
+            label.is_empty()
+                || label.len() > 63
+                || label.starts_with('-')
+                || label.ends_with('-')
+                || !label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+    {
+        return Err(format!(
+            "{context} must be a lowercase canonical DNS host or canonical IP literal"
+        ));
+    }
+    Ok(())
+}
+fn validate_canonical_soracloud_route_prefix(prefix: &str, context: &str) -> Result<(), String> {
+    let Some(suffix) = prefix.strip_prefix('/') else {
+        return Err(format!(
+            "{context} must be an exact canonical absolute route prefix"
+        ));
+    };
+    if prefix.is_empty()
+        || prefix.contains('\\')
+        || prefix.contains('?')
+        || prefix.contains('#')
+        || prefix.chars().any(char::is_whitespace)
+        || prefix.chars().any(char::is_control)
+        || (prefix != "/"
+            && (prefix.ends_with('/')
+                || suffix
+                    .split('/')
+                    .any(|component| component.is_empty() || matches!(component, "." | ".."))))
+    {
+        return Err(format!(
+            "{context} must be an exact canonical absolute route prefix"
+        ));
+    }
+    Ok(())
+}
+fn validate_soracloud_service_health(value: &Value) -> Result<&str, String> {
+    const FULL_FIELDS: &[&str] = &[
+        "mode",
+        "status",
+        "message",
+        "observed_height",
+        "observed_block_hash",
+        "state_dir",
+        "service_revisions",
+        "healthy_service_revisions",
+        "hydrating_service_revisions",
+        "degraded_service_revisions",
+        "unavailable_service_revisions",
+        "apartments",
+        "running_apartments",
+        "expired_apartments",
+    ];
+    const UNAVAILABLE_FIELDS: &[&str] = &["mode", "status", "message"];
+    let context = "/v1/soracloud/status.service_health";
+    let unvalidated = value
+        .as_object()
+        .ok_or_else(|| format!("{context} must be an object"))?;
+    let status = unvalidated
+        .get("status")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{context}.status must be a string"))?;
+    let fields = if unvalidated.len() == UNAVAILABLE_FIELDS.len() {
+        UNAVAILABLE_FIELDS
+    } else {
+        FULL_FIELDS
+    };
+    let object = exact_soracloud_status_object(value, context, fields)?;
+    if soracloud_status_string(object, "mode", context)? != "embedded_runtime_manager" {
+        return Err(format!(
+            "{context}.mode is not the canonical V1 runtime mode"
+        ));
+    }
+    soracloud_status_string(object, "message", context)?;
+    if fields == UNAVAILABLE_FIELDS {
+        if status != "unavailable" {
+            return Err(format!(
+                "{context} compact form is reserved for unavailable runtime"
+            ));
+        }
+        return Ok(status);
+    }
+    if !["idle", "healthy", "degraded", "unavailable"].contains(&status) {
+        return Err(format!("{context}.status has unknown value `{status}`"));
+    }
+    for field in [
+        "observed_height",
+        "service_revisions",
+        "healthy_service_revisions",
+        "hydrating_service_revisions",
+        "degraded_service_revisions",
+        "unavailable_service_revisions",
+        "apartments",
+        "running_apartments",
+        "expired_apartments",
+    ] {
+        soracloud_status_u64(object, field, context)?;
+    }
+    validate_soracloud_nullable_string(object, "observed_block_hash", context)?;
+    soracloud_status_string(object, "state_dir", context)?;
+    Ok(status)
+}
+fn validate_soracloud_routing(value: &Value) -> Result<(), String> {
+    const FIELDS: &[&str] = &[
+        "configured_lane_count",
+        "declared_lane_count",
+        "active_lane_count",
+        "active_lane_ids",
+        "autoscale_capacity_lane_count",
+        "autoscale_capacity_lane_ids",
+        "dataspace_count",
+        "routing_rules",
+        "default_lane_id",
+        "default_dataspace_id",
+    ];
+    let context = "/v1/soracloud/status.routing";
+    let object = exact_soracloud_status_object(value, context, FIELDS)?;
+    for field in [
+        "configured_lane_count",
+        "declared_lane_count",
+        "active_lane_count",
+        "autoscale_capacity_lane_count",
+        "dataspace_count",
+        "routing_rules",
+        "default_lane_id",
+        "default_dataspace_id",
+    ] {
+        soracloud_status_u64(object, field, context)?;
+    }
+    for (count_field, ids_field) in [
+        ("active_lane_count", "active_lane_ids"),
+        (
+            "autoscale_capacity_lane_count",
+            "autoscale_capacity_lane_ids",
+        ),
+    ] {
+        let ids = soracloud_status_field(object, ids_field, context)?
+            .as_array()
+            .ok_or_else(|| format!("{context}.{ids_field} must be an array"))?;
+        if !ids.iter().all(|value| value.as_u64().is_some()) {
+            return Err(format!(
+                "{context}.{ids_field} must contain only nonnegative integers"
+            ));
+        }
+        if soracloud_status_u64(object, count_field, context)?
+            != u64::try_from(ids.len()).unwrap_or(u64::MAX)
+        {
+            return Err(format!(
+                "{context}.{count_field} does not match {ids_field}"
+            ));
+        }
+    }
+    Ok(())
+}
+fn validate_soracloud_topology(value: &Value) -> Result<(), String> {
+    const FIELDS: &[&str] = &[
+        "active_capability_adverts",
+        "placed_host_count",
+        "hosted_replica_count",
+        "unavailable_replica_count",
+    ];
+    let context = "/v1/soracloud/status.hosted_http_topology";
+    let object = exact_soracloud_status_object(value, context, FIELDS)?;
+    for field in FIELDS {
+        soracloud_status_u64(object, field, context)?;
+    }
+    Ok(())
+}
+fn validate_soracloud_runtime_pressure(value: &Value) -> Result<(), String> {
+    const FULL_FIELDS: &[&str] = &[
+        "enabled",
+        "state_dir",
+        "observed_height",
+        "service_revisions",
+        "apartments",
+        "max_load_factor_bps",
+        "reported_pending_mailbox_messages",
+        "authoritative_pending_mailbox_messages",
+        "bundle_cache_misses",
+        "artifact_cache_misses",
+    ];
+    let context = "/v1/soracloud/status.resource_pressure.runtime";
+    let unvalidated = value
+        .as_object()
+        .ok_or_else(|| format!("{context} must be an object"))?;
+    let enabled = unvalidated
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| format!("{context}.enabled must be a boolean"))?;
+    if !enabled {
+        exact_soracloud_status_object(value, context, &["enabled"])?;
+        return Ok(());
+    }
+    let object = exact_soracloud_status_object(value, context, FULL_FIELDS)?;
+    soracloud_status_string(object, "state_dir", context)?;
+    for field in &FULL_FIELDS[2..] {
+        soracloud_status_u64(object, field, context)?;
+    }
+    Ok(())
+}
+fn validate_soracloud_resource_pressure(value: &Value) -> Result<(), String> {
+    const FIELDS: &[&str] = &[
+        "queue_active",
+        "queue_queued",
+        "queue_capacity",
+        "queue_saturated",
+        "high_load_threshold",
+        "high_load",
+        "runtime",
+    ];
+    let context = "/v1/soracloud/status.resource_pressure";
+    let object = exact_soracloud_status_object(value, context, FIELDS)?;
+    for field in [
+        "queue_active",
+        "queue_queued",
+        "queue_capacity",
+        "high_load_threshold",
+    ] {
+        soracloud_status_u64(object, field, context)?;
+    }
+    soracloud_status_bool(object, "queue_saturated", context)?;
+    soracloud_status_bool(object, "high_load", context)?;
+    validate_soracloud_runtime_pressure(soracloud_status_field(object, "runtime", context)?)
+}
+fn validate_soracloud_failed_admissions(value: &Value) -> Result<(), String> {
+    const FIELDS: &[&str] = &[
+        "available",
+        "total",
+        "governance_manifest_rejected",
+        "sorafs_provider_rejected",
+    ];
+    let context = "/v1/soracloud/status.failed_admissions";
+    let object = exact_soracloud_status_object(value, context, FIELDS)?;
+    soracloud_status_bool(object, "available", context)?;
+    for field in &FIELDS[1..] {
+        soracloud_status_u64(object, field, context)?;
+    }
+    Ok(())
+}
+fn validate_soracloud_runtime_snapshot(value: &Value) -> Result<(), String> {
+    const FIELDS: &[&str] = &[
+        "schema_version",
+        "observed_height",
+        "observed_block_hash",
+        "local_peer_id",
+        "services",
+        "apartments",
+        "hf_sources",
+    ];
+    let context = "/v1/soracloud/status.runtime_manager.snapshot";
+    let object = exact_soracloud_status_object(value, context, FIELDS)?;
+    if soracloud_status_u64(object, "schema_version", context)? != 1 {
+        return Err(format!("{context}.schema_version must equal 1"));
+    }
+    soracloud_status_u64(object, "observed_height", context)?;
+    validate_soracloud_nullable_string(object, "observed_block_hash", context)?;
+    validate_soracloud_nullable_string(object, "local_peer_id", context)?;
+    for field in ["services", "apartments", "hf_sources"] {
+        if !soracloud_status_field(object, field, context)?.is_object() {
+            return Err(format!("{context}.{field} must be an object"));
+        }
+    }
+    Ok(())
+}
+fn validate_soracloud_runtime_manager(value: &Value) -> Result<bool, String> {
+    let context = "/v1/soracloud/status.runtime_manager";
+    let unvalidated = value
+        .as_object()
+        .ok_or_else(|| format!("{context} must be an object"))?;
+    let available = unvalidated
+        .get("available")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| format!("{context}.available must be a boolean"))?;
+    if !available {
+        exact_soracloud_status_object(value, context, &["available"])?;
+        return Ok(false);
+    }
+    let object =
+        exact_soracloud_status_object(value, context, &["available", "state_dir", "snapshot"])?;
+    soracloud_status_string(object, "state_dir", context)?;
+    validate_soracloud_runtime_snapshot(soracloud_status_field(object, "snapshot", context)?)?;
+    Ok(true)
+}
+fn validate_soracloud_rollout(value: &Value, context: &str) -> Result<(), String> {
+    const FIELDS: &[&str] = &[
+        "rollout_handle",
+        "baseline_version",
+        "candidate_version",
+        "canary_percent",
+        "traffic_percent",
+        "stage",
+        "health_failures",
+        "max_health_failures",
+        "health_window_secs",
+        "created_sequence",
+        "updated_sequence",
+    ];
+    let object = exact_soracloud_status_object(value, context, FIELDS)?;
+    soracloud_status_string(object, "rollout_handle", context)?;
+    validate_soracloud_nullable_string(object, "baseline_version", context)?;
+    soracloud_status_string(object, "candidate_version", context)?;
+    for field in [
+        "canary_percent",
+        "traffic_percent",
+        "health_failures",
+        "max_health_failures",
+        "health_window_secs",
+        "created_sequence",
+        "updated_sequence",
+    ] {
+        soracloud_status_u64(object, field, context)?;
+    }
+    if soracloud_status_u64(object, "canary_percent", context)? > 100
+        || soracloud_status_u64(object, "traffic_percent", context)? > 100
+    {
+        return Err(format!(
+            "{context} rollout percentages must be within 0..=100"
+        ));
+    }
+    validate_soracloud_tagged_unit(
+        soracloud_status_field(object, "stage", context)?,
+        "stage",
+        &["Canary", "Promoted", "RolledBack"],
+        &format!("{context}.stage"),
+    )?;
+    Ok(())
+}
+fn validate_soracloud_network_policy(value: &Value, context: &str) -> Result<(), String> {
+    let object = exact_soracloud_status_object(value, context, &["mode", "value"])?;
+    let mode = soracloud_status_string(object, "mode", context)?;
+    let payload = soracloud_status_field(object, "value", context)?;
+    match mode {
+        "Open" | "Isolated" if payload.is_null() => Ok(()),
+        "Allowlist" if payload.is_array() => Ok(()),
+        "Open" | "Isolated" => Err(format!("{context}.value must be null for `{mode}`")),
+        "Allowlist" => Err(format!("{context}.value must be an array for `Allowlist`")),
+        _ => Err(format!("{context}.mode has unknown variant `{mode}`")),
+    }
+}
+#[expect(
+    clippy::too_many_lines,
+    reason = "the V1 status revision inventory is intentionally validated in one exact pass"
+)]
+fn validate_soracloud_revision(value: &Value, context: &str) -> Result<(), String> {
+    const FIELDS: &[&str] = &[
+        "sequence",
+        "action",
+        "service_version",
+        "service_manifest_hash",
+        "container_manifest_hash",
+        "replicas",
+        "execution_plane",
+        "route_host",
+        "route_path_prefix",
+        "base_url",
+        "healthcheck_url",
+        "public_discovery_content_cid",
+        "public_discovery_url",
+        "public_discovery_cid_host_url",
+        "state_binding_count",
+        "state_bindings",
+        "lease_volumes",
+        "allow_model_inference",
+        "allow_model_training",
+        "runtime",
+        "allow_state_writes",
+        "network",
+        "cpu_millis",
+        "memory_bytes",
+        "ephemeral_storage_bytes",
+        "max_open_files_per_process",
+        "max_tasks",
+        "start_grace_secs",
+        "stop_grace_secs",
+        "healthcheck_path",
+        "required_config_names",
+        "required_secret_names",
+        "config_exports",
+        "sandbox_profile_hash",
+        "process_generation",
+        "process_started_sequence",
+        "signed_by",
+    ];
+    let object = exact_soracloud_status_object(value, context, FIELDS)?;
+    soracloud_status_u64(object, "sequence", context)?;
+    validate_soracloud_tagged_unit(
+        soracloud_status_field(object, "action", context)?,
+        "action",
+        &[
+            "Deploy",
+            "Upgrade",
+            "Rollback",
+            "ConfigMutation",
+            "SecretMutation",
+            "StateMutation",
+            "FheJobRun",
+            "FhePolicyRegister",
+            "FhePolicyRotate",
+            "FhePolicyRevoke",
+            "DecryptionRequest",
+            "CiphertextQuery",
+            "Rollout",
+            "LeaseReportingEpochRollover",
+        ],
+        &format!("{context}.action"),
+    )?;
+    soracloud_status_string(object, "service_version", context)?;
+    for field in [
+        "service_manifest_hash",
+        "container_manifest_hash",
+        "sandbox_profile_hash",
+    ] {
+        validate_soracloud_hash(
+            soracloud_status_field(object, field, context)?,
+            &format!("{context}.{field}"),
+        )?;
+    }
+    for field in [
+        "replicas",
+        "state_binding_count",
+        "cpu_millis",
+        "memory_bytes",
+        "ephemeral_storage_bytes",
+        "max_open_files_per_process",
+        "max_tasks",
+        "start_grace_secs",
+        "stop_grace_secs",
+        "process_generation",
+        "process_started_sequence",
+    ] {
+        soracloud_status_u64(object, field, context)?;
+    }
+    validate_soracloud_tagged_unit(
+        soracloud_status_field(object, "execution_plane", context)?,
+        "execution_plane",
+        &["DeterministicService", "HttpService"],
+        &format!("{context}.execution_plane"),
+    )?;
+    let route_host = soracloud_status_field(object, "route_host", context)?;
+    if !route_host.is_null() {
+        validate_canonical_soracloud_route_host(
+            route_host
+                .as_str()
+                .ok_or_else(|| format!("{context}.route_host must be a string or null"))?,
+            &format!("{context}.route_host"),
+        )?;
+    }
+    let route_prefix = soracloud_status_field(object, "route_path_prefix", context)?;
+    if !route_prefix.is_null() {
+        validate_canonical_soracloud_route_prefix(
+            route_prefix
+                .as_str()
+                .ok_or_else(|| format!("{context}.route_path_prefix must be a string or null"))?,
+            &format!("{context}.route_path_prefix"),
+        )?;
+    }
+    for field in [
+        "base_url",
+        "healthcheck_url",
+        "public_discovery_content_cid",
+        "public_discovery_url",
+        "public_discovery_cid_host_url",
+        "healthcheck_path",
+    ] {
+        validate_soracloud_nullable_string(object, field, context)?;
+    }
+    for field in ["state_bindings", "lease_volumes", "config_exports"] {
+        if !soracloud_status_field(object, field, context)?.is_array() {
+            return Err(format!("{context}.{field} must be an array"));
+        }
+    }
+    if soracloud_status_u64(object, "state_binding_count", context)?
+        != u64::try_from(
+            soracloud_status_field(object, "state_bindings", context)?
+                .as_array()
+                .expect("state_bindings was validated as an array")
+                .len(),
+        )
+        .unwrap_or(u64::MAX)
+    {
+        return Err(format!(
+            "{context}.state_binding_count does not match state_bindings"
+        ));
+    }
+    for field in [
+        "allow_model_inference",
+        "allow_model_training",
+        "allow_state_writes",
+    ] {
+        soracloud_status_bool(object, field, context)?;
+    }
+    validate_soracloud_tagged_unit(
+        soracloud_status_field(object, "runtime", context)?,
+        "runtime",
+        &["Ivm", "Inrou"],
+        &format!("{context}.runtime"),
+    )?;
+    validate_soracloud_network_policy(
+        soracloud_status_field(object, "network", context)?,
+        &format!("{context}.network"),
+    )?;
+    validate_soracloud_string_array(object, "required_config_names", context)?;
+    validate_soracloud_string_array(object, "required_secret_names", context)?;
+    soracloud_status_string(object, "signed_by", context)?;
+    Ok(())
+}
+fn validate_soracloud_lease_epoch_rollover(value: &Value, context: &str) -> Result<(), String> {
+    const FIELDS: &[&str] = &[
+        "schema_version",
+        "economic_clock",
+        "lease_started_height",
+        "previous_reporting_epoch",
+        "new_reporting_epoch",
+        "reporter_account_id",
+        "active_service_version",
+        "replica_slot",
+        "placement_incarnation",
+        "finalized_checkpoint_count",
+        "settled_egress_bytes_delta",
+        "settled_egress_bytes",
+    ];
+    let object = exact_soracloud_status_object(value, context, FIELDS)?;
+    if soracloud_status_u64(object, "schema_version", context)? != 1 {
+        return Err(format!("{context}.schema_version must equal 1"));
+    }
+    validate_soracloud_tagged_unit(
+        soracloud_status_field(object, "economic_clock", context)?,
+        "clock",
+        &["CanonicalBlockHeight"],
+        &format!("{context}.economic_clock"),
+    )?;
+    for field in [
+        "lease_started_height",
+        "previous_reporting_epoch",
+        "new_reporting_epoch",
+        "replica_slot",
+        "finalized_checkpoint_count",
+    ] {
+        soracloud_status_u64(object, field, context)?;
+    }
+    soracloud_status_string(object, "reporter_account_id", context)?;
+    soracloud_status_string(object, "active_service_version", context)?;
+    validate_soracloud_hash(
+        soracloud_status_field(object, "placement_incarnation", context)?,
+        &format!("{context}.placement_incarnation"),
+    )?;
+    for field in ["settled_egress_bytes_delta", "settled_egress_bytes"] {
+        validate_soracloud_u128(
+            soracloud_status_field(object, field, context)?,
+            &format!("{context}.{field}"),
+        )?;
+    }
+    Ok(())
+}
+fn validate_soracloud_audit_event(value: &Value, context: &str) -> Result<(), String> {
+    const FIELDS: &[&str] = &[
+        "sequence",
+        "action",
+        "service_name",
+        "from_version",
+        "to_version",
+        "service_manifest_hash",
+        "container_manifest_hash",
+        "binding_name",
+        "state_key",
+        "config_name",
+        "secret_name",
+        "governance_tx_hash",
+        "rollout_handle",
+        "policy_name",
+        "policy_snapshot_hash",
+        "jurisdiction_tag",
+        "consent_evidence_hash",
+        "break_glass",
+        "break_glass_reason",
+        "lease_reporting_epoch_rollover",
+        "signed_by",
+    ];
+    let object = exact_soracloud_status_object(value, context, FIELDS)?;
+    soracloud_status_u64(object, "sequence", context)?;
+    validate_soracloud_tagged_unit(
+        soracloud_status_field(object, "action", context)?,
+        "action",
+        &[
+            "Deploy",
+            "Upgrade",
+            "Rollback",
+            "ConfigMutation",
+            "SecretMutation",
+            "StateMutation",
+            "FheJobRun",
+            "FhePolicyRegister",
+            "FhePolicyRotate",
+            "FhePolicyRevoke",
+            "DecryptionRequest",
+            "CiphertextQuery",
+            "Rollout",
+            "LeaseReportingEpochRollover",
+        ],
+        &format!("{context}.action"),
+    )?;
+    for field in ["service_name", "to_version", "signed_by"] {
+        soracloud_status_string(object, field, context)?;
+    }
+    for field in ["service_manifest_hash", "container_manifest_hash"] {
+        validate_soracloud_hash(
+            soracloud_status_field(object, field, context)?,
+            &format!("{context}.{field}"),
+        )?;
+    }
+    for field in [
+        "from_version",
+        "binding_name",
+        "state_key",
+        "config_name",
+        "secret_name",
+        "rollout_handle",
+        "policy_name",
+        "jurisdiction_tag",
+        "break_glass_reason",
+    ] {
+        validate_soracloud_nullable_string(object, field, context)?;
+    }
+    for field in [
+        "governance_tx_hash",
+        "policy_snapshot_hash",
+        "consent_evidence_hash",
+    ] {
+        validate_soracloud_nullable_hash(object, field, context)?;
+    }
+    let break_glass = soracloud_status_field(object, "break_glass", context)?;
+    if !break_glass.is_null() && !break_glass.is_bool() {
+        return Err(format!("{context}.break_glass must be a boolean or null"));
+    }
+    let rollover = soracloud_status_field(object, "lease_reporting_epoch_rollover", context)?;
+    if !rollover.is_null() {
+        validate_soracloud_lease_epoch_rollover(
+            rollover,
+            &format!("{context}.lease_reporting_epoch_rollover"),
+        )?;
+    }
+    Ok(())
+}
+fn validate_soracloud_service(value: &Value, index: usize) -> Result<(), String> {
+    const FIELDS: &[&str] = &[
+        "service_name",
+        "current_version",
+        "revision_count",
+        "config_generation",
+        "secret_generation",
+        "config_entry_count",
+        "secret_entry_count",
+        "quota_class",
+        "service_lease_status",
+        "lease_expires_height",
+        "prepaid_runtime_balance",
+        "remaining_runtime_balance",
+        "public_discovery_content_cid",
+        "public_discovery_url",
+        "public_discovery_cid_host_url",
+        "latest_revision",
+        "active_rollout",
+        "last_rollout",
+    ];
+    let context = format!("/v1/soracloud/status.control_plane.services[{index}]");
+    let object = exact_soracloud_status_object(value, &context, FIELDS)?;
+    soracloud_status_string(object, "service_name", &context)?;
+    soracloud_status_string(object, "current_version", &context)?;
+    for field in [
+        "revision_count",
+        "config_generation",
+        "secret_generation",
+        "config_entry_count",
+        "secret_entry_count",
+    ] {
+        soracloud_status_u64(object, field, &context)?;
+    }
+    validate_soracloud_nullable_string(object, "quota_class", &context)?;
+    let lease_status = soracloud_status_field(object, "service_lease_status", &context)?;
+    if !lease_status.is_null() {
+        validate_soracloud_tagged_unit(
+            lease_status,
+            "status",
+            &["Active", "Expired", "Exhausted", "Suspended"],
+            &format!("{context}.service_lease_status"),
+        )?;
+    }
+    let lease_height = soracloud_status_field(object, "lease_expires_height", &context)?;
+    if !lease_height.is_null() && lease_height.as_u64().is_none() {
+        return Err(format!(
+            "{context}.lease_expires_height must be a nonnegative integer or null"
+        ));
+    }
+    for field in ["prepaid_runtime_balance", "remaining_runtime_balance"] {
+        let value = soracloud_status_field(object, field, &context)?;
+        if !value.is_null() && !value.is_string() {
+            return Err(format!("{context}.{field} must be a string or null"));
+        }
+    }
+    for field in [
+        "public_discovery_content_cid",
+        "public_discovery_url",
+        "public_discovery_cid_host_url",
+    ] {
+        validate_soracloud_nullable_string(object, field, &context)?;
+    }
+    let revision = soracloud_status_field(object, "latest_revision", &context)?;
+    if !revision.is_null() {
+        validate_soracloud_revision(revision, &format!("{context}.latest_revision"))?;
+    }
+    for field in ["active_rollout", "last_rollout"] {
+        let rollout = soracloud_status_field(object, field, &context)?;
+        if !rollout.is_null() {
+            validate_soracloud_rollout(rollout, &format!("{context}.{field}"))?;
+        }
+    }
+    Ok(())
+}
+fn validate_soracloud_control_plane(value: &Value) -> Result<(), String> {
+    const FIELDS: &[&str] = &[
+        "schema_version",
+        "service_count",
+        "audit_event_count",
+        "services",
+        "recent_audit_events",
+    ];
+    let context = "/v1/soracloud/status.control_plane";
+    let object = exact_soracloud_status_object(value, context, FIELDS)?;
+    if soracloud_status_u64(object, "schema_version", context)? != 1 {
+        return Err(format!("{context}.schema_version must equal 1"));
+    }
+    let services = soracloud_status_field(object, "services", context)?
+        .as_array()
+        .ok_or_else(|| format!("{context}.services must be an array"))?;
+    if soracloud_status_u64(object, "service_count", context)?
+        != u64::try_from(services.len()).unwrap_or(u64::MAX)
+    {
+        return Err(format!("{context}.service_count does not match services"));
+    }
+    for (index, service) in services.iter().enumerate() {
+        validate_soracloud_service(service, index)?;
+    }
+    let audit_events = soracloud_status_field(object, "recent_audit_events", context)?
+        .as_array()
+        .ok_or_else(|| format!("{context}.recent_audit_events must be an array"))?;
+    if soracloud_status_u64(object, "audit_event_count", context)?
+        < u64::try_from(audit_events.len()).unwrap_or(u64::MAX)
+    {
+        return Err(format!(
+            "{context}.audit_event_count is smaller than recent_audit_events"
+        ));
+    }
+    for (index, event) in audit_events.iter().enumerate() {
+        validate_soracloud_audit_event(event, &format!("{context}.recent_audit_events[{index}]"))?;
+    }
+    Ok(())
+}
+#[expect(
+    clippy::too_many_lines,
+    reason = "the public V1 status validator keeps the complete fail-closed contract visible"
+)]
 fn validate_soracloud_status(status: Option<&Value>) -> Result<(), String> {
-    let status = status
-        .and_then(Value::as_object)
-        .ok_or_else(|| "/v1/soracloud/status returned a non-object JSON body".to_owned())?;
-    if status.get("schema_version").and_then(Value::as_u64) != Some(1) {
+    const ROOT_FIELDS: &[&str] = &[
+        "schema_version",
+        "service_health",
+        "routing",
+        "hosted_http_topology",
+        "resource_pressure",
+        "failed_admissions",
+        "runtime_manager",
+        "control_plane",
+    ];
+    let status = status.ok_or_else(|| "/v1/soracloud/status returned no JSON body".to_owned())?;
+    let status = exact_soracloud_status_object(status, "/v1/soracloud/status", ROOT_FIELDS)?;
+    if soracloud_status_u64(status, "schema_version", "/v1/soracloud/status")? != 1 {
         return Err("/v1/soracloud/status is not canonical schema version 1".to_owned());
     }
-    let service_health = status
-        .get("service_health")
-        .and_then(Value::as_object)
-        .ok_or_else(|| "/v1/soracloud/status is missing `service_health`".to_owned())?;
-    match service_health.get("status").and_then(Value::as_str) {
-        Some("healthy" | "idle") => {}
-        Some(other) => {
+    let health_status = validate_soracloud_service_health(soracloud_status_field(
+        status,
+        "service_health",
+        "/v1/soracloud/status",
+    )?)?;
+    match health_status {
+        "healthy" | "idle" => {}
+        other => {
             return Err(format!(
                 "/v1/soracloud/status runtime health is `{other}`, expected healthy or idle"
             ));
         }
-        None => return Err("/v1/soracloud/status runtime health is missing".to_owned()),
     }
-    if status
-        .get("runtime_manager")
-        .and_then(Value::as_object)
-        .and_then(|runtime| runtime.get("available"))
-        .and_then(Value::as_bool)
-        != Some(true)
-    {
+    validate_soracloud_routing(soracloud_status_field(
+        status,
+        "routing",
+        "/v1/soracloud/status",
+    )?)?;
+    validate_soracloud_topology(soracloud_status_field(
+        status,
+        "hosted_http_topology",
+        "/v1/soracloud/status",
+    )?)?;
+    validate_soracloud_resource_pressure(soracloud_status_field(
+        status,
+        "resource_pressure",
+        "/v1/soracloud/status",
+    )?)?;
+    validate_soracloud_failed_admissions(soracloud_status_field(
+        status,
+        "failed_admissions",
+        "/v1/soracloud/status",
+    )?)?;
+    if !validate_soracloud_runtime_manager(soracloud_status_field(
+        status,
+        "runtime_manager",
+        "/v1/soracloud/status",
+    )?)? {
         return Err("/v1/soracloud/status reports no runtime manager".to_owned());
     }
+    validate_soracloud_control_plane(soracloud_status_field(
+        status,
+        "control_plane",
+        "/v1/soracloud/status",
+    )?)?;
     let topology = status
         .get("hosted_http_topology")
         .and_then(Value::as_object)
@@ -1808,14 +5192,11 @@ fn validate_soracloud_status(status: Option<&Value>) -> Result<(), String> {
                 .get("execution_plane")
                 .and_then(|plane| tagged_enum_name(plane, "execution_plane"))
                 == Some("HttpService")
-            && revision
-                .get("route_host")
-                .and_then(Value::as_str)
-                .is_some_and(|host| !host.trim().is_empty())
+            && revision.get("route_host").and_then(Value::as_str).is_some()
             && revision
                 .get("route_path_prefix")
                 .and_then(Value::as_str)
-                .is_some_and(|path| path.starts_with('/'))
+                .is_some()
     });
     if !has_four_replica_public_inrou_route {
         return Err(
@@ -1839,13 +5220,8 @@ fn mcp_tool_names(payload: Option<&Value>) -> Vec<String> {
         })
         .collect()
 }
-fn resolve_canary_signer(config: &Config, use_config_signer: bool) -> Result<CanarySigner> {
-    let key_pair = if use_config_signer {
-        config.key_pair.clone()
-    } else {
-        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
-            .wrap_err("failed to generate Taira canary Ed25519 signer")?
-    };
+fn resolve_canary_signer(config: &Config) -> Result<CanarySigner> {
+    let key_pair = config.key_pair.clone();
     let (algorithm, _) = key_pair
         .public_key()
         .try_to_bytes()
@@ -1857,32 +5233,13 @@ fn resolve_canary_signer(config: &Config, use_config_signer: bool) -> Result<Can
     Ok(CanarySigner {
         account_id,
         key_pair,
-        generated: !use_config_signer,
     })
 }
-fn insert_write_receipt_identity(
-    extra: &mut Map,
-    signer: &CanarySigner,
-    alias: &str,
-    faucet_asset_id: &str,
-) {
-    extra.insert("chain".into(), Value::String(DEFAULT_CHAIN_ID.to_owned()));
-    extra.insert(
-        "chain_discriminant".into(),
-        Value::from(u64::from(DEFAULT_CHAIN_DISCRIMINANT)),
-    );
-    extra.insert(
-        "account_id".into(),
-        Value::String(signer.account_id.to_string()),
-    );
-    extra.insert("alias".into(), Value::String(alias.to_owned()));
-    extra.insert("generated_signer".into(), Value::from(signer.generated));
-    extra.insert(
-        "faucet_asset_id".into(),
-        Value::String(faucet_asset_id.to_owned()),
-    );
-}
-fn build_alias(prefix: &str, public_key: &iroha_crypto::PublicKey, domain: &str) -> Result<String> {
+pub(super) fn build_alias(
+    prefix: &str,
+    public_key: &iroha_crypto::PublicKey,
+    domain: &str,
+) -> Result<String> {
     if !(1..=32).contains(&prefix.len())
         || !prefix
             .as_bytes()
@@ -1910,298 +5267,29 @@ fn build_alias(prefix: &str, public_key: &iroha_crypto::PublicKey, domain: &str)
     let suffix = hex::encode(&digest[..8]);
     Ok(format!("{prefix}{suffix}@{dataspace}"))
 }
-fn post_sponsored_onboarding_json(
-    http: &HttpClient,
-    public_root: &str,
-    path: &str,
-    body: &Value,
-    onboarding_token: &str,
-) -> Result<HttpJson> {
-    let url = join_url(public_root, path)?;
-    let bytes = json::to_vec(body).map_err(|err| eyre!("encode JSON request body: {err}"))?;
-    let mut header_value =
-        reqwest::header::HeaderValue::from_str(validate_onboarding_token(onboarding_token)?)
-            .map_err(|_| {
-                eyre!("validated account onboarding token was not a valid HTTP header value")
-            })?;
-    header_value.set_sensitive(true);
-    let response = http
-        .post(url.clone())
-        .header(reqwest::header::ACCEPT, "application/json")
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header(ACCOUNT_ONBOARDING_TOKEN_HEADER, header_value)
-        .body(bytes)
-        .send()
-        .wrap_err_with(|| format!("request failed for {url}"))?;
-    let mut response = decode_http_json_response(response)?;
-    redact_http_json(&mut response, onboarding_token);
-    Ok(response)
-}
-fn plan_canary_onboarding(
-    http: &HttpClient,
-    public_root: &str,
-    alias: &str,
-    account_id: &AccountId,
-    onboarding_token: &str,
-) -> Result<HttpJson> {
-    post_sponsored_onboarding_json(
-        http,
-        public_root,
-        "/v1/accounts/onboard/plan",
-        &norito::json!({
-            "version": 1,
-            "alias": alias,
-            "account_id": (account_id.to_string()),
-            "permissions": []
-        }),
-        onboarding_token,
-    )
-}
-fn apply_canary_onboarding(
-    http: &HttpClient,
-    public_root: &str,
-    receipt: &Value,
-    onboarding_token: &str,
-) -> Result<HttpJson> {
-    post_sponsored_onboarding_json(
-        http,
-        public_root,
-        "/v1/accounts/onboard",
-        &norito::json!({ "receipt": (receipt.clone()) }),
-        onboarding_token,
-    )
-}
-fn validate_onboarding_plan_receipt(
-    response: Option<&Value>,
-    expected_account: &AccountId,
-    expected_alias: &str,
-) -> Result<Value> {
-    let object = response
-        .and_then(Value::as_object)
-        .ok_or_else(|| eyre!("onboarding plan receipt must be a JSON object"))?;
-    let body = object
-        .get("body")
-        .and_then(Value::as_object)
-        .ok_or_else(|| eyre!("onboarding plan receipt is missing `body`"))?;
-    if body.get("version").and_then(Value::as_u64) != Some(1) {
-        return Err(eyre!("onboarding plan receipt has an unsupported version"));
-    }
-    let request = body
-        .get("request")
-        .and_then(Value::as_object)
-        .ok_or_else(|| eyre!("onboarding plan receipt is missing its canonical request"))?;
-    let expected_account = expected_account.to_string();
-    if request.get("version").and_then(Value::as_u64) != Some(1)
-        || request.get("alias").and_then(Value::as_str) != Some(expected_alias)
-        || request.get("account_id").and_then(Value::as_str) != Some(expected_account.as_str())
-        || !request
-            .get("permissions")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty)
-    {
-        return Err(eyre!(
-            "onboarding plan receipt canonical request differs from the canary intent"
-        ));
-    }
-    for key in [
-        "authority",
-        "chain_id",
-        "anchor",
-        "resource",
-        "acquisition",
-        "quote_guard",
-        "instructions",
-        "valid_until_ms",
-    ] {
-        if !body.contains_key(key) {
-            return Err(eyre!("onboarding plan receipt body is missing `{key}`"));
-        }
-    }
-    for key in ["plan_hash", "signature"] {
-        if !object.contains_key(key) {
-            return Err(eyre!("onboarding plan receipt is missing `{key}`"));
-        }
-    }
-    Ok(response.expect("validated receipt response").clone())
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct OnboardingApplyResult {
-    tx_hash_hex: Option<String>,
-    unchanged: bool,
-}
-fn validate_onboarding_apply_response(
-    response: Option<&Value>,
-    expected_account: &AccountId,
-    expected_alias: &str,
-) -> Result<OnboardingApplyResult> {
-    let object = response
-        .and_then(Value::as_object)
-        .ok_or_else(|| eyre!("onboarding apply response must be a JSON object"))?;
-    let expected_account = expected_account.to_string();
-    if object.get("account_id").and_then(Value::as_str) != Some(expected_account.as_str())
-        || object.get("alias").and_then(Value::as_str) != Some(expected_alias)
-    {
-        return Err(eyre!(
-            "onboarding apply response account or alias differs from the canary intent"
-        ));
-    }
-    if !object.contains_key("disposition") {
-        return Err(eyre!("onboarding apply response is missing `disposition`"));
-    }
-    let status = object
-        .get("status")
-        .and_then(Value::as_str)
-        .ok_or_else(|| eyre!("onboarding apply response is missing `status`"))?;
-    let tx_hash_hex = object
-        .get("tx_hash_hex")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    match status {
-        "Unchanged" if tx_hash_hex.is_none() => Ok(OnboardingApplyResult {
-            tx_hash_hex: None,
-            unchanged: true,
-        }),
-        "Queued" | "Repaired" => {
-            let tx_hash = tx_hash_hex
-                .as_deref()
-                .ok_or_else(|| eyre!("queued onboarding apply response is missing tx_hash_hex"))?;
-            let decoded = hex::decode(tx_hash).wrap_err("onboarding tx_hash_hex is not hex")?;
-            if decoded.len() != 32 || tx_hash != tx_hash.to_ascii_lowercase() {
-                return Err(eyre!(
-                    "onboarding tx_hash_hex must be canonical lowercase 32-byte hex"
-                ));
-            }
-            Ok(OnboardingApplyResult {
-                tx_hash_hex,
-                unchanged: false,
-            })
-        }
-        _ => Err(eyre!(
-            "unexpected onboarding apply status `{status}` or transaction hash shape"
-        )),
-    }
-}
-fn validate_faucet_response(
-    response: Option<&Value>,
-    expected_account: &AccountId,
-    expected_asset_definition_id: &str,
-) -> Result<String> {
-    let object = response
-        .and_then(Value::as_object)
-        .ok_or_else(|| eyre!("response must be a JSON object"))?;
-    let required_string = |key: &str| -> Result<&str> {
-        object
-            .get(key)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| eyre!("missing non-empty `{key}`"))
-    };
-    let account_id = required_string("account_id")?;
-    if account_id != expected_account.to_string() {
-        return Err(eyre!(
-            "unexpected account_id; expected {expected_account}, actual {account_id}"
-        ));
-    }
-    let asset_definition_id = required_string("asset_definition_id")?;
-    if !expected_asset_definition_id.is_empty()
-        && asset_definition_id != expected_asset_definition_id
-    {
-        return Err(eyre!(
-            "unexpected asset_definition_id; expected {expected_asset_definition_id}, actual {asset_definition_id}"
-        ));
-    }
-    for key in ["asset_id", "amount"] {
-        required_string(key)?;
-    }
-    let status = required_string("status")?;
-    if status != "QUEUED" {
-        return Err(eyre!(
-            "unexpected faucet status `{status}`; expected QUEUED"
-        ));
-    }
-    let tx_hash = required_string("tx_hash_hex")?;
-    let decoded = hex::decode(tx_hash).wrap_err("faucet tx_hash_hex is not hex")?;
-    if decoded.len() != 32 {
-        return Err(eyre!(
-            "faucet tx_hash_hex must encode 32 bytes, got {}",
-            decoded.len()
-        ));
-    }
-    Ok(tx_hash.to_owned())
-}
-fn pipeline_status_kind(response: Option<&Value>) -> Option<String> {
-    let status = response
-        .and_then(Value::as_object)
-        .and_then(|object| object.get("status"))?;
-    status
-        .as_object()
-        .and_then(|object| object.get("kind"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-}
-fn pipeline_status_is_terminal(response: Option<&Value>) -> bool {
-    matches!(
-        pipeline_status_kind(response).as_deref(),
-        Some("Applied" | "Rejected" | "Expired")
-    )
-}
-fn wait_for_pipeline_terminal_status(
-    http: &HttpClient,
-    public_root: &str,
-    tx_hash_hex: &str,
-    timeout: Duration,
-) -> Result<HttpJson> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let mut url = join_url(public_root, "/v1/pipeline/transactions/status")?;
-        url.query_pairs_mut()
-            .append_pair("hash", tx_hash_hex)
-            .append_pair("scope", "global");
-        let mut response = http_json(http, reqwest::Method::GET, url.as_str(), None)?;
-        if response.status != 200 && response.status != 404 {
-            return Ok(response);
-        }
-        if pipeline_status_is_terminal(response.body.as_ref()) {
-            return Ok(response);
-        }
-        if Instant::now() >= deadline {
-            response.status = 504;
-            return Ok(response);
-        }
-        std::thread::sleep(Duration::from_millis(500));
-    }
-}
-fn claim_faucet(
-    http: &HttpClient,
+
+fn solve_account_faucet_claim(
     public_root: &str,
     account_id: &AccountId,
     expected_network_id: &NetworkId,
-) -> Result<HttpJson> {
+) -> Result<AccountFaucetClaimV1> {
+    let http = http_client()?;
     let puzzle_url = join_url(public_root, "/v1/accounts/faucet/puzzle")?;
-    let puzzle = http_json(http, reqwest::Method::GET, puzzle_url.as_str(), None)?;
+    let puzzle = http_json(&http, reqwest::Method::GET, puzzle_url.as_str(), None)?;
     if puzzle.status != 200 {
-        return Ok(puzzle);
+        eyre::bail!(
+            "faucet puzzle request failed with HTTP {}; no transaction was prepared",
+            puzzle.status
+        );
     }
-    let Some(puzzle_body) = puzzle.body.as_ref() else {
-        return Ok(HttpJson {
-            status: 502,
-            body: Some(error_value(
-                "invalid_faucet_puzzle",
-                "faucet puzzle response was not JSON",
-            )),
-            text: puzzle.text,
-        });
-    };
-    let claim_body =
-        solve_faucet_puzzle(&account_id.to_string(), expected_network_id, puzzle_body)?;
-    let claim_url = join_url(public_root, "/v1/accounts/faucet")?;
-    http_json(
-        http,
-        reqwest::Method::POST,
-        claim_url.as_str(),
-        Some(&claim_body),
-    )
+    let puzzle = puzzle
+        .body
+        .as_ref()
+        .ok_or_else(|| eyre!("faucet puzzle response was not canonical JSON"))?;
+    let claim = solve_faucet_puzzle(&account_id.to_string(), expected_network_id, puzzle)?;
+    json::from_value(claim).wrap_err("decode solved faucet claim into its closed V1 schema")
 }
+
 fn solve_faucet_puzzle(
     account_id: &str,
     expected_network_id: &NetworkId,
@@ -2357,171 +5445,18 @@ fn insert_string_metadata(metadata: &mut Metadata, key: &str, value: &str) -> Re
     metadata.insert(Name::from_str(key)?, IrohaJson::new(value.to_owned()));
     Ok(())
 }
-fn canary_message() -> Result<String> {
-    canary_message_at(SystemTime::now())
-}
-fn canary_message_at(now: SystemTime) -> Result<String> {
-    let unix_ms = now
-        .duration_since(UNIX_EPOCH)
-        .wrap_err("system clock predates the Unix epoch; refusing a defaulted canary message")?
-        .as_millis();
-    Ok(format!("taira-write-canary-{unix_ms}"))
-}
-fn write_runtime_config(path: &Path, config: &Config) -> Result<()> {
-    let rendered = Zeroizing::new(render_runtime_config(config)?);
-    write_private_runtime_config(path, rendered.as_bytes())
-}
-#[cfg(unix)]
-fn write_private_runtime_config(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::{ffi::OsString, os::unix::fs::MetadataExt as _, path::Component};
 
-    if !path.is_absolute() {
-        eyre::bail!("runtime config path must be absolute");
-    }
-    let parent_path = path
-        .parent()
-        .ok_or_else(|| eyre!("config path `{}` has no parent", path.display()))?;
-    let target_name: OsString = path
-        .file_name()
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| eyre!("runtime config path must have one exact file name"))?
-        .to_owned();
-    if parent_path.join(&target_name) != path
-        || path
-            .components()
-            .any(|component| !matches!(component, Component::RootDir | Component::Normal(_)))
+fn validate_write_canary_idempotency_key(value: &str) -> Result<String, String> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
-        eyre::bail!("runtime config path must be absolute and lexically canonical");
+        return Err("must be exactly 64 lowercase hexadecimal characters".to_owned());
     }
-    let canonical_parent = fs::canonicalize(parent_path)
-        .wrap_err_with(|| format!("failed to resolve `{}`", parent_path.display()))?;
-    if canonical_parent != parent_path {
-        eyre::bail!("runtime config parent must be canonical and symlink-free");
-    }
-    if canonical_parent
-        .ancestors()
-        .any(|ancestor| fs::symlink_metadata(ancestor.join(".git")).is_ok())
-    {
-        eyre::bail!("runtime config must not be persisted inside a Git working tree");
-    }
+    Ok(value.to_owned())
+}
 
-    let effective_uid = rustix::process::geteuid().as_raw();
-    for ancestor in canonical_parent.ancestors() {
-        let metadata = fs::symlink_metadata(ancestor)
-            .wrap_err_with(|| format!("failed to inspect `{}`", ancestor.display()))?;
-        if !metadata.file_type().is_dir()
-            || (metadata.uid() != 0 && metadata.uid() != effective_uid)
-            || metadata.mode() & 0o022 != 0
-        {
-            eyre::bail!(
-                "runtime config ancestry has unsafe custody at `{}`",
-                ancestor.display()
-            );
-        }
-    }
-    let parent_metadata = fs::symlink_metadata(&canonical_parent)?;
-    if parent_metadata.uid() != effective_uid || parent_metadata.mode() & 0o7777 != 0o700 {
-        eyre::bail!("runtime config parent must be owned by the current user with mode 0700");
-    }
-    let parent = File::from(
-        rustix::fs::open(
-            &canonical_parent,
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::DIRECTORY
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        )
-        .wrap_err("failed to securely open runtime config parent")?,
-    );
-    let opened_parent = parent.metadata()?;
-    if opened_parent.dev() != parent_metadata.dev()
-        || opened_parent.ino() != parent_metadata.ino()
-        || opened_parent.uid() != effective_uid
-        || opened_parent.mode() & 0o7777 != 0o700
-    {
-        eyre::bail!("runtime config parent custody changed during secure open");
-    }
-    match rustix::fs::statat(&parent, &target_name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
-        Err(error) if error == rustix::io::Errno::NOENT => {}
-        Ok(_) => eyre::bail!("runtime config destination already exists and will not be replaced"),
-        Err(error) => return Err(error).wrap_err("failed to inspect runtime config destination"),
-    }
-
-    let mut output = File::from(
-        rustix::fs::openat(
-            &parent,
-            &target_name,
-            rustix::fs::OFlags::WRONLY
-                | rustix::fs::OFlags::CREATE
-                | rustix::fs::OFlags::EXCL
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::from_raw_mode(0o600),
-        )
-        .wrap_err("failed to create private runtime config")?,
-    );
-    rustix::fs::fchmod(&output, rustix::fs::Mode::from_raw_mode(0o600))?;
-    let created = output.metadata()?;
-    let identity = (created.dev(), created.ino());
-    let publication = (|| -> Result<()> {
-        if !created.is_file()
-            || created.uid() != effective_uid
-            || created.nlink() != 1
-            || created.mode() & 0o7777 != 0o600
-            || created.len() != 0
-        {
-            eyre::bail!("new runtime config has unsafe initial custody");
-        }
-        output.write_all(bytes)?;
-        output.sync_all()?;
-        let complete = output.metadata()?;
-        if (complete.dev(), complete.ino()) != identity
-            || complete.uid() != effective_uid
-            || complete.nlink() != 1
-            || complete.mode() & 0o7777 != 0o600
-            || complete.len() != u64::try_from(bytes.len())?
-        {
-            eyre::bail!("runtime config custody changed during publication");
-        }
-        parent.sync_all()?;
-        Ok(())
-    })();
-    if let Err(error) = publication {
-        drop(output);
-        let named =
-            rustix::fs::statat(&parent, &target_name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW);
-        if let Ok(named) = named
-            && (u64::try_from(named.st_dev).ok(), named.st_ino) == (Some(identity.0), identity.1)
-        {
-            rustix::fs::unlinkat(&parent, &target_name, rustix::fs::AtFlags::empty())?;
-            parent.sync_all()?;
-        }
-        return Err(error).wrap_err("private runtime config publication failed");
-    }
-    Ok(())
-}
-#[cfg(not(unix))]
-fn write_private_runtime_config(_path: &Path, _bytes: &[u8]) -> Result<()> {
-    eyre::bail!("private runtime config persistence requires Unix descriptor APIs")
-}
-fn render_runtime_config(config: &Config) -> Result<String> {
-    let private_key = ExposedPrivateKey(config.key_pair.private_key().clone()).to_string();
-    let public_key = config.key_pair.public_key().to_string();
-    Ok(format!(
-        "chain = \"{}\"\ntorii_url = \"{}\"\n\n[account]\ndomain = \"wonderland.universal\"\npublic_key = \"{}\"\nprivate_key = \"{}\"\nchain_discriminant = {}\n\n[transaction]\ntime_to_live_ms = {}\nstatus_timeout_ms = {}\nnonce = false\n",
-        escape_toml(&config.chain.to_string()),
-        escape_toml(config.torii_api_url.as_str()),
-        escape_toml(&public_key),
-        escape_toml(&private_key),
-        config.account_chain_discriminant,
-        DEFAULT_WRITE_TTL_MS,
-        DEFAULT_WRITE_STATUS_TIMEOUT_MS,
-    ))
-}
-fn escape_toml(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
 fn hint_submit_error(err: eyre::Report) -> eyre::Report {
     let text = format!("{err:#}");
     if text.contains("fee intent") || text.contains("fee_payment") {
@@ -2540,48 +5475,14 @@ fn hint_submit_error(err: eyre::Report) -> eyre::Report {
         err
     }
 }
-fn hint_wait_error(err: eyre::Report) -> eyre::Report {
-    let text = format!("{err:#}");
-    if text.contains("Expired") || text.contains("expired") {
-        eyre!(
-            "{text}\nThe canary transaction expired before application; inspect /status queue depth and validator health."
-        )
-    } else {
-        err
-    }
-}
-fn faucet_failure_hint(response: &HttpJson) -> String {
-    let body = response
-        .body
-        .as_ref()
-        .map(compact_json)
-        .unwrap_or_else(|| response.text.clone());
-    if body.contains("Failed to find asset") {
-        format!(
-            "faucet claim failed with HTTP {}: faucet asset is missing or not bootstrapped",
-            response.status
-        )
-    } else {
-        format!("faucet claim failed with HTTP {}: {body}", response.status)
-    }
-}
 fn compact_json(value: &Value) -> String {
     json::to_json(value).unwrap_or_else(|_| format!("{value:?}"))
-}
-fn error_value(code: &str, message: &str) -> Value {
-    let mut error = Map::new();
-    error.insert("error_code".into(), Value::String(code.to_owned()));
-    error.insert("message".into(), Value::String(message.to_owned()));
-    Value::Object(error)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha::data_model::{DataSpaceId, nexus::FeeDebitSource};
+    use clap::Parser as _;
     use iroha_i18n::{Bundle, Language, Localizer};
-    use iroha_torii_shared::{
-        FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest, FeeQuoteResponse, uri as torii_uri,
-    };
     use std::{
         net::{TcpListener, TcpStream},
         sync::{
@@ -2592,6 +5493,320 @@ mod tests {
     };
     use tempfile::NamedTempFile;
     const TEST_ONBOARDING_TOKEN: &str = "0123456789abcdef0123456789ABCDEF";
+
+    #[derive(clap::Parser, Debug)]
+    struct TestTairaCli {
+        #[command(subcommand)]
+        command: Command,
+    }
+
+    #[test]
+    fn write_canary_parser_accepts_only_one_exact_child_action() {
+        let nonce = "n".repeat(32);
+        let phase = "pre_edge";
+        let key = write_canary_child_idempotency_key(&nonce, phase, "onboarding");
+        let parsed = TestTairaCli::try_parse_from([
+            "taira-test".to_owned(),
+            "write-canary".to_owned(),
+            "--operation".to_owned(),
+            "onboarding".to_owned(),
+            "--authorization-sha256".to_owned(),
+            "ab".repeat(32),
+            "--authorization-nonce".to_owned(),
+            nonce,
+            "--mutation-phase".to_owned(),
+            phase.to_owned(),
+            "--idempotency-key".to_owned(),
+            key,
+            "--execution-expires-at-unix-ms".to_owned(),
+            u64::MAX.to_string(),
+            "--use-config-signer".to_owned(),
+            "--prepare-envelope".to_owned(),
+            "--prepared-output-fd".to_owned(),
+            "3".to_owned(),
+            "--onboarding-token-file".to_owned(),
+            "/private/runtime/token".to_owned(),
+        ])
+        .expect("one-operation prepared mode must parse");
+        let Command::WriteCanary(command) = parsed.command else {
+            panic!("expected write-canary command");
+        };
+        assert_eq!(command.operation, WriteCanaryOperation::Onboarding);
+        assert_eq!(
+            command.prepared_action().expect("prepared action"),
+            PreparedEnvelopeAction::Prepare(3)
+        );
+
+        for retired in ["--recover-only", "--write-config"] {
+            let error = TestTairaCli::try_parse_from(["taira-test", "write-canary", retired])
+                .expect_err("retired one-shot flags must fail closed");
+            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+        }
+        let error = TestTairaCli::try_parse_from(["taira-test", "write-canary"])
+            .expect_err("aggregate operation and implicit action must not parse");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
+    fn inrou_canary_parser_accepts_only_one_exact_child_action() {
+        let nonce = "n".repeat(32);
+        let phase = "pre_edge";
+        let key = write_canary_child_idempotency_key(&nonce, phase, "inrou_bundle_pin");
+        let parsed = TestTairaCli::try_parse_from([
+            "taira-test".to_owned(),
+            "inrou-canary".to_owned(),
+            "--stage-dir".to_owned(),
+            "/private/runtime/inrou-stage".to_owned(),
+            "--mode".to_owned(),
+            "deploy".to_owned(),
+            "--operation".to_owned(),
+            "bundle-pin".to_owned(),
+            "--authorization-sha256".to_owned(),
+            "ab".repeat(32),
+            "--authorization-nonce".to_owned(),
+            nonce.clone(),
+            "--mutation-phase".to_owned(),
+            phase.to_owned(),
+            "--idempotency-key".to_owned(),
+            key,
+            "--execution-expires-at-unix-ms".to_owned(),
+            u64::MAX.to_string(),
+            "--prepare-envelope".to_owned(),
+            "--prepared-output-fd".to_owned(),
+            "3".to_owned(),
+            "--prerequisite-envelope-fd".to_owned(),
+            "4".to_owned(),
+        ])
+        .expect("one-operation Inrou prepare mode must parse");
+        let Command::InrouCanary(command) = parsed.command else {
+            panic!("expected inrou-canary command");
+        };
+        assert_eq!(command.operation, InrouCanaryOperation::BundlePin);
+        assert_eq!(
+            command.prepared_action().expect("prepared action"),
+            PreparedEnvelopeAction::Prepare(3)
+        );
+        command.binding().expect("exact child key must bind");
+
+        let error = TestTairaCli::try_parse_from(["taira-test", "inrou-canary", "--recover-only"])
+            .expect_err("retired aggregate recovery flag must fail closed");
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn inrou_canary_binding_and_prerequisite_are_child_exact() {
+        let nonce = "n".repeat(32);
+        let mut args = InrouCanary {
+            public_root: DEFAULT_PUBLIC_ROOT.to_owned(),
+            stage_dir: PathBuf::from("/private/runtime/inrou-stage"),
+            mode: InrouCanaryMode::Deploy,
+            operation: InrouCanaryOperation::GuestPin,
+            authorization_sha256: "ab".repeat(32),
+            authorization_nonce: nonce.clone(),
+            mutation_phase: "pre_edge".to_owned(),
+            idempotency_key: write_canary_child_idempotency_key(
+                &nonce,
+                "pre_edge",
+                "inrou_guest_pin",
+            ),
+            execution_expires_at_unix_ms: u64::MAX,
+            prepare_envelope: true,
+            prepared_output_fd: Some(3),
+            submit_prepared_envelope_fd: None,
+            recover_prepared_envelope_fd: None,
+            prerequisite_envelope_fd: Some(4),
+            timeout_secs: 1,
+            json: true,
+        };
+        assert!(args.binding().is_ok());
+        assert!(
+            args.validate_prerequisite_action(PreparedEnvelopeAction::Prepare(3))
+                .is_ok()
+        );
+        args.idempotency_key =
+            write_canary_child_idempotency_key(&nonce, "pre_edge", "inrou_bundle_pin");
+        assert!(args.binding().is_err());
+        args.prerequisite_envelope_fd = None;
+        assert!(
+            args.validate_prerequisite_action(PreparedEnvelopeAction::Prepare(3))
+                .is_err()
+        );
+        args.prerequisite_envelope_fd = Some(4);
+        assert!(
+            args.validate_prerequisite_action(PreparedEnvelopeAction::Recover(3))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn write_canary_prerequisite_policy_is_exact() {
+        let mut args = fixture_write_canary_args(WriteCanaryOperation::Onboarding);
+        assert!(
+            args.validate_prerequisite_action(PreparedEnvelopeAction::Prepare(3))
+                .is_ok()
+        );
+        args.prerequisite_envelope_fd = Some(4);
+        assert!(
+            args.validate_prerequisite_action(PreparedEnvelopeAction::Prepare(3))
+                .is_err()
+        );
+        args.operation = WriteCanaryOperation::Faucet;
+        args.idempotency_key = write_canary_child_idempotency_key(
+            &args.authorization_nonce,
+            &args.mutation_phase,
+            args.operation.mutation_kind(),
+        );
+        assert!(
+            args.validate_prerequisite_action(PreparedEnvelopeAction::Prepare(3))
+                .is_ok()
+        );
+        args.prerequisite_envelope_fd = None;
+        assert!(
+            args.validate_prerequisite_action(PreparedEnvelopeAction::Prepare(3))
+                .is_err()
+        );
+        args.prerequisite_envelope_fd = Some(4);
+        assert!(
+            args.validate_prerequisite_action(PreparedEnvelopeAction::Recover(3))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn authenticated_no_op_preparation_reports_proof_required() {
+        let semantic_evidence = "ab".repeat(32);
+        let (outcome, evidence) =
+            initial_prepared_report_state_from_evidence(Some(&semantic_evidence));
+        assert_eq!(outcome, "ProofRequired");
+        assert_eq!(evidence.as_deref(), Some(semantic_evidence.as_str()));
+        assert_eq!(
+            initial_prepared_report_state_from_evidence(None),
+            ("Prepared", None)
+        );
+    }
+
+    #[test]
+    fn proof_required_applied_state_maps_without_transaction_height() {
+        let semantic_evidence = "ab".repeat(32);
+        let classification = classify_proof_required_current_state(
+            &semantic_evidence,
+            AccountOnboardingCurrentStateV1::Applied {
+                block_height: NonZeroU64::new(41).expect("nonzero fixture height"),
+                block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                    b"proof-required current-state fixture anchor",
+                )),
+            },
+        );
+        let PreparedRecoveryClassification::Applied {
+            block_height,
+            evidence,
+        } = classification
+        else {
+            panic!("applied proof-required current state must classify as applied");
+        };
+        assert_eq!(block_height, None);
+        assert_eq!(evidence, semantic_evidence);
+    }
+
+    #[test]
+    fn proof_required_mismatch_states_remain_nonterminal() {
+        let block_height = NonZeroU64::new(41).expect("nonzero fixture height");
+        let block_hash = iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+            b"proof-required mismatch fixture anchor",
+        ));
+        for (state, expected_kind) in [
+            (
+                AccountOnboardingCurrentStateV1::AliasAbsent {
+                    block_height,
+                    block_hash,
+                },
+                "OnboardingStateAbsent",
+            ),
+            (
+                AccountOnboardingCurrentStateV1::AliasConflict {
+                    block_height,
+                    block_hash,
+                },
+                "OnboardingAliasConflict",
+            ),
+        ] {
+            assert_eq!(
+                classify_proof_required_current_state(&"ab".repeat(32), state),
+                PreparedRecoveryClassification::Pending {
+                    terminal_kind: expected_kind.to_owned(),
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_recovery_accepts_only_global_state_finality() {
+        let response = |kind: &str, scope: &str, resolved_from: &str| {
+            PipelineTransactionStatusResponse::new(
+                format!("{}b", "a".repeat(63)),
+                iroha_torii_shared::PipelineTransactionStatus {
+                    kind: kind.to_owned(),
+                    block_height: Some(7),
+                },
+                scope.to_owned(),
+                resolved_from.to_owned(),
+            )
+        };
+        assert!(prepared_recovery_status_is_final_applied(&response(
+            "Applied", "global", "state"
+        )));
+        for (scope, resolved_from) in [("global", "cache"), ("global", "queue"), ("local", "state")]
+        {
+            assert!(!prepared_recovery_status_is_final_applied(&response(
+                "Applied", scope, resolved_from
+            )));
+        }
+        for kind in ["Rejected", "Expired"] {
+            assert!(prepared_recovery_status_is_final_failure(&response(
+                kind, "global", "state"
+            )));
+            for (scope, resolved_from) in
+                [("global", "cache"), ("global", "queue"), ("local", "state")]
+            {
+                assert!(!prepared_recovery_status_is_final_failure(&response(
+                    kind,
+                    scope,
+                    resolved_from
+                )));
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_envelope_rejects_legacy_zero_or_multi_operation_shapes() {
+        for operations in [norito::json!([]), norito::json!([{}, {}])] {
+            let retired = norito::json!({
+                "schema": PREPARED_ENVELOPE_SCHEMA_V1,
+                "binding": {
+                    "schema": PREPARED_BINDING_SCHEMA_V1,
+                    "authorization_sha256": ("ab".repeat(32)),
+                    "authorization_nonce": ("n".repeat(32)),
+                    "kind": "onboarding",
+                    "phase": "pre_edge",
+                    "idempotency_key": ("cd".repeat(32)),
+                    "execution_expires_at_unix_ms": (u64::MAX)
+                },
+                "public_root": DEFAULT_PUBLIC_ROOT,
+                "chain_id": DEFAULT_CHAIN_ID,
+                "network_id": "retired",
+                "authority": "retired",
+                "operations": operations
+            });
+            let bytes = json::to_vec(&retired).expect("encode retired aggregate shape");
+            let error = json::from_slice::<PreparedMutationEnvelopeV1>(&bytes)
+                .expect_err("zero/multi operation envelopes must fail closed");
+            assert!(!error.to_string().is_empty());
+        }
+    }
+
     fn test_onboarding_token_file() -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("create onboarding token file");
         file.write_all(TEST_ONBOARDING_TOKEN.as_bytes())
@@ -2605,6 +5820,36 @@ mod tests {
         }
         file
     }
+
+    fn fixture_write_canary_args(operation: WriteCanaryOperation) -> WriteCanary {
+        let authorization_nonce = "n".repeat(32);
+        let mutation_phase = "pre_edge".to_owned();
+        let idempotency_key = write_canary_child_idempotency_key(
+            &authorization_nonce,
+            &mutation_phase,
+            operation.mutation_kind(),
+        );
+        WriteCanary {
+            public_root: DEFAULT_PUBLIC_ROOT.to_owned(),
+            alias_prefix: DEFAULT_ALIAS_PREFIX.to_owned(),
+            faucet_asset_id: DEFAULT_GAS_ASSET_ID.to_owned(),
+            onboarding_token_file: None,
+            use_config_signer: true,
+            operation,
+            authorization_sha256: "ab".repeat(32),
+            authorization_nonce,
+            mutation_phase,
+            idempotency_key,
+            execution_expires_at_unix_ms: u64::MAX,
+            prepare_envelope: true,
+            prepared_output_fd: Some(3),
+            submit_prepared_envelope_fd: None,
+            recover_prepared_envelope_fd: None,
+            prerequisite_envelope_fd: None,
+            json: true,
+        }
+    }
+
     #[derive(Clone)]
     struct MockRequest {
         method: String,
@@ -2860,7 +6105,8 @@ mod tests {
                 200,
                 norito::json!({
                     "txs_rejected_recent_5m": 0,
-                    "queue_size": 0
+                    "queue_size": 0,
+                    "sumeragi": { "tx_queue_saturated": false }
                 }),
             ),
             ("GET", "/v1/time/now") => MockResponse::json(
@@ -2879,6 +6125,13 @@ mod tests {
                         "offset_ok": true,
                         "confidence_ok": true
                     }
+                }),
+            ),
+            ("GET", "/v1/sumeragi/status") => MockResponse::json(
+                401,
+                norito::json!({
+                    "code": "canonical_authentication_required",
+                    "message": "canonical account request authentication is required"
                 }),
             ),
             ("GET", "/v1/contracts/state") => {
@@ -2934,252 +6187,194 @@ mod tests {
             _ => MockResponse::text(404, "not found"),
         }
     }
-    fn write_canary_mock_response(
-        request: &MockRequest,
-        onboarding_status: u16,
-        capabilities_status: u16,
-    ) -> MockResponse {
-        // Account formatting is guarded per thread.  The mock responder runs
-        // on its own thread, so mirror the Taira discriminant used by the
-        // canary client before deriving the response account identifier.
-        let _guard = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
-        match (request.method.as_str(), path_only(&request.path)) {
-            ("POST", "/v1/accounts/onboard/plan") => {
-                if onboarding_status == 400 {
-                    MockResponse::json(
-                        400,
-                        norito::json!({
-                            "error_code": "account_already_exists",
-                            "message": "account already exists",
-                            "hint": "retry onboarding with a fresh runtime signer"
-                        }),
-                    )
-                } else {
-                    let request_body =
-                        json::from_str::<Value>(&request.body).expect("decode onboarding request");
-                    let request_object = request_body.as_object().expect("onboarding object");
-                    let alias = request_object
-                        .get("alias")
-                        .and_then(Value::as_str)
-                        .expect("onboarding alias")
-                        .to_owned();
-                    let account_id = request_object
-                        .get("account_id")
-                        .and_then(Value::as_str)
-                        .expect("onboarding account id")
-                        .to_owned();
-                    MockResponse::json(
-                        200,
-                        norito::json!({
-                            "body": {
-                                "version": 1,
-                                "request": request_body,
-                                "authority": (account_id),
-                                "chain_id": (DEFAULT_CHAIN_ID),
-                                "anchor": { "block_height": 1, "block_hash": ("11".repeat(32)) },
-                                "resource": { "intent": { "alias": (alias) }, "disposition": { "kind": "create" } },
-                                "acquisition": { "term_years": 1, "pricing_class_hint": null },
-                                "quote_guard": {
-                                    "expected_policy_version": 1,
-                                    "expected_payment_asset": (DEFAULT_GAS_ASSET_ID),
-                                    "max_amount": "1",
-                                    "valid_until_ms": (u64::MAX)
-                                },
-                                "instructions": [],
-                                "owner_auto_renew_instruction": null,
-                                "valid_until_ms": (u64::MAX)
-                            },
-                            "plan_hash": ("22".repeat(32)),
-                            "signature": ("33".repeat(64))
-                        }),
-                    )
-                }
-            }
-            ("POST", "/v1/accounts/onboard") => {
-                let apply_body =
-                    json::from_str::<Value>(&request.body).expect("decode onboarding apply");
-                let canonical_request = apply_body
-                    .as_object()
-                    .and_then(|object| object.get("receipt"))
-                    .and_then(Value::as_object)
-                    .and_then(|receipt| receipt.get("body"))
-                    .and_then(Value::as_object)
-                    .and_then(|body| body.get("request"))
-                    .and_then(Value::as_object)
-                    .expect("receipt canonical request");
-                let alias = canonical_request
-                    .get("alias")
-                    .and_then(Value::as_str)
-                    .expect("receipt alias");
-                let account_id = canonical_request
-                    .get("account_id")
-                    .and_then(Value::as_str)
-                    .expect("receipt account id");
-                MockResponse::json(
-                    202,
-                    norito::json!({
-                        "account_id": (account_id),
-                        "alias": (alias),
-                        "tx_hash_hex": ("ab".repeat(32)),
-                        "status": "Queued",
-                        "disposition": { "kind": "create" }
-                    }),
-                )
-            }
-            ("GET", "/v1/accounts/faucet/puzzle") => MockResponse::json(
-                200,
-                norito::json!({
-                    "algorithm": FAUCET_POW_ALGORITHM,
-                    "network_id": (crate::fallback_config().network_id.to_string()),
-                    "chain_discriminant": DEFAULT_CHAIN_DISCRIMINANT,
-                    "difficulty_bits": 1,
-                    "anchor_height": 1,
-                    "anchor_block_hash_hex": ("11".repeat(32)),
-                    "challenge_salt_hex": null,
-                    "scrypt_log_n": 1,
-                    "scrypt_r": 1,
-                    "scrypt_p": 1
-                }),
-            ),
-            ("POST", "/v1/accounts/faucet") => {
-                let request_body =
-                    json::from_str::<Value>(&request.body).expect("decode faucet request");
-                let account_id = request_body
-                    .as_object()
-                    .and_then(|object| object.get("account_id"))
-                    .and_then(Value::as_str)
-                    .expect("faucet account_id");
-                MockResponse::json(
-                    202,
-                    norito::json!({
-                        "account_id": (account_id),
-                        "asset_definition_id": (DEFAULT_GAS_ASSET_ID),
-                        "asset_id": (format!("{DEFAULT_GAS_ASSET_ID}#{account_id}")),
-                        "amount": "1000000000000000000",
-                        "tx_hash_hex": ("cd".repeat(32)),
-                        "status": "QUEUED"
-                    }),
-                )
-            }
-            ("GET", "/v1/node/capabilities") if capabilities_status == 200 => MockResponse::json(
-                200,
-                norito::json!({
-                    "data_model_version": (iroha::data_model::DATA_MODEL_VERSION),
-                    "signed_transaction_schema_hash_hex": (hex::encode(
-                        <iroha::data_model::transaction::SignedTransaction as norito::core::NoritoSerialize>::schema_hash()
-                    ))
-                }),
-            ),
-            ("GET", "/v1/node/capabilities") => {
-                MockResponse::text(capabilities_status, "capabilities unavailable")
-            }
-            ("POST", path) if path == torii_uri::FEES_QUOTE => {
-                let request = json::from_str::<FeeQuoteRequest>(&request.body)
-                    .expect("decode fee quote request");
-                let response = FeeQuoteResponse {
-                    intent: request.payload.fee_payment,
-                    observation: FeeQuoteObservation {
-                        ledger_time_ms: 1,
-                        next_block_height: 42,
-                        route_dataspace_id: DataSpaceId::UNIVERSAL,
-                    },
-                    components: Vec::new(),
-                    capacities: Vec::new(),
-                    decision: FeeQuoteDecision::Accepted {
-                        debit_source: FeeDebitSource::Account(request.payload.authority),
-                        program_revision: None,
-                    },
-                };
-                MockResponse::json(
-                    200,
-                    json::to_value(&response).expect("encode fee quote response"),
-                )
-            }
-            ("POST", path) if path == torii_uri::TRANSACTION => MockResponse::text(200, ""),
-            ("GET", "/v1/pipeline/transactions/status") => {
-                let hash = Url::parse(&format!("http://localhost{}", request.path))
-                    .ok()
-                    .and_then(|url| {
-                        url.query_pairs()
-                            .find(|(key, _)| key == "hash")
-                            .map(|(_, value)| value.to_string())
-                    })
-                    .unwrap_or_else(|| "mockhash".to_owned());
-                MockResponse::json(
-                    200,
-                    norito::json!({
-                        "hash": (hash),
-                        "status": { "kind": "Applied", "block_height": 42 },
-                        "scope": "local",
-                        "resolved_from": "state"
-                    }),
-                )
-            }
-            ("POST", path) if path == torii_uri::QUERY => {
-                MockResponse::text(404, "query unavailable in mock")
-            }
-            _ => MockResponse::text(404, "not found"),
-        }
-    }
-    fn inrou_canary_deployment(
-        mode: &str,
-        version: &str,
-    ) -> crate::soracloud::TairaInrouCanaryDeployment {
-        crate::soracloud::TairaInrouCanaryDeployment {
+    fn inrou_canary_deployment(mode: &str, version: &str) -> InrouProbeIdentity {
+        InrouProbeIdentity {
             service_name: "taira_inrou_canary".to_owned(),
             service_version: version.to_owned(),
             route_host: "taira-inrou-canary.sora".to_owned(),
             route_path_prefix: "/api/v1".to_owned(),
             healthcheck_path: "/health".to_owned(),
-            mutation_mode: mode.to_owned(),
-            bundle_hash: "bundle-hash".to_owned(),
-            bundle_content_cid: "bundle-cid".to_owned(),
-            bundle_manifest_digest_hex: "11".repeat(32),
-            guest_content_cid: "guest-cid".to_owned(),
-            guest_manifest_digest_hex: "22".repeat(32),
-            submitted_tx_hash: json::to_value(&iroha_crypto::Hash::new(
-                b"taira-inrou-test-submitted-transaction",
-            ))
-            .expect("encode submitted transaction hash")
-            .as_str()
-            .expect("transaction hash encodes as string")
-            .to_owned(),
-            mutation_response_digest: "response-hash".to_owned(),
+            stage_mode: mode.to_owned(),
+            container_manifest_hash: Hash::new(b"taira-test-container-manifest").to_string(),
+            service_manifest_hash: Hash::new(b"taira-test-service-manifest").to_string(),
         }
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture spells out the complete exact Soracloud V1 response"
+    )]
     fn exact_inrou_status(version: &str, action: &str, revision_count: u64) -> Value {
         norito::json!({
             "schema_version": 1,
-            "service_health": { "status": "healthy" },
-            "runtime_manager": { "available": true },
+            "service_health": {
+                "mode": "embedded_runtime_manager",
+                "status": "healthy",
+                "message": "embedded runtime manager reports healthy hosted workloads",
+                "observed_height": 1,
+                "observed_block_hash": null,
+                "state_dir": "/tmp/taira-inrou-runtime",
+                "service_revisions": 1,
+                "healthy_service_revisions": 1,
+                "hydrating_service_revisions": 0,
+                "degraded_service_revisions": 0,
+                "unavailable_service_revisions": 0,
+                "apartments": 0,
+                "running_apartments": 0,
+                "expired_apartments": 0
+            },
+            "routing": {
+                "configured_lane_count": 1,
+                "declared_lane_count": 1,
+                "active_lane_count": 1,
+                "active_lane_ids": [0],
+                "autoscale_capacity_lane_count": 1,
+                "autoscale_capacity_lane_ids": [0],
+                "dataspace_count": 1,
+                "routing_rules": 0,
+                "default_lane_id": 0,
+                "default_dataspace_id": 0
+            },
             "hosted_http_topology": {
                 "active_capability_adverts": 4,
-                "hosted_replica_count": 4
+                "placed_host_count": 4,
+                "hosted_replica_count": 4,
+                "unavailable_replica_count": 0
+            },
+            "resource_pressure": {
+                "queue_active": 0,
+                "queue_queued": 0,
+                "queue_capacity": 1024,
+                "queue_saturated": false,
+                "high_load_threshold": 1024,
+                "high_load": false,
+                "runtime": {
+                    "enabled": true,
+                    "state_dir": "/tmp/taira-inrou-runtime",
+                    "observed_height": 1,
+                    "service_revisions": 1,
+                    "apartments": 0,
+                    "max_load_factor_bps": 0,
+                    "reported_pending_mailbox_messages": 0,
+                    "authoritative_pending_mailbox_messages": 0,
+                    "bundle_cache_misses": 0,
+                    "artifact_cache_misses": 0
+                }
+            },
+            "failed_admissions": {
+                "available": true,
+                "total": 0,
+                "governance_manifest_rejected": 0,
+                "sorafs_provider_rejected": 0
+            },
+            "runtime_manager": {
+                "available": true,
+                "state_dir": "/tmp/taira-inrou-runtime",
+                "snapshot": {
+                    "schema_version": 1,
+                    "observed_height": 1,
+                    "observed_block_hash": null,
+                    "local_peer_id": null,
+                    "services": {},
+                    "apartments": {},
+                    "hf_sources": {}
+                }
             },
             "control_plane": {
+                "schema_version": 1,
+                "service_count": 1,
+                "audit_event_count": 1,
                 "services": [{
                     "service_name": "taira_inrou_canary",
                     "current_version": version,
                     "revision_count": revision_count,
+                    "config_generation": 0,
+                    "secret_generation": 0,
+                    "config_entry_count": 0,
+                    "secret_entry_count": 0,
+                    "quota_class": null,
+                    "service_lease_status": null,
+                    "lease_expires_height": null,
+                    "prepaid_runtime_balance": null,
+                    "remaining_runtime_balance": null,
+                    "public_discovery_content_cid": null,
+                    "public_discovery_url": null,
+                    "public_discovery_cid_host_url": null,
                     "active_rollout": null,
                     "last_rollout": null,
                     "latest_revision": {
+                        "sequence": revision_count,
                         "action": { "action": action, "value": null },
                         "service_version": version,
+                        "container_manifest_hash": (Hash::new(b"taira-test-container-manifest")),
+                        "service_manifest_hash": (Hash::new(b"taira-test-service-manifest")),
                         "replicas": 4,
-                        "runtime": { "runtime": "Inrou", "value": null },
                         "execution_plane": {
                             "execution_plane": "HttpService",
                             "value": null
                         },
                         "route_host": "taira-inrou-canary.sora",
-                        "route_path_prefix": "/api/v1"
+                        "route_path_prefix": "/api/v1",
+                        "base_url": null,
+                        "healthcheck_url": null,
+                        "public_discovery_content_cid": null,
+                        "public_discovery_url": null,
+                        "public_discovery_cid_host_url": null,
+                        "state_binding_count": 0,
+                        "state_bindings": [],
+                        "lease_volumes": [],
+                        "allow_model_inference": false,
+                        "allow_model_training": false,
+                        "runtime": { "runtime": "Inrou", "value": null },
+                        "allow_state_writes": false,
+                        "network": { "mode": "Open", "value": null },
+                        "cpu_millis": 1000,
+                        "memory_bytes": 1073741824,
+                        "ephemeral_storage_bytes": 1073741824,
+                        "max_open_files_per_process": 1024,
+                        "max_tasks": 64,
+                        "start_grace_secs": 30,
+                        "stop_grace_secs": 30,
+                        "healthcheck_path": "/health",
+                        "required_config_names": [],
+                        "required_secret_names": [],
+                        "config_exports": [],
+                        "sandbox_profile_hash": (Hash::new(b"taira-test-sandbox-profile")),
+                        "process_generation": revision_count,
+                        "process_started_sequence": revision_count,
+                        "signed_by": "taira-test-validator"
                     }
+                }],
+                "recent_audit_events": [{
+                    "sequence": revision_count,
+                    "action": { "action": action, "value": null },
+                    "service_name": "taira_inrou_canary",
+                    "from_version": null,
+                    "to_version": version,
+                    "service_manifest_hash": (Hash::new(b"taira-test-service-manifest")),
+                    "container_manifest_hash": (Hash::new(b"taira-test-container-manifest")),
+                    "binding_name": null,
+                    "state_key": null,
+                    "config_name": null,
+                    "secret_name": null,
+                    "governance_tx_hash": null,
+                    "rollout_handle": null,
+                    "policy_name": null,
+                    "policy_snapshot_hash": null,
+                    "jurisdiction_tag": null,
+                    "consent_evidence_hash": null,
+                    "break_glass": null,
+                    "break_glass_reason": null,
+                    "lease_reporting_epoch_rollover": null,
+                    "signed_by": "taira-test-validator"
                 }]
             }
         })
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one cohesive fail-closed deploy and upgrade contract test"
+    )]
     fn exact_inrou_status_requires_distinct_promoted_upgrade() {
         let deploy = inrou_canary_deployment("deploy", "1.0.0");
         let deploy_status = exact_inrou_status("1.0.0", "Deploy", 1);
@@ -3190,7 +6385,12 @@ mod tests {
             .expect("status fixture is an object")
             .remove("schema_version");
         assert!(validate_exact_inrou_canary_status(&missing_schema, &deploy).is_err());
-        for missing_field in ["active_capability_adverts", "hosted_replica_count"] {
+        for missing_field in [
+            "active_capability_adverts",
+            "placed_host_count",
+            "hosted_replica_count",
+            "unavailable_replica_count",
+        ] {
             let mut missing = deploy_status.clone();
             missing
                 .pointer_mut("/hosted_http_topology")
@@ -3235,6 +6435,18 @@ mod tests {
             validate_exact_inrou_canary_status(&missing_revision_version, &deploy).is_err(),
             "latest revision must carry its exact service version"
         );
+        for hash_field in ["container_manifest_hash", "service_manifest_hash"] {
+            let mut mismatched = deploy_status.clone();
+            *mismatched
+                .pointer_mut(&format!(
+                    "/control_plane/services/0/latest_revision/{hash_field}"
+                ))
+                .expect("status fixture has manifest hashes") = Value::from("foreign-hash");
+            assert!(
+                validate_exact_inrou_canary_status(&mismatched, &deploy).is_err(),
+                "a live {hash_field} mismatch must fail closed"
+            );
+        }
         for (path, retired) in [
             ("/control_plane/services/0/latest_revision/action", "Deploy"),
             ("/control_plane/services/0/latest_revision/runtime", "Inrou"),
@@ -3268,11 +6480,17 @@ mod tests {
             .insert(
                 "last_rollout".to_owned(),
                 norito::json!({
+                    "rollout_handle": "taira-inrou-upgrade",
                     "baseline_version": "1.0.0",
                     "candidate_version": "1.0.1",
                     "canary_percent": 100,
                     "traffic_percent": 100,
-                    "stage": { "stage": "Promoted", "value": null }
+                    "stage": { "stage": "Promoted", "value": null },
+                    "health_failures": 0,
+                    "max_health_failures": 3,
+                    "health_window_secs": 30,
+                    "created_sequence": 1,
+                    "updated_sequence": 2
                 }),
             );
         assert!(validate_exact_inrou_canary_status(&upgrade_status, &upgrade).is_ok());
@@ -3291,11 +6509,43 @@ mod tests {
             .pointer_mut("/control_plane/services/0/last_rollout/candidate_version")
             .expect("status fixture has a rollout candidate") = Value::from("1.0.0");
         assert!(validate_exact_inrou_canary_status(&stale, &upgrade).is_err());
-        let mut extra_host = upgrade_status;
+        for field in ["rollout_handle", "updated_sequence"] {
+            let mut missing = upgrade_status.clone();
+            missing
+                .pointer_mut("/control_plane/services/0/last_rollout")
+                .and_then(Value::as_object_mut)
+                .expect("status fixture has a rollout")
+                .remove(field);
+            assert!(
+                validate_exact_inrou_canary_status(&missing, &upgrade).is_err(),
+                "missing rollout field {field} must fail closed"
+            );
+        }
+        let mut extra_rollout = upgrade_status.clone();
+        extra_rollout
+            .pointer_mut("/control_plane/services/0/last_rollout")
+            .and_then(Value::as_object_mut)
+            .expect("status fixture has a rollout")
+            .insert("retired_v0".to_owned(), Value::from(true));
+        assert!(validate_exact_inrou_canary_status(&extra_rollout, &upgrade).is_err());
+        let mut extra_host = upgrade_status.clone();
         *extra_host
             .pointer_mut("/hosted_http_topology/active_capability_adverts")
             .expect("status fixture has an advert count") = Value::from(5_u64);
         assert!(validate_exact_inrou_canary_status(&extra_host, &upgrade).is_err());
+        for (field, invalid) in [
+            ("placed_host_count", 3_u64),
+            ("unavailable_replica_count", 1_u64),
+        ] {
+            let mut unavailable = upgrade_status.clone();
+            *unavailable
+                .pointer_mut(&format!("/hosted_http_topology/{field}"))
+                .expect("status fixture has an exact topology count") = Value::from(invalid);
+            assert!(
+                validate_exact_inrou_canary_status(&unavailable, &upgrade).is_err(),
+                "noncanonical topology count {field}={invalid} must fail closed"
+            );
+        }
     }
     #[test]
     fn tagged_enum_name_requires_exact_tagged_unit_envelope() {
@@ -3316,16 +6566,7 @@ mod tests {
     }
     #[test]
     fn doctor_soracloud_status_rejects_bare_string_enum_aliases() {
-        let response = doctor_mock_response(
-            &MockRequest {
-                method: "GET".to_owned(),
-                path: "/v1/soracloud/status".to_owned(),
-                headers: Vec::new(),
-                body: String::new(),
-            },
-            None,
-        );
-        let canonical: Value = json::from_str(&response.body).expect("decode status fixture");
+        let canonical = exact_inrou_status("1.0.0", "Deploy", 1);
         validate_soracloud_status(Some(&canonical)).expect("canonical tagged status");
         for (path, retired) in [
             ("/control_plane/services/0/latest_revision/runtime", "Inrou"),
@@ -3343,34 +6584,156 @@ mod tests {
                 "doctor must reject bare-string enum alias at {path}"
             );
         }
-        for field in ["active_capability_adverts", "hosted_replica_count"] {
+        for field in [
+            "active_capability_adverts",
+            "placed_host_count",
+            "hosted_replica_count",
+            "unavailable_replica_count",
+        ] {
             let mut missing = canonical.clone();
             missing
                 .pointer_mut("/hosted_http_topology")
                 .and_then(Value::as_object_mut)
                 .expect("status fixture has hosted HTTP topology")
                 .remove(field);
-            assert_eq!(
-                validate_soracloud_status(Some(&missing)),
-                Err(format!("/v1/soracloud/status is missing `{field}`")),
-                "doctor must not infer a missing authoritative topology count"
+            let error = validate_soracloud_status(Some(&missing))
+                .expect_err("doctor must reject a missing authoritative topology count");
+            assert!(
+                error.contains(field),
+                "missing {field} reported the wrong error: {error}"
             );
         }
     }
     #[test]
-    fn write_canary_message_never_defaults_a_pre_epoch_clock() {
-        assert_eq!(
-            canary_message_at(UNIX_EPOCH + Duration::from_millis(42))
-                .expect("post-epoch timestamp must be accepted"),
-            "taira-write-canary-42"
-        );
-        let pre_epoch = UNIX_EPOCH
-            .checked_sub(Duration::from_millis(1))
-            .expect("one millisecond before the Unix epoch is representable");
+    fn doctor_soracloud_status_rejects_unknown_and_missing_v1_fields() {
+        let canonical = exact_inrou_status("1.0.0", "Deploy", 1);
+        let mut extra_root = canonical.clone();
+        extra_root
+            .as_object_mut()
+            .expect("status fixture is an object")
+            .insert("retired_v0".to_owned(), Value::from(true));
         assert!(
-            canary_message_at(pre_epoch).is_err(),
-            "pre-epoch clocks must fail instead of producing timestamp zero"
+            validate_soracloud_status(Some(&extra_root))
+                .expect_err("unknown root field must fail closed")
+                .contains("unknown field `retired_v0`")
         );
+        for path in [
+            "/service_health",
+            "/routing",
+            "/hosted_http_topology",
+            "/resource_pressure",
+            "/resource_pressure/runtime",
+            "/failed_admissions",
+            "/runtime_manager",
+            "/runtime_manager/snapshot",
+            "/control_plane",
+            "/control_plane/services/0",
+            "/control_plane/services/0/latest_revision",
+            "/control_plane/recent_audit_events/0",
+        ] {
+            let mut extra = canonical.clone();
+            extra
+                .pointer_mut(path)
+                .and_then(Value::as_object_mut)
+                .unwrap_or_else(|| panic!("status fixture has object at {path}"))
+                .insert("retired_v0".to_owned(), Value::from(true));
+            let error = validate_soracloud_status(Some(&extra))
+                .expect_err("unknown nested field must fail closed");
+            assert!(
+                error.contains("unknown field `retired_v0`"),
+                "unknown field at {path} reported the wrong error: {error}"
+            );
+        }
+        for (path, field) in [
+            ("", "routing"),
+            ("/service_health", "observed_height"),
+            ("/routing", "default_lane_id"),
+            ("/hosted_http_topology", "placed_host_count"),
+            ("/resource_pressure", "runtime"),
+            ("/resource_pressure/runtime", "artifact_cache_misses"),
+            ("/failed_admissions", "total"),
+            ("/runtime_manager", "snapshot"),
+            ("/runtime_manager/snapshot", "hf_sources"),
+            ("/control_plane", "recent_audit_events"),
+            ("/control_plane/services/0", "quota_class"),
+            ("/control_plane/services/0/latest_revision", "network"),
+            (
+                "/control_plane/recent_audit_events/0",
+                "lease_reporting_epoch_rollover",
+            ),
+        ] {
+            let mut missing = canonical.clone();
+            let object = if path.is_empty() {
+                missing.as_object_mut()
+            } else {
+                missing.pointer_mut(path).and_then(Value::as_object_mut)
+            }
+            .unwrap_or_else(|| panic!("status fixture has object at {path}"));
+            object.remove(field);
+            let error = validate_soracloud_status(Some(&missing))
+                .expect_err("missing nested field must fail closed");
+            assert!(
+                error.contains(field),
+                "missing {field} at {path} reported the wrong error: {error}"
+            );
+        }
+    }
+    #[test]
+    fn doctor_soracloud_status_rejects_noncanonical_route_text() {
+        let canonical = exact_inrou_status("1.0.0", "Deploy", 1);
+        for (field, retired) in [
+            ("route_host", " taira-inrou-canary.sora"),
+            ("route_host", "TAIRA-INROU-CANARY.SORA"),
+            ("route_path_prefix", " /api/v1"),
+            ("route_path_prefix", "/api/v1/"),
+            ("route_path_prefix", "/api//v1"),
+        ] {
+            let mut status = canonical.clone();
+            *status
+                .pointer_mut(&format!(
+                    "/control_plane/services/0/latest_revision/{field}"
+                ))
+                .expect("status fixture has a route field") = Value::from(retired);
+            assert!(
+                validate_soracloud_status(Some(&status)).is_err(),
+                "noncanonical {field} value {retired:?} must fail closed"
+            );
+        }
+    }
+    #[test]
+    fn write_canary_child_idempotency_keys_are_domain_separated() {
+        let nonce = "n".repeat(32);
+        let phase = "pre_edge";
+        let onboarding = write_canary_child_idempotency_key(&nonce, phase, "onboarding");
+        let faucet = write_canary_child_idempotency_key(&nonce, phase, "faucet");
+        let final_canary = write_canary_child_idempotency_key(&nonce, phase, "write_canary");
+        assert_eq!(onboarding.len(), 64);
+        assert_ne!(onboarding, faucet);
+        assert_ne!(onboarding, final_canary);
+        assert_ne!(faucet, final_canary);
+
+        let mut args = fixture_write_canary_args(WriteCanaryOperation::Onboarding);
+        assert!(args.binding().is_ok());
+        args.idempotency_key = faucet;
+        assert!(args.binding().is_err());
+    }
+
+    #[test]
+    fn expired_submit_reconciles_known_state_but_bars_absent_effect() {
+        let mut binding = fixture_write_canary_args(WriteCanaryOperation::FinalCanary)
+            .binding()
+            .expect("binding");
+        binding.execution_expires_at_unix_ms = 1;
+        let applied = PreparedRecoveryClassification::Applied {
+            block_height: Some(7),
+            evidence: "ab".repeat(32),
+        };
+        assert!(
+            !submit_required_after_classification(&binding, &applied)
+                .expect("known state is read-only across expiry")
+        );
+        let absent = PreparedRecoveryClassification::Absent;
+        assert!(submit_required_after_classification(&binding, &absent).is_err());
     }
     #[test]
     fn inrou_canary_rejects_zero_timeout_before_external_work() {
@@ -3502,6 +6865,70 @@ mod tests {
         );
     }
     #[test]
+    fn configless_report_writer_emits_json_and_text() {
+        let report = report_value(
+            "taira_doctor",
+            "ok",
+            DEFAULT_PUBLIC_ROOT,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Map::new(),
+        )
+        .expect("report");
+
+        let mut json_output = WriterReportOutput {
+            write: Vec::new(),
+            output_format: CliOutputFormat::Text,
+        };
+        render_report_to(&mut json_output, true, &report).expect("render configless JSON report");
+        let decoded: Value =
+            json::from_slice(&json_output.write).expect("decode configless JSON report");
+        assert_eq!(decoded, report);
+        assert!(json_output.write.ends_with(b"\n"));
+
+        let mut text_output = WriterReportOutput {
+            write: Vec::new(),
+            output_format: CliOutputFormat::Text,
+        };
+        render_report_to(&mut text_output, false, &report).expect("render configless text report");
+        assert_eq!(
+            String::from_utf8(text_output.write).expect("UTF-8 report"),
+            format!("taira_doctor: ok ({DEFAULT_PUBLIC_ROOT})\n")
+        );
+    }
+    #[test]
+    fn public_status_requires_canonical_nested_queue_saturation() {
+        let canonical = norito::json!({
+            "sumeragi": { "tx_queue_saturated": false },
+            "txs_rejected_recent_5m": 0,
+            "queue_size": 0
+        });
+        validate_public_status(Some(&canonical)).expect("canonical status");
+
+        let flattened = norito::json!({
+            "tx_queue_saturated": false,
+            "sumeragi": { "tx_queue_saturated": false }
+        });
+        assert!(
+            validate_public_status(Some(&flattened))
+                .expect_err("retired flattened status field must fail")
+                .contains("retired root")
+        );
+        let missing = norito::json!({ "sumeragi": {} });
+        assert!(validate_public_status(Some(&missing)).is_err());
+        assert!(validate_public_status(None).is_err());
+
+        let mut warnings = Vec::new();
+        let saturated = norito::json!({
+            "sumeragi": { "tx_queue_saturated": true },
+            "txs_rejected_recent_5m": 0,
+            "queue_size": 0
+        });
+        collect_status_warnings(Some(&saturated), &mut warnings);
+        assert_eq!(warnings, ["public transaction queue reports saturation"]);
+    }
+    #[test]
     fn time_snapshot_requires_network_time_and_every_health_axis() {
         let healthy = norito::json!({
             "now": 1_u64,
@@ -3573,7 +7000,7 @@ mod tests {
         }
     }
     #[test]
-    fn onboarding_token_validation_is_byte_exact_and_redacted() {
+    fn onboarding_token_validation_is_byte_exact() {
         assert_eq!(
             validate_onboarding_token(TEST_ONBOARDING_TOKEN).expect("valid token"),
             TEST_ONBOARDING_TOKEN
@@ -3591,28 +7018,6 @@ mod tests {
                 assert!(!format!("{error:#}").contains(&malformed));
             }
         }
-    }
-    #[test]
-    fn onboarding_response_redaction_covers_text_keys_and_values() {
-        let escaped_token = "\"".repeat(32);
-        let mut body = Map::new();
-        body.insert(
-            escaped_token.clone(),
-            Value::Array(vec![Value::String(escaped_token.clone())]),
-        );
-        let encoded = json::to_json(&Value::Object(body.clone())).expect("encode echoed token");
-        assert!(!encoded.contains(&escaped_token));
-        let mut response = HttpJson {
-            status: 400,
-            text: encoded,
-            body: Some(Value::Object(body)),
-        };
-        redact_http_json(&mut response, &escaped_token);
-        let rendered = compact_json(response.body.as_ref().expect("redacted body"));
-        assert!(!response.text.contains(&escaped_token));
-        assert!(!rendered.contains(&escaped_token));
-        assert!(!response.text.contains(&"\\\"".repeat(32)));
-        assert!(rendered.contains("<redacted>"));
     }
     #[test]
     fn onboarding_token_file_is_exact_owner_only_regular_and_not_cached() {
@@ -3659,49 +7064,6 @@ mod tests {
         assert!(format!("{error:#}").contains("regular non-symlink"));
     }
     #[test]
-    fn onboarding_plan_refuses_redirect_without_forwarding_token() {
-        let destination = spawn_mock_http(1, |_request| {
-            MockResponse::json(200, norito::json!({"unexpected": "redirect followed"}))
-        });
-        let destination_url = format!("{}/v1/accounts/onboard/plan", destination.base_url);
-        let redirect = spawn_mock_http(1, move |_request| MockResponse {
-            status: 307,
-            content_type: "text/plain",
-            headers: vec![("Location", destination_url.clone())],
-            body: format!("server echoed {TEST_ONBOARDING_TOKEN}"),
-        });
-        let http = http_client().expect("HTTP client");
-        let key_pair = fixture_key_pair(12);
-        let account_id = AccountId::new(key_pair.public_key().clone());
-        let response = plan_canary_onboarding(
-            &http,
-            &redirect.base_url,
-            "canary@universal",
-            &account_id,
-            TEST_ONBOARDING_TOKEN,
-        )
-        .expect("redirect remains an HTTP response");
-        let redirect_requests = finish_mock(redirect);
-        let destination_requests = finish_mock(destination);
-        assert_eq!(response.status, 307);
-        assert_eq!(response.text, "<invalid JSON response>");
-        assert!(!response.text.contains(TEST_ONBOARDING_TOKEN));
-        assert_eq!(redirect_requests.len(), 1);
-        assert_eq!(
-            redirect_requests[0]
-                .header_values(ACCOUNT_ONBOARDING_TOKEN_HEADER)
-                .len(),
-            1
-        );
-        assert!(
-            redirect_requests[0]
-                .header_values(ACCOUNT_ONBOARDING_TOKEN_HEADER)
-                .first()
-                .is_some_and(|value| *value == TEST_ONBOARDING_TOKEN)
-        );
-        assert!(destination_requests.is_empty());
-    }
-    #[test]
     fn doctor_mock_required_tool_missing_reports_failure() {
         let missing_tool = REQUIRED_MCP_TOOLS[0];
         let server = spawn_mock_http(15, move |request| {
@@ -3723,288 +7085,11 @@ mod tests {
         );
     }
     #[test]
-    fn write_canary_mock_success_returns_redacted_receipt() {
-        let onboarding_token_file = test_onboarding_token_file();
-        let server = spawn_mock_http(11, |request| write_canary_mock_response(request, 202, 200));
-        let args = WriteCanary {
-            public_root: server.base_url.clone(),
-            alias_prefix: "mock-canary".to_owned(),
-            faucet_asset_id: DEFAULT_GAS_ASSET_ID.to_owned(),
-            onboarding_token_file: onboarding_token_file.path().to_path_buf(),
-            write_config: None,
-            use_config_signer: false,
-            json: true,
-        };
-        let report = run_write_canary(
-            &crate::fallback_config(),
-            &args,
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .expect("write canary");
-        let requests = finish_mock(server);
-        let rendered = compact_json(&report);
-        assert_eq!(report_status(&report), Some("ok"), "{rendered}");
-        assert!(rendered.contains(&"cd".repeat(32)));
-        assert!(rendered.contains(DEFAULT_CHAIN_ID));
-        assert!(rendered.contains(DEFAULT_GAS_ASSET_ID));
-        assert!(!rendered.contains("private_key"));
-        assert!(requests.iter().any(|request| request.method == "POST"
-            && path_only(&request.path) == torii_uri::TRANSACTION));
-        assert!(
-            requests.iter().any(|request| request.method == "POST"
-                && path_only(&request.path) == torii_uri::FEES_QUOTE)
-        );
-        let onboarding_plan = requests
-            .iter()
-            .find(|request| {
-                request.method == "POST" && path_only(&request.path) == "/v1/accounts/onboard/plan"
-            })
-            .expect("onboarding plan request");
-        let onboarding_apply = requests
-            .iter()
-            .find(|request| {
-                request.method == "POST" && path_only(&request.path) == "/v1/accounts/onboard"
-            })
-            .expect("onboarding apply request");
-        for onboarding in [onboarding_plan, onboarding_apply] {
-            assert_eq!(
-                onboarding
-                    .header_values(ACCOUNT_ONBOARDING_TOKEN_HEADER)
-                    .len(),
-                1
-            );
-            assert!(
-                onboarding
-                    .header_values(ACCOUNT_ONBOARDING_TOKEN_HEADER)
-                    .first()
-                    .is_some_and(|value| *value == TEST_ONBOARDING_TOKEN),
-                "onboarding credential header did not match the exact token-file bytes"
-            );
-            assert_eq!(
-                onboarding.header_values("content-type"),
-                vec!["application/json"]
-            );
-            assert!(!onboarding.body.contains(TEST_ONBOARDING_TOKEN));
-            assert!(!onboarding.body.contains("private_key"));
-            assert!(!onboarding.body.contains("public_key_hex"));
-            assert!(!onboarding.body.contains("uaid"));
-        }
-        let plan_body =
-            json::from_str::<Value>(&onboarding_plan.body).expect("decode onboarding plan request");
-        let plan_object = plan_body.as_object().expect("onboarding plan object");
-        assert_eq!(
-            plan_object
-                .keys()
-                .map(String::as_str)
-                .collect::<std::collections::BTreeSet<_>>(),
-            ["account_id", "alias", "permissions", "version"]
-                .into_iter()
-                .collect()
-        );
-        assert_eq!(plan_object.get("version").and_then(Value::as_u64), Some(1));
-        assert!(
-            plan_object
-                .get("permissions")
-                .and_then(Value::as_array)
-                .is_some_and(Vec::is_empty)
-        );
-        let apply_body = json::from_str::<Value>(&onboarding_apply.body)
-            .expect("decode onboarding apply request");
-        let apply_object = apply_body.as_object().expect("onboarding apply object");
-        assert_eq!(
-            apply_object.keys().map(String::as_str).collect::<Vec<_>>(),
-            vec!["receipt"]
-        );
-        let receipt_request = apply_object
-            .get("receipt")
-            .and_then(Value::as_object)
-            .and_then(|receipt| receipt.get("body"))
-            .and_then(Value::as_object)
-            .and_then(|body| body.get("request"));
-        assert_eq!(receipt_request, Some(&plan_body));
-        assert!(requests.iter().any(|request| {
-            request.method == "GET"
-                && path_only(&request.path) == "/v1/pipeline/transactions/status"
-                && request.path.contains(&"ab".repeat(32))
-        }));
-        assert!(requests.iter().any(|request| {
-            request.method == "GET"
-                && path_only(&request.path) == "/v1/pipeline/transactions/status"
-                && request.path.contains(&"cd".repeat(32))
-        }));
-    }
-    #[test]
-    fn write_canary_rejects_unavailable_capabilities_without_transaction_post() {
-        for capabilities_status in [404, 429, 503] {
-            let onboarding_token_file = test_onboarding_token_file();
-            let server = spawn_mock_http(8, move |request| {
-                write_canary_mock_response(request, 202, capabilities_status)
-            });
-            let args = WriteCanary {
-                public_root: server.base_url.clone(),
-                alias_prefix: "mock-canary".to_owned(),
-                faucet_asset_id: DEFAULT_GAS_ASSET_ID.to_owned(),
-                onboarding_token_file: onboarding_token_file.path().to_path_buf(),
-                write_config: None,
-                use_config_signer: false,
-                json: true,
-            };
-            let error = run_write_canary(
-                &crate::fallback_config(),
-                &args,
-                FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .expect_err("unavailable capabilities must reject the write canary");
-            let requests = finish_mock(server);
-            let rendered = format!("{error:#}");
-            assert!(
-                rendered.contains("Failed to get node capabilities"),
-                "unexpected error for HTTP {capabilities_status}: {rendered}"
-            );
-            assert!(
-                rendered.contains(&capabilities_status.to_string()),
-                "capability error did not include HTTP {capabilities_status}: {rendered}"
-            );
-            assert!(requests.iter().any(|request| {
-                request.method == "GET" && path_only(&request.path) == "/v1/node/capabilities"
-            }));
-            assert!(!requests.iter().any(|request| {
-                request.method == "POST" && path_only(&request.path) == torii_uri::TRANSACTION
-            }));
-        }
-    }
-    #[test]
-    fn faucet_response_rejects_retired_synchronous_shape() {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let account_id = AccountId::new(key_pair.public_key().clone());
-        let response = norito::json!({
-            "account_id": (account_id.to_string()),
-            "asset_definition_id": (DEFAULT_GAS_ASSET_ID),
-            "asset_id": (format!("{DEFAULT_GAS_ASSET_ID}#{account_id}")),
-            "amount": "1000000000000000000",
-            "tx_hash_hex": "faucetabc",
-            "status": "Applied"
-        });
-        let error = validate_faucet_response(Some(&response), &account_id, DEFAULT_GAS_ASSET_ID)
-            .expect_err("retired synchronous faucet response must fail closed");
-        assert!(format!("{error:#}").contains("expected QUEUED"));
-    }
-    #[test]
-    fn faucet_response_rejects_wrong_asset_and_short_hash() {
-        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let account_id = AccountId::new(key_pair.public_key().clone());
-        let response = |asset_definition_id: &str, tx_hash_hex: &str| {
-            norito::json!({
-                "account_id": (account_id.to_string()),
-                "asset_definition_id": (asset_definition_id),
-                "asset_id": (format!("{asset_definition_id}#{account_id}")),
-                "amount": "1000000000000000000",
-                "tx_hash_hex": (tx_hash_hex),
-                "status": "QUEUED"
-            })
-        };
-        let wrong_asset = response("wrong-asset", &"cd".repeat(32));
-        let error = validate_faucet_response(Some(&wrong_asset), &account_id, DEFAULT_GAS_ASSET_ID)
-            .expect_err("a different funded asset cannot satisfy the canary");
-        assert!(format!("{error:#}").contains("unexpected asset_definition_id"));
-        let short_hash = response(DEFAULT_GAS_ASSET_ID, "cd");
-        let error = validate_faucet_response(Some(&short_hash), &account_id, DEFAULT_GAS_ASSET_ID)
-            .expect_err("a short transaction hash must fail closed");
-        assert!(format!("{error:#}").contains("must encode 32 bytes"));
-    }
-    #[test]
-    fn pipeline_status_requires_current_nested_shape() {
-        let current = norito::json!({"status": {"kind": "Applied"}});
-        assert_eq!(
-            pipeline_status_kind(Some(&current)).as_deref(),
-            Some("Applied")
-        );
-        let retired = norito::json!({"status": "Applied"});
-        assert_eq!(pipeline_status_kind(Some(&retired)), None);
-    }
-    #[test]
-    fn pipeline_status_requires_applied_before_success() {
-        for pending in ["Queued", "Approved", "Committed"] {
-            let response = norito::json!({"status": {"kind": pending}});
-            assert!(
-                !pipeline_status_is_terminal(Some(&response)),
-                "{pending} must not finish the Applied wait"
-            );
-        }
-        for terminal in ["Applied", "Rejected", "Expired"] {
-            let response = norito::json!({"status": {"kind": terminal}});
-            assert!(pipeline_status_is_terminal(Some(&response)));
-        }
-    }
-    #[test]
-    fn pipeline_status_poll_fails_fast_on_noncanonical_http_error() {
-        let server = spawn_mock_http(1, |_request| {
-            MockResponse::json(503, norito::json!({"error": "route unavailable"}))
-        });
-        let http = http_client().expect("HTTP client");
-        let response = wait_for_pipeline_terminal_status(
-            &http,
-            &server.base_url,
-            &"ab".repeat(32),
-            Duration::from_secs(30),
-        )
-        .expect("HTTP error remains a typed canary result");
-        let requests = finish_mock(server);
-        assert_eq!(response.status, 503);
-        assert_eq!(requests.len(), 1);
-    }
-    #[test]
-    fn write_canary_mock_onboarding_400_does_not_attempt_faucet() {
-        let onboarding_token_file = test_onboarding_token_file();
-        let server = spawn_mock_http(1, |request| write_canary_mock_response(request, 400, 200));
-        let args = WriteCanary {
-            public_root: server.base_url.clone(),
-            alias_prefix: "mock-canary".to_owned(),
-            faucet_asset_id: DEFAULT_GAS_ASSET_ID.to_owned(),
-            onboarding_token_file: onboarding_token_file.path().to_path_buf(),
-            write_config: None,
-            use_config_signer: false,
-            json: true,
-        };
-        let report = run_write_canary(
-            &crate::fallback_config(),
-            &args,
-            FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .expect("write canary");
-        let requests = finish_mock(server);
-        let failures = report
-            .as_object()
-            .and_then(|object| object.get("failures"))
-            .and_then(Value::as_array)
-            .expect("failures");
-        assert_eq!(report_status(&report), Some("fail"));
-        assert!(
-            failures
-                .iter()
-                .filter_map(Value::as_str)
-                .any(|failure| failure.contains("faucet funding was not attempted"))
-        );
-        assert!(
-            !requests.iter().any(|request| request.method == "POST"
-                && path_only(&request.path) == "/v1/accounts/faucet")
-        );
-    }
-    #[test]
     fn submit_failure_hints_cover_invalid_fee_intent_and_route_unavailable() {
         let invalid_fee = hint_submit_error(eyre!("invalid fee_payment intent"));
         assert!(format!("{invalid_fee:#}").contains("/v1/fees/quote"));
         let route = hint_submit_error(eyre!("route_unavailable"));
         assert!(format!("{route:#}").contains("ingress or lane routing"));
-    }
-    #[test]
-    fn faucet_asset_failure_points_at_bootstrap() {
-        let response = HttpJson {
-            status: 400,
-            body: Some(error_value("invalid", "Failed to find asset")),
-            text: String::new(),
-        };
-        assert!(faucet_failure_hint(&response).contains("not bootstrapped"));
     }
     #[test]
     fn leading_zero_bits_counts_prefix() {
@@ -4025,6 +7110,43 @@ mod tests {
         .expect("challenge");
         assert_eq!(challenge.len(), 32);
         assert_ne!(challenge, [0_u8; 32]);
+    }
+    #[test]
+    fn faucet_challenge_matches_v1_preimage_vector() {
+        let genesis_hash =
+            hex::decode("32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149")
+                .expect("decode fixture genesis hash")
+                .try_into()
+                .expect("fixture genesis hash is exactly 32 bytes");
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::prehashed(genesis_hash)),
+        );
+        let challenge = build_faucet_challenge(
+            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+            &network_id,
+            68,
+            "d5c0016a6345e8ea379da42aab1fdc16ba82756e19e0b63c48c14735e8caf7ef",
+            None,
+        )
+        .expect("V1 faucet challenge");
+        assert_eq!(
+            hex::encode(challenge),
+            "21e547302359214b28f0d1e0b04b6aeaf62a0e597dbad018d93ab0ce6af81a05"
+        );
+    }
+    #[test]
+    fn solve_faucet_puzzle_rejects_pre_release_algorithm_label() {
+        let network_id = crate::fallback_config().network_id;
+        let puzzle = norito::json!({"algorithm": "scrypt-leading-zero-bits-v2"});
+        let error = solve_faucet_puzzle(
+            "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            &network_id,
+            &puzzle,
+        )
+        .expect_err("pre-release faucet algorithm must fail closed");
+        let message = format!("{error:#}");
+        assert!(message.contains("scrypt-leading-zero-bits-v2"));
+        assert!(message.contains(FAUCET_POW_ALGORITHM));
     }
     #[test]
     fn faucet_challenge_rejects_same_label_different_genesis_replay() {
@@ -4107,75 +7229,11 @@ mod tests {
         let key_pair = fixture_key_pair(3);
         let mut config = crate::fallback_config();
         config.key_pair = key_pair.clone();
-        let signer = resolve_canary_signer(&config, true).expect("config signer");
-        assert!(!signer.generated);
+        let signer = resolve_canary_signer(&config).expect("config signer");
         assert_eq!(
             signer.account_id,
             AccountId::new(key_pair.public_key().clone())
         );
-    }
-    #[test]
-    fn resolve_canary_signer_generates_checked_ed25519_signer() {
-        let config = crate::fallback_config();
-        let signer = resolve_canary_signer(&config, false).expect("generated signer");
-        assert!(signer.generated);
-        assert_eq!(signer.key_pair.algorithm(), Algorithm::Ed25519);
-        assert_eq!(
-            signer.account_id,
-            AccountId::new(signer.key_pair.public_key().clone())
-        );
-    }
-    #[test]
-    fn onboarding_apply_rejects_the_retired_synchronous_shape() {
-        let key_pair = fixture_key_pair(11);
-        let account_id = AccountId::new(key_pair.public_key().clone());
-        let stale = norito::json!({
-            "account_id": (account_id.to_string()),
-            "alias": "canary@universal",
-            "tx_hash_hex": ("ab".repeat(32)),
-            "status": "Applied",
-            "disposition": { "kind": "create" }
-        });
-        let error =
-            validate_onboarding_apply_response(Some(&stale), &account_id, "canary@universal")
-                .expect_err("retired apply response must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("unexpected onboarding apply status")
-        );
-    }
-    #[test]
-    fn write_canary_receipt_identity_is_redacted() {
-        let key_pair = fixture_key_pair(5);
-        let signer = CanarySigner {
-            account_id: AccountId::new(key_pair.public_key().clone()),
-            key_pair,
-            generated: true,
-        };
-        let mut extra = Map::new();
-        insert_write_receipt_identity(
-            &mut extra,
-            &signer,
-            "tairacanary123@universal",
-            DEFAULT_GAS_ASSET_ID,
-        );
-        let report = report_value(
-            "taira_write_canary",
-            "ok",
-            DEFAULT_PUBLIC_ROOT,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            extra,
-        )
-        .expect("report");
-        let rendered = compact_json(&report);
-        assert!(rendered.contains(DEFAULT_CHAIN_ID));
-        assert!(rendered.contains("tairacanary123@universal"));
-        assert!(rendered.contains(DEFAULT_GAS_ASSET_ID));
-        assert!(!rendered.contains("private_key"));
-        assert!(!rendered.contains("public_key_raw_hex"));
     }
     #[test]
     fn build_alias_requires_a_canonical_prefix() {
@@ -4183,7 +7241,7 @@ mod tests {
         let alias = build_alias(
             DEFAULT_ALIAS_PREFIX,
             key_pair.public_key(),
-            "wonderland.universal",
+            TAIRA_CANARY_ALIAS_SCOPE,
         )
         .expect("canonical alias inputs");
         assert!(alias.starts_with("tairarolloutcanary"));
@@ -4194,10 +7252,10 @@ mod tests {
                 .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '@')
         );
         for retired in ["Taira Rollout Canary!", "taira-rollout-canary", ""] {
-            build_alias(retired, key_pair.public_key(), "wonderland.universal")
+            let _ = build_alias(retired, key_pair.public_key(), TAIRA_CANARY_ALIAS_SCOPE)
                 .expect_err("alias prefixes are never sanitized or defaulted");
         }
-        build_alias(DEFAULT_ALIAS_PREFIX, key_pair.public_key(), "wonderland.")
+        let _ = build_alias(DEFAULT_ALIAS_PREFIX, key_pair.public_key(), "taira.")
             .expect_err("dataspace labels are never defaulted");
     }
     #[test]
@@ -4219,53 +7277,9 @@ mod tests {
             "https://taira.sora.org#fragment",
             "HTTPS://TAIRA.SORA.ORG",
         ] {
-            normalize_root_url(invalid).expect_err("noncanonical public roots must fail closed");
+            let _ = normalize_root_url(invalid)
+                .expect_err("noncanonical public roots must fail closed");
         }
-    }
-    #[test]
-    fn render_runtime_config_redacts_nothing_only_when_explicitly_called() {
-        let key_pair = fixture_key_pair(9);
-        let mut config = crate::fallback_config();
-        config.key_pair = key_pair;
-        config.account = AccountId::new(config.key_pair.public_key().clone());
-        config.chain = DEFAULT_CHAIN_ID.into();
-        config.account_chain_discriminant = DEFAULT_CHAIN_DISCRIMINANT;
-        config.torii_api_url = Url::parse("https://taira.sora.org/").expect("url");
-        let rendered = render_runtime_config(&config).expect("config");
-        assert!(rendered.contains("private_key = "));
-        assert!(rendered.contains("chain_discriminant = 369"));
-        assert!(rendered.contains("nonce = false"));
-    }
-    #[cfg(unix)]
-    #[test]
-    fn runtime_config_is_created_once_with_private_custody() {
-        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
-        let directory = tempfile::tempdir().expect("runtime config directory");
-        let parent = fs::canonicalize(directory.path()).expect("canonical temp directory");
-        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
-            .expect("private runtime config directory");
-        let path = parent.join("taira-canary.toml");
-        let key_pair = fixture_key_pair(10);
-        let mut config = crate::fallback_config();
-        config.key_pair = key_pair;
-        config.account = AccountId::new(config.key_pair.public_key().clone());
-        config.chain = DEFAULT_CHAIN_ID.into();
-        config.account_chain_discriminant = DEFAULT_CHAIN_DISCRIMINANT;
-        config.torii_api_url = Url::parse("https://taira.sora.org/").expect("url");
-
-        write_runtime_config(&path, &config).expect("secure runtime config publication");
-        let metadata = fs::symlink_metadata(&path).expect("published runtime config");
-        assert!(metadata.file_type().is_file());
-        assert_eq!(metadata.mode() & 0o7777, 0o600);
-        assert_eq!(metadata.nlink(), 1);
-        assert!(
-            fs::read_to_string(&path)
-                .expect("read config")
-                .contains("private_key = ")
-        );
-        write_runtime_config(&path, &config)
-            .expect_err("an existing runtime config must never be replaced");
     }
     #[test]
     fn inrou_canary_requires_exact_taira_client_identity_before_publication() {

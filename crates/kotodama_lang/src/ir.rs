@@ -6131,9 +6131,6 @@ fn lower_surface_builtin_call(
         | Builtin::SoracloudEmitMailboxMessage
         | Builtin::SoracloudAppendJournal
         | Builtin::SoracloudPublishCheckpoint
-        | Builtin::SoracloudReadSecret
-        | Builtin::SoracloudReadCredential
-        | Builtin::SoracloudEgressFetch
         | Builtin::SoracloudReadConfig
         | Builtin::SoracloudReadSecretEnvelope => {
             let request = lower_expr(ctx, &args[0], vars);
@@ -9579,7 +9576,7 @@ seiyaku RangeOffsetBits {{
                     if *kind == DataRefKind::Name && value == "cursor" {
                         saw_name = true;
                     }
-                    if *kind == DataRefKind::Json && value == "{}\n" {
+                    if *kind == DataRefKind::Json && value == "{}" {
                         saw_json = true;
                     }
                     if *kind == DataRefKind::Domain && value == "wonderland.universal" {

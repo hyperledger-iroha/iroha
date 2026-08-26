@@ -111,7 +111,7 @@
     ],
     "runtime_provider": {
       "transport": "stock-local-runtime-provider-broker-v1",
-      "slot_wire_id": 56,
+      "slot_wire_id": 55,
       "handle": "runtime://privacy/bootle-lantern/taira-primary",
       "revision": 1,
       "qualification_policy_digest_hex": null

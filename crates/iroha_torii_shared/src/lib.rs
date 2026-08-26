@@ -12,6 +12,8 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 pub mod da;
 /// Public Torii DTOs for the offline cash lifecycle.
 pub mod offline_api;
+/// Stable cross-SDK signing transcript for exact prepared transactions.
+pub mod prepared_transaction;
 /// Shared QR Code encoder used by Torii and CLI offline flows.
 pub mod qr;
 /// Canonical Torii route metadata and projection helpers.
@@ -624,12 +626,13 @@ pub struct ProofRetentionStatus {
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
+#[norito(deny_unknown_fields)]
 pub struct PipelineTransactionStatusResponse {
-    /// Canonical signed transaction hash (hex, lowercase).
+    /// Canonical signed transaction hash (64 lowercase hex digits with the Iroha marker set).
     pub hash: String,
     /// Current pipeline status details.
     pub status: PipelineTransactionStatus,
-    /// Read scope applied by Torii (`local`, `auto`, `global`).
+    /// Read scope applied by Torii (`local` or `global`).
     pub scope: String,
     /// Source used to resolve the status (`cache`, `queue`, `state`).
     pub resolved_from: String,
@@ -691,6 +694,7 @@ pub struct TriggerCompletionListResponse {
 #[derive(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
+#[norito(deny_unknown_fields)]
 pub struct PipelineTransactionStatus {
     /// Stable pipeline status kind (`Queued`, `Approved`, `Committed`, `Applied`, `Rejected`, `Expired`).
     pub kind: String,
@@ -751,18 +755,165 @@ pub struct AccountReadResponse {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub opaque_ids: Vec<OpaqueAccountId>,
 }
+/// Maximum encoded response size for one atomic onboarding-state observation.
+pub const ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES: usize = 4 * 1024;
+
+/// Exact first-release request for one atomic account-onboarding state observation.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingCurrentStateRequestV1 {
+    /// Request layout version. The only accepted value is `1`.
+    pub version: u8,
+    /// Canonical domainless I105 account identifier whose existence must be observed.
+    pub account_id: String,
+    /// Exact canonical account alias whose active target must be observed.
+    pub alias: String,
+}
+impl AccountOnboardingCurrentStateRequestV1 {
+    /// Current and only first-release request layout.
+    pub const VERSION: u8 = 1;
+    /// Construct one exact request from canonical typed identities.
+    #[must_use]
+    pub fn new(
+        account_id: &AccountId,
+        alias: &iroha_data_model::alias_setup::AccountAliasName,
+    ) -> Self {
+        Self {
+            version: Self::VERSION,
+            account_id: account_id.to_string(),
+            alias: alias.to_string(),
+        }
+    }
+    /// Validate the closed V1 layout and return its exact typed identities.
+    ///
+    /// # Errors
+    /// Returns an error for an unsupported version or a non-canonical identity literal.
+    pub fn validate_exact(
+        &self,
+    ) -> Result<(AccountId, iroha_data_model::alias_setup::AccountAliasName), String> {
+        if self.version != Self::VERSION {
+            return Err(format!(
+                "unsupported account onboarding current-state request version {}; expected {}",
+                self.version,
+                Self::VERSION,
+            ));
+        }
+        let parsed_account = AccountId::parse_encoded(&self.account_id)
+            .map_err(|error| format!("invalid canonical account_id: {error}"))?;
+        if parsed_account.to_string() != self.account_id {
+            return Err("account_id must use its exact canonical I105 literal".to_owned());
+        }
+        let account_id = parsed_account;
+        let alias = self
+            .alias
+            .parse::<iroha_data_model::alias_setup::AccountAliasName>()
+            .map_err(|error| format!("invalid canonical account alias: {error}"))?;
+        if alias.to_string() != self.alias {
+            return Err("alias must use its exact canonical literal".to_owned());
+        }
+        Ok((account_id, alias))
+    }
+}
+/// One internally consistent first-release account-onboarding state observation.
+///
+/// Every consensus-derived field is read from one committed state snapshot. A target account in
+/// `alias_target_account_id` has therefore also been proven to exist by the active-alias resolver.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingCurrentStateResponseV1 {
+    /// Response layout version. The only accepted value is `1`.
+    pub version: u8,
+    /// Exact genesis-derived network that owns the observed state.
+    pub network_id: iroha_data_model::NetworkId,
+    /// Canonical requested account identifier.
+    pub account_id: String,
+    /// Canonical requested account alias.
+    pub alias: String,
+    /// Whether the exact requested account exists in the observed state.
+    pub account_exists: bool,
+    /// Exact active alias target, or `null` when the alias has no active target.
+    #[norito(required)]
+    pub alias_target_account_id: Option<String>,
+    /// Nonzero committed block height anchoring the observation.
+    pub observed_block_height: u64,
+    /// Exact committed block hash anchoring the observation.
+    pub observed_block_hash: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
+}
+impl AccountOnboardingCurrentStateResponseV1 {
+    /// Current and only first-release response layout.
+    pub const VERSION: u8 = 1;
+    /// Validate the response against one exact request and expected network.
+    ///
+    /// # Errors
+    /// Returns an error for any substituted identity, unsupported version, zero height, or
+    /// non-canonical alias target.
+    pub fn validate_for(
+        &self,
+        request: &AccountOnboardingCurrentStateRequestV1,
+        expected_network_id: &iroha_data_model::NetworkId,
+    ) -> Result<(std::num::NonZeroU64, Option<AccountId>), String> {
+        let (requested_account, _) = request.validate_exact()?;
+        if self.version != Self::VERSION {
+            return Err(format!(
+                "unsupported account onboarding current-state response version {}; expected {}",
+                self.version,
+                Self::VERSION,
+            ));
+        }
+        if &self.network_id != expected_network_id {
+            return Err("account onboarding current-state response changed network_id".to_owned());
+        }
+        if self.account_id != request.account_id || self.alias != request.alias {
+            return Err(
+                "account onboarding current-state response does not bind the exact request"
+                    .to_owned(),
+            );
+        }
+        let observed_block_height = std::num::NonZeroU64::new(self.observed_block_height)
+            .ok_or_else(|| {
+                "account onboarding current-state response has a zero committed height".to_owned()
+            })?;
+        let alias_target = self
+            .alias_target_account_id
+            .as_deref()
+            .map(|literal| {
+                let parsed = AccountId::parse_encoded(literal)
+                    .map_err(|error| format!("invalid alias target account_id: {error}"))?;
+                if parsed.to_string() != literal {
+                    return Err("alias target must use its exact canonical I105 literal".to_owned());
+                }
+                Ok(parsed)
+            })
+            .transpose()?;
+        if alias_target.as_ref() == Some(&requested_account) && !self.account_exists {
+            return Err(
+                "alias target cannot equal an account reported absent in the same state snapshot"
+                    .to_owned(),
+            );
+        }
+        Ok((observed_block_height, alias_target))
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::{
+        AccountOnboardingCurrentStateRequestV1, AccountOnboardingCurrentStateResponseV1,
         AccountReadResponse, ErrorDetails, ErrorEnvelope, FeeErrorDetails, FeeQuoteDecision,
         FeeQuoteObservation, FeeQuoteResponse, FeeSponsorProgramByIdRequest,
         MINAMOTO_CHAIN_DISCRIMINANT, NETWORK_PROFILE_MINAMOTO, NETWORK_PROFILE_TAIRA,
         PipelineTransactionStatus, PipelineTransactionStatusResponse, QueueErrorSnapshot,
         TAIRA_CHAIN_DISCRIMINANT, network_profile, network_profile_for_discriminant,
     };
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
+        NetworkId,
         account::{AccountAlias, AccountAliasDomain, AccountId},
+        alias_setup::AccountAliasName,
+        block::BlockHeader,
         name::Name,
         nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId},
         transaction::FeePaymentIntent,
@@ -770,6 +921,93 @@ mod tests {
     fn checked_test_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("Torii shared test fixture key derivation should succeed")
+    }
+    #[test]
+    fn onboarding_current_state_contract_is_closed_and_exact() {
+        let account_id = AccountId::new(checked_test_keypair(0x25).public_key().clone());
+        let alias = "merchant@banka.paynet"
+            .parse::<AccountAliasName>()
+            .expect("canonical onboarding alias");
+        let request = AccountOnboardingCurrentStateRequestV1::new(&account_id, &alias);
+        assert_eq!(
+            request.validate_exact().expect("exact request"),
+            (account_id.clone(), alias.clone())
+        );
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"onboarding-current-state-network",
+            )));
+        let response = AccountOnboardingCurrentStateResponseV1 {
+            version: AccountOnboardingCurrentStateResponseV1::VERSION,
+            network_id,
+            account_id: account_id.to_string(),
+            alias: alias.to_string(),
+            account_exists: true,
+            alias_target_account_id: Some(account_id.to_string()),
+            observed_block_height: 7,
+            observed_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"onboarding-current-state-block",
+            )),
+        };
+        let (height, target) = response
+            .validate_for(&request, &network_id)
+            .expect("exact response");
+        assert_eq!(height.get(), 7);
+        assert_eq!(target, Some(account_id));
+
+        let mut missing_nullable_target =
+            norito::json::to_value(&response).expect("encode onboarding current-state response");
+        missing_nullable_target
+            .as_object_mut()
+            .expect("response object")
+            .remove("alias_target_account_id");
+        assert!(
+            norito::json::from_value::<AccountOnboardingCurrentStateResponseV1>(
+                missing_nullable_target,
+            )
+            .is_err(),
+            "alias_target_account_id must be present even when its value is null"
+        );
+
+        let mut unknown_field =
+            norito::json::to_value(&request).expect("encode onboarding current-state request");
+        unknown_field
+            .as_object_mut()
+            .expect("request object")
+            .insert("legacy_account".to_owned(), "forbidden".into());
+        assert!(
+            norito::json::from_value::<AccountOnboardingCurrentStateRequestV1>(unknown_field)
+                .is_err(),
+            "the first-release request must reject compatibility fields"
+        );
+    }
+    #[test]
+    fn onboarding_current_state_validation_rejects_substitution_and_zero_height() {
+        let account_id = AccountId::new(checked_test_keypair(0x26).public_key().clone());
+        let alias = "merchant@paynet"
+            .parse::<AccountAliasName>()
+            .expect("canonical onboarding alias");
+        let request = AccountOnboardingCurrentStateRequestV1::new(&account_id, &alias);
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"onboarding-current-state-validation-network",
+            )));
+        let mut response = AccountOnboardingCurrentStateResponseV1 {
+            version: AccountOnboardingCurrentStateResponseV1::VERSION,
+            network_id,
+            account_id: account_id.to_string(),
+            alias: alias.to_string(),
+            account_exists: true,
+            alias_target_account_id: None,
+            observed_block_height: 0,
+            observed_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"onboarding-current-state-validation-block",
+            )),
+        };
+        assert!(response.validate_for(&request, &network_id).is_err());
+        response.observed_block_height = 1;
+        response.alias.push('x');
+        assert!(response.validate_for(&request, &network_id).is_err());
     }
     #[test]
     fn error_envelope_new_sets_fields() {
@@ -1040,7 +1278,7 @@ mod tests {
                 kind: "Rejected".to_owned(),
                 block_height: Some(42),
             },
-            "auto".to_owned(),
+            "global".to_owned(),
             "state".to_owned(),
         );
         let encoded = norito::to_bytes(&payload).expect("encode status payload");

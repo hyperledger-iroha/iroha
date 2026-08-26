@@ -284,7 +284,6 @@ mod tests {
             operator: AccountId::parse_encoded(
                 "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
             )
-            .map(crate::account::ParsedAccountId::into_account_id)
             .expect("account id"),
             reason: "Guardian freeze window".to_string(),
             notes: Some("Escalated during SNNet-15 drill".to_string()),
@@ -314,8 +313,7 @@ mod tests {
             operator: AccountId::parse_encoded(
                 "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T",
             )
-            .expect("account id")
-            .into_account_id(),
+            .expect("account id"),
             reason: "Taikai stream purge drill".to_string(),
             notes: None,
             evidence_uris: vec!["sora://gar/receipts/taikai/purge-l7".to_string()],

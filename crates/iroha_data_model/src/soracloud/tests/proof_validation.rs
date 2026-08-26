@@ -950,13 +950,31 @@ fn agent_wallet_spend_provenance_payload_encodes_canonical_tuple() {
     let amount = xor_quantity_from_nanos(1_250_000);
     let encoded = encode_agent_wallet_spend_provenance_payload(
         "agent-apartment",
+        "spend-req-9",
         "61CtjvNd9T3THAR65GsMVHr82Bjc",
         &amount,
     )
     .expect("encode payload");
-    let expected = norito::to_bytes(&("agent-apartment", "61CtjvNd9T3THAR65GsMVHr82Bjc", amount))
-        .expect("encode tuple");
+    let expected = norito::to_bytes(&(
+        "agent-apartment",
+        "spend-req-9",
+        "61CtjvNd9T3THAR65GsMVHr82Bjc",
+        amount,
+    ))
+    .expect("encode tuple");
     assert_eq!(encoded, expected);
+}
+#[test]
+fn agent_wallet_request_id_v1_policy_is_exact() {
+    assert!(is_canonical_agent_wallet_request_id_v1("wallet-request:1"));
+    assert!(is_canonical_agent_wallet_request_id_v1("wallet request 1"));
+    assert!(!is_canonical_agent_wallet_request_id_v1(""));
+    assert!(!is_canonical_agent_wallet_request_id_v1(" request-1"));
+    assert!(!is_canonical_agent_wallet_request_id_v1("request-1 "));
+    assert!(!is_canonical_agent_wallet_request_id_v1("request\n1"));
+    assert!(!is_canonical_agent_wallet_request_id_v1(
+        &"x".repeat(SORA_AGENT_WALLET_REQUEST_ID_MAX_BYTES_V1 + 1)
+    ));
 }
 #[test]
 fn agent_wallet_approve_provenance_payload_encodes_canonical_tuple() {
@@ -1018,9 +1036,31 @@ fn agent_autonomy_run_provenance_payload_encodes_canonical_tuple() {
         Some("QmProvenanceHash"),
         42_000u64,
         "nightly-retrain",
-        canonical_agent_workflow_input_json_for_payload(Some("{\"inputs\":[\"alpha\",\"beta\"]}"))
-            .as_deref(),
+        Some("{\"inputs\":[\"alpha\",\"beta\"]}"),
     ))
     .expect("encode tuple");
+    assert_eq!(encoded, expected);
+}
+#[test]
+fn agent_autonomy_run_provenance_payload_preserves_exact_workflow_json_bytes() {
+    let workflow_input_json = " { \"input\" : 1 } ";
+    let encoded = encode_agent_autonomy_run_provenance_payload(
+        "agent-apartment",
+        "QmArtifactHash",
+        None,
+        42_000,
+        "nightly-retrain",
+        Some(workflow_input_json),
+    )
+    .expect("encode payload");
+    let expected = norito::to_bytes(&(
+        "agent-apartment",
+        "QmArtifactHash",
+        None::<&str>,
+        42_000u64,
+        "nightly-retrain",
+        Some(workflow_input_json),
+    ))
+    .expect("encode exact tuple");
     assert_eq!(encoded, expected);
 }

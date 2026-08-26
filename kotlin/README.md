@@ -92,10 +92,17 @@ pipeline status. Never resend the same signed bytes. `RetryPolicy` applies only 
 replay-safe reads, and configured pending queues are explicit local staging: submission neither
 fills nor drains them.
 
-Public pipeline status contains only the canonical transaction hash, closed status kind,
+Public pipeline status contains only the canonical transaction hash—exactly
+`[0-9a-f]{63}[13579bdf]`, including the Iroha `HashOf` marker—closed status kind,
 optional committed height, read scope, and resolution source. The parser rejects rejection
 text, diagnostics, trigger completions, batch outcomes, unknown kinds, and noncanonical
-metadata. Detailed transaction reads require an involved account or operator to send a
+metadata. Status scope is exactly `local` or `global`; `auto` is not a first-release value, and
+`waitForTransactionStatus(...)` always requests `global`. Transaction-hash request values,
+status responses, and Torii receipt headers are never trimmed, case-folded, prefix-stripped, or
+decoded from byte-shaped values. Status reads accept only an exact HTTP `200` envelope or `404`
+not-found response; `202` and `204` are protocol errors. State-resolved `Rejected` and `Expired`
+are the only failures; every other non-success status remains progress. Negative polling
+intervals and timeouts are rejected rather than clamped. Detailed transaction reads require an involved account or operator to send a
 one-shot canonical signed `FindTransactions` query bound to the exact genesis-derived
 `NetworkId`; Kotlin intentionally exposes no details helper until its generated signed-query
 surface supports that contract.
@@ -802,6 +809,17 @@ val tunedManager = IrohaKeyManager.withDefaultProviders(
 `ML_DSA`, the five `GOST_2012_*` variants, and `SM2` use the shared native
 bridge and are software-only in this SDK pass, so hardware/StrongBox
 preferences fail fast instead of silently downgrading.
+
+For Android Keystore Ed25519 aliases, required hardware preferences are checked
+against the selected key's `KeyInfo`, not only provider capability or the
+generation request. Unknown provenance fails closed; preferred policies may
+downgrade and expose the measured route. Custom `KeyProvider` implementations
+must override `outcomeFor(...)` to prove a hardware route, and a preference set
+through `KeystoreKeyProvider.withPreference(...)` remains effective for plain
+`generate(...)` calls. Deterministic Ed25519 export/import in
+`core-jvm` also derives the public key from the private seed at both boundaries,
+rejecting substituted public keys and inconsistent input pairs without changing
+the v4 bundle layout.
 
 ## Resolving Account Aliases
 

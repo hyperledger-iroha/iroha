@@ -2571,18 +2571,15 @@ mod tests {
     fn canonical_literal(raw: &str) -> String {
         iroha_data_model::account::AccountId::parse_encoded(raw)
             .expect("literal parses")
-            .canonical()
             .to_string()
     }
     fn canonical_account(raw: &str) -> AccountId {
-        AccountId::parse_encoded(raw)
-            .expect("literal parses")
-            .into_account_id()
+        AccountId::parse_encoded(raw).expect("literal parses")
     }
     fn noncanonical_literal(raw: &str) -> String {
         AccountId::parse_encoded(raw)
             .expect("literal parses")
-            .canonical()
+            .to_string()
             .replacen("sora", "ｓｏｒａ", 1)
     }
     fn mk_basic_context() -> (Arc<State>, Arc<Queue>, Arc<ChainId>) {
@@ -3799,9 +3796,7 @@ seiyaku GovernedReadFixture {
     #[tokio::test]
     async fn ballot_plain_accepts_account_aliases() {
         let (state, _queue, _chain_id) = mk_basic_context();
-        let authority = AccountId::parse_encoded(ACCOUNT_AUTHORITY)
-            .expect("account parses")
-            .into_account_id();
+        let authority = AccountId::parse_encoded(ACCOUNT_AUTHORITY).expect("account parses");
         bind_account_alias_for_test(&state, &authority, "ballot@universal");
         let body = crate::json_object(vec![
             crate::json_entry("authority", "ballot@universal"),
@@ -4207,9 +4202,7 @@ seiyaku GovernedReadFixture {
         state.set_gov(cfg);
         let custody = generic_lock_custody(&state);
         let rid = "rid-tally-overflow".to_string();
-        let other = AccountId::parse_encoded(ACCOUNT_OWNER_ALT)
-            .expect("alternate account id")
-            .into_account_id();
+        let other = AccountId::parse_encoded(ACCOUNT_OWNER_ALT).expect("alternate account id");
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         {
             let mut block = state.block(header);

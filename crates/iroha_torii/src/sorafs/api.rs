@@ -49,7 +49,7 @@ use iroha_data_model::events::data::sorafs::SorafsOrderbookLedgerEvent;
 use iroha_data_model::sorafs::pin_registry::ManifestRootCid;
 use iroha_data_model::{
     ChainId, NetworkId,
-    account::{AccountId, ParsedAccountId},
+    account::AccountId,
     asset::AssetDefinitionId,
     block::BlockHeader,
     escrow::{
@@ -19511,7 +19511,6 @@ fn appeal_finance_account_id(field: &'static str, raw: &str) -> Result<AccountId
         return Err(format!("SoraFS appeal finance `{field}` must not be empty"));
     }
     let account = AccountId::parse_encoded(trimmed)
-        .map(ParsedAccountId::into_account_id)
         .map_err(|err| format!("invalid SoraFS appeal finance `{field}`: {err}"))?;
     if trimmed != account.to_string() {
         return Err(format!(

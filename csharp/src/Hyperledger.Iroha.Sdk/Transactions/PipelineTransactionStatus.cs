@@ -14,12 +14,16 @@ public sealed record class PipelineTransactionStatus
 
     public string ResolvedFrom { get; init; } = string.Empty;
 
-    public bool IsTerminal =>
-        State is PipelineTransactionState.Applied
-            or PipelineTransactionState.Committed
-            or PipelineTransactionState.Rejected
-            or PipelineTransactionState.Expired;
-
     public bool IsSuccess =>
-        State is PipelineTransactionState.Applied or PipelineTransactionState.Committed;
+        Scope == "global"
+        && ResolvedFrom == "state"
+        && State == PipelineTransactionState.Applied
+        && BlockHeight is > 0;
+
+    public bool IsFailure =>
+        Scope == "global"
+        && ResolvedFrom == "state"
+        && State is PipelineTransactionState.Rejected or PipelineTransactionState.Expired;
+
+    public bool IsTerminal => IsSuccess || IsFailure;
 }

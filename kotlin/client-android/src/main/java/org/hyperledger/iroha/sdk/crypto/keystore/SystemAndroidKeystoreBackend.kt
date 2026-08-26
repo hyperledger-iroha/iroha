@@ -2,9 +2,11 @@ package org.hyperledger.iroha.sdk.crypto.keystore
 
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
 import java.io.IOException
 import java.security.GeneralSecurityException
+import java.security.KeyFactory
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.KeyStore
@@ -64,7 +66,7 @@ internal class SystemAndroidKeystoreBackend private constructor(
         try {
             generator.initialize(spec)
             val pair = generator.generateKeyPair()
-            return KeyGenerationResult(pair, strongBoxRequested)
+            return KeyGenerationResult(pair, keyMetadata(alias, pair).strongBoxBacked)
         } catch (ex: ProviderException) {
             throw KeyManagementException("Android Keystore generation failed", ex)
         } catch (ex: GeneralSecurityException) {
@@ -83,6 +85,51 @@ internal class SystemAndroidKeystoreBackend private constructor(
         throw KeyManagementException("Android Keystore does not support unmanaged ephemeral keys")
 
     override fun metadata(): KeyProviderMetadata = _metadata
+
+    @Suppress("DEPRECATION")
+    override fun keyMetadata(alias: String, keyPair: KeyPair): KeyProviderMetadata {
+        require(alias.isNotBlank()) { "alias must not be blank" }
+        val level = try {
+            val factory = KeyFactory.getInstance(keyPair.private.algorithm, ANDROID_KEYSTORE)
+            val keyInfo = factory.getKeySpec(keyPair.private, KeyInfo::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                when (keyInfo.securityLevel) {
+                    KeyProperties.SECURITY_LEVEL_STRONGBOX ->
+                        KeyProviderMetadata.HardwareSecurityLevel.STRONGBOX
+                    KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT,
+                    KeyProperties.SECURITY_LEVEL_UNKNOWN_SECURE ->
+                        KeyProviderMetadata.HardwareSecurityLevel.TRUSTED_ENVIRONMENT
+                    else -> KeyProviderMetadata.HardwareSecurityLevel.NONE
+                }
+            } else if (keyInfo.isInsideSecureHardware) {
+                KeyProviderMetadata.HardwareSecurityLevel.TRUSTED_ENVIRONMENT
+            } else {
+                KeyProviderMetadata.HardwareSecurityLevel.NONE
+            }
+        } catch (_: GeneralSecurityException) {
+            KeyProviderMetadata.HardwareSecurityLevel.NONE
+        } catch (_: RuntimeException) {
+            KeyProviderMetadata.HardwareSecurityLevel.NONE
+        }
+        return when (level) {
+            KeyProviderMetadata.HardwareSecurityLevel.STRONGBOX ->
+                KeyProviderMetadata.strongBox(
+                    _metadata.name,
+                    _metadata.supportsAttestationCertificates,
+                )
+            KeyProviderMetadata.HardwareSecurityLevel.TRUSTED_ENVIRONMENT ->
+                KeyProviderMetadata(
+                    name = _metadata.name,
+                    hardwareBacked = true,
+                    supportsAttestationCertificates = _metadata.supportsAttestationCertificates,
+                    securityLevel = level,
+                )
+            else -> KeyProviderMetadata(
+                name = _metadata.name,
+                supportsAttestationCertificates = _metadata.supportsAttestationCertificates,
+            )
+        }
+    }
 
     override fun name(): String = _metadata.name
 

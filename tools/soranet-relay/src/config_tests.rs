@@ -21,7 +21,8 @@ macro_rules! config_fixture {
     };
 }
 fn write_config(json: &str) -> PathBuf {
-    let file = NamedTempFile::new().expect("create temp file");
+    let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
+        .expect("create temp file");
     std::fs::write(file.path(), json).expect("write config");
     file.into_temp_path().keep().expect("persist temp file")
 }
@@ -30,6 +31,49 @@ fn write_manifest(json: &str) -> NamedTempFile {
         .expect("create manifest file");
     std::fs::write(file.path(), json).expect("write manifest");
     file
+}
+fn fixture_mldsa65_private_key_hex() -> &'static str {
+    static PRIVATE_KEY_HEX: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PRIVATE_KEY_HEX.get_or_init(|| {
+        let key_pair = KeyPair::try_from_seed(
+            b"soranet-relay-strict-manifest-test-mldsa65".to_vec(),
+            Algorithm::MlDsa,
+        )
+        .expect("derive fixture ML-DSA-65 keypair");
+        let (algorithm, mut private_key) = key_pair.private_key().to_bytes();
+        assert_eq!(algorithm, Algorithm::MlDsa);
+        assert_eq!(private_key.len(), MlDsaSuite::MlDsa65.secret_key_len());
+        let encoded = hex::encode(&private_key);
+        zeroize::Zeroize::zeroize(&mut private_key);
+        encoded
+    })
+}
+fn descriptor_manifest_identity_json(ed25519: &str, mldsa65: &str) -> String {
+    format!(r#"{{"ed25519_private_key_hex":"{ed25519}","mldsa65_private_key_hex":"{mldsa65}"}}"#)
+}
+fn descriptor_manifest_json_from_hex(ed25519: &str, mldsa65: &str) -> String {
+    let identity = descriptor_manifest_identity_json(ed25519, mldsa65);
+    format!(r#"{{"version":1,"identity":{identity}}}"#)
+}
+fn valid_descriptor_manifest_json(ed25519_seed: [u8; ED25519_IDENTITY_SEED_LEN_V1]) -> String {
+    descriptor_manifest_json_from_hex(
+        &hex::encode(ed25519_seed),
+        fixture_mldsa65_private_key_hex(),
+    )
+}
+fn descriptor_manifest_error_message(json: &str) -> String {
+    let manifest = write_manifest(json);
+    let policy = HandshakePolicy {
+        descriptor_manifest_path: Some(manifest.path().to_path_buf()),
+        ..HandshakePolicy::default()
+    };
+    match policy
+        .manifest_secrets()
+        .expect_err("descriptor manifest must fail closed")
+    {
+        ConfigError::DescriptorManifest { message, .. } => message,
+        other => panic!("unexpected descriptor manifest error: {other:?}"),
+    }
 }
 fn write_vpn_issuer_public_key(byte: u8) -> NamedTempFile {
     let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
@@ -83,7 +127,8 @@ fn vpn_config_with_credentials(byte: u8) -> (VpnConfig, VpnConfigCredentials) {
     )
 }
 fn assert_config_json_admission_rejected(bytes: &[u8]) {
-    let file = NamedTempFile::new().expect("create admission input");
+    let file = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
+        .expect("create admission input");
     std::fs::write(file.path(), bytes).expect("write admission input");
     let error = RelayConfig::load(file.path()).expect_err("JSON admission must reject input");
     assert!(
@@ -93,13 +138,15 @@ fn assert_config_json_admission_rejected(bytes: &[u8]) {
 }
 #[test]
 fn relay_config_file_limit_accepts_exact_and_rejects_plus_one() {
-    let exact = NamedTempFile::new().expect("create exact config");
+    let exact = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
+        .expect("create exact config");
     let mut valid = br#"{"mode":"Entry","listen":"127.0.0.1:0"}"#.to_vec();
     valid.resize(RELAY_CONFIG_JSON_MAX_BYTES_V1, b' ');
     std::fs::write(exact.path(), &valid).expect("write exact config");
     let loaded = RelayConfig::load(exact.path()).expect("exact-limit config must load");
     assert_eq!(loaded.mode, RelayMode::Entry);
-    let plus_one = NamedTempFile::new().expect("create oversized config");
+    let plus_one = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
+        .expect("create oversized config");
     plus_one
         .as_file()
         .set_len(
@@ -116,7 +163,8 @@ fn relay_config_file_limit_accepts_exact_and_rejects_plus_one() {
 #[test]
 fn relay_config_rejects_symlink_input() {
     use std::os::unix::fs::symlink;
-    let directory = tempfile::tempdir().expect("create temp directory");
+    let directory = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("create temp directory");
     let target = directory.path().join("relay-target.json");
     let link = directory.path().join("relay-link.json");
     std::fs::write(&target, br#"{"mode":"Entry","listen":"127.0.0.1:0"}"#).expect("write target");
@@ -130,7 +178,8 @@ fn relay_config_rejects_symlink_input() {
 #[cfg(unix)]
 #[test]
 fn relay_config_rejects_path_replacement_race() {
-    let directory = tempfile::tempdir().expect("create temp directory");
+    let directory = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("create temp directory");
     let configured = directory.path().join("relay.json");
     let replacement = directory.path().join("replacement.json");
     std::fs::write(&configured, br#"{"mode":"Entry","listen":"127.0.0.1:0"}"#)
@@ -145,6 +194,85 @@ fn relay_config_rejects_path_replacement_race() {
         matches!(error, ConfigError::Io(ref source) if source.kind() == std::io::ErrorKind::InvalidData),
         "unexpected error: {error:?}"
     );
+}
+#[cfg(unix)]
+#[test]
+fn relay_config_requires_trusted_leaf_mode_and_single_link() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("create temp directory");
+    let configured = directory.path().join("relay.json");
+    let hardlink = directory.path().join("relay-hardlink.json");
+    std::fs::write(&configured, br#"{"mode":"Entry","listen":"127.0.0.1:0"}"#)
+        .expect("write config");
+    std::fs::set_permissions(&configured, std::fs::Permissions::from_mode(0o664))
+        .expect("make config group-writable");
+    let error = RelayConfig::load(&configured).expect_err("writable config must fail closed");
+    assert!(
+        matches!(error, ConfigError::Io(ref source) if source.kind() == std::io::ErrorKind::PermissionDenied)
+    );
+
+    std::fs::set_permissions(&configured, std::fs::Permissions::from_mode(0o644))
+        .expect("make config read-only to non-owner");
+    RelayConfig::load(&configured).expect("non-writable 0644 config must be accepted");
+    std::fs::hard_link(&configured, &hardlink).expect("create hard link");
+    let error =
+        RelayConfig::load(&configured).expect_err("multiply linked config must fail closed");
+    assert!(
+        matches!(error, ConfigError::Io(ref source) if source.kind() == std::io::ErrorKind::PermissionDenied)
+    );
+}
+#[cfg(unix)]
+#[test]
+fn relay_config_rejects_relative_path() {
+    let error = RelayConfig::load(std::path::Path::new("relative-relay-config.json"))
+        .expect_err("relative config path must fail closed before open");
+    assert!(
+        matches!(error, ConfigError::Io(ref source) if source.kind() == std::io::ErrorKind::PermissionDenied),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn relay_config_rejects_group_writable_parent() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let directory = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("create temp directory");
+    let unsafe_parent = directory.path().join("unsafe-parent");
+    std::fs::create_dir(&unsafe_parent).expect("create unsafe parent");
+    let configured = unsafe_parent.join("relay.json");
+    std::fs::write(&configured, br#"{"mode":"Entry","listen":"127.0.0.1:0"}"#)
+        .expect("write config");
+    std::fs::set_permissions(&unsafe_parent, std::fs::Permissions::from_mode(0o770))
+        .expect("make parent group-writable");
+    let error = RelayConfig::load(&configured).expect_err("writable parent must fail closed");
+    assert!(
+        matches!(error, ConfigError::Io(ref source) if source.kind() == std::io::ErrorKind::PermissionDenied),
+        "unexpected error: {error:?}"
+    );
+    std::fs::set_permissions(&unsafe_parent, std::fs::Permissions::from_mode(0o700))
+        .expect("restore parent custody");
+}
+#[cfg(unix)]
+#[test]
+fn relay_config_pins_canonical_parent_before_opening_through_alias() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir_in(std::env::current_dir().expect("current directory"))
+        .expect("create temp directory");
+    let real_parent = directory.path().join("real-parent");
+    std::fs::create_dir(&real_parent).expect("create real parent");
+    let configured = real_parent.join("relay.json");
+    std::fs::write(&configured, br#"{"mode":"Entry","listen":"127.0.0.1:0"}"#)
+        .expect("write config");
+    let alias = directory.path().join("alias-parent");
+    symlink(&real_parent, &alias).expect("create parent symlink");
+    let config = RelayConfig::load(alias.join("relay.json"))
+        .expect("stable canonical parent must be accepted");
+    assert_eq!(config.mode, RelayMode::Entry);
 }
 #[cfg(unix)]
 #[test]
@@ -241,14 +369,48 @@ fn manifest_json_string_scrubber_overwrites_nested_values() {
     assert_eq!(object["number"].as_u64(), Some(7));
 }
 #[test]
+#[allow(unsafe_code)]
 fn bounded_reader_sensitive_buffer_can_be_explicitly_cleared() {
-    let mut buffer = SensitiveReadBuffer(vec![0xA5; 32]);
+    let mut allocation = Vec::with_capacity(64);
+    allocation.resize(allocation.capacity(), 0xA5);
+    allocation.truncate(17);
+    let capacity = allocation.capacity();
+    let mut buffer = SensitiveReadBuffer(allocation);
     buffer.clear();
+    assert_eq!(buffer.0.len(), 17);
     assert!(buffer.0.iter().all(|byte| *byte == 0));
+    // SAFETY: `SensitiveReadBuffer::clear` initializes and wipes every byte
+    // through the allocation's capacity before restoring its logical length.
+    unsafe { buffer.0.set_len(capacity) };
+    assert!(buffer.0.iter().all(|byte| *byte == 0));
+    buffer.0.truncate(17);
 
     let mut probe = SensitiveReadProbe([0xA5]);
     probe.clear();
     assert_eq!(probe.0, [0]);
+}
+#[test]
+#[allow(unsafe_code)]
+fn sensitive_byte_scrubber_overwrites_spare_capacity() {
+    let mut bytes = Vec::with_capacity(64);
+    bytes.resize(bytes.capacity(), 0xA5);
+    bytes.truncate(17);
+    let capacity = bytes.capacity();
+
+    clear_sensitive_bytes(&mut bytes);
+
+    assert_eq!(bytes.len(), 17);
+    assert!(bytes.iter().all(|byte| *byte == 0));
+    // SAFETY: `clear_sensitive_bytes` initializes and overwrites every byte
+    // through the allocation's capacity before restoring its logical length.
+    unsafe { bytes.set_len(capacity) };
+    assert!(bytes.iter().all(|byte| *byte == 0));
+    bytes.truncate(17);
+
+    let mut owner = PrivateFileBytes::from(vec![0xA5; 17]);
+    assert_eq!(format!("{owner:?}"), "<redacted private file bytes>");
+    owner.clear();
+    assert!(owner.is_empty());
 }
 #[test]
 fn relay_config_preflight_rejects_depth_count_and_string_budgets() {
@@ -284,23 +446,20 @@ fn relay_config_preflight_rejects_depth_count_and_string_budgets() {
 fn descriptor_manifest_file_limit_accepts_exact_and_rejects_plus_one() {
     let exact = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
         .expect("create exact manifest");
-    let mut manifest = format!(
-        r#"{{"identity":{{"ed25519_private_key_hex":"{}"}}}}"#,
-        "11".repeat(32)
-    )
-    .into_bytes();
+    let mut manifest =
+        valid_descriptor_manifest_json([0x11; ED25519_IDENTITY_SEED_LEN_V1]).into_bytes();
     manifest.resize(DESCRIPTOR_MANIFEST_JSON_MAX_BYTES_V1, b' ');
     std::fs::write(exact.path(), manifest).expect("write exact manifest");
     let mut policy = HandshakePolicy {
         descriptor_manifest_path: Some(exact.path().to_path_buf()),
         ..HandshakePolicy::default()
     };
-    assert_eq!(
-        policy
-            .identity_private_key_from_manifest()
-            .expect("exact-limit manifest must load"),
-        Some([0x11; 32])
-    );
+    let secrets = policy
+        .manifest_secrets()
+        .expect("exact-limit manifest must load");
+    let (ed25519, mldsa65) = secrets.into_private_keys();
+    assert_eq!(ed25519, [0x11; ED25519_IDENTITY_SEED_LEN_V1]);
+    assert_eq!(mldsa65.len(), MlDsaSuite::MlDsa65.secret_key_len());
     let plus_one = NamedTempFile::new_in(std::env::current_dir().expect("current directory"))
         .expect("create oversized manifest");
     plus_one
@@ -320,7 +479,17 @@ fn descriptor_manifest_file_limit_accepts_exact_and_rejects_plus_one() {
     );
 }
 #[test]
-fn descriptor_manifest_preflight_bounds_recursive_lookup() {
+fn descriptor_manifest_is_required_by_first_release_loader() {
+    let error = HandshakePolicy::default()
+        .manifest_secrets()
+        .expect_err("first-release relay identity manifest must be required");
+    assert!(
+        matches!(error, ConfigError::Handshake(ref message) if message.contains("descriptor_manifest_path")),
+        "unexpected error: {error:?}"
+    );
+}
+#[test]
+fn descriptor_manifest_preflight_bounds_nesting() {
     let mut deep = "[".repeat(DESCRIPTOR_MANIFEST_JSON_MAX_DEPTH_V1 + 1);
     deep.push_str("null");
     deep.push_str(&"]".repeat(DESCRIPTOR_MANIFEST_JSON_MAX_DEPTH_V1 + 1));
@@ -349,10 +518,7 @@ fn descriptor_manifest_requires_private_direct_file() {
     let link = directory.path().join("relay-manifest.link");
     std::fs::write(
         &target,
-        format!(
-            r#"{{"identity":{{"ed25519_private_key_hex":"{}"}}}}"#,
-            "11".repeat(32)
-        ),
+        valid_descriptor_manifest_json([0x11; ED25519_IDENTITY_SEED_LEN_V1]),
     )
     .expect("write manifest");
     std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640))
@@ -378,6 +544,16 @@ fn descriptor_manifest_requires_private_direct_file() {
         .expect_err("manifest symlink must fail closed");
     assert!(
         matches!(error, ConfigError::DescriptorManifest { ref message, .. } if message.contains("regular file")),
+        "unexpected error: {error:?}"
+    );
+}
+#[test]
+fn certificate_bundle_is_required_by_first_release_loader() {
+    let error = HandshakePolicy::default()
+        .load_certificate_bundle_at(0)
+        .expect_err("first-release relay certificate bundle must be required");
+    assert!(
+        matches!(error, ConfigError::Handshake(ref message) if message.contains("handshake.certificate")),
         "unexpected error: {error:?}"
     );
 }
@@ -502,22 +678,8 @@ fn handshake_validation_bounds_worst_case_relay_capability_vector() {
     );
 }
 #[test]
-fn manifest_with_ml_kem_keys_loads() {
-    let private_hex = "aa".repeat(ML_KEM_768_SECRET_LEN);
-    let public_hex = "bb".repeat(ML_KEM_768_PUBLIC_LEN);
-    let manifest_json = format!(
-        r#"{{
-                "version": 1,
-                "identity": {{
-                    "ed25519_private_key_hex": "{seed}",
-                    "ml_kem_private_key_hex": "{private_hex}",
-                    "ml_kem_public_hex": "{public_hex}"
-                }}
-            }}"#,
-        seed = "11".repeat(32),
-        private_hex = private_hex,
-        public_hex = public_hex,
-    );
+fn strict_identity_manifest_loads_exact_v1_key_material() {
+    let manifest_json = valid_descriptor_manifest_json([0x11; ED25519_IDENTITY_SEED_LEN_V1]);
     let manifest = write_manifest(&manifest_json);
     let manifest_path = manifest.path().display().to_string();
     let manifest_json_path = format!("{manifest_path:?}");
@@ -531,93 +693,163 @@ fn manifest_with_ml_kem_keys_loads() {
     let config_path = write_config(&config_json);
     let cfg = RelayConfig::load(config_path).expect("load config");
     let policy = cfg.handshake_policy();
-    let secrets = policy
-        .manifest_secrets()
-        .expect("manifest secrets")
-        .expect("secrets expected");
-    assert!(secrets.identity_private_key.is_some());
+    let secrets = policy.manifest_secrets().expect("manifest secrets");
+    let (ed25519, mldsa65) = secrets.into_private_keys();
+    assert_eq!(ed25519, [0x11; ED25519_IDENTITY_SEED_LEN_V1]);
     assert_eq!(
-        secrets.ml_kem_private_key.as_ref().map(Vec::len),
-        Some(ML_KEM_768_SECRET_LEN)
+        mldsa65,
+        hex::decode(fixture_mldsa65_private_key_hex()).unwrap()
     );
-    assert_eq!(
-        secrets.ml_kem_public_key.as_ref().map(Vec::len),
-        Some(ML_KEM_768_PUBLIC_LEN)
-    );
-    let ml_kem = policy
-        .ml_kem_keys_from_manifest()
-        .expect("ml-kem keys")
-        .expect("ml-kem keypair expected");
-    assert_eq!(ml_kem.private.len(), ML_KEM_768_SECRET_LEN);
-    assert_eq!(ml_kem.public.len(), ML_KEM_768_PUBLIC_LEN);
 }
 #[test]
-fn manifest_requires_complete_ml_kem_pair() {
-    let manifest_json = format!(
-        r#"{{
-                "version": 1,
-                "identity": {{
-                    "ed25519_private_key_hex": "{seed}",
-                    "ml_kem_public_hex": "{public_hex}"
-                }}
-            }}"#,
-        seed = "22".repeat(32),
-        public_hex = "cc".repeat(ML_KEM_768_PUBLIC_LEN),
-    );
-    let manifest = write_manifest(&manifest_json);
-    let manifest_path = manifest.path().display().to_string();
-    let manifest_json_path = format!("{manifest_path:?}");
-    let config_json = format!(
-        r#"{{
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "handshake": {{ "descriptor_manifest_path": {manifest_json_path} }}
-            }}"#
-    );
-    let config_path = write_config(&config_json);
-    let cfg = RelayConfig::load(config_path).expect("load config");
-    let policy = cfg.handshake_policy();
-    let err = policy
-        .ml_kem_keys_from_manifest()
-        .expect_err("expected manifest error");
-    match err {
-        ConfigError::DescriptorManifest { message, .. } => {
-            assert!(
-                message.contains("ml_kem_private_key_hex") && message.contains("ml_kem_public_hex"),
-                "unexpected error message: {message}"
-            );
-        }
-        other => panic!("unexpected error {other:?}"),
+fn strict_identity_manifest_rejects_aliases_nesting_versions_types_and_unknown_fields() {
+    let seed = "22".repeat(ED25519_IDENTITY_SEED_LEN_V1);
+    let mldsa65 = fixture_mldsa65_private_key_hex();
+    let identity = descriptor_manifest_identity_json(&seed, mldsa65);
+    let cases = [
+        ("[]".to_owned(), "root must be a JSON object"),
+        (
+            format!(r#"{{"identity":{identity}}}"#),
+            "missing required field `version`",
+        ),
+        (
+            format!(r#"{{"version":2,"identity":{identity}}}"#),
+            "`version` must be the integer 1",
+        ),
+        (
+            format!(r#"{{"version":"1","identity":{identity}}}"#),
+            "`version` must be the integer 1",
+        ),
+        (
+            format!(r#"{{"version":1,"identity":{identity},"metadata":{{}}}}"#),
+            "root contains unknown field `metadata`",
+        ),
+        (
+            r#"{"version":1,"identity":[]}"#.to_owned(),
+            "`identity` must be a JSON object",
+        ),
+        (
+            format!(
+                r#"{{"version":1,"identity":{{"ed25519_private_key_hex":"{seed}","mldsa65_private_key_hex":"{mldsa65}","rotation":1}}}}"#
+            ),
+            "identity contains unknown field `rotation`",
+        ),
+        (
+            format!(r#"{{"version":1,"relay":{{"identity":{identity}}}}}"#),
+            "root contains unknown field `relay`",
+        ),
+        (
+            format!(
+                r#"{{"version":1,"identity":{{"private_key_hex":"{seed}","mldsa65_private_key_hex":"{mldsa65}"}}}}"#
+            ),
+            "identity contains unknown field `private_key_hex`",
+        ),
+        (
+            format!(r#"{{"version":1,"identity_private_key_hex":"{seed}","identity":{identity}}}"#),
+            "root contains unknown field `identity_private_key_hex`",
+        ),
+        (
+            format!(
+                r#"{{"version":1,"identity":{{"ed25519_private_key_hex":7,"mldsa65_private_key_hex":"{mldsa65}"}}}}"#
+            ),
+            "`identity.ed25519_private_key_hex` must be a string",
+        ),
+        (
+            format!(
+                r#"{{"version":1,"identity":{{"ed25519_private_key_hex":"{seed}","mldsa65_private_key_hex":7}}}}"#
+            ),
+            "`identity.mldsa65_private_key_hex` must be a string",
+        ),
+        (
+            format!(
+                r#"{{"version":1,"identity":{{"ed25519_private_key_hex":"{seed}","mldsa65_private_key_hex":"{mldsa65}","ml_kem_private_key_hex":"11"}}}}"#
+            ),
+            "identity contains unknown field `ml_kem_private_key_hex`",
+        ),
+        (
+            format!(
+                r#"{{"version":1,"identity":{{"ed25519_private_key_hex":"{seed}","mldsa65_private_key_hex":"{mldsa65}","ml_kem_public_hex":"11"}}}}"#
+            ),
+            "identity contains unknown field `ml_kem_public_hex`",
+        ),
+    ];
+    for (manifest, expected) in cases {
+        let message = descriptor_manifest_error_message(&manifest);
+        assert!(
+            message.contains(expected),
+            "expected `{expected}` in `{message}`"
+        );
+    }
+}
+#[test]
+fn strict_identity_manifest_rejects_noncanonical_or_inert_private_material() {
+    let seed = "ab".repeat(ED25519_IDENTITY_SEED_LEN_V1);
+    let mldsa65 = fixture_mldsa65_private_key_hex();
+    let uppercase_seed = seed.to_ascii_uppercase();
+    let uppercase_mldsa65 = mldsa65.to_ascii_uppercase();
+    let cases = [
+        (
+            descriptor_manifest_json_from_hex(&"00".repeat(ED25519_IDENTITY_SEED_LEN_V1), mldsa65),
+            "ed25519_private_key_hex must not be all zero",
+        ),
+        (
+            descriptor_manifest_json_from_hex(&uppercase_seed, mldsa65),
+            "canonical lowercase hexadecimal",
+        ),
+        (
+            descriptor_manifest_json_from_hex("11", mldsa65),
+            "ed25519_private_key_hex must contain exactly 64",
+        ),
+        (
+            descriptor_manifest_json_from_hex(
+                &seed,
+                &"00".repeat(MlDsaSuite::MlDsa65.secret_key_len()),
+            ),
+            "mldsa65_private_key_hex must not be all zero",
+        ),
+        (
+            descriptor_manifest_json_from_hex(&seed, &uppercase_mldsa65),
+            "canonical lowercase hexadecimal",
+        ),
+        (
+            descriptor_manifest_json_from_hex(&seed, "11"),
+            "mldsa65_private_key_hex must contain exactly 8064",
+        ),
+        (
+            descriptor_manifest_json_from_hex(
+                &seed,
+                &"11".repeat(MlDsaSuite::MlDsa65.secret_key_len()),
+            ),
+            "does not encode a valid ML-DSA-65 private key",
+        ),
+    ];
+    for (manifest, expected) in cases {
+        let message = descriptor_manifest_error_message(&manifest);
+        assert!(
+            message.contains(expected),
+            "expected `{expected}` in `{message}`"
+        );
     }
 }
 #[test]
 fn manifest_secret_debug_is_redacted_and_private_material_can_be_cleared() {
-    let mut ml_kem = MlKemKeys {
-        public: vec![1, 2, 3],
-        private: vec![222; 4],
-    };
-    let rendered = format!("{ml_kem:?}");
-    assert!(rendered.contains("<redacted>"));
-    assert!(!rendered.contains("222"));
-    ml_kem.clear_private_material();
-    assert_eq!(ml_kem.private, vec![0; 4]);
-
     let mut secrets = ManifestSecrets {
-        identity_private_key: Some([171; 32]),
-        ml_kem_private_key: Some(vec![205; 4]),
-        ml_kem_public_key: Some(vec![7; 5]),
+        ed25519_private_key: [171; ED25519_IDENTITY_SEED_LEN_V1],
+        mldsa65_private_key: vec![205; 4],
     };
     let rendered = format!("{secrets:?}");
     assert!(rendered.contains("<redacted>"));
     assert!(!rendered.contains("171"));
     assert!(!rendered.contains("205"));
     secrets.clear_private_material();
-    assert_eq!(secrets.identity_private_key, Some([0; 32]));
-    assert_eq!(secrets.ml_kem_private_key, Some(vec![0; 4]));
-    assert_eq!(secrets.ml_kem_public_key, Some(vec![7; 5]));
+    assert_eq!(
+        secrets.ed25519_private_key,
+        [0; ED25519_IDENTITY_SEED_LEN_V1]
+    );
+    assert_eq!(secrets.mldsa65_private_key, vec![0; 4]);
 }
 #[test]
-fn load_self_signed_config() {
+fn load_minimal_structural_config_in_test_build() {
     let json = config_fixture!("self_signed.json");
     let path = write_config(json);
     let cfg = RelayConfig::load(path).expect("load config");
@@ -627,7 +859,6 @@ fn load_self_signed_config() {
     assert_eq!(cfg.pow_config().difficulty, 18);
     assert_eq!(cfg.pow_config().max_future_skew_secs, 300);
     assert_eq!(cfg.pow_config().min_ticket_ttl_secs, 30);
-    assert_eq!(cfg.self_signed_subject(), DEFAULT_SELF_SIGNED_SUBJECT);
     assert_eq!(cfg.padding_config().cell_size, 1024);
     assert_eq!(cfg.padding_config().max_idle_millis, 150);
     assert_eq!(
@@ -702,7 +933,7 @@ fn vpn_requires_exit_role_and_persistent_transport_trust() {
     assert_vpn_config_error(missing_certificate, "verified handshake.certificate");
 }
 #[test]
-fn vpn_requires_persistent_identity_and_strict_authenticated_directory() {
+fn vpn_requires_persistent_identity_and_authenticated_directory() {
     let issuer_mldsa = "bb".repeat(MlDsaSuite::MlDsa65.public_key_len());
     let certificate = format!(
         r#"{{
@@ -749,34 +980,44 @@ fn vpn_requires_persistent_identity_and_strict_authenticated_directory() {
             }}"#,
     );
     assert_vpn_config_error(&missing_directory, "authenticated guard_directory");
-    let permissive_directory = format!(
-        r#"{{
-                "mode": "Exit",
+}
+#[test]
+fn every_guard_directory_rejects_the_retired_missing_entry_bypass() {
+    for value in [false, true] {
+        let config = format!(
+            r#"{{
+                "mode": "Entry",
                 "listen": "127.0.0.1:0",
-                "tls": {{
-                    "certificate_path": "/run/secrets/relay-cert.pem",
-                    "private_key_path": "/run/secrets/relay-key.pem"
-                }},
-                "handshake": {{
-                    "descriptor_manifest_path": "/run/secrets/relay-descriptor-manifest.json",
-                    "certificate": {certificate}
-                }},
                 "guard_directory": {{
                     "snapshot_path": "/run/secrets/guard-directory.norito",
                     "expected_snapshot_digest_hex": "{}",
-                    "allow_missing_entry": true
-                }},
-                "vpn": {{
-                    "enabled": true,
-                    "helper_ticket_issuer_public_key_path": "/run/secrets/vpn-helper-ticket-issuer-public-key.hex",
-                    "backend_bootstrap_secret_path": "/run/secrets/vpn-backend-bootstrap.hex"
+                    "allow_missing_entry": {value}
                 }}
             }}"#,
-        "ee".repeat(32),
-    );
-    assert_vpn_config_error(
-        &permissive_directory,
-        "forbids guard_directory.allow_missing_entry",
+            "ee".repeat(32),
+        );
+        assert_config_json_admission_rejected(config.as_bytes());
+    }
+}
+#[test]
+fn relay_config_rejects_retired_self_signed_transport_field() {
+    let config = br#"{
+        "mode": "Entry",
+        "listen": "127.0.0.1:0",
+        "tls": { "self_signed_subject": "attacker-controlled.example" }
+    }"#;
+    assert_config_json_admission_rejected(config);
+}
+#[test]
+fn production_transport_validation_rejects_incomplete_trust_chain() {
+    let path = write_config(r#"{"mode":"Entry","listen":"127.0.0.1:0"}"#);
+    let config = RelayConfig::load(path).expect("test-only structural config admission");
+    let error = config
+        .validate_production_transport()
+        .expect_err("production transport cannot fall back to a self-signed identity");
+    assert!(
+        matches!(error, ConfigError::TlsPaths(ref message) if message.contains("production relays require")),
+        "unexpected error: {error:?}"
     );
 }
 #[test]
@@ -952,7 +1193,7 @@ fn exit_routing_validation_rejects_plain_http() {
     match err {
         ConfigError::Routing(message) => {
             assert!(
-                message.contains("ws://"),
+                message.contains("wss://"),
                 "unexpected routing error message: {message}"
             );
         }
@@ -1008,11 +1249,37 @@ fn exit_routing_validation_rejects_kaigi_plain_http() {
     match err {
         ConfigError::Routing(message) => {
             assert!(
-                message.contains("ws://"),
+                message.contains("wss://"),
                 "unexpected routing error message: {message}"
             );
         }
         other => panic!("unexpected error {other:?}"),
+    }
+}
+#[test]
+fn exit_routing_validation_pins_canonical_wss_origins() {
+    validate_wss_endpoint_v1("kaigi_stream.hub_ws_url", "wss://kaigi.example:443/hub")
+        .expect("canonical TLS WebSocket endpoint");
+    validate_wss_endpoint_v1("kaigi_stream.hub_ws_url", "wss://[2001:db8::1]:443/hub")
+        .expect("canonical IPv6 TLS WebSocket endpoint");
+
+    for hostile in [
+        "ws://kaigi.example/hub",
+        "wss://viewer:secret@kaigi.example/hub",
+        "wss://kaigi.example/hub?access_token=secret",
+        "wss://kaigi.example/hub#redirect",
+        "wss://127.1/hub",
+        "wss://KAIGI.example/hub",
+        "wss://kaigi%2eexample/hub",
+        "wss://kaigi.example:0/hub",
+        "wss://kaigi.example:0443/hub",
+        " wss://kaigi.example/hub",
+        "wss://kaigi.example\\internal/hub",
+    ] {
+        assert!(
+            validate_wss_endpoint_v1("kaigi_stream.hub_ws_url", hostile).is_err(),
+            "hostile or ambiguous endpoint must fail closed: {hostile}"
+        );
     }
 }
 #[test]
@@ -1108,37 +1375,13 @@ fn pow_config_rejects_optional_admission() {
     );
 }
 #[test]
-fn pow_config_rejects_zero_adaptive_difficulty_floor() {
-    let mut pow = PowConfig {
-        adaptive: AdaptiveDifficultyConfig {
-            min_difficulty: 0,
-            ..AdaptiveDifficultyConfig::default()
-        },
-        ..PowConfig::default()
-    };
-    let err = pow
-        .apply_defaults()
-        .expect_err("zero adaptive difficulty floor must fail");
+fn pow_config_rejects_retired_adaptive_key_as_unknown() {
+    let err = norito::json::from_str::<PowConfig>(r#"{"adaptive":{"enabled":true}}"#)
+        .expect_err("the retired adaptive schema must fail closed");
+    let message = err.to_string();
     assert!(
-        matches!(err, ConfigError::Puzzle(ref message) if message.contains("min_difficulty")),
-        "unexpected error: {err:?}"
-    );
-}
-#[test]
-fn pow_config_rejects_adaptive_difficulty_above_supported_corridor() {
-    let mut pow = PowConfig {
-        adaptive: AdaptiveDifficultyConfig {
-            max_difficulty: puzzle::MAX_DIFFICULTY + 1,
-            ..AdaptiveDifficultyConfig::default()
-        },
-        ..PowConfig::default()
-    };
-    let err = pow
-        .apply_defaults()
-        .expect_err("oversized adaptive difficulty ceiling must fail");
-    assert!(
-        matches!(err, ConfigError::Puzzle(ref message) if message.contains("max_difficulty")),
-        "unexpected error: {err:?}"
+        message.contains("unknown field") && message.contains("adaptive"),
+        "unexpected error: {message}"
     );
 }
 #[test]
@@ -1699,9 +1942,11 @@ fn identity_manifest_is_loaded() {
         r#"{{
                 "version": 1,
                 "identity": {{
-                    "ed25519_private_key_hex": "{seed_hex}"
+                    "ed25519_private_key_hex": "{seed_hex}",
+                    "mldsa65_private_key_hex": "{}"
                 }}
-            }}"#
+            }}"#,
+        fixture_mldsa65_private_key_hex(),
     ));
     let manifest_path = manifest.path().to_str().expect("manifest path utf-8");
     let json = format!(
@@ -1715,39 +1960,37 @@ fn identity_manifest_is_loaded() {
     );
     let config_path = write_config(&json);
     let config = RelayConfig::load(config_path).expect("load config");
-    let seed = config
+    let secrets = config
         .handshake_policy()
-        .identity_private_key_from_manifest()
-        .expect("manifest parsing")
-        .expect("seed present");
+        .manifest_secrets()
+        .expect("manifest parsing");
+    let (seed, mldsa65) = secrets.into_private_keys();
     let expected_bytes = hex::decode(seed_hex).expect("valid hex");
-    let mut expected = [0u8; 32];
+    let mut expected = [0u8; ED25519_IDENTITY_SEED_LEN_V1];
     expected.copy_from_slice(&expected_bytes);
     assert_eq!(seed, expected);
+    assert_eq!(mldsa65.len(), MlDsaSuite::MlDsa65.secret_key_len());
 }
 #[test]
 fn identity_manifest_missing_key_errors() {
-    let manifest = write_manifest(r#"{ "version": 1, "identity": { "metadata": "placeholder" } }"#);
-    let manifest_path = manifest.path().to_str().expect("manifest path utf-8");
-    let json = format!(
-        r#"{{
-                "mode": "Entry",
-                "listen": "127.0.0.1:0",
-                "handshake": {{
-                    "descriptor_manifest_path": "{manifest_path}"
-                }}
-            }}"#
-    );
-    let config_path = write_config(&json);
-    let config = RelayConfig::load(config_path).expect("load config");
-    match config
-        .handshake_policy()
-        .identity_private_key_from_manifest()
-    {
-        Err(ConfigError::DescriptorManifest { message, .. }) => {
-            assert!(message.contains("missing"), "unexpected message: {message}");
-        }
-        other => panic!("expected manifest error, got {other:?}"),
+    let seed = "44".repeat(ED25519_IDENTITY_SEED_LEN_V1);
+    let mldsa65 = fixture_mldsa65_private_key_hex();
+    let cases = [
+        (
+            format!(r#"{{"version":1,"identity":{{"mldsa65_private_key_hex":"{mldsa65}"}}}}"#),
+            "ed25519_private_key_hex",
+        ),
+        (
+            format!(r#"{{"version":1,"identity":{{"ed25519_private_key_hex":"{seed}"}}}}"#),
+            "mldsa65_private_key_hex",
+        ),
+    ];
+    for (manifest, field) in cases {
+        let message = descriptor_manifest_error_message(&manifest);
+        assert!(
+            message.contains(&format!("missing required field `{field}`")),
+            "unexpected message for `{field}`: {message}"
+        );
     }
 }
 #[test]
@@ -1756,6 +1999,32 @@ fn deploy_sample_config_validates() {
     let mut cfg: RelayConfig = norito::json::from_str(json).expect("parse sample config");
     cfg.validate().expect("sample config validates");
     assert_eq!(cfg.mode, RelayMode::Entry);
+    let certificate = cfg
+        .handshake_policy()
+        .certificate
+        .as_ref()
+        .expect("production sample pins a certificate bundle");
+    assert_eq!(
+        certificate.bundle_path,
+        PathBuf::from("/etc/soranet/relay/secrets/relay-certificate.cbor")
+    );
+    assert_eq!(certificate.issuer_ed25519_hex.len(), 64);
+    assert!(
+        certificate
+            .issuer_ed25519_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    );
+    assert_eq!(
+        certificate.issuer_mldsa_hex.len(),
+        MlDsaSuite::MlDsa65.public_key_len() * 2
+    );
+    assert!(
+        certificate
+            .issuer_mldsa_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    );
     assert_eq!(
         cfg.handshake_policy()
             .descriptor_manifest_path()
@@ -1787,7 +2056,14 @@ fn deploy_sample_config_validates() {
             .expect("spool dir")
             .display()
             .to_string(),
-        "/var/spool/soranet/audit"
+        "/var/lib/soranet-relay/audit-spool"
+    );
+    assert_eq!(
+        cfg.guard_directory_config()
+            .expect("guard directory")
+            .pinning_proof_path()
+            .expect("guard pinning proof path"),
+        Path::new("/var/lib/soranet-relay/guard-pinning-proofs/relay.json")
     );
     assert_eq!(cfg.constant_rate_profile(), ConstantRateProfileName::Core);
     assert_eq!(
@@ -1810,6 +2086,255 @@ fn deploy_sample_config_validates() {
         cfg.privacy_config().max_completed_buckets,
         DEFAULT_PRIVACY_MAX_COMPLETED_BUCKETS
     );
+}
+#[test]
+fn deployment_secret_samples_expose_only_the_exact_v1_identity_schema() {
+    let manifest: norito::json::Value = norito::json::from_str(include_str!(
+        "../deploy/config/relay-descriptor-manifest.sample.json"
+    ))
+    .expect("parse deployment descriptor manifest sample");
+    let root = manifest.as_object().expect("manifest root object");
+    assert_eq!(root.len(), 2);
+    assert_eq!(root["version"].as_u64(), Some(1));
+    let identity = root["identity"].as_object().expect("identity object");
+    let mut fields = identity
+        .keys()
+        .map(|field| field.as_str())
+        .collect::<Vec<_>>();
+    fields.sort_unstable();
+    assert_eq!(
+        fields,
+        ["ed25519_private_key_hex", "mldsa65_private_key_hex"]
+    );
+
+    let kubernetes = include_str!("../deploy/kubernetes/soranet-relay.yaml");
+    for required in [
+        "descriptor_manifest_path",
+        "bundle_path",
+        "issuer_ed25519_hex",
+        "issuer_mldsa_hex",
+        "ed25519_private_key_hex",
+        "mldsa65_private_key_hex",
+        "relay-certificate.cbor",
+    ] {
+        assert!(
+            kubernetes.contains(required),
+            "Kubernetes deployment sample is missing `{required}`"
+        );
+    }
+    for retired in ["ml_kem_private_key_hex", "ml_kem_public_hex"] {
+        assert!(
+            !kubernetes.contains(retired),
+            "Kubernetes deployment sample retains retired manifest field `{retired}`"
+        );
+    }
+}
+#[test]
+fn deployment_samples_materialize_direct_config_and_persist_audit_state() {
+    let kubernetes = include_str!("../deploy/kubernetes/soranet-relay.yaml");
+    for required in [
+        "cp /var/run/soranet-relay-config-source/relay.json /config/relay.json",
+        "snapshot_source=/var/run/soranet-relay-snapshot-source/current_snapshot.norito",
+        "cp \"$snapshot_source\" /private/current_snapshot.norito",
+        "chmod 0400 /config/relay.json",
+        "refusing symbolic-link persistence path",
+        "chmod 0700 \"$path\"",
+        "pinning_proof_path\": \"/var/lib/soranet-relay/guard-pinning-proofs/relay.json",
+        "automountServiceAccountToken: false",
+        "claimName: soranet-relay-guard-snapshot",
+        "claimName: soranet-relay-state",
+        "claimName: soranet-relay-audit-spool",
+        "claimName: soranet-relay-compliance-logs",
+    ] {
+        assert!(
+            kubernetes.contains(required),
+            "Kubernetes deployment sample is missing `{required}`"
+        );
+    }
+    let images = kubernetes
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("image:").map(str::trim))
+        .collect::<Vec<_>>();
+    assert!(!images.is_empty(), "deployment sample must declare images");
+    for image in images {
+        let (repository, digest) = image
+            .rsplit_once("@sha256:")
+            .unwrap_or_else(|| panic!("image `{image}` must use an immutable sha256 digest"));
+        assert!(
+            !repository.is_empty() && !repository.contains('@'),
+            "image `{image}` has a malformed repository or multiple digest selectors"
+        );
+        assert_eq!(
+            digest.len(),
+            64,
+            "image `{image}` must have exactly 64 digest characters"
+        );
+        assert!(
+            digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "image `{image}` digest must be lowercase hexadecimal"
+        );
+    }
+
+    let systemd = include_str!("../deploy/systemd/soranet-relay.service");
+    for required in [
+        "StateDirectoryMode=0700",
+        "LogsDirectory=soranet",
+        "LogsDirectoryMode=0700",
+        "UMask=0077",
+        "ExecStartPre=/usr/bin/test ! -L",
+        "/var/lib/soranet-relay/audit-spool",
+        "/var/lib/soranet-relay/guard-pinning-proofs",
+    ] {
+        assert!(
+            systemd.contains(required),
+            "systemd deployment sample is missing `{required}`"
+        );
+    }
+    for forbidden in ["ExecReload=", "CAP_NET_BIND_SERVICE", "AmbientCapabilities="] {
+        assert!(
+            !systemd.contains(forbidden),
+            "systemd deployment sample must not contain `{forbidden}`"
+        );
+    }
+}
+#[test]
+fn kubernetes_deployment_preserves_private_custody_without_fs_group() {
+    let kubernetes = include_str!("../deploy/kubernetes/soranet-relay.yaml");
+    for forbidden in ["fsGroup:", "fsGroupChangePolicy:"] {
+        assert!(
+            !kubernetes.contains(forbidden),
+            "pod-level `{forbidden}` can widen persistent private files"
+        );
+    }
+    for required in [
+        "for path in /persistent/audit /persistent/logs /persistent/state /persistent/state/guard-pinning-proofs; do",
+        "chown 65532:65532 \"$path\"",
+        "chmod 0700 \"$path\"",
+        "chown 65532:65532 /private/*",
+        "chmod 0400 /private/*",
+        "chown 0:0 /config",
+        "chmod 0755 /config",
+        "chown 0:0 /private",
+        "chmod 0755 /private",
+    ] {
+        assert!(
+            kubernetes.contains(required),
+            "Kubernetes custody contract is missing `{required}`"
+        );
+    }
+    let init_container = kubernetes
+        .split("      initContainers:\n")
+        .nth(1)
+        .and_then(|source| source.split("\n      containers:\n").next())
+        .expect("init-container source contract");
+    let exact_capability_contract = concat!(
+        "            capabilities:\n",
+        "              drop:\n",
+        "                - ALL\n",
+        "              add:\n",
+        "                - CHOWN\n",
+        "                - DAC_OVERRIDE\n",
+        "                - FOWNER\n",
+        "          volumeMounts:"
+    );
+    assert!(
+        init_container.contains(exact_capability_contract),
+        "root init container must drop all capabilities and add only CHOWN, DAC_OVERRIDE, and FOWNER"
+    );
+}
+#[test]
+fn kubernetes_persistent_claims_are_single_pod_writer_volumes() {
+    let kubernetes = include_str!("../deploy/kubernetes/soranet-relay.yaml");
+    let claims = kubernetes
+        .split("\n---\n")
+        .filter(|document| document.contains("\nkind: PersistentVolumeClaim\n"))
+        .collect::<Vec<_>>();
+    assert_eq!(claims.len(), 4, "deployment must declare four custody PVCs");
+    for claim in claims {
+        assert_eq!(
+            claim.matches("    - ReadWriteOncePod").count(),
+            1,
+            "every custody PVC must enforce cluster-wide single-pod mounting"
+        );
+        assert!(
+            !claim.contains("    - ReadWriteOnce\n"),
+            "node-scoped ReadWriteOnce is insufficient for relay custody"
+        );
+    }
+    let readme = include_str!("../deploy/README.md");
+    for required in [
+        "selected CSI driver and cluster must support it",
+        "adds only `CHOWN`, `FOWNER`, and `DAC_OVERRIDE`",
+        "storage access mode is not a substitute",
+    ] {
+        assert!(
+            readme.contains(required),
+            "single-writer/capability documentation is missing `{required}`"
+        );
+    }
+}
+#[test]
+fn kubernetes_guard_snapshot_uses_a_dedicated_volume_instead_of_a_secret() {
+    let kubernetes = include_str!("../deploy/kubernetes/soranet-relay.yaml");
+    let secret = kubernetes
+        .split("\n---\n")
+        .find(|document| document.contains("\nkind: Secret\n"))
+        .expect("deployment Secret document");
+    for required in [
+        "relay-descriptor-manifest.json",
+        "server.crt",
+        "server.key",
+        "relay-certificate.cbor",
+    ] {
+        assert!(
+            secret.contains(required),
+            "private identity/certificate Secret is missing `{required}`"
+        );
+    }
+    assert!(
+        !secret.contains("current_snapshot.norito"),
+        "a valid 5 MiB guard snapshot cannot be delivered through a Kubernetes Secret"
+    );
+    for required in [
+        "name: soranet-relay-guard-snapshot",
+        "mountPath: /var/run/soranet-relay-snapshot-source",
+        "readOnly: true",
+        "guard snapshot exceeds the 5 MiB first-release limit",
+    ] {
+        assert!(
+            kubernetes.contains(required),
+            "dedicated guard snapshot volume contract is missing `{required}`"
+        );
+    }
+    let readme = include_str!("../deploy/README.md");
+    for required in [
+        "Scale `deployment/soranet-relay` to zero",
+        "atomically rename it to",
+        "`/current_snapshot.norito`",
+        "Never overwrite the live inode in place",
+    ] {
+        assert!(
+            readme.contains(required),
+            "guard snapshot replacement documentation is missing `{required}`"
+        );
+    }
+}
+#[test]
+fn runtime_shutdown_contract_handles_sigterm_and_keeps_quic_close() {
+    let runtime = include_str!("runtime.rs");
+    for required in [
+        "async fn shutdown_signal()",
+        "tokio::signal::ctrl_c()",
+        "SignalKind::terminate()",
+        "endpoint.close(0u32.into(), b\"shutdown\")",
+    ] {
+        assert!(
+            runtime.contains(required),
+            "runtime shutdown contract is missing `{required}`"
+        );
+    }
 }
 #[test]
 fn token_config_merges_inline_and_file_revocations() {

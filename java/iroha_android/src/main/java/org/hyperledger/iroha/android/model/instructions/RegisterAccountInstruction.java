@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.nexus.UaidLiteral;
 
 /** Typed builder for the `RegisterAccount` instruction. */
 public final class RegisterAccountInstruction implements InstructionTemplate {
@@ -113,7 +114,7 @@ public final class RegisterAccountInstruction implements InstructionTemplate {
     }
 
     public Builder setUaid(final String uaid) {
-      this.uaid = Objects.requireNonNull(uaid, "uaid");
+      this.uaid = UaidLiteral.canonicalize(uaid, "uaid");
       return this;
     }
 

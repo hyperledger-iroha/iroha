@@ -445,9 +445,6 @@ fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
         InvalidNormVersion(value) => {
             fields.insert("value".into(), JsonValue::from(u64::from(*value)));
         }
-        InvalidDomainLabel(label) => {
-            fields.insert("label".into(), JsonValue::from(label.to_string()));
-        }
         UnexpectedNetworkPrefix { expected, found } => {
             fields.insert("expected".into(), JsonValue::from(u64::from(*expected)));
             fields.insert("found".into(), JsonValue::from(u64::from(*found)));
@@ -1159,18 +1156,14 @@ unsafe fn clear_kagemusha_secret_allocated_buffer(ptr_: *mut c_uchar) -> Option<
     Some(header.cast::<c_uchar>())
 }
 fn parse_account_id(value: String) -> BridgeResult<AccountId> {
-    AccountId::parse_encoded(&value)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| BridgeError::Authority)
+    AccountId::parse_encoded(&value).map_err(|_| BridgeError::Authority)
 }
 fn parse_account_id_for_chain(value: String, chain_discriminant: u16) -> BridgeResult<AccountId> {
     let _chain_discriminant = ChainDiscriminantGuard::enter(chain_discriminant);
     parse_account_id(value)
 }
 fn parse_destination(value: String) -> BridgeResult<AccountId> {
-    AccountId::parse_encoded(&value)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| BridgeError::Destination)
+    AccountId::parse_encoded(&value).map_err(|_| BridgeError::Destination)
 }
 fn parse_asset_definition(value: String) -> BridgeResult<AssetDefinitionId> {
     let trimmed = value.trim();
@@ -13013,7 +13006,7 @@ mod detached_transaction_scaffold_tests {
             let mut metadata = Metadata::default();
             metadata.insert(
                 "nested".parse().expect("metadata key"),
-                Json::from_raw_json("{\"z\":2,\"a\":[true,null]}".to_owned())
+                Json::from_raw_json("{\"a\":[true,null],\"z\":2}".to_owned())
                     .expect("valid nested JSON fixture"),
             );
             metadata
@@ -24514,9 +24507,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let (account_cstr, _) = sample_account("bank", 0);
         let account_literal = account_cstr.to_str().expect("account literal");
-        let account_id = AccountId::parse_encoded(account_literal)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("parse account");
+        let account_id = AccountId::parse_encoded(account_literal).expect("parse account");
         let definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("bank", "universal").expect("domain"),
             "usd".parse().expect("asset name"),
@@ -25489,12 +25480,10 @@ mod accel_tests {
         let scoped_account = cstring(authority.to_str().unwrap());
         let member_a_str = sample_destination("default", 2);
         let member_b_str = sample_destination("default", 3);
-        let member_a = AccountId::parse_encoded(member_a_str.to_str().unwrap())
-            .expect("member A account id")
-            .into_account_id();
-        let member_b = AccountId::parse_encoded(member_b_str.to_str().unwrap())
-            .expect("member B account id")
-            .into_account_id();
+        let member_a =
+            AccountId::parse_encoded(member_a_str.to_str().unwrap()).expect("member A account id");
+        let member_b =
+            AccountId::parse_encoded(member_b_str.to_str().unwrap()).expect("member B account id");
         let mut members = BTreeMap::new();
         members.insert(member_a, 2);
         members.insert(member_b, 1);

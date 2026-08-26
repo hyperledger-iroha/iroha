@@ -240,10 +240,15 @@ Restart Codex after installation so the selected skill appears in the Skills
 tab.
 
 Start a disposable four-validator Taira network with
-`python3 scripts/taira_devnet.py up`; inspect it with `check` and stop it with
-`down`. `up` is a Linux/AArch64/root/KVM qualification run bound to the current
-`optimizations` worktree and freshly built target-specific binaries; `check` is
-read-only inspection and does not repeat that qualification. The command
+`python3 scripts/taira_devnet.py up --inrou-canary-dir <owner-only-workspace>`;
+inspect it with `check` and stop it with `down`. `up` is a
+Linux/AArch64/root/KVM and mandatory guest-workload qualification run bound to
+the current `optimizations` worktree and freshly built target-specific
+binaries. `check` is read-only and requires the exact owner-only V1 guest
+qualification record produced by `up`; it revalidates the retained input,
+stage, CLI/source/target identities, and fresh four-route live evidence without
+repeating the mutating canary or signed ping.
+The command
 delegates config/genesis generation to the current Kagami binary and
 transaction/API checks to the current daemon and CLI. See
 [`configs/soranexus/taira/README.md`](./configs/soranexus/taira/README.md).

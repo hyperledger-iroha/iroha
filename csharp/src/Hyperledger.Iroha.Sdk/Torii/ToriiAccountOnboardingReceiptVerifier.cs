@@ -35,7 +35,7 @@ public static class ToriiAccountOnboardingReceiptVerifier
         {
             throw new ArgumentException("Receipt and request versions must both be 1.", nameof(receipt));
         }
-        if (!string.Equals(body.Authority, authority, StringComparison.Ordinal))
+        if (!AccountIdsHaveSameIdentity(body.Authority, authority))
         {
             throw new ArgumentException("Receipt authority does not match the pinned authority.", nameof(receipt));
         }
@@ -258,6 +258,25 @@ public static class ToriiAccountOnboardingReceiptVerifier
     }
 
     private static bool IsUpperHex(char value) => value is >= '0' and <= '9' or >= 'A' and <= 'F';
+
+    private static bool AccountIdsHaveSameIdentity(string? left, string? right)
+    {
+        if (left is null || right is null)
+        {
+            return false;
+        }
+        try
+        {
+            return AccountAddress.Parse(left)
+                .CanonicalBytes()
+                .AsSpan()
+                .SequenceEqual(AccountAddress.Parse(right).CanonicalBytes());
+        }
+        catch (AccountAddressException)
+        {
+            return false;
+        }
+    }
 
     private static ushort Crc16(ReadOnlySpan<byte> bytes)
     {

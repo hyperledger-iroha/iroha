@@ -32,6 +32,24 @@ use kaigi_zk::{
 use mv::storage::StorageReadOnly;
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 use std::str::FromStr;
+
+fn ensure_ledger_safe_identity_artifacts(
+    commitment: &KaigiParticipantCommitment,
+    nullifier: &KaigiParticipantNullifier,
+) -> Result<(), Error> {
+    if commitment.alias_tag.is_some() {
+        return Err(privacy_error(
+            "commitment alias_tag must be omitted from on-chain privacy artifacts",
+        ));
+    }
+    if nullifier.issued_at_ms != 0 {
+        return Err(privacy_error(
+            "nullifier issued_at_ms must be zero in on-chain privacy artifacts",
+        ));
+    }
+    Ok(())
+}
+
 /// Information supplied with a privacy-mode join/leave request.
 #[derive(Debug)]
 pub struct PrivacyArtifacts<'a> {
@@ -78,16 +96,10 @@ fn verify_roster_stub(artifacts: &PrivacyArtifacts<'_>, expected_root: &Hash) ->
     let commitment = artifacts
         .commitment
         .ok_or_else(|| privacy_error("privacy mode requires commitment"))?;
-    artifacts
+    let nullifier = artifacts
         .nullifier
         .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-    if commitment
-        .alias_tag
-        .as_deref()
-        .is_some_and(|tag| tag.len() > 64)
-    {
-        return Err(privacy_error("commitment alias_tag exceeds 64 characters"));
-    }
+    ensure_ledger_safe_identity_artifacts(commitment, nullifier)?;
     if artifacts.host == artifacts.subject {
         return Err(privacy_error("host must not re-enter privacy roster"));
     }
@@ -125,13 +137,7 @@ fn verify_host_stub(
     let nullifier = artifacts
         .nullifier
         .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-    if commitment
-        .alias_tag
-        .as_deref()
-        .is_some_and(|tag| tag.len() > 64)
-    {
-        return Err(privacy_error("commitment alias_tag exceeds 64 characters"));
-    }
+    ensure_ledger_safe_identity_artifacts(commitment, nullifier)?;
     if let Some(expected_commitment) = expected_commitment
         && commitment.commitment != expected_commitment.commitment
     {
@@ -193,6 +199,13 @@ pub fn verify_usage_commitment(
         if proof_bytes.is_empty() {
             return Err(privacy_error("privacy proof payload must be non-empty"));
         }
+        let vk_cfg = state_transaction.zk.kaigi_usage_vk.clone();
+        validate_configured_verifier(
+            state_transaction,
+            proof_bytes.len(),
+            vk_cfg.as_ref(),
+            "kaigi usage",
+        )?;
         let envelope = decode_privacy_proof_envelope(proof_bytes)?;
         if envelope.circuit_id != KAIGI_USAGE_BACKEND {
             return Err(privacy_error(
@@ -202,7 +215,6 @@ pub fn verify_usage_commitment(
         let instance_cols = crate::zk::extract_pasta_fp_instances(&envelope.proof_bytes)
             .ok_or_else(|| privacy_error("failed to parse usage privacy proof instances"))?;
         verify_usage_public_input(&instance_cols, expected_commitment)?;
-        let vk_cfg = state_transaction.zk.kaigi_usage_vk.clone();
         return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi usage");
     }
     #[allow(unreachable_code)]
@@ -220,8 +232,15 @@ pub fn verify_host_create(
     }
     #[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
     {
-        let proof_bytes = validate_host_artifacts(artifacts, expected_root, None)?;
         let vk_cfg = state_transaction.zk.kaigi_roster_join_vk.clone();
+        let proof_bytes = validate_host_artifacts(
+            state_transaction,
+            artifacts,
+            expected_root,
+            None,
+            vk_cfg.as_ref(),
+            "kaigi host create",
+        )?;
         return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi host create");
     }
     #[allow(unreachable_code)]
@@ -240,13 +259,19 @@ pub fn verify_host_action(
     }
     #[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
     {
-        let proof_bytes =
-            validate_host_artifacts(artifacts, expected_root, Some(expected_commitment))?;
         let vk_cfg = state_transaction
             .zk
             .kaigi_roster_leave_vk
             .clone()
             .or_else(|| state_transaction.zk.kaigi_roster_join_vk.clone());
+        let proof_bytes = validate_host_artifacts(
+            state_transaction,
+            artifacts,
+            expected_root,
+            Some(expected_commitment),
+            vk_cfg.as_ref(),
+            "kaigi host action",
+        )?;
         return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi host action");
     }
     #[allow(unreachable_code)]
@@ -264,13 +289,7 @@ fn validate_roster_artifacts<'a>(
     let nullifier = artifacts
         .nullifier
         .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-    if commitment
-        .alias_tag
-        .as_deref()
-        .is_some_and(|tag| tag.len() > 64)
-    {
-        return Err(privacy_error("commitment alias_tag exceeds 64 characters"));
-    }
+    ensure_ledger_safe_identity_artifacts(commitment, nullifier)?;
     if artifacts.host == artifacts.subject {
         return Err(privacy_error("host must not re-enter privacy roster"));
     }
@@ -305,9 +324,12 @@ fn validate_roster_artifacts<'a>(
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 #[allow(dead_code)]
 fn validate_host_artifacts<'a>(
+    state_transaction: &StateTransaction<'_, '_>,
     artifacts: &'a HostPrivacyArtifacts<'a>,
     expected_root: &Hash,
     expected_commitment: Option<&KaigiParticipantCommitment>,
+    vk_cfg: Option<&VerifyingKeyRef>,
+    purpose: &str,
 ) -> Result<&'a [u8], Error> {
     let commitment = artifacts
         .commitment
@@ -315,13 +337,7 @@ fn validate_host_artifacts<'a>(
     let nullifier = artifacts
         .nullifier
         .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-    if commitment
-        .alias_tag
-        .as_deref()
-        .is_some_and(|tag| tag.len() > 64)
-    {
-        return Err(privacy_error("commitment alias_tag exceeds 64 characters"));
-    }
+    ensure_ledger_safe_identity_artifacts(commitment, nullifier)?;
     if let Some(expected_commitment) = expected_commitment
         && commitment.commitment != expected_commitment.commitment
     {
@@ -339,6 +355,7 @@ fn validate_host_artifacts<'a>(
     if advertised_root != expected_root {
         return Err(privacy_error("roster root mismatch"));
     }
+    validate_configured_verifier(state_transaction, proof_bytes.len(), vk_cfg, purpose)?;
     let envelope = decode_privacy_proof_envelope(proof_bytes)?;
     if envelope.circuit_id != KAIGI_ROSTER_BACKEND {
         return Err(privacy_error(
@@ -354,6 +371,30 @@ fn validate_host_artifacts<'a>(
         &nullifier.digest,
     )?;
     Ok(proof_bytes)
+}
+#[cfg(not(feature = "kaigi_privacy_mocks"))]
+fn validate_configured_verifier(
+    state_transaction: &StateTransaction<'_, '_>,
+    proof_len: usize,
+    vk_cfg: Option<&VerifyingKeyRef>,
+    purpose: &str,
+) -> Result<(), Error> {
+    let Some(vk_cfg) = vk_cfg else {
+        return Err(privacy_error(format!("{purpose} verifier not configured")));
+    };
+    let vk_id = VerifyingKeyId::new(vk_cfg.backend.clone(), vk_cfg.name.clone());
+    let Some(record) = state_transaction.world.verifying_keys.get(&vk_id) else {
+        return Err(privacy_error(format!("{purpose} verifier not registered")));
+    };
+    if !record.is_active_at(state_transaction.block_height()) {
+        return Err(privacy_error(format!("{purpose} verifier is not active")));
+    }
+    if record.gas_schedule_id.is_none() {
+        return Err(privacy_error(format!(
+            "{purpose} verifier missing gas schedule reference"
+        )));
+    }
+    enforce_verifier_proof_size(record.max_proof_bytes, proof_len, purpose)
 }
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 #[allow(clippy::needless_pass_by_value)]
@@ -381,6 +422,7 @@ fn verify_with_config(
             "{purpose} verifier missing gas schedule reference"
         )));
     }
+    enforce_verifier_proof_size(record.max_proof_bytes, proof_bytes.len(), purpose)?;
     let record_backend = record.backend;
     let record_circuit_id = record.circuit_id.clone();
     let record_commitment = record.commitment;
@@ -420,6 +462,25 @@ fn verify_with_config(
     }
     if !report.ok {
         return Err(privacy_error("privacy proof verification failed"));
+    }
+    Ok(())
+}
+#[cfg(not(feature = "kaigi_privacy_mocks"))]
+fn enforce_verifier_proof_size(
+    max_proof_bytes: u32,
+    proof_len: usize,
+    purpose: &str,
+) -> Result<(), Error> {
+    let max_proof_bytes = usize::try_from(max_proof_bytes).unwrap_or(usize::MAX);
+    if max_proof_bytes == 0 {
+        return Err(privacy_error(format!(
+            "{purpose} verifier missing a governed max_proof_bytes limit"
+        )));
+    }
+    if proof_len > max_proof_bytes {
+        return Err(privacy_error(format!(
+            "{purpose} proof exceeds verifier max_proof_bytes"
+        )));
     }
     Ok(())
 }
@@ -600,6 +661,36 @@ mod tests {
         assert!(verify_usage_public_input(&[vec![scalar + Fp::from(1u64)]], &commitment).is_err());
         let extra_column = [vec![scalar], vec![Fp::from(0u64)]];
         assert!(verify_usage_public_input(&extra_column, &commitment).is_err());
+    }
+    #[test]
+    fn clear_identity_hints_are_rejected_from_ledger_artifacts() {
+        let safe_commitment = KaigiParticipantCommitment {
+            commitment: Hash::prehashed([1_u8; Hash::LENGTH]),
+            alias_tag: None,
+        };
+        let safe_nullifier = KaigiParticipantNullifier {
+            digest: Hash::prehashed([2_u8; Hash::LENGTH]),
+            issued_at_ms: 0,
+        };
+        ensure_ledger_safe_identity_artifacts(&safe_commitment, &safe_nullifier)
+            .expect("canonical privacy artifacts do not disclose identity hints");
+
+        let mut tagged = safe_commitment.clone();
+        tagged.alias_tag = Some("participant".to_owned());
+        assert!(ensure_ledger_safe_identity_artifacts(&tagged, &safe_nullifier).is_err());
+        let mut timestamped = safe_nullifier;
+        timestamped.issued_at_ms = 1;
+        assert!(ensure_ledger_safe_identity_artifacts(&safe_commitment, &timestamped).is_err());
+    }
+    #[test]
+    fn verifier_proof_size_enforces_governed_cap() {
+        assert!(enforce_verifier_proof_size(8, 8, "kaigi usage").is_ok());
+        let err = enforce_verifier_proof_size(8, 9, "kaigi usage")
+            .expect_err("proof larger than verifier cap must reject");
+        assert!(format!("{err:?}").contains("max_proof_bytes"));
+        let err = enforce_verifier_proof_size(0, 1, "kaigi usage")
+            .expect_err("zero verifier cap must fail closed");
+        assert!(format!("{err:?}").contains("missing a governed max_proof_bytes limit"));
     }
     #[test]
     fn privacy_proof_envelope_metadata_rejects_zero_verifier_hash() {

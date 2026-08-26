@@ -191,11 +191,8 @@ export {
   assembleSoracloudAppInfraRequest,
   assembleSoracloudHfDeployRequest,
   buildSoracloudAppInfraDraft,
-  buildSoracloudPrivateUploadedModelExecuteRequest,
-  buildSoracloudPrivateUploadedModelReceiptQuery,
   buildSoracloudHfDeployDraft,
   deploySoracloudAppInfraInstruction,
-  privateUploadedModelReceiptInstruction,
   upgradeSoracloudAppInfraInstruction,
 } from "./soracloud.js";
 export {
@@ -318,6 +315,7 @@ export {
   buildRecordKaigiUsageTransaction,
   buildSetKaigiRelayManifestTransaction,
   buildRegisterKaigiRelayTransaction,
+  buildReportKaigiRelayHealthTransaction,
   buildRegisterSmartContractCodeTransaction,
   buildRegisterSmartContractBytesTransaction,
   buildRemoveSmartContractBytesTransaction,
@@ -416,6 +414,7 @@ export {
   buildRecordKaigiUsageInstruction,
   buildSetKaigiRelayManifestInstruction,
   buildRegisterKaigiRelayInstruction,
+  buildReportKaigiRelayHealthInstruction,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
   buildUploadSmartContractCodeChunkInstruction,

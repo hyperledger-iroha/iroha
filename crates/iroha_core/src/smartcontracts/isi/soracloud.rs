@@ -6,7 +6,6 @@ use super::{
 };
 use crate::{
     smartcontracts::Execute,
-    soracloud_runtime::soracloud_hf_generated_source_binding,
     state::{StateTransaction, public_lane_validator_record_matches_key},
 };
 #[cfg(all(test, feature = "zk-stark"))]
@@ -92,12 +91,13 @@ use iroha_data_model::{
         BfvCiphertextBoundModeV1, BfvEvaluationKeyRefreshTranscriptV1, BfvRefreshTranscriptModeV1,
         DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheExecutionPolicyV1, FheJobOperationV1,
         FheJobSpecV1, FheParamSetV1, FheSchemeV1, SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
-        SORA_AGENT_APARTMENT_RECORD_VERSION_V1, SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1,
-        SORA_APP_INFRA_STATE_VERSION_V1, SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
-        SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-        SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1, SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
-        SORA_HF_SOURCE_RECORD_VERSION_V1, SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
-        SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1, SORA_MODEL_ARTIFACT_RECORD_VERSION_V1,
+        SORA_AGENT_APARTMENT_RECORD_VERSION_V1, SORA_AGENT_WALLET_REQUEST_ID_MAX_BYTES_V1,
+        SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1, SORA_APP_INFRA_STATE_VERSION_V1,
+        SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1, SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+        SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1, SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+        SORA_HF_SHARED_LEASE_POOL_VERSION_V1, SORA_HF_SOURCE_RECORD_VERSION_V1,
+        SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1, SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1,
+        SORA_MODEL_ARTIFACT_RECORD_VERSION_V1,
         SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1, SORA_MODEL_REGISTRY_VERSION_V1,
         SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1, SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
         SORA_SERVICE_AUDIT_EVENT_VERSION_V1, SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
@@ -107,8 +107,7 @@ use iroha_data_model::{
         SORA_SERVICE_LEASE_STATE_VERSION_V1, SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1,
         SORA_SERVICE_ROLLOUT_STATE_VERSION_V1, SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
         SORA_SERVICE_STATE_ENTRY_VERSION_V1, SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1,
-        SORA_TRAINING_JOB_RECORD_VERSION_V1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
-        SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+        SORA_TRAINING_JOB_RECORD_VERSION_V1, SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_NATIVE_ENVELOPE_BYTES,
         SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_MAX_OPEN_VERIFY_BYTES,
@@ -143,16 +142,16 @@ use iroha_data_model::{
         SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1,
         SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseQueuedWindowV1,
         SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraInrouGuestIsaV1,
-        SoraInrouHostCapabilityRecordV1, SoraInrouReplicaPlacementV1,
-        SoraInrouReplicaRuntimeStateV1, SoraInrouServicePlacementRecordV1,
-        SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1,
-        SoraModelHostCapabilityRecordV1, SoraModelHostViolationEvidenceRecordV1,
-        SoraModelHostViolationKindV1, SoraModelProvenanceKindV1, SoraModelProvenanceRefV1,
-        SoraModelRegistryV1, SoraModelWeightActionV1, SoraModelWeightAuditEventV1,
-        SoraModelWeightVersionRecordV1, SoraPrivateUploadedModelExecutionReceiptV1,
+        SoraInrouHostCapabilityRecordV1, SoraInrouReplicaHostAvailabilityV1,
+        SoraInrouReplicaPlacementV1, SoraInrouReplicaRuntimeStateV1,
+        SoraInrouServicePlacementRecordV1, SoraModelArtifactActionV1,
+        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
+        SoraModelHostViolationEvidenceRecordV1, SoraModelHostViolationKindV1,
+        SoraModelProvenanceKindV1, SoraModelProvenanceRefV1, SoraModelRegistryV1,
+        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
         SoraRolloutStageV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
         SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1,
-        SoraServiceHealthStatusV1, SoraServiceLeaseEgressCheckpointV1,
+        SoraServiceHealthStatusV1, SoraServiceLeaseClockV1, SoraServiceLeaseEgressCheckpointV1,
         SoraServiceLeaseReportingEpochRolloverV1, SoraServiceLeaseStateV1,
         SoraServiceLeaseStatusV1, SoraServiceLeaseVolumeStateV1, SoraServiceLifecycleActionV1,
         SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1,
@@ -164,7 +163,8 @@ use iroha_data_model::{
         SoracloudFheInputAdmissionProofV1, SoracloudFhePolicyRecordV1,
         SoracloudFhePolicyReferenceV1, SoracloudFhePolicyVersionLifecycleV1,
         SoracloudFhePolicyVersionStateV1, SoracloudFhePublicKeyProofV1,
-        derive_agent_autonomy_request_commitment, derive_hf_source_id_v1,
+        derive_agent_autonomy_request_commitment, derive_hf_shared_lease_pool_id_v1,
+        derive_hf_source_id_v1,
         derive_soracloud_fhe_input_admission_statement_hash_with_bound_mode,
         encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
@@ -196,8 +196,9 @@ use iroha_data_model::{
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
         encode_uploaded_model_bundle_register_provenance_payload,
         encode_uploaded_model_finalize_provenance_payload,
-        hf_shared_lease_max_compute_reservation_fee_v1, is_canonical_hf_commit_oid_v1,
-        is_canonical_hf_repo_id_v1, soracloud_fhe_bootstrap_key_proof_open_verify_bounds,
+        hf_shared_lease_max_compute_reservation_fee_v1, is_canonical_agent_wallet_request_id_v1,
+        is_canonical_hf_commit_oid_v1, is_canonical_hf_repo_id_v1,
+        soracloud_fhe_bootstrap_key_proof_open_verify_bounds,
         soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1,
         soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds,
         soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1,
@@ -622,7 +623,7 @@ fn current_signed_transaction_hash(
         .map(Into::into)
         .ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
-                "Soracloud FHE governance requires the canonical signed transaction hash".into(),
+                "Soracloud state transition requires the canonical signed transaction hash".into(),
             )
         })
 }
@@ -748,16 +749,15 @@ fn require_soracloud_service_runtime_authority(
             .into(),
         ));
     }
-    if placement
-        .placements
-        .iter()
-        .any(|assignment| assignment.validator_account_id == *authority)
-    {
+    if let Some(assignment) = placement.placements.iter().find(|assignment| {
+        assignment.host_availability.is_available() && assignment.validator_account_id == *authority
+    }) {
+        require_inrou_host_peer_binding(authority, &assignment.peer_id, state_transaction)?;
         Ok(SoracloudServiceRuntimeAuthority::AssignedValidator)
     } else {
         Err(InstructionExecutionError::InvariantViolation(
             format!(
-                "validator `{authority}` is not assigned to service `{service_name}` revision `{service_version}`"
+                "validator `{authority}` is not assigned to service `{service_name}` revision `{service_version}` on an available exact host"
             )
             .into(),
         ))
@@ -3281,29 +3281,12 @@ fn validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_la
                 "FHE full-bootstrap execution native verifier-key material must use canonical V1 bytes: {err}"
             ))
         })?;
-    // A governed artifact may carry either the normalized Core STARK key or
-    // the richer audited BFV-native descriptor. These are distinct typed
-    // artifact formats; each must use its one canonical V1 representation.
-    #[cfg(feature = "zk-stark")]
-    if let Err(core_err) = norito::decode_canonical::<crate::zk_stark::StarkFriVerifyingKeyV1>(
-        &native_material.native_payload,
-    ) {
-        norito::decode_canonical::<
-            iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1,
-        >(&native_material.native_payload)
-        .map_err(|native_err| {
-            invalid_parameter(format!(
-                "FHE full-bootstrap execution native verifier-key payload must use one canonical governed V1 format: core payload decode failed: {core_err}; native payload decode failed: {native_err}"
-            ))
-        })?;
-    }
-    #[cfg(not(feature = "zk-stark"))]
     norito::decode_canonical::<
         iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1,
     >(&native_material.native_payload)
     .map_err(|native_err| {
         invalid_parameter(format!(
-            "FHE full-bootstrap execution native verifier-key payload must use the canonical BFV-native governed V1 format when Core STARK support is disabled: {native_err}"
+            "FHE full-bootstrap execution native verifier-key payload must use the canonical BFV-native governed V1 format: {native_err}"
         ))
     })?;
     Ok(())
@@ -3335,10 +3318,10 @@ fn governed_full_bootstrap_execution_verifier_key_circuit_error_from_artifact(
     let material_envelope: iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1 =
         norito::decode_canonical(&key.key_material).ok()?;
     let material_envelope_preflight =
-        governed_full_bootstrap_execution_verifier_key_material_envelope_matches_key_for_circuit_fallback(
-        &key,
-        &material_envelope,
-    );
+        governed_full_bootstrap_execution_verifier_key_material_envelope_matches_key_for_circuit_diagnostic(
+            &key,
+            &material_envelope,
+        );
     if let Err(err) = material_envelope_preflight {
         return Some(invalid_parameter(format!(
             "FHE full-bootstrap execution verifier-key artifact material envelope failed validation before circuit diagnostic: {err}"
@@ -3373,7 +3356,7 @@ fn governed_full_bootstrap_execution_verifier_key_circuit_error_from_artifact(
     }
 }
 #[cfg(feature = "zk-stark")]
-fn governed_full_bootstrap_execution_verifier_key_material_envelope_matches_key_for_circuit_fallback(
+fn governed_full_bootstrap_execution_verifier_key_material_envelope_matches_key_for_circuit_diagnostic(
     key: &iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyV1,
     envelope: &iroha_crypto::fhe_bfv::BfvFullBootstrapProofKeyMaterialEnvelopeV1,
 ) -> Result<(), String> {
@@ -3521,104 +3504,94 @@ fn validate_governed_full_bootstrap_execution_stark_verifier_key_payload(
             "FHE full-bootstrap execution verifier-key artifact backend mismatch",
         ));
     }
-    let payload: crate::zk_stark::StarkFriVerifyingKeyV1 = match norito::decode_canonical(
-        &verifier_key.bytes,
-    ) {
-        Ok(payload) => payload,
-        Err(core_err) => {
-            let native_payload: iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
-                    norito::decode_canonical(&verifier_key.bytes).map_err(|native_err| {
-                        invalid_parameter(format!(
-                            "FHE full-bootstrap execution verifier-key artifact has invalid STARK payload: {core_err}; native payload decode failed: {native_err}"
-                        ))
-                    })?;
-            if native_payload.field_count
-                != iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_FIELD_COUNT_V1
-            {
-                return Err(invalid_parameter(
-                    "FHE full-bootstrap execution verifier-key artifact native field count mismatch",
-                ));
-            }
-            if native_payload.backend != iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1
-            {
-                return Err(invalid_parameter(
-                    "FHE full-bootstrap execution verifier-key artifact native backend mismatch",
-                ));
-            }
-            if native_payload.key_format
-                != iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1
-            {
-                return Err(invalid_parameter(
-                    "FHE full-bootstrap execution verifier-key artifact native key format mismatch",
-                ));
-            }
-            if native_payload.proof_system
-                != iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_PROOF_SYSTEM_V1
-            {
-                return Err(invalid_parameter(
-                    "FHE full-bootstrap execution verifier-key artifact native proof system mismatch",
-                ));
-            }
-            if native_payload.field
-                != iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FIELD_V1
-            {
-                return Err(invalid_parameter(
-                    "FHE full-bootstrap execution verifier-key artifact native field mismatch",
-                ));
-            }
-            let expected_trace_profile_digest =
-                iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_profile_digest_v1()
-                    .map_err(|err| {
-                        invalid_parameter(format!(
-                            "FHE full-bootstrap execution verifier-key artifact arithmetic trace profile digest could not be derived: {err}"
-                        ))
-                    })?;
-            if native_payload.arithmetic_trace_profile_digest != expected_trace_profile_digest {
-                return Err(invalid_parameter(
-                    "FHE full-bootstrap execution verifier-key artifact native arithmetic trace profile digest mismatch",
-                ));
-            }
-            let expected_air_constraint_system_digest =
-                iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1()
-                    .map_err(|err| {
-                        invalid_parameter(format!(
-                            "FHE full-bootstrap execution verifier-key artifact arithmetic AIR constraint-system digest could not be derived: {err}"
-                        ))
-                    })?;
-            if native_payload.arithmetic_air_constraint_system_digest
-                != expected_air_constraint_system_digest
-            {
-                return Err(invalid_parameter(
-                    "FHE full-bootstrap execution verifier-key artifact native arithmetic AIR constraint-system digest mismatch",
-                ));
-            }
-            iroha_crypto::fhe_bfv::validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
-                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
-                &verifier_key.bytes,
-            )
+    // The governed wire format is BFV-native only. Conversion happens after
+    // the complete native descriptor has passed its release-profile checks.
+    let native_payload: iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
+        norito::decode_canonical(&verifier_key.bytes).map_err(|native_err| {
+            invalid_parameter(format!(
+                "FHE full-bootstrap execution verifier-key artifact must use the canonical BFV-native governed V1 payload: {native_err}"
+            ))
+        })?;
+    if native_payload.field_count
+        != iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_VERIFIER_PAYLOAD_FIELD_COUNT_V1
+    {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap execution verifier-key artifact native field count mismatch",
+        ));
+    }
+    if native_payload.backend != iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1 {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap execution verifier-key artifact native backend mismatch",
+        ));
+    }
+    if native_payload.key_format != iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1 {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap execution verifier-key artifact native key format mismatch",
+        ));
+    }
+    if native_payload.proof_system
+        != iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_PROOF_SYSTEM_V1
+    {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap execution verifier-key artifact native proof system mismatch",
+        ));
+    }
+    if native_payload.field != iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FIELD_V1 {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap execution verifier-key artifact native field mismatch",
+        ));
+    }
+    let expected_trace_profile_digest =
+        iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_trace_profile_digest_v1().map_err(
+            |err| {
+                invalid_parameter(format!(
+                    "FHE full-bootstrap execution verifier-key artifact arithmetic trace profile digest could not be derived: {err}"
+                ))
+            },
+        )?;
+    if native_payload.arithmetic_trace_profile_digest != expected_trace_profile_digest {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap execution verifier-key artifact native arithmetic trace profile digest mismatch",
+        ));
+    }
+    let expected_air_constraint_system_digest =
+        iroha_crypto::fhe_bfv::bfv_full_bootstrap_arithmetic_air_constraint_system_digest_v1()
             .map_err(|err| {
                 invalid_parameter(format!(
-                    "FHE full-bootstrap execution verifier-key artifact native generated circuit body validation failed: {err}"
+                    "FHE full-bootstrap execution verifier-key artifact arithmetic AIR constraint-system digest could not be derived: {err}"
                 ))
             })?;
-            let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
-                version: native_payload.version,
-                circuit_id: native_payload.circuit_id,
-                n_log2: native_payload.n_log2,
-                blowup_log2: native_payload.blowup_log2,
-                fold_arity: native_payload.fold_arity,
-                queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
-                merkle_arity: native_payload.merkle_arity,
-                hash_fn: native_payload.hash_fn,
-            };
-            verifier_key.bytes = norito::encode_canonical(&payload).map_err(|err| {
-                    invalid_parameter(format!(
-                        "FHE full-bootstrap execution verifier-key artifact canonical STARK payload encoding failed: {err}"
-                    ))
-                })?;
-            payload
-        }
+    if native_payload.arithmetic_air_constraint_system_digest
+        != expected_air_constraint_system_digest
+    {
+        return Err(invalid_parameter(
+            "FHE full-bootstrap execution verifier-key artifact native arithmetic AIR constraint-system digest mismatch",
+        ));
+    }
+    iroha_crypto::fhe_bfv::validate_bfv_full_bootstrap_native_stark_fri_verifier_payload_v1(
+        SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+        &verifier_key.bytes,
+    )
+    .map_err(|err| {
+        invalid_parameter(format!(
+            "FHE full-bootstrap execution verifier-key artifact native generated circuit body validation failed: {err}"
+        ))
+    })?;
+    let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+        version: native_payload.version,
+        circuit_id: native_payload.circuit_id,
+        n_log2: native_payload.n_log2,
+        blowup_log2: native_payload.blowup_log2,
+        fold_arity: native_payload.fold_arity,
+        queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
+        merkle_arity: native_payload.merkle_arity,
+        hash_fn: native_payload.hash_fn,
     };
+    verifier_key.bytes = norito::encode_canonical(&payload).map_err(|err| {
+        invalid_parameter(format!(
+            "FHE full-bootstrap execution verifier-key artifact canonical STARK payload encoding failed: {err}"
+        ))
+    })?;
     crate::zk_stark::validate_stark_fri_canonical_verifying_key_payload(
         &payload,
         SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
@@ -3655,11 +3628,6 @@ fn canonical_soracloud_fhe_full_bootstrap_prover_verifier_key(
         return Err(invalid_parameter(format!(
             "{label} verifier-key backend mismatch"
         )));
-    }
-    if expected_circuit_id == SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1 {
-        let mut verifier_key = verifier_key.clone();
-        validate_governed_full_bootstrap_execution_stark_verifier_key_payload(&mut verifier_key)?;
-        return Ok(verifier_key);
     }
     let payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
         norito::decode_canonical(&verifier_key.bytes).map_err(|err| {
@@ -4828,10 +4796,7 @@ fn latest_soracloud_audit_sequence(state_transaction: &StateTransaction<'_, '_>)
     .max()
     .unwrap_or(0)
 }
-pub(crate) fn next_soracloud_audit_sequence(state_transaction: &StateTransaction<'_, '_>) -> u64 {
-    latest_soracloud_audit_sequence(state_transaction).saturating_add(1)
-}
-fn next_unique_soracloud_audit_sequence(
+pub(crate) fn next_soracloud_audit_sequence(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<u64, InstructionExecutionError> {
     latest_soracloud_audit_sequence(state_transaction)
@@ -4843,31 +4808,34 @@ fn next_unique_soracloud_audit_sequence(
         })
 }
 fn parse_training_model_name(model_name: &str) -> Result<String, InstructionExecutionError> {
-    let normalized = model_name.trim();
-    let parsed: iroha_data_model::name::Name = normalized
+    let parsed: iroha_data_model::name::Name = model_name
         .parse()
         .map_err(|err| invalid_parameter(format!("invalid model_name: {err}")))?;
-    Ok(parsed.to_string())
+    if parsed.as_ref() != model_name {
+        return Err(invalid_parameter(
+            "model_name must use its exact canonical Name representation",
+        ));
+    }
+    Ok(model_name.to_owned())
 }
 fn parse_training_job_id(job_id: &str) -> Result<String, InstructionExecutionError> {
-    let normalized = job_id.trim();
-    if normalized.is_empty() {
+    if job_id.is_empty() {
         return Err(invalid_parameter("job_id must not be empty"));
     }
-    if normalized.len() > TRAINING_MAX_IDENTIFIER_BYTES {
+    if job_id.len() > TRAINING_MAX_IDENTIFIER_BYTES {
         return Err(invalid_parameter(format!(
             "job_id exceeds max bytes ({TRAINING_MAX_IDENTIFIER_BYTES})"
         )));
     }
-    if normalized.chars().any(char::is_control) {
+    if job_id.chars().any(char::is_control) {
         return Err(invalid_parameter(
             "job_id must not contain control characters",
         ));
     }
-    if normalized.chars().any(|ch| ch.is_ascii_whitespace()) {
+    if job_id.chars().any(|ch| ch.is_ascii_whitespace()) {
         return Err(invalid_parameter("job_id must not contain whitespace"));
     }
-    if !normalized
+    if !job_id
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '#'))
     {
@@ -4875,29 +4843,28 @@ fn parse_training_job_id(job_id: &str) -> Result<String, InstructionExecutionErr
             "job_id must use only ASCII letters, digits, or [- _ . : #]",
         ));
     }
-    Ok(normalized.to_owned())
+    Ok(job_id.to_owned())
 }
 fn parse_model_weight_version(weight_version: &str) -> Result<String, InstructionExecutionError> {
-    let normalized = weight_version.trim();
-    if normalized.is_empty() {
+    if weight_version.is_empty() {
         return Err(invalid_parameter("weight_version must not be empty"));
     }
-    if normalized.len() > TRAINING_MAX_IDENTIFIER_BYTES {
+    if weight_version.len() > TRAINING_MAX_IDENTIFIER_BYTES {
         return Err(invalid_parameter(format!(
             "weight_version exceeds max bytes ({TRAINING_MAX_IDENTIFIER_BYTES})"
         )));
     }
-    if normalized.chars().any(char::is_control) {
+    if weight_version.chars().any(char::is_control) {
         return Err(invalid_parameter(
             "weight_version must not contain control characters",
         ));
     }
-    if normalized.chars().any(|ch| ch.is_ascii_whitespace()) {
+    if weight_version.chars().any(|ch| ch.is_ascii_whitespace()) {
         return Err(invalid_parameter(
             "weight_version must not contain whitespace",
         ));
     }
-    if !normalized
+    if !weight_version
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '#'))
     {
@@ -4905,24 +4872,28 @@ fn parse_model_weight_version(weight_version: &str) -> Result<String, Instructio
             "weight_version must use only ASCII letters, digits, or [- _ . : #]",
         ));
     }
-    Ok(normalized.to_owned())
+    Ok(weight_version.to_owned())
 }
 fn parse_model_weight_dataset_ref(dataset_ref: &str) -> Result<String, InstructionExecutionError> {
-    let normalized = dataset_ref.trim();
-    if normalized.is_empty() {
+    if dataset_ref.is_empty() {
         return Err(invalid_parameter("dataset_ref must not be empty"));
     }
-    if normalized.len() > MODEL_WEIGHT_MAX_DATASET_REF_BYTES {
+    if dataset_ref.trim() != dataset_ref {
+        return Err(invalid_parameter(
+            "dataset_ref must not contain surrounding whitespace",
+        ));
+    }
+    if dataset_ref.len() > MODEL_WEIGHT_MAX_DATASET_REF_BYTES {
         return Err(invalid_parameter(format!(
             "dataset_ref exceeds max bytes ({MODEL_WEIGHT_MAX_DATASET_REF_BYTES})"
         )));
     }
-    if normalized.chars().any(char::is_control) {
+    if dataset_ref.chars().any(char::is_control) {
         return Err(invalid_parameter(
             "dataset_ref must not contain control characters",
         ));
     }
-    Ok(normalized.to_owned())
+    Ok(dataset_ref.to_owned())
 }
 fn parse_uploaded_model_id(model_id: &str) -> Result<String, InstructionExecutionError> {
     parse_training_job_id(model_id).map_err(|_| invalid_parameter("invalid model_id"))
@@ -4988,90 +4959,90 @@ fn require_active_sorafs_uploaded_model_pin(
     }
     Ok(())
 }
-fn normalize_training_reason(reason: &str) -> Result<String, InstructionExecutionError> {
-    let normalized = reason.trim();
-    if normalized.is_empty() {
+fn validate_training_reason(reason: &str) -> Result<String, InstructionExecutionError> {
+    if reason.trim().is_empty() {
         return Err(invalid_parameter("reason must not be empty"));
     }
-    if normalized.len() > TRAINING_MAX_REASON_BYTES {
+    if reason.len() > TRAINING_MAX_REASON_BYTES {
         return Err(invalid_parameter(format!(
             "reason exceeds max bytes ({TRAINING_MAX_REASON_BYTES})"
         )));
     }
-    if normalized.chars().any(char::is_control) {
+    if reason.chars().any(char::is_control) {
         return Err(invalid_parameter(
             "reason must not contain control characters",
         ));
     }
-    Ok(normalized.to_owned())
+    Ok(reason.to_owned())
 }
-fn normalize_model_weight_reason(reason: &str) -> Result<String, InstructionExecutionError> {
-    let normalized = reason.trim();
-    if normalized.is_empty() {
+fn validate_model_weight_reason(reason: &str) -> Result<String, InstructionExecutionError> {
+    if reason.trim().is_empty() {
         return Err(invalid_parameter("reason must not be empty"));
     }
-    if normalized.len() > MODEL_WEIGHT_MAX_REASON_BYTES {
+    if reason.len() > MODEL_WEIGHT_MAX_REASON_BYTES {
         return Err(invalid_parameter(format!(
             "reason exceeds max bytes ({MODEL_WEIGHT_MAX_REASON_BYTES})"
         )));
     }
-    if normalized.chars().any(char::is_control) {
+    if reason.chars().any(char::is_control) {
         return Err(invalid_parameter(
             "reason must not contain control characters",
         ));
     }
-    Ok(normalized.to_owned())
+    Ok(reason.to_owned())
 }
-fn normalize_model_host_violation_detail(
+fn validate_model_host_violation_detail(
     detail: Option<String>,
 ) -> Result<Option<String>, InstructionExecutionError> {
     detail
         .map(|detail| {
-            let normalized = detail.trim();
-            if normalized.is_empty() {
+            if detail.trim().is_empty() {
                 return Err(invalid_parameter("detail must not be empty"));
             }
-            if normalized.len() > MODEL_HOST_VIOLATION_MAX_DETAIL_BYTES {
+            if detail.len() > MODEL_HOST_VIOLATION_MAX_DETAIL_BYTES {
                 return Err(invalid_parameter(format!(
                     "detail exceeds max bytes ({MODEL_HOST_VIOLATION_MAX_DETAIL_BYTES})"
                 )));
             }
-            if normalized.chars().any(char::is_control) {
+            if detail.chars().any(char::is_control) {
                 return Err(invalid_parameter(
                     "detail must not contain control characters",
                 ));
             }
-            Ok(normalized.to_owned())
+            Ok(detail)
         })
         .transpose()
 }
 fn parse_agent_capability_name(capability: &str) -> Result<String, InstructionExecutionError> {
-    let normalized: Name = capability
-        .trim()
+    let parsed: Name = capability
         .parse()
         .map_err(|err| invalid_parameter(format!("invalid capability: {err}")))?;
-    Ok(normalized.to_string())
+    if parsed.as_ref() != capability {
+        return Err(invalid_parameter(
+            "capability must use its exact canonical Name representation",
+        ));
+    }
+    Ok(capability.to_owned())
 }
-fn normalize_hf_token(
+fn parse_exact_hf_token(
     field_name: &'static str,
     value: &str,
     max_bytes: usize,
 ) -> Result<String, InstructionExecutionError> {
-    let normalized = value.trim();
-    if normalized.is_empty() {
+    if value.is_empty() {
         return Err(invalid_parameter(format!("{field_name} must not be empty")));
     }
-    if normalized.len() > max_bytes {
+    if value.len() > max_bytes {
         return Err(invalid_parameter(format!(
             "{field_name} exceeds max bytes ({max_bytes})"
         )));
     }
-    if normalized.chars().any(char::is_control) || normalized.chars().any(char::is_whitespace) {
+    if value.chars().any(char::is_control) || value.chars().any(char::is_whitespace) {
         return Err(invalid_parameter(format!(
             "{field_name} must not contain control characters or whitespace"
         )));
     }
-    Ok(normalized.to_owned())
+    Ok(value.to_owned())
 }
 fn parse_hf_repo_id(repo_id: &str) -> Result<String, InstructionExecutionError> {
     if !is_canonical_hf_repo_id_v1(repo_id) {
@@ -5090,7 +5061,7 @@ fn parse_hf_revision(revision: &str) -> Result<String, InstructionExecutionError
     Ok(revision.to_owned())
 }
 fn parse_hf_model_name(model_name: &str) -> Result<String, InstructionExecutionError> {
-    normalize_hf_token("model_name", model_name, HF_MODEL_NAME_MAX_BYTES)
+    parse_exact_hf_token("model_name", model_name, HF_MODEL_NAME_MAX_BYTES)
 }
 fn verify_provenance_payload(
     authority: &AccountId,
@@ -5106,25 +5077,76 @@ fn verify_provenance_payload(
         .map_err(|_| invalid_parameter(verification_failed))?;
     Ok(())
 }
-fn normalize_agent_hash_like(
+fn validate_agent_reason(reason: &str) -> Result<String, InstructionExecutionError> {
+    if reason.trim().is_empty() {
+        return Err(invalid_parameter("reason must not be empty"));
+    }
+    Ok(reason.to_owned())
+}
+fn validate_optional_agent_reason(
+    reason: Option<&str>,
+) -> Result<Option<String>, InstructionExecutionError> {
+    reason.map(validate_agent_reason).transpose()
+}
+fn parse_agent_mailbox_channel(channel: &str) -> Result<String, InstructionExecutionError> {
+    if channel.is_empty() {
+        return Err(invalid_parameter("channel must not be empty"));
+    }
+    if channel.trim() != channel {
+        return Err(invalid_parameter(
+            "channel must not contain surrounding whitespace",
+        ));
+    }
+    if channel.chars().any(char::is_control) {
+        return Err(invalid_parameter(
+            "channel must not contain control characters",
+        ));
+    }
+    Ok(channel.to_owned())
+}
+fn validate_agent_mailbox_payload(payload: &str) -> Result<String, InstructionExecutionError> {
+    if payload.trim().is_empty() {
+        return Err(invalid_parameter("payload must not be empty"));
+    }
+    if payload.len() > AGENT_MAILBOX_MAX_PAYLOAD_BYTES {
+        return Err(invalid_parameter(format!(
+            "payload exceeds max mailbox payload bytes ({AGENT_MAILBOX_MAX_PAYLOAD_BYTES})"
+        )));
+    }
+    Ok(payload.to_owned())
+}
+fn parse_agent_record_id(
     field_name: &'static str,
     value: &str,
 ) -> Result<String, InstructionExecutionError> {
-    let normalized = value.trim();
-    if normalized.is_empty() {
+    if value.is_empty() {
         return Err(invalid_parameter(format!("{field_name} must not be empty")));
     }
-    if normalized.len() > AGENT_AUTONOMY_MAX_HASH_BYTES {
+    if value.chars().any(char::is_control) || value.chars().any(char::is_whitespace) {
+        return Err(invalid_parameter(format!(
+            "{field_name} must not contain control characters or whitespace"
+        )));
+    }
+    Ok(value.to_owned())
+}
+fn parse_agent_hash_like(
+    field_name: &'static str,
+    value: &str,
+) -> Result<String, InstructionExecutionError> {
+    if value.is_empty() {
+        return Err(invalid_parameter(format!("{field_name} must not be empty")));
+    }
+    if value.len() > AGENT_AUTONOMY_MAX_HASH_BYTES {
         return Err(invalid_parameter(format!(
             "{field_name} exceeds max bytes ({AGENT_AUTONOMY_MAX_HASH_BYTES})"
         )));
     }
-    if normalized.chars().any(|ch| ch.is_ascii_whitespace()) {
+    if value.chars().any(|ch| ch.is_ascii_whitespace()) {
         return Err(invalid_parameter(format!(
             "{field_name} must not contain whitespace"
         )));
     }
-    if !normalized
+    if !value
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ':' | '-' | '_' | '.' | '#'))
     {
@@ -5132,64 +5154,68 @@ fn normalize_agent_hash_like(
             "{field_name} must use only ASCII letters, digits, or [: - _ . #]"
         )));
     }
-    Ok(normalized.to_owned())
+    Ok(value.to_owned())
 }
-fn normalize_optional_agent_hash_like(
+fn parse_optional_agent_hash_like(
     field_name: &'static str,
     value: Option<&str>,
 ) -> Result<Option<String>, InstructionExecutionError> {
     value
-        .map(|value| normalize_agent_hash_like(field_name, value))
+        .map(|value| parse_agent_hash_like(field_name, value))
         .transpose()
 }
-fn normalize_agent_run_label(run_label: &str) -> Result<String, InstructionExecutionError> {
-    let normalized = run_label.trim();
-    if normalized.is_empty() {
+fn parse_agent_run_label(run_label: &str) -> Result<String, InstructionExecutionError> {
+    if run_label.is_empty() {
         return Err(invalid_parameter("run_label must not be empty"));
     }
-    if normalized.len() > AGENT_AUTONOMY_MAX_LABEL_BYTES {
+    if run_label.trim() != run_label {
+        return Err(invalid_parameter(
+            "run_label must not contain surrounding whitespace",
+        ));
+    }
+    if run_label.len() > AGENT_AUTONOMY_MAX_LABEL_BYTES {
         return Err(invalid_parameter(format!(
             "run_label exceeds max bytes ({AGENT_AUTONOMY_MAX_LABEL_BYTES})"
         )));
     }
-    if normalized.chars().any(char::is_control) {
+    if run_label.chars().any(char::is_control) {
         return Err(invalid_parameter(
             "run_label must not contain control characters",
         ));
     }
-    Ok(normalized.to_owned())
+    Ok(run_label.to_owned())
 }
-fn normalize_optional_agent_workflow_input_json(
+fn parse_optional_agent_workflow_input_json(
     workflow_input_json: Option<&str>,
 ) -> Result<Option<String>, InstructionExecutionError> {
     let Some(workflow_input_json) = workflow_input_json else {
         return Ok(None);
     };
-    let normalized = workflow_input_json.trim();
-    if normalized.is_empty() {
+    if workflow_input_json.is_empty() {
         return Err(invalid_parameter(
             "workflow_input_json must not be empty when provided",
         ));
     }
-    if normalized.len() > AGENT_AUTONOMY_MAX_REQUEST_BYTES {
+    if workflow_input_json.len() > AGENT_AUTONOMY_MAX_REQUEST_BYTES {
         return Err(invalid_parameter(format!(
             "workflow_input_json exceeds max bytes ({AGENT_AUTONOMY_MAX_REQUEST_BYTES})"
         )));
     }
-    let parsed = norito::json::from_str::<norito::json::Value>(normalized).map_err(|error| {
-        invalid_parameter(format!("workflow_input_json must be valid JSON: {error}"))
-    })?;
+    let parsed =
+        norito::json::from_str::<norito::json::Value>(workflow_input_json).map_err(|error| {
+            invalid_parameter(format!("workflow_input_json must be valid JSON: {error}"))
+        })?;
     let canonical = norito::json::to_json(&parsed).map_err(|error| {
         invalid_parameter(format!(
             "workflow_input_json canonicalization failed: {error}"
         ))
     })?;
-    if canonical.len() > AGENT_AUTONOMY_MAX_REQUEST_BYTES {
-        return Err(invalid_parameter(format!(
-            "workflow_input_json exceeds max bytes ({AGENT_AUTONOMY_MAX_REQUEST_BYTES}) after canonicalization"
-        )));
+    if canonical != workflow_input_json {
+        return Err(invalid_parameter(
+            "workflow_input_json must equal its canonical Norito JSON serialization",
+        ));
     }
-    Ok(Some(canonical))
+    Ok(Some(workflow_input_json.to_owned()))
 }
 fn agent_policy_capability_active(record: &SoraAgentApartmentRecordV1, capability: &str) -> bool {
     let declared = record
@@ -5477,6 +5503,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
     reporting_epoch: u64,
     active_service_version: String,
     replica_slot: u16,
+    placement_incarnation: Hash,
     replica_accounted_egress_bytes: u64,
     finalize_reporter: bool,
     reporter_has_active_assignment: bool,
@@ -5508,8 +5535,30 @@ pub(crate) fn write_soracloud_service_lease_usage(
             .into(),
         ));
     }
-    let accounted_storage_bytes = deployment.accounted_storage_bytes();
-    let current_sequence = next_soracloud_audit_sequence(state_transaction);
+    let current_height = state_transaction.block_height();
+    let accounted_storage_bytes = deployment.accounted_storage_bytes().map_err(|error| {
+        invalid_quantity_arithmetic(
+            "failed to calculate replica-multiplied hosted-service storage usage",
+            error,
+        )
+    })?;
+    if reporter_has_active_assignment
+        && !deployment
+            .hosted_service_lease_active_at(current_height)
+            .map_err(|error| {
+                invalid_quantity_arithmetic(
+                    "failed to calculate hosted-service lease status before usage update",
+                    error,
+                )
+            })?
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "service `{service_name}` cannot accept active-replica usage outside an active economic lease"
+            )
+            .into(),
+        ));
+    }
     let mut reporting_epoch_rollover = None;
     let lease = deployment.service_lease.as_mut().ok_or_else(|| {
         InstructionExecutionError::InvariantViolation(
@@ -5524,6 +5573,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
                 checkpoint.reporting_epoch == reporting_epoch
                     && checkpoint.active_service_version == active_service_version
                     && checkpoint.replica_slot == replica_slot
+                    && checkpoint.placement_incarnation == placement_incarnation
                     && checkpoint.validator_account_id == *reporter
             })
         {
@@ -5540,14 +5590,18 @@ pub(crate) fn write_soracloud_service_lease_usage(
                     )));
                 }
                 if checkpoint.finalize_reporter {
-                    if replica_accounted_egress_bytes == checkpoint.accounted_egress_bytes {
-                        return Ok(());
-                    }
                     return Err(invalid_parameter(format!(
                         "former reporter `{reporter}` for service `{service_name}` revision `{active_service_version}` replica {replica_slot} is already finalized at {} bytes",
                         checkpoint.accounted_egress_bytes
                     )));
                 }
+            }
+            if replica_accounted_egress_bytes == checkpoint.accounted_egress_bytes
+                && finalize_reporter == checkpoint.finalize_reporter
+            {
+                return Err(invalid_parameter(format!(
+                    "service `{service_name}` revision `{active_service_version}` replica {replica_slot} reporter `{reporter}` submitted a no-op egress checkpoint"
+                )));
             }
             checkpoint.accounted_egress_bytes = replica_accounted_egress_bytes;
             checkpoint.finalize_reporter = finalize_reporter;
@@ -5575,6 +5629,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
                     reporting_epoch,
                     active_service_version: active_service_version.clone(),
                     replica_slot,
+                    placement_incarnation,
                     validator_account_id: reporter.clone(),
                     accounted_egress_bytes: 0,
                     finalize_reporter: false,
@@ -5627,6 +5682,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
             )
             .is_some_and(|assignment| {
                 assignment.validator_account_id == checkpoint.validator_account_id
+                    && assignment.placement_incarnation == checkpoint.placement_incarnation
             })
         }) {
             return Err(invalid_parameter(
@@ -5658,12 +5714,14 @@ pub(crate) fn write_soracloud_service_lease_usage(
             })?;
         reporting_epoch_rollover = Some(SoraServiceLeaseReportingEpochRolloverV1 {
             schema_version: SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1,
-            lease_started_sequence: lease.lease_started_sequence,
+            economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+            lease_started_height: lease.lease_started_height,
             previous_reporting_epoch: lease.reporting_epoch,
             new_reporting_epoch: successor_epoch,
             reporter_account_id: reporter.clone(),
             active_service_version: active_service_version.clone(),
             replica_slot,
+            placement_incarnation,
             finalized_checkpoint_count: u32::try_from(
                 SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
             )
@@ -5680,6 +5738,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
                 reporting_epoch: successor_epoch,
                 active_service_version: active_service_version.clone(),
                 replica_slot,
+                placement_incarnation,
                 validator_account_id: reporter.clone(),
                 accounted_egress_bytes: 0,
                 finalize_reporter: false,
@@ -5690,12 +5749,14 @@ pub(crate) fn write_soracloud_service_lease_usage(
             left.reporting_epoch,
             left.active_service_version.as_str(),
             left.replica_slot,
+            left.placement_incarnation,
             &left.validator_account_id,
         )
             .cmp(&(
                 right.reporting_epoch,
                 right.active_service_version.as_str(),
                 right.replica_slot,
+                right.placement_incarnation,
                 &right.validator_account_id,
             ))
     });
@@ -5703,7 +5764,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
         .refresh_accounted_egress_bytes()
         .map_err(|error| invalid_parameter(error.to_string()))?;
     match lease
-        .status_at(current_sequence, accounted_storage_bytes)
+        .status_at(current_height, accounted_storage_bytes)
         .map_err(|error| {
             invalid_quantity_arithmetic(
                 "failed to calculate hosted-service lease status after usage update",
@@ -5727,7 +5788,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
         SoraServiceLeaseStatusV1::Suspended => {}
     }
     let audit_event = if let Some(rollover) = reporting_epoch_rollover {
-        let sequence = next_unique_soracloud_audit_sequence(state_transaction)?;
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         Some(SoraServiceAuditEventV1 {
             schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
             sequence,
@@ -5755,6 +5816,11 @@ pub(crate) fn write_soracloud_service_lease_usage(
     } else {
         None
     };
+    if let Some(audit_event) = audit_event.as_ref() {
+        audit_event
+            .validate()
+            .map_err(|error| invalid_parameter(error.to_string()))?;
+    }
     record_deployment_state(state_transaction, deployment)?;
     if let Some(audit_event) = audit_event {
         record_audit_event(state_transaction, audit_event)?;
@@ -5867,73 +5933,6 @@ pub(crate) fn write_soracloud_runtime_receipt(
     state_transaction
         .world
         .soracloud_runtime_receipts
-        .insert(receipt.receipt_id, receipt);
-    Ok(())
-}
-pub(crate) fn write_soracloud_private_uploaded_model_execution_receipt(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    receipt: SoraPrivateUploadedModelExecutionReceiptV1,
-) -> Result<(), InstructionExecutionError> {
-    receipt
-        .validate()
-        .map_err(|err| invalid_parameter(err.to_string()))?;
-    if state_transaction
-        .world
-        .soracloud_private_uploaded_model_execution_receipts
-        .get(&receipt.receipt_id)
-        .is_some()
-    {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "Soracloud private uploaded-model execution receipt `{}` has already been recorded",
-                receipt.receipt_id
-            )
-            .into(),
-        ));
-    }
-    let Some(bundle) = state_transaction
-        .world
-        .soracloud_uploaded_model_bundles
-        .get(&(
-            receipt.service_name.as_ref().to_owned(),
-            receipt.model_id.clone(),
-            receipt.weight_version.clone(),
-        ))
-    else {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "uploaded model `{}` version `{}` for service `{}` has not been finalized",
-                receipt.model_id, receipt.weight_version, receipt.service_name
-            )
-            .into(),
-        ));
-    };
-    if bundle.runtime_format
-        != iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1
-    {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "private receipt `{}` targets uploaded model `{}` version `{}` with a non-deterministic private runtime format",
-                receipt.receipt_id, receipt.model_id, receipt.weight_version
-            )
-            .into(),
-        ));
-    }
-    if bundle.sorafs_manifest_digest != receipt.model_manifest_digest
-        || bundle.bundle_root != receipt.model_bundle_root
-        || bundle.decryption_policy_ref != receipt.policy_id
-    {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "private receipt `{}` does not match finalized uploaded model `{}` version `{}`",
-                receipt.receipt_id, receipt.model_id, receipt.weight_version
-            )
-            .into(),
-        ));
-    }
-    state_transaction
-        .world
-        .soracloud_private_uploaded_model_execution_receipts
         .insert(receipt.receipt_id, receipt);
     Ok(())
 }
@@ -6154,8 +6153,25 @@ fn record_deployment_state(
     state_transaction: &mut StateTransaction<'_, '_>,
     state: SoraServiceDeploymentStateV1,
 ) -> Result<(), InstructionExecutionError> {
+    let active_revision_key = (
+        state.service_name.as_ref().to_owned(),
+        state.current_service_version.clone(),
+    );
+    let active_bundle = state_transaction
+        .world
+        .soracloud_service_revisions
+        .get(&active_revision_key)
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "service `{}` active revision `{}` is missing from admitted bundle state",
+                    state.service_name, state.current_service_version
+                )
+                .into(),
+            )
+        })?;
     state
-        .validate()
+        .validate_against_active_bundle(active_bundle)
         .map_err(|err| invalid_parameter(err.to_string()))?;
     state_transaction
         .world
@@ -6192,7 +6208,7 @@ fn record_app_infra_state(
 fn build_http_service_lease_state(
     bundle: &SoraDeploymentBundleV1,
     existing: Option<&SoraServiceDeploymentStateV1>,
-    sequence: u64,
+    current_height: u64,
     extend_terms: bool,
 ) -> Result<Option<SoraServiceLeaseStateV1>, InstructionExecutionError> {
     if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService {
@@ -6201,8 +6217,8 @@ fn build_http_service_lease_state(
     let economics = &bundle.service.economics;
     let existing_lease = existing.and_then(|deployment| deployment.service_lease.as_ref());
     if let Some(lease) = existing_lease
-        && (lease.runtime_price_per_sequence != economics.runtime_price_per_sequence
-            || lease.storage_price_per_gib_sequence != economics.storage_price_per_gib_sequence
+        && (lease.runtime_price_per_block != economics.runtime_price_per_block
+            || lease.storage_price_per_gib_block != economics.storage_price_per_gib_block
             || lease.egress_price_per_mib != economics.egress_price_per_mib)
     {
         return Err(invalid_parameter(
@@ -6232,50 +6248,52 @@ fn build_http_service_lease_state(
         Some(lease) => lease.prepaid_runtime_balance.clone(),
         None => economics.prepaid_runtime_balance.clone(),
     };
-    let lease_started_sequence =
-        existing_lease.map_or(sequence, |lease| lease.lease_started_sequence);
-    let lease_expires_sequence = match existing_lease {
+    let lease_started_height =
+        existing_lease.map_or(current_height, |lease| lease.lease_started_height);
+    let lease_expires_height = match existing_lease {
         Some(lease) if extend_terms => lease
-            .lease_expires_sequence
-            .max(sequence)
-            .checked_add(economics.lease_duration_sequences.get())
+            .lease_expires_height
+            .max(current_height)
+            .checked_add(economics.lease_duration_blocks.get())
             .ok_or_else(|| {
-                invalid_parameter("hosted-service lease expiry sequence overflow while extending")
+                invalid_parameter("hosted-service lease expiry height overflow while extending")
             })?,
-        Some(lease) => lease.lease_expires_sequence,
-        None => sequence
-            .checked_add(economics.lease_duration_sequences.get())
-            .ok_or_else(|| invalid_parameter("hosted-service lease expiry sequence overflow"))?,
+        Some(lease) => lease.lease_expires_height,
+        None => current_height
+            .checked_add(economics.lease_duration_blocks.get())
+            .ok_or_else(|| invalid_parameter("hosted-service lease expiry height overflow"))?,
     };
     let existing_status =
         existing_lease.map_or(SoraServiceLeaseStatusV1::Active, |lease| lease.status);
     let status = if existing_status == SoraServiceLeaseStatusV1::Suspended {
         SoraServiceLeaseStatusV1::Suspended
-    } else if sequence >= lease_expires_sequence {
+    } else if current_height >= lease_expires_height {
         SoraServiceLeaseStatusV1::Expired
     } else {
         SoraServiceLeaseStatusV1::Active
     };
     Ok(Some(SoraServiceLeaseStateV1 {
         schema_version: SORA_SERVICE_LEASE_STATE_VERSION_V1,
+        economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
         status,
         quota_class,
+        replica_count: bundle.service.replicas,
         deployment_deposit,
         prepaid_runtime_balance,
-        runtime_price_per_sequence: existing_lease.map_or_else(
-            || economics.runtime_price_per_sequence.clone(),
-            |lease| lease.runtime_price_per_sequence.clone(),
+        runtime_price_per_block: existing_lease.map_or_else(
+            || economics.runtime_price_per_block.clone(),
+            |lease| lease.runtime_price_per_block.clone(),
         ),
-        storage_price_per_gib_sequence: existing_lease.map_or_else(
-            || economics.storage_price_per_gib_sequence.clone(),
-            |lease| lease.storage_price_per_gib_sequence.clone(),
+        storage_price_per_gib_block: existing_lease.map_or_else(
+            || economics.storage_price_per_gib_block.clone(),
+            |lease| lease.storage_price_per_gib_block.clone(),
         ),
         egress_price_per_mib: existing_lease.map_or_else(
             || economics.egress_price_per_mib.clone(),
             |lease| lease.egress_price_per_mib.clone(),
         ),
-        lease_started_sequence,
-        lease_expires_sequence,
+        lease_started_height,
+        lease_expires_height,
         reporting_epoch: existing_lease.map_or(1, |lease| lease.reporting_epoch),
         settled_egress_bytes: existing_lease.map_or(0, |lease| lease.settled_egress_bytes),
         egress_reporter_checkpoints: existing_lease
@@ -6284,16 +6302,26 @@ fn build_http_service_lease_state(
         last_status_reason: existing_lease.and_then(|lease| lease.last_status_reason.clone()),
     }))
 }
+fn checked_hosted_service_generation(
+    current: u64,
+    field: &'static str,
+) -> Result<u64, InstructionExecutionError> {
+    current.checked_add(1).ok_or_else(|| {
+        InstructionExecutionError::InvariantViolation(
+            format!("hosted-service {field} generation space is exhausted").into(),
+        )
+    })
+}
 fn build_http_service_lease_volume_states(
     bundle: &SoraDeploymentBundleV1,
     lease_state: Option<&SoraServiceLeaseStateV1>,
     existing: Option<&SoraServiceDeploymentStateV1>,
-) -> Vec<SoraServiceLeaseVolumeStateV1> {
+) -> Result<Vec<SoraServiceLeaseVolumeStateV1>, InstructionExecutionError> {
     if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let Some(lease_state) = lease_state else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     bundle
         .service
@@ -6312,25 +6340,32 @@ fn build_http_service_lease_volume_states(
                     && state.mount_path == volume.mount_path
                     && state.max_total_bytes == volume.max_total_bytes.get()
             });
-            SoraServiceLeaseVolumeStateV1 {
+            let authoritative_generation = match existing_state {
+                Some(state) if unchanged => state.authoritative_generation,
+                Some(state) => state
+                    .authoritative_generation
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "hosted-service lease-volume generation space is exhausted".into(),
+                        )
+                    })?,
+                None => 1,
+            };
+            Ok(SoraServiceLeaseVolumeStateV1 {
                 schema_version: SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1,
+                economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
                 volume_name: volume.volume_name.clone(),
                 kind: volume.kind,
                 storage_class: volume.storage_class,
                 mount_path: volume.mount_path.clone(),
                 max_total_bytes: volume.max_total_bytes.get(),
-                lease_started_sequence: lease_state.lease_started_sequence,
-                lease_expires_sequence: lease_state.lease_expires_sequence,
-                authoritative_generation: existing_state.map_or(1, |state| {
-                    if unchanged {
-                        state.authoritative_generation
-                    } else {
-                        state.authoritative_generation.saturating_add(1)
-                    }
-                }),
+                lease_started_height: lease_state.lease_started_height,
+                lease_expires_height: lease_state.lease_expires_height,
+                authoritative_generation,
                 last_materialized_sequence: existing_state
                     .and_then(|state| state.last_materialized_sequence),
-            }
+            })
         })
         .collect()
 }
@@ -6355,7 +6390,8 @@ fn apply_service_config_mutation(
                     last_update_sequence: sequence,
                 },
             );
-            deployment.config_generation = deployment.config_generation.saturating_add(1);
+            deployment.config_generation =
+                checked_hosted_service_generation(deployment.config_generation, "config")?;
         }
         None => {
             if deployment.service_configs.remove(config_name).is_none() {
@@ -6364,7 +6400,8 @@ fn apply_service_config_mutation(
                         .into(),
                 ));
             }
-            deployment.config_generation = deployment.config_generation.saturating_add(1);
+            deployment.config_generation =
+                checked_hosted_service_generation(deployment.config_generation, "config")?;
         }
     }
     bundle
@@ -6395,7 +6432,8 @@ fn apply_service_secret_mutation(
                     last_update_sequence: sequence,
                 },
             );
-            deployment.secret_generation = deployment.secret_generation.saturating_add(1);
+            deployment.secret_generation =
+                checked_hosted_service_generation(deployment.secret_generation, "secret")?;
         }
         None => {
             if deployment.service_secrets.remove(secret_name).is_none() {
@@ -6404,7 +6442,8 @@ fn apply_service_secret_mutation(
                         .into(),
                 ));
             }
-            deployment.secret_generation = deployment.secret_generation.saturating_add(1);
+            deployment.secret_generation =
+                checked_hosted_service_generation(deployment.secret_generation, "secret")?;
         }
     }
     bundle
@@ -6693,40 +6732,74 @@ struct InrouHostReservationUsage {
     memory_bytes: u64,
     storage_bytes: u64,
 }
-fn inrou_per_replica_storage_bytes(bundle: &SoraDeploymentBundleV1) -> u64 {
-    let per_replica_volume_bytes = bundle
+fn inrou_per_replica_storage_bytes(
+    bundle: &SoraDeploymentBundleV1,
+) -> Result<u64, InstructionExecutionError> {
+    bundle
         .service
         .lease_volumes
         .iter()
         .filter(|volume| volume.kind.is_per_replica())
-        .fold(0_u64, |total, volume| {
-            total.saturating_add(volume.max_total_bytes.get())
-        });
-    bundle
-        .container
-        .resources
-        .ephemeral_storage_bytes
-        .get()
-        .saturating_add(per_replica_volume_bytes)
+        .try_fold(
+            bundle.container.resources.ephemeral_storage_bytes.get(),
+            |total, volume| {
+                total
+                    .checked_add(volume.max_total_bytes.get())
+                    .ok_or_else(|| {
+                        invalid_parameter(
+                            "Inrou per-replica ephemeral and lease-volume storage exceeds u64",
+                        )
+                    })
+            },
+        )
+}
+fn checked_inrou_host_reservation_usage(
+    usage: InrouHostReservationUsage,
+    bundle: &SoraDeploymentBundleV1,
+) -> Result<InrouHostReservationUsage, InstructionExecutionError> {
+    Ok(InrouHostReservationUsage {
+        hosted_replicas: usage
+            .hosted_replicas
+            .checked_add(1)
+            .ok_or_else(|| invalid_parameter("Inrou host reserved replica count exceeds u16"))?,
+        cpu_millis: usage
+            .cpu_millis
+            .checked_add(
+                bundle
+                    .container
+                    .resources
+                    .checked_inrou_host_cpu_millis()
+                    .ok_or_else(|| invalid_parameter("Inrou physical CPU cost exceeds u64"))?,
+            )
+            .ok_or_else(|| invalid_parameter("Inrou host reserved CPU exceeds u64"))?,
+        memory_bytes: usage
+            .memory_bytes
+            .checked_add(
+                bundle
+                    .container
+                    .resources
+                    .checked_inrou_host_memory_bytes()
+                    .ok_or_else(|| invalid_parameter("Inrou physical memory cost exceeds u64"))?,
+            )
+            .ok_or_else(|| invalid_parameter("Inrou host reserved memory exceeds u64"))?,
+        storage_bytes: usage
+            .storage_bytes
+            .checked_add(inrou_per_replica_storage_bytes(bundle)?)
+            .ok_or_else(|| invalid_parameter("Inrou host reserved storage exceeds u64"))?,
+    })
 }
 fn accumulate_inrou_host_reservation_usage(
     usage_by_validator: &mut BTreeMap<AccountId, InrouHostReservationUsage>,
     validator_account_id: &AccountId,
     bundle: &SoraDeploymentBundleV1,
-) {
-    let usage = usage_by_validator
-        .entry(validator_account_id.clone())
-        .or_default();
-    usage.hosted_replicas = usage.hosted_replicas.saturating_add(1);
-    usage.cpu_millis = usage
-        .cpu_millis
-        .saturating_add(u64::from(bundle.container.resources.cpu_millis.get()));
-    usage.memory_bytes = usage
-        .memory_bytes
-        .saturating_add(bundle.container.resources.memory_bytes.get());
-    usage.storage_bytes = usage
-        .storage_bytes
-        .saturating_add(inrou_per_replica_storage_bytes(bundle));
+) -> Result<(), InstructionExecutionError> {
+    let current = usage_by_validator
+        .get(validator_account_id)
+        .copied()
+        .unwrap_or_default();
+    let next = checked_inrou_host_reservation_usage(current, bundle)?;
+    usage_by_validator.insert(validator_account_id.clone(), next);
+    Ok(())
 }
 fn select_inrou_guest_isa_for_host(
     capability: &SoraInrouHostCapabilityRecordV1,
@@ -6737,43 +6810,45 @@ fn select_inrou_guest_isa_for_host(
         .into_iter()
         .find(|guest_isa| {
             capability.supported_guest_isas.contains(guest_isa)
-                && inrou.guest_images.contains_key(guest_isa)
+                && inrou.guest_images.get(guest_isa).is_some_and(|image| {
+                    image.published_artifact == capability.trusted_guest_artifact
+                })
         })
+}
+fn inrou_host_reservation_usage_fits_capability(
+    capability: &SoraInrouHostCapabilityRecordV1,
+    usage: &InrouHostReservationUsage,
+    now_ms: u64,
+) -> bool {
+    capability.can_host_replicas_at(now_ms)
+        && usage.hosted_replicas <= capability.max_hosted_replica_capacity
+        && usage.cpu_millis <= u64::from(capability.max_cpu_millis)
+        && usage.memory_bytes <= capability.max_memory_bytes
+        && usage.storage_bytes <= capability.max_storage_bytes
 }
 fn inrou_host_supports_bundle(
     capability: &SoraInrouHostCapabilityRecordV1,
     bundle: &SoraDeploymentBundleV1,
     reserved_usage: Option<&InrouHostReservationUsage>,
     now_ms: u64,
-) -> Option<SoraInrouGuestIsaV1> {
+) -> Result<Option<SoraInrouGuestIsaV1>, InstructionExecutionError> {
     if !capability.can_host_replicas_at(now_ms) {
-        return None;
+        return Ok(None);
     }
     if bundle.container.runtime != iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou
         || bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
     {
-        return None;
+        return Ok(None);
     }
-    let selected_guest_isa = select_inrou_guest_isa_for_host(capability, bundle)?;
+    let Some(selected_guest_isa) = select_inrou_guest_isa_for_host(capability, bundle) else {
+        return Ok(None);
+    };
     let usage = reserved_usage.copied().unwrap_or_default();
-    let next_hosted_replicas = u32::from(usage.hosted_replicas).saturating_add(1);
-    let next_cpu_millis = usage
-        .cpu_millis
-        .saturating_add(u64::from(bundle.container.resources.cpu_millis.get()));
-    let next_memory_bytes = usage
-        .memory_bytes
-        .saturating_add(bundle.container.resources.memory_bytes.get());
-    let next_storage_bytes = usage
-        .storage_bytes
-        .saturating_add(inrou_per_replica_storage_bytes(bundle));
-    if next_hosted_replicas > u32::from(capability.max_hosted_replica_capacity)
-        || next_cpu_millis > u64::from(capability.max_cpu_millis)
-        || next_memory_bytes > capability.max_memory_bytes
-        || next_storage_bytes > capability.max_storage_bytes
-    {
-        return None;
+    let next = checked_inrou_host_reservation_usage(usage, bundle)?;
+    if !inrou_host_reservation_usage_fits_capability(capability, &next, now_ms) {
+        return Ok(None);
     }
-    Some(selected_guest_isa)
+    Ok(Some(selected_guest_isa))
 }
 fn inrou_replica_selection_digest(
     service_name: &Name,
@@ -6796,36 +6871,51 @@ fn select_inrou_replica_placement(
     service_version: &str,
     bundle: &SoraDeploymentBundleV1,
     replica_slot: u16,
+    lease_started_height: u64,
     reserved_usage_by_validator: &mut BTreeMap<AccountId, InrouHostReservationUsage>,
+    service_validator_accounts: &BTreeSet<AccountId>,
     now_ms: u64,
 ) -> Result<Option<SoraInrouReplicaPlacementV1>, InstructionExecutionError> {
-    let mut candidates = state_transaction
+    let mut candidates = Vec::new();
+    for (validator_account_id, capability) in state_transaction
         .world
         .soracloud_inrou_host_capabilities
         .iter()
-        .filter_map(|(validator_account_id, capability)| {
-            let selected_guest_isa = inrou_host_supports_bundle(
-                capability,
-                bundle,
-                reserved_usage_by_validator.get(validator_account_id),
-                now_ms,
-            )?;
-            Some((
-                validator_account_id.clone(),
-                capability.clone(),
-                selected_guest_isa,
-            ))
-        })
-        .map(|(validator_account_id, capability, selected_guest_isa)| {
-            inrou_replica_selection_digest(
-                service_name,
-                service_version,
-                replica_slot,
-                &validator_account_id,
-            )
-            .map(|digest| (validator_account_id, capability, selected_guest_isa, digest))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    {
+        if service_validator_accounts.contains(validator_account_id) {
+            continue;
+        }
+        if require_inrou_host_peer_binding(
+            validator_account_id,
+            &capability.peer_id,
+            state_transaction,
+        )
+        .is_err()
+        {
+            continue;
+        }
+        let Some(selected_guest_isa) = inrou_host_supports_bundle(
+            capability,
+            bundle,
+            reserved_usage_by_validator.get(validator_account_id),
+            now_ms,
+        )?
+        else {
+            continue;
+        };
+        let digest = inrou_replica_selection_digest(
+            service_name,
+            service_version,
+            replica_slot,
+            validator_account_id,
+        )?;
+        candidates.push((
+            validator_account_id.clone(),
+            capability.clone(),
+            selected_guest_isa,
+            digest,
+        ));
+    }
     candidates.sort_by(
         |(left_account, _, left_isa, left_digest), (right_account, _, right_isa, right_digest)| {
             right_digest
@@ -6839,77 +6929,117 @@ fn select_inrou_replica_placement(
     else {
         return Ok(None);
     };
+    // A canonical transaction identity is required only when reconciliation
+    // actually mints a new placement incarnation. No-candidate and
+    // retention-only passes must not mint an incarnation or require a hash.
+    let placement_transaction_hash = current_signed_transaction_hash(state_transaction)?;
     accumulate_inrou_host_reservation_usage(
         reserved_usage_by_validator,
         &validator_account_id,
         bundle,
-    );
+    )?;
+    let placement_incarnation = Hash::new(Encode::encode(&(
+        "soracloud.inrou.placement-incarnation.v1",
+        placement_transaction_hash,
+        service_name.clone(),
+        service_version.to_owned(),
+        lease_started_height,
+        replica_slot,
+        validator_account_id.clone(),
+        capability.peer_id.clone(),
+        selected_guest_isa,
+    )));
     Ok(Some(SoraInrouReplicaPlacementV1 {
         replica_slot,
+        economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+        lease_started_height,
+        placement_incarnation,
+        host_availability: SoraInrouReplicaHostAvailabilityV1::Available,
         validator_account_id,
         peer_id: capability.peer_id,
         selected_guest_isa,
-        selected_geography_tag: None,
-        selection_latency_ms: None,
     }))
 }
 fn active_inrou_service_versions(
     deployment: &SoraServiceDeploymentStateV1,
 ) -> Result<Vec<String>, InstructionExecutionError> {
-    let Some(rollout) = deployment.active_rollout.as_ref() else {
-        return Ok(vec![deployment.current_service_version.clone()]);
+    if deployment.active_rollout.is_some() {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "service `{}` carries an unsupported active Inrou canary; first-release host-local lease disks require one active revision",
+                deployment.service_name
+            )
+            .into(),
+        ));
+    }
+    Ok(vec![deployment.current_service_version.clone()])
+}
+#[derive(Clone)]
+struct ActiveInrouPlacementContext {
+    service_name: Name,
+    service_version: String,
+    bundle: SoraDeploymentBundleV1,
+    lease_started_height: u64,
+    previous_placements: BTreeMap<u16, SoraInrouReplicaPlacementV1>,
+}
+fn exact_inrou_placement_host_is_eligible(
+    state_transaction: &StateTransaction<'_, '_>,
+    placement: &SoraInrouReplicaPlacementV1,
+    bundle: &SoraDeploymentBundleV1,
+    aggregate_usage: &InrouHostReservationUsage,
+    now_ms: u64,
+) -> bool {
+    let Some(capability) = state_transaction
+        .world
+        .soracloud_inrou_host_capabilities
+        .get(&placement.validator_account_id)
+    else {
+        return false;
     };
-    if rollout.stage != SoraRolloutStageV1::Canary
-        || !(1..100).contains(&rollout.traffic_percent)
-        || rollout.candidate_version != deployment.current_service_version
-    {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "service `{}` carries an invalid active Inrou rollout",
-                deployment.service_name
-            )
-            .into(),
-        ));
-    }
-    let baseline_version = rollout.baseline_version.as_ref().ok_or_else(|| {
-        InstructionExecutionError::InvariantViolation(
-            format!(
-                "service `{}` active Inrou rollout has no baseline revision",
-                deployment.service_name
-            )
-            .into(),
+    bundle.container.runtime == iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou
+        && bundle.service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
+        && capability.peer_id == placement.peer_id
+        && inrou_host_reservation_usage_fits_capability(capability, aggregate_usage, now_ms)
+        && capability
+            .supported_guest_isas
+            .contains(&placement.selected_guest_isa)
+        && bundle.container.inrou.as_ref().is_some_and(|inrou| {
+            inrou
+                .guest_images
+                .contains_key(&placement.selected_guest_isa)
+        })
+        && require_inrou_host_peer_binding(
+            &placement.validator_account_id,
+            &placement.peer_id,
+            state_transaction,
         )
-    })?;
-    if baseline_version == &rollout.candidate_version {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "service `{}` active Inrou rollout uses the same baseline and candidate revision `{baseline_version}`",
-                deployment.service_name
-            )
-            .into(),
-        ));
-    }
-    Ok(vec![
-        deployment.current_service_version.clone(),
-        baseline_version.clone(),
-    ])
+        .is_ok()
+}
+fn retain_inrou_replica_placement_for_lease(
+    previous: Option<&SoraInrouReplicaPlacementV1>,
+    lease_started_height: u64,
+    host_availability: SoraInrouReplicaHostAvailabilityV1,
+) -> Option<SoraInrouReplicaPlacementV1> {
+    previous
+        .filter(|placement| placement.lease_started_height == lease_started_height)
+        .cloned()
+        .map(|mut placement| {
+            placement.host_availability = host_availability;
+            placement
+        })
 }
 fn reconcile_inrou_service_placements(
     state_transaction: &mut StateTransaction<'_, '_>,
     now_ms: u64,
 ) -> Result<(), InstructionExecutionError> {
-    let current_sequence = next_soracloud_audit_sequence(state_transaction);
+    let current_height = state_transaction.block_height();
     let deployment_keys = state_transaction
         .world
         .soracloud_service_deployments
         .iter()
         .map(|(service_name, _deployment)| service_name.clone())
         .collect::<Vec<_>>();
-    let mut desired_records =
-        BTreeMap::<(String, String), SoraInrouServicePlacementRecordV1>::new();
-    let mut desired_slots =
-        BTreeMap::<(String, String, String), SoraInrouReplicaPlacementV1>::new();
-    let mut reserved_usage_by_validator = BTreeMap::<AccountId, InrouHostReservationUsage>::new();
+    let mut active_contexts = Vec::<ActiveInrouPlacementContext>::new();
     for service_name in deployment_keys {
         let Some(deployment) = state_transaction
             .world
@@ -6920,7 +7050,7 @@ fn reconcile_inrou_service_placements(
             continue;
         };
         if !deployment
-            .hosted_service_lease_active_at(current_sequence)
+            .hosted_service_lease_active_at(current_height)
             .map_err(|error| {
                 invalid_quantity_arithmetic(
                     "failed to calculate hosted-service lease status during Inrou reconciliation",
@@ -6930,6 +7060,18 @@ fn reconcile_inrou_service_placements(
         {
             continue;
         }
+        let lease_started_height = deployment
+            .service_lease
+            .as_ref()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "active hosted service `{service_name}` has no authoritative lease incarnation"
+                    )
+                    .into(),
+                )
+            })?
+            .lease_started_height;
         for service_version in active_inrou_service_versions(&deployment)? {
             let bundle = load_admitted_bundle(state_transaction, &service_name, &service_version)?;
             if bundle.container.runtime
@@ -6938,38 +7080,133 @@ fn reconcile_inrou_service_placements(
             {
                 continue;
             }
-            let eligible_validator_count = u32::try_from(
-                state_transaction
-                    .world
-                    .soracloud_inrou_host_capabilities
-                    .iter()
-                    .filter(|(validator_account_id, capability)| {
-                        inrou_host_supports_bundle(
-                            capability,
-                            &bundle,
-                            reserved_usage_by_validator.get(validator_account_id),
-                            now_ms,
-                        )
-                        .is_some()
-                    })
-                    .count(),
+            let previous_placements = state_transaction
+                .world
+                .soracloud_inrou_service_placements
+                .get(&(service_name.as_ref().to_owned(), service_version.clone()))
+                .map(|record| {
+                    record
+                        .placements
+                        .iter()
+                        .cloned()
+                        .map(|placement| (placement.replica_slot, placement))
+                        .collect()
+                })
+                .unwrap_or_default();
+            active_contexts.push(ActiveInrouPlacementContext {
+                service_name: service_name.clone(),
+                service_version,
+                bundle,
+                lease_started_height,
+                previous_placements,
+            });
+        }
+    }
+
+    // Stateful Inrou replicas consume their exact original host for the whole lease, including
+    // while that host is unavailable. Reserving all retained assignments before selecting any new
+    // slots prevents a later service from losing its stateful host to deterministic iteration order.
+    let mut reserved_usage_by_validator = BTreeMap::<AccountId, InrouHostReservationUsage>::new();
+    let mut retained_available_slots = BTreeSet::<(String, String, u16)>::new();
+    for context in &active_contexts {
+        let desired_replica_count = context.bundle.service.replicas.get();
+        for placement in context.previous_placements.values().filter(|placement| {
+            placement.lease_started_height == context.lease_started_height
+                && placement.replica_slot <= desired_replica_count
+        }) {
+            accumulate_inrou_host_reservation_usage(
+                &mut reserved_usage_by_validator,
+                &placement.validator_account_id,
+                &context.bundle,
+            )?;
+        }
+    }
+    for context in &active_contexts {
+        let desired_replica_count = context.bundle.service.replicas.get();
+        for placement in context.previous_placements.values().filter(|placement| {
+            placement.lease_started_height == context.lease_started_height
+                && placement.replica_slot <= desired_replica_count
+        }) {
+            if reserved_usage_by_validator
+                .get(&placement.validator_account_id)
+                .is_some_and(|aggregate_usage| {
+                    exact_inrou_placement_host_is_eligible(
+                        state_transaction,
+                        placement,
+                        &context.bundle,
+                        aggregate_usage,
+                        now_ms,
+                    )
+                })
+            {
+                retained_available_slots.insert((
+                    context.service_name.as_ref().to_owned(),
+                    context.service_version.clone(),
+                    placement.replica_slot,
+                ));
+            }
+        }
+    }
+
+    let mut desired_records =
+        BTreeMap::<(String, String), SoraInrouServicePlacementRecordV1>::new();
+    let mut desired_slots =
+        BTreeMap::<(String, String, String), SoraInrouReplicaPlacementV1>::new();
+    for context in active_contexts {
+        let ActiveInrouPlacementContext {
+            service_name,
+            service_version,
+            bundle,
+            lease_started_height,
+            previous_placements,
+        } = context;
+        let mut eligible_validator_count = 0_usize;
+        for (validator_account_id, capability) in state_transaction
+            .world
+            .soracloud_inrou_host_capabilities
+            .iter()
+        {
+            if require_inrou_host_peer_binding(
+                validator_account_id,
+                &capability.peer_id,
+                state_transaction,
             )
-            .unwrap_or(u32::MAX);
-            let desired_replica_count = bundle.service.replicas.get();
-            let mut placements = Vec::with_capacity(usize::from(desired_replica_count));
-            for replica_slot in 1..=desired_replica_count {
-                let Some(placement) = select_inrou_replica_placement(
-                    state_transaction,
-                    &service_name,
-                    &service_version,
-                    &bundle,
-                    replica_slot,
-                    &mut reserved_usage_by_validator,
-                    now_ms,
-                )?
-                else {
-                    break;
-                };
+            .is_ok()
+                && inrou_host_supports_bundle(capability, &bundle, None, now_ms)?.is_some()
+            {
+                eligible_validator_count =
+                    eligible_validator_count.checked_add(1).ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "Inrou eligible-validator count exceeds usize".into(),
+                        )
+                    })?;
+            }
+        }
+        let eligible_validator_count = u32::try_from(eligible_validator_count).map_err(|_| {
+            InstructionExecutionError::InvariantViolation(
+                "Inrou eligible-validator count exceeds u32".into(),
+            )
+        })?;
+        let desired_replica_count = bundle.service.replicas.get();
+        let mut placements = Vec::with_capacity(usize::from(desired_replica_count));
+        let mut service_validator_accounts = BTreeSet::<AccountId>::new();
+        for replica_slot in 1..=desired_replica_count {
+            let slot_key = (
+                service_name.as_ref().to_owned(),
+                service_version.clone(),
+                replica_slot,
+            );
+            let host_availability = if retained_available_slots.contains(&slot_key) {
+                SoraInrouReplicaHostAvailabilityV1::Available
+            } else {
+                SoraInrouReplicaHostAvailabilityV1::Unavailable
+            };
+            if let Some(placement) = retain_inrou_replica_placement_for_lease(
+                previous_placements.get(&replica_slot),
+                lease_started_height,
+                host_availability,
+            ) {
+                service_validator_accounts.insert(placement.validator_account_id.clone());
                 desired_slots.insert(
                     inrou_replica_runtime_key(
                         &service_name,
@@ -6979,27 +7216,51 @@ fn reconcile_inrou_service_placements(
                     placement.clone(),
                 );
                 placements.push(placement);
+                continue;
             }
-            let last_error = (placements.len() < usize::from(desired_replica_count)).then(|| {
+            let Some(placement) = select_inrou_replica_placement(
+                state_transaction,
+                &service_name,
+                &service_version,
+                &bundle,
+                replica_slot,
+                lease_started_height,
+                &mut reserved_usage_by_validator,
+                &service_validator_accounts,
+                now_ms,
+            )?
+            else {
+                continue;
+            };
+            service_validator_accounts.insert(placement.validator_account_id.clone());
+            desired_slots.insert(
+                inrou_replica_runtime_key(&service_name, &service_version, placement.replica_slot),
+                placement.clone(),
+            );
+            placements.push(placement);
+        }
+        let available_placement_count = placements
+            .iter()
+            .filter(|placement| placement.host_availability.is_available())
+            .count();
+        let last_error =
+            (available_placement_count < usize::from(desired_replica_count)).then(|| {
                 format!(
-                    "placed {} of {} replicas using {} eligible validators",
-                    placements.len(),
-                    desired_replica_count,
-                    eligible_validator_count
+                    "{} of {} replica hosts are available using {} eligible validators",
+                    available_placement_count, desired_replica_count, eligible_validator_count
                 )
             });
-            let record = SoraInrouServicePlacementRecordV1 {
-                schema_version: SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
-                service_name: service_name.clone(),
-                service_version: service_version.clone(),
-                desired_replica_count,
-                eligible_validator_count,
-                placements,
-                reconciled_at_ms: now_ms.max(1),
-                last_error,
-            };
-            desired_records.insert((service_name.as_ref().to_owned(), service_version), record);
-        }
+        let record = SoraInrouServicePlacementRecordV1 {
+            schema_version: SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
+            service_name: service_name.clone(),
+            service_version: service_version.clone(),
+            desired_replica_count,
+            eligible_validator_count,
+            placements,
+            reconciled_at_ms: now_ms.max(1),
+            last_error,
+        };
+        desired_records.insert((service_name.as_ref().to_owned(), service_version), record);
     }
     let stale_placement_keys = state_transaction
         .world
@@ -7022,7 +7283,9 @@ fn reconcile_inrou_service_placements(
         .iter()
         .filter_map(|(key, state)| {
             let placement = desired_slots.get(key)?;
-            (state.validator_account_id != placement.validator_account_id
+            (!placement.host_availability.is_available()
+                || state.placement_incarnation != placement.placement_incarnation
+                || state.validator_account_id != placement.validator_account_id
                 || state.peer_id != placement.peer_id
                 || state.selected_guest_isa != placement.selected_guest_isa)
                 .then_some(key.clone())
@@ -7345,7 +7608,7 @@ fn report_model_host_violation(
     detail: Option<String>,
     observed_at_ms: u64,
 ) -> Result<(), InstructionExecutionError> {
-    let detail = normalize_model_host_violation_detail(detail)?;
+    let detail = validate_model_host_violation_detail(detail)?;
     let placement = placement_id
         .as_ref()
         .map(|placement_id| load_hf_placement_by_placement_id(state_transaction, placement_id))
@@ -7416,7 +7679,7 @@ fn report_model_host_violation(
                 .advert_contradiction_slash_bps
         }
     };
-    let sequence = next_soracloud_audit_sequence(state_transaction);
+    let sequence = next_soracloud_audit_sequence(state_transaction)?;
     let slash_id = if should_apply_penalty {
         let slash_id = model_host_violation_slash_id(
             validator_account_id,
@@ -7719,10 +7982,8 @@ fn hf_shared_lease_pool_id(
     storage_class: StorageClass,
     lease_term_ms: u64,
 ) -> Result<Hash, InstructionExecutionError> {
-    let payload = norito::to_bytes(&(source_id, storage_class, lease_term_ms)).map_err(|err| {
-        invalid_parameter(format!("failed to encode hf shared lease pool id: {err}"))
-    })?;
-    Ok(Hash::new(payload))
+    derive_hf_shared_lease_pool_id_v1(source_id, storage_class, lease_term_ms)
+        .map_err(|error| invalid_parameter(error.to_string()))
 }
 fn resolve_hf_resource_profile(
     source_record: &mut SoraHfSourceRecordV1,
@@ -7885,7 +8146,7 @@ fn hf_placement_seed_hash(
         source_id,
         pool_id,
         window_started_at_ms,
-        next_soracloud_audit_sequence(state_transaction),
+        next_soracloud_audit_sequence(state_transaction)?,
     ))
     .map_err(|err| invalid_parameter(format!("failed to encode hf placement seed: {err}")))?;
     Ok(Hash::new(payload))
@@ -8234,6 +8495,9 @@ fn resolve_fee_sink_account(
         &state_transaction.nexus.fees.fee_sink_account_id,
         state_transaction.block_unix_timestamp_ms(),
     )
+    .map_err(|error| {
+        InstructionExecutionError::InvariantViolation(error.to_string().into())
+    })?
     .ok_or_else(|| {
         InstructionExecutionError::InvariantViolation(
             "invalid nexus.fees.fee_sink_account_id; expected canonical I105 account id or on-chain alias"
@@ -8441,11 +8705,6 @@ fn promote_hf_shared_lease_queued_window(
     if source_record.status == SoraHfSourceStatusV1::Retired {
         source_record.status = SoraHfSourceStatusV1::PendingImport;
     }
-    refresh_hf_source_status_from_generated_service(
-        state_transaction,
-        source_record,
-        &next_window.service_name,
-    );
     record_hf_source(state_transaction, source_record.clone())?;
     pool.lease_asset_definition_id = next_window.lease_asset_definition_id;
     pool.base_fee = next_window.base_fee.clone();
@@ -8467,31 +8726,6 @@ fn bind_hf_shared_lease_targets(
     member.service_bindings.insert(service_name.to_string());
     if let Some(apartment_name) = apartment_name {
         member.apartment_bindings.insert(apartment_name.to_string());
-    }
-}
-fn refresh_hf_source_status_from_generated_service(
-    state_transaction: &StateTransaction<'_, '_>,
-    source_record: &mut SoraHfSourceRecordV1,
-    service_name: &Name,
-) {
-    if matches!(
-        source_record.status,
-        SoraHfSourceStatusV1::Ready | SoraHfSourceStatusV1::Failed | SoraHfSourceStatusV1::Retired
-    ) {
-        return;
-    }
-    let Ok((_deployment, bundle)) = load_active_bundle(state_transaction, service_name) else {
-        return;
-    };
-    let Some(binding) = soracloud_hf_generated_source_binding(&bundle) else {
-        return;
-    };
-    if binding.repo_id == source_record.repo_id
-        && binding.resolved_revision == source_record.resolved_revision
-        && binding.model_name == source_record.model_name
-    {
-        source_record.status = SoraHfSourceStatusV1::Ready;
-        source_record.last_error = None;
     }
 }
 fn verify_hf_shared_lease_join_provenance(
@@ -10212,7 +10446,7 @@ fn admit_bundle(
             format!("service `{service_name}` is already at version `{service_version}`").into(),
         ));
     }
-    let sequence = next_soracloud_audit_sequence(state_transaction);
+    let sequence = next_soracloud_audit_sequence(state_transaction)?;
     let previous_version = existing
         .as_ref()
         .map(|deployment| deployment.current_service_version.clone());
@@ -10231,7 +10465,7 @@ fn admit_bundle(
         .as_ref()
         .map_or(0, |deployment| deployment.secret_generation);
     if !initial_service_configs.is_empty() {
-        config_generation = config_generation.saturating_add(1);
+        config_generation = checked_hosted_service_generation(config_generation, "config")?;
         for (config_name, value_json) in initial_service_configs {
             let value_hash = service_config_value_hash(&value_json)?;
             service_configs.insert(
@@ -10247,7 +10481,7 @@ fn admit_bundle(
         }
     }
     if !initial_service_secrets.is_empty() {
-        secret_generation = secret_generation.saturating_add(1);
+        secret_generation = checked_hosted_service_generation(secret_generation, "secret")?;
         for (secret_name, envelope) in initial_service_secrets {
             service_secrets.insert(
                 secret_name.clone(),
@@ -10265,9 +10499,9 @@ fn admit_bundle(
         .map_err(|err| invalid_parameter(err.to_string()))?;
     insert_admitted_bundle(state_transaction, bundle.clone());
     let revision_count = count_revisions_for_service(state_transaction, &service_name);
-    let process_generation = existing.as_ref().map_or(1, |deployment| {
-        deployment.process_generation.saturating_add(1)
-    });
+    let process_generation = existing.as_ref().map_or(Ok(1), |deployment| {
+        checked_hosted_service_generation(deployment.process_generation, "process")
+    })?;
     let last_rollout = if action == SoraServiceLifecycleActionV1::Upgrade {
         Some(build_rollout_state(
             &bundle,
@@ -10283,11 +10517,11 @@ fn admit_bundle(
     let service_lease = build_http_service_lease_state(
         &bundle,
         existing.as_ref(),
-        sequence,
+        state_transaction.block_height(),
         action == SoraServiceLifecycleActionV1::Upgrade,
     )?;
     let lease_volume_states =
-        build_http_service_lease_volume_states(&bundle, service_lease.as_ref(), existing.as_ref());
+        build_http_service_lease_volume_states(&bundle, service_lease.as_ref(), existing.as_ref())?;
     record_deployment_state(
         state_transaction,
         SoraServiceDeploymentStateV1 {
@@ -10476,7 +10710,7 @@ fn admit_app_infra(
             ));
         }
     }
-    let sequence = next_soracloud_audit_sequence(state_transaction);
+    let sequence = next_soracloud_audit_sequence(state_transaction)?;
     let previous_version = existing
         .as_ref()
         .map(|state| state.current_app_version.clone());
@@ -10588,14 +10822,20 @@ impl Execute for isi::RollbackSoracloudService {
                 &existing.service_secrets,
             )
             .map_err(|err| invalid_parameter(err.to_string()))?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
-        let service_lease =
-            build_http_service_lease_state(&bundle, Some(&existing), sequence, false)?;
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
+        let service_lease = build_http_service_lease_state(
+            &bundle,
+            Some(&existing),
+            state_transaction.block_height(),
+            false,
+        )?;
         let lease_volume_states = build_http_service_lease_volume_states(
             &bundle,
             service_lease.as_ref(),
             Some(&existing),
-        );
+        )?;
+        let process_generation =
+            checked_hosted_service_generation(existing.process_generation, "process")?;
         record_deployment_state(
             state_transaction,
             SoraServiceDeploymentStateV1 {
@@ -10605,7 +10845,7 @@ impl Execute for isi::RollbackSoracloudService {
                 current_service_manifest_hash: bundle.service_manifest_hash(),
                 current_container_manifest_hash: bundle.container_manifest_hash(),
                 revision_count: existing.revision_count,
-                process_generation: existing.process_generation.saturating_add(1),
+                process_generation,
                 process_started_sequence: sequence,
                 config_generation: existing.config_generation,
                 secret_generation: existing.secret_generation,
@@ -10661,7 +10901,7 @@ impl Execute for isi::SetSoracloudServiceConfig {
             &self.value_json,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = apply_service_config_mutation(
             state_transaction,
             &self.service_name,
@@ -10711,7 +10951,7 @@ impl Execute for isi::DeleteSoracloudServiceConfig {
             &self.config_name,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = apply_service_config_mutation(
             state_transaction,
             &self.service_name,
@@ -10762,7 +11002,7 @@ impl Execute for isi::SetSoracloudServiceSecret {
             &self.secret,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = apply_service_secret_mutation(
             state_transaction,
             &self.service_name,
@@ -10812,7 +11052,7 @@ impl Execute for isi::DeleteSoracloudServiceSecret {
             &self.secret_name,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = apply_service_secret_mutation(
             state_transaction,
             &self.service_name,
@@ -10923,7 +11163,7 @@ impl Execute for isi::MutateSoracloudState {
             admitted_fhe_bound.map_or((None, None, None), |(bound, mode, public_key_digest)| {
                 (Some(bound), Some(mode), Some(public_key_digest))
             });
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = apply_soracloud_state_mutation(
             state_transaction,
             &service_name,
@@ -11000,7 +11240,7 @@ impl Execute for isi::RegisterSoracloudFhePolicy {
             ));
         }
         let transaction_hash = current_signed_transaction_hash(state_transaction)?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (mut deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if deployment
             .fhe_policy_records
@@ -11114,7 +11354,7 @@ impl Execute for isi::RotateSoracloudFhePolicy {
             ));
         }
         let transaction_hash = current_signed_transaction_hash(state_transaction)?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (mut deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         resolve_active_soracloud_fhe_material(&deployment, &self.expected_active)?;
         let record = deployment
@@ -11194,7 +11434,7 @@ impl Execute for isi::RevokeSoracloudFhePolicy {
             &self.provenance,
         )?;
         let transaction_hash = current_signed_transaction_hash(state_transaction)?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (mut deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         resolve_active_soracloud_fhe_material(&deployment, &self.expected_active)?;
         let record = deployment
@@ -11389,7 +11629,7 @@ impl Execute for isi::RunSoracloudFheJob {
         let output_payload = encode_soracloud_fhe_output_payload(&output_envelope)?;
         let output_payload_bytes = u64::try_from(output_payload.len())
             .map_err(|_| invalid_parameter("FHE output payload length exceeds u64 range"))?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let binding = bundle
             .service
             .state_bindings
@@ -11558,7 +11798,7 @@ impl Execute for isi::RecordSoracloudDecryptionRequest {
         self.request
             .validate_for_policy(&self.policy)
             .map_err(|err| invalid_parameter(err.to_string()))?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         let binding = bundle
             .service
@@ -11747,11 +11987,6 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
         if source_record.status == SoraHfSourceStatusV1::Retired {
             source_record.status = SoraHfSourceStatusV1::PendingImport;
         }
-        refresh_hf_source_status_from_generated_service(
-            state_transaction,
-            &mut source_record,
-            &service_name,
-        );
         record_hf_source(state_transaction, source_record.clone())?;
         let member_key = (pool_id.to_string(), authority.to_string());
         let mut pool_record = state_transaction
@@ -11822,7 +12057,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                 state_transaction,
                 SoraHfSharedLeaseAuditEventV1 {
                     schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-                    sequence: next_soracloud_audit_sequence(state_transaction),
+                    sequence: next_soracloud_audit_sequence(state_transaction)?,
                     action: SoraHfSharedLeaseActionV1::Join,
                     pool_id,
                     source_id,
@@ -11950,7 +12185,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                 state_transaction,
                 SoraHfSharedLeaseAuditEventV1 {
                     schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-                    sequence: next_soracloud_audit_sequence(state_transaction),
+                    sequence: next_soracloud_audit_sequence(state_transaction)?,
                     action: SoraHfSharedLeaseActionV1::Join,
                     pool_id,
                     source_id,
@@ -12064,7 +12299,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             state_transaction,
             SoraHfSharedLeaseAuditEventV1 {
                 schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-                sequence: next_soracloud_audit_sequence(state_transaction),
+                sequence: next_soracloud_audit_sequence(state_transaction)?,
                 action: SoraHfSharedLeaseActionV1::CreateWindow,
                 pool_id,
                 source_id,
@@ -12236,7 +12471,7 @@ impl Execute for isi::LeaveSoracloudHfSharedLease {
             state_transaction,
             SoraHfSharedLeaseAuditEventV1 {
                 schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-                sequence: next_soracloud_audit_sequence(state_transaction),
+                sequence: next_soracloud_audit_sequence(state_transaction)?,
                 action: SoraHfSharedLeaseActionV1::Leave,
                 pool_id,
                 source_id,
@@ -12471,7 +12706,7 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
                 state_transaction,
                 SoraHfSharedLeaseAuditEventV1 {
                     schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-                    sequence: next_soracloud_audit_sequence(state_transaction),
+                    sequence: next_soracloud_audit_sequence(state_transaction)?,
                     action: SoraHfSharedLeaseActionV1::Renew,
                     pool_id,
                     source_id,
@@ -12492,11 +12727,6 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
         if source_record.status == SoraHfSourceStatusV1::Retired {
             source_record.status = SoraHfSourceStatusV1::PendingImport;
         }
-        refresh_hf_source_status_from_generated_service(
-            state_transaction,
-            &mut source_record,
-            &service_name,
-        );
         record_hf_source(state_transaction, source_record)?;
         pool.lease_asset_definition_id = lease_asset_definition_id.clone();
         pool.base_fee = base_fee.clone();
@@ -12586,7 +12816,7 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
             state_transaction,
             SoraHfSharedLeaseAuditEventV1 {
                 schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-                sequence: next_soracloud_audit_sequence(state_transaction),
+                sequence: next_soracloud_audit_sequence(state_transaction)?,
                 action: SoraHfSharedLeaseActionV1::Renew,
                 pool_id,
                 source_id,
@@ -12883,7 +13113,7 @@ impl Execute for isi::DeploySoracloudAgentApartment {
                 format!("apartment `{apartment_name}` is already deployed").into(),
             ));
         }
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let manifest_hash = Hash::new(Encode::encode(&manifest));
         let record = SoraAgentApartmentRecordV1 {
             schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
@@ -12984,7 +13214,7 @@ impl Execute for isi::RenewSoracloudAgentLease {
             return Err(invalid_parameter("lease_ticks must be greater than zero"));
         }
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -13051,14 +13281,12 @@ impl Execute for isi::RestartSoracloudAgentApartment {
             provenance,
         } = self;
         require_soracloud_permission(authority, state_transaction)?;
-        let normalized_reason = reason.trim().to_owned();
-        let payload = encode_agent_restart_provenance_payload(
-            apartment_name.as_ref(),
-            normalized_reason.as_str(),
-        )
-        .map_err(|err| {
-            invalid_parameter(format!("failed to encode agent restart provenance: {err}"))
-        })?;
+        let reason = validate_agent_reason(&reason)?;
+        let payload =
+            encode_agent_restart_provenance_payload(apartment_name.as_ref(), reason.as_str())
+                .map_err(|err| {
+                    invalid_parameter(format!("failed to encode agent restart provenance: {err}"))
+                })?;
         verify_provenance_payload(
             authority,
             &provenance,
@@ -13066,11 +13294,8 @@ impl Execute for isi::RestartSoracloudAgentApartment {
             "agent restart provenance signer must match the transaction authority",
             "agent restart provenance signature verification failed",
         )?;
-        if normalized_reason.is_empty() {
-            return Err(invalid_parameter("reason must not be empty"));
-        }
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -13095,7 +13320,7 @@ impl Execute for isi::RestartSoracloudAgentApartment {
         record.status = SoraAgentRuntimeStatusV1::Running;
         record.restart_count = record.restart_count.saturating_add(1);
         record.last_restart_sequence = Some(sequence);
-        record.last_restart_reason = Some(normalized_reason.clone());
+        record.last_restart_reason = Some(reason.clone());
         record.process_generation = record.process_generation.saturating_add(1).max(1);
         record.process_started_sequence = sequence;
         touch_agent_runtime_activity(&mut record, sequence);
@@ -13116,7 +13341,7 @@ impl Execute for isi::RestartSoracloudAgentApartment {
                 asset_definition: None,
                 amount: None,
                 capability: None,
-                reason: Some(normalized_reason),
+                reason: Some(reason),
                 from_apartment: None,
                 to_apartment: None,
                 channel: None,
@@ -13151,16 +13376,12 @@ impl Execute for isi::RevokeSoracloudAgentPolicy {
             provenance,
         } = self;
         require_soracloud_permission(authority, state_transaction)?;
-        let normalized_capability = parse_agent_capability_name(&capability)?;
-        let normalized_reason = reason
-            .as_deref()
-            .map(str::trim)
-            .filter(|reason| !reason.is_empty())
-            .map(ToOwned::to_owned);
+        let capability = parse_agent_capability_name(&capability)?;
+        let reason = validate_optional_agent_reason(reason.as_deref())?;
         let payload = encode_agent_policy_revoke_provenance_payload(
             apartment_name.as_ref(),
-            normalized_capability.as_str(),
-            normalized_reason.as_deref(),
+            capability.as_str(),
+            reason.as_deref(),
         )
         .map_err(|err| {
             invalid_parameter(format!(
@@ -13175,7 +13396,7 @@ impl Execute for isi::RevokeSoracloudAgentPolicy {
             "agent policy revoke provenance signature verification failed",
         )?;
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -13190,29 +13411,29 @@ impl Execute for isi::RevokeSoracloudAgentPolicy {
             .manifest
             .policy_capabilities
             .iter()
-            .any(|candidate| candidate.as_ref() == normalized_capability.as_str());
+            .any(|candidate| candidate.as_ref() == capability.as_str());
         if !declared {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "apartment `{apartment_name}` does not declare policy capability `{normalized_capability}`"
+                    "apartment `{apartment_name}` does not declare policy capability `{capability}`"
                 )
                 .into(),
             ));
         }
         if record
             .revoked_policy_capabilities
-            .contains(normalized_capability.as_str())
+            .contains(capability.as_str())
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "policy capability `{normalized_capability}` is already revoked for apartment `{apartment_name}`"
+                    "policy capability `{capability}` is already revoked for apartment `{apartment_name}`"
                 )
                 .into(),
             ));
         }
         record
             .revoked_policy_capabilities
-            .insert(normalized_capability.clone());
+            .insert(capability.clone());
         touch_agent_runtime_activity(&mut record, sequence);
         record_agent_apartment(state_transaction, apartment_key, record.clone())?;
         record_agent_apartment_audit_event(
@@ -13230,8 +13451,8 @@ impl Execute for isi::RevokeSoracloudAgentPolicy {
                 request_id: None,
                 asset_definition: None,
                 amount: None,
-                capability: Some(normalized_capability),
-                reason: normalized_reason,
+                capability: Some(capability),
+                reason,
                 from_apartment: None,
                 to_apartment: None,
                 channel: None,
@@ -13261,15 +13482,29 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
     ) -> Result<(), InstructionExecutionError> {
         let isi::RequestSoracloudAgentWalletSpend {
             apartment_name,
+            request_id,
             asset_definition,
             amount,
             provenance,
         } = self;
         require_soracloud_permission(authority, state_transaction)?;
-        let normalized_asset_definition = asset_definition.trim().to_owned();
+        if !is_canonical_agent_wallet_request_id_v1(&request_id) {
+            return Err(invalid_parameter(format!(
+                "request_id must be canonical V1 text of 1..={SORA_AGENT_WALLET_REQUEST_ID_MAX_BYTES_V1} bytes with no surrounding whitespace or control characters"
+            )));
+        }
+        if asset_definition.is_empty() {
+            return Err(invalid_parameter("asset_definition must not be empty"));
+        }
+        if asset_definition.trim() != asset_definition {
+            return Err(invalid_parameter(
+                "asset_definition must not contain surrounding whitespace",
+            ));
+        }
         let payload = encode_agent_wallet_spend_provenance_payload(
             apartment_name.as_ref(),
-            normalized_asset_definition.as_str(),
+            request_id.as_str(),
+            asset_definition.as_str(),
             &amount,
         )
         .map_err(|err| {
@@ -13284,23 +13519,18 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
             "agent wallet spend provenance signer must match the transaction authority",
             "agent wallet spend provenance signature verification failed",
         )?;
-        if normalized_asset_definition.is_empty() {
-            return Err(invalid_parameter("asset_definition must not be empty"));
-        }
         if amount.is_zero() {
             return Err(invalid_parameter("amount must be greater than zero"));
         }
-        let canonical_asset_definition_id = resolve_agent_asset_definition_literal(
-            state_transaction,
-            &normalized_asset_definition,
-        )?;
+        let canonical_asset_definition_id =
+            resolve_agent_asset_definition_literal(state_transaction, &asset_definition)?;
         let asset_numeric_spec = state_transaction
             .numeric_spec_for(&canonical_asset_definition_id)
             .map_err(InstructionExecutionError::from)?;
         assert_numeric_spec_with(amount.as_numeric(), asset_numeric_spec)?;
         let canonical_asset_definition = canonical_asset_definition_id.to_string();
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -13311,6 +13541,25 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
                     format!("apartment `{apartment_name}` is not deployed").into(),
                 )
             })?;
+        let request_id_already_used = record.pending_wallet_requests.contains_key(&request_id)
+            || state_transaction
+                .world
+                .soracloud_agent_apartment_audit_events
+                .iter()
+                .any(|(_sequence, event)| {
+                    event.apartment_name.as_ref() == apartment_name.as_ref()
+                        && event.request_id.as_deref() == Some(request_id.as_str())
+                        && matches!(
+                            event.action,
+                            SoraAgentApartmentActionV1::WalletSpendRequested
+                                | SoraAgentApartmentActionV1::WalletSpendApproved
+                        )
+                });
+        if request_id_already_used {
+            return Err(invalid_parameter(format!(
+                "wallet request_id `{request_id}` has already been used for apartment `{apartment_name}`"
+            )));
+        }
         if agent_runtime_status_for_sequence(&record, sequence)
             == SoraAgentRuntimeStatusV1::LeaseExpired
         {
@@ -13363,7 +13612,6 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
                 .into(),
             ));
         }
-        let request_id = format!("{apartment_key}:wallet:{sequence}");
         let action = if agent_policy_capability_active(&record, "wallet.auto_approve") {
             wallet_record_spend(
                 &mut record,
@@ -13436,10 +13684,14 @@ impl Execute for isi::ApproveSoracloudAgentWalletSpend {
             provenance,
         } = self;
         require_soracloud_permission(authority, state_transaction)?;
-        let normalized_request_id = request_id.trim().to_owned();
+        if !is_canonical_agent_wallet_request_id_v1(&request_id) {
+            return Err(invalid_parameter(format!(
+                "request_id must be canonical V1 text of 1..={SORA_AGENT_WALLET_REQUEST_ID_MAX_BYTES_V1} bytes with no surrounding whitespace or control characters"
+            )));
+        }
         let payload = encode_agent_wallet_approve_provenance_payload(
             apartment_name.as_ref(),
-            normalized_request_id.as_str(),
+            request_id.as_str(),
         )
         .map_err(|err| {
             invalid_parameter(format!(
@@ -13453,11 +13705,8 @@ impl Execute for isi::ApproveSoracloudAgentWalletSpend {
             "agent wallet approve provenance signer must match the transaction authority",
             "agent wallet approve provenance signature verification failed",
         )?;
-        if normalized_request_id.is_empty() {
-            return Err(invalid_parameter("request_id must not be empty"));
-        }
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -13489,11 +13738,11 @@ impl Execute for isi::ApproveSoracloudAgentWalletSpend {
         }
         let pending = record
             .pending_wallet_requests
-            .remove(normalized_request_id.as_str())
+            .remove(request_id.as_str())
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
-                        "wallet request `{normalized_request_id}` is not pending for apartment `{apartment_name}`"
+                        "wallet request `{request_id}` is not pending for apartment `{apartment_name}`"
                     )
                     .into(),
                 )
@@ -13595,13 +13844,13 @@ impl Execute for isi::EnqueueSoracloudAgentMessage {
             provenance,
         } = self;
         require_soracloud_permission(authority, state_transaction)?;
-        let normalized_channel = channel.trim().to_owned();
-        let normalized_payload = payload.trim().to_owned();
+        let channel = parse_agent_mailbox_channel(&channel)?;
+        let payload = validate_agent_mailbox_payload(&payload)?;
         let encoded = encode_agent_message_send_provenance_payload(
             from_apartment.as_ref(),
             to_apartment.as_ref(),
-            normalized_channel.as_str(),
-            normalized_payload.as_str(),
+            channel.as_str(),
+            payload.as_str(),
         )
         .map_err(|err| {
             invalid_parameter(format!(
@@ -13615,22 +13864,11 @@ impl Execute for isi::EnqueueSoracloudAgentMessage {
             "agent message send provenance signer must match the transaction authority",
             "agent message send provenance signature verification failed",
         )?;
-        if normalized_channel.is_empty() {
-            return Err(invalid_parameter("channel must not be empty"));
-        }
-        if normalized_payload.is_empty() {
-            return Err(invalid_parameter("payload must not be empty"));
-        }
-        if normalized_payload.len() > AGENT_MAILBOX_MAX_PAYLOAD_BYTES {
-            return Err(invalid_parameter(format!(
-                "payload exceeds max mailbox payload bytes ({AGENT_MAILBOX_MAX_PAYLOAD_BYTES})"
-            )));
-        }
         let from_key = from_apartment.to_string();
         let to_key = to_apartment.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let message_id = format!("{to_key}:mail:{sequence}");
-        let payload_hash = Hash::new(normalized_payload.as_bytes());
+        let payload_hash = Hash::new(payload.as_bytes());
         let mut sender = state_transaction
             .world
             .soracloud_agent_apartments
@@ -13672,8 +13910,8 @@ impl Execute for isi::EnqueueSoracloudAgentMessage {
             sender.mailbox_queue.push(SoraAgentMailboxMessageV1 {
                 message_id: message_id.clone(),
                 from_apartment: from_key.clone(),
-                channel: normalized_channel.clone(),
-                payload: normalized_payload,
+                channel: channel.clone(),
+                payload,
                 payload_hash,
                 enqueued_sequence: sequence,
             });
@@ -13703,7 +13941,7 @@ impl Execute for isi::EnqueueSoracloudAgentMessage {
                     reason: None,
                     from_apartment: Some(from_key.clone()),
                     to_apartment: Some(from_key),
-                    channel: Some(normalized_channel),
+                    channel: Some(channel),
                     payload_hash: Some(payload_hash),
                     artifact_hash: None,
                     provenance_hash: None,
@@ -13753,8 +13991,8 @@ impl Execute for isi::EnqueueSoracloudAgentMessage {
         recipient.mailbox_queue.push(SoraAgentMailboxMessageV1 {
             message_id: message_id.clone(),
             from_apartment: from_key.clone(),
-            channel: normalized_channel.clone(),
-            payload: normalized_payload,
+            channel: channel.clone(),
+            payload,
             payload_hash,
             enqueued_sequence: sequence,
         });
@@ -13786,7 +14024,7 @@ impl Execute for isi::EnqueueSoracloudAgentMessage {
                 reason: None,
                 from_apartment: Some(from_key),
                 to_apartment: Some(to_key),
-                channel: Some(normalized_channel),
+                channel: Some(channel),
                 payload_hash: Some(payload_hash),
                 artifact_hash: None,
                 provenance_hash: None,
@@ -13817,10 +14055,10 @@ impl Execute for isi::AcknowledgeSoracloudAgentMessage {
             provenance,
         } = self;
         require_soracloud_permission(authority, state_transaction)?;
-        let normalized_message_id = message_id.trim().to_owned();
+        let message_id = parse_agent_record_id("message_id", &message_id)?;
         let payload = encode_agent_message_ack_provenance_payload(
             apartment_name.as_ref(),
-            normalized_message_id.as_str(),
+            message_id.as_str(),
         )
         .map_err(|err| {
             invalid_parameter(format!(
@@ -13834,11 +14072,8 @@ impl Execute for isi::AcknowledgeSoracloudAgentMessage {
             "agent message ack provenance signer must match the transaction authority",
             "agent message ack provenance signature verification failed",
         )?;
-        if normalized_message_id.is_empty() {
-            return Err(invalid_parameter("message_id must not be empty"));
-        }
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -13871,11 +14106,11 @@ impl Execute for isi::AcknowledgeSoracloudAgentMessage {
         let message_index = record
             .mailbox_queue
             .iter()
-            .position(|message| message.message_id == normalized_message_id)
+            .position(|message| message.message_id == message_id)
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
-                        "mailbox message `{normalized_message_id}` is not queued for apartment `{apartment_name}`"
+                        "mailbox message `{message_id}` is not queued for apartment `{apartment_name}`"
                     )
                     .into(),
                 )
@@ -13938,13 +14173,13 @@ impl Execute for isi::AllowSoracloudAgentAutonomyArtifact {
             provenance,
         } = self;
         require_soracloud_permission(authority, state_transaction)?;
-        let normalized_artifact_hash = normalize_agent_hash_like("artifact_hash", &artifact_hash)?;
-        let normalized_provenance_hash =
-            normalize_optional_agent_hash_like("provenance_hash", provenance_hash.as_deref())?;
+        let artifact_hash = parse_agent_hash_like("artifact_hash", &artifact_hash)?;
+        let provenance_hash =
+            parse_optional_agent_hash_like("provenance_hash", provenance_hash.as_deref())?;
         let payload = encode_agent_artifact_allow_provenance_payload(
             apartment_name.as_ref(),
-            normalized_artifact_hash.as_str(),
-            normalized_provenance_hash.as_deref(),
+            artifact_hash.as_str(),
+            provenance_hash.as_deref(),
         )
         .map_err(|err| {
             invalid_parameter(format!(
@@ -13959,7 +14194,7 @@ impl Execute for isi::AllowSoracloudAgentAutonomyArtifact {
             "agent artifact allow provenance signature verification failed",
         )?;
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -13993,21 +14228,21 @@ impl Execute for isi::AllowSoracloudAgentAutonomyArtifact {
         }
         if record
             .artifact_allowlist
-            .get(&normalized_artifact_hash)
-            .is_some_and(|rule| rule.provenance_hash == normalized_provenance_hash)
+            .get(&artifact_hash)
+            .is_some_and(|rule| rule.provenance_hash == provenance_hash)
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "artifact `{normalized_artifact_hash}` is already allowlisted for apartment `{apartment_name}` with the same provenance rule"
+                    "artifact `{artifact_hash}` is already allowlisted for apartment `{apartment_name}` with the same provenance rule"
                 )
                 .into(),
             ));
         }
         record.artifact_allowlist.insert(
-            normalized_artifact_hash.clone(),
+            artifact_hash.clone(),
             SoraAgentArtifactAllowRuleV1 {
-                artifact_hash: normalized_artifact_hash.clone(),
-                provenance_hash: normalized_provenance_hash.clone(),
+                artifact_hash: artifact_hash.clone(),
+                provenance_hash: provenance_hash.clone(),
                 added_sequence: sequence,
             },
         );
@@ -14034,8 +14269,8 @@ impl Execute for isi::AllowSoracloudAgentAutonomyArtifact {
                 to_apartment: None,
                 channel: None,
                 payload_hash: None,
-                artifact_hash: Some(normalized_artifact_hash),
-                provenance_hash: normalized_provenance_hash,
+                artifact_hash: Some(artifact_hash),
+                provenance_hash,
                 run_id: None,
                 run_label: None,
                 budget_units: None,
@@ -14067,19 +14302,19 @@ impl Execute for isi::RunSoracloudAgentAutonomy {
             provenance,
         } = self;
         require_soracloud_permission(authority, state_transaction)?;
-        let normalized_artifact_hash = normalize_agent_hash_like("artifact_hash", &artifact_hash)?;
-        let normalized_provenance_hash =
-            normalize_optional_agent_hash_like("provenance_hash", provenance_hash.as_deref())?;
-        let normalized_run_label = normalize_agent_run_label(&run_label)?;
-        let normalized_workflow_input_json =
-            normalize_optional_agent_workflow_input_json(workflow_input_json.as_deref())?;
+        let artifact_hash = parse_agent_hash_like("artifact_hash", &artifact_hash)?;
+        let provenance_hash =
+            parse_optional_agent_hash_like("provenance_hash", provenance_hash.as_deref())?;
+        let run_label = parse_agent_run_label(&run_label)?;
+        let workflow_input_json =
+            parse_optional_agent_workflow_input_json(workflow_input_json.as_deref())?;
         let payload = encode_agent_autonomy_run_provenance_payload(
             apartment_name.as_ref(),
-            normalized_artifact_hash.as_str(),
-            normalized_provenance_hash.as_deref(),
+            artifact_hash.as_str(),
+            provenance_hash.as_deref(),
             budget_units,
-            normalized_run_label.as_str(),
-            normalized_workflow_input_json.as_deref(),
+            run_label.as_str(),
+            workflow_input_json.as_deref(),
         )
         .map_err(|err| {
             invalid_parameter(format!(
@@ -14097,7 +14332,7 @@ impl Execute for isi::RunSoracloudAgentAutonomy {
             return Err(invalid_parameter("budget_units must be greater than zero"));
         }
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -14129,21 +14364,21 @@ impl Execute for isi::RunSoracloudAgentAutonomy {
         }
         let allow_rule = record
             .artifact_allowlist
-            .get(&normalized_artifact_hash)
+            .get(&artifact_hash)
             .cloned()
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
-                        "artifact `{normalized_artifact_hash}` is not allowlisted for apartment `{apartment_name}`"
+                        "artifact `{artifact_hash}` is not allowlisted for apartment `{apartment_name}`"
                     )
                     .into(),
                 )
             })?;
         if let Some(expected_provenance) = allow_rule.provenance_hash.as_deref() {
-            let provided_provenance = normalized_provenance_hash.as_deref().ok_or_else(|| {
+            let provided_provenance = provenance_hash.as_deref().ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
-                        "artifact `{normalized_artifact_hash}` requires provenance_hash `{expected_provenance}`"
+                        "artifact `{artifact_hash}` requires provenance_hash `{expected_provenance}`"
                     )
                     .into(),
                 )
@@ -14151,7 +14386,7 @@ impl Execute for isi::RunSoracloudAgentAutonomy {
             if provided_provenance != expected_provenance {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "artifact `{normalized_artifact_hash}` provenance mismatch: expected `{expected_provenance}`, got `{provided_provenance}`"
+                        "artifact `{artifact_hash}` provenance mismatch: expected `{expected_provenance}`, got `{provided_provenance}`"
                     )
                     .into(),
                 ));
@@ -14169,21 +14404,21 @@ impl Execute for isi::RunSoracloudAgentAutonomy {
         let run_id = format!("{apartment_key}:autonomy:{sequence}");
         let request_commitment = derive_agent_autonomy_request_commitment(
             apartment_name.as_ref(),
-            normalized_artifact_hash.as_str(),
-            normalized_provenance_hash.as_deref(),
+            artifact_hash.as_str(),
+            provenance_hash.as_deref(),
             budget_units,
             &run_id,
-            normalized_run_label.as_str(),
-            normalized_workflow_input_json.as_deref(),
+            run_label.as_str(),
+            workflow_input_json.as_deref(),
             record.process_generation,
         );
         let checkpoint_key = autonomy_checkpoint_key(&apartment_key, &run_id);
         let checkpoint_value_size = autonomy_checkpoint_value_size(
-            &normalized_artifact_hash,
-            normalized_provenance_hash.as_deref(),
-            &normalized_run_label,
+            &artifact_hash,
+            provenance_hash.as_deref(),
+            &run_label,
             budget_units,
-            normalized_workflow_input_json.as_deref(),
+            workflow_input_json.as_deref(),
         );
         let projected_total = projected_agent_persistent_state_total_bytes(
             &record,
@@ -14206,11 +14441,11 @@ impl Execute for isi::RunSoracloudAgentAutonomy {
             .autonomy_run_history
             .push(SoraAgentAutonomyRunRecordV1 {
                 run_id: run_id.clone(),
-                artifact_hash: normalized_artifact_hash.clone(),
-                provenance_hash: normalized_provenance_hash.clone(),
+                artifact_hash: artifact_hash.clone(),
+                provenance_hash: provenance_hash.clone(),
                 budget_units,
-                run_label: normalized_run_label.clone(),
-                workflow_input_json: normalized_workflow_input_json.clone(),
+                run_label: run_label.clone(),
+                workflow_input_json: workflow_input_json.clone(),
                 approved_process_generation: record.process_generation,
                 request_commitment,
                 approved_sequence: sequence,
@@ -14244,13 +14479,13 @@ impl Execute for isi::RunSoracloudAgentAutonomy {
                 from_apartment: None,
                 to_apartment: None,
                 channel: None,
-                payload_hash: normalized_workflow_input_json
+                payload_hash: workflow_input_json
                     .as_ref()
                     .map(|payload| Hash::new(payload.as_bytes())),
-                artifact_hash: Some(normalized_artifact_hash),
-                provenance_hash: normalized_provenance_hash,
+                artifact_hash: Some(artifact_hash),
+                provenance_hash,
                 run_id: Some(run_id),
-                run_label: Some(normalized_run_label),
+                run_label: Some(run_label),
                 budget_units: Some(budget_units),
                 service_name: None,
                 service_version: None,
@@ -14290,10 +14525,7 @@ impl Execute for isi::RecordSoracloudAgentAutonomyExecution {
                 "process_generation must be greater than zero",
             ));
         }
-        let normalized_run_id = run_id.trim();
-        if normalized_run_id.is_empty() {
-            return Err(invalid_parameter("run_id must not be empty"));
-        }
+        let run_id = parse_agent_record_id("run_id", &run_id)?;
         if let Some(service_version) = service_version.as_deref()
             && service_version.trim().is_empty()
         {
@@ -14317,7 +14549,7 @@ impl Execute for isi::RecordSoracloudAgentAutonomyExecution {
             ));
         }
         let apartment_key = apartment_name.to_string();
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let mut record = state_transaction
             .world
             .soracloud_agent_apartments
@@ -14331,12 +14563,12 @@ impl Execute for isi::RecordSoracloudAgentAutonomyExecution {
         let run = record
             .autonomy_run_history
             .iter()
-            .find(|run| run.run_id == normalized_run_id)
+            .find(|run| run.run_id == run_id)
             .cloned()
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
-                        "apartment `{apartment_name}` does not contain approved run `{normalized_run_id}`"
+                        "apartment `{apartment_name}` does not contain approved run `{run_id}`"
                     )
                     .into(),
                 )
@@ -14353,7 +14585,7 @@ impl Execute for isi::RecordSoracloudAgentAutonomyExecution {
         if run.approved_process_generation != process_generation {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "run `{normalized_run_id}` for apartment `{apartment_name}` was approved for generation {}, not {process_generation}",
+                    "run `{run_id}` for apartment `{apartment_name}` was approved for generation {}, not {process_generation}",
                     run.approved_process_generation
                 )
                 .into(),
@@ -14373,7 +14605,7 @@ impl Execute for isi::RecordSoracloudAgentAutonomyExecution {
                 manifest_hash: record.manifest_hash,
                 restart_count: record.restart_count,
                 signer: single_signatory_authority(authority)?.clone(),
-                request_id: Some(normalized_run_id.to_owned()),
+                request_id: Some(run_id.clone()),
                 asset_definition: None,
                 amount: None,
                 capability: None,
@@ -14384,7 +14616,7 @@ impl Execute for isi::RecordSoracloudAgentAutonomyExecution {
                 payload_hash: None,
                 artifact_hash: Some(run.artifact_hash),
                 provenance_hash: run.provenance_hash,
-                run_id: Some(normalized_run_id.to_owned()),
+                run_id: Some(run_id),
                 run_label: Some(run.run_label),
                 budget_units: Some(run.budget_units),
                 service_name: service_name.map(|value| value.to_string()),
@@ -14471,7 +14703,7 @@ impl Execute for isi::StartSoracloudTrainingJob {
                 "compute_budget_units must cover at least one worker-group step ({minimum_step_units})"
             )));
         }
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if !bundle.container.capabilities.allow_model_training {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -14574,7 +14806,7 @@ impl Execute for isi::CheckpointSoracloudTrainingJob {
                 "checkpoint_size_bytes must be greater than zero",
             ));
         }
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if !bundle.container.capabilities.allow_model_training {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -14733,7 +14965,7 @@ impl Execute for isi::RetrySoracloudTrainingJob {
     ) -> Result<(), InstructionExecutionError> {
         require_soracloud_permission(authority, state_transaction)?;
         let job_id = parse_training_job_id(&self.job_id)?;
-        let reason = normalize_training_reason(&self.reason)?;
+        let reason = validate_training_reason(&self.reason)?;
         verify_training_job_retry_provenance(
             authority,
             &self.service_name,
@@ -14741,7 +14973,7 @@ impl Execute for isi::RetrySoracloudTrainingJob {
             &reason,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if !bundle.container.capabilities.allow_model_training {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -14838,7 +15070,7 @@ impl Execute for isi::RegisterSoracloudModelArtifact {
             self.provenance_attestation_hash,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if !bundle.container.capabilities.allow_model_training {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -14969,7 +15201,7 @@ impl Execute for isi::RegisterSoracloudModelWeight {
             self.provenance_attestation_hash,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if !bundle.container.capabilities.allow_model_training {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -15225,7 +15457,7 @@ impl Execute for isi::PromoteSoracloudModelWeight {
                 "model promotion gate is not approved".into(),
             ));
         }
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if !bundle.container.capabilities.allow_model_training {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -15313,7 +15545,7 @@ impl Execute for isi::RollbackSoracloudModelWeight {
         require_soracloud_permission(authority, state_transaction)?;
         let model_name = parse_training_model_name(&self.model_name)?;
         let target_version = parse_model_weight_version(&self.target_version)?;
-        let reason = normalize_model_weight_reason(&self.reason)?;
+        let reason = validate_model_weight_reason(&self.reason)?;
         verify_model_weight_rollback_provenance(
             authority,
             &self.service_name,
@@ -15322,7 +15554,7 @@ impl Execute for isi::RollbackSoracloudModelWeight {
             &reason,
             &self.provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
         if !bundle.container.capabilities.allow_model_training {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -15467,18 +15699,12 @@ impl Execute for isi::RegisterSoracloudUploadedModelBundle {
             ));
         }
         require_active_sorafs_uploaded_model_pin(state_transaction, &bundle)?;
-        let record = SoraUploadedModelBundleV1 {
-            schema_version: SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
-            model_id,
-            weight_version,
-            ..bundle
-        };
         transfer_uploaded_model_amount(
             authority,
-            &record.pricing_policy.storage_price,
+            &bundle.pricing_policy.storage_price,
             state_transaction,
         )?;
-        record_uploaded_model_bundle(state_transaction, record)
+        record_uploaded_model_bundle(state_transaction, bundle)
     }
 }
 impl Execute for isi::FinalizeSoracloudUploadedModelBundle {
@@ -15523,7 +15749,7 @@ impl Execute for isi::FinalizeSoracloudUploadedModelBundle {
             provenance_attestation_hash,
             &provenance,
         )?;
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let (deployment, service_bundle) = load_active_bundle(state_transaction, &service_name)?;
         if !service_allows_uploaded_model_plane(&service_bundle) {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -15765,7 +15991,7 @@ impl Execute for isi::AdvanceSoracloudRollout {
                 .into(),
             ));
         }
-        let sequence = next_soracloud_audit_sequence(state_transaction);
+        let sequence = next_soracloud_audit_sequence(state_transaction)?;
         let current_version = deployment.current_service_version.clone();
         let mut action = SoraServiceLifecycleActionV1::Rollout;
         let mut to_version = current_version.clone();
@@ -15820,15 +16046,29 @@ impl Execute for isi::AdvanceSoracloudRollout {
                 };
                 let bundle =
                     load_admitted_bundle(state_transaction, &self.service_name, &baseline_version)?;
+                let service_lease = build_http_service_lease_state(
+                    &bundle,
+                    Some(&deployment),
+                    state_transaction.block_height(),
+                    false,
+                )?;
+                let lease_volume_states = build_http_service_lease_volume_states(
+                    &bundle,
+                    service_lease.as_ref(),
+                    Some(&deployment),
+                )?;
                 rollout.stage = SoraRolloutStageV1::RolledBack;
                 rollout.traffic_percent = 0;
                 deployment.current_service_version = baseline_version.clone();
                 deployment.current_service_manifest_hash = bundle.service_manifest_hash();
                 deployment.current_container_manifest_hash = bundle.container_manifest_hash();
-                deployment.process_generation = deployment.process_generation.saturating_add(1);
+                deployment.process_generation =
+                    checked_hosted_service_generation(deployment.process_generation, "process")?;
                 deployment.process_started_sequence = sequence;
                 deployment.active_rollout = None;
                 deployment.last_rollout = Some(rollout.clone());
+                deployment.service_lease = service_lease;
+                deployment.lease_volume_states = lease_volume_states;
                 action = SoraServiceLifecycleActionV1::Rollback;
                 to_version = baseline_version;
                 service_manifest_hash = bundle.service_manifest_hash();
@@ -15917,7 +16157,10 @@ impl Execute for isi::SetSoracloudInrouReplicaRuntimeState {
                 .into(),
             ));
         }
-        if state.validator_account_id != assignment.validator_account_id
+        require_active_public_lane_validator(authority, state_transaction)?;
+        require_inrou_host_peer_binding(authority, &assignment.peer_id, state_transaction)?;
+        if state.placement_incarnation != assignment.placement_incarnation
+            || state.validator_account_id != assignment.validator_account_id
             || state.peer_id != assignment.peer_id
             || state.selected_guest_isa != assignment.selected_guest_isa
         {
@@ -15925,11 +16168,15 @@ impl Execute for isi::SetSoracloudInrouReplicaRuntimeState {
                 "Inrou replica runtime state identity must exactly match its authoritative placement",
             ));
         }
-        let lease = state_transaction
+        if !assignment.host_availability.is_available() {
+            return Err(invalid_parameter(
+                "an unavailable Inrou replica host cannot publish runtime state",
+            ));
+        }
+        let deployment = state_transaction
             .world
             .soracloud_service_deployments
             .get(&state.service_name)
-            .and_then(|deployment| deployment.service_lease.as_ref())
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
@@ -15939,16 +16186,39 @@ impl Execute for isi::SetSoracloudInrouReplicaRuntimeState {
                     .into(),
                 )
             })?;
+        if !active_inrou_service_versions(deployment)?
+            .iter()
+            .any(|service_version| service_version == &state.service_version)
+        {
+            return Err(invalid_parameter(
+                "Inrou replica runtime state revision is not active for its deployment",
+            ));
+        }
+        let lease = deployment.service_lease.as_ref().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "service `{}` has no hosted-service lease for its Inrou replica",
+                    state.service_name
+                )
+                .into(),
+            )
+        })?;
         if state.reporting_epoch != lease.reporting_epoch {
             return Err(invalid_parameter(format!(
                 "Inrou replica runtime reporting epoch {} does not match hosted-service epoch {}",
                 state.reporting_epoch, lease.reporting_epoch
             )));
         }
+        if assignment.lease_started_height != lease.lease_started_height {
+            return Err(invalid_parameter(
+                "Inrou replica placement belongs to a different hosted-service lease incarnation",
+            ));
+        }
         let checkpoint = lease.egress_reporter_checkpoints.iter().find(|checkpoint| {
             checkpoint.reporting_epoch == state.reporting_epoch
                 && checkpoint.active_service_version == state.service_version
                 && checkpoint.replica_slot == state.replica_slot
+                && checkpoint.placement_incarnation == state.placement_incarnation
                 && checkpoint.validator_account_id == *authority
         });
         if matches!(
@@ -16011,6 +16281,23 @@ impl Execute for isi::ClearSoracloudInrouReplicaRuntimeState {
                 .into(),
             ));
         }
+        require_active_public_lane_validator(authority, state_transaction)?;
+        require_inrou_host_peer_binding(authority, &assignment.peer_id, state_transaction)?;
+        if let Some(state) =
+            state_transaction
+                .world
+                .soracloud_inrou_replica_runtime
+                .get(&inrou_replica_runtime_key(
+                    &self.service_name,
+                    &self.service_version,
+                    self.replica_slot,
+                ))
+            && state.placement_incarnation != self.expected_placement_incarnation
+        {
+            return Err(invalid_parameter(
+                "Inrou replica runtime clear compare-and-swap incarnation is stale",
+            ));
+        }
         clear_soracloud_inrou_replica_runtime_state(
             state_transaction,
             &self.service_name,
@@ -16041,12 +16328,10 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
                 "reporting_epoch must be greater than zero".to_string(),
             ));
         }
-        let current_reporting_epoch = state_transaction
+        let deployment = state_transaction
             .world
             .soracloud_service_deployments
             .get(&self.service_name)
-            .and_then(|deployment| deployment.service_lease.as_ref())
-            .map(|lease| lease.reporting_epoch)
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
@@ -16056,15 +16341,33 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
                     .into(),
                 )
             })?;
+        let reporter_revision_is_active = active_inrou_service_versions(deployment)?
+            .iter()
+            .any(|service_version| service_version == &self.active_service_version);
+        let lease = deployment.service_lease.as_ref().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "service `{}` does not have an active hosted-service lease",
+                    self.service_name
+                )
+                .into(),
+            )
+        })?;
+        let current_reporting_epoch = lease.reporting_epoch;
+        let current_lease_started_height = lease.lease_started_height;
         let assignment = find_inrou_replica_assignment(
             state_transaction,
             &self.service_name,
             &self.active_service_version,
             self.replica_slot,
         );
-        let reporter_has_active_assignment = assignment
-            .as_ref()
-            .is_some_and(|assignment| assignment.validator_account_id == *authority);
+        let reporter_has_active_assignment = assignment.as_ref().is_some_and(|assignment| {
+            reporter_revision_is_active
+                && assignment.host_availability.is_available()
+                && assignment.validator_account_id == *authority
+                && assignment.placement_incarnation == self.placement_incarnation
+                && assignment.lease_started_height == current_lease_started_height
+        });
         if reporter_has_active_assignment {
             if self.finalize_reporter {
                 return Err(invalid_parameter(
@@ -16072,6 +16375,10 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
                 ));
             }
             require_active_public_lane_validator(authority, state_transaction)?;
+            let assignment = assignment
+                .as_ref()
+                .expect("active reporter identity was matched against an assignment");
+            require_inrou_host_peer_binding(authority, &assignment.peer_id, state_transaction)?;
         } else {
             if !self.finalize_reporter {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -16092,6 +16399,7 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
                         checkpoint.reporting_epoch == self.reporting_epoch
                             && checkpoint.active_service_version == self.active_service_version
                             && checkpoint.replica_slot == self.replica_slot
+                            && checkpoint.placement_incarnation == self.placement_incarnation
                             && checkpoint.validator_account_id == *authority
                     })
                 });
@@ -16117,6 +16425,7 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
             self.reporting_epoch,
             self.active_service_version,
             self.replica_slot,
+            self.placement_incarnation,
             self.replica_accounted_egress_bytes,
             self.finalize_reporter,
             reporter_has_active_assignment,
@@ -16176,16 +16485,6 @@ impl Execute for isi::RecordSoracloudRuntimeReceipt {
             ));
         }
         write_soracloud_runtime_receipt(state_transaction, self.receipt)
-    }
-}
-impl Execute for isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-    fn execute(
-        self,
-        authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), InstructionExecutionError> {
-        require_soracloud_permission(authority, state_transaction)?;
-        write_soracloud_private_uploaded_model_execution_receipt(state_transaction, self.receipt)
     }
 }
 #[cfg(all(test, feature = "zk-stark"))]

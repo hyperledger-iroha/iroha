@@ -13,13 +13,5 @@
     "status": "ready",
     "expect_header": "sora-cache-version",
     "notes": "Gateway rejects unknown cache versions; align with honey probes."
-  },
-  "canary_hosts": {
-    "status": "ready",
-    "hosts": [
-      "canary1.soranet-pop-m0.gw.sora.id",
-      "canary2.soranet-pop-m0.gw.sora.id"
-    ],
-    "notes": "Use canaries for PQ cipher rollout before flipping defaults."
   }
 }

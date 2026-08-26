@@ -2,10 +2,7 @@
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
-    account::{AccountId, ParsedAccountId},
-    asset::AssetDefinitionId,
-    name::Name,
-    smart_contract::ContractAddress,
+    account::AccountId, asset::AssetDefinitionId, name::Name, smart_contract::ContractAddress,
 };
 use iroha_crypto::Hash;
 use iroha_primitives::numeric::Quantity;
@@ -58,7 +55,6 @@ impl FromStr for FeeSponsorProgramId {
         }
         let sponsor_literal = sponsor;
         let sponsor = AccountId::parse_encoded(sponsor_literal)
-            .map(ParsedAccountId::into_account_id)
             .map_err(|err| FeeSponsorProgramIdParseError::InvalidSponsor(err.to_string()))?;
         if sponsor.to_string() != sponsor_literal {
             return Err(FeeSponsorProgramIdParseError::InvalidFormat);

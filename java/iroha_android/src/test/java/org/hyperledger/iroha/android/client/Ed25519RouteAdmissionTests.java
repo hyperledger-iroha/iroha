@@ -12,6 +12,7 @@ import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 public final class Ed25519RouteAdmissionTests {
   private static final String VALID_PUBLIC_KEY_HEX = TestEd25519Keys.publicKeyHex(0x22);
   private static final String IDENTITY_PUBLIC_KEY_HEX = "01" + "00".repeat(31);
+  private static final String VALID_MLDSA65_PUBLIC_KEY_HEX = "ab".repeat(1_952);
 
   private Ed25519RouteAdmissionTests() {}
 
@@ -134,6 +135,9 @@ public final class Ed25519RouteAdmissionTests {
         + "\"padding_budget_ms\":15,"
         + "\"relay_id_hex\":\""
         + VALID_PUBLIC_KEY_HEX
+        + "\","
+        + "\"relay_mldsa65_public_key_hex\":\""
+        + VALID_MLDSA65_PUBLIC_KEY_HEX
         + "\","
         + "\"descriptor_commit_hex\":\""
         + "cd".repeat(32)

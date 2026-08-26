@@ -315,7 +315,8 @@ pub(crate) const GOVERNANCE_BALLOT_CIRCUIT_ID_V1: &str = "vote-ballot";
 pub(crate) const GOVERNANCE_TALLY_CIRCUIT_ID_V1: &str = "vote-tally";
 /// Exact Halo2/Pasta verifier-registry label for IVM execution commitments.
 pub const IVM_EXECUTION_V1_HALO2_BACKEND: &str = "halo2/pasta/ivm-execution-v1";
-const IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID: &str = "halo2/pasta/ipa/ivm-execution-v1";
+/// Canonical first-release Halo2/Pasta/IPA circuit identifier for IVM execution proofs.
+pub const IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID: &str = "halo2/pasta/ipa/ivm-execution-v1";
 /// Canonical Halo2 IPA circuit identifiers admitted by generic OpenVerify v1.
 ///
 /// The list contains only semantic production circuits. Tiny arithmetic,
@@ -362,25 +363,10 @@ fn halo2_ipa_canonical_k_v1(circuit_id: &str) -> Option<u32> {
 }
 #[cfg(feature = "zk-halo2-ipa")]
 fn is_ivm_execution_v1_circuit_id(circuit_id: &str) -> bool {
-    let trimmed = circuit_id.trim();
-    trimmed == IVM_EXECUTION_V1_CIRCUIT_ID
-        || trimmed
-            .strip_prefix("halo2/ipa:")
-            .is_some_and(|suffix| suffix == IVM_EXECUTION_V1_CIRCUIT_ID)
-        || trimmed
-            .strip_prefix("halo2/ipa::")
-            .is_some_and(|suffix| suffix == IVM_EXECUTION_V1_CIRCUIT_ID)
-        || trimmed
-            .strip_prefix("halo2/ipa/")
-            .is_some_and(|suffix| suffix == IVM_EXECUTION_V1_CIRCUIT_ID)
-        || trimmed
-            .strip_prefix("halo2/pasta/")
-            .is_some_and(|suffix| suffix == IVM_EXECUTION_V1_CIRCUIT_ID)
-        || trimmed
-            .strip_prefix("halo2/pasta/ipa/")
-            .is_some_and(|suffix| suffix == IVM_EXECUTION_V1_CIRCUIT_ID)
+    circuit_id == IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID
 }
-/// Canonical public-input schema descriptor for `halo2/ipa:ivm-execution-v1`.
+/// Canonical public-input schema descriptor for
+/// `halo2/pasta/ipa/ivm-execution-v1`.
 ///
 /// The execution proof instances still carry concrete values in the proof payload;
 /// this descriptor is only used for stable registry binding via
@@ -2131,14 +2117,13 @@ pub fn prove_stark_fri_ivm_execution_envelope(
     events_commitment: iroha_crypto::Hash,
     gas_policy_commitment: iroha_crypto::Hash,
 ) -> Result<ProofBox, String> {
-    let expected_circuit_id =
-        normalize_stark_fri_circuit_id_for_backend(backend, IVM_EXECUTION_V1_CIRCUIT_ID)
-            .ok_or_else(|| "invalid STARK IVM execution circuit_id".to_owned())?;
-    let actual_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
-        .ok_or_else(|| "invalid STARK IVM execution circuit_id".to_owned())?;
-    if actual_circuit_id != expected_circuit_id {
+    if !is_stark_fri_v1_backend(backend) {
+        return Err("invalid STARK IVM execution backend".to_owned());
+    }
+    let expected_circuit_id = format!("{backend}:{IVM_EXECUTION_V1_CIRCUIT_ID}");
+    if circuit_id != expected_circuit_id {
         return Err(format!(
-            "STARK IVM execution proving requires `{IVM_EXECUTION_V1_CIRCUIT_ID}` circuit_id"
+            "STARK IVM execution proving requires exact `{expected_circuit_id}` circuit_id"
         ));
     }
     let public_inputs = ivm_execution_public_inputs_columns(
@@ -2508,7 +2493,7 @@ pub mod test_utils {
         gas_policy_commitment: CryptoHash,
     ) -> FixtureEnvelope {
         halo2_ivm_execution_bind_v1_envelope(
-            super::IVM_EXECUTION_V1_CIRCUIT_ID,
+            super::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
             code_hash,
             overlay_hash,
             events_commitment,
@@ -7450,28 +7435,35 @@ mod stark_prover_tests {
         assert!(report.ok);
     }
     #[test]
-    fn prove_stark_ivm_execution_envelope_rejects_non_ivm_circuit_with_matching_vk() {
+    fn prove_stark_ivm_execution_envelope_rejects_noncanonical_circuit_ids() {
         let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = format!("{backend}:not-ivm-execution-v1");
-        let vk_payload = consensus_stark_vk!(circuit_id.clone(), STARK_HASH_SHA256_V1);
+        let canonical = format!("{backend}:ivm-execution-v1");
+        let vk_payload = consensus_stark_vk!(canonical, STARK_HASH_SHA256_V1);
         let vk_box = VerifyingKeyBox::new(
             backend.to_owned(),
-            norito::to_bytes(&vk_payload).expect("encode non-IVM STARK VK payload"),
+            norito::to_bytes(&vk_payload).expect("encode canonical STARK VK payload"),
         );
-        let err = prove_stark_fri_ivm_execution_envelope(
-            backend,
-            &circuit_id,
-            &vk_box,
-            Hash::new(b"code"),
-            Hash::new(b"overlay"),
-            Hash::new(b"events"),
-            Hash::new(b"gas"),
-        )
-        .expect_err("STARK IVM helper must reject non-IVM circuit ids even when the VK matches");
-        assert!(
-            err.contains("ivm-execution-v1"),
-            "unexpected non-IVM circuit rejection: {err}"
-        );
+        for circuit_id in [
+            "ivm-execution-v1",
+            "stark/fri/sha256-goldilocks/ivm-execution-v1",
+            " stark/fri/sha256-goldilocks:ivm-execution-v1 ",
+            "stark/fri/sha256-goldilocks:not-ivm-execution-v1",
+        ] {
+            let err = prove_stark_fri_ivm_execution_envelope(
+                backend,
+                circuit_id,
+                &vk_box,
+                Hash::new(b"code"),
+                Hash::new(b"overlay"),
+                Hash::new(b"events"),
+                Hash::new(b"gas"),
+            )
+            .expect_err("STARK IVM helper must reject non-canonical circuit ids");
+            assert!(
+                err.contains("exact") && err.contains("ivm-execution-v1"),
+                "unexpected circuit rejection for {circuit_id:?}: {err}"
+            );
+        }
     }
     #[test]
     fn verify_stark_open_verify_envelope_rejects_malformed_payload_without_panic() {
@@ -8710,20 +8702,30 @@ mod halo2_ipa_proving_key_archive_tests {
         let vk_box = halo2_ipa_ivm_execution_vk_box().expect("ivm execution verifying key");
         ensure_halo2_ipa_ivm_execution_canonical_vk_box(&vk_box)
             .expect("generated IVM verifier key must have canonical parameter provenance");
-        let err = prove_halo2_ipa_ivm_execution_envelope(
+        for circuit_id in [
+            IVM_EXECUTION_V1_CIRCUIT_ID,
+            "halo2/ipa:ivm-execution-v1",
+            "halo2/ipa::ivm-execution-v1",
+            "halo2/ipa/ivm-execution-v1",
+            "halo2/pasta/ivm-execution-v1",
+            " halo2/pasta/ipa/ivm-execution-v1 ",
             "halo2/ipa:not-ivm-execution-v1",
-            &vk_box,
-            iroha_crypto::Hash::new(b"code"),
-            iroha_crypto::Hash::new(b"overlay"),
-            iroha_crypto::Hash::new(b"events"),
-            iroha_crypto::Hash::new(b"gas"),
-            None,
-        )
-        .expect_err("wrong IVM circuit family must reject before proving");
-        assert!(
-            err.contains("unsupported IVM execution circuit id"),
-            "unexpected circuit id error: {err}"
-        );
+        ] {
+            let err = prove_halo2_ipa_ivm_execution_envelope(
+                circuit_id,
+                &vk_box,
+                iroha_crypto::Hash::new(b"code"),
+                iroha_crypto::Hash::new(b"overlay"),
+                iroha_crypto::Hash::new(b"events"),
+                iroha_crypto::Hash::new(b"gas"),
+                None,
+            )
+            .expect_err("non-canonical IVM circuit id must reject before proving");
+            assert!(
+                err.contains("unsupported IVM execution circuit id"),
+                "unexpected circuit id error for {circuit_id:?}: {err}"
+            );
+        }
     }
     #[test]
     fn halo2_ipa_proving_key_archive_binds_family_and_verifier_commitment() {

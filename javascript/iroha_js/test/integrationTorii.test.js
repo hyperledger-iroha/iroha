@@ -21,7 +21,6 @@ import {
   buildTimeTriggerAction,
   buildPacs008Message,
   buildPacs009Message,
-  inspectAccountId,
 } from "../src/index.js";
 import {
   assertNonNegativeInteger,
@@ -89,7 +88,7 @@ const DA_TICKET_RAW = process.env.IROHA_TORII_INTEGRATION_DA_TICKET ?? "";
 const DA_TICKET_HEX = DA_TICKET_RAW.trim().length === 0 ? null : DA_TICKET_RAW.trim();
 const UAID_LITERAL_RAW = process.env.IROHA_TORII_INTEGRATION_UAID ?? "";
 const UAID_LITERAL =
-  UAID_LITERAL_RAW.trim().length === 0 ? null : UAID_LITERAL_RAW.trim();
+  UAID_LITERAL_RAW.length === 0 ? null : UAID_LITERAL_RAW;
 const UAID_DATASPACE_ID = parseUnsignedIntegerEnv(
   process.env.IROHA_TORII_INTEGRATION_UAID_DATASPACE,
   { allowZero: true },
@@ -148,7 +147,6 @@ const OPERATOR_CLIENT = new BaseToriiClient(BASE_URL, {
   operatorSigningContext: INTEGRATION_OPERATOR_SIGNING_CONTEXT,
 });
 
-const SUCCESS_STATUSES = new Set(["applied"]);
 const KAIGI_HEALTH_STATUSES = new Set(["healthy", "degraded", "unavailable"]);
 
 /**
@@ -947,14 +945,13 @@ test(
     });
     assertSuccessfulStatus(typedStatus, domainId);
     assert.equal(
-      typedStatus?.hashHex?.toLowerCase(),
+      typedStatus.hash,
       hashHex,
       "pipeline status payload should expose the submitted hash",
     );
-    assert.ok(
-      typedStatus?.status?.kind,
-      "pipeline status payload should report a terminal status kind",
-    );
+    assert.equal(typedStatus.status.kind, "Applied");
+    assert.equal(typedStatus.scope, "global");
+    assert.equal(typedStatus.resolved_from, "state");
 
     const fetchedStatus = await client.getTransactionStatusTyped(hashHex);
     assert.ok(
@@ -962,14 +959,14 @@ test(
       "pipeline status endpoint should retain the terminal snapshot after polling",
     );
     assert.equal(
-      fetchedStatus?.hashHex?.toLowerCase(),
+      fetchedStatus?.hash,
       hashHex,
       "fetching the pipeline status should return the same transaction hash",
     );
     assert.equal(
       fetchedStatus?.status?.kind,
       typedStatus?.status?.kind,
-      "fetching the pipeline status should preserve the terminal status kind",
+      "fetching the pipeline status should preserve the Applied status kind",
     );
   },
 );
@@ -993,33 +990,13 @@ test(
       return;
     }
     const privateKey = decodePrivateKeyHex(PRIVATE_KEY_HEX);
-    const domainId = randomDomainId();
-    const { signedTransaction: domainTx, hash: domainHash } = buildRegisterDomainTransaction({
-      networkId: NETWORK_ID,
-      authority: AUTHORITY_ACCOUNT_ID,
-      domainId,
-      metadata: {
-        suite: "js-integration",
-        step: "account-asset",
-        timestamp: Date.now(),
-      },
-      privateKey,
-    });
-    const domainStatus = await client.submitTransactionAndWaitTyped(domainTx, {
-      hashHex: domainHash.toString("hex"),
-      intervalMs: 1_000,
-      timeoutMs: 30_000,
-    });
-    assertSuccessfulStatus(domainStatus, domainId);
-
-    const accountId = randomAccountId(domainId);
+    const accountId = randomAccountId();
     const { signedTransaction: accountTx, hash: accountHash } =
       buildRegisterAccountAndTransferTransaction({
         networkId: NETWORK_ID,
         authority: AUTHORITY_ACCOUNT_ID,
         account: {
           accountId,
-          domainId,
           metadata: {
             suite: "js-integration",
             step: "account-asset",
@@ -1034,7 +1011,7 @@ test(
     });
     assertSuccessfulStatus(accountStatus, accountId);
 
-    const assetDefinitionId = randomAssetDefinitionId(domainId);
+    const assetDefinitionId = randomAssetDefinitionId();
     const assetId = composeAssetId(assetDefinitionId, AUTHORITY_ACCOUNT_ID);
     const { signedTransaction: assetTx, hash: assetHash } =
       buildRegisterAssetDefinitionAndMintTransaction({
@@ -1181,32 +1158,14 @@ test(
       return;
     }
     const privateKey = decodePrivateKeyHex(PRIVATE_KEY_HEX);
-    const domainId = randomDomainId();
-    const senderAccountId = randomAccountId(domainId);
-    const receiverAccountId = randomAccountId(domainId);
-    const assetDefinitionId = randomAssetDefinitionId(domainId);
+    const senderAccountId = randomAccountId();
+    const receiverAccountId = randomAccountId();
+    const assetDefinitionId = randomAssetDefinitionId();
     const senderAssetId = composeAssetId(assetDefinitionId, senderAccountId);
     const receiverAssetId = composeAssetId(assetDefinitionId, receiverAccountId);
     const mintedQuantity = "15";
     const transferQuantity = "6";
     const remainingQuantity = (BigInt(mintedQuantity) - BigInt(transferQuantity)).toString();
-
-    const { signedTransaction: domainTx, hash: domainHash } = buildRegisterDomainTransaction({
-      networkId: NETWORK_ID,
-      authority: AUTHORITY_ACCOUNT_ID,
-      domainId,
-      metadata: {
-        suite: "js-integration",
-        step: "asset-transfer",
-      },
-      privateKey,
-    });
-    const domainStatus = await client.submitTransactionAndWaitTyped(domainTx, {
-      hashHex: domainHash.toString("hex"),
-      intervalMs: 1_000,
-      timeoutMs: 30_000,
-    });
-    assertSuccessfulStatus(domainStatus, domainId);
 
     const { signedTransaction: senderTx, hash: senderHash } =
       buildRegisterAccountAndTransferTransaction({
@@ -1214,7 +1173,6 @@ test(
         authority: AUTHORITY_ACCOUNT_ID,
         account: {
           accountId: senderAccountId,
-          domainId,
           metadata: {
             suite: "js-integration",
             step: "asset-transfer",
@@ -1236,7 +1194,6 @@ test(
         authority: AUTHORITY_ACCOUNT_ID,
         account: {
           accountId: receiverAccountId,
-          domainId,
           metadata: {
             suite: "js-integration",
             step: "asset-transfer",
@@ -2564,7 +2521,7 @@ test(
   async (t) => {
     if (!UAID_LITERAL) {
       t.diagnostic(
-        "set IROHA_TORII_INTEGRATION_UAID=uaid:<hex> (or raw 64-hex digest) to exercise UAID portfolio coverage",
+        "set IROHA_TORII_INTEGRATION_UAID=uaid:<64-lowercase-hex> to exercise UAID portfolio coverage",
       );
       return;
     }
@@ -2585,7 +2542,7 @@ test(
   async (t) => {
     if (!UAID_LITERAL) {
       t.diagnostic(
-        "set IROHA_TORII_INTEGRATION_UAID=uaid:<hex> (or raw 64-hex digest) to exercise UAID bindings coverage",
+        "set IROHA_TORII_INTEGRATION_UAID=uaid:<64-lowercase-hex> to exercise UAID bindings coverage",
       );
       return;
     }
@@ -2606,7 +2563,7 @@ test(
   async (t) => {
     if (!UAID_LITERAL) {
       t.diagnostic(
-        "set IROHA_TORII_INTEGRATION_UAID=uaid:<hex> (or raw 64-hex digest) to exercise UAID manifest coverage",
+        "set IROHA_TORII_INTEGRATION_UAID=uaid:<64-lowercase-hex> to exercise UAID manifest coverage",
       );
       return;
     }
@@ -4422,17 +4379,16 @@ function randomDomainId() {
   return randomIdentifier("jsintegration");
 }
 
-function randomAccountId(domainId) {
+function randomAccountId() {
   const label = randomIdentifier("jsacct");
   const publicKey = crypto
     .createHash("sha256")
-    .update(`${domainId}:${label}`)
+    .update(`account:${label}`)
     .digest();
   return AccountAddress.fromAccount({ publicKey }).toI105();
 }
 
-function randomAssetDefinitionId(domainId) {
-  void domainId;
+function randomAssetDefinitionId() {
   const value =
     INTEGRATION_ASSET_DEFINITION_IDS[
       randomAssetDefinitionCounter % INTEGRATION_ASSET_DEFINITION_IDS.length
@@ -4457,13 +4413,13 @@ function randomIdentifier(prefix) {
 
 function assertSuccessfulStatus(status, referenceId) {
   assert.ok(status, "expected submitTransactionAndWaitTyped to return a payload");
-  const kind = status?.status?.kind;
-  assert.ok(kind, "pipeline status should provide kind");
-  const normalized = kind.toLowerCase();
-  assert.ok(
-    SUCCESS_STATUSES.has(normalized),
-    `transaction for ${referenceId} reported ${kind}`,
+  assert.equal(
+    status.status?.kind,
+    "Applied",
+    `transaction for ${referenceId} did not reach Applied finality`,
   );
+  assert.equal(status.scope, "global");
+  assert.equal(status.resolved_from, "state");
 }
 
 async function waitForSumeragiStatusEvent(client, signal) {
@@ -4719,18 +4675,6 @@ async function iteratorIncludes(iterator, predicate) {
     }
   }
   return false;
-}
-
-function i105LiteralForAccount(accountId) {
-  const literal = String(accountId);
-  const separator = literal.lastIndexOf("@");
-  if (separator === -1) {
-    throw new Error(`account id "${literal}" must include a domain`);
-  }
-  const accountLiteral = literal.slice(0, separator);
-  const domain = literal.slice(separator + 1);
-  const summary = inspectAccountId(accountLiteral);
-  return `${summary.i105.value}@${domain}`;
 }
 
 async function waitForDaManifest(client, ticketHex, options = {}) {

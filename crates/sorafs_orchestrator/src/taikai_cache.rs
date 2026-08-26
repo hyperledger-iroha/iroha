@@ -277,6 +277,7 @@ struct TokenBucket {
     capacity: u64,
     refill_rate: u64,
     tokens: u64,
+    debt_bytes: u64,
     refill_remainder_nanos: u128,
     last_refill: Instant,
 }
@@ -286,6 +287,7 @@ impl TokenBucket {
             capacity,
             refill_rate,
             tokens: capacity,
+            debt_bytes: 0,
             refill_remainder_nanos: 0,
             last_refill: now,
         }
@@ -297,7 +299,11 @@ impl TokenBucket {
         const NANOS_PER_SECOND: u128 = 1_000_000_000;
         let elapsed_nanos = now.duration_since(self.last_refill).as_nanos();
         self.last_refill = now;
-        if self.tokens >= self.capacity || self.refill_rate == 0 {
+        if self.refill_rate == 0 {
+            self.refill_remainder_nanos = 0;
+            return;
+        }
+        if self.debt_bytes == 0 && self.tokens >= self.capacity {
             self.tokens = self.capacity;
             self.refill_remainder_nanos = 0;
             return;
@@ -305,11 +311,21 @@ impl TokenBucket {
         let refill_units = elapsed_nanos
             .saturating_mul(u128::from(self.refill_rate))
             .saturating_add(self.refill_remainder_nanos);
-        let added = refill_units / NANOS_PER_SECOND;
+        let mut added = refill_units / NANOS_PER_SECOND;
         let remainder = refill_units % NANOS_PER_SECOND;
         if added == 0 {
             self.refill_remainder_nanos = remainder;
             return;
+        }
+        if self.debt_bytes > 0 {
+            let debt = u128::from(self.debt_bytes);
+            if added < debt {
+                self.debt_bytes -= u64::try_from(added).expect("refill below u64 debt");
+                self.refill_remainder_nanos = remainder;
+                return;
+            }
+            added -= debt;
+            self.debt_bytes = 0;
         }
         let available_headroom = self.capacity.saturating_sub(self.tokens);
         if added >= u128::from(available_headroom) {
@@ -325,6 +341,17 @@ impl TokenBucket {
         self.refill(now);
         if self.tokens >= amount {
             self.tokens -= amount;
+            Ok(())
+        } else if self.capacity > 0
+            && amount > self.capacity
+            && self.tokens == self.capacity
+            && self.debt_bytes == 0
+        {
+            // A segment can legitimately exceed the configured burst. Admit it once the bucket
+            // is full, then repay the bytes beyond that burst before making tokens available
+            // again so oversized segments still respect the configured long-run rate.
+            self.tokens = 0;
+            self.debt_bytes = amount - self.capacity;
             Ok(())
         } else {
             Err(QosError::RateLimited {
@@ -1203,6 +1230,13 @@ impl TaikaiPullQueueConfig {
             max_backlog_segments: 256,
         }
     }
+    fn normalized(mut self) -> Self {
+        self.max_batch_segments = self.max_batch_segments.max(1);
+        self.max_batch_bytes = self.max_batch_bytes.max(1);
+        self.max_in_flight_batches = self.max_in_flight_batches.max(1);
+        self.max_backlog_segments = self.max_backlog_segments.max(1);
+        self
+    }
 }
 impl Default for TaikaiPullQueueConfig {
     fn default() -> Self {
@@ -1259,6 +1293,7 @@ impl TaikaiPullQueue {
         reliability: ReliabilityConfig,
     ) -> Self {
         let now = Instant::now();
+        let config = config.normalized();
         Self {
             config,
             shard_ring,
@@ -1276,11 +1311,6 @@ impl TaikaiPullQueue {
     fn record_shaper_denial(&mut self, class: QosClass) {
         record_taikai_qos_denial(class);
         self.stats.shaper_denials.increment(class);
-    }
-    fn requeue_front(&mut self, drained: Vec<PendingPull>) {
-        for pending in drained.into_iter().rev() {
-            self.pending.push_front(pending);
-        }
     }
     pub fn enqueue(&mut self, request: TaikaiPullRequest) -> Result<(), TaikaiQueueError> {
         self.enqueue_at(request, Instant::now())
@@ -1302,8 +1332,8 @@ impl TaikaiPullQueue {
             record_taikai_shard_failover(selection.preferred, selection.selected);
         }
         let shard = selection.selected;
-        self.stats.pending_segments += 1;
-        self.stats.pending_bytes += request.size_bytes;
+        self.stats.pending_segments = self.stats.pending_segments.saturating_add(1);
+        self.stats.pending_bytes = self.stats.pending_bytes.saturating_add(request.size_bytes);
         self.pending.push_back(PendingPull { shard, request });
         Ok(())
     }
@@ -1311,61 +1341,87 @@ impl TaikaiPullQueue {
         if self.pending.is_empty() || self.in_flight.len() >= self.config.max_in_flight_batches {
             return None;
         }
-        let mut segments = Vec::new();
-        let mut drained = Vec::new();
-        let mut shard: Option<TaikaiShardId> = None;
-        let mut qos = QosClass::Bulk;
-        let mut total_bytes = 0_u64;
-        while let Some(pending) = self.pending.front() {
-            if segments.len() >= self.config.max_batch_segments
-                || total_bytes >= self.config.max_batch_bytes
-            {
-                break;
-            }
-            let matches_shard = match (shard, pending.shard) {
-                (None, hint) => {
-                    shard = hint;
-                    true
+        let mut heads_to_scan = self.pending.len();
+        while heads_to_scan > 0 {
+            let mut drained = Vec::new();
+            let mut total_bytes = 0_u64;
+            while let Some(pending) = self.pending.front() {
+                if drained.len() >= self.config.max_batch_segments
+                    || total_bytes >= self.config.max_batch_bytes
+                {
+                    break;
                 }
-                (Some(existing), Some(candidate)) => existing == candidate,
-                (Some(_), None) => false,
-            };
-            if !matches_shard {
+                if drained
+                    .first()
+                    .is_some_and(|first: &PendingPull| first.shard != pending.shard)
+                {
+                    break;
+                }
+                let Some(projected_bytes) = total_bytes.checked_add(pending.request.size_bytes)
+                else {
+                    break;
+                };
+                // Always allow one oversized segment to make progress, but never coalesce another
+                // request once doing so would cross the configured byte limit.
+                if !drained.is_empty() && projected_bytes > self.config.max_batch_bytes {
+                    break;
+                }
+                total_bytes = projected_bytes;
+                drained.push(self.pending.pop_front().expect("front"));
+            }
+            if drained.is_empty() {
+                return None;
+            }
+
+            loop {
+                let qos = drained.iter().fold(QosClass::Bulk, |class, pending| {
+                    merge_qos(class, pending.request.qos)
+                });
+                match self.shaper.try_acquire(qos, total_bytes, now) {
+                    Ok(()) => {
+                        let shard = drained.first().and_then(|pending| pending.shard);
+                        let segments: Vec<_> = drained
+                            .iter()
+                            .map(|pending| pending.request.clone())
+                            .collect();
+                        self.stats.pending_segments = self
+                            .stats
+                            .pending_segments
+                            .saturating_sub(segments.len() as u64);
+                        self.stats.pending_bytes =
+                            self.stats.pending_bytes.saturating_sub(total_bytes);
+                        let id = TaikaiPullBatchId::next(&mut self.next_batch_id);
+                        let batch = TaikaiPullBatch::new(id, shard, qos, segments, false);
+                        self.in_flight.insert(
+                            id,
+                            InFlightBatch {
+                                batch: batch.clone(),
+                                issued_at: now,
+                            },
+                        );
+                        self.stats.in_flight_batches += 1;
+                        record_taikai_queue_event("issued", Some(batch.qos));
+                        return Some(batch);
+                    }
+                    Err(QosError::RateLimited { class, .. }) => {
+                        self.record_shaper_denial(class);
+                    }
+                }
+
+                if drained.len() > 1 {
+                    let deferred = drained.pop().expect("batch contains a suffix");
+                    total_bytes = total_bytes.saturating_sub(deferred.request.size_bytes);
+                    self.pending.push_front(deferred);
+                    continue;
+                }
+
+                let denied = drained.pop().expect("batch contains one request");
+                self.pending.push_back(denied);
+                heads_to_scan -= 1;
                 break;
             }
-            let pending = self.pending.pop_front().expect("front");
-            qos = merge_qos(qos, pending.request.qos);
-            total_bytes = total_bytes.saturating_add(pending.request.size_bytes);
-            segments.push(pending.request.clone());
-            drained.push(pending);
         }
-        if segments.is_empty() {
-            return None;
-        }
-        if let Err(QosError::RateLimited { class, .. }) =
-            self.shaper.try_acquire(qos, total_bytes, now)
-        {
-            self.record_shaper_denial(class);
-            self.requeue_front(drained);
-            return None;
-        }
-        self.stats.pending_segments = self
-            .stats
-            .pending_segments
-            .saturating_sub(segments.len() as u64);
-        self.stats.pending_bytes = self.stats.pending_bytes.saturating_sub(total_bytes);
-        let id = TaikaiPullBatchId::next(&mut self.next_batch_id);
-        let batch = TaikaiPullBatch::new(id, shard, qos, segments, false);
-        self.in_flight.insert(
-            id,
-            InFlightBatch {
-                batch: batch.clone(),
-                issued_at: now,
-            },
-        );
-        self.stats.in_flight_batches += 1;
-        record_taikai_queue_event("issued", Some(batch.qos));
-        Some(batch)
+        None
     }
     pub fn issue_specific(&mut self, key: &SegmentKey, now: Instant) -> Option<TaikaiPullBatch> {
         if self.pending.is_empty() || self.in_flight.len() >= self.config.max_in_flight_batches {
@@ -1476,13 +1532,36 @@ impl TaikaiPullQueue {
         }
         false
     }
+    fn pending_batch_count(&self) -> u64 {
+        let mut batches = 0_u64;
+        let mut batch_shard: Option<Option<TaikaiShardId>> = None;
+        let mut batch_segments = 0_usize;
+        let mut batch_bytes = 0_u64;
+        for pending in &self.pending {
+            let projected_bytes = batch_bytes.checked_add(pending.request.size_bytes);
+            let fits = batch_shard == Some(pending.shard)
+                && batch_segments < self.config.max_batch_segments
+                && batch_bytes < self.config.max_batch_bytes
+                && projected_bytes.is_some_and(|bytes| bytes <= self.config.max_batch_bytes);
+            if !fits {
+                batches = batches.saturating_add(1);
+                batch_shard = Some(pending.shard);
+                batch_segments = 1;
+                batch_bytes = pending.request.size_bytes;
+            } else {
+                batch_segments += 1;
+                batch_bytes = projected_bytes.expect("checked batch byte total");
+            }
+        }
+        batches
+    }
     #[must_use]
     pub fn stats(&mut self) -> TaikaiPullQueueStats {
-        let pending_batches = if self.pending.is_empty() {
-            0
-        } else {
-            self.pending.len().div_ceil(self.config.max_batch_segments) as u64
-        };
+        self.stats.pending_segments = u64::try_from(self.pending.len()).unwrap_or(u64::MAX);
+        self.stats.pending_bytes = self.pending.iter().fold(0_u64, |total, pending| {
+            total.saturating_add(pending.request.size_bytes)
+        });
+        let pending_batches = self.pending_batch_count();
         let reliability = self.reliability.stats(Instant::now());
         self.stats.open_circuits = reliability.open_circuits;
         self.stats.failovers = reliability.failovers;
@@ -1530,6 +1609,7 @@ impl TaikaiCacheHandle {
         config: TaikaiCacheConfig,
         queue_config: TaikaiPullQueueConfig,
     ) -> Self {
+        let queue_config = queue_config.normalized();
         let reliability = config.reliability_config();
         let queue = TaikaiPullQueue::new(
             queue_config,
@@ -1728,7 +1808,8 @@ impl CacheAdmissionRecord {
     ///
     /// # Errors
     ///
-    /// Returns [`CacheAdmissionError`] when the TTL is zero, overflows, or timestamp addition wraps.
+    /// Returns [`CacheAdmissionError`] when the TTL is shorter than one millisecond, overflows, or
+    /// timestamp addition wraps.
     pub fn from_segment(
         shard_id: TaikaiShardId,
         issuer: GuardDirectoryId,
@@ -1745,6 +1826,9 @@ impl CacheAdmissionRecord {
             .as_millis()
             .try_into()
             .map_err(|_| CacheAdmissionError::TtlOverflow)?;
+        if ttl_ms == 0 {
+            return Err(CacheAdmissionError::InvalidTtl);
+        }
         let expires_unix_ms = issued_unix_ms
             .checked_add(ttl_ms)
             .ok_or(CacheAdmissionError::TimestampOverflow)?;
@@ -1810,14 +1894,19 @@ impl CacheAdmissionEnvelope {
     ///
     /// # Errors
     ///
-    /// Returns [`CacheAdmissionError`] when the signature fails or the envelope expired.
+    /// Returns [`CacheAdmissionError`] when the version is unsupported, the signature fails, or
+    /// the envelope expired.
     pub fn verify(&self, now_unix_ms: u64) -> Result<(), CacheAdmissionError> {
-        if now_unix_ms >= self.body.expires_unix_ms {
-            return Err(CacheAdmissionError::Expired {
-                now_unix_ms,
-                expires_unix_ms: self.body.expires_unix_ms,
+        if self.body.version != CACHE_ADMISSION_VERSION_V1 {
+            return Err(CacheAdmissionError::UnsupportedRecordVersion {
+                version: self.body.version,
             });
         }
+        verify_validity_window(
+            self.body.issued_unix_ms,
+            self.body.expires_unix_ms,
+            now_unix_ms,
+        )?;
         let canonical = self.body.canonical_bytes()?;
         verify_signature_for_signer(&self.signature, self.signer(), &canonical)
             .map_err(|_| CacheAdmissionError::InvalidSignature)
@@ -1863,7 +1952,8 @@ impl CacheAdmissionGossipBody {
     ///
     /// # Errors
     ///
-    /// Returns [`CacheAdmissionError`] when TTL is zero or the expiry overflows.
+    /// Returns [`CacheAdmissionError`] when TTL is shorter than one millisecond, the expiry
+    /// overflows, or the gossip issue time falls outside the signed record's validity interval.
     pub fn new(
         envelope: CacheAdmissionEnvelope,
         issued_unix_ms: u64,
@@ -1876,7 +1966,8 @@ impl CacheAdmissionGossipBody {
     ///
     /// # Errors
     ///
-    /// Returns [`CacheAdmissionError`] when TTL is zero or the expiry overflows.
+    /// Returns [`CacheAdmissionError`] when TTL is shorter than one millisecond, the expiry
+    /// overflows, or the gossip issue time falls outside the signed record's validity interval.
     pub fn with_nonce(
         envelope: CacheAdmissionEnvelope,
         issued_unix_ms: u64,
@@ -1886,11 +1977,18 @@ impl CacheAdmissionGossipBody {
         if ttl.is_zero() {
             return Err(CacheAdmissionError::InvalidTtl);
         }
+        let envelope_issued = envelope.body().issued_unix_ms();
         let envelope_expiry = envelope.body().expires_unix_ms();
+        if issued_unix_ms < envelope_issued || issued_unix_ms >= envelope_expiry {
+            return Err(CacheAdmissionError::GossipValidityOutsideEnvelope);
+        }
         let ttl_ms: u64 = ttl
             .as_millis()
             .try_into()
             .map_err(|_| CacheAdmissionError::TtlOverflow)?;
+        if ttl_ms == 0 {
+            return Err(CacheAdmissionError::InvalidTtl);
+        }
         let mut nonce = [0u8; 16];
         rng.try_fill_bytes(&mut nonce)
             .map_err(|error| CacheAdmissionError::RandomNonce(error.to_string()))?;
@@ -1952,15 +2050,29 @@ impl CacheAdmissionGossip {
     ///
     /// # Errors
     ///
-    /// Returns [`CacheAdmissionError`] when the signature fails or the gossip body expired.
+    /// Returns [`CacheAdmissionError`] when the version is unsupported, the signature fails, or
+    /// the gossip body expired.
     pub fn verify(&self, now_unix_ms: u64) -> Result<(), CacheAdmissionError> {
-        if now_unix_ms >= self.body.expires_unix_ms {
-            return Err(CacheAdmissionError::Expired {
-                now_unix_ms,
-                expires_unix_ms: self.body.expires_unix_ms,
+        if self.body.version != CACHE_ADMISSION_GOSSIP_VERSION_V1 {
+            return Err(CacheAdmissionError::UnsupportedGossipVersion {
+                version: self.body.version,
             });
         }
-        self.body.envelope.verify(now_unix_ms)?;
+        verify_validity_window(
+            self.body.issued_unix_ms,
+            self.body.expires_unix_ms,
+            now_unix_ms,
+        )?;
+        let envelope = &self.body.envelope;
+        if self.body.issued_unix_ms < envelope.body().issued_unix_ms
+            || self.body.expires_unix_ms > envelope.body().expires_unix_ms
+        {
+            return Err(CacheAdmissionError::GossipValidityOutsideEnvelope);
+        }
+        if self.signer() != envelope.signer() {
+            return Err(CacheAdmissionError::SignerMismatch);
+        }
+        envelope.verify(now_unix_ms)?;
         let canonical = self.body.canonical_bytes()?;
         verify_signature_for_signer(&self.signature, self.signer(), &canonical)
             .map_err(|_| CacheAdmissionError::InvalidSignature)
@@ -2016,7 +2128,8 @@ impl CacheAdmissionReplayFilter {
     ///
     /// # Errors
     ///
-    /// Returns [`CacheAdmissionError`] when TTL or capacity are zero, or TTL overflows.
+    /// Returns [`CacheAdmissionError`] when TTL is shorter than one millisecond, capacity is zero,
+    /// or TTL overflows.
     pub fn new(ttl: Duration, capacity: usize) -> Result<Self, CacheAdmissionError> {
         if ttl.is_zero() {
             return Err(CacheAdmissionError::InvalidReplayWindow);
@@ -2028,6 +2141,9 @@ impl CacheAdmissionReplayFilter {
             .as_millis()
             .try_into()
             .map_err(|_| CacheAdmissionError::TtlOverflow)?;
+        if ttl_ms == 0 {
+            return Err(CacheAdmissionError::InvalidReplayWindow);
+        }
         Ok(Self {
             ttl_ms,
             capacity,
@@ -2058,20 +2174,27 @@ impl CacheAdmissionReplayFilter {
         self.window.push_back((expires_at, digest));
         self.index.insert(digest, expires_at);
         if self.window.len() > self.capacity
-            && let Some((_, evicted)) = self.window.pop_front()
+            && let Some((expires, evicted)) = self.window.pop_front()
         {
-            self.index.remove(&evicted);
+            self.remove_index_if_current(evicted, expires);
         }
         Ok(true)
     }
-    fn evict_expired(&mut self, now_unix_ms: u64) {
-        while let Some((expires, digest)) = self.window.front().copied() {
-            if expires > now_unix_ms {
-                break;
-            }
-            self.window.pop_front();
+    fn remove_index_if_current(&mut self, digest: [u8; 32], expires: u64) {
+        if self.index.get(&digest) == Some(&expires) {
             self.index.remove(&digest);
         }
+    }
+    fn evict_expired(&mut self, now_unix_ms: u64) {
+        let mut retained = VecDeque::with_capacity(self.window.len());
+        while let Some((expires, digest)) = self.window.pop_front() {
+            if expires <= now_unix_ms {
+                self.remove_index_if_current(digest, expires);
+            } else {
+                retained.push_back((expires, digest));
+            }
+        }
+        self.window = retained;
     }
 }
 /// Errors produced by cache admission gossip helpers.
@@ -2079,9 +2202,9 @@ impl CacheAdmissionReplayFilter {
 pub enum CacheAdmissionError {
     #[error("failed to serialize cache admission record: {0}")]
     Serialization(NoritoError),
-    #[error("cache admission TTL must be greater than zero")]
+    #[error("cache admission TTL must be at least one millisecond")]
     InvalidTtl,
-    #[error("cache admission replay window must be greater than zero")]
+    #[error("cache admission replay window must be at least one millisecond")]
     InvalidReplayWindow,
     #[error("cache admission replay filter capacity must be greater than zero")]
     InvalidReplayCapacity,
@@ -2095,11 +2218,56 @@ pub enum CacheAdmissionError {
     Signing(String),
     #[error("cache admission signature verification failed")]
     InvalidSignature,
+    #[error("unsupported cache admission record version {version}")]
+    UnsupportedRecordVersion { version: u16 },
+    #[error("unsupported cache admission gossip version {version}")]
+    UnsupportedGossipVersion { version: u16 },
+    #[error(
+        "cache admission validity window is invalid: issued={issued_unix_ms}, expires={expires_unix_ms}"
+    )]
+    InvalidValidityWindow {
+        issued_unix_ms: u64,
+        expires_unix_ms: u64,
+    },
+    #[error("cache admission entry is not valid before {issued_unix_ms}, now={now_unix_ms}")]
+    NotYetValid {
+        now_unix_ms: u64,
+        issued_unix_ms: u64,
+    },
+    #[error("cache admission gossip validity must be contained by its signed record")]
+    GossipValidityOutsideEnvelope,
+    #[error("cache admission gossip signer does not match its signed record signer")]
+    SignerMismatch,
     #[error("cache admission envelope expired at {expires_unix_ms}, now={now_unix_ms}")]
     Expired {
         now_unix_ms: u64,
         expires_unix_ms: u64,
     },
+}
+fn verify_validity_window(
+    issued_unix_ms: u64,
+    expires_unix_ms: u64,
+    now_unix_ms: u64,
+) -> Result<(), CacheAdmissionError> {
+    if issued_unix_ms >= expires_unix_ms {
+        return Err(CacheAdmissionError::InvalidValidityWindow {
+            issued_unix_ms,
+            expires_unix_ms,
+        });
+    }
+    if now_unix_ms < issued_unix_ms {
+        return Err(CacheAdmissionError::NotYetValid {
+            now_unix_ms,
+            issued_unix_ms,
+        });
+    }
+    if now_unix_ms >= expires_unix_ms {
+        return Err(CacheAdmissionError::Expired {
+            now_unix_ms,
+            expires_unix_ms,
+        });
+    }
+    Ok(())
 }
 /// Default replay TTL for cache admission gossip entries.
 pub const CACHE_ADMISSION_REPLAY_DEFAULT_TTL: Duration = Duration::from_secs(30);
@@ -2151,7 +2319,9 @@ impl CacheAdmissionTracker {
         let body = gossip.body();
         let record = body.envelope().body();
         self.active_shards
-            .insert(record.shard_id, body.expires_unix_ms());
+            .entry(record.shard_id)
+            .and_modify(|expires| *expires = (*expires).max(body.expires_unix_ms()))
+            .or_insert_with(|| body.expires_unix_ms());
         let _ = self.evict_expired(now_unix_ms);
         self.refresh_ring();
         Ok(true)
@@ -2336,6 +2506,159 @@ mod tests {
         gossip.verify(issued_ms).expect("admission gossip verifies");
     }
     #[test]
+    fn cache_admission_verifiers_reject_unsupported_versions() {
+        let issued_ms = 1_726_000_200_000;
+        let ttl = Duration::from_secs(30);
+        let cached = dummy_segment(44, 512, QosClass::Priority);
+        let key_pair = cache_admission_fixture_keypair();
+        let mut record = CacheAdmissionRecord::from_segment(
+            TaikaiShardId(7),
+            GuardDirectoryId::new("soranet/cache"),
+            &cached,
+            CacheTierKind::Hot,
+            CacheAdmissionAction::Admit,
+            issued_ms,
+            ttl,
+        )
+        .expect("record");
+        record.version = CACHE_ADMISSION_VERSION_V1 + 1;
+        let envelope = CacheAdmissionEnvelope::sign(record, &key_pair).expect("envelope");
+        let error = envelope
+            .verify(issued_ms)
+            .expect_err("unsupported record version must be rejected");
+        assert!(matches!(
+            error,
+            CacheAdmissionError::UnsupportedRecordVersion { version }
+                if version == CACHE_ADMISSION_VERSION_V1 + 1
+        ));
+
+        let valid_envelope = cache_admission_gossip(TaikaiShardId(7), 44, issued_ms, ttl)
+            .body()
+            .envelope()
+            .clone();
+        let mut rng = StdRng::seed_from_u64(44);
+        let mut body =
+            CacheAdmissionGossipBody::with_nonce(valid_envelope, issued_ms, ttl, &mut rng)
+                .expect("gossip body");
+        body.version = CACHE_ADMISSION_GOSSIP_VERSION_V1 + 1;
+        let gossip = CacheAdmissionGossip::sign(body, &key_pair).expect("gossip");
+        let error = gossip
+            .verify(issued_ms)
+            .expect_err("unsupported gossip version must be rejected");
+        assert!(matches!(
+            error,
+            CacheAdmissionError::UnsupportedGossipVersion { version }
+                if version == CACHE_ADMISSION_GOSSIP_VERSION_V1 + 1
+        ));
+    }
+    #[test]
+    fn cache_admission_gossip_binds_outer_and_inner_signers() {
+        let issued_ms = 1_726_000_200_000;
+        let ttl = Duration::from_secs(30);
+        let inner_key = cache_admission_fixture_keypair();
+        let outer_key = KeyPair::try_from_seed(vec![0xCD; 32], Algorithm::Ed25519)
+            .expect("derive distinct outer key");
+        let cached = dummy_segment(48, 512, QosClass::Priority);
+        let record = CacheAdmissionRecord::from_segment(
+            TaikaiShardId(7),
+            GuardDirectoryId::new("soranet/cache"),
+            &cached,
+            CacheTierKind::Hot,
+            CacheAdmissionAction::Admit,
+            issued_ms,
+            ttl,
+        )
+        .expect("record");
+        let envelope = CacheAdmissionEnvelope::sign(record, &inner_key).expect("envelope");
+        let mut rng = StdRng::seed_from_u64(48);
+        let body = CacheAdmissionGossipBody::with_nonce(envelope, issued_ms, ttl, &mut rng)
+            .expect("gossip body");
+        let gossip = CacheAdmissionGossip::sign(body, &outer_key).expect("gossip");
+
+        assert!(matches!(
+            gossip
+                .verify(issued_ms)
+                .expect_err("independently valid outer signer must not replace record signer"),
+            CacheAdmissionError::SignerMismatch
+        ));
+    }
+    #[test]
+    fn cache_admission_verifiers_enforce_validity_intervals() {
+        let issued_ms = 1_726_000_200_000;
+        let ttl = Duration::from_secs(30);
+        let key_pair = cache_admission_fixture_keypair();
+        let cached = dummy_segment(49, 512, QosClass::Priority);
+        let record = CacheAdmissionRecord::from_segment(
+            TaikaiShardId(7),
+            GuardDirectoryId::new("soranet/cache"),
+            &cached,
+            CacheTierKind::Hot,
+            CacheAdmissionAction::Admit,
+            issued_ms,
+            ttl,
+        )
+        .expect("record");
+        let envelope = CacheAdmissionEnvelope::sign(record.clone(), &key_pair).expect("envelope");
+        assert!(matches!(
+            envelope
+                .verify(issued_ms - 1)
+                .expect_err("record must not verify before issuance"),
+            CacheAdmissionError::NotYetValid { .. }
+        ));
+
+        let mut invalid_record = record;
+        invalid_record.expires_unix_ms = invalid_record.issued_unix_ms;
+        let invalid =
+            CacheAdmissionEnvelope::sign(invalid_record, &key_pair).expect("signed invalid record");
+        assert!(matches!(
+            invalid
+                .verify(issued_ms)
+                .expect_err("empty record validity interval must fail"),
+            CacheAdmissionError::InvalidValidityWindow { .. }
+        ));
+
+        let mut rng = StdRng::seed_from_u64(49);
+        let mut body = CacheAdmissionGossipBody::with_nonce(
+            envelope,
+            issued_ms,
+            Duration::from_secs(1),
+            &mut rng,
+        )
+        .expect("gossip body");
+        body.issued_unix_ms = issued_ms - 1;
+        let gossip = CacheAdmissionGossip::sign(body, &key_pair).expect("gossip");
+        assert!(matches!(
+            gossip
+                .verify(issued_ms - 1)
+                .expect_err("gossip interval must not precede its record"),
+            CacheAdmissionError::GossipValidityOutsideEnvelope
+        ));
+    }
+    #[test]
+    fn cache_admission_gossip_constructor_rejects_interval_outside_record() {
+        let issued_ms = 1_726_000_200_000;
+        let ttl = Duration::from_secs(30);
+        let envelope = cache_admission_gossip(TaikaiShardId(7), 50, issued_ms, ttl)
+            .body()
+            .envelope()
+            .clone();
+        let expires_ms = envelope.body().expires_unix_ms();
+        let mut rng = StdRng::seed_from_u64(50);
+        for invalid_issued in [issued_ms - 1, expires_ms] {
+            let error = CacheAdmissionGossipBody::with_nonce(
+                envelope.clone(),
+                invalid_issued,
+                Duration::from_secs(1),
+                &mut rng,
+            )
+            .expect_err("constructor must reject an outer interval outside its signed record");
+            assert!(matches!(
+                error,
+                CacheAdmissionError::GossipValidityOutsideEnvelope
+            ));
+        }
+    }
+    #[test]
     fn cache_admission_record_rejects_zero_ttl() {
         let issuer = GuardDirectoryId::new("soranet/cache");
         let cached = dummy_segment(45, 512, QosClass::Priority);
@@ -2351,6 +2674,48 @@ mod tests {
         )
         .expect_err("zero-TTL admission records must be rejected");
         assert!(matches!(error, CacheAdmissionError::InvalidTtl));
+    }
+    #[test]
+    fn cache_admission_rejects_submillisecond_windows() {
+        let issued_ms = 1_726_000_200_000;
+        let cached = dummy_segment(45, 512, QosClass::Priority);
+        let error = CacheAdmissionRecord::from_segment(
+            TaikaiShardId(7),
+            GuardDirectoryId::new("soranet/cache"),
+            &cached,
+            CacheTierKind::Hot,
+            CacheAdmissionAction::Admit,
+            issued_ms,
+            Duration::from_nanos(1),
+        )
+        .expect_err("sub-millisecond admission TTL must not collapse to zero");
+        assert!(matches!(error, CacheAdmissionError::InvalidTtl));
+
+        let record = CacheAdmissionRecord::from_segment(
+            TaikaiShardId(7),
+            GuardDirectoryId::new("soranet/cache"),
+            &cached,
+            CacheTierKind::Hot,
+            CacheAdmissionAction::Admit,
+            issued_ms,
+            Duration::from_secs(1),
+        )
+        .expect("valid admission record");
+        let key_pair = cache_admission_fixture_keypair();
+        let envelope = CacheAdmissionEnvelope::sign(record, &key_pair).expect("envelope");
+        let mut rng = StdRng::seed_from_u64(45);
+        let error = CacheAdmissionGossipBody::with_nonce(
+            envelope,
+            issued_ms,
+            Duration::from_nanos(1),
+            &mut rng,
+        )
+        .expect_err("sub-millisecond gossip TTL must not collapse to zero");
+        assert!(matches!(error, CacheAdmissionError::InvalidTtl));
+
+        let error = CacheAdmissionReplayFilter::new(Duration::from_nanos(1), 8)
+            .expect_err("sub-millisecond replay windows must not disable replay protection");
+        assert!(matches!(error, CacheAdmissionError::InvalidReplayWindow));
     }
     #[test]
     fn cache_admission_envelope_rejects_exact_expiry_boundary() {
@@ -2698,6 +3063,25 @@ mod tests {
             .expect("second half-second refill should preserve the remainder");
     }
     #[test]
+    fn qos_bucket_repays_oversized_request_debt_before_refilling_burst() {
+        let now = Instant::now();
+        let mut bucket = TokenBucket::new(10, 10, now);
+        bucket
+            .try_consume(25, now)
+            .expect("a full bucket admits one oversized segment");
+        let err = bucket
+            .try_consume(25, now + Duration::from_secs(1))
+            .expect_err("oversized byte debt must be repaid before tokens refill");
+        assert!(matches!(err, QosError::RateLimited { available: 0, .. }));
+        let err = bucket
+            .try_consume(25, now + Duration::from_secs(2))
+            .expect_err("a partial refill must not admit another oversized segment");
+        assert!(matches!(err, QosError::RateLimited { available: 5, .. }));
+        bucket
+            .try_consume(25, now + Duration::from_millis(2_500))
+            .expect("a second oversized segment is eligible only after 25 bytes refill");
+    }
+    #[test]
     fn taikai_cache_records_metrics() {
         let metrics = global_or_default();
         let hit_before = metrics
@@ -2904,6 +3288,135 @@ mod tests {
         assert!(queue.issue_ready_batch(now).is_none());
     }
     #[test]
+    fn taikai_pull_queue_respects_batch_byte_limit_when_coalescing() {
+        let mut queue = TaikaiPullQueue::new(
+            TaikaiPullQueueConfig {
+                max_batch_segments: 4,
+                max_batch_bytes: 100,
+                max_in_flight_batches: 2,
+                hedge_after: Duration::from_millis(50),
+                max_backlog_segments: 8,
+            },
+            QosConfig::balanced(),
+            TaikaiShardRing::new(vec![TaikaiShardId(1)]),
+            ReliabilityConfig::default(),
+        );
+        for sequence in [210, 211] {
+            queue
+                .enqueue(TaikaiPullRequest::new(
+                    dummy_segment(sequence, 64, QosClass::Standard).key(),
+                    QosClass::Standard,
+                    60,
+                    None,
+                ))
+                .expect("enqueue");
+        }
+        assert_eq!(queue.stats().pending_batches, 2);
+        let now = Instant::now();
+        let first = queue.issue_ready_batch(now).expect("first batch");
+        assert_eq!(first.segments.len(), 1);
+        assert_eq!(first.total_bytes, 60);
+        let second = queue.issue_ready_batch(now).expect("second batch");
+        assert_eq!(second.segments.len(), 1);
+        assert_eq!(second.total_bytes, 60);
+    }
+    #[test]
+    fn taikai_pull_queue_normalizes_zero_progress_limits() {
+        let mut queue = TaikaiPullQueue::new(
+            TaikaiPullQueueConfig {
+                max_batch_segments: 0,
+                max_batch_bytes: 0,
+                max_in_flight_batches: 0,
+                hedge_after: Duration::ZERO,
+                max_backlog_segments: 0,
+            },
+            QosConfig::balanced(),
+            TaikaiShardRing::new(Vec::new()),
+            ReliabilityConfig::default(),
+        );
+        queue
+            .enqueue(TaikaiPullRequest::new(
+                dummy_segment(212, 1, QosClass::Standard).key(),
+                QosClass::Standard,
+                1,
+                None,
+            ))
+            .expect("normalized backlog accepts a request");
+        assert_eq!(queue.stats().pending_batches, 1);
+        assert!(
+            queue.issue_ready_batch(Instant::now()).is_some(),
+            "normalized queue limits must permit progress"
+        );
+    }
+    #[test]
+    fn taikai_pull_queue_does_not_mix_unassigned_and_assigned_shards() {
+        let mut queue = TaikaiPullQueue::new(
+            TaikaiPullQueueConfig {
+                max_batch_segments: 4,
+                max_batch_bytes: 1_024,
+                max_in_flight_batches: 2,
+                hedge_after: Duration::from_millis(50),
+                max_backlog_segments: 8,
+            },
+            QosConfig::balanced(),
+            TaikaiShardRing::new(Vec::new()),
+            ReliabilityConfig::default(),
+        );
+        queue
+            .enqueue(TaikaiPullRequest::new(
+                dummy_segment(220, 64, QosClass::Standard).key(),
+                QosClass::Standard,
+                60,
+                None,
+            ))
+            .expect("enqueue without a shard");
+        queue.set_shard_ring(TaikaiShardRing::new(vec![TaikaiShardId(9)]));
+        queue
+            .enqueue(TaikaiPullRequest::new(
+                dummy_segment(221, 64, QosClass::Standard).key(),
+                QosClass::Standard,
+                60,
+                None,
+            ))
+            .expect("enqueue with a shard");
+
+        let now = Instant::now();
+        let unassigned = queue.issue_ready_batch(now).expect("unassigned batch");
+        assert_eq!(unassigned.shard, None);
+        assert_eq!(unassigned.segments.len(), 1);
+        let assigned = queue.issue_ready_batch(now).expect("assigned batch");
+        assert_eq!(assigned.shard, Some(TaikaiShardId(9)));
+        assert_eq!(assigned.segments.len(), 1);
+    }
+    #[test]
+    fn taikai_pull_queue_pending_byte_stats_saturate() {
+        let mut queue = TaikaiPullQueue::new(
+            TaikaiPullQueueConfig {
+                max_backlog_segments: 2,
+                ..TaikaiPullQueueConfig::default()
+            },
+            QosConfig::balanced(),
+            TaikaiShardRing::new(Vec::new()),
+            ReliabilityConfig::default(),
+        );
+        let mut keys = Vec::new();
+        for (sequence, size_bytes) in [(230, u64::MAX), (231, 1)] {
+            let key = dummy_segment(sequence, 1, QosClass::Bulk).key();
+            queue
+                .enqueue(TaikaiPullRequest::new(
+                    key.clone(),
+                    QosClass::Bulk,
+                    size_bytes,
+                    None,
+                ))
+                .expect("enqueue");
+            keys.push(key);
+        }
+        assert_eq!(queue.stats().pending_bytes, u64::MAX);
+        assert!(queue.cancel_pending(&keys[0]));
+        assert_eq!(queue.stats().pending_bytes, 1);
+    }
+    #[test]
     fn taikai_pull_queue_enforces_backpressure() {
         let mut queue = TaikaiPullQueue::new(
             TaikaiPullQueueConfig {
@@ -3053,6 +3566,108 @@ mod tests {
         assert_eq!(second.segments.len(), 1);
         stats = queue.stats();
         assert_eq!(stats.pending_segments, 0);
+    }
+    #[test]
+    fn taikai_pull_queue_skips_rate_limited_head_request() {
+        let mut queue = TaikaiPullQueue::new(
+            TaikaiPullQueueConfig {
+                max_batch_segments: 4,
+                max_batch_bytes: 512,
+                max_in_flight_batches: 2,
+                hedge_after: Duration::from_millis(20),
+                max_backlog_segments: 4,
+            },
+            QosConfig {
+                priority_rate_bps: 1,
+                standard_rate_bps: 256,
+                bulk_rate_bps: 256,
+                burst_multiplier: 1,
+            },
+            TaikaiShardRing::new(vec![TaikaiShardId(9)]),
+            ReliabilityConfig::default(),
+        );
+        let now = Instant::now();
+        queue
+            .enqueue_at(
+                TaikaiPullRequest::new(
+                    dummy_segment(612, 1, QosClass::Priority).key(),
+                    QosClass::Priority,
+                    1,
+                    None,
+                ),
+                now,
+            )
+            .expect("enqueue token consumer");
+        let first = queue
+            .issue_ready_batch(now)
+            .expect("consume priority token");
+        assert_eq!(first.segments[0].key.sequence(), 612);
+        queue
+            .enqueue_at(
+                TaikaiPullRequest::new(
+                    dummy_segment(613, 1, QosClass::Priority).key(),
+                    QosClass::Priority,
+                    1,
+                    None,
+                ),
+                now,
+            )
+            .expect("enqueue rate-limited head");
+        queue
+            .enqueue_at(
+                TaikaiPullRequest::new(
+                    dummy_segment(614, 1, QosClass::Standard).key(),
+                    QosClass::Standard,
+                    1,
+                    None,
+                ),
+                now,
+            )
+            .expect("enqueue ready request");
+
+        let ready = queue
+            .issue_ready_batch(now)
+            .expect("ready class must bypass rate-limited head");
+        assert_eq!(ready.qos, QosClass::Standard);
+        assert_eq!(ready.segments.len(), 1);
+        assert_eq!(ready.segments[0].key.sequence(), 614);
+        assert_eq!(queue.stats().pending_segments, 1);
+    }
+    #[test]
+    fn taikai_pull_queue_issues_segment_larger_than_qos_burst() {
+        let mut queue = TaikaiPullQueue::new(
+            TaikaiPullQueueConfig {
+                max_batch_segments: 1,
+                max_batch_bytes: 512,
+                max_in_flight_batches: 1,
+                hedge_after: Duration::from_millis(20),
+                max_backlog_segments: 2,
+            },
+            QosConfig {
+                priority_rate_bps: 10,
+                standard_rate_bps: 10,
+                bulk_rate_bps: 10,
+                burst_multiplier: 1,
+            },
+            TaikaiShardRing::new(Vec::new()),
+            ReliabilityConfig::default(),
+        );
+        let now = Instant::now();
+        queue
+            .enqueue_at(
+                TaikaiPullRequest::new(
+                    dummy_segment(615, 1, QosClass::Bulk).key(),
+                    QosClass::Bulk,
+                    20,
+                    None,
+                ),
+                now,
+            )
+            .expect("enqueue oversized request");
+        let batch = queue
+            .issue_ready_batch(now)
+            .expect("full bucket must permit one oversized segment");
+        assert_eq!(batch.total_bytes, 20);
     }
     #[test]
     fn taikai_pull_queue_hedges_after_timeout() {
@@ -3359,6 +3974,34 @@ mod tests {
         assert!(tracker.active_shards().is_empty());
     }
     #[test]
+    fn cache_admission_tracker_does_not_shorten_existing_shard_lifetime() {
+        let handle = TaikaiCacheHandle::from_config(TaikaiCacheConfig::default());
+        let replay =
+            CacheAdmissionReplayFilter::new(Duration::from_secs(5), 8).expect("replay filter");
+        let mut tracker = CacheAdmissionTracker::new(handle, replay);
+        let issued_ms = 1_726_000_500_000;
+        let shard = TaikaiShardId(7);
+        let long_lived = cache_admission_gossip(shard, 69, issued_ms, Duration::from_millis(1_000));
+        let short_lived =
+            cache_admission_gossip(shard, 70, issued_ms + 100, Duration::from_millis(100));
+        assert!(
+            tracker
+                .ingest(&long_lived, issued_ms)
+                .expect("long-lived admission")
+        );
+        assert!(
+            tracker
+                .ingest(&short_lived, issued_ms + 100)
+                .expect("short-lived admission")
+        );
+        assert!(
+            !tracker.evict_expired(issued_ms + 200),
+            "a newer short TTL must not erase an existing longer shard lease"
+        );
+        assert_eq!(tracker.active_shards(), vec![shard]);
+        assert!(tracker.evict_expired(issued_ms + 1_000));
+    }
+    #[test]
     fn cache_admission_replay_filter_reopens_at_exact_window_expiry() {
         let issued_ms = 1_726_000_500_000;
         let gossip =
@@ -3379,6 +4022,33 @@ mod tests {
             replay
                 .observe(&gossip, issued_ms + 250)
                 .expect("digest accepted exactly when replay window expires")
+        );
+    }
+    #[test]
+    fn cache_admission_replay_filter_keeps_newer_duplicate_after_clock_regression() {
+        let issued_ms = 1_726_000_500_000;
+        let gossip_a =
+            cache_admission_gossip(TaikaiShardId(7), 67, issued_ms, Duration::from_secs(30));
+        let gossip_b =
+            cache_admission_gossip(TaikaiShardId(7), 68, issued_ms, Duration::from_secs(30));
+        let mut replay =
+            CacheAdmissionReplayFilter::new(Duration::from_millis(100), 2).expect("replay filter");
+        assert!(replay.observe(&gossip_a, 100).expect("observe A"));
+        assert!(replay.observe(&gossip_b, 0).expect("observe B"));
+        assert!(
+            replay
+                .observe(&gossip_b, 100)
+                .expect("B reopens at its first exact expiry")
+        );
+        assert!(
+            !replay
+                .observe(&gossip_a, 150)
+                .expect("expired entries behind A must not evict A's live window")
+        );
+        assert!(
+            !replay
+                .observe(&gossip_b, 150)
+                .expect("stale queue entry must not remove B's newer replay window")
         );
     }
     #[test]

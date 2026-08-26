@@ -51,11 +51,8 @@ mod version_tests {
 #[cfg(feature = "telemetry")]
 fn ensure_status_metrics_match_authoritative_height(
     status: &Status,
-    authoritative_block_height: Option<u64>,
+    authoritative_block_height: u64,
 ) -> std::result::Result<(), Error> {
-    let Some(authoritative_block_height) = authoritative_block_height else {
-        return Ok(());
-    };
     if status.blocks != authoritative_block_height {
         return Err(Error::AppServiceUnavailable {
             code: "status_metrics_stale",
@@ -67,31 +64,9 @@ fn ensure_status_metrics_match_authoritative_height(
     }
     Ok(())
 }
-#[cfg(feature = "telemetry")]
-/// Anchor the public chain-height field to applied state.
-///
-/// The Prometheus block counter is populated by a lazy Kura scan and can trail
-/// while a peer applies a catch-up batch. Kura is also persisted before the WSV
-/// commit boundary, so that counter can briefly lead query-visible state. The
-/// state block-hash journal publishes query-visible committed height on the
-/// apply path, so `/status.blocks` must use that height exactly whenever the
-/// handler provides it. Direct callers without a state anchor retain the legacy
-/// monotonic CommitQC fallback.
-fn normalize_status_block_visibility(status: &mut Status, authoritative_block_height: Option<u64>) {
-    let telemetry_commit_height = status
-        .sumeragi
-        .as_ref()
-        .map_or(0, |sumeragi| sumeragi.commit_qc_height);
-    status.blocks =
-        authoritative_block_height.unwrap_or_else(|| status.blocks.max(telemetry_commit_height));
-}
 #[cfg(all(test, feature = "telemetry"))]
 mod status_block_visibility_tests {
-    use super::{
-        Error, Status, ensure_status_metrics_match_authoritative_height,
-        normalize_status_block_visibility,
-    };
-    use iroha_telemetry::metrics::SumeragiConsensusStatus;
+    use super::{Error, Status, ensure_status_metrics_match_authoritative_height};
     #[test]
     fn stale_classified_height_is_retriable_instead_of_publishing_a_false_empty_gap() {
         let status = Status {
@@ -99,7 +74,7 @@ mod status_block_visibility_tests {
             blocks_non_empty: 2,
             ..Status::default()
         };
-        let error = ensure_status_metrics_match_authoritative_height(&status, Some(3))
+        let error = ensure_status_metrics_match_authoritative_height(&status, 3)
             .expect_err("an authoritative height ahead of classification must be retriable");
         assert!(matches!(
             error,
@@ -116,33 +91,7 @@ mod status_block_visibility_tests {
             blocks_non_empty: 3,
             ..Status::default()
         };
-        ensure_status_metrics_match_authoritative_height(&status, Some(3))
+        ensure_status_metrics_match_authoritative_height(&status, 3)
             .expect("a single classified frontier is publishable");
-    }
-    #[test]
-    fn authoritative_state_height_replaces_lagging_and_leading_counters() {
-        for telemetry_height in [3, 19] {
-            let mut sumeragi = SumeragiConsensusStatus::default();
-            sumeragi.commit_qc_height = telemetry_height;
-            let mut status = Status {
-                blocks: telemetry_height,
-                sumeragi: Some(sumeragi),
-                ..Status::default()
-            };
-            normalize_status_block_visibility(&mut status, Some(11));
-            assert_eq!(status.blocks, 11);
-        }
-    }
-    #[test]
-    fn missing_state_anchor_keeps_monotonic_commit_qc_fallback() {
-        let mut sumeragi = SumeragiConsensusStatus::default();
-        sumeragi.commit_qc_height = 8;
-        let mut status = Status {
-            blocks: 5,
-            sumeragi: Some(sumeragi),
-            ..Status::default()
-        };
-        normalize_status_block_visibility(&mut status, None);
-        assert_eq!(status.blocks, 8);
     }
 }

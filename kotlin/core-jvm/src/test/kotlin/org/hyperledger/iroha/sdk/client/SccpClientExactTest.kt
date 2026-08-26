@@ -1514,6 +1514,20 @@ class SccpClientExactTest {
         assertEquals(SccpPayloadKindV1.TRANSFER, parsed.payloadKind)
         assertEquals(hash(0x41), parsed.routeConfigurationHashHex)
 
+        response["submitted"] = true
+        response["tx_hash_hex"] = "ab".repeat(32)
+        response["transaction_payload_b64"] = null
+        response["signing_message_b64"] = null
+        assertTrue(SccpBridgeSubmitResponseParser.parse(jsonBytes(response)).submitted)
+        response["tx_hash_hex"] = "aa".repeat(32)
+        assertFailsWith<IllegalArgumentException> {
+            SccpBridgeSubmitResponseParser.parse(jsonBytes(response))
+        }
+        response["submitted"] = false
+        response["tx_hash_hex"] = null
+        response["transaction_payload_b64"] = transaction
+        response["signing_message_b64"] = signing
+
         val ordinaryTransactionBytes = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
             .encodeTransaction(
                 NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)

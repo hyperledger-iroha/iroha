@@ -13,7 +13,7 @@ import org.hyperledger.iroha.android.model.FeeChargeLimit;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 
-final class FeePaymentJson {
+public final class FeePaymentJson {
   private FeePaymentJson() {}
 
   static FeeSponsorProgramResponse parseProgram(final byte[] payload) {
@@ -106,7 +106,7 @@ final class FeePaymentJson {
         objectValue(root.get("decision"), "fee quote response.decision"));
   }
 
-  static FeePaymentIntent parse(final Object value, final String path) {
+  public static FeePaymentIntent parse(final Object value, final String path) {
     final Map<String, Object> root = objectValue(value, path);
     requireExactKeys(root, keys("payer", "value"), keys("payer", "value"), path);
     final String payer = string(root.get("payer"), path + ".payer");

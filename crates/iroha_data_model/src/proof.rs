@@ -229,6 +229,103 @@ impl<'de> norito::NoritoDeserialize<'de> for VerifyingKeyBox {
 }
 impl<'a> ncore::DecodeFromSlice<'a> for VerifyingKeyBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        let flags = ncore::effective_decode_flags().unwrap_or_else(ncore::default_encode_flags);
+        let packed_struct = flags & ncore::header_flags::PACKED_STRUCT != 0;
+        let field_bitset = flags & ncore::header_flags::FIELD_BITSET != 0;
+        if field_bitset && !packed_struct {
+            return Err(ncore::Error::LengthMismatch);
+        }
+        if packed_struct && field_bitset {
+            // `backend` requires an explicit size while `Vec<u8>` is
+            // self-delimiting, so the canonical two-field bitset is exactly
+            // `0b0000_0001`.
+            if flags & ncore::header_flags::COMPACT_LEN == 0 || bytes.first() != Some(&0x01) {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            let size_bytes = bytes.get(1..).ok_or(ncore::Error::LengthMismatch)?;
+            let (backend_len, backend_header_len) = ncore::read_len_dyn_slice(size_bytes)?;
+            if backend_len > MAX_BACKEND_FIELD_BYTES {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            let backend_start = 1_usize
+                .checked_add(backend_header_len)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let backend_end = backend_start
+                .checked_add(backend_len)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let backend_bytes = bytes
+                .get(backend_start..backend_end)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let (backend, used) =
+                <Ident as ncore::DecodeFromSlice>::decode_from_slice(backend_bytes)?;
+            if used != backend_bytes.len() {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            let vk_bytes_slice = bytes
+                .get(backend_end..)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let (declared_vk_len, _) = ncore::inspect_seq_len_slice(vk_bytes_slice)?;
+            if declared_vk_len > VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1 {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            let (vk_bytes, used) =
+                <Vec<u8> as ncore::DecodeFromSlice>::decode_from_slice(vk_bytes_slice)?;
+            if used > VERIFYING_KEY_BOX_MAX_FIELD_BYTES_V1 {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            let total = backend_end
+                .checked_add(used)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            return Ok((
+                Self {
+                    backend,
+                    bytes: vk_bytes,
+                },
+                total,
+            ));
+        }
+        if packed_struct {
+            let (offsets, data_start, data_len, _) = ncore::decode_packed_offsets_slice(bytes, 2)?;
+            let total = data_start
+                .checked_add(data_len)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let data = bytes
+                .get(data_start..total)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            let backend_bytes = data
+                .get(offsets[0]..offsets[1])
+                .ok_or(ncore::Error::LengthMismatch)?;
+            if backend_bytes.len() > MAX_BACKEND_FIELD_BYTES {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            let (backend, used) =
+                <Ident as ncore::DecodeFromSlice>::decode_from_slice(backend_bytes)?;
+            if used != backend_bytes.len() {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            let vk_bytes_slice = data
+                .get(offsets[1]..offsets[2])
+                .ok_or(ncore::Error::LengthMismatch)?;
+            if vk_bytes_slice.len() > VERIFYING_KEY_BOX_MAX_FIELD_BYTES_V1 {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            let (declared_vk_len, _) = ncore::inspect_seq_len_slice(vk_bytes_slice)?;
+            if declared_vk_len > VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1 {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            let (vk_bytes, used) =
+                <Vec<u8> as ncore::DecodeFromSlice>::decode_from_slice(vk_bytes_slice)?;
+            if used != vk_bytes_slice.len() {
+                return Err(ncore::Error::LengthMismatch);
+            }
+            return Ok((
+                Self {
+                    backend,
+                    bytes: vk_bytes,
+                },
+                total,
+            ));
+        }
         let mut offset = 0usize;
         let backend_bytes = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
         let (backend, used) = <Ident as ncore::DecodeFromSlice>::decode_from_slice(backend_bytes)?;
@@ -2865,6 +2962,29 @@ mod tests {
         assert_eq!(dec.bytes, vec![7, 7, 7]);
     }
     #[test]
+    fn verifying_key_box_decodes_explicit_packed_struct_layouts() {
+        let expected = VerifyingKeyBox::new("halo2/ipa".into(), vec![3, 5, 8, 13]);
+        for flags in [
+            ncore::header_flags::PACKED_STRUCT | ncore::header_flags::COMPACT_LEN,
+            ncore::header_flags::PACKED_STRUCT
+                | ncore::header_flags::COMPACT_LEN
+                | ncore::header_flags::FIELD_BITSET,
+        ] {
+            let (payload, encoded_flags) = {
+                let _guard = ncore::DecodeFlagsGuard::enter(flags);
+                norito::codec::encode_with_header_flags(&expected)
+            };
+            assert_eq!(encoded_flags & flags, flags);
+            let (decoded, used) = {
+                let _guard = ncore::DecodeFlagsGuard::enter(encoded_flags);
+                <VerifyingKeyBox as ncore::DecodeFromSlice>::decode_from_slice(&payload)
+                    .expect("decode packed verifying-key box")
+            };
+            assert_eq!(used, payload.len());
+            assert_eq!(decoded, expected);
+        }
+    }
+    #[test]
     fn verifying_key_id_decode_from_slice_roundtrip() {
         let id = VerifyingKeyId::new("halo2/ipa", "vk_transfer");
         let encoded = id.encode();
@@ -4429,8 +4549,7 @@ mod tests {
         let authority = crate::account::AccountId::parse_encoded(
             "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         )
-        .expect("valid account id")
-        .into_account_id();
+        .expect("valid account id");
         let trigger_id: crate::trigger::TriggerId = "test_trigger".parse().expect("trigger id");
         let time_entry = crate::trigger::TimeTriggerEntrypoint {
             id: trigger_id,

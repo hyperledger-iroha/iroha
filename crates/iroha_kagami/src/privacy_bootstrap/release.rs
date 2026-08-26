@@ -1218,7 +1218,7 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
         "stock-local-runtime-provider-broker-v1",
         "Bootle/Lantern provider plan",
     )?;
-    expect_u64_v1(provider, "slot_wire_id", 56, "Bootle/Lantern provider plan")?;
+    expect_u64_v1(provider, "slot_wire_id", 55, "Bootle/Lantern provider plan")?;
     expect_string_v1(
         provider,
         "handle",
@@ -1455,18 +1455,53 @@ fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::
         .get("credentials")
         .and_then(toml::Value::as_array)
         .ok_or_else(|| eyre!("Taira onboarding credentials must be an array"))?;
-    if credentials.len() != 1 {
-        bail!("Taira config template must contain exactly one placeholder onboarding credential");
+    let expected_credentials = [
+        (
+            "REPLACE_WITH_TAIRA_BOI_ONBOARDING_CREDENTIAL_ID",
+            "is2",
+            "REPLACE_WITH_TAIRA_BOI_ONBOARDING_TOKEN_HASH",
+        ),
+        (
+            "REPLACE_WITH_TAIRA_DPN_ONBOARDING_CREDENTIAL_ID",
+            "dpn",
+            "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH",
+        ),
+        (
+            "REPLACE_WITH_TAIRA_CANARY_ONBOARDING_CREDENTIAL_ID",
+            "universal",
+            "REPLACE_WITH_TAIRA_CANARY_ONBOARDING_TOKEN_HASH",
+        ),
+    ];
+    if credentials.len() != expected_credentials.len() {
+        bail!(
+            "Taira config template must contain the exact BOI, DPN, and public-reset canary onboarding credentials"
+        );
     }
-    let credential = credentials[0]
-        .as_table()
-        .ok_or_else(|| eyre!("Taira onboarding credential must be a table"))?;
-    expect_toml_string_v1(
-        credential,
-        "token_hash",
-        "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH",
-        "Taira onboarding token digest",
-    )?;
+    for (index, (expected_id, expected_dataspace, expected_token_hash)) in
+        expected_credentials.into_iter().enumerate()
+    {
+        let credential = credentials[index]
+            .as_table()
+            .ok_or_else(|| eyre!("Taira onboarding credential {index} must be a table"))?;
+        expect_toml_string_v1(
+            credential,
+            "id",
+            expected_id,
+            "Taira onboarding credential id",
+        )?;
+        expect_toml_string_v1(
+            toml_table_field_v1(credential, "scope", "Taira onboarding credential")?,
+            "dataspace",
+            expected_dataspace,
+            "Taira onboarding credential dataspace",
+        )?;
+        expect_toml_string_v1(
+            credential,
+            "token_hash",
+            expected_token_hash,
+            "Taira onboarding token digest",
+        )?;
+    }
     expect_toml_string_v1(
         toml_table_field_v1(torii, "faucet", "Taira torii config")?,
         "private_key_file",

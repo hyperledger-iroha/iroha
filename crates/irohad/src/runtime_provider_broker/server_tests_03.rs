@@ -1326,82 +1326,88 @@ fn moderation_quarantine_broker_debug_output_redacts_key_material() {
     }
 }
 #[test]
-fn soracloud_hf_inference_broker_is_bounded_and_redacts_payloads() {
-    assert_eq!(
-        operation_frame_limit(OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1),
-        MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1
+fn sensitive_broker_payload_is_scrubbed_before_request_ownership_on_early_errors() {
+    let binding = token_signer_binding();
+    let (stream, peer) = UnixStream::pair().expect("create isolated broker stream pair");
+    let session = Arc::new(BrokerSession {
+        connection: Mutex::new(BrokerConnection {
+            stream,
+            session_id: TEST_SESSION_ID,
+            next_request_id: 1,
+            poisoned: false,
+        }),
+        chain_id: "sensitive-payload-test-chain".to_owned(),
+        network_id: network_id(),
+        endpoint: EndpointPolicy::for_test(std::path::PathBuf::from("unused-broker.sock")),
+        requested_catalog: vec![binding.clone()],
+    });
+
+    let oversized_len = MAX_STREAM_TOKEN_FRAME_BYTES_V1 + 1;
+    let admission_audit = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+    let admission_error = session.call_sensitive(
+        &binding,
+        [0xA7; 32],
+        OPERATION_STREAM_TOKEN_SIGN_V1,
+        ScrubbedBytes::with_drop_audit(vec![0xD1; oversized_len], Arc::clone(&admission_audit)),
+        false,
     );
+    assert!(matches!(
+        admission_error,
+        Err(BrokerError::Rejected | BrokerError::Unavailable)
+    ));
     assert_eq!(
-        operation_decode_policy(OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1),
-        SORACLOUD_HF_DECODE_POLICY_V1
+        admission_audit.load(std::sync::atomic::Ordering::SeqCst),
+        oversized_len,
+        "admission failure must drop the original, fully scrubbed owner",
     );
-    let request_wire = SoracloudHfAuthenticatedInferenceRequestWireV1 {
-        repo_id: "example/model".to_owned(),
-        resolved_revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
-        url: "https://router.huggingface.co/models/example/model?private-query-value=redacted&revision=0123456789abcdef0123456789abcdef01234567".to_owned(),
-        content_type: "application/json".to_owned(),
-        accept: Some("application/json".to_owned()),
-        body: b"private-hf-model-input".to_vec(),
-        maximum_response_bytes: 1024,
-    };
-    let request = validated_operation(
-        runtime_binding(
-            IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider,
-            "kms://soracloud/hf-inference-primary",
+
+    let request_audit = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+    assert_eq!(
+        make_operation_request_with_scrubbed_payload(
+            [0; 32],
+            1,
+            binding.clone(),
+            [0xA7; 32],
+            OPERATION_STREAM_TOKEN_SIGN_V1,
+            ScrubbedBytes::with_drop_audit(vec![0xD2; 37], Arc::clone(&request_audit)),
         ),
-        OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1,
-        encode_canonical(&request_wire, MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1)
-            .expect("encode bounded HF inference request"),
-    );
-    let response_wire = SoracloudHfAuthenticatedInferenceResponseWireV1 {
-        served_repo_id: request_wire.repo_id.clone(),
-        served_revision: request_wire.resolved_revision.clone(),
-        status: 200,
-        content_type: Some("application/json".to_owned()),
-        content_encoding: None,
-        body: b"private-hf-model-output".to_vec(),
-    };
-    let response = operation_response(
-        &request,
-        STATUS_OK_V1,
-        encode_canonical(&response_wire, MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1)
-            .expect("encode bounded HF inference response"),
-    );
-    assert_eq!(
-        validate_operation_response(&request, &response, &network_id(),),
-        Ok(())
-    );
-    let mismatched_response_wire = SoracloudHfAuthenticatedInferenceResponseWireV1 {
-        served_repo_id: request_wire.repo_id.clone(),
-        served_revision: "1123456789abcdef0123456789abcdef01234567".to_owned(),
-        status: 200,
-        content_type: Some("application/json".to_owned()),
-        content_encoding: None,
-        body: b"mismatched-model-output".to_vec(),
-    };
-    let mismatched_response = operation_response(
-        &request,
-        STATUS_OK_V1,
-        encode_canonical(
-            &mismatched_response_wire,
-            MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
-        )
-        .expect("encode mismatched HF inference response"),
-    );
-    assert_eq!(
-        validate_operation_response(&request, &mismatched_response, &network_id()),
         Err(BrokerError::Protocol),
     );
-    for rendered in [
-        format!("{request_wire:?}"),
-        format!("{request:?}"),
-        format!("{response_wire:?}"),
-        format!("{response:?}"),
-    ] {
-        assert!(!rendered.contains("private-hf-model-input"));
-        assert!(!rendered.contains("private-hf-model-output"));
-        assert!(!rendered.contains("private-query-value"));
-    }
+    assert_eq!(
+        request_audit.load(std::sync::atomic::Ordering::SeqCst),
+        37,
+        "request validation failure must retain and scrub the sensitive owner",
+    );
+
+    let poisoning_session = Arc::clone(&session);
+    assert!(
+        thread::spawn(move || {
+            let _connection = poisoning_session
+                .connection
+                .lock()
+                .expect("lock broker connection before poisoning");
+            panic!("poison broker connection for custody regression");
+        })
+        .join()
+        .is_err()
+    );
+    let lock_audit = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+    assert_eq!(
+        session.call_sensitive(
+            &binding,
+            [0xA7; 32],
+            OPERATION_STREAM_TOKEN_SIGN_V1,
+            ScrubbedBytes::with_drop_audit(vec![0xD3; 41], Arc::clone(&lock_audit)),
+            false,
+        ),
+        Err(BrokerError::Unavailable),
+    );
+    assert_eq!(
+        lock_audit.load(std::sync::atomic::Ordering::SeqCst),
+        41,
+        "connection-lock failure must drop the original, fully scrubbed owner",
+    );
+    drop(peer);
 }
 #[test]
 fn reputation_retention_slot_is_exact_bounded_and_backend_symmetric() {

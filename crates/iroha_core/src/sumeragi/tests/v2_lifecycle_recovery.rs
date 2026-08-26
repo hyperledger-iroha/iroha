@@ -4,7 +4,7 @@ use crate::{
     prelude::World,
     query::store::LiveQueryStore,
     queue::{
-        LaneQueueReservationKeyV2, Queue, RoutingDecision, RoutingPlan,
+        LaneQueueReservationKeyV1, Queue, RoutingDecision, RoutingPlan,
         canonical_lane_queue_reservation_group_identity_projection,
         lane_queue_reservation_group_binding_from_ordered_keys,
     },
@@ -226,8 +226,8 @@ fn lifecycle_payload_for_validators_with_count(
     let reservations = entrypoints
         .iter()
         .enumerate()
-        .map(|(index, entrypoint)| LaneQueueReservationKeyV2 {
-            version: LaneQueueReservationKeyV2::VERSION,
+        .map(|(index, entrypoint)| LaneQueueReservationKeyV1 {
+            version: LaneQueueReservationKeyV1::VERSION,
             entrypoint_hash: entrypoint.hash(),
             queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
                 b"lifecycle-recovery-queue-plan-admission\0",
@@ -310,8 +310,8 @@ fn lifecycle_binding_and_live_state(
             ..ProductionInFlightFirstReleaseSessionProjection::default()
         },
         history: ProductionInFlightFirstReleaseHistoryProjection {
-            ever_queue_plan_v4: true,
-            ever_reservation_v5: true,
+            ever_queue_plan_v1: true,
+            ever_reservation_v1: true,
             ..ProductionInFlightFirstReleaseHistoryProjection::default()
         },
         decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
@@ -416,14 +416,14 @@ impl LifecycleRecoveryPostCasBoundary {
             Self::FinalLive => 5,
         }
     }
-    fn assert_durable_cursor(self, cursor: &AutonomousLifecycleCursorV2, local_actor: u128) {
+    fn assert_durable_cursor(self, cursor: &AutonomousLifecycleCursorV1, local_actor: u128) {
         assert_eq!(cursor.sequence(), self.cas_ordinal() + 1);
         assert_eq!(cursor.owner_generation(), 2);
         match self {
             Self::Crashed => {
                 assert_eq!(
                     cursor.phase_kind(),
-                    AutonomousLifecycleCursorPhaseKindV2::Crashed
+                    AutonomousLifecycleCursorPhaseKindV1::Crashed
                 );
                 assert_eq!(cursor.source_generation(), Some(1));
                 let crashed = cursor
@@ -435,7 +435,7 @@ impl LifecycleRecoveryPostCasBoundary {
             Self::PreparedRecover | Self::PreparedRehydration => {
                 assert_eq!(
                     cursor.phase_kind(),
-                    AutonomousLifecycleCursorPhaseKindV2::Prepared
+                    AutonomousLifecycleCursorPhaseKindV1::Prepared
                 );
                 assert_eq!(cursor.source_generation(), None);
                 let transition = cursor
@@ -458,7 +458,7 @@ impl LifecycleRecoveryPostCasBoundary {
             Self::RecoveredLive | Self::FinalLive => {
                 assert_eq!(
                     cursor.phase_kind(),
-                    AutonomousLifecycleCursorPhaseKindV2::Live
+                    AutonomousLifecycleCursorPhaseKindV1::Live
                 );
                 assert_eq!(cursor.source_generation(), None);
                 let live = cursor
@@ -542,7 +542,7 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
         1,
         None,
         binding.clone(),
-        AutonomousLifecycleCursorPhaseV2::live(generation_one.generation(), live_state)
+        AutonomousLifecycleCursorPhaseV1::live(generation_one.generation(), live_state)
             .expect("construct first-generation Live cursor"),
     )
     .expect("sign first-generation Live cursor");
@@ -638,7 +638,7 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
         queue
             .revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot)
             .expect("revalidate generation-recovery Queue receipt"),
-        "generation recovery must preserve the exact combined V4/V6 receipt",
+        "generation recovery must preserve the exact combined V1 receipt",
     );
     drop(receipt);
     let read = restarted
@@ -647,7 +647,7 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
     let cursor = read.cursor().expect("recovered cursor");
     assert_eq!(
         cursor.phase_kind(),
-        AutonomousLifecycleCursorPhaseKindV2::Live
+        AutonomousLifecycleCursorPhaseKindV1::Live
     );
     assert_eq!(cursor.owner_generation(), 2);
     assert_eq!(cursor.sequence(), 6);
@@ -752,7 +752,7 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
         1,
         None,
         binding.clone(),
-        AutonomousLifecycleCursorPhaseV2::live(generation_one.generation(), live_state)
+        AutonomousLifecycleCursorPhaseV1::live(generation_one.generation(), live_state)
             .expect("construct initial interruption Live cursor"),
     )
     .expect("sign initial interruption Live cursor");
@@ -910,7 +910,7 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
         .clone();
     assert_eq!(
         final_cursor.phase_kind(),
-        AutonomousLifecycleCursorPhaseKindV2::Live
+        AutonomousLifecycleCursorPhaseKindV1::Live
     );
     assert_eq!(final_cursor.owner_generation(), 3);
     assert_eq!(final_cursor.source_generation(), None);
@@ -1005,7 +1005,7 @@ fn local_producer_recovery_requires_the_exact_current_queue_owner() {
         1,
         None,
         binding.clone(),
-        AutonomousLifecycleCursorPhaseV2::live(1, live_state)
+        AutonomousLifecycleCursorPhaseV1::live(1, live_state)
             .expect("construct local-producer Live cursor"),
     )
     .expect("sign local-producer Live cursor");
@@ -1064,7 +1064,7 @@ fn prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side() {
         1,
         None,
         binding.clone(),
-        AutonomousLifecycleCursorPhaseV2::prepared(1, activate)
+        AutonomousLifecycleCursorPhaseV1::prepared(1, activate)
             .expect("construct Prepared ActivateKura"),
     )
     .expect("sign Prepared ActivateKura");
@@ -1083,7 +1083,7 @@ fn prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side() {
         2,
         Some(activate_cursor.cursor_hash()),
         binding.clone(),
-        AutonomousLifecycleCursorPhaseV2::prepared(1, crash).expect("construct Prepared Crash"),
+        AutonomousLifecycleCursorPhaseV1::prepared(1, crash).expect("construct Prepared Crash"),
     )
     .expect("sign Prepared Crash");
     assert_eq!(
@@ -1097,7 +1097,7 @@ fn prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side() {
         3,
         Some(prepared_crash.cursor_hash()),
         binding.clone(),
-        AutonomousLifecycleCursorPhaseV2::crashed(1, 2, crash.before, crash.after)
+        AutonomousLifecycleCursorPhaseV1::crashed(1, 2, crash.before, crash.after)
             .expect("construct Crashed cursor"),
     )
     .expect("sign Crashed cursor");
@@ -1115,7 +1115,7 @@ fn prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side() {
         4,
         Some(crashed.cursor_hash()),
         binding.clone(),
-        AutonomousLifecycleCursorPhaseV2::prepared(2, recover).expect("construct Prepared Recover"),
+        AutonomousLifecycleCursorPhaseV1::prepared(2, recover).expect("construct Prepared Recover"),
     )
     .expect("sign Prepared Recover");
     assert_eq!(
@@ -1136,7 +1136,7 @@ fn prepared_bootstrap_and_crash_boundaries_resolve_only_their_durable_side() {
         5,
         Some(prepared_recover.cursor_hash()),
         binding,
-        AutonomousLifecycleCursorPhaseV2::prepared(2, rehydrate)
+        AutonomousLifecycleCursorPhaseV1::prepared(2, rehydrate)
             .expect("construct Prepared rehydration"),
     )
     .expect("sign Prepared rehydration");
@@ -1200,6 +1200,6 @@ fn empty_queue_reconciliation_returns_the_same_checked_receipt() {
         queue
             .revalidate_lane_reservation_startup_reconciliation_receipt(&receipt, &snapshot,)
             .expect("revalidate returned Queue receipt"),
-        "reconciliation must return the exact combined V4/V6 receipt it authenticated",
+        "reconciliation must return the exact combined V1 receipt it authenticated",
     );
 }

@@ -1,5 +1,5 @@
 fn reservation_group_identity(
-    key: &crate::queue::LaneQueueReservationKeyV2,
+    key: &crate::queue::LaneQueueReservationKeyV1,
 ) -> LaneQueueReservationGroupIdentityV1 {
     LaneQueueReservationGroupIdentityV1 {
         lane_id: key.lane_id,
@@ -13,7 +13,7 @@ fn reservation_group_identity(
     }
 }
 fn reservation_key_matches_group(
-    key: &crate::queue::LaneQueueReservationKeyV2,
+    key: &crate::queue::LaneQueueReservationKeyV1,
     group: &LaneQueueReservationGroupIdentityV1,
 ) -> bool {
     reservation_group_identity(key) == *group
@@ -38,9 +38,10 @@ fn autonomous_payload_overlaps_group_transaction_identity(
     group: &LaneQueueReservationReconciliationGroupV1,
 ) -> bool {
     payload.reservation_keys.iter().any(|candidate| {
-        group.ordered_keys.iter().any(|expected| {
-            candidate.entrypoint_hash == expected.entrypoint_hash
-        })
+        group
+            .ordered_keys
+            .iter()
+            .any(|expected| candidate.entrypoint_hash == expected.entrypoint_hash)
     })
 }
 fn proposal_from_canonical_lane_ownership(

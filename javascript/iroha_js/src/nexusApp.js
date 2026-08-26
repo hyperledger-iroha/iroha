@@ -33,7 +33,6 @@ const MAX_TORII_RESPONSE_BYTES = 64 * 1024;
 const DEFAULT_TORII_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_STATUS_POLL_TIMEOUT_MS = 30_000;
-const DEFAULT_FAILURE_STATUSES = Object.freeze(["Rejected", "Expired"]);
 const PIPELINE_STATUS_KINDS = new Set([
   "Queued",
   "Approved",
@@ -170,10 +169,10 @@ function isBytesInput(value) {
 }
 
 function exactHashHex(value, context, code) {
-  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+  if (typeof value !== "string" || !/^[0-9a-f]{63}[13579bdf]$/u.test(value)) {
     throw new NexusAppError(
       code,
-      `${context} must be exactly 64 lowercase hexadecimal characters`,
+      `${context} must be an exact canonical lowercase 32-byte Iroha hash`,
     );
   }
   return value;
@@ -198,7 +197,14 @@ function normalizeHashValue(value, context, code, { hexOnly = false } = {}) {
   if (bytes.length !== 32) {
     throw new NexusAppError(code, `${context} must be an exact 32-byte hash`);
   }
-  return bytes.toString("hex");
+  const literal = bytes.toString("hex");
+  if (!/[13579bdf]$/u.test(literal)) {
+    throw new NexusAppError(
+      code,
+      `${context} must carry the canonical Iroha hash marker`,
+    );
+  }
+  return literal;
 }
 
 function ownDataDescriptor(value, key, context, code) {
@@ -443,7 +449,6 @@ const FINALIZE_OPTION_FIELDS = new Set([
   "intervalMs",
   "timeoutMs",
   "maxAttempts",
-  "failureStatuses",
   "onStatus",
   "signal",
   "signingPublicKey",
@@ -453,10 +458,10 @@ const STATUS_WAIT_OPTION_FIELDS = Object.freeze([
   "intervalMs",
   "timeoutMs",
   "maxAttempts",
-  "failureStatuses",
   "onStatus",
   "signal",
 ]);
+const STATUS_READ_OPTION_FIELDS = new Set(["scope", "signal"]);
 const CONNECT_OPTION_FIELDS = new Set([
   "sid",
   "networkId",
@@ -1074,35 +1079,6 @@ function normalizePositiveInteger(value, context) {
   return value;
 }
 
-function normalizeStatusSet(value, fallback, context) {
-  const source = value === undefined || value === null ? fallback : value;
-  if (typeof source === "string") {
-    throw new TypeError(`${context} must be an iterable of status strings`);
-  }
-  const result = new Set();
-  let rawCount = 0;
-  for (const status of source) {
-    rawCount += 1;
-    if (rawCount > 32) {
-      throw new TypeError(`${context} must not contain more than 32 statuses`);
-    }
-    if (
-      typeof status !== "string" ||
-      status.length === 0 ||
-      status.length > 64 ||
-      status.trim() !== status ||
-      !/^[\x20-\x7e]+$/u.test(status)
-    ) {
-      throw new TypeError(`${context} must contain exact printable status strings`);
-    }
-    result.add(status);
-  }
-  if (result.size === 0) {
-    throw new TypeError(`${context} must not be empty`);
-  }
-  return result;
-}
-
 function normalizeStatusScope(value) {
   const scope = value === undefined ? "global" : value;
   if (scope !== "local" && scope !== "global") {
@@ -1172,9 +1148,19 @@ function normalizeTransactionStatusOptions(options = {}) {
   if (options === null || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("transaction status options must be an object");
   }
-  if (Object.getOwnPropertyDescriptor(options, "successStatuses")) {
+  for (const field of ["successStatuses", "failureStatuses", "terminalStatuses"]) {
+    if (Object.getOwnPropertyDescriptor(options, field)) {
+      throw new TypeError(
+        `transaction status options contains unsupported field ${field}`,
+      );
+    }
+  }
+  const unsupported = Object.keys(options).find(
+    (field) => !STATUS_WAIT_OPTION_FIELDS.includes(field),
+  );
+  if (unsupported !== undefined) {
     throw new TypeError(
-      "transaction status options contains unsupported field successStatuses",
+      `transaction status options contains unsupported field ${unsupported}`,
     );
   }
   if (Object.getOwnPropertyDescriptor(options, "scope")) {
@@ -1216,19 +1202,10 @@ function normalizeTransactionStatusOptions(options = {}) {
     }
     abortSignalState(signal);
   }
-  const failureStatuses = normalizeStatusSet(
-    options.failureStatuses,
-    DEFAULT_FAILURE_STATUSES,
-    "transaction status failureStatuses",
-  );
-  if (failureStatuses.has("Applied")) {
-    throw new TypeError("transaction status Applied cannot be configured as failure");
-  }
   return Object.freeze({
     intervalMs,
     timeoutMs,
     maxAttempts,
-    failureStatuses: Object.freeze([...failureStatuses]),
     onStatus: options.onStatus ?? null,
     signal,
   });
@@ -1425,7 +1402,7 @@ function normalizePublicPipelineStatus(payload, context) {
     }
     status.block_height = payload.status.block_height;
   }
-  if (!["local", "auto", "global"].includes(payload.scope)) {
+  if (!["local", "global"].includes(payload.scope)) {
     throw new TypeError(`${context}.scope is unsupported`);
   }
   if (!PIPELINE_STATUS_SOURCES.has(payload.resolved_from)) {
@@ -1470,17 +1447,6 @@ function classifyPipelineStatus(payload, expectedHash, context) {
     ) {
       throw new TypeError(
         `${context} Applied status must have a positive block height`,
-      );
-    }
-    if (resolvedFrom !== "cache" && resolvedFrom !== "state") {
-      throw new TypeError(
-        `${context} Applied status must be cache- or state-resolved`,
-      );
-    }
-  } else if (kind === "Rejected" || kind === "Expired") {
-    if (resolvedFrom !== "cache" && resolvedFrom !== "state") {
-      throw new TypeError(
-        `${context} terminal failure must be cache- or state-resolved`,
       );
     }
   }
@@ -1607,7 +1573,7 @@ function awaitStatusWithGuards(value, statusOptions) {
         finish(
           reject,
           new BrowserTransactionStatusTimeoutError(
-            `transaction status did not settle within ${timeoutMs}ms`,
+            `transaction status did not reach state-resolved Applied finality within ${timeoutMs}ms`,
             null,
             null,
           ),
@@ -1618,7 +1584,7 @@ function awaitStatusWithGuards(value, statusOptions) {
       finish(
         reject,
         new BrowserTransactionStatusTimeoutError(
-          "transaction status did not settle within 0ms",
+          "transaction status did not reach state-resolved Applied finality within 0ms",
           null,
           null,
         ),
@@ -1631,7 +1597,7 @@ function awaitStatusWithGuards(value, statusOptions) {
 
 class BrowserTransactionRejectedError extends Error {
   constructor(status, payload) {
-    super(`transaction reached failure status ${status}`);
+    super(`transaction reached fixed failure status ${status}`);
     this.name = "BrowserTransactionRejectedError";
     this.status = status;
     this.payload = payload;
@@ -1785,6 +1751,14 @@ class BrowserToriiPipelineClient {
     if (options === null || typeof options !== "object" || Array.isArray(options)) {
       throw new TypeError("transaction status options must be an object");
     }
+    const unsupported = Object.keys(options).find(
+      (field) => !STATUS_READ_OPTION_FIELDS.has(field),
+    );
+    if (unsupported !== undefined) {
+      throw new TypeError(
+        `transaction status options contains unsupported field ${unsupported}`,
+      );
+    }
     const scope = normalizeStatusScope(options.scope);
     const query = new URLSearchParams({ hash, scope });
     const request = await this._open(
@@ -1798,12 +1772,12 @@ class BrowserToriiPipelineClient {
     );
     try {
       const { response, signal } = request;
-      if (response.status === 404 || response.status === 204) {
+      if (response.status === 404) {
         await cancelResponseBody(response, signal);
         throwIfAbortSignalAborted(signal);
         return null;
       }
-      if (response.status !== 200 && response.status !== 202) {
+      if (response.status !== 200) {
         await cancelResponseBody(response, signal);
         throwIfAbortSignalAborted(signal);
         throw new Error(`Torii transaction status returned HTTP ${response.status}`);
@@ -1824,7 +1798,6 @@ class BrowserToriiPipelineClient {
 
   async waitForTransactionStatus(hashHex, options = {}) {
     const normalized = normalizeTransactionStatusOptions(options);
-    const failureStatuses = new Set(normalized.failureStatuses);
     const controller = new AbortController();
     let externalListenerAttached = false;
     let timeout = null;
@@ -1837,7 +1810,7 @@ class BrowserToriiPipelineClient {
     let lastPayload = null;
     const timeoutError = () =>
       new BrowserTransactionStatusTimeoutError(
-        `transaction status did not settle within ${normalized.timeoutMs}ms`,
+        `transaction status did not reach state-resolved Applied finality within ${normalized.timeoutMs}ms`,
         attempts,
         lastPayload,
       );
@@ -1938,24 +1911,13 @@ class BrowserToriiPipelineClient {
         if (status === "Applied" && resolution.resolvedFrom === "state") {
           return lastPayload;
         }
-        const isCanonicalTerminalFailure =
-          status === "Rejected" || status === "Expired";
-        const isStateTerminalFailure =
-          isCanonicalTerminalFailure &&
-          resolution?.resolvedFrom === "state";
-        const isConfiguredStateFailure =
-          failureStatuses.has(status) &&
-          resolution?.resolvedFrom === "state";
-        if (
-          status !== null &&
-          (isStateTerminalFailure ||
-            isConfiguredStateFailure)
-        ) {
+        const isFixedFailure = status === "Rejected" || status === "Expired";
+        if (isFixedFailure) {
           throw new BrowserTransactionRejectedError(status, lastPayload);
         }
         if (normalized.maxAttempts !== null && attempts >= normalized.maxAttempts) {
           throw new BrowserTransactionStatusTimeoutError(
-            `transaction status did not settle after ${attempts} attempts`,
+            `transaction status did not reach state-resolved Applied finality after ${attempts} attempts`,
             attempts,
             lastPayload,
           );
@@ -2808,7 +2770,7 @@ export class NexusAppClient {
         try {
           if (error instanceof BrowserTransactionRejectedError) {
             code = "transaction_rejected";
-            message = "transaction reached a terminal failure status";
+            message = "transaction reached a fixed failure status";
             observedStatus = error.status;
           } else if (error instanceof BrowserTransactionStatusTimeoutError) {
             code = "status_wait_timeout";

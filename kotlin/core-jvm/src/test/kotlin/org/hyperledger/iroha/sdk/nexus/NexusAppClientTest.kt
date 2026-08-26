@@ -13,10 +13,16 @@ import kotlin.test.assertTrue
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingCurrentStateV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanReceiptV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanRequestV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingProofRequiredPrepareResponseV1
+import org.hyperledger.iroha.sdk.alias.TairaPublicResetMutationBindingV1
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.IrohaClient
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.PipelineStatusOptions
+import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
@@ -80,6 +86,24 @@ class NexusAppClientTest {
         assertContentEquals(PUBLIC_KEY, receipt.signedTransaction.publicKey())
         assertContentEquals(connect.signature, receipt.signedTransaction.signature())
         assertTrue(assertNotNull(connect.lastSignable).payloadBytes.isNotEmpty())
+        assertFailsWith<IllegalArgumentException> {
+            NexusTransferReceipt(
+                "aa".repeat(32),
+                receipt.signedTransaction,
+                receipt.submission,
+                receipt.finalStatus,
+            )
+        }
+        val wrongMarkedHash =
+            (if (receipt.transactionHashHex[0] == '0') "1" else "0") + receipt.transactionHashHex.drop(1)
+        assertFailsWith<IllegalArgumentException> {
+            NexusTransferReceipt(
+                wrongMarkedHash,
+                receipt.signedTransaction,
+                receipt.submission,
+                receipt.finalStatus,
+            )
+        }
     }
 
     @Test
@@ -597,6 +621,17 @@ class NexusAppClientTest {
         private val statusKind: String = "Applied",
     ) : IrohaClient {
         var submittedHash: String? = null
+
+        override fun verifyAccountOnboardingCurrentState(
+            proofRequired: AccountOnboardingProofRequiredPrepareResponseV1,
+            request: AccountOnboardingPlanRequestV1,
+            receipt: AccountOnboardingPlanReceiptV1,
+            binding: TairaPublicResetMutationBindingV1,
+            expectedAuthority: String,
+            expectedNetworkId: NetworkId,
+            canonicalAuth: ToriiCanonicalRequestAuth,
+        ): CompletableFuture<AccountOnboardingCurrentStateV1> =
+            throw AssertionError("account onboarding is not used by this test fake")
 
         override fun submitTransaction(transaction: SignedTransaction): CompletableFuture<ClientResponse> {
             submitFailure?.let {

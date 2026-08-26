@@ -1,7 +1,7 @@
 const OPENAPI_CONTRACT_ASSET_VERSION: u64 = 1;
-const OPENAPI_CONTRACT_ASSET_LEN: usize = 14_912;
+const OPENAPI_CONTRACT_ASSET_LEN: usize = 15_417;
 const OPENAPI_CONTRACT_ASSET_SHA256: &str =
-    "85ce59f16860d1ce0403d7b6fa424947e89df6a7b35ad21566300721383fd986";
+    "7a02dfd132a9e26da1201a79bd70f3a1f19437075326300aab63485b9e517a68";
 const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "evidence.audit.description",
     "evidence.audit.success",
@@ -19,21 +19,21 @@ const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "bridge.attestation.required",
     "finality.artifact.required",
     "height.context.required",
-    "height.context.optional",
+    "height.context.nullable",
     "validator.power.required",
     "dual.quorum.required",
     "block.subject.required",
-    "block.subject.optional",
+    "block.subject.nullable",
     "merge.carrier.required",
     "execution.required",
-    "execution.optional",
+    "execution.nullable",
     "qc.required",
     "snapshot.bootstrap.required",
     "next.epoch.required",
     "bridge.commitment.required",
     "bridge.bundle.required",
     "block.header.required",
-    "block.header.optional",
+    "block.header.nullable",
     "ledger.state_finality.required",
     "ledger.state_finality.retired",
     "ledger.state_finality.retired_paths",
@@ -52,7 +52,6 @@ const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
     "native.proposal.required",
     "native.body.required",
     "hf.headers",
-    "private.receipt.metadata",
     "app.page.required",
     "app.page.properties",
     "repo.agreement.fields",
@@ -537,6 +536,15 @@ fn sorafs_storage_and_inventory_openapi_matches_authenticated_catalog() {
             assert!(headers.contains(&(name.to_string(), true)), "{path} must require {name}");
         }
     }
+    let car = openapi_operation(&document, "/v1/sorafs/storage/car/{manifest_id}", "get");
+    assert!(car.get("responses").and_then(Value::as_object).is_some_and(|responses| {
+        !responses.contains_key("200")
+            && responses
+                .get("206")
+                .and_then(|response| response.get("content"))
+                .and_then(Value::as_object)
+                .is_some_and(|content| content.contains_key("application/vnd.ipld.car"))
+    }));
 }
 
 #[test]
@@ -617,7 +625,19 @@ fn sorafs_replication_openapi_is_a_strict_chain_authoritative_v1_projection() {
     let operation = openapi_operation(&document, PATH, "get");
     assert_eq!(operation_response_schema_ref(operation, "200", PATH), "#/components/schemas/SorafsReplicationListResponseV1");
     assert_description_inventory(operation.get("description").and_then(Value::as_str).expect("replication description"), "replication.description", "replication operation");
-    let names = operation_parameters(operation, PATH).iter().filter_map(|parameter| parameter.get("name").and_then(Value::as_str)).collect::<BTreeSet<_>>();
+    assert_eq!(
+        operation_header_requirements(operation)
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        canonical_account_headers(false)
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+    );
+    let names = operation_parameters(operation, PATH)
+        .iter()
+        .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("query"))
+        .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
     assert_eq!(names, BTreeSet::from(["limit", "offset", "status", "manifest_digest"]));
     let status = parameter_schema(operation_parameter(operation, "status", PATH), "replication status");
     assert_eq!(value_strings(status.get("enum").expect("replication status enum"), "replication statuses").into_iter().collect::<BTreeSet<_>>(), BTreeSet::from(["pending", "completed", "expired"]));

@@ -33,7 +33,7 @@ fn replay_blocks_from_kura(
     state: &mut State,
     topology: &crate::sumeragi::network_topology::Topology,
     block_count: usize,
-    fallback_consensus_mode: ConsensusMode,
+    fixture_consensus_mode: ConsensusMode,
 ) -> Result<()> {
     replay_blocks_from_kura_range(
         kura,
@@ -41,20 +41,20 @@ fn replay_blocks_from_kura(
         topology,
         1,
         block_count,
-        fallback_consensus_mode,
+        fixture_consensus_mode,
     )
 }
-/// Exercise fixture blocks without weakening the production v2 replay boundary.
+/// Exercise checkpoint fixtures through the current Sumeragi-v2 validation profile.
 ///
-/// Historical unit fixtures predate v2 finality artifacts. Production callers resolve to the
-/// parent-module function, which never enters this test-only adapter.
+/// Production replay additionally authenticates the exact durable finality artifact before
+/// reaching this execution boundary; that corridor is covered by `strict_replay_tests`.
 pub(super) fn replay_blocks_from_kura_range(
     kura: &Arc<Kura>,
     state: &mut State,
     topology: &crate::sumeragi::network_topology::Topology,
     start_height: usize,
     block_count: usize,
-    fallback_consensus_mode: ConsensusMode,
+    fixture_consensus_mode: ConsensusMode,
 ) -> Result<()> {
     if block_count == 0 || start_height > block_count {
         return Ok(());
@@ -84,14 +84,11 @@ pub(super) fn replay_blocks_from_kura_range(
         let mut validation_topology =
             crate::sumeragi::network_topology::Topology::new(roster.clone());
         let view = signed.header().view_change_index();
-        let (mode, seed) = {
+        let seed = {
             let state_view = state.view();
-            (
-                crate::sumeragi::effective_consensus_mode(&state_view, fallback_consensus_mode),
-                crate::sumeragi::prf_seed_for_height(&state_view, height),
-            )
+            crate::sumeragi::prf_seed_for_height(&state_view, height)
         };
-        match mode {
+        match fixture_consensus_mode {
             ConsensusMode::Permissioned => {
                 validation_topology.canonicalize_order();
                 validation_topology.shuffle_prf(seed, height);
@@ -103,7 +100,7 @@ pub(super) fn replay_blocks_from_kura_range(
             }
         }
         let mut voting_block = None;
-        let (valid, mut state_block) = ValidBlock::validate_keep_voting_block_for_replay(
+        let (valid, mut state_block) = ValidBlock::validate_sumeragi_v2_fixture_keep_voting_block(
             signed.clone(),
             &validation_topology,
             &genesis_account,
@@ -123,7 +120,7 @@ pub(super) fn replay_blocks_from_kura_range(
                     "failed to verify replayed block #{height} against committed execution results"
                 )
             })?;
-        state_block.replay_compatibility = true;
+        state_block.authenticated_replay_commit = true;
         let _ = state_block.apply_without_execution(&committed, roster);
         state_block.prepare_replay_checkpoint_preview();
         let actual = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
@@ -191,20 +188,6 @@ fn rebind_test_execution_context_validators_and_resign(
     block
         .replace_signatures(std::collections::BTreeSet::from([signature]))
         .expect("replace rebound block signature");
-}
-fn clear_test_execution_context_and_resign(
-    block: &mut SignedBlock,
-    private_key: &iroha_crypto::PrivateKey,
-) {
-    block.set_execution_context(None);
-    let signature = iroha_data_model::block::BlockSignature::new(
-        0,
-        iroha_crypto::SignatureOf::try_from_hash(private_key, block.header().hash())
-            .expect("re-sign legacy replay fixture"),
-    );
-    block
-        .replace_signatures(std::collections::BTreeSet::from([signature]))
-        .expect("replace legacy replay fixture signature");
 }
 fn assert_canonical_successful_fixture_results(block: &SignedBlock) {
     assert!(block.has_results(), "committed fixture must carry results");
@@ -277,7 +260,7 @@ fn commit_replay_validated_block_with_options(
 ) -> SignedBlock {
     let time_source = TimeSource::new_system();
     let mut voting_block = None;
-    let validation = ValidBlock::validate_keep_voting_block_for_replay(
+    let validation = ValidBlock::validate_sumeragi_v2_fixture_keep_voting_block(
         block,
         topology,
         genesis_account,
@@ -416,9 +399,12 @@ fn replay_fixture_state(
     configure_replay_fixture_parameters(&state);
     state
 }
-fn seed_space_directory_manifest_for_legacy_checkpoint_test(state: &State, dataspace: DataSpaceId) {
+fn seed_space_directory_manifest_for_retired_checkpoint_test(
+    state: &State,
+    dataspace: DataSpaceId,
+) {
     let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(
-        b"strict-replay-legacy-checkpoint-surface",
+        b"strict-replay-retired-checkpoint-surface",
     ));
     let manifest = AssetPermissionManifest {
         version: ManifestVersion::default(),
@@ -1354,18 +1340,18 @@ fn replay_rejects_exact_wsv_checkpoint_mismatch_impl() {
     );
 }
 #[test]
-fn replay_rejects_legacy_space_directory_checkpoint_surface() {
+fn replay_rejects_retired_space_directory_checkpoint_surface() {
     run_replay_validation_test_on_stack(
-        "replay_rejects_legacy_checkpoint_surface",
-        replay_rejects_legacy_space_directory_checkpoint_surface_impl,
+        "replay_rejects_retired_checkpoint_surface",
+        replay_rejects_retired_space_directory_checkpoint_surface_impl,
     );
 }
 #[allow(clippy::too_many_lines)]
-fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
+fn replay_rejects_retired_space_directory_checkpoint_surface_impl() {
     use iroha_crypto::Algorithm;
     use iroha_primitives::json::Json;
     use std::borrow::Cow;
-    let chain_id = ChainId::from("iroha:test:legacy-route-replay");
+    let chain_id = ChainId::from("iroha:test:retired-checkpoint-rejection");
     let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
     let lane_id = LaneId::new(3);
     let dataspace_id = DataSpaceId::new(10);
@@ -1376,7 +1362,7 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
     let kura = Kura::blank_kura_for_testing();
     let original_state =
         replay_fixture_state(Arc::clone(&kura), chain_id.clone(), lane_id, dataspace_id);
-    seed_space_directory_manifest_for_legacy_checkpoint_test(&original_state, dataspace_id);
+    seed_space_directory_manifest_for_retired_checkpoint_test(&original_state, dataspace_id);
     let proof_policies = |height| {
         crate::da::active_proof_policy_bundle_at_height(&original_state.nexus_snapshot(), height)
     };
@@ -1445,22 +1431,16 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
         .with_da_proof_policies(Some(proof_policies(2)))
         .sign(leader.private_key())
         .unpack(|_| {});
-    let mut legacy_block: SignedBlock = block.into();
-    clear_test_execution_context_and_resign(&mut legacy_block, leader.private_key());
-    assert!(
-        legacy_block.execution_context().is_none(),
-        "legacy fixture must exercise replay compatibility without an execution context"
-    );
-    let legacy_block = commit_replay_validated_block_with_signature_mode(
-        &original_state,
+    let mut block2: SignedBlock = block.into();
+    rebind_test_execution_context_validators_and_resign(
+        &mut block2,
         &topology,
-        legacy_block,
-        &genesis_id,
-        true,
+        leader.private_key(),
     );
-    assert!(legacy_block.has_results());
-    kura.store_block(Arc::new(legacy_block.clone()))
-        .expect("store legacy block");
+    let block2 = commit_replay_validated_block(&original_state, &topology, block2, &genesis_id);
+    assert!(block2.has_results());
+    kura.store_block(Arc::new(block2.clone()))
+        .expect("store current block");
     let canonical_prefix =
         crate::snapshot::canonical_state_snapshot_bytes_for_tests(&original_state);
     let block3_instructions = vec![
@@ -1485,41 +1465,35 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     let block3_accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(block3_tx));
     let block3 = crate::block::BlockBuilder::new(vec![block3_accepted])
-        .chain(0, Some(&legacy_block))
+        .chain(0, Some(&block2))
         .with_da_proof_policies(Some(proof_policies(3)))
         .sign(leader.private_key())
         .unpack(|_| {});
-    let mut legacy_block3: SignedBlock = block3.into();
-    clear_test_execution_context_and_resign(&mut legacy_block3, leader.private_key());
-    assert!(
-        legacy_block3.execution_context().is_none(),
-        "multi-block legacy fixture must retain missing-context replay compatibility"
-    );
-    let legacy_block3 = commit_replay_validated_block_with_signature_mode(
-        &original_state,
+    let mut block3: SignedBlock = block3.into();
+    rebind_test_execution_context_validators_and_resign(
+        &mut block3,
         &topology,
-        legacy_block3,
-        &genesis_id,
-        true,
+        leader.private_key(),
     );
-    assert!(legacy_block3.has_results());
-    kura.store_block(Arc::new(legacy_block3.clone()))
-        .expect("store second legacy block");
+    let block3 = commit_replay_validated_block(&original_state, &topology, block3, &genesis_id);
+    assert!(block3.has_results());
+    kura.store_block(Arc::new(block3.clone()))
+        .expect("store second current block");
     let canonical_checkpoint = crate::snapshot::canonical_state_snapshot_hash(&original_state);
-    let legacy_checkpoint =
-        crate::snapshot::legacy_state_snapshot_hash_without_space_directory_manifests(
+    let retired_checkpoint =
+        crate::snapshot::retired_state_snapshot_hash_without_space_directory_manifests(
             &original_state,
         );
     assert_ne!(
-        canonical_checkpoint, legacy_checkpoint,
+        canonical_checkpoint, retired_checkpoint,
         "test fixture must distinguish the exact first-release WSV from the retired surface"
     );
-    kura.overwrite_wsv_checkpoint_without_validation_for_tests(3, legacy_checkpoint, None)
+    kura.overwrite_wsv_checkpoint_without_validation_for_tests(3, retired_checkpoint, None)
         .expect("overwrite final WSV checkpoint with retired surface hash");
     let replay_kura = Kura::blank_kura_for_testing();
     let mut replay_state =
         replay_fixture_state(Arc::clone(&replay_kura), chain_id, lane_id, dataspace_id);
-    seed_space_directory_manifest_for_legacy_checkpoint_test(&replay_state, dataspace_id);
+    seed_space_directory_manifest_for_retired_checkpoint_test(&replay_state, dataspace_id);
     for height in 1..=3 {
         let height_index = NonZeroUsize::new(height).expect("replay height is non-zero");
         let block = kura

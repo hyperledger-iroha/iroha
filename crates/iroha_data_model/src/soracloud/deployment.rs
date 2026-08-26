@@ -110,16 +110,12 @@ impl SoraServiceRolloutStateV1 {
             "candidate_version",
             &self.candidate_version,
         )?;
-        if self
-            .baseline_version
-            .as_ref()
-            .is_some_and(|version| version.trim().is_empty())
-        {
-            return Err(invalid_field(
+        if let Some(baseline_version) = self.baseline_version.as_deref() {
+            validate_nonblank_field(
                 "sora service rollout state",
                 "baseline_version",
-                "must not be empty when provided",
-            ));
+                baseline_version,
+            )?;
         }
         if self.canary_percent > 100 {
             return Err(invalid_field(
@@ -377,65 +373,221 @@ impl SoraServiceDeploymentStateV1 {
         }
         if let Some(lease) = self.service_lease.as_ref()
             && self.lease_volume_states.iter().any(|volume| {
-                volume.lease_started_sequence != lease.lease_started_sequence
-                    || volume.lease_expires_sequence != lease.lease_expires_sequence
+                volume.economic_clock != lease.economic_clock
+                    || volume.lease_started_height != lease.lease_started_height
+                    || volume.lease_expires_height != lease.lease_expires_height
             })
         {
             return Err(invalid_field(
                 "sora service deployment state",
                 "lease_volume_states",
-                "every volume economic start and expiry must exactly match the hosted-service lease",
+                "every volume economic clock, start, and expiry must exactly match the hosted-service lease",
             ));
+        }
+        self.accounted_storage_bytes().map_err(|error| {
+            invalid_field(
+                "sora service deployment state",
+                "lease_volume_states",
+                format!("replica-multiplied leased storage overflows u64: {error}"),
+            )
+        })?;
+        Ok(())
+    }
+    /// Validate that this authoritative state is bound to one exact active bundle.
+    ///
+    /// Accumulated prepayment, deposit, and lease bounds intentionally remain
+    /// stateful across upgrades. Replica capacity, quota, unit prices, and the
+    /// complete lease-volume shape are instead immutable inputs to accounting
+    /// and must match the currently active admitted manifest exactly.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when either object is invalid or the
+    /// deployment can be interpreted under economic terms other than those in
+    /// `active_bundle`.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the active-bundle boundary deliberately keeps all economic bindings in one auditable fail-closed check"
+    )]
+    pub fn validate_against_active_bundle(
+        &self,
+        active_bundle: &SoraDeploymentBundleV1,
+    ) -> Result<(), SoracloudManifestError> {
+        self.validate()?;
+        active_bundle.validate_for_admission()?;
+        if self.service_name != active_bundle.service.service_name
+            || self.current_service_version != active_bundle.service.service_version
+        {
+            return Err(invalid_field(
+                "sora service deployment state",
+                "current_service_version",
+                "service identity and active version must match the admitted bundle exactly",
+            ));
+        }
+        if self.current_service_manifest_hash != active_bundle.service_manifest_hash()
+            || self.current_container_manifest_hash != active_bundle.container_manifest_hash()
+        {
+            return Err(invalid_field(
+                "sora service deployment state",
+                "current_service_manifest_hash",
+                "active service and container manifest hashes must match the admitted bundle exactly",
+            ));
+        }
+        match active_bundle.service.execution_plane {
+            SoraServiceExecutionPlaneV1::DeterministicService => {
+                if self.service_lease.is_some() || !self.lease_volume_states.is_empty() {
+                    return Err(invalid_field(
+                        "sora service deployment state",
+                        "service_lease",
+                        "deterministic services must not retain hosted-service lease or volume state",
+                    ));
+                }
+            }
+            SoraServiceExecutionPlaneV1::HttpService => {
+                let lease = self.service_lease.as_ref().ok_or_else(|| {
+                    invalid_field(
+                        "sora service deployment state",
+                        "service_lease",
+                        "hosted HTTP services require authoritative economic lease state",
+                    )
+                })?;
+                let economics = &active_bundle.service.economics;
+                for (field, matches) in [
+                    (
+                        "service_lease.replica_count",
+                        lease.replica_count == active_bundle.service.replicas,
+                    ),
+                    (
+                        "service_lease.quota_class",
+                        lease.quota_class == economics.quota_class,
+                    ),
+                    (
+                        "service_lease.runtime_price_per_block",
+                        lease.runtime_price_per_block == economics.runtime_price_per_block,
+                    ),
+                    (
+                        "service_lease.storage_price_per_gib_block",
+                        lease.storage_price_per_gib_block
+                            == economics.storage_price_per_gib_block,
+                    ),
+                    (
+                        "service_lease.egress_price_per_mib",
+                        lease.egress_price_per_mib == economics.egress_price_per_mib,
+                    ),
+                ] {
+                    if !matches {
+                        return Err(invalid_field(
+                            "sora service deployment state",
+                            field,
+                            "must exactly match the active admitted service manifest",
+                        ));
+                    }
+                }
+                if self.lease_volume_states.len() != active_bundle.service.lease_volumes.len() {
+                    return Err(invalid_field(
+                        "sora service deployment state",
+                        "lease_volume_states",
+                        "must have an exact one-to-one entry for every active admitted lease volume",
+                    ));
+                }
+                for declared in &active_bundle.service.lease_volumes {
+                    let authoritative = self
+                        .lease_volume_states
+                        .iter()
+                        .find(|volume| volume.volume_name == declared.volume_name)
+                        .ok_or_else(|| {
+                            invalid_field(
+                                "sora service deployment state",
+                                "lease_volume_states",
+                                format!(
+                                    "missing authoritative state for active lease volume `{}`",
+                                    declared.volume_name
+                                ),
+                            )
+                        })?;
+                    if authoritative.kind != declared.kind
+                        || authoritative.storage_class != declared.storage_class
+                        || authoritative.mount_path != declared.mount_path
+                        || authoritative.max_total_bytes != declared.max_total_bytes.get()
+                    {
+                        return Err(invalid_field(
+                            "sora service deployment state",
+                            "lease_volume_states",
+                            format!(
+                                "authoritative state for active lease volume `{}` must match kind, storage class, mount path, and byte limit exactly",
+                                declared.volume_name
+                            ),
+                        ));
+                    }
+                }
+            }
         }
         Ok(())
     }
     /// Maximum authoritative leased-storage bytes retained by the deployment.
-    #[must_use]
-    pub fn accounted_storage_bytes(&self) -> u64 {
-        self.lease_volume_states.iter().fold(0_u64, |acc, volume| {
-            acc.saturating_add(volume.max_total_bytes)
-        })
+    ///
+    /// # Errors
+    /// Returns [`NumericOperationError::MantissaOverflow`] when an exact
+    /// per-replica volume product or their aggregate cannot fit in `u64`.
+    pub fn accounted_storage_bytes(&self) -> Result<u64, NumericOperationError> {
+        let replica_count = self
+            .service_lease
+            .as_ref()
+            .map_or(0_u64, |lease| u64::from(lease.replica_count.get()));
+        self.lease_volume_states
+            .iter()
+            .try_fold(0_u64, |total, volume| {
+                let replica_bytes = volume
+                    .max_total_bytes
+                    .checked_mul(replica_count)
+                    .ok_or(NumericOperationError::MantissaOverflow)?;
+                total
+                    .checked_add(replica_bytes)
+                    .ok_or(NumericOperationError::MantissaOverflow)
+            })
     }
-    /// Effective hosted-service lease status at the observed sequence.
+    /// Effective hosted-service lease status at the observed block height.
     ///
     /// # Errors
     /// Returns a bounded-domain accounting error.
     pub fn hosted_service_lease_status_at(
         &self,
-        current_sequence: u64,
+        current_height: u64,
     ) -> Result<Option<SoraServiceLeaseStatusV1>, NumericOperationError> {
-        self.service_lease.as_ref().map_or(Ok(None), |lease| {
-            lease
-                .status_at(current_sequence, self.accounted_storage_bytes())
-                .map(Some)
-        })
+        let Some(lease) = self.service_lease.as_ref() else {
+            return Ok(None);
+        };
+        lease
+            .status_at(current_height, self.accounted_storage_bytes()?)
+            .map(Some)
     }
-    /// Effective remaining prepaid runtime balance at the observed sequence.
+    /// Effective remaining prepaid runtime balance at the observed block height.
     ///
     /// # Errors
     /// Returns a bounded-domain accounting error.
     pub fn hosted_service_remaining_balance(
         &self,
-        current_sequence: u64,
+        current_height: u64,
     ) -> Result<Option<Quantity>, NumericOperationError> {
-        self.service_lease.as_ref().map_or(Ok(None), |lease| {
-            lease
-                .remaining_balance(current_sequence, self.accounted_storage_bytes())
-                .map(Some)
-        })
+        let Some(lease) = self.service_lease.as_ref() else {
+            return Ok(None);
+        };
+        lease
+            .remaining_balance(current_height, self.accounted_storage_bytes()?)
+            .map(Some)
     }
     /// Returns `true` when the hosted-service plane may still be routed and
-    /// materialized at the observed sequence.
+    /// materialized at the observed block height.
     ///
     /// # Errors
     /// Returns a bounded-domain accounting error.
     pub fn hosted_service_lease_active_at(
         &self,
-        current_sequence: u64,
+        current_height: u64,
     ) -> Result<bool, NumericOperationError> {
-        self.service_lease.as_ref().map_or(Ok(false), |lease| {
-            lease.is_active_at(current_sequence, self.accounted_storage_bytes())
-        })
+        let Some(lease) = self.service_lease.as_ref() else {
+            return Ok(false);
+        };
+        lease.is_active_at(current_height, self.accounted_storage_bytes()?)
     }
 }
 fn validate_service_material_name(
@@ -492,28 +644,6 @@ fn validate_nonempty_no_control(
             manifest,
             field,
             "must not contain control characters",
-        ));
-    }
-    Ok(())
-}
-fn validate_distribution_geography_tag(
-    manifest: &'static str,
-    field: &'static str,
-    value: &str,
-) -> Result<(), SoracloudManifestError> {
-    validate_nonempty_no_control(manifest, field, value)?;
-    if value.len() > 128 {
-        return Err(invalid_field(
-            manifest,
-            field,
-            "geography tags must not exceed 128 bytes",
-        ));
-    }
-    if value.chars().any(char::is_whitespace) {
-        return Err(invalid_field(
-            manifest,
-            field,
-            "geography tags must not contain whitespace",
         ));
     }
     Ok(())
@@ -590,13 +720,6 @@ fn validate_config_export_relative_path(value: &str) -> Result<(), SoracloudMani
             "config export file path must not exceed 512 bytes",
         ));
     }
-    if value.chars().any(char::is_control) {
-        return Err(invalid_field(
-            manifest,
-            field,
-            "config export file path must not contain control characters",
-        ));
-    }
     for segment in value.split('/') {
         if segment.is_empty() || segment == "." || segment == ".." {
             return Err(SoracloudManifestError::InvalidField {
@@ -604,6 +727,18 @@ fn validate_config_export_relative_path(value: &str) -> Result<(), SoracloudMani
                 field,
                 reason: format!(
                     "config export file path `{value}` must not contain empty, '.' or '..' segments"
+                ),
+            });
+        }
+        if !segment
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest,
+                field,
+                reason: format!(
+                    "config export file path `{value}` must use only ASCII letters, digits, '.', '_' or '-' in every segment"
                 ),
             });
         }
@@ -770,6 +905,13 @@ fn validate_inrou_image_member_path(
             "must use canonical `/`-separated portable path components",
         ));
     }
+    if relative_path.split('/').count() > SORA_INROU_PORTABLE_PATH_MAX_COMPONENTS_V1 {
+        return Err(invalid_field(
+            manifest,
+            field,
+            "must not exceed the first-release portable path component limit",
+        ));
+    }
     for component in relative_path.split('/') {
         if !is_portable_inrou_path_component(component) {
             return Err(SoracloudManifestError::InvalidField {
@@ -846,6 +988,13 @@ fn validate_bundle_absolute_path(
             manifest,
             field,
             "must use a canonical nonempty `/`-separated path",
+        ));
+    }
+    if relative_path.split('/').count() > SORA_INROU_PORTABLE_PATH_MAX_COMPONENTS_V1 {
+        return Err(invalid_field(
+            manifest,
+            field,
+            "must not exceed the first-release portable path component limit",
         ));
     }
     for component in relative_path.split('/') {
@@ -1317,6 +1466,17 @@ impl SoraTrainingJobRecordV1 {
         self.validate_progress_fields()?;
         self.validate_storage_fields()?;
         self.validate_digest_fields()?;
+        if self
+            .last_failure_reason
+            .as_ref()
+            .is_some_and(|reason| reason.trim().is_empty())
+        {
+            return Err(invalid_field(
+                "sora training job record",
+                "last_failure_reason",
+                "must not be empty when provided",
+            ));
+        }
         self.validate_sequence_fields()
     }
     fn validate_identity_fields(&self) -> Result<(), SoracloudManifestError> {
@@ -1527,6 +1687,17 @@ impl SoraTrainingJobAuditEventV1 {
                 latest_metrics_hash,
             )?;
         }
+        if self
+            .last_failure_reason
+            .as_ref()
+            .is_some_and(|reason| reason.trim().is_empty())
+        {
+            return Err(invalid_field(
+                "sora training job audit event",
+                "last_failure_reason",
+                "must not be empty when provided",
+            ));
+        }
         Ok(())
     }
 }
@@ -1567,16 +1738,8 @@ impl SoraModelRegistryV1 {
             &self.service_version,
         )?;
         validate_nonblank_field("sora model registry", "model_name", &self.model_name)?;
-        if self
-            .current_version
-            .as_ref()
-            .is_some_and(|version| version.trim().is_empty())
-        {
-            return Err(invalid_field(
-                "sora model registry",
-                "current_version",
-                "must not be empty when provided",
-            ));
+        if let Some(current_version) = self.current_version.as_deref() {
+            validate_nonblank_field("sora model registry", "current_version", current_version)?;
         }
         if self.updated_sequence == 0 {
             return Err(invalid_field(
@@ -1637,14 +1800,12 @@ impl SoraModelProvenanceRefV1 {
 /// Package format admitted for SoraFS-backed uploaded-model registration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "runtime_format", content = "value"))]
+#[cfg_attr(feature = "json", norito(tag = "package_format", content = "value"))]
 #[norito(deny_unknown_fields)]
-pub enum SoraUploadedModelRuntimeFormatV1 {
-    /// Hugging Face-style safetensors repository layout.
+pub enum SoraUploadedModelPackageFormatV1 {
+    /// Canonical normalized Hugging Face-style safetensors repository layout.
     #[default]
-    HuggingFaceSafetensors,
-    /// Deterministic quantized CPU operator-set v1.
-    DeterministicQuantizedCpuV1,
+    NormalizedHuggingFaceSafetensorsV1,
 }
 /// Policy pricing for uploaded-model storage.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
@@ -1699,7 +1860,7 @@ fn validate_uploaded_model_x25519_public_key(
     })?;
     Ok(())
 }
-/// Soracloud-upload recipient metadata advertised for model bundle encryption.
+/// Soracloud-upload recipient metadata recorded for model bundle encryption.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -1722,7 +1883,7 @@ pub struct SoraUploadedModelEncryptionRecipientV1 {
 }
 impl SoraUploadedModelEncryptionRecipientV1 {
     const MAX_PUBLIC_KEY_BYTES: usize = 256;
-    /// Validate advertised upload-recipient metadata.
+    /// Validate recorded upload-recipient metadata.
     ///
     /// # Errors
     /// Returns [`SoracloudManifestError`] when the recipient metadata is empty or malformed.
@@ -1732,7 +1893,7 @@ impl SoraUploadedModelEncryptionRecipientV1 {
             self.schema_version,
             SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
         )?;
-        validate_nonblank_field(
+        validate_nonempty_no_control(
             "sora uploaded model encryption recipient",
             "key_id",
             &self.key_id,
@@ -1772,7 +1933,7 @@ impl SoraUploadedModelEncryptionRecipientV1 {
             return Err(invalid_field(
                 "sora uploaded model encryption recipient",
                 "public_key_fingerprint",
-                "must match the advertised public_key_bytes",
+                "must match the recorded public_key_bytes",
             ));
         }
         Ok(())
@@ -1821,7 +1982,7 @@ impl SoraUploadedModelWrappedKeyV1 {
             self.schema_version,
             SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
         )?;
-        validate_nonblank_field(
+        validate_nonempty_no_control(
             "sora uploaded model wrapped key",
             "recipient_key_id",
             &self.recipient_key_id,
@@ -1925,8 +2086,8 @@ pub struct SoraUploadedModelBundleV1 {
     pub modalities: Vec<String>,
     /// Deterministic commitment over the normalized plaintext upload bundle.
     pub plaintext_root: Hash,
-    /// Uploaded-model package format.
-    pub runtime_format: SoraUploadedModelRuntimeFormatV1,
+    /// Uploaded-model package format committed by this encrypted bundle.
+    pub package_format: SoraUploadedModelPackageFormatV1,
     /// Canonical bundle root.
     pub bundle_root: Hash,
     /// Approved active `SoraFS` manifest digest containing the encrypted model bundle.
@@ -2001,7 +2162,7 @@ impl SoraUploadedModelBundleV1 {
             ("family", self.family.as_str()),
             ("decryption_policy_ref", self.decryption_policy_ref.as_str()),
         ] {
-            validate_nonblank_field("sora uploaded model bundle", field, value)?;
+            validate_nonempty_no_control("sora uploaded model bundle", field, value)?;
         }
         if self.modalities.is_empty() {
             return Err(SoracloudManifestError::EmptyField {
@@ -2053,168 +2214,6 @@ impl SoraUploadedModelBundleV1 {
                 "sora uploaded model bundle",
                 "chunk_count",
                 "chunk_count, plaintext_bytes, and ciphertext_bytes must be greater than zero",
-            ));
-        }
-        Ok(())
-    }
-}
-/// SoraFS-backed encrypted artifact reference for private uploaded-model execution.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct SoraPrivateModelArtifactRefV1 {
-    /// Schema version; must equal [`SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1`].
-    pub schema_version: u16,
-    /// Approved active `SoraFS` manifest digest containing the encrypted artifact.
-    pub sorafs_manifest_digest: ManifestDigest,
-    /// Commitment over the encrypted artifact bytes.
-    pub artifact_hash: Hash,
-    /// Total encrypted bytes stored by `SoraFS` for the artifact.
-    pub ciphertext_bytes: u64,
-    /// Stable artifact role, for example `input` or `output`.
-    pub artifact_role: String,
-}
-impl SoraPrivateModelArtifactRefV1 {
-    /// Validate encrypted artifact metadata.
-    ///
-    /// # Errors
-    /// Returns [`SoracloudManifestError`] when artifact metadata is malformed.
-    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_schema_version(
-            "sora private model artifact ref",
-            self.schema_version,
-            SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
-        )?;
-        validate_soracloud_digest_hash(
-            "sora private model artifact ref",
-            "artifact_hash",
-            self.artifact_hash,
-        )?;
-        if self.ciphertext_bytes == 0 {
-            return Err(invalid_field(
-                "sora private model artifact ref",
-                "ciphertext_bytes",
-                "must be greater than zero",
-            ));
-        }
-        let role = self.artifact_role.trim();
-        validate_nonblank_field("sora private model artifact ref", "artifact_role", role)?;
-        if role != self.artifact_role || role.chars().any(char::is_control) {
-            return Err(invalid_field(
-                "sora private model artifact ref",
-                "artifact_role",
-                "must be canonical and free of control characters",
-            ));
-        }
-        Ok(())
-    }
-}
-/// Receipt committed for deterministic private uploaded-model execution.
-///
-/// The receipt intentionally carries only commitments and encrypted artifact
-/// references. Plaintext input and output bytes remain outside chain state.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(deny_unknown_fields)]
-pub struct SoraPrivateUploadedModelExecutionReceiptV1 {
-    /// Schema version; must equal [`SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1`].
-    pub schema_version: u16,
-    /// Deterministic receipt identifier.
-    pub receipt_id: Hash,
-    /// Service that owns the uploaded model.
-    pub service_name: Name,
-    /// Stable uploaded-model identifier.
-    pub model_id: String,
-    /// Pinned weight version label.
-    pub weight_version: String,
-    /// Deterministic runtime version that defines operator semantics.
-    pub runtime_version: String,
-    /// Approved `SoraFS` manifest digest for the encrypted model package.
-    pub model_manifest_digest: ManifestDigest,
-    /// Canonical uploaded-model bundle root.
-    pub model_bundle_root: Hash,
-    /// Decryption or release policy identifier used by the execution.
-    pub policy_id: String,
-    /// Encrypted input artifact persisted outside chain state.
-    pub input_artifact: SoraPrivateModelArtifactRefV1,
-    /// Encrypted output artifact persisted outside chain state.
-    pub output_artifact: SoraPrivateModelArtifactRefV1,
-    /// Commitment over the canonical plaintext input envelope.
-    pub input_commitment: Hash,
-    /// Commitment over the canonical plaintext output envelope.
-    pub output_commitment: Hash,
-    /// Commitment over the runtime request envelope.
-    pub request_commitment: Hash,
-    /// Commitment over the runtime result envelope.
-    pub result_commitment: Hash,
-    /// Monotonic Soracloud sequence that emitted the receipt.
-    pub emitted_sequence: u64,
-}
-impl SoraPrivateUploadedModelExecutionReceiptV1 {
-    /// Validate private uploaded-model execution receipt metadata.
-    ///
-    /// # Errors
-    /// Returns [`SoracloudManifestError`] when the receipt is malformed.
-    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        validate_schema_version(
-            "sora private uploaded model execution receipt",
-            self.schema_version,
-            SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
-        )?;
-        for (field, value) in [
-            ("model_id", self.model_id.as_str()),
-            ("weight_version", self.weight_version.as_str()),
-            ("runtime_version", self.runtime_version.as_str()),
-            ("policy_id", self.policy_id.as_str()),
-        ] {
-            validate_nonblank_field(
-                "sora private uploaded model execution receipt",
-                field,
-                value,
-            )?;
-            if value.trim() != value || value.chars().any(char::is_control) {
-                return Err(invalid_field(
-                    "sora private uploaded model execution receipt",
-                    field,
-                    "must be canonical and free of control characters",
-                ));
-            }
-        }
-        for (field, digest) in [
-            ("receipt_id", self.receipt_id),
-            ("model_bundle_root", self.model_bundle_root),
-            ("input_commitment", self.input_commitment),
-            ("output_commitment", self.output_commitment),
-            ("request_commitment", self.request_commitment),
-            ("result_commitment", self.result_commitment),
-        ] {
-            validate_soracloud_digest_hash(
-                "sora private uploaded model execution receipt",
-                field,
-                digest,
-            )?;
-        }
-        if self.emitted_sequence == 0 {
-            return Err(invalid_field(
-                "sora private uploaded model execution receipt",
-                "emitted_sequence",
-                "must be greater than zero",
-            ));
-        }
-        self.input_artifact.validate()?;
-        self.output_artifact.validate()?;
-        if self.input_artifact.artifact_role != "input" {
-            return Err(invalid_field(
-                "sora private uploaded model execution receipt",
-                "input_artifact.artifact_role",
-                "must be `input`",
-            ));
-        }
-        if self.output_artifact.artifact_role != "output" {
-            return Err(invalid_field(
-                "sora private uploaded model execution receipt",
-                "output_artifact.artifact_role",
-                "must be `output`",
             ));
         }
         Ok(())
@@ -2285,23 +2284,26 @@ impl SoraModelWeightVersionRecordV1 {
         ] {
             validate_nonblank_field("sora model weight version record", field, value)?;
         }
-        if self.training_job_id.trim().is_empty() && self.source_provenance.is_none() {
+        if self.training_job_id.is_empty() && self.source_provenance.is_none() {
             return Err(invalid_field(
                 "sora model weight version record",
                 "source_provenance",
                 "training_job_id or source_provenance must be populated",
             ));
         }
-        if self
-            .parent_version
-            .as_ref()
-            .is_some_and(|version| version.trim().is_empty())
-        {
-            return Err(invalid_field(
+        if !self.training_job_id.is_empty() {
+            validate_nonblank_field(
+                "sora model weight version record",
+                "training_job_id",
+                &self.training_job_id,
+            )?;
+        }
+        if let Some(parent_version) = self.parent_version.as_deref() {
+            validate_nonblank_field(
                 "sora model weight version record",
                 "parent_version",
-                "must not be empty when provided",
-            ));
+                parent_version,
+            )?;
         }
         if let Some(source_provenance) = &self.source_provenance {
             source_provenance.validate()?;
@@ -2497,34 +2499,33 @@ impl SoraModelArtifactRecordV1 {
         ] {
             validate_nonblank_field("sora model artifact record", field, value)?;
         }
-        if self.training_job_id.trim().is_empty() && self.source_provenance.is_none() {
+        if self.training_job_id.is_empty() && self.source_provenance.is_none() {
             return Err(invalid_field(
                 "sora model artifact record",
                 "source_provenance",
                 "training_job_id or source_provenance must be populated",
             ));
         }
-        if self
-            .weight_version
-            .as_ref()
-            .is_some_and(|version| version.trim().is_empty())
-        {
-            return Err(invalid_field(
+        if !self.training_job_id.is_empty() {
+            validate_nonblank_field(
+                "sora model artifact record",
+                "training_job_id",
+                &self.training_job_id,
+            )?;
+        }
+        if let Some(weight_version) = self.weight_version.as_deref() {
+            validate_nonblank_field(
                 "sora model artifact record",
                 "weight_version",
-                "must not be empty when provided",
-            ));
+                weight_version,
+            )?;
         }
-        if self
-            .consumed_by_version
-            .as_ref()
-            .is_some_and(|version| version.trim().is_empty())
-        {
-            return Err(invalid_field(
+        if let Some(consumed_by_version) = self.consumed_by_version.as_deref() {
+            validate_nonblank_field(
                 "sora model artifact record",
                 "consumed_by_version",
-                "must not be empty when provided",
-            ));
+                consumed_by_version,
+            )?;
         }
         if let Some(source_provenance) = &self.source_provenance {
             source_provenance.validate()?;

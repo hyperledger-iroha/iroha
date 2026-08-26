@@ -1113,7 +1113,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     private static ControllerPayload parseAuthority(final String authority) {
       final String canonicalAuthority =
           AccountIdLiteral.requireCanonicalI105Address(authority, "authority");
-      final AccountAddress.ParseResult parsed;
+      final AccountAddress parsed;
       try {
         parsed =
             AccountAddress.parseEncodedIgnoringCurveSupport(
@@ -1121,7 +1121,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       } catch (final AccountAddress.AccountAddressException ex) {
         throw new IllegalArgumentException("authority must use canonical I105 encoding", ex);
       }
-      return parseAddressToController(parsed.address);
+      return parseAddressToController(parsed);
     }
 
     private static ControllerPayload parseAddressToController(final AccountAddress address) {

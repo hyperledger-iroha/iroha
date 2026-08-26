@@ -289,9 +289,7 @@ fn proof_id_from_json(value: &norito::json::Value) -> Option<iroha_data_model::p
     }
 }
 fn parse_account_id_literal(input: &str) -> Option<iroha_data_model::account::AccountId> {
-    iroha_data_model::account::AccountId::parse_encoded(input)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .ok()
+    iroha_data_model::account::AccountId::parse_encoded(input).ok()
 }
 #[derive(Clone, Copy, Debug)]
 pub struct HttpTimeoutConfig {

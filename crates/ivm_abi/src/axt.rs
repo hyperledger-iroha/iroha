@@ -878,7 +878,7 @@ pub fn validate_remote_spend_intent(intent: &RemoteSpendIntent) -> Result<(), VM
 
 fn canonical_account_id(value: &str) -> Option<AccountId> {
     let parsed = AccountId::parse_encoded(value).ok()?;
-    (parsed.canonical() == value).then(|| parsed.into_account_id())
+    (parsed.to_string() == value).then_some(parsed)
 }
 
 /// Require a registered asset policy's balance scope to match the intent dataspace.

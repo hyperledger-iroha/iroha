@@ -693,7 +693,10 @@ fn validate_signature_r_for_strict_batch(signature: &[u8]) -> Result<(), Error> 
         .map_err(|_| Error::BadSignature)?;
     let r_compressed = CompressedEdwardsY(r_bytes);
     let r_point = r_compressed.decompress().ok_or(Error::BadSignature)?;
-    if r_point.is_small_order() || r_point.compress().as_bytes() != &r_bytes {
+    if r_point.is_small_order()
+        || !r_point.is_torsion_free()
+        || r_point.compress().as_bytes() != &r_bytes
+    {
         return Err(Error::BadSignature);
     }
     Ok(())
@@ -1619,6 +1622,60 @@ mod test {
             uncached_batch_verify_calls_for_tests(),
             0,
             "strict R validation must run before the dalek batch backend"
+        );
+    }
+    #[test]
+    fn ed25519_batch_rejects_mixed_torsion_r_before_batch_backend() {
+        reset_verify_ok_cache_for_tests();
+        reset_batch_cache_counters_for_tests();
+        let mixed_torsion_r = mixed_torsion_public_key();
+        let mixed_torsion_point = CompressedEdwardsY(mixed_torsion_r)
+            .decompress()
+            .expect("mixed-torsion test point must decompress");
+        assert!(!mixed_torsion_point.is_small_order());
+        assert!(!mixed_torsion_point.is_torsion_free());
+        assert_eq!(mixed_torsion_point.compress().to_bytes(), mixed_torsion_r);
+
+        let mut triples = ed25519_batch_fixture();
+        triples[0].1[..32].copy_from_slice(&mixed_torsion_r);
+        assert_eq!(
+            Ed25519Sha512::parse_signature(&triples[0].1)
+                .expect_err("mixed-torsion R must fail parsing"),
+            Error::BadSignature
+        );
+        let messages = triples
+            .iter()
+            .map(|(message, _, _)| message.as_slice())
+            .collect::<Vec<_>>();
+        let signatures = triples
+            .iter()
+            .map(|(_, signature, _)| signature.as_slice())
+            .collect::<Vec<_>>();
+        let public_keys = triples
+            .iter()
+            .map(|(_, _, public_key)| *public_key)
+            .collect::<Vec<_>>();
+        let err = Ed25519Sha512::verify_batch_preparsed_deterministic(
+            &messages,
+            &signatures,
+            &public_keys,
+        )
+        .expect_err("mixed-torsion R must fail before batch verification");
+        assert_eq!(err, Error::BadSignature);
+        assert_eq!(
+            uncached_batch_verify_calls_for_tests(),
+            0,
+            "strict R validation must run before the dalek batch backend"
+        );
+        assert!(!is_verify_ok_cached(
+            &triples[0].2,
+            &triples[0].0,
+            &triples[0].1
+        ));
+        assert_eq!(
+            Ed25519Sha512::verify(&triples[0].0, &triples[0].1, &triples[0].2)
+                .expect_err("mixed-torsion R must also fail strict verification"),
+            Error::BadSignature
         );
     }
     #[test]

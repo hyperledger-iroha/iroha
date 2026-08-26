@@ -91,6 +91,10 @@ pub enum RecordError {
         /// Protocol maximum.
         maximum: usize,
     },
+    /// Zero-length records are forbidden because they make no application
+    /// progress and can monopolize an async reader with authenticated work.
+    #[error("record plaintext must not be empty")]
+    EmptyPlaintext,
     /// Record is truncated: expected at least {expected} bytes, received {actual}
     #[error("record is truncated: expected at least {expected} bytes, received {actual}")]
     Truncated {
@@ -163,11 +167,14 @@ impl fmt::Debug for RecordLayer {
 impl RecordLayer {
     /// Bind a record layer to a negotiated `SoraNet` session key and local role.
     ///
+    /// The non-clone session key is consumed so safe callers cannot accidentally
+    /// create a second stream registry over the same negotiated nonce domain.
+    ///
     /// # Errors
     ///
     /// Returns [`RecordError::InvalidSessionKeyLength`] unless the handshake
     /// supplied the 32-byte key required by the first-release protocol.
-    pub fn new(session_key: &SessionKey, endpoint: RecordEndpoint) -> Result<Self, RecordError> {
+    pub fn new(session_key: SessionKey, endpoint: RecordEndpoint) -> Result<Self, RecordError> {
         let payload = session_key.payload();
         if payload.len() != SESSION_KEY_LEN {
             return Err(RecordError::InvalidSessionKeyLength {
@@ -268,7 +275,7 @@ impl RecordSealer {
     ///
     /// # Errors
     ///
-    /// Rejects oversized plaintext, sequence exhaustion, or cipher failure.
+    /// Rejects empty or oversized plaintext, sequence exhaustion, or cipher failure.
     pub fn seal(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, RecordError> {
         let mut output = Vec::new();
         self.seal_into(plaintext, &mut output)?;
@@ -278,10 +285,13 @@ impl RecordSealer {
     ///
     /// # Errors
     ///
-    /// Rejects oversized plaintext, sequence exhaustion, or cipher failure.
+    /// Rejects empty or oversized plaintext, sequence exhaustion, or cipher failure.
     pub fn seal_into(&mut self, plaintext: &[u8], output: &mut Vec<u8>) -> Result<(), RecordError> {
         output.zeroize();
         output.clear();
+        if plaintext.is_empty() {
+            return Err(RecordError::EmptyPlaintext);
+        }
         if plaintext.len() > MAX_RECORD_PLAINTEXT_LEN {
             return Err(RecordError::PlaintextTooLarge {
                 actual: plaintext.len(),
@@ -343,7 +353,7 @@ impl RecordOpener {
     /// # Errors
     ///
     /// Rejects an invalid version, unexpected sequence, exhausted sequence
-    /// space, or an oversized advertised plaintext.
+    /// space, or an empty or oversized advertised plaintext.
     pub fn ciphertext_len(&self, header: &[u8; RECORD_HEADER_LEN]) -> Result<usize, RecordError> {
         let (_, plaintext_len) = self.parse_header(header)?;
         Ok(plaintext_len + RECORD_TAG_LEN)
@@ -436,6 +446,9 @@ impl RecordOpener {
                 .expect("record length has a fixed-width field"),
         ))
         .expect("u32 record length is representable as usize");
+        if plaintext_len == 0 {
+            return Err(RecordError::EmptyPlaintext);
+        }
         if plaintext_len > MAX_RECORD_PLAINTEXT_LEN {
             return Err(RecordError::PlaintextTooLarge {
                 actual: plaintext_len,
@@ -464,10 +477,11 @@ fn nonce_for_sequence(sequence: u64) -> aead::Nonce<ChaCha20Poly1305> {
 mod tests {
     use super::*;
     fn layers() -> (RecordLayer, RecordLayer) {
-        let key = SessionKey::new((0_u8..32).collect());
+        let key = (0_u8..32).collect::<Vec<_>>();
         (
-            RecordLayer::new(&key, RecordEndpoint::Client).expect("client layer"),
-            RecordLayer::new(&key, RecordEndpoint::Relay).expect("relay layer"),
+            RecordLayer::new(SessionKey::new(key.clone()), RecordEndpoint::Client)
+                .expect("client layer"),
+            RecordLayer::new(SessionKey::new(key), RecordEndpoint::Relay).expect("relay layer"),
         )
     }
     #[test]
@@ -573,6 +587,42 @@ mod tests {
         ));
     }
     #[test]
+    fn empty_records_are_rejected_without_advancing_sequence_state() {
+        let (client, relay) = layers();
+        let context =
+            RecordStreamContext::new(RecordEndpoint::Client, RecordStreamKind::Bidirectional, 5);
+        let mut client = client.stream(context).expect("client stream");
+        let mut relay = relay.stream(context).expect("relay stream");
+
+        assert!(matches!(
+            client.sealer.seal(b""),
+            Err(RecordError::EmptyPlaintext)
+        ));
+
+        // Construct the authenticated empty record that the former sealer
+        // emitted. The v1 opener rejects its header before doing AEAD work.
+        let header = encode_header(0, 0);
+        let nonce = nonce_for_sequence(0);
+        let mut body = Vec::new();
+        client
+            .sealer
+            .cipher
+            .encrypt_in_place(&nonce, &header, &mut body)
+            .expect("construct authenticated empty-record fixture");
+        let mut empty_record = header.to_vec();
+        empty_record.extend_from_slice(&body);
+        assert!(matches!(
+            relay.opener.open(&empty_record),
+            Err(RecordError::EmptyPlaintext)
+        ));
+
+        let record = client.sealer.seal(b"progress").expect("seal sequence zero");
+        assert_eq!(
+            relay.opener.open(&record).expect("open sequence zero"),
+            b"progress"
+        );
+    }
+    #[test]
     fn malformed_lengths_are_rejected_before_allocation_or_decryption() {
         let (client, relay) = layers();
         let context =
@@ -593,7 +643,7 @@ mod tests {
     fn invalid_session_key_length_is_rejected() {
         let key = SessionKey::new(vec![0xAA; 31]);
         assert!(matches!(
-            RecordLayer::new(&key, RecordEndpoint::Client),
+            RecordLayer::new(key, RecordEndpoint::Client),
             Err(RecordError::InvalidSessionKeyLength { actual: 31 })
         ));
     }

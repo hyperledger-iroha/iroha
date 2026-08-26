@@ -23,6 +23,7 @@ use std::{
 
 use eyre::WrapErr as _;
 use iroha_crypto::sha256_reader_bounded;
+use iroha_data_model::soracloud::SORA_INROU_DATA_VOLUME_MAX_COUNT_V1;
 
 use super::PortableVmChildIdentity;
 
@@ -38,10 +39,27 @@ const INROU_RUNTIME_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 const INROU_RUNTIME_FILE_MAX_BYTES: u64 = 1024 * 1024 * 1024;
 const INROU_RUNTIME_TOTAL_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const INROU_RUNTIME_MAX_FILES: usize = 512;
-pub(super) const INROU_NAMESPACE_MAX_LEASE_DISKS: usize = 32;
+pub(super) const INROU_NAMESPACE_MAX_LEASE_DISKS: usize = SORA_INROU_DATA_VOLUME_MAX_COUNT_V1;
 const INROU_NAMESPACE_TOOL_PROBE_MAX_BYTES: usize = 1024 * 1024;
 const INROU_NAMESPACE_TOOL_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const INROU_NAMESPACE_MAX_CGROUP_PIDS: usize = 2;
+const INROU_BWRAP_REQUIRED_OPTIONS: [&str; 15] = [
+    "--as-pid-1",
+    "--bind-fd",
+    "--clearenv",
+    "--dev-bind",
+    "--die-with-parent",
+    "--new-session",
+    "--proc",
+    "--ro-bind",
+    "--ro-bind-fd",
+    "--tmpfs",
+    "--unshare-cgroup",
+    "--unshare-ipc",
+    "--unshare-net",
+    "--unshare-pid",
+    "--unshare-uts",
+];
 const INROU_NAMESPACE_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 const INROU_NAMESPACE_CONNECT_THREAD_STACK_BYTES: usize = 256 * 1024;
 
@@ -52,15 +70,36 @@ pub(super) const INROU_NAMESPACE_INITRD_PATH: &str = "/inrou/input/initrd";
 pub(super) const INROU_NAMESPACE_BUNDLE_PATH: &str = "/inrou/input/bundle";
 pub(super) const INROU_NAMESPACE_CLOUD_INIT_ROOT: &str = "/inrou/input/cloud-init";
 pub(super) const INROU_NAMESPACE_ROOT_DISK_PATH: &str = "/inrou/disk/root";
+const INROU_NAMESPACE_MANDATORY_PRODUCTION_BINDINGS: [(&str, bool); 6] = [
+    (INROU_NAMESPACE_KERNEL_PATH, false),
+    (INROU_NAMESPACE_BUNDLE_PATH, false),
+    ("/inrou/input/cloud-init/meta-data", false),
+    ("/inrou/input/cloud-init/network-config", false),
+    ("/inrou/input/cloud-init/user-data", false),
+    (INROU_NAMESPACE_ROOT_DISK_PATH, true),
+];
+const INROU_NAMESPACE_MAX_INITRD_BINDINGS: usize = 1;
+pub(super) const INROU_NAMESPACE_MAX_PRODUCTION_BINDINGS: usize =
+    INROU_NAMESPACE_MANDATORY_PRODUCTION_BINDINGS.len()
+        + INROU_NAMESPACE_MAX_INITRD_BINDINGS
+        + INROU_NAMESPACE_MAX_LEASE_DISKS;
 
 #[derive(Clone, Debug)]
 pub(super) struct InrouNamespaceTools {
     bubblewrap: PathBuf,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(super) struct InrouNamespaceBindingRequest {
     pub host_path: PathBuf,
+    pub host_file: fs::File,
+    pub sandbox_path: PathBuf,
+    pub writable: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct InrouNamespaceLauncherBindingV1 {
+    pub descriptor: std::os::fd::RawFd,
     pub sandbox_path: PathBuf,
     pub writable: bool,
 }
@@ -84,9 +123,16 @@ enum InrouFileKind {
     Directory,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InrouNamespacePlanMode {
+    StaticPreflight,
+    StartupProbe,
+    Production,
+}
+
+#[derive(Debug)]
 struct InrouNamespaceBinding {
-    host_path: PathBuf,
+    host_file: fs::File,
     sandbox_path: PathBuf,
     identity: InrouFileIdentity,
     writable: bool,
@@ -108,7 +154,7 @@ enum InrouRuntimeEntryKind {
     Regular,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub(super) struct InrouNamespacePlan {
     tools: InrouNamespaceTools,
     runtime_root: PathBuf,
@@ -158,42 +204,38 @@ impl InrouNamespaceTools {
         )
         .wrap_err("probe the pinned bubblewrap launcher surface")?;
         let help = String::from_utf8(output).wrap_err("decode pinned bubblewrap help")?;
-        for required in [
-            "--as-pid-1",
-            "--clearenv",
-            "--dev-bind",
-            "--die-with-parent",
-            "--new-session",
-            "--proc",
-            "--ro-bind",
-            "--tmpfs",
-            "--unshare-cgroup",
-            "--unshare-ipc",
-            "--unshare-net",
-            "--unshare-pid",
-            "--unshare-uts",
-        ] {
-            if !help.split_ascii_whitespace().any(|word| word == required) {
-                eyre::bail!("pinned bubblewrap launcher omitted mandatory option `{required}`");
-            }
-        }
-        Ok(())
+        require_inrou_bubblewrap_help(&help)
     }
+}
+
+fn require_inrou_bubblewrap_help(help: &str) -> eyre::Result<()> {
+    for required in INROU_BWRAP_REQUIRED_OPTIONS {
+        if !help.split_ascii_whitespace().any(|word| word == required) {
+            eyre::bail!("pinned bubblewrap launcher omitted mandatory option `{required}`");
+        }
+    }
+    Ok(())
 }
 
 impl InrouNamespacePlan {
     pub(super) fn preflight(tools: InrouNamespaceTools) -> eyre::Result<()> {
-        Self::prepare_inner(tools, 0, Vec::new(), false).map(|_| ())
+        Self::prepare_inner(
+            tools,
+            0,
+            Vec::new(),
+            InrouNamespacePlanMode::StaticPreflight,
+        )
+        .map(|_| ())
     }
 
     /// Prepare the exact minimal-root plan used by the startup KVM probe.
     ///
-    /// The probe deliberately binds no workload files. It authenticates the
-    /// packaged QEMU closure and its empty placeholders, then launches the
-    /// production QEMU machine profile without guest artifacts through the
-    /// same namespace boundary as a real worker.
+    /// The probe binds the authenticated empty kernel placeholder over its own
+    /// destination through one read-only descriptor, exercising the production
+    /// descriptor-mount path without accepting a workload file. It then launches
+    /// the production QEMU machine profile without guest artifacts.
     pub(super) fn prepare_startup_probe(tools: InrouNamespaceTools) -> eyre::Result<Arc<Self>> {
-        Self::prepare_inner(tools, 0, Vec::new(), false)
+        Self::prepare_inner(tools, 0, Vec::new(), InrouNamespacePlanMode::StartupProbe)
     }
 
     pub(super) fn prepare(
@@ -201,14 +243,19 @@ impl InrouNamespacePlan {
         child_gid: u32,
         requests: Vec<InrouNamespaceBindingRequest>,
     ) -> eyre::Result<Arc<Self>> {
-        Self::prepare_inner(tools, child_gid, requests, true)
+        Self::prepare_inner(
+            tools,
+            child_gid,
+            requests,
+            InrouNamespacePlanMode::Production,
+        )
     }
 
     fn prepare_inner(
         tools: InrouNamespaceTools,
         child_gid: u32,
         requests: Vec<InrouNamespaceBindingRequest>,
-        require_bindings: bool,
+        mode: InrouNamespacePlanMode,
     ) -> eyre::Result<Arc<Self>> {
         let runtime_root = PathBuf::from(INROU_RUNTIME_ROOT);
         let runtime_root_identity = inspect_root_runtime_directory(&runtime_root)?;
@@ -259,21 +306,51 @@ impl InrouNamespacePlan {
                     request.sandbox_path.display()
                 );
             }
-            let identity =
-                inspect_delegated_input_file(&request.host_path, child_gid, request.writable)?;
+            let identity = inspect_delegated_input_file(
+                &request.host_path,
+                &request.host_file,
+                child_gid,
+                request.writable,
+            )?;
             bindings.push(InrouNamespaceBinding {
-                host_path: request.host_path,
+                host_file: request.host_file,
                 sandbox_path: request.sandbox_path,
                 identity,
                 writable: request.writable,
             });
         }
 
+        if mode == InrouNamespacePlanMode::StartupProbe {
+            bindings.push(prepare_startup_probe_binding(
+                &runtime_root,
+                &runtime_entries,
+            )?);
+        }
+
         bindings.sort_by(|left, right| left.sandbox_path.cmp(&right.sandbox_path));
-        if require_bindings {
-            require_exact_binding_layout(&bindings)?;
-        } else if !bindings.is_empty() {
-            eyre::bail!("static Inrou namespace preflight must not accept dynamic bindings");
+        match mode {
+            InrouNamespacePlanMode::Production => require_exact_binding_layout(&bindings)?,
+            InrouNamespacePlanMode::StaticPreflight => {
+                if !bindings.is_empty() {
+                    eyre::bail!(
+                        "static Inrou namespace preflight must not accept dynamic bindings"
+                    );
+                }
+            }
+            InrouNamespacePlanMode::StartupProbe => {
+                let [binding] = bindings.as_slice() else {
+                    eyre::bail!(
+                        "Inrou startup probe requires one exact read-only descriptor binding"
+                    );
+                };
+                if binding.sandbox_path != Path::new(INROU_NAMESPACE_KERNEL_PATH)
+                    || binding.writable
+                {
+                    eyre::bail!(
+                        "Inrou startup probe requires one exact read-only descriptor binding"
+                    );
+                }
+            }
         }
         let expected_root_entries = expected_minimal_root_entries(&runtime_entries, &bindings)?;
         Ok(Arc::new(Self {
@@ -300,19 +377,29 @@ impl InrouNamespacePlan {
             .filter(|entry| entry.kind == InrouRuntimeEntryKind::Regular)
             .map(|entry| runtime_host_path(&self.runtime_root, &entry.sandbox_path))
             .collect::<eyre::Result<Vec<_>>>()?;
-        paths.extend(
-            self.bindings
-                .iter()
-                .map(|binding| binding.host_path.clone()),
-        );
+        paths.extend(self.bindings.iter().map(|binding| {
+            PathBuf::from(format!("/proc/self/fd/{}", binding.host_file.as_raw_fd()))
+        }));
         paths.sort();
         paths.dedup();
         Ok(paths)
     }
 
+    pub(super) fn binding_files(&self) -> impl ExactSizeIterator<Item = &fs::File> {
+        self.bindings.iter().map(|binding| &binding.host_file)
+    }
+
+    pub(super) fn launcher_binding_map(
+        &self,
+        inherited_binding_fds: &[std::os::fd::RawFd],
+    ) -> eyre::Result<Vec<InrouNamespaceLauncherBindingV1>> {
+        build_inrou_launcher_binding_map(&self.bindings, inherited_binding_fds)
+    }
+
     pub(super) fn command_arguments(
         &self,
         identity: &PortableVmChildIdentity,
+        inherited_binding_fds: &[std::os::fd::RawFd],
     ) -> eyre::Result<Vec<OsString>> {
         validate_exact_file_identity(
             &self.tools.bubblewrap,
@@ -326,8 +413,8 @@ impl InrouNamespacePlan {
         )?;
         attest_runtime_manifest_entries(&self.runtime_root, &self.runtime_entries)?;
         for binding in &self.bindings {
-            validate_exact_file_identity(
-                &binding.host_path,
+            validate_opened_file_identity(
+                &binding.host_file,
                 binding.identity,
                 "Inrou namespace binding",
             )?;
@@ -344,15 +431,7 @@ impl InrouNamespacePlan {
         arguments.extend(["--dev".into(), "/dev".into()]);
         arguments.extend(["--dev-bind".into(), "/dev/kvm".into(), "/dev/kvm".into()]);
         arguments.extend(["--tmpfs".into(), "/tmp".into()]);
-        for binding in &self.bindings {
-            arguments.push(if binding.writable {
-                "--bind".into()
-            } else {
-                "--ro-bind".into()
-            });
-            arguments.push(binding.host_path.as_os_str().to_owned());
-            arguments.push(binding.sandbox_path.as_os_str().to_owned());
-        }
+        append_inrou_binding_arguments(&mut arguments, &self.bindings, inherited_binding_fds)?;
         arguments.extend(["--chdir".into(), "/".into(), "--".into()]);
         arguments.push(INROU_NAMESPACE_SETPRIV_PATH.into());
         arguments.extend(inrou_namespaced_setpriv_arguments(identity));
@@ -487,6 +566,86 @@ impl InrouNamespacePlan {
         validate_minimal_root_tree(qemu_pid, &self.expected_root_entries)?;
         Ok(())
     }
+}
+
+fn prepare_startup_probe_binding(
+    runtime_root: &Path,
+    runtime_entries: &[InrouRuntimeManifestEntry],
+) -> eyre::Result<InrouNamespaceBinding> {
+    let sandbox_path = PathBuf::from(INROU_NAMESPACE_KERNEL_PATH);
+    let entry = runtime_entries
+        .iter()
+        .find(|entry| entry.sandbox_path == sandbox_path)
+        .ok_or_else(|| eyre::eyre!("Inrou startup probe runtime placeholder is absent"))?;
+    if entry.kind != InrouRuntimeEntryKind::Regular || entry.mode != 0o444 || entry.exact_bytes != 0
+    {
+        eyre::bail!("Inrou startup probe runtime placeholder is not an authenticated empty file");
+    }
+    let identity = entry
+        .identity
+        .ok_or_else(|| eyre::eyre!("Inrou startup probe runtime placeholder lacks an identity"))?;
+    let host_path = runtime_host_path(runtime_root, &sandbox_path)?;
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32);
+    let host_file = options
+        .open(&host_path)
+        .wrap_err("open the fixed Inrou startup-probe descriptor binding")?;
+    require_opened_file_matches_name(&host_path, &host_file, "Inrou startup-probe binding")?;
+    validate_opened_file_identity(&host_file, identity, "Inrou startup-probe binding")?;
+    Ok(InrouNamespaceBinding {
+        host_file,
+        sandbox_path,
+        identity,
+        writable: false,
+    })
+}
+
+fn append_inrou_binding_arguments(
+    arguments: &mut Vec<OsString>,
+    bindings: &[InrouNamespaceBinding],
+    inherited_binding_fds: &[std::os::fd::RawFd],
+) -> eyre::Result<()> {
+    if inherited_binding_fds.len() != bindings.len() {
+        eyre::bail!(
+            "Inrou namespace launcher received {} inherited binding fds for {} exact bindings",
+            inherited_binding_fds.len(),
+            bindings.len()
+        );
+    }
+    for (binding, inherited_fd) in bindings.iter().zip(inherited_binding_fds) {
+        arguments.push(if binding.writable {
+            "--bind-fd".into()
+        } else {
+            "--ro-bind-fd".into()
+        });
+        arguments.push(inherited_fd.to_string().into());
+        arguments.push(binding.sandbox_path.as_os_str().to_owned());
+    }
+    Ok(())
+}
+
+fn build_inrou_launcher_binding_map(
+    bindings: &[InrouNamespaceBinding],
+    inherited_binding_fds: &[std::os::fd::RawFd],
+) -> eyre::Result<Vec<InrouNamespaceLauncherBindingV1>> {
+    if inherited_binding_fds.len() != bindings.len() {
+        eyre::bail!(
+            "Inrou namespace launcher received {} inherited binding fds for {} exact bindings",
+            inherited_binding_fds.len(),
+            bindings.len()
+        );
+    }
+    Ok(bindings
+        .iter()
+        .zip(inherited_binding_fds)
+        .map(|(binding, descriptor)| InrouNamespaceLauncherBindingV1 {
+            descriptor: *descriptor,
+            sandbox_path: binding.sandbox_path.clone(),
+            writable: binding.writable,
+        })
+        .collect())
 }
 
 fn inrou_bubblewrap_namespace_arguments() -> Vec<OsString> {
@@ -703,14 +862,13 @@ fn inspect_root_runtime_file(path: &Path, label: &str) -> eyre::Result<InrouFile
 
 fn inspect_delegated_input_file(
     path: &Path,
+    file: &fs::File,
     child_gid: u32,
     writable: bool,
 ) -> eyre::Result<InrouFileIdentity> {
-    let metadata = fs::symlink_metadata(path)
-        .wrap_err_with(|| format!("inspect Inrou namespace input {}", path.display()))?;
+    let metadata = require_opened_file_matches_name(path, file, "Inrou namespace input")?;
     let expected_mode = if writable { 0o660 } else { 0o640 };
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
+    if !metadata.is_file()
         || metadata.uid() != 0
         || metadata.gid() != child_gid
         || metadata.nlink() != 1
@@ -722,6 +880,37 @@ fn inspect_delegated_input_file(
         );
     }
     Ok(file_identity(&metadata, InrouFileKind::Regular))
+}
+
+fn require_opened_file_matches_name(
+    path: &Path,
+    file: &fs::File,
+    label: &str,
+) -> eyre::Result<fs::Metadata> {
+    let named = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("inspect {label} {}", path.display()))?;
+    let opened = file
+        .metadata()
+        .wrap_err_with(|| format!("inspect opened {label} {}", path.display()))?;
+    if named.file_type().is_symlink() || named.dev() != opened.dev() || named.ino() != opened.ino()
+    {
+        eyre::bail!(
+            "opened {label} {} no longer matches its direct name",
+            path.display()
+        );
+    }
+    Ok(opened)
+}
+
+fn validate_opened_file_identity(
+    file: &fs::File,
+    expected: InrouFileIdentity,
+    label: &str,
+) -> eyre::Result<()> {
+    let metadata = file
+        .metadata()
+        .wrap_err_with(|| format!("inspect opened {label}"))?;
+    validate_metadata_identity(Path::new("<inherited-fd>"), &metadata, expected, label)
 }
 
 fn file_identity(metadata: &fs::Metadata, kind: InrouFileKind) -> InrouFileIdentity {
@@ -1009,15 +1198,10 @@ fn require_runtime_manifest_layout(entries: &[InrouRuntimeManifestEntry]) -> eyr
 }
 
 fn require_exact_binding_layout(bindings: &[InrouNamespaceBinding]) -> eyre::Result<()> {
-    let mandatory = [
-        (INROU_NAMESPACE_KERNEL_PATH, false),
-        (INROU_NAMESPACE_BUNDLE_PATH, false),
-        ("/inrou/input/cloud-init/meta-data", false),
-        ("/inrou/input/cloud-init/network-config", false),
-        ("/inrou/input/cloud-init/user-data", false),
-        (INROU_NAMESPACE_ROOT_DISK_PATH, true),
-    ];
-    for (path, writable) in mandatory {
+    if bindings.len() > INROU_NAMESPACE_MAX_PRODUCTION_BINDINGS {
+        eyre::bail!("Inrou namespace binding plan exceeds the exact V1 surface");
+    }
+    for (path, writable) in INROU_NAMESPACE_MANDATORY_PRODUCTION_BINDINGS {
         let Some(binding) = bindings
             .iter()
             .find(|binding| binding.sandbox_path == Path::new(path))
@@ -1032,7 +1216,7 @@ fn require_exact_binding_layout(bindings: &[InrouNamespaceBinding]) -> eyre::Res
     let mut leases = BTreeSet::new();
     for binding in bindings {
         let path = binding.sandbox_path.as_path();
-        if mandatory
+        if INROU_NAMESPACE_MANDATORY_PRODUCTION_BINDINGS
             .iter()
             .any(|(required, _)| path == Path::new(required))
         {
@@ -1865,6 +2049,25 @@ mod tests {
     }
 
     #[test]
+    fn bubblewrap_probe_requires_both_descriptor_binding_options() -> eyre::Result<()> {
+        let complete = INROU_BWRAP_REQUIRED_OPTIONS.join(" ");
+        require_inrou_bubblewrap_help(&complete)?;
+        for omitted in ["--bind-fd", "--ro-bind-fd"] {
+            let incomplete = INROU_BWRAP_REQUIRED_OPTIONS
+                .into_iter()
+                .filter(|option| *option != omitted)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let error = require_inrou_bubblewrap_help(&incomplete)
+                .expect_err("descriptor-less bubblewrap must fail closed");
+            assert!(error.to_string().contains(omitted));
+        }
+        require_inrou_bubblewrap_help("--bind --ro-bind")
+            .expect_err("legacy path-binding flags must not satisfy the fd-binding contract");
+        Ok(())
+    }
+
+    #[test]
     fn binding_layout_is_exact_and_lease_slots_are_contiguous() -> eyre::Result<()> {
         let identity = InrouFileIdentity {
             device: 1,
@@ -1877,32 +2080,121 @@ mod tests {
             kind: InrouFileKind::Regular,
         };
         let binding = |path: &str, writable: bool| InrouNamespaceBinding {
-            host_path: PathBuf::from("/host/input"),
+            host_file: tempfile::tempfile().expect("create synthetic binding file"),
             sandbox_path: PathBuf::from(path),
             identity,
             writable,
         };
-        let mut bindings = [
-            (INROU_NAMESPACE_KERNEL_PATH, false),
-            (INROU_NAMESPACE_BUNDLE_PATH, false),
-            ("/inrou/input/cloud-init/meta-data", false),
-            ("/inrou/input/cloud-init/network-config", false),
-            ("/inrou/input/cloud-init/user-data", false),
-            (INROU_NAMESPACE_ROOT_DISK_PATH, true),
-        ]
-        .into_iter()
-        .map(|(path, writable)| binding(path, writable))
-        .collect::<Vec<_>>();
-        bindings.push(binding("/inrou/disk/lease0", true));
-        bindings.push(binding("/inrou/disk/lease1", true));
+        let build_bindings = || {
+            let mut bindings = [
+                (INROU_NAMESPACE_KERNEL_PATH, false),
+                (INROU_NAMESPACE_BUNDLE_PATH, false),
+                ("/inrou/input/cloud-init/meta-data", false),
+                ("/inrou/input/cloud-init/network-config", false),
+                ("/inrou/input/cloud-init/user-data", false),
+                (INROU_NAMESPACE_ROOT_DISK_PATH, true),
+            ]
+            .into_iter()
+            .map(|(path, writable)| binding(path, writable))
+            .collect::<Vec<_>>();
+            bindings.push(binding("/inrou/disk/lease0", true));
+            bindings.push(binding("/inrou/disk/lease1", true));
+            bindings
+        };
+        let bindings = build_bindings();
         require_exact_binding_layout(&bindings)?;
 
-        let mut gap = bindings.clone();
+        let mut gap = build_bindings();
         gap.last_mut().expect("lease1").sandbox_path = "/inrou/disk/lease2".into();
         require_exact_binding_layout(&gap).expect_err("lease gaps must fail closed");
-        let mut extra = bindings;
+        let mut extra = build_bindings();
         extra.push(binding("/run/escape", false));
         require_exact_binding_layout(&extra).expect_err("extra bindings must fail closed");
+        Ok(())
+    }
+
+    #[test]
+    fn binding_arguments_use_only_exact_inherited_descriptors() -> eyre::Result<()> {
+        let identity = InrouFileIdentity {
+            device: 1,
+            inode: 1,
+            mode: 0o640,
+            uid: 0,
+            gid: 70_001,
+            links: 1,
+            size: 1,
+            kind: InrouFileKind::Regular,
+        };
+        let bindings = vec![
+            InrouNamespaceBinding {
+                host_file: tempfile::tempfile()?,
+                sandbox_path: PathBuf::from(INROU_NAMESPACE_KERNEL_PATH),
+                identity,
+                writable: false,
+            },
+            InrouNamespaceBinding {
+                host_file: tempfile::tempfile()?,
+                sandbox_path: PathBuf::from(INROU_NAMESPACE_ROOT_DISK_PATH),
+                identity,
+                writable: true,
+            },
+        ];
+        let mut arguments = Vec::new();
+        append_inrou_binding_arguments(&mut arguments, &bindings, &[66, 67])?;
+        assert_eq!(
+            arguments,
+            [
+                "--ro-bind-fd",
+                "66",
+                INROU_NAMESPACE_KERNEL_PATH,
+                "--bind-fd",
+                "67",
+                INROU_NAMESPACE_ROOT_DISK_PATH,
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>()
+        );
+        append_inrou_binding_arguments(&mut Vec::new(), &bindings, &[66])
+            .expect_err("an incomplete inherited descriptor map must fail closed");
+        assert_eq!(
+            build_inrou_launcher_binding_map(&bindings, &[66, 67])?,
+            [
+                InrouNamespaceLauncherBindingV1 {
+                    descriptor: 66,
+                    sandbox_path: PathBuf::from(INROU_NAMESPACE_KERNEL_PATH),
+                    writable: false,
+                },
+                InrouNamespaceLauncherBindingV1 {
+                    descriptor: 67,
+                    sandbox_path: PathBuf::from(INROU_NAMESPACE_ROOT_DISK_PATH),
+                    writable: true,
+                },
+            ]
+        );
+        build_inrou_launcher_binding_map(&bindings, &[66])
+            .expect_err("typed launcher bindings require one exact descriptor per binding");
+        Ok(())
+    }
+
+    #[test]
+    fn opened_binding_identity_survives_replaced_host_name() -> eyre::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("binding.raw");
+        let displaced = directory.path().join("binding.displaced");
+        fs::write(&path, b"authenticated bytes")?;
+        let opened = fs::File::open(&path)?;
+        let identity = file_identity(&opened.metadata()?, InrouFileKind::Regular);
+        require_opened_file_matches_name(&path, &opened, "test binding")?;
+
+        fs::rename(&path, &displaced)?;
+        fs::write(&path, b"replacement")?;
+
+        require_opened_file_matches_name(&path, &opened, "test binding")
+            .expect_err("a replaced host name must fail pre-launch validation");
+        validate_opened_file_identity(&opened, identity, "test binding")?;
+        validate_exact_file_identity(&path, identity, "replaced test binding")
+            .expect_err("the replacement name must not impersonate the retained file");
         Ok(())
     }
 
@@ -1912,7 +2204,7 @@ mod tests {
         file.as_file().set_len(1)?;
         let metadata = fs::symlink_metadata(file.path())?;
         let mut binding = InrouNamespaceBinding {
-            host_path: file.path().to_path_buf(),
+            host_file: file.as_file().try_clone()?,
             sandbox_path: PathBuf::from(INROU_NAMESPACE_ROOT_DISK_PATH),
             identity: file_identity(&metadata, InrouFileKind::Regular),
             writable: true,

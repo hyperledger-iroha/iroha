@@ -187,14 +187,17 @@ Note: First release policy
   `private_key`, bearer tokens, or forwarded auth headers as runtime-only
   secrets and never persist them in repo files or committed docs.
 - For a disposable four-validator Taira deployment, use
-  `python3 scripts/taira_devnet.py up`; use its `check` and `down` subcommands
-  for inspection and teardown. Keep the default smoke narrow; request
-  `--full-doctor` only when the public product-route surface is under test.
+  `python3 scripts/taira_devnet.py up --inrou-canary-dir <owner-only-workspace>`;
+  use its `check` and `down` subcommands for inspection and teardown. Guest
+  workload qualification is mandatory; request `--full-doctor` only when the
+  broader public product-route surface is also under test.
 - For public Taira diagnostics use the same-revision compiled
-  `iroha taira doctor`. For an explicitly authorized signed public canary, use
-  `iroha taira write-canary` with a populated runtime-only copy of
-  `configs/soranexus/taira/taira-canary-client.example.toml` and an owner-only
-  onboarding-token file.
+  `iroha taira doctor`. The public-reset coordinator owns signed canary
+  execution. Its low-level `iroha taira write-canary` child accepts exactly one
+  ordered operation and exactly one prepare, submit, or read-only recovery
+  action over an inherited numeric descriptor; never replace that durable
+  protocol with a one-shot invocation. Keep the populated client config and
+  owner-only onboarding-token file runtime-only.
 - If a live public Taira write fails with `route_unavailable`, treat it as an
   ingress or authoritative-peer routing failure first, not a user payload bug.
 - If a live Taira signed canary fails with `Failed to find asset`, check the

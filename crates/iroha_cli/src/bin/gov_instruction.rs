@@ -549,7 +549,6 @@ fn main() -> Result<()> {
         } => {
             let owner = parse_account_address(&owner, Some(chain_discriminant))
                 .wrap_err("failed to parse --owner as canonical account address")?
-                .address
                 .to_account_id()
                 .map_err(|err| eyre!(err.to_string()))
                 .wrap_err("failed to decode --owner into account id")?;

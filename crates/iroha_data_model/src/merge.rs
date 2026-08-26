@@ -1287,9 +1287,11 @@ mod tests {
             lane_drain_certificates: entry.lane_drain_certificates.clone(),
         };
         let previous_v1_encoded = previous_v1.encode();
+        let decoded_previous_v1 = MergeLedgerEntry::decode(&mut previous_v1_encoded.as_slice())
+            .expect("the retired layout is structurally identical apart from its version");
         assert!(
-            MergeLedgerEntry::decode(&mut previous_v1_encoded.as_slice()).is_err(),
-            "the complete version-one layout must fail closed"
+            !decoded_previous_v1.has_current_version(),
+            "the retired version-one value must never be admitted as the current entry"
         );
         let mut unsupported = entry;
         unsupported.version = MergeLedgerEntry::VERSION.saturating_add(1);

@@ -470,6 +470,20 @@ public final class IrohaKeyManagerTests {
     }
 
     @Override
+    public org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcomeFor(
+        final String alias, final KeyPair keyPair) {
+      final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route route;
+      if (metadata.strongBoxBacked()) {
+        route = org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.STRONGBOX;
+      } else if (metadata.hardwareBacked()) {
+        route = org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.HARDWARE;
+      } else {
+        route = org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.SOFTWARE;
+      }
+      return new org.hyperledger.iroha.android.crypto.KeyGenerationOutcome(keyPair, route);
+    }
+
+    @Override
     public String name() {
       return metadata.name();
     }

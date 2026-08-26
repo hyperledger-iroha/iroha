@@ -42,6 +42,7 @@ artifact/*
 artifacts/nsc/*
 objective-1-fast/*
 fixtures/taikai/segments/*
+!fixtures/taikai/segments/smoke_video.json
 benchmarks/nsc/clips/*
 netflix/*
 target_migrate/*

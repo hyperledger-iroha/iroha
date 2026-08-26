@@ -30,7 +30,6 @@
   "info.listen_events_with_timeout": "Listening to events with filter: {filter} and timeout: {timeout}",
   "info.listen_blocks": "Listening to blocks from height: {height}",
   "info.listen_blocks_with_timeout": "Listening to blocks from height: {height} and timeout: {timeout}",
-  "warning.normalize_no_local_selectors": "normalize: no Local-domain selectors matched the provided input",
   "warning.normalize_skipped_address": "normalize: skipped address at index {index}: {error}",
   "warning.local_selector_warning": "warning: {warning}"
 }

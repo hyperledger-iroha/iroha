@@ -12,7 +12,6 @@ const TEST_CALLER_PUBLIC_KEY: &str =
 fn literal_account() -> ivm::mock_wsv::AccountId {
     iroha_data_model::account::AccountId::parse_encoded(TEST_ACCOUNT_LITERAL)
         .expect("parse test account literal")
-        .into_account_id()
 }
 fn public_key_account() -> ivm::mock_wsv::AccountId {
     ivm::mock_wsv::AccountId::new(

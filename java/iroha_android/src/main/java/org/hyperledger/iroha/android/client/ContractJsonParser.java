@@ -41,15 +41,13 @@ public final class ContractJsonParser {
             root.get("creation_time_ms"), "contract call response.creation_time_ms"),
         optionalString(root.get("contract_address"), "contract call response.contract_address"),
         root.containsKey("tx_hash_hex") && root.get("tx_hash_hex") != null
-            ? HttpClientTransport.normalizeHex32(
-                requiredString(root.get("tx_hash_hex"), "contract call response.tx_hash_hex"),
-                "txHashHex")
+            ? transactionHash(root.get("tx_hash_hex"), "contract call response.tx_hash_hex")
             : null,
         optionalObject(root.get("pipeline_status"), "contract call response.pipeline_status"),
         optionalString(root.get("entrypoint"), "contract call response.entrypoint"),
         asOptionalNonNegativeLong(
             root.get("transaction_ttl_ms"), "contract call response.transaction_ttl_ms"),
-        optionalHash(root.get("entrypoint_hash_hex"), "contract call response.entrypoint_hash_hex"),
+        optionalTransactionHash(root.get("entrypoint_hash_hex"), "contract call response.entrypoint_hash_hex"),
         optionalBase64(root.get("transaction_payload_b64"), "contract call response.transaction_payload_b64"),
         optionalBase64(root.get("signing_message_b64"), "contract call response.signing_message_b64"),
         parseOperationReceipt(
@@ -86,9 +84,9 @@ public final class ContractJsonParser {
         optionalString(receipt.get("contract_address"), path + ".contract_address"),
         optionalHash(receipt.get("code_hash_hex"), path + ".code_hash_hex"),
         optionalHash(receipt.get("abi_hash_hex"), path + ".abi_hash_hex"),
-        optionalHash(receipt.get("tx_hash_hex"), path + ".tx_hash_hex"),
+        optionalTransactionHash(receipt.get("tx_hash_hex"), path + ".tx_hash_hex"),
         optionalString(receipt.get("entrypoint"), path + ".entrypoint"),
-        optionalHash(receipt.get("entrypoint_hash_hex"), path + ".entrypoint_hash_hex"),
+        optionalTransactionHash(receipt.get("entrypoint_hash_hex"), path + ".entrypoint_hash_hex"),
         gasLimit,
         asOptionalNonNegativeLong(receipt.get("gas_used"), path + ".gas_used"),
         receipt.get("fee_payment") == null
@@ -116,14 +114,11 @@ public final class ContractJsonParser {
                 "instructionsHash")
             : null,
         root.containsKey("tx_hash_hex") && root.get("tx_hash_hex") != null
-            ? HttpClientTransport.normalizeHex32(
-                requiredString(root.get("tx_hash_hex"), "multisig response.tx_hash_hex"),
-                "txHashHex")
+            ? transactionHash(root.get("tx_hash_hex"), "multisig response.tx_hash_hex")
             : null,
         root.containsKey("executed_tx_hash_hex") && root.get("executed_tx_hash_hex") != null
-            ? HttpClientTransport.normalizeHex32(
-                requiredString(root.get("executed_tx_hash_hex"), "multisig response.executed_tx_hash_hex"),
-                "executedTxHashHex")
+            ? transactionHash(
+                root.get("executed_tx_hash_hex"), "multisig response.executed_tx_hash_hex")
             : null,
         asOptionalNonNegativeLong(root.get("creation_time_ms"), "multisig response.creation_time_ms"),
         optionalBase64(root.get("transaction_payload_b64"), "multisig response.transaction_payload_b64"),
@@ -218,6 +213,21 @@ public final class ContractJsonParser {
       return null;
     }
     return HttpClientTransport.normalizeHex32(requiredString(value, path), path);
+  }
+
+  private static String transactionHash(final Object value, final String path) {
+    if (!(value instanceof String literal)) {
+      throw new IllegalStateException(path + " must be a string");
+    }
+    if (!literal.matches("[0-9a-f]{63}[13579bdf]")) {
+      throw new IllegalStateException(
+          path + " must match [0-9a-f]{63}[13579bdf] with the Iroha HashOf marker");
+    }
+    return literal;
+  }
+
+  private static String optionalTransactionHash(final Object value, final String path) {
+    return value == null ? null : transactionHash(value, path);
   }
 
   private static Map<String, Object> optionalObject(final Object value, final String path) {

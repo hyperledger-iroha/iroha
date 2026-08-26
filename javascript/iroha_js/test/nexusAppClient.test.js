@@ -1159,7 +1159,14 @@ test("NexusAppClient independently verifies finalized bytes and hash aliases", a
     [hostileFinalizerResult, "invalid_signed_transaction"],
     [{ signedTransaction: fixtureSignedTransaction }, "invalid_transaction_hash"],
     [
-      { signedTransaction: Buffer.from("opaque"), hashHex: "a".repeat(64) },
+      {
+        signedTransaction: fixtureSignedTransaction,
+        signedTransactionHash: Buffer.alloc(32, 0x12),
+      },
+      "invalid_transaction_hash",
+    ],
+    [
+      { signedTransaction: Buffer.from("opaque"), hashHex: "b".repeat(64) },
       "invalid_signed_transaction",
     ],
     [
@@ -2396,6 +2403,7 @@ test("NexusAppClient rejects status-only options when waiting is disabled", asyn
     scope: "local",
     successStatuses: ["Committed"],
     failureStatuses: ["Rejected"],
+    terminalStatuses: ["Committed"],
     onStatus() {},
     signal: new AbortController().signal,
   };
@@ -2430,9 +2438,10 @@ test("NexusAppClient prevalidates all wait options before Torii side effects", a
   const aborted = new AbortController();
   aborted.abort(new Error("cancelled-before-submit"));
   const invalidOptions = [
-    { successStatuses: new Array(33).fill("Committed") },
-    { failureStatuses: new Array(33).fill("Rejected") },
+    { successStatuses: ["Committed"] },
+    { failureStatuses: ["Rejected"] },
     { failureStatuses: ["Applied"] },
+    { terminalStatuses: ["Committed"] },
     { intervalMs: -1 },
     { timeoutMs: Number.MAX_SAFE_INTEGER + 1 },
     { maxAttempts: 0 },
@@ -2467,7 +2476,7 @@ test("NexusAppClient prevalidates all wait options before Torii side effects", a
   }
 
   let observedOptions = null;
-  const compatible = new NexusAppClient({
+  const fixedPolicy = new NexusAppClient({
     signingPublicKey: fixturePublicKey,
     transactionCodec: {
       finalizeSignedTransaction() {
@@ -2487,18 +2496,18 @@ test("NexusAppClient prevalidates all wait options before Torii side effects", a
       },
     },
   });
-  await compatible.finalizeAndSubmit(
+  await fixedPolicy.finalizeAndSubmit(
     fixtureSignable(),
     fixtureWalletSignature,
     {
-      failureStatuses: ["Rejected"],
+      intervalMs: 0,
     },
   );
-  assert.ok(Array.isArray(observedOptions.failureStatuses));
-  assert.ok(Object.isFrozen(observedOptions.failureStatuses));
   assert.equal("successStatuses" in observedOptions, false);
+  assert.equal("failureStatuses" in observedOptions, false);
+  assert.equal("terminalStatuses" in observedOptions, false);
   assert.equal("scope" in observedOptions, false);
-  assert.deepEqual(observedOptions.failureStatuses, ["Rejected"]);
+  assert.equal(observedOptions.intervalMs, 0);
 });
 
 test("NexusAppClient rejects a delegated waiter that returns before Applied", async () => {

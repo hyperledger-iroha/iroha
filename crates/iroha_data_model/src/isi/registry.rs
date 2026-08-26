@@ -330,7 +330,7 @@ mod tests {
             ("register::<", 1),
             ("register_slice::<", 2),
             ("register_with_id::<", 1),
-            ("register_with_id_slice::<", 1),
+            ("register_with_id_slice::<", 0),
         ] {
             assert!(
                 provider.matches(forbidden).count() == expected_provider_owners
@@ -346,9 +346,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "6e45bdd0660c988a60e472f1f070e566728933ace51c1823165500616f8da87a";
+            "76d504389afcd5e06260c0408b446d6827ee7f473e08a473101c57a4b4450d02";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "69cae26fe4929e265f915592e1ce61ec7f97002b9f539dedfa35027c0d866c5f";
+            "1877201fc0c83041db924b9225dab533e6603aefa2ba8b67d076205f5eae41a7";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -475,6 +475,15 @@ mod tests {
         assert!(!is_instruction_wire_id_registered(
             "nexus::UpsertFeeSponsorPolicy"
         ));
+    }
+    #[test]
+    fn retired_private_uploaded_model_receipt_wire_id_stays_unknown() {
+        const RETIRED_WIRE_ID: &str =
+            "soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt";
+        let registry = default();
+        assert!(!registry.contains(RETIRED_WIRE_ID));
+        assert!(registry.decode(RETIRED_WIRE_ID, &[0xFF; 64]).is_none());
+        assert!(!is_instruction_wire_id_registered(RETIRED_WIRE_ID));
     }
     #[test]
     fn only_declarative_alias_instruction_ids_are_registered() {

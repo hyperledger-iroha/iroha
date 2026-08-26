@@ -345,23 +345,15 @@ fn kura_startup_rejects_every_retired_roster_artifact() {
         }
     }
 }
-#[derive(Encode)]
-struct LegacyKuraRollbackIntentV1Fixture {
-    version: u32,
-    from_height: u64,
-    target_height: u64,
-    target_merge_entries: u64,
-    target_block_hash: Option<HashOf<BlockHeader>>,
-}
 #[test]
-fn pending_v1_rollback_intents_are_rejected_before_mutation() {
+fn kura_startup_rejects_retired_rollback_intents_without_decoding_or_mutation() {
     for temporary in [false, true] {
-        let temp_dir = TempDir::new().expect("V1 rollback tempdir");
+        let temp_dir = TempDir::new().expect("retired rollback tempdir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("initialize rollback Kura");
-        let hashes = store_dummy_blocks(&kura, 2);
+        store_dummy_blocks(&kura, 2);
         let blocks_root = kura.active_blocks_dir.lock().clone();
         drop(kura);
         let stable = Kura::rollback_intent_path(&blocks_root);
@@ -370,92 +362,28 @@ fn pending_v1_rollback_intents_are_rejected_before_mutation() {
         } else {
             stable
         };
-        let legacy = LegacyKuraRollbackIntentV1Fixture {
-            version: 1,
-            from_height: 2,
-            target_height: 1,
-            target_merge_entries: 0,
-            target_block_hash: Some(hashes[0]),
-        };
-        fs::write(
-            &path,
-            norito::encode_canonical(&legacy).expect("encode V1 rollback intent"),
-        )
-        .expect("write V1 rollback intent");
-        sync_dir(&blocks_root).expect("sync V1 rollback intent");
+        fs::write(&path, b"retired rollback bytes must remain")
+            .expect("write retired rollback intent");
+        sync_dir(&blocks_root).expect("sync retired rollback intent");
         let before = snapshot_regular_test_tree(&blocks_root);
-        assert!(matches!(
-            Kura::open_test_kura_with_configured_lane_config(&config, &lane_config),
-            Err(Error::RollbackIntentInvalid { .. })
-        ));
+        let err = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
+            Ok(_) => panic!("retired rollback intent must abort startup"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(&err, Error::RetiredKuraArtifact { path: rejected } if rejected == &path),
+            "unexpected retired rollback rejection: {err:?}",
+        );
         assert_eq!(
             snapshot_regular_test_tree(&blocks_root),
             before,
-            "unsupported V1 rollback evidence must be rejected before any recovery mutation",
+            "retired rollback evidence must be rejected before any recovery mutation",
+        );
+        assert_eq!(
+            fs::read(&path).expect("retired rollback bytes remain"),
+            b"retired rollback bytes must remain",
         );
     }
-}
-#[test]
-fn kura_startup_rejects_corrupt_rollback_intent_without_mutating_block_boundary() {
-    let temp_dir = TempDir::new().expect("tempdir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("initial Kura");
-    store_dummy_blocks(&kura, 2);
-    let blocks_root = kura.active_blocks_dir.lock().clone();
-    drop(kura);
-    let intent_path = Kura::rollback_intent_path(&blocks_root);
-    fs::write(&intent_path, b"corrupt rollback intent").expect("write corrupt intent");
-    sync_dir(&blocks_root).expect("sync corrupt intent marker");
-    let err = match Kura::open_test_kura_with_configured_lane_config(&config, &lane_config) {
-        Ok(_) => panic!("corrupt rollback intent must block startup"),
-        Err(err) => err,
-    };
-    assert!(matches!(err, Error::RollbackIntentInvalid { .. }));
-    assert!(
-        intent_path.exists(),
-        "unrecoverable intent must remain durable for operator diagnosis"
-    );
-    let mut store = BlockStore::new(&blocks_root);
-    assert_eq!(store.read_index_count().expect("index count"), 2);
-    assert_eq!(store.read_hashes_count().expect("hash count"), 2);
-}
-#[test]
-fn kura_startup_promotes_synced_temporary_rollback_intent_and_completes() {
-    let temp_dir = TempDir::new().expect("tempdir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("initial Kura");
-    let hashes = store_dummy_blocks(&kura, 2);
-    let blocks_root = kura.active_blocks_dir.lock().clone();
-    drop(kura);
-    // Dummy blocks do not carry merge-ledger entries, so the sparse merge boundary is zero.
-    let intent = KuraRollbackIntent::new_with_merge_entries(2, 1, 0, Some(hashes[0]));
-    assert_eq!(intent.version, 2);
-    let intent_path = Kura::rollback_intent_path(&blocks_root);
-    let temp_path = intent_path.with_extension("norito.tmp");
-    fs::write(
-        &temp_path,
-        norito::encode_canonical(&intent).expect("encode rollback intent"),
-    )
-    .expect("write temporary rollback intent");
-    fs::File::open(&temp_path)
-        .expect("open temporary intent")
-        .sync_data()
-        .expect("sync temporary intent");
-    sync_dir(&blocks_root).expect("sync temporary intent directory entry");
-    let (reopened, BlockCount(block_count)) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-            .expect("startup should promote and complete valid temporary intent");
-    assert_eq!(block_count, 1);
-    assert_eq!(
-        reopened.block_hash_at_height(nonzero!(1_usize)),
-        Some(hashes[0])
-    );
-    assert!(!intent_path.exists());
-    assert!(!temp_path.exists());
 }
 fn offline_top_up_entrypoint_for_index(
     request_operation_id: [u8; 32],
@@ -697,7 +625,7 @@ fn merge_entry_with_indexed_reservation(
 ) -> (
     MergeLedgerEntry,
     HashOf<TransactionEntrypoint>,
-    LaneQueueReservationKeyV2,
+    LaneQueueReservationKeyV1,
 ) {
     let entrypoint = offline_top_up_entrypoint_for_index([salt; 32], [salt.saturating_add(1); 32]);
     let entrypoint_hash = entrypoint.hash();
@@ -713,8 +641,8 @@ fn merge_entry_with_indexed_reservation(
         descriptor.lane_id,
         descriptor.dataspace_id,
     ));
-    let reservation = LaneQueueReservationKeyV2 {
-        version: LaneQueueReservationKeyV2::VERSION,
+    let reservation = LaneQueueReservationKeyV1 {
+        version: LaneQueueReservationKeyV1::VERSION,
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
             b"kura-queue-plan-admission-binding",
@@ -742,7 +670,7 @@ fn store_indexed_reservation_carrier(
     salt: u8,
 ) -> (
     HashOf<TransactionEntrypoint>,
-    LaneQueueReservationKeyV2,
+    LaneQueueReservationKeyV1,
     MergeLedgerFrameIndex,
 ) {
     let mut blocks = DummyBlocks::new();

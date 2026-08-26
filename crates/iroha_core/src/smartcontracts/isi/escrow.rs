@@ -968,7 +968,7 @@ pub(crate) fn settle_orderbook_asset_lock(
         .checked_add(&fee_amount)
         .map_err(|_| validation_err("orderbook settlement amount overflow"))?;
     ensure_positive(&total)?;
-    if !state_transaction.replay_compatibility && state_transaction.tx_call_hash.is_none() {
+    if state_transaction.tx_call_hash.is_none() {
         return Err(validation_err(
             "orderbook settlement requires a transaction call hash",
         ));

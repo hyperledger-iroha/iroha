@@ -33,7 +33,7 @@ test('checkOpenApiSignatures validates signed entries', async () => {
   const staticDir = join(tempRoot, 'static', 'openapi');
   await mkdir(staticDir, {recursive: true});
 
-  const latestSpec = releaseSpecBuffer('/v1/status');
+  const latestSpec = releaseSpecBuffer('/status');
   const latestSha = sha256Hex(latestSpec);
   const latestSignature = signPayload(latestSpec);
   await writeAsset(join(staticDir, 'torii.json'), latestSpec);

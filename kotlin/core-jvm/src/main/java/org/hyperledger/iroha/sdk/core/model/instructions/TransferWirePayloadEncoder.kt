@@ -256,7 +256,7 @@ object TransferWirePayloadEncoder {
             fun parse(accountIdStr: String): AccountId {
                 val address: AccountAddress
                 try {
-                    address = AccountAddress.parseEncodedIgnoringCurveSupport(accountIdStr, null).address
+                    address = AccountAddress.parseEncodedIgnoringCurveSupport(accountIdStr, null)
                 } catch (e: AccountAddressException) {
                     throw IllegalArgumentException(
                         "AssetId.account must use canonical I105 form",

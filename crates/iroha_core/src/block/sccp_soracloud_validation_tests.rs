@@ -126,7 +126,6 @@ fn seed_soracloud_mailbox_fixture(
             config_exports: Vec::new(),
             capabilities: SoraCapabilityPolicyV1 {
                 network: SoraNetworkPolicyV1::Isolated,
-                allow_wallet_signing: false,
                 allow_state_writes: false,
                 allow_model_inference: false,
                 allow_model_training: false,
@@ -136,7 +135,7 @@ fn seed_soracloud_mailbox_fixture(
                 memory_bytes: NonZeroU64::new(16 * 1024 * 1024).expect("nonzero memory"),
                 ephemeral_storage_bytes: NonZeroU64::new(16 * 1024 * 1024)
                     .expect("nonzero storage"),
-                max_open_files: NonZeroU32::new(256).expect("nonzero files"),
+                max_open_files_per_process: NonZeroU32::new(256).expect("nonzero files"),
                 max_tasks: NonZeroU16::new(16).expect("nonzero tasks"),
             },
             lifecycle: SoraLifecycleHooksV1 {
@@ -928,7 +927,8 @@ fn validate_and_record_transactions_persists_soracloud_mailbox_state_mutations()
     assert_eq!(
         crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
             &follow_up_transaction
-        ),
+        )
+        .expect("test mailbox receipt leaves Soracloud sequence space available"),
         receipt.emitted_sequence.saturating_add(1),
         "runtime receipts must advance the shared Soracloud execution sequence"
     );

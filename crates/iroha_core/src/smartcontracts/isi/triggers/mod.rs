@@ -266,6 +266,7 @@ pub mod isi {
                     &alias,
                     state_transaction.block_unix_timestamp_ms(),
                 )
+                .map_err(|error| Error::InvariantViolation(error.to_string().into()))?
                 .as_ref()
                     != Some(&owner)
                 {

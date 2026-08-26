@@ -33,6 +33,17 @@ public sealed class FeePaymentIntentTests
     }
 
     [Fact]
+    public void AbsentGasLimitUsesCanonicalExplicitNull()
+    {
+        var intent = FeePaymentIntent.Authority([]);
+        var json = JsonSerializer.Serialize(intent);
+        var decoded = JsonSerializer.Deserialize<FeePaymentIntent>(json);
+
+        Assert.Equal(intent, decoded);
+        Assert.Contains("\"gas_limit\":null", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void IntentRejectsDuplicateOrOutOfOrderComponents()
     {
         var nexus = new FeeChargeLimit(FeeChargeKind.Nexus, AssetDefinitionId, "1");

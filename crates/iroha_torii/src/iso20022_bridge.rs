@@ -14,7 +14,7 @@ use iroha_core::state::WorldReadOnly;
 use iroha_crypto::PrivateKey;
 use iroha_data_model::{
     ValidationFail,
-    account::address::{AccountAddress, AccountAddressError, AddressDomainKind},
+    account::address::AccountAddress,
     alias::AliasIndex,
     asset::AssetDefinitionAlias,
     prelude::{
@@ -108,8 +108,6 @@ pub struct IsoMessageContext {
     collateral_reason_code: Option<String>,
     plan_execution_order: Option<String>,
     plan_atomicity: Option<String>,
-    source_address_observation: AddressParseObservation,
-    target_address_observation: AddressParseObservation,
 }
 impl IsoMessageContext {
     /// Ledger identifier supplied in the message, if any.
@@ -220,45 +218,6 @@ impl IsoMessageContext {
     pub fn plan_atomicity(&self) -> Option<&str> {
         self.plan_atomicity.as_deref()
     }
-    /// Parsed metadata captured when handling `SourceAccountAddress`.
-    pub fn source_address_observation(&self) -> &AddressParseObservation {
-        &self.source_address_observation
-    }
-    /// Parsed metadata captured when handling `TargetAccountAddress`.
-    pub fn target_address_observation(&self) -> &AddressParseObservation {
-        &self.target_address_observation
-    }
-}
-#[derive(Clone, Debug, Default)]
-pub struct AddressParseObservation {
-    literal: Option<String>,
-    domain_kind: Option<AddressDomainKind>,
-    error_code: Option<&'static str>,
-}
-impl AddressParseObservation {
-    fn from_success(literal: &str, address: &AccountAddress) -> Self {
-        Self {
-            literal: Some(literal.to_owned()),
-            domain_kind: Some(address.domain_kind()),
-            error_code: None,
-        }
-    }
-    fn from_error(literal: &str, code: &'static str) -> Self {
-        Self {
-            literal: Some(literal.to_owned()),
-            domain_kind: None,
-            error_code: Some(code),
-        }
-    }
-    pub fn error_code(&self) -> Option<&'static str> {
-        self.error_code
-    }
-    pub fn domain_kind(&self) -> Option<AddressDomainKind> {
-        self.domain_kind
-    }
-    pub fn domain_label(&self) -> Option<&'static str> {
-        self.domain_kind.map(AddressDomainKind::as_str)
-    }
 }
 /// Profile and idempotency metadata captured for an inbound ISO message.
 #[derive(Clone, Debug, Default)]
@@ -367,26 +326,12 @@ impl IsoStatusHistoryEntry {
         self.reason_code.as_deref()
     }
 }
-fn parse_account_address_literal(input: &str) -> (Option<String>, AddressParseObservation) {
-    if input.is_empty() {
-        return (None, AddressParseObservation::default());
-    }
-    match AccountAddress::parse_encoded(input, None) {
-        Ok(address) => {
-            let canonical = address.canonical_hex().unwrap_or_else(|_| input.to_owned());
-            (
-                Some(canonical),
-                AddressParseObservation::from_success(input, &address),
-            )
-        }
-        Err(err) => {
-            let code = err.code_str();
-            (
-                Some(input.to_owned()),
-                AddressParseObservation::from_error(input, code),
-            )
-        }
-    }
+fn parse_account_address_literal(input: &str) -> Result<String, MsgError> {
+    let address =
+        AccountAddress::parse_encoded(input, None).map_err(|_| MsgError::ValidationFailed)?;
+    address
+        .canonical_hex()
+        .map_err(|_| MsgError::ValidationFailed)
 }
 fn parse_iso_account_hint(
     literal: &str,
@@ -395,8 +340,8 @@ fn parse_iso_account_hint(
 ) -> Result<(AccountId, String), MsgError> {
     let parsed = routing::parse_account_literal(literal, telemetry, context)
         .map_err(|_| MsgError::ValidationFailed)?;
-    let canonical = parsed.canonical().to_owned();
-    Ok((parsed.into_account_id(), canonical))
+    let canonical = parsed.to_string();
+    Ok((parsed, canonical))
 }
 #[derive(Clone, Debug)]
 pub struct IsoMessageStatus {
@@ -824,7 +769,6 @@ enum IsoStatusHistoryLimitError {
 }
 fn parse_config_account_id(literal: &str, field: &str) -> eyre::Result<AccountId> {
     AccountId::parse_encoded(literal)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .wrap_err_with(|| format!("{field} must parse as an account identifier"))
 }
 fn load_profile_catalog(
@@ -2343,11 +2287,7 @@ impl Iso20022BridgeRuntime {
         if let Some(address) = parsed.field_text("SplmtryData/SourceAccountAddress") {
             let trimmed = address.trim();
             if !trimmed.is_empty() {
-                let (value, observation) = parse_account_address_literal(trimmed);
-                if let Some(value) = value {
-                    context.source_account_address = Some(value);
-                }
-                context.source_address_observation = observation;
+                context.source_account_address = Some(parse_account_address_literal(trimmed)?);
             }
         }
         let creditor = self.resolve_bound_account(
@@ -2362,11 +2302,7 @@ impl Iso20022BridgeRuntime {
         if let Some(address) = parsed.field_text("SplmtryData/TargetAccountAddress") {
             let trimmed = address.trim();
             if !trimmed.is_empty() {
-                let (value, observation) = parse_account_address_literal(trimmed);
-                if let Some(value) = value {
-                    context.target_account_address = Some(value);
-                }
-                context.target_address_observation = observation;
+                context.target_account_address = Some(parse_account_address_literal(trimmed)?);
             }
         }
         let asset_definition = self.resolve_bound_asset(
@@ -2506,11 +2442,7 @@ impl Iso20022BridgeRuntime {
         if let Some(address) = parsed.field_text("SplmtryData/SourceAccountAddress") {
             let trimmed = address.trim();
             if !trimmed.is_empty() {
-                let (value, observation) = parse_account_address_literal(trimmed);
-                if let Some(value) = value {
-                    context.source_account_address = Some(value);
-                }
-                context.source_address_observation = observation;
+                context.source_account_address = Some(parse_account_address_literal(trimmed)?);
             }
         }
         let creditor = self.resolve_bound_account(
@@ -2525,11 +2457,7 @@ impl Iso20022BridgeRuntime {
         if let Some(address) = parsed.field_text("SplmtryData/TargetAccountAddress") {
             let trimmed = address.trim();
             if !trimmed.is_empty() {
-                let (value, observation) = parse_account_address_literal(trimmed);
-                if let Some(value) = value {
-                    context.target_account_address = Some(value);
-                }
-                context.target_address_observation = observation;
+                context.target_account_address = Some(parse_account_address_literal(trimmed)?);
             }
         }
         let asset_definition = self.resolve_bound_asset(
@@ -3892,8 +3820,6 @@ fn context_from_value(value: &JsonValue) -> Option<IsoMessageContext> {
         collateral_reason_code: required_nullable_string(obj, "collateral_reason_code")?,
         plan_execution_order: required_nullable_string(obj, "plan_execution_order")?,
         plan_atomicity: required_nullable_string(obj, "plan_atomicity")?,
-        source_address_observation: AddressParseObservation::default(),
-        target_address_observation: AddressParseObservation::default(),
     })
 }
 fn metadata_value(metadata: &IsoMessageMetadata) -> JsonValue {

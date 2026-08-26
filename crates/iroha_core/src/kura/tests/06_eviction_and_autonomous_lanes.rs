@@ -2088,8 +2088,8 @@ fn autonomous_lane_payload_for_kura(
         proposal.descriptor.lane_id,
         proposal.descriptor.dataspace_id,
     ));
-    let reservation = LaneQueueReservationKeyV2 {
-        version: LaneQueueReservationKeyV2::VERSION,
+    let reservation = LaneQueueReservationKeyV1 {
+        version: LaneQueueReservationKeyV1::VERSION,
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new(
             b"kura-autonomous-view-queue-plan-admission-binding",
@@ -2125,9 +2125,9 @@ fn write_autonomous_claim_inventory_fixture(
     entrypoint_hash: Hash,
     staged: bool,
 ) -> PathBuf {
-    let mut claim = AutonomousLaneEntrypointClaimV3::new(payload, entrypoint_hash);
+    let mut claim = AutonomousLaneEntrypointClaimV1::new(payload, entrypoint_hash);
     if !staged {
-        claim.state = AutonomousLaneEntrypointClaimStateV3::Released(Hash::new_from_chunks(&[
+        claim.state = AutonomousLaneEntrypointClaimStateV1::Released(Hash::new_from_chunks(&[
             b"iroha:kura:test-claim-inventory-retirement:v1\0",
             entrypoint_hash.as_ref(),
         ]));
@@ -2210,8 +2210,8 @@ fn rebind_autonomous_lane_payload_for_kura(
         .zip(&routing_plans)
         .enumerate()
         .map(
-            |(index, (entrypoint, routing_plan))| LaneQueueReservationKeyV2 {
-                version: LaneQueueReservationKeyV2::VERSION,
+            |(index, (entrypoint, routing_plan))| LaneQueueReservationKeyV1 {
+                version: LaneQueueReservationKeyV1::VERSION,
                 entrypoint_hash: entrypoint.hash(),
                 queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
                     b"kura-autonomous-bundle-queue-plan-admission-binding",

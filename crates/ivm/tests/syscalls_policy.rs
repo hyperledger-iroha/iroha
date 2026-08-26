@@ -14,7 +14,6 @@ fn baseline_policy_allows_known_surface_numbers() {
         SYSCALL_VERIFY_PROOF,
         SYSCALL_GET_MERKLE_PATH,
         SYSCALL_SORACLOUD_READ_COMMITTED_STATE,
-        SYSCALL_SORACLOUD_EGRESS_FETCH,
         // WSV helpers
         SYSCALL_SET_ACCOUNT_DETAIL,
         SYSCALL_MINT_ASSET,
@@ -28,6 +27,15 @@ fn baseline_policy_allows_known_surface_numbers() {
             ivm::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, num),
             "num=0x{num:x}"
         );
+    }
+}
+#[test]
+fn retired_soracloud_private_io_holes_are_rejected() {
+    for number in 0xC5..=0xC7 {
+        assert!(!ivm::syscalls::is_syscall_allowed(
+            SyscallPolicy::AbiV1,
+            number
+        ));
     }
 }
 #[test]

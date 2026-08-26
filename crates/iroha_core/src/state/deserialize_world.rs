@@ -118,18 +118,17 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     ),
                 )
             })?;
-            if deployment.current_service_manifest_hash != current_bundle.service_manifest_hash()
-                || deployment.current_container_manifest_hash
-                    != current_bundle.container_manifest_hash()
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_service_deployments",
-                    format!(
-                        "service `{}` current revision `{}` manifest hashes must exactly match its admitted bundle",
-                        deployment.service_name, deployment.current_service_version
-                    ),
-                ));
-            }
+            deployment
+                .validate_against_active_bundle(current_bundle)
+                .map_err(|error| {
+                    invalid_soracloud_state(
+                        "soracloud_service_deployments",
+                        format!(
+                            "service `{}` current revision `{}` is not bound to its active admitted bundle: {error}",
+                            deployment.service_name, deployment.current_service_version
+                        ),
+                    )
+                })?;
             for (rollout_field, rollout) in [
                 ("active_rollout", deployment.active_rollout.as_ref()),
                 ("last_rollout", deployment.last_rollout.as_ref()),
@@ -345,13 +344,15 @@ impl SoracloudInrouPersistedStateV1<'_> {
                         ),
                     )
                 })?;
-            if state.validator_account_id != assignment.validator_account_id
+            if !assignment.host_availability.is_available()
+                || state.placement_incarnation != assignment.placement_incarnation
+                || state.validator_account_id != assignment.validator_account_id
                 || state.peer_id != assignment.peer_id
                 || state.selected_guest_isa != assignment.selected_guest_isa
             {
                 return Err(invalid_soracloud_state(
                     "soracloud_inrou_replica_runtime",
-                    "replica runtime identity must exactly match its authoritative placement assignment",
+                    "replica runtime identity must exactly match its authoritative placement assignment, which must be available",
                 ));
             }
         }
@@ -493,6 +494,29 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     ),
                 )
             })?;
+            let deployment = service_deployments
+                .get(&placement.service_name)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_inrou_service_placements",
+                        format!(
+                            "service `{}` revision `{}` placement has no authoritative deployment",
+                            placement.service_name, placement.service_version
+                        ),
+                    )
+                })?;
+            if deployment.current_service_version != placement.service_version {
+                return Err(invalid_soracloud_state(
+                    "soracloud_inrou_service_placements",
+                    "first-release Inrou placement must reference the exact active deployment revision",
+                ));
+            }
+            let lease = deployment.service_lease.as_ref().ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_inrou_service_placements",
+                    "Inrou placement requires an authoritative hosted-service lease",
+                )
+            })?;
             if admitted_bundle.container.runtime
                 != iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou
                 || admitted_bundle.service.execution_plane
@@ -522,6 +546,19 @@ impl SoracloudInrouPersistedStateV1<'_> {
                 )
             })?;
             for assignment in &placement.placements {
+                if assignment.economic_clock != lease.economic_clock
+                    || assignment.lease_started_height != lease.lease_started_height
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_inrou_service_placements",
+                        format!(
+                            "service `{}` revision `{}` replica {} belongs to another economic lease incarnation",
+                            placement.service_name,
+                            placement.service_version,
+                            assignment.replica_slot
+                        ),
+                    ));
+                }
                 if !inrou
                     .guest_images
                     .contains_key(&assignment.selected_guest_isa)
@@ -2140,10 +2177,6 @@ fn parse_world(
         runtime_receipts: &soracloud_runtime_receipts,
     }
     .validate()?;
-    let soracloud_private_uploaded_model_execution_receipts = take_optional_default(
-        &mut map,
-        "soracloud_private_uploaded_model_execution_receipts",
-    )?;
     let provider_owners = take_required(&mut map, "provider_owners")?;
     let provider_ingest_completion_authorities =
         take_required(&mut map, "provider_ingest_completion_authorities")?;
@@ -2377,7 +2410,6 @@ fn parse_world(
         soracloud_inrou_service_placements,
         soracloud_mailbox_messages,
         soracloud_runtime_receipts,
-        soracloud_private_uploaded_model_execution_receipts,
         capacity_declarations: Storage::default(),
         capacity_fee_ledger: Storage::default(),
         capacity_disputes: Storage::default(),

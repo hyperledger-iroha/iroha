@@ -19,9 +19,13 @@ use base64::Engine as _;
 use blake3::Hasher as Blake3Hasher;
 use iroha_crypto::PublicKey;
 use iroha_data_model::account::AccountAddress;
-use iroha_torii_shared::route_catalog::{
-    self, AdmissionPolicy, ApiSurface, AuthenticationPolicy, CatalogProjection, EnabledFeatures,
-    HttpMethod as CatalogHttpMethod, RouteCatalog, RouteDescriptor, RouteEffect,
+use iroha_torii_shared::{
+    PipelineTransactionStatusResponse,
+    route_catalog::{
+        self, AdmissionPolicy, ApiSurface, AuthenticationPolicy, CatalogProjection,
+        EnabledFeatures, HttpMethod as CatalogHttpMethod, RouteCatalog, RouteDescriptor,
+        RouteEffect,
+    },
 };
 use norito::json::{self, BoundedJsonError, FastJsonWrite, JsonWriteSink, Map, Value};
 use std::{
@@ -94,15 +98,6 @@ const DEFAULT_TX_SUBMIT_WAIT_POLL_INTERVAL_MS: u64 = 500;
 const MIN_TX_SUBMIT_WAIT_POLL_INTERVAL_MS: u64 = 50;
 const CANONICAL_TRANSACTION_HASH_HEX_BYTES: usize = iroha_crypto::Hash::LENGTH * 2;
 const QUERY_PROJECTION_SHARD_CATALOG_FIELDS: &[&str] = &["asset_definition_id", "limit", "offset"];
-const DEFAULT_TX_SUBMIT_WAIT_TERMINAL_STATUSES: &[&str] = &["Applied"];
-const SUPPORTED_PIPELINE_STATUS_KINDS: &[&str] = &[
-    "Queued",
-    "Approved",
-    "Committed",
-    "Applied",
-    "Rejected",
-    "Expired",
-];
 /// OpenAPI-derived tool metadata used for MCP dispatch.
 #[derive(Debug, Clone)]
 pub(crate) struct ToolSpec {
@@ -455,8 +450,6 @@ const COMPILED_CATALOG_FEATURES: &[&str] = &[
     "schema",
     #[cfg(feature = "telemetry")]
     "telemetry",
-    #[cfg(feature = "p2p_ws")]
-    "p2p_ws",
     #[cfg(feature = "connect")]
     "connect",
 ];
@@ -517,7 +510,13 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
             parameters.extend(parse_parameters(spec, operation.get("parameters")));
             let mut input_schema =
                 build_input_schema(spec, path, &parameters, operation.get("requestBody"));
-            harden_governance_openapi_input_schema(&method, path, &mut input_schema);
+            harden_governance_openapi_input_schema(
+                spec,
+                operation.get("requestBody"),
+                &method,
+                path,
+                &mut input_schema,
+            );
             let effect = openapi_tool_effect(path, method_key, operation);
             tools.push(ToolSpec {
                 name: format!("torii.{operation_id}"),
@@ -609,8 +608,10 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_accounts_qr_tool());
     tools.push(iroha_accounts_query_tool());
     tools.push(iroha_accounts_onboard_plan_tool());
-    tools.push(iroha_accounts_onboard_tool());
-    tools.push(iroha_accounts_faucet_tool());
+    tools.push(iroha_accounts_onboard_prepare_tool());
+    tools.push(iroha_accounts_onboard_submit_tool());
+    tools.push(iroha_accounts_faucet_prepare_tool());
+    tools.push(iroha_accounts_faucet_submit_tool());
     tools.push(iroha_account_transactions_tool());
     tools.push(iroha_account_history_tool());
     tools.push(iroha_account_transactions_query_tool());
@@ -963,6 +964,8 @@ fn is_manual_read_tool_name(name: &str) -> bool {
             | "iroha.accounts.transactions"
             | "iroha.accounts.history"
             | "iroha.accounts.onboard.plan"
+            | "iroha.accounts.onboard.prepare"
+            | "iroha.accounts.faucet.prepare"
             | "iroha.da.commitments.prove"
             | "iroha.da.pin_intents.prove"
             | "iroha.node.query_projection_checkpoint"
@@ -1718,8 +1721,8 @@ async fn handle_named_tool_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.accounts.onboard" => {
-            match dispatch_iroha_accounts_onboard(&app, inbound_headers, arguments).await {
+        "iroha.accounts.onboard.submit" => {
+            match dispatch_iroha_accounts_onboard_submit(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -1730,8 +1733,20 @@ async fn handle_named_tool_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.accounts.faucet" => {
-            match dispatch_iroha_accounts_faucet(&app, inbound_headers, arguments).await {
+        "iroha.accounts.onboard.prepare" => {
+            match dispatch_iroha_accounts_onboard_prepare(&app, inbound_headers, arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.accounts.faucet.prepare" => {
+            match dispatch_iroha_accounts_faucet_prepare(&app, inbound_headers, arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.accounts.faucet.submit" => {
+            match dispatch_iroha_accounts_faucet_submit(&app, inbound_headers, arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -2770,7 +2785,13 @@ fn governance_openapi_validation(
         _ => None,
     }
 }
-fn harden_governance_openapi_input_schema(method: &Method, path: &str, schema: &mut Value) {
+fn harden_governance_openapi_input_schema(
+    spec: &Value,
+    request_body: Option<&Value>,
+    method: &Method,
+    path: &str,
+    schema: &mut Value,
+) {
     let Some(validation) = governance_openapi_validation(method, path) else {
         return;
     };
@@ -2788,6 +2809,15 @@ fn harden_governance_openapi_input_schema(method: &Method, path: &str, schema: &
         .get_mut("properties")
         .and_then(Value::as_object_mut)
         .expect("OpenAPI-derived MCP input properties are an object");
+    let json_body_schema = request_body
+        .map(|request_body| deref_openapi_value(spec, request_body))
+        .and_then(|request_body| request_body.get("content"))
+        .and_then(Value::as_object)
+        .and_then(|content| content.get("application/json"))
+        .and_then(|media| media.get("schema"))
+        .map(|schema| inline_openapi_schema(spec, schema, 0))
+        .expect("governance MCP routes must expose one typed application/json body");
+    properties.insert("body".to_owned(), json_body_schema);
     properties.remove("body_base64");
     properties.insert(
         "content_type".to_owned(),
@@ -3486,7 +3516,6 @@ fn should_skip_operation(
         path,
         iroha_torii_shared::uri::SUBSCRIPTION
             | iroha_torii_shared::uri::BLOCKS_STREAM
-            | "/p2p"
             | "/v1/connect/ws"
             | "/v1/mcp"
     ) {
@@ -4805,11 +4834,43 @@ async fn dispatch_iroha_contracts_call_and_wait(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
+    const ALLOWED_ARGUMENTS: &[&str] = &[
+        "body",
+        "hash",
+        "timeout_ms",
+        "poll_interval_ms",
+        "status_accept",
+        "headers",
+        "accept",
+    ];
+    reject_unknown_arguments(
+        arguments,
+        ALLOWED_ARGUMENTS,
+        "canonical contract call-and-wait request",
+    )?;
     let timeout_ms = resolve_submit_wait_timeout_ms(arguments)?;
     let poll_interval_ms = resolve_submit_wait_poll_interval_ms(arguments)?;
-    let terminal_statuses = resolve_submit_wait_terminal_statuses(arguments)?;
     let explicit_tx_hash = extract_optional_transaction_hash_argument(arguments)?;
-    let submit = dispatch_iroha_contracts_call(app, inbound_headers, arguments).await?;
+    let body = arguments
+        .get("body")
+        .ok_or_else(|| "`body` is required".to_owned())?;
+    body.as_object()
+        .ok_or_else(|| "`body` must be an object".to_owned())?;
+    let body_bytes = encode_mcp_json_body(body, "encode contract call request body")?;
+    let submit = dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/contracts/call",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await?;
     let submit_status = submit.get("status").and_then(Value::as_u64).unwrap_or(0);
     if !(200..300).contains(&submit_status) {
         return Ok(submit);
@@ -4823,7 +4884,7 @@ async fn dispatch_iroha_contracts_call_and_wait(
         })?;
         &submitted_hash
     };
-    wait_for_terminal_transaction_status(
+    wait_for_transaction_applied(
         app,
         inbound_headers,
         arguments,
@@ -4831,7 +4892,6 @@ async fn dispatch_iroha_contracts_call_and_wait(
         Some(submit),
         timeout_ms,
         poll_interval_ms,
-        terminal_statuses,
     )
     .await
 }
@@ -4908,18 +4968,40 @@ async fn dispatch_iroha_accounts_qr(
     )
     .await
 }
-async fn dispatch_iroha_accounts_onboard(
+async fn dispatch_iroha_accounts_onboard_submit(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let body = build_accounts_onboard_apply_body(arguments)?;
+    let body = build_accounts_onboard_submit_body(arguments)?;
     let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
         inbound_headers,
         Method::POST,
         "/v1/accounts/onboard",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+async fn dispatch_iroha_accounts_onboard_prepare(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_accounts_onboard_prepare_body(arguments)?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/accounts/onboard/prepare",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -4952,12 +5034,34 @@ async fn dispatch_iroha_accounts_onboard_plan(
     )
     .await
 }
-async fn dispatch_iroha_accounts_faucet(
+async fn dispatch_iroha_accounts_faucet_prepare(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let body = build_accounts_faucet_body(arguments)?;
+    let body = build_accounts_faucet_prepare_body(arguments)?;
+    let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/accounts/faucet/prepare",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+async fn dispatch_iroha_accounts_faucet_submit(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_accounts_faucet_submit_body(arguments)?;
     let body_bytes = encode_mcp_json_body(&body, "encode request body")?;
     dispatch_route(
         app,
@@ -6029,7 +6133,6 @@ async fn dispatch_iroha_transactions_submit_and_wait(
 ) -> Result<Value, String> {
     let timeout_ms = resolve_submit_wait_timeout_ms(arguments)?;
     let poll_interval_ms = resolve_submit_wait_poll_interval_ms(arguments)?;
-    let terminal_statuses = resolve_submit_wait_terminal_statuses(arguments)?;
     reject_unknown_arguments(
         arguments,
         &[
@@ -6037,7 +6140,6 @@ async fn dispatch_iroha_transactions_submit_and_wait(
             "hash",
             "timeout_ms",
             "poll_interval_ms",
-            "terminal_statuses",
             "status_accept",
             "headers",
             "accept",
@@ -6061,7 +6163,7 @@ async fn dispatch_iroha_transactions_submit_and_wait(
         })?;
         &submitted_hash
     };
-    wait_for_terminal_transaction_status(
+    wait_for_transaction_applied(
         app,
         inbound_headers,
         arguments,
@@ -6069,7 +6171,6 @@ async fn dispatch_iroha_transactions_submit_and_wait(
         Some(submit),
         timeout_ms,
         poll_interval_ms,
-        terminal_statuses,
     )
     .await
 }
@@ -6078,11 +6179,22 @@ async fn dispatch_iroha_transactions_wait(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
+    reject_unknown_arguments(
+        arguments,
+        &[
+            "query",
+            "timeout_ms",
+            "poll_interval_ms",
+            "status_accept",
+            "headers",
+            "accept",
+        ],
+        "canonical transaction wait request",
+    )?;
     let timeout_ms = resolve_submit_wait_timeout_ms(arguments)?;
     let poll_interval_ms = resolve_submit_wait_poll_interval_ms(arguments)?;
-    let terminal_statuses = resolve_submit_wait_terminal_statuses(arguments)?;
     let tx_hash = extract_transaction_status_hash_argument(arguments)?;
-    wait_for_terminal_transaction_status(
+    wait_for_transaction_applied(
         app,
         inbound_headers,
         arguments,
@@ -6090,12 +6202,10 @@ async fn dispatch_iroha_transactions_wait(
         None,
         timeout_ms,
         poll_interval_ms,
-        terminal_statuses,
     )
     .await
 }
-#[allow(clippy::too_many_arguments)]
-async fn wait_for_terminal_transaction_status(
+async fn wait_for_transaction_applied(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
     arguments: &Map,
@@ -6103,7 +6213,6 @@ async fn wait_for_terminal_transaction_status(
     mut submit: Option<Value>,
     timeout_ms: u64,
     poll_interval_ms: u64,
-    terminal_statuses: Vec<String>,
 ) -> Result<Value, String> {
     let start = tokio::time::Instant::now();
     let timeout = Duration::from_millis(timeout_ms);
@@ -6129,75 +6238,26 @@ async fn wait_for_terminal_transaction_status(
             .get("status")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-        if (200..300).contains(&status_code) {
-            let kind = extract_pipeline_status_kind(&status_result).ok_or_else(|| {
-                format!(
-                    "status polling response is missing `body.status.kind` for `{tx_hash}`; last_status=decode_failed"
-                )
-            })?;
+        if exact_pipeline_status_poll_has_body(status_code, tx_hash)? {
+            let status = decode_exact_global_pipeline_status(&status_result, tx_hash)?;
+            let kind = status.status.kind.as_str();
             last_kind = Some(kind.to_owned());
-            if !SUPPORTED_PIPELINE_STATUS_KINDS
-                .iter()
-                .any(|known| known.eq_ignore_ascii_case(kind))
+            if fixed_pipeline_status_is_applied(&status)
+                .map_err(|error| format!("transaction `{tx_hash}` {error}; last_status={kind}"))?
             {
-                return Err(format!(
-                    "unsupported transaction status kind `{kind}` for `{tx_hash}`; last_status={kind}"
-                ));
-            }
-            if is_terminal_pipeline_status(kind, &terminal_statuses) {
-                let mut out = Map::new();
-                out.insert("status".into(), Value::from(status_code));
-                out.insert(
-                    "hash".into(),
-                    Value::String(try_copy_canonical_transaction_hash(tx_hash)?),
+                let elapsed_ms = start
+                    .elapsed()
+                    .as_millis()
+                    .min(u128::from(u64::MAX))
+                    .try_into()
+                    .unwrap_or(u64::MAX);
+                return build_transaction_applied_wait_result(
+                    tx_hash,
+                    attempts,
+                    elapsed_ms,
+                    submit.take(),
+                    status_result,
                 );
-                out.insert(
-                    "tx_hash".into(),
-                    Value::String(try_copy_canonical_transaction_hash(tx_hash)?),
-                );
-                out.insert("terminal_kind".into(), Value::String(kind.to_owned()));
-                out.insert(
-                    "terminal_statuses".into(),
-                    Value::Array(
-                        terminal_statuses
-                            .iter()
-                            .cloned()
-                            .map(Value::String)
-                            .collect(),
-                    ),
-                );
-                out.insert("attempts".into(), Value::from(attempts));
-                out.insert(
-                    "elapsed_ms".into(),
-                    Value::from(
-                        start
-                            .elapsed()
-                            .as_millis()
-                            .min(u128::from(u64::MAX))
-                            .try_into()
-                            .unwrap_or(u64::MAX),
-                    ),
-                );
-                if let Some(submit) = submit.take() {
-                    out.insert("submit".into(), submit);
-                }
-                out.insert("final_status".into(), status_result.clone());
-                out.insert("final".into(), status_result);
-                return Ok(Value::Object(out));
-            }
-            if should_error_on_unrequested_terminal_failure(kind, &terminal_statuses) {
-                return Err(format!(
-                    "transaction `{tx_hash}` reached terminal failure status `{kind}` before requested terminal statuses ({}); last_status={kind}",
-                    format_submit_wait_terminal_statuses(&terminal_statuses)
-                ));
-            }
-        } else {
-            let retryable_http = status_code == 404 || status_code == 429 || status_code >= 500;
-            if let Some(kind) = extract_pipeline_status_kind(&status_result) {
-                last_kind = Some(kind.to_owned());
-            }
-            if !retryable_http {
-                return Ok(status_result);
             }
         }
         if start.elapsed() >= timeout {
@@ -6210,8 +6270,39 @@ async fn wait_for_terminal_transaction_status(
         .map(|kind| format!(" (last status kind: `{kind}`)"))
         .unwrap_or_else(|| " (last status kind: `not_observed`)".to_owned());
     Err(format!(
-        "timed out waiting for terminal transaction status after {timeout_ms}ms for `{tx_hash}`{last_kind}"
+        "timed out waiting for state-resolved Applied after {timeout_ms}ms for `{tx_hash}`{last_kind}"
     ))
+}
+fn exact_pipeline_status_poll_has_body(status_code: u64, tx_hash: &str) -> Result<bool, String> {
+    match status_code {
+        200 => Ok(true),
+        404 => Ok(false),
+        status_code => Err(format!(
+            "transaction `{tx_hash}` status poll returned HTTP {status_code}; expected exact HTTP 200 with a status payload or HTTP 404 while pending"
+        )),
+    }
+}
+fn build_transaction_applied_wait_result(
+    tx_hash: &str,
+    attempts: u64,
+    elapsed_ms: u64,
+    submit: Option<Value>,
+    final_result: Value,
+) -> Result<Value, String> {
+    let mut out = Map::new();
+    out.insert("status".into(), Value::from(200_u64));
+    out.insert(
+        "hash".into(),
+        Value::String(try_copy_canonical_transaction_hash(tx_hash)?),
+    );
+    out.insert("terminal_kind".into(), Value::String("Applied".to_owned()));
+    out.insert("attempts".into(), Value::from(attempts));
+    out.insert("elapsed_ms".into(), Value::from(elapsed_ms));
+    if let Some(submit) = submit {
+        out.insert("submit".into(), submit);
+    }
+    out.insert("final".into(), final_result);
+    Ok(Value::Object(out))
 }
 async fn dispatch_iroha_transactions_status(
     app: &SharedAppState,
@@ -6266,48 +6357,6 @@ fn resolve_submit_wait_poll_interval_ms(arguments: &Map) -> Result<u64, String> 
         ));
     }
     Ok(poll_interval_ms)
-}
-fn resolve_submit_wait_terminal_statuses(arguments: &Map) -> Result<Vec<String>, String> {
-    let statuses = match arguments.get("terminal_statuses") {
-        Some(value) => {
-            let array = value
-                .as_array()
-                .ok_or_else(|| "`terminal_statuses` must be an array of strings".to_owned())?;
-            if array.is_empty() {
-                return Err("`terminal_statuses` must not be empty".to_owned());
-            }
-            if array.len() > SUPPORTED_PIPELINE_STATUS_KINDS.len() {
-                return Err(format!(
-                    "`terminal_statuses` must contain at most {} entries",
-                    SUPPORTED_PIPELINE_STATUS_KINDS.len()
-                ));
-            }
-            let mut out = Vec::new();
-            out.try_reserve_exact(array.len())
-                .map_err(|_| "failed to reserve terminal transaction statuses".to_owned())?;
-            for value in array {
-                let status = value
-                    .as_str()
-                    .ok_or_else(|| "`terminal_statuses` must be an array of strings".to_owned())?;
-                if !SUPPORTED_PIPELINE_STATUS_KINDS
-                    .iter()
-                    .any(|known| known.eq_ignore_ascii_case(status))
-                {
-                    return Err(format!(
-                        "unsupported terminal status `{status}` (supported: {})",
-                        SUPPORTED_PIPELINE_STATUS_KINDS.join(", ")
-                    ));
-                }
-                out.push(status.to_owned());
-            }
-            out
-        }
-        None => DEFAULT_TX_SUBMIT_WAIT_TERMINAL_STATUSES
-            .iter()
-            .map(|status| (*status).to_owned())
-            .collect(),
-    };
-    Ok(statuses)
 }
 fn extract_optional_transaction_hash_argument(arguments: &Map) -> Result<Option<&str>, String> {
     if arguments.contains_key("transaction_hash") || arguments.contains_key("query") {
@@ -6396,19 +6445,15 @@ fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<
     let body = submit_result
         .get("body")
         .ok_or_else(|| "submit response missing `body`".to_owned())?;
+    if let Some(hash) = body.get("tx_hash_hex").and_then(Value::as_str) {
+        return try_copy_canonical_transaction_hash(hash);
+    }
     if let Some(hash) = body
-        .get("tx_hash_hex")
+        .get("payload")
+        .and_then(|payload| payload.get("signed_transaction_hash"))
         .and_then(Value::as_str)
-        .or_else(|| body.get("tx_hash").and_then(Value::as_str))
-        .or_else(|| body.get("transaction_hash").and_then(Value::as_str))
-        .or_else(|| {
-            body.get("payload")
-                .and_then(|payload| payload.get("entrypoint_hash"))
-                .and_then(Value::as_str)
-        })
-        .filter(|hash| !hash.is_empty())
     {
-        return normalize_submission_receipt_hash(hash);
+        return try_copy_canonical_transaction_hash(hash);
     }
     if let Some(encoded) = body.as_str().filter(|body| !body.is_empty()) {
         let bytes = decode_base64_any(
@@ -6418,41 +6463,59 @@ fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<
         let receipt: iroha_data_model::transaction::TransactionSubmissionReceipt =
             norito::decode_from_bytes(&bytes)
                 .map_err(|err| format!("decode submission receipt: {err}"))?;
-        return Ok(receipt.payload.entrypoint_hash.to_string());
+        let hash = receipt
+            .payload
+            .signed_transaction_hash
+            .as_ref()
+            .ok_or_else(|| "submission receipt is missing its signed transaction hash".to_owned())?
+            .to_string();
+        return try_copy_canonical_transaction_hash(&hash);
     }
-    Err("submission response missing transaction hash field (`tx_hash_hex`, `tx_hash`, `transaction_hash`, `payload.entrypoint_hash`, or base64 Norito receipt body)".to_owned())
+    Err("submission response missing exact signed transaction hash field (`tx_hash_hex`, `payload.signed_transaction_hash`, or base64 Norito receipt body)".to_owned())
 }
-fn normalize_submission_receipt_hash(hash: &str) -> Result<String, String> {
-    if !hash.starts_with("hash:") {
-        return try_copy_canonical_transaction_hash(hash);
+fn decode_exact_global_pipeline_status(
+    status_result: &Value,
+    expected_hash: &str,
+) -> Result<PipelineTransactionStatusResponse, String> {
+    let body = status_result
+        .get("body")
+        .ok_or_else(|| "status polling response is missing `body`".to_owned())?;
+    let status = json::from_value::<PipelineTransactionStatusResponse>(body.clone())
+        .map_err(|error| format!("status polling response is not exact V1 JSON: {error}"))?;
+    canonical_transaction_hash(&status.hash)
+        .map_err(|error| format!("status polling response hash is not canonical: {error}"))?;
+    if status.hash != expected_hash {
+        return Err(format!(
+            "status polling response hash `{}` does not match requested `{expected_hash}`",
+            status.hash
+        ));
     }
-    let body = norito::literal::parse("hash", hash)
-        .map_err(|err| format!("decode submission receipt hash literal: {err}"))?;
-    body.parse::<iroha_crypto::Hash>()
-        .map(|hash| hash.to_string())
-        .map_err(|err| format!("decode submission receipt hash literal body: {err}"))
+    if status.scope != "global" {
+        return Err(format!(
+            "status polling response scope must be exact `global`, got `{}`",
+            status.scope
+        ));
+    }
+    if !matches!(status.resolved_from.as_str(), "cache" | "queue" | "state") {
+        return Err(format!(
+            "status polling response has unknown resolution source `{}`",
+            status.resolved_from
+        ));
+    }
+    Ok(status)
 }
-fn extract_pipeline_status_kind(status_result: &Value) -> Option<&str> {
-    let body = status_result.get("body")?;
-    body.get("status")
-        .and_then(Value::as_object)
-        .and_then(|status| status.get("kind"))
-        .and_then(Value::as_str)
-}
-fn is_terminal_pipeline_status(status: &str, terminal_statuses: &[String]) -> bool {
-    terminal_statuses
-        .iter()
-        .any(|terminal| terminal.eq_ignore_ascii_case(status))
-}
-fn should_error_on_unrequested_terminal_failure(
-    status: &str,
-    terminal_statuses: &[String],
-) -> bool {
-    matches!(status, "Rejected" | "Expired")
-        && !is_terminal_pipeline_status(status, terminal_statuses)
-}
-fn format_submit_wait_terminal_statuses(terminal_statuses: &[String]) -> String {
-    terminal_statuses.join(", ")
+fn fixed_pipeline_status_is_applied(
+    status: &PipelineTransactionStatusResponse,
+) -> Result<bool, String> {
+    match status.status.kind.as_str() {
+        "Applied" => Ok(status.resolved_from == "state"),
+        "Rejected" | "Expired" if status.resolved_from == "state" => Err(format!(
+            "reached fixed terminal failure status `{}` (resolved_from={})",
+            status.status.kind, status.resolved_from
+        )),
+        "Queued" | "Approved" | "Committed" | "Rejected" | "Expired" => Ok(false),
+        other => Err(format!("returned unsupported exact status kind `{other}`")),
+    }
 }
 fn reject_retired_flat_path_arguments(
     arguments: &Map,
@@ -7127,7 +7190,10 @@ fn is_onboarding_dispatch_route(method: &Method, path_and_query: &str) -> bool {
         .split_once('?')
         .map_or(path_and_query, |(path, _)| path);
     (method == Method::POST
-        && (path == "/v1/accounts/onboard" || path == "/v1/accounts/onboard/plan"))
+        && matches!(
+            path,
+            "/v1/accounts/onboard" | "/v1/accounts/onboard/plan" | "/v1/accounts/onboard/prepare"
+        ))
         || (method == Method::GET && path == "/v1/accounts/onboarding/readiness")
 }
 fn forward_onboarding_auth_header(out: &mut HeaderMap, inbound: &HeaderMap) -> Result<(), String> {
@@ -7655,13 +7721,13 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
     Ok(url)
 }
 const MANUAL_STATIC_TOOL_ASSET_VERSION: u64 = 1;
-const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 68;
-const MANUAL_STATIC_TOOL_ASSET_LEN: usize = 86_670;
+const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 70;
+const MANUAL_STATIC_TOOL_ASSET_LEN: usize = 90_497;
 const MANUAL_STATIC_TOOL_HISTORICAL_RUST_PREIMAGE_SHA256: &str =
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4";
 const MANUAL_STATIC_TOOL_ASSET_BLAKE3: [u8; 32] = [
-    0x96, 0x9b, 0xc1, 0x7f, 0xab, 0xe5, 0xee, 0xf4, 0x13, 0xa8, 0xf2, 0x0f, 0x59, 0x2a, 0x66, 0xea,
-    0x15, 0x74, 0x3c, 0x1c, 0xd0, 0xf7, 0x9b, 0xd4, 0xb6, 0x56, 0xe0, 0xe6, 0xb0, 0xd1, 0x47, 0x9d,
+    0x25, 0x2d, 0x29, 0xcd, 0x02, 0xe7, 0x48, 0x41, 0x25, 0x87, 0xfc, 0x2b, 0x39, 0x43, 0x62, 0x94,
+    0x94, 0x89, 0x2a, 0x39, 0x11, 0x3f, 0xc6, 0xf6, 0x8b, 0x16, 0x96, 0xab, 0x1f, 0x87, 0x8e, 0x52,
 ];
 const MANUAL_STATIC_TOOL_ASSET: &[u8] = include_bytes!("mcp/manual_tool_descriptors_v1.json");
 
@@ -7922,8 +7988,10 @@ manual_tool! {
     iroha_accounts_qr_tool => "iroha.accounts.qr";
     iroha_accounts_query_tool => "iroha.accounts.query";
     iroha_accounts_onboard_plan_tool => "iroha.accounts.onboard.plan";
-    iroha_accounts_onboard_tool => "iroha.accounts.onboard";
-    iroha_accounts_faucet_tool => "iroha.accounts.faucet";
+    iroha_accounts_onboard_prepare_tool => "iroha.accounts.onboard.prepare";
+    iroha_accounts_onboard_submit_tool => "iroha.accounts.onboard.submit";
+    iroha_accounts_faucet_prepare_tool => "iroha.accounts.faucet.prepare";
+    iroha_accounts_faucet_submit_tool => "iroha.accounts.faucet.submit";
     iroha_account_transactions_tool => "iroha.accounts.transactions";
     iroha_account_history_tool => "iroha.accounts.history";
     iroha_account_transactions_query_tool => "iroha.accounts.transactions.query";
@@ -9040,7 +9108,7 @@ fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.submit_and_wait".to_owned(),
         effect: manual_tool_effect_from_name("iroha.transactions.submit_and_wait"),
-        description: "Submit a versioned SignedTransaction from canonical `body_base64` bytes and poll pipeline status until a configured terminal status (`Applied` by default).".to_owned(),
+        description: "Submit a versioned SignedTransaction from canonical `body_base64` bytes and poll exact global pipeline status until state-resolved Applied; state-resolved Rejected and Expired fail. Status polling decodes only exact HTTP 200 payloads, treats only HTTP 404 as pending, and rejects every other HTTP status. The Applied result has exactly `status`, `hash`, `terminal_kind`, `attempts`, `elapsed_ms`, optional `submit`, and `final`.".to_owned(),
         method: Method::POST,
         path_template: iroha_torii_shared::uri::TRANSACTION.to_owned(),
         input_schema: norito::json!({
@@ -9054,20 +9122,21 @@ fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
                 },
                 "hash": {
                     "type": "string",
-                    "description": "Optional known transaction hash; if omitted the tool attempts to decode it from the submission receipt."
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{63}[13579bdf]$",
+                    "description": "Optional exact canonical Iroha transaction hash; if omitted the tool decodes the exact submission response."
                 },
                 "timeout_ms": {
                     "type": "integer",
+                    "minimum": 1,
+                    "maximum": 600000,
                     "description": "Polling timeout in milliseconds (default 30000, max 600000)."
                 },
                 "poll_interval_ms": {
                     "type": "integer",
+                    "minimum": 50,
                     "description": "Polling interval in milliseconds (default 500, minimum 50)."
-                },
-                "terminal_statuses": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Optional terminal status override (default: Applied). Include Rejected or Expired to inspect those failure outcomes."
                 },
                 "status_accept": {
                     "type": "string",

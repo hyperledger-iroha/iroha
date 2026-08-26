@@ -82,21 +82,25 @@ public final class JoinKaigiInstruction implements InstructionTemplate {
     builder.setCallId(KaigiInstructionUtils.parseCallId(arguments, "call"));
     builder.setParticipant(KaigiInstructionUtils.require(arguments, "participant"));
 
+    if (arguments.get("commitment.alias_tag") != null) {
+      throw new IllegalArgumentException(
+          "commitment aliasTag is off-chain only and must be omitted");
+    }
     final String commitmentValue = arguments.get("commitment.commitment");
     if (commitmentValue != null) {
       builder.setCommitmentLiteral(commitmentValue);
-      final String alias = arguments.get("commitment.alias_tag");
-      if (alias != null) {
-        builder.setCommitmentAliasTag(alias);
-      }
     }
 
     final String nullifier = arguments.get("nullifier.digest");
+    final Long issuedAt =
+        KaigiInstructionUtils.parseOptionalUnsignedLong(
+            arguments.get("nullifier.issued_at_ms"), "nullifier.issued_at_ms");
+    if (issuedAt != null && issuedAt.longValue() != 0L) {
+      throw new IllegalArgumentException(
+          "nullifier issuedAtMs is off-chain only and must be zero when provided");
+    }
     if (nullifier != null) {
       builder.setNullifierDigest(nullifier);
-      final Long issuedAt =
-          KaigiInstructionUtils.parseOptionalUnsignedLong(
-              arguments.get("nullifier.issued_at_ms"), "nullifier.issued_at_ms");
       builder.setNullifierIssuedAtMs(issuedAt);
     }
 
@@ -189,7 +193,11 @@ public final class JoinKaigiInstruction implements InstructionTemplate {
     }
 
     public Builder setCommitmentAliasTag(final String aliasTag) {
-      this.commitmentAliasTag = aliasTag;
+      if (aliasTag != null) {
+        throw new IllegalArgumentException(
+            "commitment aliasTag is off-chain only and must be omitted");
+      }
+      this.commitmentAliasTag = null;
       return this;
     }
 
@@ -204,8 +212,9 @@ public final class JoinKaigiInstruction implements InstructionTemplate {
     }
 
     public Builder setNullifierIssuedAtMs(final Long issuedAtMs) {
-      if (issuedAtMs != null && issuedAtMs < 0) {
-        throw new IllegalArgumentException("nullifier issuedAtMs must be non-negative");
+      if (issuedAtMs != null && issuedAtMs.longValue() != 0L) {
+        throw new IllegalArgumentException(
+            "nullifier issuedAtMs is off-chain only and must be zero when provided");
       }
       this.nullifierIssuedAtMs = issuedAtMs;
       return this;
@@ -254,9 +263,6 @@ public final class JoinKaigiInstruction implements InstructionTemplate {
       args.put("participant", participant);
       if (commitment != null) {
         args.put("commitment.commitment", commitment);
-        if (commitmentAliasTag != null) {
-          args.put("commitment.alias_tag", commitmentAliasTag);
-        }
       }
       if (nullifierDigest != null) {
         args.put("nullifier.digest", nullifierDigest);

@@ -69,7 +69,7 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
         .expect("remove stale pending fixture");
     let_row! { _ = state .lane_incarnations .write() .insert(participant_lane, participant_incarnation) };
     let_row! { registry_key = State::queue_plan_admission_registry_marker_key(&binding.registry_key()) .expect("fixture registry key") };
-    let_row! { conflicting_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV2 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2, binding_hash: Hash::new(b"different-immutable-queue-plan-binding"), } };
+    let_row! { conflicting_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV1 { version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1, binding_hash: Hash::new(b"different-immutable-queue-plan-binding"), } };
     let_row! { conflicting_payload = State::queue_plan_admission_registry_marker_payload(&conflicting_value) .expect("fixture conflicting registry value") };
     {
         let mut world = state.world.block();

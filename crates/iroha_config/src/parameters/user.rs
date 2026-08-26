@@ -29,6 +29,11 @@ use iroha_config_base::{
 use iroha_data_model::{
     domain::DomainId,
     merge::{MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
+    soracloud::{
+        SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1, SORA_INROU_MIN_CPU_MILLIS_V1,
+        SORA_INROU_MIN_MEMORY_BYTES_V1, SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1,
+        SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1, SoraPublishedInrouGuestImageArtifactV1,
+    },
     sorafs::{
         capacity::ProviderId,
         moderation_ledger::{MODERATION_QUERY_MAX_CASES_V1, MODERATION_QUERY_MAX_EVENTS_V1},
@@ -81,28 +86,7 @@ fn normalize_jdg_signature_schemes(raw: Vec<String>) -> BTreeSet<JdgSignatureSch
     schemes
 }
 fn parse_account_id_literal(raw: &str, context: &str) -> AccountId {
-    match AccountId::parse_encoded(raw) {
-        Ok(parsed) => parsed.into_account_id(),
-        Err(err)
-            if err.reason()
-                == iroha_data_model::account::address::AccountAddressErrorCode::UnexpectedNetworkPrefix
-                    .as_str()
-                && iroha_data_model::account::address::chain_discriminant()
-                    != defaults::common::chain_discriminant() =>
-        {
-            // `read_and_complete::<UserConfig>()` materializes account-literal defaults before
-            // `Root::parse()` installs the config-specific chain discriminant. Accept the
-            // baseline-default literals here and canonicalize them into the configured runtime.
-            let _fallback = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
-                defaults::common::chain_discriminant(),
-            );
-            AccountId::parse_encoded(raw).map_or_else(
-                |fallback_err| panic!("{context}: {fallback_err}"),
-                iroha_data_model::account::ParsedAccountId::into_account_id,
-            )
-        }
-        Err(err) => panic!("{context}: {err}"),
-    }
+    AccountId::parse_encoded(raw).unwrap_or_else(|err| panic!("{context}: {err}"))
 }
 fn validate_asset_definition_selector_literal(value: &str) -> core::result::Result<String, String> {
     let trimmed = value.trim();
@@ -121,13 +105,17 @@ fn validate_asset_definition_selector_literal(value: &str) -> core::result::Resu
         })
 }
 fn validate_nexus_fee_asset_selector_literal(value: &str) -> core::result::Result<String, String> {
+    if value.trim() != value {
+        return Err(
+            "must be an exact canonical selector without surrounding whitespace".to_owned(),
+        );
+    }
     let value = validate_asset_definition_selector_literal(value)?;
-    let is_xor_selector = value == defaults::nexus::fees::fee_asset_id()
-        || value.eq_ignore_ascii_case("xor#universal")
-        || value.eq_ignore_ascii_case("xor#universal.universal");
+    let is_xor_selector =
+        value == defaults::nexus::fees::fee_asset_id() || value == "xor#universal";
     if !is_xor_selector {
         return Err(
-            "Nexus fees must be charged in XOR; use xor#universal or the canonical XOR asset definition id"
+            "Nexus fees must be charged in XOR; use exact `xor#universal` or the canonical XOR asset definition id"
                 .to_owned(),
         );
     }
@@ -3581,28 +3569,23 @@ impl Content {
     }
 }
 fn parse_content_auth_mode(raw: &str) -> ContentAuthMode {
-    let trimmed = raw.trim();
-    if trimmed.eq_ignore_ascii_case("public") {
+    if raw == "public" {
         return ContentAuthMode::Public;
     }
-    if let Some(role_str) = trimmed.strip_prefix("role:") {
-        let role = RoleId::from_str(role_str.trim()).unwrap_or_else(|err| {
+    if let Some(role_str) = raw.strip_prefix("role:") {
+        let role = RoleId::from_str(role_str).unwrap_or_else(|err| {
             panic!("invalid content.default_auth_mode role `{role_str}`: {err}");
         });
         return ContentAuthMode::RoleGate(role);
     }
-    if let Some(uaid_str) = trimmed.strip_prefix("sponsor:") {
-        let cleaned = uaid_str
-            .trim()
-            .strip_prefix("uaid:")
-            .unwrap_or_else(|| uaid_str.trim());
-        let uaid = UniversalAccountId::from_str(cleaned).unwrap_or_else(|err| {
+    if let Some(uaid_str) = raw.strip_prefix("sponsor:") {
+        let uaid = UniversalAccountId::from_str(uaid_str).unwrap_or_else(|err| {
             panic!("invalid content.default_auth_mode sponsor `{uaid_str}`: {err}");
         });
         return ContentAuthMode::Sponsor(uaid);
     }
     panic!(
-        "invalid content.default_auth_mode value `{trimmed}`; expected `public`, `role:<role_id>`, or `sponsor:<uaid>`"
+        "invalid content.default_auth_mode value `{raw}`; expected exact `public`, `role:<role_id>`, or `sponsor:uaid:<lowercase-hex>`"
     );
 }
 /// Economic settings for the compute lane (pricing, bounds, sponsorship).
@@ -6351,7 +6334,7 @@ pub struct SoranetHandshakePow {
     revocation_store_ttl_secs: u64,
     #[config(default = "Self::default_revocation_store_path()")]
     revocation_store_path: PathBuf,
-    /// ML-DSA-44 public key for verifying signed PoW tickets.
+    /// ML-DSA-44 public key for verifying signed Argon2 ticket envelopes.
     signed_ticket_public_key_hex: Option<WithOrigin<HexBytes>>,
     #[config(nested)]
     puzzle: SoranetHandshakePuzzle,
@@ -7353,30 +7336,6 @@ pub struct Network {
     ///
     /// When `p2p_proxy_tls_verify` is enabled, the dialer pins the proxy certificate to this value.
     pub p2p_proxy_tls_pinned_cert_der_base64: Option<String>,
-    /// Enable TLS-over-TCP transport (feature-gated).
-    /// When enabled and built with the `iroha_p2p/p2p_tls` feature, the dialer
-    /// wraps the TCP stream in TLS 1.3. Peer identity remains authenticated by
-    /// the signed application handshake.
-    #[config(env = "P2P_TLS", default)]
-    pub tls_enabled: bool,
-    /// When TLS-over-TCP is enabled, fall back to plain TCP if the TLS dial fails.
-    ///
-    /// Set to `false` to enforce TLS-only outbound P2P dials when `tls_enabled=true`.
-    #[config(default = "false")]
-    pub tls_fallback_to_plain: bool,
-    /// Optional P2P TLS listener address (host:port). If set and TLS is enabled,
-    /// node will accept inbound TLS connections on this address.
-    /// Plain TCP listener remains active on `address` unless `tls_inbound_only=true`.
-    #[config(env = "P2P_TLS_LISTEN_ADDRESS")]
-    pub tls_listen_address: Option<WithOrigin<SocketAddr>>,
-    /// Disable the plain TCP listener and accept inbound P2P connections only via TLS-over-TCP.
-    ///
-    /// Requires `tls_enabled=true` and a build with the `iroha_p2p/p2p_tls` feature.
-    ///
-    /// When enabled, the node binds a TLS listener on `tls_listen_address` when set, otherwise on
-    /// `address`.
-    #[config(default)]
-    pub tls_inbound_only: bool,
     /// Optional interval to refresh DNS hostnames (when `public_address` is a hostname).
     /// Disabled if not set. Useful to catch IP changes faster.
     pub dns_refresh_interval_ms: Option<DurationMs>,
@@ -7384,11 +7343,6 @@ pub struct Network {
     /// after this TTL elapses since last refresh. If both interval and TTL are set, interval
     /// takes precedence.
     pub dns_refresh_ttl_ms: Option<DurationMs>,
-    /// Prefer WebSocket fallback for outbound P2P connections (feature `p2p_ws`).
-    /// If enabled, the dialer will attempt WSS/WS to Torii `/p2p` before other transports
-    /// for Host addresses. This is primarily for constrained envs and tests.
-    #[config(default)]
-    pub prefer_ws_fallback: bool,
     /// Capacity for the high-priority network message queue and inbound peer dispatch buffer
     /// (bounded mode only).
     #[config(default = "defaults::network::P2P_QUEUE_CAP_HIGH")]
@@ -7543,9 +7497,6 @@ pub struct Network {
     /// Maximum frame size for miscellaneous topics.
     #[config(default = "defaults::network::MAX_FRAME_BYTES_OTHER")]
     pub max_frame_bytes_other: NonZeroUsize,
-    /// TLS policy: restrict to TLS 1.3 only (default: true).
-    #[config(default)]
-    pub tls_only_v1_3: bool,
     /// QUIC max idle timeout (ms); if unset, quic idle timeout default applies.
     pub quic_max_idle_timeout_ms: Option<DurationMs>,
 }
@@ -7613,10 +7564,6 @@ impl Network {
             p2p_no_proxy,
             p2p_proxy_tls_verify,
             p2p_proxy_tls_pinned_cert_der_base64,
-            tls_enabled,
-            tls_fallback_to_plain,
-            tls_listen_address,
-            tls_inbound_only,
             p2p_queue_cap_high,
             p2p_queue_cap_low,
             p2p_post_queue_cap,
@@ -7657,7 +7604,6 @@ impl Network {
             deny_keys,
             allow_cidrs,
             deny_cidrs,
-            prefer_ws_fallback,
             disconnect_on_post_overflow,
             max_frame_bytes,
             tcp_nodelay,
@@ -7669,7 +7615,6 @@ impl Network {
             max_frame_bytes_peer_gossip,
             max_frame_bytes_health,
             max_frame_bytes_other,
-            tls_only_v1_3,
             quic_max_idle_timeout_ms,
             ..
         } = self;
@@ -7847,11 +7792,6 @@ impl Network {
                 quic_datagram_max_payload_bytes: quic_datagram_max_payload_bytes.get(),
                 quic_datagram_receive_buffer_bytes: quic_datagram_receive_buffer_bytes.get(),
                 quic_datagram_send_buffer_bytes: quic_datagram_send_buffer_bytes.get(),
-                tls_enabled,
-                tls_fallback_to_plain,
-                tls_listen_address,
-                tls_inbound_only,
-                prefer_ws_fallback,
                 p2p_queue_cap_high,
                 p2p_queue_cap_low,
                 p2p_post_queue_cap,
@@ -7910,7 +7850,6 @@ impl Network {
                 max_frame_bytes_peer_gossip: max_frame_bytes_peer_gossip.get(),
                 max_frame_bytes_health: max_frame_bytes_health.get(),
                 max_frame_bytes_other: max_frame_bytes_other.get(),
-                tls_only_v1_3,
                 quic_max_idle_timeout: quic_max_idle_timeout_ms
                     .map(iroha_config_base::util::DurationMs::get),
             },
@@ -8983,7 +8922,7 @@ impl StreamingSync {
 #[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 pub struct StreamingSoranet {
     #[config(default = "defaults::streaming::soranet::ENABLED")]
-    /// Toggles SoraNet integration for streaming routes.
+    /// Reserved SoraNet exit-publication switch; V1 rejects `true`.
     pub enabled: bool,
     #[config(default = "defaults::streaming::soranet::EXIT_MULTIADDR.to_string()")]
     /// Default exit relay multi-address.
@@ -8997,9 +8936,9 @@ pub struct StreamingSoranet {
     /// Optional override hashed into blinded channel identifiers.
     pub channel_salt: Option<WithOrigin<String>>,
     #[config(default = "PathBuf::from(defaults::streaming::soranet::PROVISION_SPOOL_DIR)")]
-    /// Directory where privacy-route updates are spooled for SoraNet exits.
+    /// Reserved spool path; V1 never creates or writes it.
     pub provision_spool_dir: WithOrigin<PathBuf>,
-    /// Maximum on-disk footprint for the SoraNet provision spool (0 = unlimited).
+    /// Reserved spool budget; unused while V1 publication is disabled.
     #[config(default = "defaults::streaming::soranet::PROVISION_SPOOL_MAX_BYTES")]
     pub provision_spool_max_bytes: WithOrigin<Bytes<u64>>,
     /// Segment window (inclusive) used when provisioning privacy routes.
@@ -9013,6 +8952,14 @@ impl StreamingSoranet {
     /// Convert user-supplied overrides into runtime defaults.
     pub fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::StreamingSoranet> {
         let mut config = actual::StreamingSoranet::from_defaults();
+        if self.enabled {
+            emitter.emit(
+                Report::new(ParseError::InvalidStreamingConfig).attach(
+                    "streaming.soranet.enabled cannot be enabled in V1: token-bearing filesystem exit publication requires RouteOpen proof and durable revocation tombstones",
+                ),
+            );
+            return None;
+        }
         config.enabled = self.enabled;
         let (exit_multiaddr, exit_origin) = self.exit_multiaddr.into_tuple();
         if exit_multiaddr.trim().is_empty() {
@@ -9987,50 +9934,26 @@ impl NexusHfSharedLeases {
         })
     }
 }
-/// User-level configuration container for uploaded private-model quotas.
+/// User-level configuration for encrypted uploaded-model registry quotas.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct NexusUploadedModels {
-    /// Plaintext chunk size admitted before envelope encryption.
-    #[config(default = "defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES")]
-    pub chunk_plaintext_bytes: u64,
     /// Maximum plaintext bytes admitted for one uploaded model.
     #[config(default = "defaults::nexus::uploaded_models::MAX_PLAINTEXT_BYTES_PER_MODEL")]
     pub max_plaintext_bytes_per_model: u64,
     /// Maximum encrypted chunk count admitted for one uploaded model.
     #[config(default = "defaults::nexus::uploaded_models::MAX_CHUNK_COUNT_PER_MODEL")]
     pub max_chunk_count_per_model: u32,
-    /// Maximum concurrent private sessions admitted for one apartment.
-    #[config(
-        default = "defaults::nexus::uploaded_models::MAX_ACTIVE_PRIVATE_SESSIONS_PER_APARTMENT"
-    )]
-    pub max_active_private_sessions_per_apartment: u32,
-    /// Maximum token budget admitted for one private session.
-    #[config(default = "defaults::nexus::uploaded_models::MAX_SESSION_TOKEN_BUDGET")]
-    pub max_session_token_budget: u32,
-    /// Maximum image budget admitted for one private session.
-    #[config(default = "defaults::nexus::uploaded_models::MAX_SESSION_IMAGE_BUDGET")]
-    pub max_session_image_budget: u16,
 }
 impl_default!(NexusUploadedModels {
-    chunk_plaintext_bytes: defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES,
     max_plaintext_bytes_per_model: defaults::nexus::uploaded_models::MAX_PLAINTEXT_BYTES_PER_MODEL,
     max_chunk_count_per_model: defaults::nexus::uploaded_models::MAX_CHUNK_COUNT_PER_MODEL,
-    max_active_private_sessions_per_apartment:
-        defaults::nexus::uploaded_models::MAX_ACTIVE_PRIVATE_SESSIONS_PER_APARTMENT,
-    max_session_token_budget: defaults::nexus::uploaded_models::MAX_SESSION_TOKEN_BUDGET,
-    max_session_image_budget: defaults::nexus::uploaded_models::MAX_SESSION_IMAGE_BUDGET,
 });
 impl NexusUploadedModels {
     #[allow(clippy::unnecessary_wraps)]
     fn parse(self, _emitter: &mut Emitter<ParseError>) -> Option<actual::NexusUploadedModels> {
         Some(actual::NexusUploadedModels {
-            chunk_plaintext_bytes: self.chunk_plaintext_bytes,
             max_plaintext_bytes_per_model: self.max_plaintext_bytes_per_model,
             max_chunk_count_per_model: self.max_chunk_count_per_model,
-            max_active_private_sessions_per_apartment: self
-                .max_active_private_sessions_per_apartment,
-            max_session_token_budget: self.max_session_token_budget,
-            max_session_image_budget: self.max_session_image_budget,
         })
     }
 }
@@ -10138,13 +10061,13 @@ impl NexusFees {
             .enumerate()
         {
             match AccountId::parse_encoded(&literal) {
-                Ok(parsed) if parsed.canonical() == literal => {
-                    successful_claim_fee_exempt_authorities.insert(parsed.into_account_id());
+                Ok(account_id) if account_id.to_string() == literal => {
+                    successful_claim_fee_exempt_authorities.insert(account_id);
                 }
-                Ok(parsed) => {
+                Ok(account_id) => {
                     emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
                         "nexus.fees.successful_claim_fee_exempt_authorities[{index}] must be the exact canonical I105 literal `{}`",
-                        parsed.canonical()
+                        account_id
                     )));
                     valid_authorities = false;
                 }
@@ -11584,13 +11507,13 @@ impl Nexus {
                         continue;
                     };
                     let account_id = match AccountId::parse_encoded(&account_raw) {
-                        Ok(parsed) if parsed.canonical() == account_raw => parsed.into_account_id(),
-                        Ok(parsed) => {
+                        Ok(account_id) if account_id.to_string() == account_raw => account_id,
+                        Ok(account_id) => {
                             lane_errors = true;
                             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
                                 format!(
                                     "lane[{idx}] settlement_buffer.account_id must be the exact canonical I105 literal `{}`",
-                                    parsed.canonical()
+                                    account_id
                                 ),
                             ));
                             continue;
@@ -12730,20 +12653,28 @@ pub struct SoracloudRuntime {
     /// Outbound egress policy for embedded runtimes.
     #[config(default)]
     pub egress: SoracloudRuntimeEgress,
-    /// Hugging Face importer and inference-bridge settings.
+    /// Hugging Face importer settings.
     #[config(default)]
     pub hf: SoracloudRuntimeHuggingFace,
 }
 impl SoracloudRuntime {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoracloudRuntime {
         let production_mode = self.production_mode;
-        let egress = self.egress.parse();
+        let egress = self.egress.parse(emitter);
         let hf = self.hf.parse(emitter);
         let submission = self.submission.parse(production_mode, emitter);
+        let reconcile_interval = self.reconcile_interval_ms.get();
+        if reconcile_interval < MIN_TIMER_INTERVAL {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(
+                    "soracloud_runtime.reconcile_interval_ms must be at least the minimum timer interval",
+                ),
+            );
+        }
         actual::SoracloudRuntime {
             production_mode,
             state_dir: self.state_dir.resolve_relative_path(),
-            reconcile_interval: self.reconcile_interval_ms.get().max(MIN_TIMER_INTERVAL),
+            reconcile_interval,
             hydration_concurrency: self.hydration_concurrency,
             cache_budgets: self.cache_budgets.parse(),
             inrou: self.inrou.parse(emitter),
@@ -12938,7 +12869,7 @@ impl SoracloudRuntimeCacheBudgets {
     }
 }
 /// User-level Inrou PortableVM configuration and resource ceilings.
-#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct SoracloudRuntimeInrou {
     /// Whether this validator advertises and materializes local Inrou workloads.
@@ -12951,10 +12882,20 @@ pub struct SoracloudRuntimeInrou {
     /// Canonical slot gid of the locked local `iroha-inrou-{slot}` primary group.
     #[norito(default)]
     pub portable_vm_gid: Option<NonZeroU32>,
-    /// Maximum aggregate hosted CPU budget in millicores.
+    /// Canonical lowercase digest of the exact operator-approved guest artifact manifest.
+    #[norito(default)]
+    pub trusted_guest_manifest_digest_hex: Option<String>,
+    /// Canonical SoraFS content CID of the exact operator-approved guest artifact.
+    #[norito(default)]
+    pub trusted_guest_content_cid: Option<String>,
+    /// Maximum immutable guest-image bytes materialized from the operator-preseed store.
+    #[config(default = "defaults::soracloud_runtime::INROU_GUEST_IMAGE_MAX_BYTES")]
+    #[norito(default = "default_soracloud_runtime_inrou_guest_image_max_bytes")]
+    pub guest_image_max_bytes: NonZeroU64,
+    /// Maximum aggregate physical host CPU reservation, including VMM overhead, in millicores.
     #[norito(default)]
     pub max_cpu_millis: Option<NonZeroU32>,
-    /// Maximum aggregate hosted memory budget in bytes.
+    /// Maximum aggregate physical host memory reservation, including VMM overhead, in bytes.
     #[norito(default)]
     pub max_memory_bytes: Option<NonZeroU64>,
     /// Maximum aggregate hosted writable-storage budget in bytes.
@@ -12996,6 +12937,9 @@ pub struct SoracloudRuntimeInrou {
 fn default_soracloud_runtime_inrou_enabled() -> bool {
     defaults::soracloud_runtime::INROU_ENABLED
 }
+fn default_soracloud_runtime_inrou_guest_image_max_bytes() -> NonZeroU64 {
+    defaults::soracloud_runtime::INROU_GUEST_IMAGE_MAX_BYTES
+}
 fn default_soracloud_runtime_inrou_bundle_archive_max_compressed_bytes() -> NonZeroU64 {
     defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES
 }
@@ -13025,6 +12969,9 @@ impl_default!(SoracloudRuntimeInrou {
     enabled: defaults::soracloud_runtime::INROU_ENABLED,
     portable_vm_uid: defaults::soracloud_runtime::INROU_PORTABLE_VM_UID,
     portable_vm_gid: defaults::soracloud_runtime::INROU_PORTABLE_VM_GID,
+    trusted_guest_manifest_digest_hex: None,
+    trusted_guest_content_cid: None,
+    guest_image_max_bytes: defaults::soracloud_runtime::INROU_GUEST_IMAGE_MAX_BYTES,
     max_cpu_millis: None,
     max_memory_bytes: None,
     max_storage_bytes: None,
@@ -13045,6 +12992,16 @@ impl_default!(SoracloudRuntimeInrou {
 });
 impl SoracloudRuntimeInrou {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoracloudRuntimeInrou {
+        if self.guest_image_max_bytes.get()
+            > defaults::soracloud_runtime::INROU_GUEST_IMAGE_MAX_BYTES_LIMIT
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                    "soracloud_runtime.inrou.guest_image_max_bytes must not exceed {}",
+                    defaults::soracloud_runtime::INROU_GUEST_IMAGE_MAX_BYTES_LIMIT
+                )),
+            );
+        }
         for (field, value) in [
             ("start_grace_ms", self.start_grace_ms.get()),
             ("stop_grace_ms", self.stop_grace_ms.get()),
@@ -13130,6 +13087,14 @@ impl SoracloudRuntimeInrou {
         for (field, present) in [
             ("portable_vm_uid", self.portable_vm_uid.is_some()),
             ("portable_vm_gid", self.portable_vm_gid.is_some()),
+            (
+                "trusted_guest_manifest_digest_hex",
+                self.trusted_guest_manifest_digest_hex.is_some(),
+            ),
+            (
+                "trusted_guest_content_cid",
+                self.trusted_guest_content_cid.is_some(),
+            ),
         ] {
             if self.enabled && !present {
                 emitter.emit(
@@ -13184,10 +13149,66 @@ impl SoracloudRuntimeInrou {
                 );
             }
         }
+        if self.enabled {
+            let minimum_cpu =
+                u64::from(SORA_INROU_MIN_CPU_MILLIS_V1) + SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1;
+            if self
+                .max_cpu_millis
+                .is_some_and(|value| u64::from(value.get()) < minimum_cpu)
+            {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                        "soracloud_runtime.inrou.max_cpu_millis must cover at least {minimum_cpu} millicores of workload and VMM cost"
+                    )),
+                );
+            }
+            let minimum_memory =
+                SORA_INROU_MIN_MEMORY_BYTES_V1 + SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1;
+            if self
+                .max_memory_bytes
+                .is_some_and(|value| value.get() < minimum_memory)
+            {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                        "soracloud_runtime.inrou.max_memory_bytes must cover at least {minimum_memory} bytes of guest and VMM cost"
+                    )),
+                );
+            }
+            if self
+                .max_storage_bytes
+                .is_some_and(|value| value.get() < SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1)
+            {
+                emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
+                    "soracloud_runtime.inrou.max_storage_bytes must be at least 4096 bytes",
+                ));
+            }
+        }
+        let trusted_guest_artifact = match (
+            self.trusted_guest_manifest_digest_hex.as_ref(),
+            self.trusted_guest_content_cid.as_ref(),
+        ) {
+            (Some(manifest_digest_hex), Some(content_cid)) => {
+                let artifact = SoraPublishedInrouGuestImageArtifactV1 {
+                    manifest_digest_hex: manifest_digest_hex.clone(),
+                    content_cid: content_cid.clone(),
+                };
+                if let Err(error) = artifact.validate() {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                            "soracloud_runtime.inrou trusted guest artifact is invalid: {error}"
+                        )),
+                    );
+                }
+                Some(artifact)
+            }
+            _ => None,
+        };
         actual::SoracloudRuntimeInrou {
             enabled: self.enabled,
             portable_vm_uid: self.portable_vm_uid,
             portable_vm_gid: self.portable_vm_gid,
+            trusted_guest_artifact,
+            guest_image_max_bytes: self.guest_image_max_bytes,
             max_cpu_millis: self
                 .max_cpu_millis
                 .unwrap_or(defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS),
@@ -13263,7 +13284,7 @@ impl SoracloudRuntimeMutationSignerBinding {
             None
         };
         let authority = match AccountId::parse_encoded(&authority) {
-            Ok(parsed) if parsed.canonical() == authority => Some(parsed.into_account_id()),
+            Ok(account_id) if account_id.to_string() == authority => Some(account_id),
             Ok(_) | Err(_) => {
                 emit(
                     emitter,
@@ -13386,7 +13407,7 @@ impl SoracloudRuntimeSubmission {
         production_mode: bool,
         emitter: &mut Emitter<ParseError>,
     ) -> actual::SoracloudRuntimeSubmission {
-        let fee_payer = match self.fee_payer.as_deref().map_or("authority", str::trim) {
+        let fee_payer = match self.fee_payer.as_deref().unwrap_or("authority") {
             "authority" => {
                 assert!(
                     self.fee_program_id.is_none() && self.fee_program_revision.is_none(),
@@ -13426,9 +13447,14 @@ impl SoracloudRuntimeSubmission {
                     program_revision,
                 }
             }
-            payer => panic!(
-                "invalid soracloud_runtime.submission.fee_payer `{payer}`; expected authority or sponsor"
-            ),
+            payer => {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                        "invalid soracloud_runtime.submission.fee_payer `{payer}`; expected exact `authority` or `sponsor`"
+                    )),
+                );
+                actual::SoracloudRuntimeFeePayer::Authority
+            }
         };
         if production_mode && self.signer.is_none() {
             emitter.emit(
@@ -13465,24 +13491,53 @@ impl Default for SoracloudRuntimeEgress {
     }
 }
 impl SoracloudRuntimeEgress {
-    fn parse(self) -> actual::SoracloudRuntimeEgress {
-        let mut allowed_hosts: Vec<String> = self
-            .allowed_hosts
-            .into_iter()
-            .map(|host| host.trim().to_string())
-            .filter(|host| !host.is_empty())
-            .collect();
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoracloudRuntimeEgress {
+        let mut seen_hosts = BTreeSet::new();
+        let mut allowed_hosts = Vec::with_capacity(self.allowed_hosts.len());
+        for host in self.allowed_hosts {
+            if host.is_empty() || host.trim() != host {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                        "soracloud_runtime.egress.allowed_hosts entry `{host}` must be non-empty and use its exact spelling"
+                    )),
+                );
+            } else if !seen_hosts.insert(host.clone()) {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                        "soracloud_runtime.egress.allowed_hosts contains duplicate entry `{host}`"
+                    )),
+                );
+            }
+            allowed_hosts.push(host);
+        }
         allowed_hosts.sort();
-        allowed_hosts.dedup();
+        let rate_per_minute = match self.rate_per_minute {
+            Some(0) => {
+                emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
+                    "soracloud_runtime.egress.rate_per_minute must be nonzero when present",
+                ));
+                None
+            }
+            value => value.and_then(NonZeroU32::new),
+        };
+        let max_bytes_per_minute = match self.max_bytes_per_minute {
+            Some(0) => {
+                emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(
+                    "soracloud_runtime.egress.max_bytes_per_minute must be nonzero when present",
+                ));
+                None
+            }
+            value => value.and_then(NonZeroU64::new),
+        };
         actual::SoracloudRuntimeEgress {
             default_allow: self.default_allow,
             allowed_hosts,
-            rate_per_minute: self.rate_per_minute.and_then(NonZeroU32::new),
-            max_bytes_per_minute: self.max_bytes_per_minute.and_then(NonZeroU64::new),
+            rate_per_minute,
+            max_bytes_per_minute,
         }
     }
 }
-/// User-level Hugging Face importer/inference settings for the embedded Soracloud runtime manager.
+/// User-level Hugging Face importer settings for the embedded Soracloud runtime manager.
 #[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct SoracloudRuntimeHuggingFace {
@@ -13494,10 +13549,6 @@ pub struct SoracloudRuntimeHuggingFace {
     #[config(default = "defaults::soracloud_runtime::hf::API_BASE_URL.to_string()")]
     #[norito(default = "default_soracloud_runtime_hf_api_base_url")]
     pub api_base_url: String,
-    /// Base URL used to forward `/infer` calls to HF Inference.
-    #[config(default = "defaults::soracloud_runtime::hf::INFERENCE_BASE_URL.to_string()")]
-    #[norito(default = "default_soracloud_runtime_hf_inference_base_url")]
-    pub inference_base_url: String,
     /// Timeout applied to Hugging Face API and file requests (milliseconds).
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS))"
@@ -13508,26 +13559,6 @@ pub struct SoracloudRuntimeHuggingFace {
     #[config(default = "defaults::soracloud_runtime::hf::import_redirect_allowed_origins()")]
     #[norito(default = "default_soracloud_runtime_hf_import_redirect_allowed_origins")]
     pub import_redirect_allowed_origins: Vec<String>,
-    /// Reserved host-local execution switch; V1 rejects `true`.
-    #[config(default = "defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED")]
-    #[norito(default = "default_soracloud_runtime_hf_local_execution_enabled")]
-    pub local_execution_enabled: bool,
-    /// Reserved local runner program; host-local execution is unavailable in V1.
-    #[config(default = "defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_string()")]
-    #[norito(default = "default_soracloud_runtime_hf_local_runner_program")]
-    pub local_runner_program: String,
-    /// Timeout applied to one local runner invocation (milliseconds).
-    #[config(
-        default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::hf::LOCAL_RUNNER_TIMEOUT_MS))"
-    )]
-    #[norito(default = "default_soracloud_runtime_hf_local_runner_timeout_ms")]
-    pub local_runner_timeout_ms: DurationMs,
-    /// Reserved local-probe heartbeat TTL; host-local probing is unavailable in V1.
-    #[config(
-        default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS))"
-    )]
-    #[norito(default = "default_soracloud_runtime_hf_model_host_heartbeat_ttl_ms")]
-    pub model_host_heartbeat_ttl_ms: DurationMs,
     /// Maximum number of imported Hub files retained per shared source.
     #[config(default = "defaults::soracloud_runtime::hf::IMPORT_MAX_FILES")]
     #[norito(default = "default_soracloud_runtime_hf_import_max_files")]
@@ -13544,91 +13575,16 @@ pub struct SoracloudRuntimeHuggingFace {
     #[config(default = "defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES")]
     #[norito(default = "default_soracloud_runtime_hf_model_info_max_response_bytes")]
     pub model_info_max_response_bytes: u64,
-    /// Maximum in-memory response accepted from the HF inference bridge.
-    #[config(default = "defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES")]
-    #[norito(default = "default_soracloud_runtime_hf_inference_max_response_bytes")]
-    pub inference_max_response_bytes: u64,
     /// File-selection allowlist used by the importer.
     #[config(default = "defaults::soracloud_runtime::hf::import_file_allowlist()")]
     #[norito(default = "default_soracloud_runtime_hf_import_file_allowlist")]
     pub import_file_allowlist: Vec<String>,
-    /// Deployment-owned credential provider for authenticated HF inference.
-    pub inference_credential_provider: Option<SoracloudRuntimeHfCredentialProviderBinding>,
-}
-/// User-facing public identity for the Hugging Face credential provider.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-pub struct SoracloudRuntimeHfCredentialProviderBinding {
-    /// Stable opaque production provider handle.
-    pub handle: String,
-    /// Exact non-zero deployment adapter and public-policy revision.
-    pub revision: u64,
-    /// Exact non-zero public-policy digest as lowercase hexadecimal.
-    pub policy_digest_hex: String,
-}
-impl SoracloudRuntimeHfCredentialProviderBinding {
-    fn parse(
-        self,
-        emitter: &mut Emitter<ParseError>,
-    ) -> Option<actual::SoracloudRuntimeHfCredentialProviderBinding> {
-        const PATH: &str = "soracloud_runtime.hf.inference_credential_provider";
-        let emit = |emitter: &mut Emitter<ParseError>, message: String| {
-            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(message));
-        };
-        let handle = if is_production_runtime_handle(&self.handle) {
-            Some(self.handle)
-        } else {
-            emit(
-                emitter,
-                format!("{PATH}.handle must be one canonical production provider handle"),
-            );
-            None
-        };
-        let revision = if self.revision == 0 {
-            emit(emitter, format!("{PATH}.revision must be nonzero"));
-            None
-        } else {
-            Some(self.revision)
-        };
-        let policy_digest = if self.policy_digest_hex.len() == 64
-            && self
-                .policy_digest_hex
-                .bytes()
-                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-        {
-            let mut digest = [0_u8; 32];
-            hex::decode_to_slice(self.policy_digest_hex, &mut digest)
-                .expect("validated lowercase 32-byte hexadecimal");
-            if digest == [0; 32] {
-                emit(emitter, format!("{PATH}.policy_digest_hex must be nonzero"));
-                None
-            } else {
-                Some(digest)
-            }
-        } else {
-            emit(
-                emitter,
-                format!(
-                    "{PATH}.policy_digest_hex must be exactly 64 lowercase hexadecimal characters"
-                ),
-            );
-            None
-        };
-        Some(actual::SoracloudRuntimeHfCredentialProviderBinding {
-            handle: handle?,
-            revision: revision?,
-            policy_digest: policy_digest?,
-        })
-    }
 }
 fn default_soracloud_runtime_hf_hub_base_url() -> String {
     defaults::soracloud_runtime::hf::HUB_BASE_URL.to_string()
 }
 fn default_soracloud_runtime_hf_api_base_url() -> String {
     defaults::soracloud_runtime::hf::API_BASE_URL.to_string()
-}
-fn default_soracloud_runtime_hf_inference_base_url() -> String {
-    defaults::soracloud_runtime::hf::INFERENCE_BASE_URL.to_string()
 }
 fn default_soracloud_runtime_hf_request_timeout_ms() -> DurationMs {
     DurationMs(std::time::Duration::from_millis(
@@ -13637,22 +13593,6 @@ fn default_soracloud_runtime_hf_request_timeout_ms() -> DurationMs {
 }
 fn default_soracloud_runtime_hf_import_redirect_allowed_origins() -> Vec<String> {
     defaults::soracloud_runtime::hf::import_redirect_allowed_origins()
-}
-fn default_soracloud_runtime_hf_local_execution_enabled() -> bool {
-    defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED
-}
-fn default_soracloud_runtime_hf_local_runner_program() -> String {
-    defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_string()
-}
-fn default_soracloud_runtime_hf_local_runner_timeout_ms() -> DurationMs {
-    DurationMs(std::time::Duration::from_millis(
-        defaults::soracloud_runtime::hf::LOCAL_RUNNER_TIMEOUT_MS,
-    ))
-}
-fn default_soracloud_runtime_hf_model_host_heartbeat_ttl_ms() -> DurationMs {
-    DurationMs(std::time::Duration::from_millis(
-        defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS,
-    ))
 }
 fn default_soracloud_runtime_hf_import_max_files() -> u32 {
     defaults::soracloud_runtime::hf::IMPORT_MAX_FILES
@@ -13666,9 +13606,6 @@ fn default_soracloud_runtime_hf_import_max_total_bytes() -> u64 {
 fn default_soracloud_runtime_hf_model_info_max_response_bytes() -> u64 {
     defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES
 }
-fn default_soracloud_runtime_hf_inference_max_response_bytes() -> u64 {
-    defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES
-}
 fn default_soracloud_runtime_hf_import_file_allowlist() -> Vec<String> {
     defaults::soracloud_runtime::hf::import_file_allowlist()
 }
@@ -13677,29 +13614,17 @@ impl Default for SoracloudRuntimeHuggingFace {
         Self {
             hub_base_url: defaults::soracloud_runtime::hf::HUB_BASE_URL.to_string(),
             api_base_url: defaults::soracloud_runtime::hf::API_BASE_URL.to_string(),
-            inference_base_url: defaults::soracloud_runtime::hf::INFERENCE_BASE_URL.to_string(),
             request_timeout_ms: DurationMs(std::time::Duration::from_millis(
                 defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS,
             )),
             import_redirect_allowed_origins:
                 defaults::soracloud_runtime::hf::import_redirect_allowed_origins(),
-            local_execution_enabled: defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED,
-            local_runner_program: defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_string(),
-            local_runner_timeout_ms: DurationMs(std::time::Duration::from_millis(
-                defaults::soracloud_runtime::hf::LOCAL_RUNNER_TIMEOUT_MS,
-            )),
-            model_host_heartbeat_ttl_ms: DurationMs(std::time::Duration::from_millis(
-                defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS,
-            )),
             import_max_files: defaults::soracloud_runtime::hf::IMPORT_MAX_FILES,
             import_max_file_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES,
             import_max_total_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES,
             model_info_max_response_bytes:
                 defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES,
-            inference_max_response_bytes:
-                defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES,
             import_file_allowlist: defaults::soracloud_runtime::hf::import_file_allowlist(),
-            inference_credential_provider: None,
         }
     }
 }
@@ -13708,10 +13633,55 @@ impl SoracloudRuntimeHuggingFace {
         fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
             emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(message.into()));
         }
-        if self.local_execution_enabled {
+        fn validate_exact_base_url(emitter: &mut Emitter<ParseError>, path: &str, raw: &str) {
+            let parsed = Url::parse(raw).ok();
+            let Some(parsed) = parsed.filter(|parsed| {
+                let transport_allowed = parsed.scheme() == "https"
+                    || (parsed.scheme() == "http"
+                        && parsed.host().is_some_and(|host| match host {
+                            url::Host::Ipv4(address) => address.is_loopback(),
+                            url::Host::Ipv6(address) => address.is_loopback(),
+                            url::Host::Domain(_) => false,
+                        }));
+                transport_allowed
+                    && parsed.host_str().is_some()
+                    && parsed.port() != Some(0)
+                    && parsed.username().is_empty()
+                    && parsed.password().is_none()
+                    && parsed.query().is_none()
+                    && parsed.fragment().is_none()
+            }) else {
+                emit(
+                    emitter,
+                    format!(
+                        "{path} must be one exact HTTPS base URL or an HTTP base URL with an IP loopback host"
+                    ),
+                );
+                return;
+            };
+            let canonical = parsed.as_str().trim_end_matches('/');
+            if raw != canonical {
+                emit(
+                    emitter,
+                    format!("{path} must use its exact canonical spelling `{canonical}`"),
+                );
+            }
+        }
+        validate_exact_base_url(
+            emitter,
+            "soracloud_runtime.hf.hub_base_url",
+            &self.hub_base_url,
+        );
+        validate_exact_base_url(
+            emitter,
+            "soracloud_runtime.hf.api_base_url",
+            &self.api_base_url,
+        );
+        let request_timeout = self.request_timeout_ms.get();
+        if request_timeout < MIN_TIMER_INTERVAL {
             emit(
                 emitter,
-                "soracloud_runtime.hf.local_execution_enabled is unavailable until generated HF execution is isolated by Inrou",
+                "soracloud_runtime.hf.request_timeout_ms must be at least the minimum timer interval",
             );
         }
         if self.import_max_files == 0
@@ -13767,26 +13737,30 @@ impl SoracloudRuntimeHuggingFace {
                 ),
             );
         }
-        if self.inference_max_response_bytes == 0
-            || self.inference_max_response_bytes
-                > defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES_LIMIT
-        {
-            emit(
-                emitter,
-                format!(
-                    "soracloud_runtime.hf.inference_max_response_bytes must be within 1..={}",
-                    defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES_LIMIT
-                ),
-            );
+        let mut seen_import_file_patterns = BTreeSet::new();
+        let mut import_file_allowlist = Vec::with_capacity(self.import_file_allowlist.len());
+        for pattern in self.import_file_allowlist {
+            if pattern.is_empty()
+                || pattern.trim() != pattern
+                || pattern.to_ascii_lowercase() != pattern
+            {
+                emit(
+                    emitter,
+                    format!(
+                        "soracloud_runtime.hf.import_file_allowlist entry `{pattern}` must be one non-empty exact lowercase pattern"
+                    ),
+                );
+            } else if !seen_import_file_patterns.insert(pattern.clone()) {
+                emit(
+                    emitter,
+                    format!(
+                        "soracloud_runtime.hf.import_file_allowlist contains duplicate entry `{pattern}`"
+                    ),
+                );
+            }
+            import_file_allowlist.push(pattern);
         }
-        let mut import_file_allowlist = self
-            .import_file_allowlist
-            .into_iter()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .filter(|value| !value.is_empty())
-            .collect::<Vec<_>>();
         import_file_allowlist.sort();
-        import_file_allowlist.dedup();
         if self.import_redirect_allowed_origins.len()
             > defaults::soracloud_runtime::hf::IMPORT_REDIRECT_ALLOWED_ORIGINS_LIMIT
         {
@@ -13798,12 +13772,12 @@ impl SoracloudRuntimeHuggingFace {
                 ),
             );
         }
+        let mut seen_import_redirect_origins = BTreeSet::new();
         let mut import_redirect_allowed_origins = self
             .import_redirect_allowed_origins
             .into_iter()
             .filter_map(|raw| {
-                let trimmed = raw.trim();
-                let parsed = Url::parse(trimmed).ok();
+                let parsed = Url::parse(&raw).ok();
                 let Some(parsed) = parsed.filter(|parsed| {
                     parsed.scheme() == "https"
                         && parsed.host_str().is_some()
@@ -13822,48 +13796,38 @@ impl SoracloudRuntimeHuggingFace {
                     );
                     return None;
                 };
-                Some(parsed.origin().ascii_serialization())
+                let canonical = parsed.origin().ascii_serialization();
+                if raw != canonical {
+                    emit(
+                        emitter,
+                        format!(
+                            "soracloud_runtime.hf.import_redirect_allowed_origins entry `{raw}` must use its exact canonical spelling `{canonical}`"
+                        ),
+                    );
+                    return None;
+                }
+                if !seen_import_redirect_origins.insert(raw.clone()) {
+                    emit(
+                        emitter,
+                        format!(
+                            "soracloud_runtime.hf.import_redirect_allowed_origins contains duplicate entry `{raw}`"
+                        ),
+                    );
+                }
+                Some(raw)
             })
             .collect::<Vec<_>>();
         import_redirect_allowed_origins.sort();
-        import_redirect_allowed_origins.dedup();
-        let local_runner_program = {
-            let trimmed = self.local_runner_program.trim();
-            if trimmed.is_empty() {
-                defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_owned()
-            } else {
-                trimmed.to_owned()
-            }
-        };
-        let inference_credential_provider = self
-            .inference_credential_provider
-            .and_then(|provider| provider.parse(emitter));
         actual::SoracloudRuntimeHuggingFace {
-            hub_base_url: self.hub_base_url.trim().trim_end_matches('/').to_owned(),
-            api_base_url: self.api_base_url.trim().trim_end_matches('/').to_owned(),
-            inference_base_url: self
-                .inference_base_url
-                .trim()
-                .trim_end_matches('/')
-                .to_owned(),
-            request_timeout: self.request_timeout_ms.get().max(MIN_TIMER_INTERVAL),
+            hub_base_url: self.hub_base_url,
+            api_base_url: self.api_base_url,
+            request_timeout,
             import_redirect_allowed_origins,
-            // Parsing already rejects `true`; pin the actual value so an
-            // accumulated parse error cannot accidentally retain launch intent.
-            local_execution_enabled: false,
-            local_runner_program,
-            local_runner_timeout: self.local_runner_timeout_ms.get().max(MIN_TIMER_INTERVAL),
-            model_host_heartbeat_ttl: self
-                .model_host_heartbeat_ttl_ms
-                .get()
-                .max(MIN_TIMER_INTERVAL),
             import_max_files: self.import_max_files,
             import_max_file_bytes: self.import_max_file_bytes,
             import_max_total_bytes: self.import_max_total_bytes,
             model_info_max_response_bytes: self.model_info_max_response_bytes,
-            inference_max_response_bytes: self.inference_max_response_bytes,
             import_file_allowlist,
-            inference_credential_provider,
         }
     }
 }
@@ -13971,9 +13935,6 @@ pub struct Torii {
     /// Maximum signed Soracloud mutation body size before signature verification.
     #[config(default = "defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES")]
     pub soracloud_mutation_max_body_bytes: Bytes<u64>,
-    /// Maximum signed Soracloud uploaded-model upload body size before signature verification.
-    #[config(default = "defaults::torii::SORACLOUD_UPLOAD_MAX_BODY_BYTES")]
-    pub soracloud_upload_max_body_bytes: Bytes<u64>,
     /// Proof endpoint steady-state rate (requests per minute). None disables.
     pub proof_rate_per_minute: Option<u32>,
     /// Proof endpoint burst tokens (requests).
@@ -15103,7 +15064,6 @@ impl Torii {
                 .and_then(std::num::NonZeroU32::new),
             soracloud_mutation_max_inflight: self.soracloud_mutation_max_inflight,
             soracloud_mutation_max_body_bytes: self.soracloud_mutation_max_body_bytes,
-            soracloud_upload_max_body_bytes: self.soracloud_upload_max_body_bytes,
             proof_api: actual::ProofApi {
                 rate_per_minute: self
                     .proof_rate_per_minute
@@ -16279,7 +16239,7 @@ pub struct AccountOnboardingAutoRenew {
 impl AccountOnboarding {
     fn parse_authority(raw: &str, emitter: &mut Emitter<ParseError>) -> Option<AccountId> {
         let parsed = match AccountId::parse_encoded(raw) {
-            Ok(parsed) => parsed.into_account_id(),
+            Ok(account_id) => account_id,
             Err(err) => {
                 emit_torii_config_error(
                     emitter,
@@ -16922,7 +16882,7 @@ pub struct ToriiFaucet {
 impl ToriiFaucet {
     fn parse_authority(raw: &str, emitter: &mut Emitter<ParseError>) -> Option<AccountId> {
         let parsed = match AccountId::parse_encoded(raw) {
-            Ok(parsed) => parsed.into_account_id(),
+            Ok(account_id) => account_id,
             Err(err) => {
                 emit_torii_config_error(
                     emitter,
@@ -17887,7 +17847,8 @@ impl TransactionIngress {
 #[derive(Debug, ReadConfig, Clone)]
 #[allow(clippy::struct_field_names)]
 pub struct DaIngest {
-    /// Replay cache capacity per `(lane, epoch)` window.
+    /// Per-`(lane, epoch)` capacity for committed replay entries and in-flight reservations.
+    /// Each category is bounded independently by this value.
     #[config(default = "defaults::torii::DA_REPLAY_CACHE_CAPACITY")]
     pub replay_cache_capacity: NonZeroUsize,
     /// Maximum number of distinct `(lane, epoch)` replay windows retained globally.
@@ -20126,14 +20087,14 @@ impl SorafsModerationOrchestrator {
             );
             return None;
         };
-        if decoded_account.canonical() != authority_literal {
+        if decoded_account.to_string() != authority_literal {
             emit(
                 emitter,
                 "sorafs.storage.moderation_orchestrator.maintenance_authority must be one canonical AccountId",
             );
             return None;
         }
-        let maintenance_authority = decoded_account.into_account_id();
+        let maintenance_authority = decoded_account;
         let mut runtime_handle = |field: &str, value: Option<String>| {
             let Some(value) = value else {
                 emit(
@@ -24421,7 +24382,7 @@ impl SorafsNativeTransactionSignerBinding {
             None
         };
         let authority = match AccountId::parse_encoded(&authority) {
-            Ok(parsed) if parsed.canonical() == authority => Some(parsed.into_account_id()),
+            Ok(account_id) if account_id.to_string() == authority => Some(account_id),
             Ok(_) | Err(_) => {
                 emit(
                     emitter,
@@ -31481,7 +31442,6 @@ mod offline_cfg_tests {
             iroha_data_model::account::AccountId::parse_encoded(
                 &defaults::governance::citizenship_escrow_account()
             )
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .unwrap()
         );
         assert_eq!(parsed.min_bond_amount, Quantity::from(42_u64));
@@ -31490,7 +31450,6 @@ mod offline_cfg_tests {
             iroha_data_model::account::AccountId::parse_encoded(
                 &defaults::governance::bond_escrow_account()
             )
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .unwrap()
         );
         assert_eq!(parsed.approval_threshold_q_num, 2);
@@ -31535,28 +31494,12 @@ mod offline_cfg_tests {
         );
     }
     #[test]
-    fn governance_default_account_literals_parse_under_chain_override() {
+    fn governance_default_account_literals_reject_foreign_chain_override() {
         let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
-        let parsed = Governance::default().parse();
-        assert_eq!(
-            parsed.citizenship_escrow_account,
-            defaults::governance::citizenship_escrow_account_id()
-        );
-        assert_eq!(
-            parsed.bond_escrow_account,
-            defaults::governance::bond_escrow_account_id()
-        );
-        assert_eq!(
-            parsed.slash_receiver_account,
-            defaults::governance::slash_receiver_account_id()
-        );
-        assert_eq!(
-            parsed.viral_incentives.incentive_pool_account,
-            defaults::governance::slash_receiver_account_id()
-        );
-        assert_eq!(
-            parsed.viral_incentives.escrow_account,
-            defaults::governance::slash_receiver_account_id()
+        let result = std::panic::catch_unwind(|| Governance::default().parse());
+        assert!(
+            result.is_err(),
+            "account literals for another chain discriminant must be rejected"
         );
     }
     #[test]
@@ -31594,10 +31537,13 @@ mod duration_clamp_tests {
     use super::{
         AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, DaManifestPolicy, DomainId,
         Emitter, LaneId, NexusFees, NonZeroU64, RETIRED_LANE_FUNCTIONAL_METADATA_KEYS,
+        SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1, SORA_INROU_MIN_CPU_MILLIS_V1,
+        SORA_INROU_MIN_MEMORY_BYTES_V1, SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1,
+        SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1,
     };
     use crate::parameters::{
         actual, defaults,
-        user::{LaneValidatorModeConfig, SoracloudRuntime, SoracloudRuntimeHuggingFace},
+        user::{LaneValidatorModeConfig, SoracloudRuntime},
     };
     use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource, util::Bytes};
     use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair};
@@ -34790,6 +34736,7 @@ publish_delay_seconds = 17
             runtime.hydration_concurrency => defaults::soracloud_runtime::HYDRATION_CONCURRENCY,
             runtime.cache_budgets.bundle_bytes => defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES,
             inrou.enabled => defaults::soracloud_runtime::INROU_ENABLED,
+            inrou.guest_image_max_bytes => defaults::soracloud_runtime::INROU_GUEST_IMAGE_MAX_BYTES,
             inrou.max_cpu_millis => defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS,
             inrou.max_memory_bytes => defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES,
             inrou.max_storage_bytes => defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES,
@@ -34801,18 +34748,13 @@ publish_delay_seconds = 17
             inrou.start_grace => StdDuration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS),
             runtime.egress.default_allow => defaults::soracloud_runtime::EGRESS_DEFAULT_ALLOW,
             hf.hub_base_url => defaults::soracloud_runtime::hf::HUB_BASE_URL,
-            hf.local_execution_enabled => defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED,
-            hf.local_runner_program => defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM,
-            hf.model_host_heartbeat_ttl => StdDuration::from_millis(defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS),
             hf.import_max_files => defaults::soracloud_runtime::hf::IMPORT_MAX_FILES,
             hf.model_info_max_response_bytes => defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES,
-            hf.inference_max_response_bytes => defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES,
         );
         assert!(matches!(
             &runtime.submission.fee_payer,
             actual::SoracloudRuntimeFeePayer::Authority
         ));
-        assert!(hf.inference_credential_provider.is_none());
     }
     #[test]
     fn soracloud_runtime_inrou_lifecycle_grace_rejects_out_of_range_values() {
@@ -34851,21 +34793,6 @@ publish_delay_seconds = 17
                 StdDuration::from_millis(value)
             );
         }
-    }
-    #[test]
-    fn soracloud_runtime_rejects_host_local_hf_execution() {
-        let table = table_with_soracloud_runtime(
-            r#"
-[hf]
-local_execution_enabled = true
-"#,
-        );
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("host-local HF execution must be rejected during user-config parsing");
-        assert!(
-            format!("{error:?}").contains("local_execution_enabled is unavailable"),
-            "unexpected parse error: {error:?}"
-        );
     }
     #[test]
     fn soracloud_runtime_inrou_bundle_archive_limits_allow_equal_file_total_and_decoded() {
@@ -34919,8 +34846,12 @@ local_execution_enabled = true
         );
     }
     #[test]
-    fn soracloud_runtime_inrou_bundle_archive_byte_limits_accept_exact_hard_ceilings() {
+    fn soracloud_runtime_inrou_bounded_byte_limits_accept_exact_hard_ceilings() {
         let values = [
+            (
+                "guest_image_max_bytes",
+                defaults::soracloud_runtime::INROU_GUEST_IMAGE_MAX_BYTES_LIMIT,
+            ),
             (
                 "bundle_archive_max_compressed_bytes",
                 defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT,
@@ -34947,6 +34878,7 @@ local_execution_enabled = true
         let actual = load_root(table_with_soracloud_inrou_values(&values));
         let inrou = &actual.soracloud_runtime.inrou;
         assert_all_eq!(
+            inrou.guest_image_max_bytes.get() => defaults::soracloud_runtime::INROU_GUEST_IMAGE_MAX_BYTES_LIMIT,
             inrou.bundle_archive_max_compressed_bytes.get() => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT,
             inrou.bundle_archive_max_decoded_bytes.get() => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES_LIMIT,
             inrou.bundle_archive_max_file_bytes.get() => defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES_LIMIT,
@@ -34954,8 +34886,12 @@ local_execution_enabled = true
         );
     }
     #[test]
-    fn soracloud_runtime_inrou_bundle_archive_byte_limits_reject_hard_ceiling_plus_one() {
+    fn soracloud_runtime_inrou_bounded_byte_limits_reject_hard_ceiling_plus_one() {
         for (field, hard_ceiling) in [
+            (
+                "guest_image_max_bytes",
+                defaults::soracloud_runtime::INROU_GUEST_IMAGE_MAX_BYTES_LIMIT,
+            ),
             (
                 "bundle_archive_max_compressed_bytes",
                 defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT,
@@ -35004,11 +34940,6 @@ local_execution_enabled = true
                 i64::try_from(defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT)
                     .expect("hard limit fits i64"),
             ),
-            (
-                "inference_max_response_bytes",
-                i64::try_from(defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES_LIMIT)
-                    .expect("hard limit fits i64"),
-            ),
         ]);
         let actual = load_root(table);
         let hf = &actual.soracloud_runtime.hf;
@@ -35017,7 +34948,6 @@ local_execution_enabled = true
             hf.import_max_file_bytes => defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES_LIMIT,
             hf.import_max_total_bytes => defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES_LIMIT,
             hf.model_info_max_response_bytes => defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT,
-            hf.inference_max_response_bytes => defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES_LIMIT,
         );
     }
     #[test]
@@ -35038,10 +34968,6 @@ local_execution_enabled = true
             (
                 "model_info_max_response_bytes",
                 defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES_LIMIT,
-            ),
-            (
-                "inference_max_response_bytes",
-                defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES_LIMIT,
             ),
         ];
         for (field, maximum) in cases {
@@ -35113,6 +35039,8 @@ local_execution_enabled = true
 enabled = {enabled}
 portable_vm_uid = 70000
 portable_vm_gid = 70000
+trusted_guest_manifest_digest_hex = "3131313131313131313131313131313131313131313131313131313131313131"
+trusted_guest_content_cid = "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
 max_cpu_millis = 8000
 max_memory_bytes = 8589934592
 max_storage_bytes = 68719476736
@@ -35177,6 +35105,97 @@ max_bytes_per_minute = 1048576
         assert!(inrou.enabled);
         assert_eq!(inrou.portable_vm_uid.expect("PortableVM uid").get(), 70_000);
         assert_eq!(inrou.portable_vm_gid.expect("PortableVM gid").get(), 70_000);
+        let trusted_guest = inrou
+            .trusted_guest_artifact
+            .expect("exact trusted Inrou guest artifact");
+        assert_eq!(trusted_guest.manifest_digest_hex, "31".repeat(32));
+        assert_eq!(
+            trusted_guest.content_cid,
+            "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
+        );
+    }
+    #[test]
+    fn soracloud_runtime_inrou_requires_the_complete_trusted_guest_artifact() {
+        for field in [
+            "trusted_guest_manifest_digest_hex",
+            "trusted_guest_content_cid",
+        ] {
+            let mut table = production_soracloud_runtime_table(Some(true), true);
+            let removed = table
+                .get_mut("soracloud_runtime")
+                .and_then(Value::as_table_mut)
+                .and_then(|runtime| runtime.get_mut("inrou"))
+                .and_then(Value::as_table_mut)
+                .expect("production Inrou table")
+                .remove(field);
+            assert!(removed.is_some(), "fixture must contain {field}");
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "enabled Inrou hosting must reject a missing {field}"
+            );
+        }
+    }
+    #[test]
+    fn soracloud_runtime_inrou_host_limits_cover_exact_minimum_physical_cost() {
+        let minimum_cpu =
+            u64::from(SORA_INROU_MIN_CPU_MILLIS_V1) + SORA_INROU_VMM_CPU_OVERHEAD_MILLIS_V1;
+        let minimum_memory =
+            SORA_INROU_MIN_MEMORY_BYTES_V1 + SORA_INROU_VMM_MEMORY_OVERHEAD_BYTES_V1;
+        let minimum_storage = SORA_INROU_EPHEMERAL_STORAGE_ALIGNMENT_BYTES_V1;
+
+        let mut exact = production_soracloud_runtime_table(Some(true), true);
+        let inrou = exact
+            .get_mut("soracloud_runtime")
+            .and_then(Value::as_table_mut)
+            .and_then(|runtime| runtime.get_mut("inrou"))
+            .and_then(Value::as_table_mut)
+            .expect("production Inrou table");
+        inrou.insert(
+            "max_cpu_millis".into(),
+            Value::Integer(i64::try_from(minimum_cpu).expect("minimum CPU fits i64")),
+        );
+        inrou.insert(
+            "max_memory_bytes".into(),
+            Value::Integer(i64::try_from(minimum_memory).expect("minimum memory fits i64")),
+        );
+        inrou.insert(
+            "max_storage_bytes".into(),
+            Value::Integer(i64::try_from(minimum_storage).expect("minimum storage fits i64")),
+        );
+        let actual = actual::Root::from_toml_source(TomlSource::inline(exact))
+            .expect("exact physical Inrou minima are sufficient");
+        assert_eq!(
+            u64::from(actual.soracloud_runtime.inrou.max_cpu_millis.get()),
+            minimum_cpu
+        );
+        assert_eq!(
+            actual.soracloud_runtime.inrou.max_memory_bytes.get(),
+            minimum_memory
+        );
+
+        for (field, below_minimum) in [
+            ("max_cpu_millis", minimum_cpu - 1),
+            ("max_memory_bytes", minimum_memory - 1),
+            ("max_storage_bytes", minimum_storage - 1),
+        ] {
+            let mut table = production_soracloud_runtime_table(Some(true), true);
+            table
+                .get_mut("soracloud_runtime")
+                .and_then(Value::as_table_mut)
+                .and_then(|runtime| runtime.get_mut("inrou"))
+                .and_then(Value::as_table_mut)
+                .expect("production Inrou table")
+                .insert(
+                    field.into(),
+                    Value::Integer(
+                        i64::try_from(below_minimum).expect("minimum resource bound fits i64"),
+                    ),
+                );
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "{field} below the exact physical minimum must fail closed"
+            );
+        }
     }
     #[test]
     #[should_panic(expected = "sponsor payer requires fee_program_id")]
@@ -35224,16 +35243,19 @@ max_bytes_per_minute = 1048576
     }
     #[test]
     fn soracloud_runtime_portable_vm_requires_dedicated_identity() {
-        let result =
-            actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
+        let result = actual::Root::from_toml_source(TomlSource::inline(
+            table_with_soracloud_runtime(
                 r#"
 [inrou]
 enabled = true
+trusted_guest_manifest_digest_hex = "3131313131313131313131313131313131313131313131313131313131313131"
+trusted_guest_content_cid = "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
 "#,
-            )));
+            ),
+        ));
         assert!(
             result.is_err(),
             "PortableVM must fail closed without an explicit uid and gid"
@@ -35249,6 +35271,8 @@ max_storage_bytes = 10737418240
 [inrou]
 enabled = true
 {identity_fields}
+trusted_guest_manifest_digest_hex = "3131313131313131313131313131313131313131313131313131313131313131"
+trusted_guest_content_cid = "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
@@ -35271,6 +35295,8 @@ max_storage_bytes = 10737418240
 enabled = true
 portable_vm_uid = {uid}
 portable_vm_gid = {gid}
+trusted_guest_manifest_digest_hex = "3131313131313131313131313131313131313131313131313131313131313131"
+trusted_guest_content_cid = "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
@@ -35318,6 +35344,8 @@ max_storage_bytes = 10737418240
 enabled = true
 portable_vm_uid = 70000
 portable_vm_gid = 70000
+trusted_guest_manifest_digest_hex = "3131313131313131313131313131313131313131313131313131313131313131"
+trusted_guest_content_cid = "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
 {retired}
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
@@ -35342,6 +35370,8 @@ max_storage_bytes = 10737418240
 enabled = true
 portable_vm_uid = 70000
 portable_vm_gid = 70000
+trusted_guest_manifest_digest_hex = "3131313131313131313131313131313131313131313131313131313131313131"
+trusted_guest_content_cid = "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
@@ -35354,6 +35384,13 @@ max_storage_bytes = 10737418240
         assert!(!actual.soracloud_runtime.inrou.enabled);
         assert!(actual.soracloud_runtime.inrou.portable_vm_uid.is_none());
         assert!(actual.soracloud_runtime.inrou.portable_vm_gid.is_none());
+        assert!(
+            actual
+                .soracloud_runtime
+                .inrou
+                .trusted_guest_artifact
+                .is_none()
+        );
     }
     #[test]
     fn soracloud_runtime_partial_hf_overrides_keep_defaults() {
@@ -35364,7 +35401,6 @@ max_storage_bytes = 10737418240
         assert_all_eq!(
             hf.hub_base_url => "http://127.0.0.1:52220",
             hf.api_base_url => "http://127.0.0.1:52220/api",
-            hf.inference_base_url => defaults::soracloud_runtime::hf::INFERENCE_BASE_URL,
             hf.request_timeout => StdDuration::from_millis(defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS),
         );
         let mut expected_allowlist = defaults::soracloud_runtime::hf::import_file_allowlist();
@@ -35373,8 +35409,24 @@ max_storage_bytes = 10737418240
         assert_eq!(hf.import_file_allowlist, expected_allowlist);
     }
     #[test]
+    fn soracloud_runtime_hf_base_urls_allow_https_and_exact_ip_loopback_http() {
+        for (hub_base_url, api_base_url) in [
+            ("https://mirror.hf.test", "https://mirror.hf.test/api"),
+            ("http://127.0.0.1:52220", "http://127.0.0.1:52220/api"),
+            ("http://[::1]:52220", "http://[::1]:52220/api"),
+        ] {
+            let actual = load_root(table_with_soracloud_runtime(&format!(
+                "[hf]\nhub_base_url = \"{hub_base_url}\"\napi_base_url = \"{api_base_url}\"\n"
+            )));
+            assert_all_eq!(
+                actual.soracloud_runtime.hf.hub_base_url => hub_base_url,
+                actual.soracloud_runtime.hf.api_base_url => api_base_url,
+            );
+        }
+    }
+    #[test]
     fn soracloud_runtime_parse_applies_explicit_overrides() {
-        let actual = load_root(table_with_soracloud_runtime(&format!(
+        let actual = load_root(table_with_soracloud_runtime(
             r#"
 state_dir = "./runtime/custom"
 reconcile_interval_ms = 2500
@@ -35389,6 +35441,7 @@ model_artifact_bytes = 5120
 model_weight_bytes = 6144
 
 [inrou]
+guest_image_max_bytes = 12345678
 max_cpu_millis = 5000
 max_memory_bytes = 5368709120
 max_storage_bytes = 10737418240
@@ -35401,38 +35454,26 @@ start_grace_ms = 7500
 stop_grace_ms = 9500
 
 [submission]
-fee_payer = " authority "
+fee_payer = "authority"
 
 [egress]
 default_allow = true
-allowed_hosts = ["cdn.sora.test", " api.sora.test ", "cdn.sora.test"]
+allowed_hosts = ["cdn.sora.test", "api.sora.test"]
 rate_per_minute = 120
 max_bytes_per_minute = 262144
 
 [hf]
-hub_base_url = " https://mirror.hf.test/ "
-api_base_url = "https://mirror.hf.test/api/"
-inference_base_url = "https://router.hf.test/hf-inference/models/"
+hub_base_url = "https://mirror.hf.test"
+api_base_url = "https://mirror.hf.test/api"
 request_timeout_ms = 21000
-import_redirect_allowed_origins = [" https://downloads.hf.test/ ", "https://downloads.hf.test"]
-local_execution_enabled = false
-local_runner_program = " python3.12 "
-local_runner_timeout_ms = 45000
-model_host_heartbeat_ttl_ms = 18000
+import_redirect_allowed_origins = ["https://downloads.hf.test"]
 import_max_files = 48
 import_max_file_bytes = 777777
 import_max_total_bytes = 9999999
 model_info_max_response_bytes = 1234567
-inference_max_response_bytes = 7654321
-import_file_allowlist = [" config.json ", "*.safetensors", "CONFIG.JSON"]
-
-[hf.inference_credential_provider]
-handle = "kms://soracloud/hf-inference-primary"
-revision = 7
-policy_digest_hex = "{}"
+import_file_allowlist = ["config.json", "*.safetensors"]
 "#,
-            "a7".repeat(32),
-        )));
+        ));
         let runtime = &actual.soracloud_runtime;
         let inrou = &runtime.inrou;
         let egress = &runtime.egress;
@@ -35450,6 +35491,7 @@ policy_digest_hex = "{}"
             runtime.hydration_concurrency.get() => 7,
             runtime.cache_budgets.bundle_bytes.get() => 1_024,
             runtime.cache_budgets.model_weight_bytes.get() => 6_144,
+            inrou.guest_image_max_bytes.get() => 12_345_678,
             inrou.bundle_archive_max_compressed_bytes.get() => 10_000,
             inrou.bundle_archive_max_decoded_bytes.get() => 40_000,
             inrou.bundle_archive_max_entries.get() => 123,
@@ -35462,17 +35504,12 @@ policy_digest_hex = "{}"
             egress.max_bytes_per_minute.expect("byte cap").get() => 262_144,
             hf.hub_base_url => "https://mirror.hf.test",
             hf.api_base_url => "https://mirror.hf.test/api",
-            hf.inference_base_url => "https://router.hf.test/hf-inference/models",
             hf.request_timeout => StdDuration::from_millis(21_000),
             hf.import_redirect_allowed_origins => vec!["https://downloads.hf.test".to_string()],
-            hf.local_runner_program => "python3.12",
-            hf.local_runner_timeout => StdDuration::from_millis(45_000),
-            hf.model_host_heartbeat_ttl => StdDuration::from_millis(18_000),
             hf.import_max_files => 48,
             hf.import_max_file_bytes => 777_777,
             hf.import_max_total_bytes => 9_999_999,
             hf.model_info_max_response_bytes => 1_234_567,
-            hf.inference_max_response_bytes => 7_654_321,
             hf.import_file_allowlist => vec!["*.safetensors".to_string(), "config.json".to_string()],
         );
         assert!(!inrou.enabled);
@@ -35486,16 +35523,77 @@ policy_digest_hex = "{}"
             actual::SoracloudRuntimeFeePayer::Authority
         ));
         assert!(egress.default_allow);
-        assert!(!hf.local_execution_enabled);
-        let credential_provider = hf
-            .inference_credential_provider
-            .as_ref()
-            .expect("credential-provider binding");
-        assert_all_eq!(
-            credential_provider.handle => "kms://soracloud/hf-inference-primary",
-            credential_provider.revision => 7,
-            credential_provider.policy_digest => [0xA7; 32],
-        );
+    }
+    #[test]
+    fn soracloud_runtime_hf_rejects_noncanonical_or_insecure_base_urls() {
+        let cases = [
+            "[hf]\nhub_base_url = \" https://mirror.hf.test\"\n",
+            "[hf]\napi_base_url = \"https://mirror.hf.test/api/\"\n",
+            "[hf]\nhub_base_url = \"http://mirror.hf.test\"\n",
+            "[hf]\napi_base_url = \"http://192.0.2.1/api\"\n",
+            "[hf]\napi_base_url = \"http://[2001:db8::1]/api\"\n",
+            "[hf]\nhub_base_url = \"http://localhost:52220\"\n",
+            "[hf]\nhub_base_url = \"http://node.localhost:52220\"\n",
+            "[hf]\nhub_base_url = \"http://127.0.0.1.example:52220\"\n",
+            "[hf]\nrequest_timeout_ms = 0\n",
+            "[hf]\nimport_redirect_allowed_origins = [\" https://downloads.hf.test\"]\n",
+            "[hf]\nimport_redirect_allowed_origins = [\"https://downloads.hf.test\", \"https://downloads.hf.test\"]\n",
+            "[hf]\nimport_file_allowlist = [\" config.json\"]\n",
+            "[hf]\nimport_file_allowlist = [\"CONFIG.JSON\"]\n",
+            "[hf]\nimport_file_allowlist = [\"\"]\n",
+            "[hf]\nimport_file_allowlist = [\"config.json\", \"config.json\"]\n",
+        ];
+        for snippet in cases {
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
+                    snippet
+                )))
+                .is_err(),
+                "noncanonical HF configuration must fail closed: {snippet}"
+            );
+        }
+    }
+    #[test]
+    fn soracloud_runtime_rejects_noncanonical_runtime_aliases() {
+        let cases = [
+            "reconcile_interval_ms = 0\n",
+            "[submission]\nfee_payer = \" authority \"\n",
+            "[egress]\nallowed_hosts = [\" cdn.sora.test\"]\n",
+            "[egress]\nallowed_hosts = [\"\"]\n",
+            "[egress]\nallowed_hosts = [\"cdn.sora.test\", \"cdn.sora.test\"]\n",
+            "[egress]\nrate_per_minute = 0\n",
+            "[egress]\nmax_bytes_per_minute = 0\n",
+        ];
+        for snippet in cases {
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
+                    snippet
+                )))
+                .is_err(),
+                "noncanonical Soracloud runtime configuration must fail closed: {snippet}"
+            );
+        }
+    }
+    #[test]
+    fn content_auth_mode_requires_exact_sponsor_uaid() {
+        let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"content-sponsor"));
+        let canonical = format!("sponsor:{uaid}");
+        assert!(matches!(
+            parse_content_auth_mode(&canonical),
+            ContentAuthMode::Sponsor(parsed) if parsed == uaid
+        ));
+        let hex = uaid.as_hash().to_string();
+        for noncanonical in [
+            format!("sponsor:{hex}"),
+            format!("sponsor:UAID:{hex}"),
+            format!(" sponsor:{uaid}"),
+            format!("sponsor:{uaid} "),
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| parse_content_auth_mode(&noncanonical)).is_err(),
+                "noncanonical sponsor mode must reject: {noncanonical:?}"
+            );
+        }
     }
     include!("user/runtime_tail_tests.rs");
 }

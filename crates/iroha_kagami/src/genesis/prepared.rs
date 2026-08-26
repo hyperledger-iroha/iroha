@@ -247,7 +247,6 @@ fn bind_validator_roster(
             );
             let account_id_literal = required_roster_string(table, "account_id", index)?;
             let account_id = AccountId::parse_encoded(account_id_literal)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .wrap_err_with(|| format!("parse validator roster account id for {slug}"))?;
             ensure!(
                 account_id.to_string() == account_id_literal,

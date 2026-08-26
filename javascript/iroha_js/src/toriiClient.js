@@ -57,7 +57,6 @@ import {
 } from "./validationError.js";
 import {
   assertNonBlankString,
-  normalizeStatusSet,
   normalizeTransactionStatusScope,
   readHeaderValue,
 } from "./toriiClientPrimitives.js";
@@ -110,7 +109,11 @@ import {
   VERIFYING_KEY_PRIVATE_KEY_FIELDS,
 } from "./toriiGovernanceNormalizers.js";
 import { createSubscriptionResponseNormalizers } from "./subscriptionResponses.js";
-import { requestSoracloudAppInfraStatus } from "./soracloud.js";
+import {
+  decodeExactSoracloudJsonResponse,
+  normalizeSoracloudMutationDraftResponse,
+  requestSoracloudAppInfraStatus,
+} from "./soracloud.js";
 import {
   normalizeCanonicalApplicationPostOptions,
   rejectPrecomputedCanonicalHeaders,
@@ -206,7 +209,6 @@ const JSON_REQUEST_HEADERS = Object.freeze({
   Accept: APPLICATION_JSON,
 });
 
-const DEFAULT_FAILURE_STATUSES = ["Rejected", "Expired"];
 const AUTHORITATIVE_PIPELINE_STATUS_KINDS = new Set([
   "Queued",
   "Approved",
@@ -416,16 +418,11 @@ const TX_STATUS_POLL_OPTION_KEYS = new Set([
   "intervalMs",
   "timeoutMs",
   "maxAttempts",
-  "failureStatuses",
   "onStatus",
 ]);
 const GET_METRICS_OPTION_KEYS = new Set(["asText", "signal"]);
 const CONNECT_APP_LIST_OPTION_KEYS = new Set(["limit", "cursor", "signal"]);
-const GET_TX_STATUS_OPTION_KEYS = new Set([
-  "allowShortHash",
-  "signal",
-  "scope",
-]);
+const GET_TX_STATUS_OPTION_KEYS = new Set(["signal", "scope"]);
 const IVM_PROVE_WAIT_OPTION_KEYS = new Set([
   "signal",
   "intervalMs",
@@ -540,6 +537,7 @@ const EVIDENCE_BASE_FIELDS = Object.freeze([
 
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
 const KAIGI_EVENT_KIND_VALUES = new Set(["registration", "health"]);
+const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS = 500;
 
 function ownDataMethod(target, name) {
   if (target === null || (typeof target !== "object" && typeof target !== "function")) {
@@ -776,6 +774,14 @@ const SORAFS_PIN_LIST_MAX_ITEMS = 256;
 const SORAFS_PIN_LIST_MIN_PAGE_BYTES = 1024;
 const SORAFS_PIN_LIST_MAX_PAGE_BYTES = 256 * 1024;
 const UAID_MANIFEST_STATUS_VALUES = new Set(["Pending", "Active", "Expired", "Revoked"]);
+const UAID_MANIFEST_FILTER_VALUES = new Set(["active", "inactive", "all"]);
+const UAID_MANIFEST_COUNT_MODE_VALUES = new Set(["bounded", "exact"]);
+const UAID_MANIFEST_ROLE_VALUES = new Set(["Initiator", "Participant"]);
+const UAID_MANIFEST_ALLOWANCE_WINDOW_VALUES = new Set([
+  "PerSlot",
+  "PerMinute",
+  "PerDay",
+]);
 const SUBSCRIPTION_STATUS_VALUES = new Set([
   "active",
   "paused",
@@ -5372,7 +5378,7 @@ export class ToriiClient {
     if (!payload) {
       throw new Error("uaid portfolio endpoint returned no payload");
     }
-    return normalizeUaidPortfolioResponse(payload);
+    return normalizeUaidPortfolioResponse(payload, canonicalUaid);
   }
 
   /**
@@ -5397,13 +5403,13 @@ export class ToriiClient {
     if (!payload) {
       throw new Error("uaid bindings endpoint returned no payload");
     }
-    return normalizeUaidBindingsResponse(payload);
+    return normalizeUaidBindingsResponse(payload, canonicalUaid);
   }
 
   /**
    * Fetch Space Directory manifests for a UAID (`GET /v1/space-directory/uaids/{uaid}/manifests`).
    * @param {string} uaid
-   * @param {{dataspaceId?: number, signal?: AbortSignal}} [options]
+   * @param {{dataspaceId?: number, status?: "active" | "inactive" | "all", limit?: number, offset?: number, countMode?: "bounded" | "exact", signal?: AbortSignal}} [options]
    * @returns {Promise<UaidManifestsResponse>}
    */
   async getUaidManifests(uaid, options = {}) {
@@ -5412,13 +5418,45 @@ export class ToriiClient {
       options,
       "getUaidManifests",
     );
-    assertSupportedOptionKeys(rest, new Set(["dataspaceId"]), "getUaidManifests options");
+    assertSupportedOptionKeys(
+      rest,
+      new Set(["dataspaceId", "status", "limit", "offset", "countMode"]),
+      "getUaidManifests options",
+    );
     const params = {};
-    if (rest.dataspaceId !== undefined && rest.dataspaceId !== null) {
-      params.dataspace = ToriiClient._normalizeUnsignedInteger(
+    if (rest.dataspaceId !== undefined) {
+      params.dataspace = requireExactJsonUnsignedInteger(
         rest.dataspaceId,
         "getUaidManifests.dataspaceId",
         { allowZero: true },
+      );
+    }
+    if (rest.status !== undefined) {
+      params.status = requireExactEnumString(
+        rest.status,
+        UAID_MANIFEST_FILTER_VALUES,
+        "getUaidManifests.status",
+      );
+    }
+    if (rest.limit !== undefined) {
+      params.limit = requireExactJsonUnsignedInteger(
+        rest.limit,
+        "getUaidManifests.limit",
+        { allowZero: false },
+      );
+    }
+    if (rest.offset !== undefined) {
+      params.offset = requireExactJsonUnsignedInteger(
+        rest.offset,
+        "getUaidManifests.offset",
+        { allowZero: true },
+      );
+    }
+    if (rest.countMode !== undefined) {
+      params.count_mode = requireExactEnumString(
+        rest.countMode,
+        UAID_MANIFEST_COUNT_MODE_VALUES,
+        "getUaidManifests.countMode",
       );
     }
     const response = await this._request(
@@ -5435,7 +5473,7 @@ export class ToriiClient {
     if (!payload) {
       throw new Error("uaid manifests endpoint returned no payload");
     }
-    return normalizeUaidManifestsResponse(payload);
+    return normalizeUaidManifestsResponse(payload, canonicalUaid);
   }
 
   /**
@@ -5701,7 +5739,6 @@ export class ToriiClient {
    * Query pipeline status for a transaction hash (hex encoded).
    * @param {string} hashHex
    * @param {{
-   *   allowShortHash?: boolean,
    *   signal?: AbortSignal,
    *   scope?: "local" | "global",
    * }} [options]
@@ -5717,18 +5754,6 @@ export class ToriiClient {
       GET_TX_STATUS_OPTION_KEYS,
       "getTransactionStatus options",
     );
-    if (
-      optionRecord.allowShortHash !== undefined &&
-      optionRecord.allowShortHash !== null &&
-      typeof optionRecord.allowShortHash !== "boolean"
-    ) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        "getTransactionStatus options.allowShortHash must be a boolean when provided",
-        "getTransactionStatus.options.allowShortHash",
-      );
-    }
-    const allowShortHash = optionRecord.allowShortHash === true;
     const scope = normalizeTransactionStatusScope(
       optionRecord.scope,
       "getTransactionStatus options.scope",
@@ -5737,10 +5762,9 @@ export class ToriiClient {
       optionRecord,
       "getTransactionStatus",
     );
-    const normalizedHash = normalizeHashLike32(
+    const normalizedHash = requireCanonicalTransactionHashString(
       hashHex,
       "getTransactionStatus.hashHex",
-      { allowShort: allowShortHash },
     );
     return this._fetchTransactionStatus(normalizedHash, { signal, scope });
   }
@@ -5763,30 +5787,13 @@ export class ToriiClient {
       );
       return null;
     }
-    await this._expectStatus(response, [200, 202, 204], { signal });
-    if (response.status === 204) {
-      cancelResponseBodyBestEffort(
-        response,
-        "discarding empty transaction status response body",
-      );
-      return null;
-    }
+    await this._expectStatus(response, [200], { signal });
     const payload = await this._maybeBoundedJson(
       response,
       PIPELINE_STATUS_JSON_MAX_BYTES,
       "transaction status response",
       { signal },
     );
-    if (!payload) {
-      return null;
-    }
-    if (
-      typeof payload === "object" &&
-      payload !== null &&
-      Object.keys(payload).length === 0
-    ) {
-      return null;
-    }
     return assertPipelineTransactionStatusMatchesHash(
       normalizePipelineTransactionStatus(payload),
       normalizedHash,
@@ -5795,9 +5802,9 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch transaction pipeline status and normalise the payload.
+   * Fetch transaction pipeline status and normalise the diagnostic payload.
    * @param {string} hashHex
-   * @returns {Promise<ToriiPipelineStatus | null>}
+   * @returns {Promise<ToriiPipelineTransactionStatus | null>}
    */
   async getTransactionStatusTyped(hashHex, options = {}) {
     const payload = await this.getTransactionStatus(hashHex, options);
@@ -5808,22 +5815,21 @@ export class ToriiClient {
   }
 
   /**
-   * Poll pipeline status until the transaction reaches a terminal state.
+   * Poll until global chain state reports exact state-resolved Applied finality.
    * @param {string} hashHex
    * @param {{
    *   signal?: AbortSignal,
    *   intervalMs?: number,
    *   timeoutMs?: number | null,
    *   maxAttempts?: number | null,
-   *   failureStatuses?: Iterable<string>,
    *   onStatus?: (status: string | null, payload: any, attempt: number) => (void | Promise<void>)
    * }} [options]
   * @returns {Promise<any>}
-  * @throws {TransactionStatusError} when the transaction reports a failure status.
+  * @throws {TransactionStatusError} when the transaction reports Rejected or Expired.
   * @throws {TransactionTimeoutError} when timeout or max attempts elapse.
   */
   async waitForTransactionStatus(hashHex, options = {}) {
-    const normalizedHash = normalizeHashLike32(
+    const normalizedHash = requireCanonicalTransactionHashString(
       hashHex,
       "waitForTransactionStatus.hashHex",
     );
@@ -5832,7 +5838,6 @@ export class ToriiClient {
       timeoutMs,
       maxAttempts,
       signal,
-      failureSet,
       onStatus,
     } = ToriiClient._normalizeTransactionStatusPollOptions(
       options,
@@ -5878,25 +5883,15 @@ export class ToriiClient {
         ) {
           return lastPayload;
         }
-        const isCanonicalTerminalFailure =
-          status === "Rejected" || status === "Expired";
-        const isStateTerminalFailure =
-          isCanonicalTerminalFailure &&
-          statusResolution?.resolvedFrom === "state";
-        const isConfiguredStateFailure =
-          failureSet.has(status) &&
-          statusResolution?.resolvedFrom === "state";
-        if (
-          isStateTerminalFailure ||
-          isConfiguredStateFailure
-        ) {
+        const isFixedFailure = status === "Rejected" || status === "Expired";
+        if (isFixedFailure) {
           throw new TransactionStatusError(normalizedHash, status, lastPayload);
         }
       }
 
       if (maxAttempts !== null && attempts >= maxAttempts) {
         throw new TransactionTimeoutError(
-          `Transaction ${normalizedHash} did not reach a terminal status after ${attempts} attempts`,
+          `Transaction ${normalizedHash} did not reach state-resolved Applied finality after ${attempts} attempts`,
           normalizedHash,
           attempts,
           lastPayload,
@@ -5905,7 +5900,7 @@ export class ToriiClient {
 
       if (hasTimeout && Date.now() >= deadline) {
         throw new TransactionTimeoutError(
-          `Transaction ${normalizedHash} did not reach a terminal status within ${timeoutBudgetMs}ms`,
+          `Transaction ${normalizedHash} did not reach state-resolved Applied finality within ${timeoutBudgetMs}ms`,
           normalizedHash,
           attempts,
           lastPayload,
@@ -5919,28 +5914,24 @@ export class ToriiClient {
   }
 
   /**
-   * Poll transaction pipeline status until it reaches a terminal state and normalise the payload.
+   * Poll until exact state-resolved Applied finality and normalise the payload.
    * @param {string} hashHex
    * @param {TransactionStatusPollOptions} [options]
-   * @returns {Promise<ToriiPipelineStatus | null>}
+   * @returns {Promise<ToriiAppliedTransactionStatus>}
    */
   async waitForTransactionStatusTyped(hashHex, options = {}) {
     const payload = await this.waitForTransactionStatus(hashHex, options);
-    if (!payload) {
-      return null;
-    }
     return normalizePipelineStatusPayload(payload);
   }
 
   /**
-   * Submit a transaction payload and await its terminal pipeline status.
+   * Submit a transaction payload and await exact state-resolved Applied finality.
    * @param {ArrayBufferView | ArrayBuffer | Buffer} payload
    * @param {{
    *   hashHex: string,
    *   intervalMs?: number,
    *   timeoutMs?: number | null,
    *   maxAttempts?: number | null,
-   *   failureStatuses?: Iterable<string>,
    *   onStatus?: (status: string | null, payload: any, attempt: number) => (void | Promise<void>)
    * }} options
    * @returns {Promise<any>}
@@ -5951,8 +5942,8 @@ export class ToriiClient {
       "submitTransactionAndWait options",
     );
     const { hashHex, ...pollOptions } = record;
-    const normalizedHash = normalizeHashLike32(
-      requireHexString(hashHex, "options.hashHex"),
+    const normalizedHash = requireCanonicalTransactionHashString(
+      hashHex,
       "options.hashHex",
     );
     ToriiClient._normalizeTransactionStatusPollOptions(
@@ -5964,16 +5955,13 @@ export class ToriiClient {
   }
 
   /**
-   * Submit a transaction payload and await its terminal pipeline status (normalised structure).
+   * Submit a transaction payload and await exact Applied finality (normalised structure).
    * @param {ArrayBufferView | ArrayBuffer | Buffer} payload
    * @param {SubmitTransactionAndWaitOptions} options
-   * @returns {Promise<ToriiPipelineStatus | null>}
+   * @returns {Promise<ToriiAppliedTransactionStatus>}
    */
   async submitTransactionAndWaitTyped(payload, options) {
     const status = await this.submitTransactionAndWait(payload, options);
-    if (!status) {
-      return null;
-    }
     return normalizePipelineStatusPayload(status);
   }
 
@@ -6178,13 +6166,13 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch Torii status snapshot (`GET /v1/status`) with typed governance breakdown.
+   * Fetch Torii status snapshot (`GET /status`) with typed governance breakdown.
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiStatusSnapshot>}
    */
   async getStatusSnapshot(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getStatusSnapshot");
-    const response = await this._request("GET", "/v1/status", {
+    const response = await this._request("GET", "/status", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
     });
@@ -6258,7 +6246,13 @@ export class ToriiClient {
       canonicalAuth,
     });
     await this._expectStatus(response, [200]);
-    return this._maybeJson(response);
+    const payload = await decodeExactSoracloudJsonResponse(
+      this,
+      response,
+      context,
+      signal,
+    );
+    return normalizeSoracloudMutationDraftResponse(payload);
   }
 
   /**
@@ -8246,7 +8240,24 @@ export class ToriiClient {
    */
   async listKaigiCallSignals(callId, options = {}) {
     const normalizedCallId = requireNonEmptyString(callId, "callId");
-    const { signal, params } = buildKaigiCallSignalsQuery(options);
+    const {
+      signal,
+      params,
+      canonicalAuth: requestedCanonicalAuth,
+    } = buildKaigiCallSignalsQuery(options);
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
+      requestedCanonicalAuth === undefined
+        ? this._canonicalRequestAuth
+        : requestedCanonicalAuth,
+      "listKaigiCallSignals.canonicalAuth",
+    );
+    if (!canonicalAuth) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "listKaigiCallSignals canonicalAuth is required when the client has no canonicalRequestAuth",
+        "listKaigiCallSignals.canonicalAuth",
+      );
+    }
     const response = await this._request(
       "GET",
       `/v1/kaigi/calls/${encodeURIComponent(normalizedCallId)}/signals`,
@@ -8254,6 +8265,7 @@ export class ToriiClient {
         headers: JSON_ACCEPT_HEADERS,
         params,
         signal,
+        canonicalAuth,
       },
     );
     await this._expectStatus(response, [200]);
@@ -8285,10 +8297,7 @@ export class ToriiClient {
     );
     return (async function* mapEvents() {
       for await (const event of iterator) {
-        let data = event.data;
-        if (data && typeof data === "object") {
-          data = normalizeKaigiCallEventData(data);
-        }
+        const data = normalizeKaigiCallEventData(event.data);
         yield {
           ...event,
           data,
@@ -8379,10 +8388,7 @@ export class ToriiClient {
     });
     return (async function* mapEvents() {
       for await (const event of iterator) {
-        let data = event.data;
-        if (data && typeof data === "object") {
-          data = normalizeKaigiRelayEventData(data);
-        }
+        const data = normalizeKaigiRelayEventData(event.data);
         yield {
           ...event,
           data,
@@ -12476,7 +12482,6 @@ export class ToriiClient {
         intervalMs: DEFAULT_TX_STATUS_POLL_INTERVAL_MS,
         timeoutMs: DEFAULT_TX_STATUS_TIMEOUT_MS,
         maxAttempts: null,
-        failureSet: normalizeStatusSet(undefined, DEFAULT_FAILURE_STATUSES),
         onStatus: null,
       };
     }
@@ -12525,23 +12530,11 @@ export class ToriiClient {
       }
       onStatus = record.onStatus;
     }
-    const failureSet = normalizeStatusSet(
-      record.failureStatuses,
-      DEFAULT_FAILURE_STATUSES,
-    );
-    if (failureSet.has("Applied")) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context}.failureStatuses cannot classify Applied as failure`,
-        `${context}.failureStatuses`,
-      );
-    }
     return {
       signal,
       intervalMs,
       timeoutMs,
       maxAttempts,
-      failureSet,
       onStatus,
     };
   }
@@ -15521,7 +15514,7 @@ function normalizeVpnSessionCreateRequest(input) {
       record.quoteId ?? record.quote_id,
       "createVpnSession request.quoteId",
     ),
-    payment_tx_hash: normalizeHex32String(
+    payment_tx_hash: requireCanonicalTransactionHashString(
       record.paymentTxHash ?? record.payment_tx_hash,
       "createVpnSession request.paymentTxHash",
     ),
@@ -15709,7 +15702,7 @@ function normalizeVpnSessionResponse(payload, context = "vpn session response") 
       record.payment_reference ?? "",
       `${context}.payment_reference`,
     ),
-    paymentTxHash: requireExactLowerHex32String(
+    paymentTxHash: requireCanonicalTransactionHashString(
       record.payment_tx_hash,
       `${context}.payment_tx_hash`,
     ),
@@ -15822,7 +15815,7 @@ function normalizeVpnReceiptResponse(payload, context = "vpn receipt response") 
       `${context}.receipt_source`,
     ),
     quoteId: requireExactLowerHex32String(record.quote_id, `${context}.quote_id`),
-    paymentTxHash: requireExactLowerHex32String(
+    paymentTxHash: requireCanonicalTransactionHashString(
       record.payment_tx_hash,
       `${context}.payment_tx_hash`,
     ),
@@ -16928,26 +16921,15 @@ function requireUnsignedIntegerArray(value, context) {
 
 function normalizeUaidLiteral(value, context = "uaid") {
   const literal = requireExactNonEmptyString(value, context);
-  let hexPortion;
-  if (literal.slice(0, 5).toLowerCase() === "uaid:") {
-    hexPortion = literal.slice(5);
-  } else {
-    hexPortion = literal;
-  }
-  if (hexPortion.trim() !== hexPortion) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must not contain surrounding whitespace`,
-      context,
+  if (!/^uaid:[0-9a-f]{64}$/u.test(literal)) {
+    throw new TypeError(
+      `${context} must be an exact canonical uaid:<64 lowercase hex> literal`,
     );
   }
-  if (hexPortion.length !== 64 || !/^[0-9a-fA-F]+$/.test(hexPortion)) {
-    throw new TypeError(`${context} must contain 64 hex characters`);
-  }
-  if (!/[13579bdf]$/i.test(hexPortion)) {
+  if (!/[13579bdf]$/u.test(literal)) {
     throw new TypeError(`${context} must have least significant bit set to 1`);
   }
-  return `uaid:${hexPortion.toLowerCase()}`;
+  return literal;
 }
 
 function normalizeUaidPortfolioOptions(options, context = "getUaidPortfolio") {
@@ -16958,179 +16940,447 @@ function normalizeUaidPortfolioOptions(options, context = "getUaidPortfolio") {
   assertSupportedOptionKeys(record, new Set(["signal", "assetId"]), `${context} options`);
   const { signal } = normalizeSignalOption(record, context);
   let assetId;
-  if (record.assetId !== undefined && record.assetId !== null) {
-    assetId = ToriiClient._normalizeAssetId(record.assetId, `${context}.assetId`);
+  if (record.assetId !== undefined) {
+    assetId = requireExactAssetHoldingId(record.assetId, `${context}.assetId`);
   }
   return { signal, assetId };
 }
 
-function normalizeUaidPortfolioResponse(payload) {
-  const record = ensureRecord(payload, "uaid portfolio response");
+function requireExactUaidRecord(
+  value,
+  requiredFields,
+  optionalFields,
+  context,
+) {
+  const record = ensureRecord(value, context);
+  const required = new Set(requiredFields);
+  const allowed = new Set([...requiredFields, ...optionalFields]);
+  const missing = [...required].filter(
+    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  );
+  const unexpected = Reflect.ownKeys(record).filter(
+    (field) => typeof field !== "string" || !allowed.has(field),
+  );
+  if (missing.length > 0 || unexpected.length > 0) {
+    const details = [];
+    if (missing.length > 0) details.push(`missing ${missing.join(", ")}`);
+    if (unexpected.length > 0) {
+      details.push(`unexpected ${unexpected.map(String).sort().join(", ")}`);
+    }
+    throw new TypeError(
+      `${context} must use the exact server fields (${details.join("; ")})`,
+    );
+  }
+  return record;
+}
+
+function requireExactEnumString(value, allowed, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  if (!allowed.has(literal)) {
+    throw new TypeError(
+      `${context} must be one of ${Array.from(allowed).join(", ")}`,
+    );
+  }
+  return literal;
+}
+
+function requireJsonNullableString(value, context) {
+  if (value === null) return null;
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a string or null`);
+  }
+  return value;
+}
+
+function requireExactNullableUnsignedInteger(value, context) {
+  return value === null
+    ? null
+    : requireExactJsonUnsignedInteger(value, context, { allowZero: true });
+}
+
+function requireExactAssetHoldingId(value, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  const canonical = normalizeAssetHoldingId(literal, context);
+  if (canonical !== literal) {
+    throw new TypeError(`${context} must be an exact canonical asset holding id`);
+  }
+  const parts = literal.split("#");
+  if (parts.length === 3) {
+    const match = /^dataspace:(0|[1-9][0-9]*)$/u.exec(parts[2]);
+    if (match === null) {
+      throw new TypeError(`${context} must use a canonical dataspace scope`);
+    }
+  }
+  return literal;
+}
+
+function requireExactAssetDefinitionId(value, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  const canonical = normalizeAssetDefinitionId(literal, context);
+  if (canonical !== literal) {
+    throw new TypeError(`${context} must be an exact canonical asset definition id`);
+  }
+  return literal;
+}
+
+function requireCanonicalUaidManifestName(value, context) {
+  const name = requireExactNonEmptyString(value, context);
+  if (
+    Buffer.byteLength(name, "utf8") > 255 ||
+    /[\p{Cc}\p{White_Space}@#$]/u.test(name) ||
+    /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(name) ||
+    name.normalize("NFC") !== name
+  ) {
+    throw new TypeError(`${context} must be a canonical Iroha Name`);
+  }
+  return name;
+}
+
+function requireExactAccountArray(value, context) {
+  return requireDenseArray(value, context).map((entry, index) =>
+    requireExactAccountId(entry, `${context}[${index}]`),
+  );
+}
+
+function normalizeUaidPortfolioResponse(payload, expectedUaid) {
+  const record = requireExactUaidRecord(
+    payload,
+    ["uaid", "totals", "dataspaces"],
+    [],
+    "uaid portfolio response",
+  );
   const uaid = normalizeUaidLiteral(record.uaid, "uaid portfolio response.uaid");
-  const totalsRecord = ensureRecord(
-    record.totals ?? {},
+  if (expectedUaid !== undefined && uaid !== expectedUaid) {
+    throw new TypeError("uaid portfolio response.uaid does not match the requested UAID");
+  }
+  const totalsRecord = requireExactUaidRecord(
+    record.totals,
+    ["accounts", "positions"],
+    [],
     "uaid portfolio response.totals",
   );
   const totals = {
-    accounts: ToriiClient._normalizeUnsignedInteger(
-      totalsRecord.accounts ?? 0,
+    accounts: requireExactJsonUnsignedInteger(
+      totalsRecord.accounts,
       "uaid portfolio response.totals.accounts",
       { allowZero: true },
     ),
-    positions: ToriiClient._normalizeUnsignedInteger(
-      totalsRecord.positions ?? 0,
+    positions: requireExactJsonUnsignedInteger(
+      totalsRecord.positions,
       "uaid portfolio response.totals.positions",
       { allowZero: true },
     ),
   };
-  const dataspacesValue = record.dataspaces ?? [];
-  if (!Array.isArray(dataspacesValue)) {
-    throw new TypeError("uaid portfolio response.dataspaces must be an array");
-  }
+  const dataspacesValue = requireDenseArray(
+    record.dataspaces,
+    "uaid portfolio response.dataspaces",
+  );
   const dataspaces = dataspacesValue.map((entry, index) =>
     normalizeUaidPortfolioDataspace(
       entry,
       `uaid portfolio response.dataspaces[${index}]`,
     ),
   );
+  const accounts = new Set();
+  let positions = 0;
+  for (const dataspace of dataspaces) {
+    for (const account of dataspace.accounts) {
+      accounts.add(account.account_id);
+      positions += account.assets.length;
+    }
+  }
+  if (accounts.size > 1) {
+    throw new TypeError(
+      "uaid portfolio response must contain at most one universal account",
+    );
+  }
+  if (totals.accounts !== accounts.size || totals.positions !== positions) {
+    throw new TypeError("uaid portfolio response.totals do not match the portfolio tree");
+  }
   return { uaid, totals, dataspaces };
 }
 
 function normalizeUaidPortfolioDataspace(value, context) {
-  const record = ensureRecord(value, context);
-  const accountsValue = record.accounts ?? [];
-  if (!Array.isArray(accountsValue)) {
-    throw new TypeError(`${context}.accounts must be an array`);
-  }
+  const record = requireExactUaidRecord(
+    value,
+    ["dataspace_id", "dataspace_alias", "accounts"],
+    [],
+    context,
+  );
+  const dataspaceId = requireExactJsonUnsignedInteger(
+    record.dataspace_id,
+    `${context}.dataspace_id`,
+    { allowZero: true },
+  );
+  const accountsValue = requireDenseArray(record.accounts, `${context}.accounts`);
   return {
-    dataspace_id: ToriiClient._normalizeUnsignedInteger(
-      record.dataspace_id,
-      `${context}.dataspace_id`,
-      { allowZero: true },
+    dataspace_id: dataspaceId,
+    dataspace_alias: requireJsonNullableString(
+      record.dataspace_alias,
+      `${context}.dataspace_alias`,
     ),
-    dataspace_alias: optionalString(record.dataspace_alias, `${context}.dataspace_alias`),
     accounts: accountsValue.map((entry, index) =>
-      normalizeUaidPortfolioAccount(entry, `${context}.accounts[${index}]`),
+      normalizeUaidPortfolioAccount(
+        entry,
+        dataspaceId,
+        `${context}.accounts[${index}]`,
+      ),
     ),
   };
 }
 
-function normalizeUaidPortfolioAccount(value, context) {
-  const record = ensureRecord(value, context);
-  const assetsValue = record.assets ?? [];
-  if (!Array.isArray(assetsValue)) {
-    throw new TypeError(`${context}.assets must be an array`);
+function normalizeUaidPortfolioAccount(value, dataspaceId, context) {
+  const record = requireExactUaidRecord(
+    value,
+    ["account_id", "label", "assets"],
+    [],
+    context,
+  );
+  const accountId = requireExactAccountId(record.account_id, `${context}.account_id`);
+  const assetsValue = requireDenseArray(record.assets, `${context}.assets`);
+  return {
+    account_id: accountId,
+    label: requireJsonNullableString(record.label, `${context}.label`),
+    assets: assetsValue.map((entry, index) =>
+      normalizeUaidPortfolioAsset(
+        entry,
+        accountId,
+        dataspaceId,
+        `${context}.assets[${index}]`,
+      ),
+    ),
+  };
+}
+
+function normalizeUaidPortfolioAsset(value, accountId, dataspaceId, context) {
+  const record = requireExactUaidRecord(
+    value,
+    ["asset_id", "asset_definition_id", "quantity"],
+    [],
+    context,
+  );
+  const assetId = requireExactAssetHoldingId(record.asset_id, `${context}.asset_id`);
+  const assetDefinitionId = requireExactAssetDefinitionId(
+    record.asset_definition_id,
+    `${context}.asset_definition_id`,
+  );
+  const [holdingDefinitionId, holdingAccountId, scope] = assetId.split("#");
+  if (holdingDefinitionId !== assetDefinitionId || holdingAccountId !== accountId) {
+    throw new TypeError(`${context}.asset_id does not match its account and definition`);
+  }
+  if (scope !== undefined) {
+    const scopeId = BigInt(scope.slice("dataspace:".length));
+    if (scopeId !== BigInt(dataspaceId)) {
+      throw new TypeError(`${context}.asset_id dataspace scope does not match its row`);
+    }
   }
   return {
-    account_id: ToriiClient._normalizeAccountId(record.account_id, `${context}.account_id`),
-    label: optionalString(record.label, `${context}.label`),
-    assets: assetsValue.map((entry, index) =>
-      normalizeUaidPortfolioAsset(entry, `${context}.assets[${index}]`),
-    ),
-  };
-}
-
-function normalizeUaidPortfolioAsset(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    asset_id: ToriiClient._normalizeAssetId(record.asset_id, `${context}.asset_id`),
-    asset_definition_id: requireNonEmptyString(
-      record.asset_definition_id,
-      `${context}.asset_definition_id`,
-    ),
+    asset_id: assetId,
+    asset_definition_id: assetDefinitionId,
     quantity: requireCanonicalQuantity(record.quantity, `${context}.quantity`),
   };
 }
 
-function normalizeUaidBindingsResponse(payload) {
-  const record = ensureRecord(payload, "uaid bindings response");
+function normalizeUaidBindingsResponse(payload, expectedUaid) {
+  const record = requireExactUaidRecord(
+    payload,
+    ["uaid", "dataspaces"],
+    [],
+    "uaid bindings response",
+  );
   const uaid = normalizeUaidLiteral(record.uaid, "uaid bindings response.uaid");
-  const dataspacesValue = record.dataspaces ?? [];
-  if (!Array.isArray(dataspacesValue)) {
-    throw new TypeError("uaid bindings response.dataspaces must be an array");
+  if (expectedUaid !== undefined && uaid !== expectedUaid) {
+    throw new TypeError("uaid bindings response.uaid does not match the requested UAID");
   }
+  const dataspacesValue = requireDenseArray(
+    record.dataspaces,
+    "uaid bindings response.dataspaces",
+  );
   const dataspaces = dataspacesValue.map((entry, index) =>
     normalizeUaidBindingsDataspace(
       entry,
       `uaid bindings response.dataspaces[${index}]`,
     ),
   );
+  const uniqueAccounts = new Set(dataspaces.flatMap((entry) => entry.accounts));
+  if (uniqueAccounts.size > 1) {
+    throw new TypeError(
+      "uaid bindings response must contain at most one universal account",
+    );
+  }
   return { uaid, dataspaces };
 }
 
 function normalizeUaidBindingsDataspace(value, context) {
-  const record = ensureRecord(value, context);
+  const record = requireExactUaidRecord(
+    value,
+    ["dataspace_id", "dataspace_alias", "accounts"],
+    [],
+    context,
+  );
+  const accounts = requireExactAccountArray(record.accounts, `${context}.accounts`);
+  if (accounts.length > 1) {
+    throw new TypeError(`${context}.accounts must contain at most one universal account`);
+  }
   return {
-    dataspace_id: ToriiClient._normalizeUnsignedInteger(
+    dataspace_id: requireExactJsonUnsignedInteger(
       record.dataspace_id,
       `${context}.dataspace_id`,
       { allowZero: true },
     ),
-    dataspace_alias: optionalString(record.dataspace_alias, `${context}.dataspace_alias`),
-    accounts: requireStringArray(record.accounts ?? [], `${context}.accounts`),
+    dataspace_alias: requireJsonNullableString(
+      record.dataspace_alias,
+      `${context}.dataspace_alias`,
+    ),
+    accounts,
   };
 }
 
-function normalizeUaidManifestsResponse(payload) {
-  const record = ensureRecord(payload, "uaid manifests response");
+function normalizeUaidManifestsResponse(payload, expectedUaid) {
+  const record = requireExactUaidRecord(
+    payload,
+    ["uaid", "total", "has_more", "count_mode", "manifests"],
+    [],
+    "uaid manifests response",
+  );
   const uaid = normalizeUaidLiteral(record.uaid, "uaid manifests response.uaid");
-  const manifestsValue = record.manifests ?? [];
-  if (!Array.isArray(manifestsValue)) {
-    throw new TypeError("uaid manifests response.manifests must be an array");
+  if (expectedUaid !== undefined && uaid !== expectedUaid) {
+    throw new TypeError("uaid manifests response.uaid does not match the requested UAID");
   }
+  const total = requireExactJsonUnsignedInteger(
+    record.total,
+    "uaid manifests response.total",
+    { allowZero: true },
+  );
+  if (typeof record.has_more !== "boolean") {
+    throw new TypeError("uaid manifests response.has_more must be a boolean");
+  }
+  const countMode = requireExactEnumString(
+    record.count_mode,
+    UAID_MANIFEST_COUNT_MODE_VALUES,
+    "uaid manifests response.count_mode",
+  );
+  const manifestsValue = requireDenseArray(
+    record.manifests,
+    "uaid manifests response.manifests",
+  );
   const manifests = manifestsValue.map((entry, index) =>
     normalizeUaidManifestRecord(
       entry,
+      uaid,
       `uaid manifests response.manifests[${index}]`,
     ),
   );
-  return { uaid, manifests };
-}
-
-function normalizeUaidManifestRecord(value, context) {
-  const record = ensureRecord(value, context);
-  const status = requireNonEmptyString(record.status, `${context}.status`);
-  if (!UAID_MANIFEST_STATUS_VALUES.has(status)) {
-    throw new TypeError(
-      `${context}.status must be one of ${Array.from(UAID_MANIFEST_STATUS_VALUES).join(", ")}`,
-    );
+  if (total < manifests.length) {
+    throw new TypeError("uaid manifests response.total cannot be smaller than the page");
   }
   return {
-    dataspace_id: ToriiClient._normalizeUnsignedInteger(
-      record.dataspace_id,
-      `${context}.dataspace_id`,
-      { allowZero: true },
+    uaid,
+    total,
+    has_more: record.has_more,
+    count_mode: countMode,
+    manifests,
+  };
+}
+
+function normalizeUaidManifestRecord(value, expectedUaid, context) {
+  const record = requireExactUaidRecord(
+    value,
+    [
+      "dataspace_id",
+      "dataspace_alias",
+      "manifest_hash",
+      "status",
+      "lifecycle",
+      "accounts",
+      "manifest",
+    ],
+    [],
+    context,
+  );
+  const status = requireExactEnumString(
+    record.status,
+    UAID_MANIFEST_STATUS_VALUES,
+    `${context}.status`,
+  );
+  const dataspaceId = requireExactJsonUnsignedInteger(
+    record.dataspace_id,
+    `${context}.dataspace_id`,
+    { allowZero: true },
+  );
+  const lifecycle = normalizeUaidManifestLifecycle(
+    record.lifecycle,
+    `${context}.lifecycle`,
+  );
+  const derivedStatus = lifecycle.revocation !== null
+    ? "Revoked"
+    : lifecycle.expired_epoch !== null
+      ? "Expired"
+      : lifecycle.activated_epoch !== null
+        ? "Active"
+        : "Pending";
+  if (status !== derivedStatus) {
+    throw new TypeError(`${context}.status does not match its lifecycle`);
+  }
+  const accounts = requireExactAccountArray(record.accounts, `${context}.accounts`);
+  if (accounts.length > 1) {
+    throw new TypeError(`${context}.accounts must contain at most one universal account`);
+  }
+  const manifest = normalizeUaidManifest(record.manifest, `${context}.manifest`);
+  if (manifest.uaid !== expectedUaid || manifest.dataspace !== dataspaceId) {
+    throw new TypeError(`${context}.manifest identity does not match its row`);
+  }
+  return {
+    dataspace_id: dataspaceId,
+    dataspace_alias: requireJsonNullableString(
+      record.dataspace_alias,
+      `${context}.dataspace_alias`,
     ),
-    dataspace_alias: optionalString(record.dataspace_alias, `${context}.dataspace_alias`),
-    manifest_hash: normalizeHex32String(
+    manifest_hash: requireExactLowerHex32String(
       record.manifest_hash,
       `${context}.manifest_hash`,
     ),
     status,
-    lifecycle: normalizeUaidManifestLifecycle(record.lifecycle, `${context}.lifecycle`),
-    accounts: requireStringArray(record.accounts ?? [], `${context}.accounts`),
-    manifest: normalizeUaidManifest(record.manifest, `${context}.manifest`),
+    lifecycle,
+    accounts,
+    manifest,
   };
 }
 
 function normalizeUaidManifestLifecycle(value, context) {
-  const record = ensureRecord(value ?? {}, context);
-  const activated = coerceOptionalInt(
+  const record = requireExactUaidRecord(
+    value,
+    ["activated_epoch", "expired_epoch", "revocation"],
+    [],
+    context,
+  );
+  const activated = requireExactNullableUnsignedInteger(
     record.activated_epoch,
     `${context}.activated_epoch`,
   );
-  const expired = coerceOptionalInt(record.expired_epoch, `${context}.expired_epoch`);
-  const revocationValue = record.revocation ?? null;
+  const expired = requireExactNullableUnsignedInteger(
+    record.expired_epoch,
+    `${context}.expired_epoch`,
+  );
+  const revocationValue = record.revocation;
   let revocation = null;
-  if (revocationValue !== null && revocationValue !== undefined) {
-    const rev = ensureRecord(revocationValue, `${context}.revocation`);
+  if (revocationValue !== null) {
+    const rev = requireExactUaidRecord(
+      revocationValue,
+      ["epoch", "reason"],
+      [],
+      `${context}.revocation`,
+    );
     revocation = {
-      epoch: ToriiClient._normalizeUnsignedInteger(
+      epoch: requireExactJsonUnsignedInteger(
         rev.epoch,
         `${context}.revocation.epoch`,
         { allowZero: true },
       ),
-      reason: optionalString(rev.reason, `${context}.revocation.reason`),
+      reason: requireJsonNullableString(
+        rev.reason,
+        `${context}.revocation.reason`,
+      ),
     };
   }
   return {
@@ -17141,49 +17391,154 @@ function normalizeUaidManifestLifecycle(value, context) {
 }
 
 function normalizeUaidManifest(value, context) {
-  const record = ensureRecord(value, context);
-  const entriesValue = record.entries ?? [];
-  if (!Array.isArray(entriesValue)) {
-    throw new TypeError(`${context}.entries must be an array`);
+  const record = requireExactUaidRecord(
+    value,
+    ["version", "uaid", "dataspace", "issued_ms", "activation_epoch", "entries"],
+    ["expiry_epoch"],
+    context,
+  );
+  if (record.version !== 1) {
+    throw new TypeError(`${context}.version must be the unsigned integer 1`);
   }
-  return {
-    version: requireNonEmptyString(record.version, `${context}.version`),
+  const normalized = {
+    version: 1,
     uaid: normalizeUaidLiteral(record.uaid, `${context}.uaid`),
-    dataspace: ToriiClient._normalizeUnsignedInteger(
+    dataspace: requireExactJsonUnsignedInteger(
       record.dataspace,
       `${context}.dataspace`,
       { allowZero: true },
     ),
-    issued_ms: ToriiClient._normalizeUnsignedInteger(
+    issued_ms: requireExactJsonUnsignedInteger(
       record.issued_ms,
       `${context}.issued_ms`,
       { allowZero: true },
     ),
-    activation_epoch: ToriiClient._normalizeUnsignedInteger(
+    activation_epoch: requireExactJsonUnsignedInteger(
       record.activation_epoch,
       `${context}.activation_epoch`,
       { allowZero: true },
     ),
-    expiry_epoch: coerceOptionalInt(record.expiry_epoch, `${context}.expiry_epoch`),
-    entries: entriesValue.map((entry, index) =>
+    entries: requireDenseArray(record.entries, `${context}.entries`).map((entry, index) =>
       normalizeUaidManifestEntry(entry, `${context}.entries[${index}]`),
     ),
   };
+  if (Object.prototype.hasOwnProperty.call(record, "expiry_epoch")) {
+    if (record.expiry_epoch === null) {
+      throw new TypeError(`${context}.expiry_epoch must be omitted instead of null`);
+    }
+    normalized.expiry_epoch = requireExactJsonUnsignedInteger(
+      record.expiry_epoch,
+      `${context}.expiry_epoch`,
+      { allowZero: true },
+    );
+  }
+  return normalized;
 }
 
 function normalizeUaidManifestEntry(value, context) {
-  const record = ensureRecord(value, context);
-  if (!isPlainObject(record.scope)) {
-    throw new TypeError(`${context}.scope must be an object`);
-  }
-  if (!isPlainObject(record.effect)) {
-    throw new TypeError(`${context}.effect must be an object`);
-  }
-  return {
-    scope: record.scope,
-    effect: record.effect,
-    notes: optionalString(record.notes, `${context}.notes`),
+  const record = requireExactUaidRecord(
+    value,
+    ["scope", "effect"],
+    ["notes"],
+    context,
+  );
+  const normalized = {
+    scope: normalizeUaidManifestScope(record.scope, `${context}.scope`),
+    effect: normalizeUaidManifestEffect(record.effect, `${context}.effect`),
   };
+  if (Object.prototype.hasOwnProperty.call(record, "notes")) {
+    if (record.notes === null) {
+      throw new TypeError(`${context}.notes must be omitted instead of null`);
+    }
+    if (typeof record.notes !== "string") {
+      throw new TypeError(`${context}.notes must be a string`);
+    }
+    normalized.notes = record.notes;
+  }
+  return normalized;
+}
+
+function normalizeUaidManifestScope(value, context) {
+  const record = requireExactUaidRecord(
+    value,
+    [],
+    ["dataspace", "program", "method", "asset", "role"],
+    context,
+  );
+  const normalized = {};
+  for (const field of ["dataspace", "program", "method", "asset", "role"]) {
+    if (!Object.prototype.hasOwnProperty.call(record, field)) continue;
+    const fieldContext = `${context}.${field}`;
+    if (record[field] === null) {
+      throw new TypeError(`${fieldContext} must be omitted instead of null`);
+    }
+    if (field === "dataspace") {
+      normalized[field] = requireExactJsonUnsignedInteger(record[field], fieldContext, {
+        allowZero: true,
+      });
+    } else if (field === "program" || field === "method") {
+      normalized[field] = requireCanonicalUaidManifestName(record[field], fieldContext);
+    } else if (field === "asset") {
+      normalized[field] = requireExactAssetDefinitionId(record[field], fieldContext);
+    } else {
+      normalized[field] = requireExactEnumString(
+        record[field],
+        UAID_MANIFEST_ROLE_VALUES,
+        fieldContext,
+      );
+    }
+  }
+  return normalized;
+}
+
+function normalizeUaidManifestEffect(value, context) {
+  const record = requireExactUaidRecord(value, [], ["Allow", "Deny"], context);
+  const decisions = Object.keys(record);
+  if (decisions.length !== 1) {
+    throw new TypeError(`${context} must contain exactly one Allow or Deny decision`);
+  }
+  if (decisions[0] === "Allow") {
+    const allowance = requireExactUaidRecord(
+      record.Allow,
+      ["window"],
+      ["max_amount"],
+      `${context}.Allow`,
+    );
+    const normalized = {
+      window: requireExactEnumString(
+        allowance.window,
+        UAID_MANIFEST_ALLOWANCE_WINDOW_VALUES,
+        `${context}.Allow.window`,
+      ),
+    };
+    if (Object.prototype.hasOwnProperty.call(allowance, "max_amount")) {
+      if (allowance.max_amount === null) {
+        throw new TypeError(`${context}.Allow.max_amount must be omitted instead of null`);
+      }
+      normalized.max_amount = requireCanonicalQuantity(
+        allowance.max_amount,
+        `${context}.Allow.max_amount`,
+      );
+    }
+    return { Allow: normalized };
+  }
+  const denial = requireExactUaidRecord(
+    record.Deny,
+    [],
+    ["reason"],
+    `${context}.Deny`,
+  );
+  const normalized = {};
+  if (Object.prototype.hasOwnProperty.call(denial, "reason")) {
+    if (denial.reason === null) {
+      throw new TypeError(`${context}.Deny.reason must be omitted instead of null`);
+    }
+    if (typeof denial.reason !== "string") {
+      throw new TypeError(`${context}.Deny.reason must be a string`);
+    }
+    normalized.reason = denial.reason;
+  }
+  return { Deny: normalized };
 }
 
 function normalizeProverFilterBoolean(value, name) {
@@ -17850,6 +18205,18 @@ function requireExactJsonUnsignedInteger(value, name, options = {}) {
 
 function requireExactLowerHex32String(value, name) {
   return requireExactLowerHexBytesString(value, name, 32);
+}
+
+function requireCanonicalTransactionHashString(value, name) {
+  const literal = requireExactLowerHex32String(value, name);
+  if (!/[13579bdf]$/u.test(literal)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must carry the canonical Iroha hash marker`,
+      name,
+    );
+  }
+  return literal;
 }
 
 function requireNonZeroLowerHex32String(value, name) {
@@ -19969,90 +20336,7 @@ function cloneJsonValueInternal(value, path, state, depth) {
 
 function normalizeSpaceDirectoryManifestPayload(input, context) {
   const manifest = cloneJsonValue(input, context);
-  const normalized = {};
-  const versionRaw = manifest.version ?? manifest.Version;
-  const version = requireNonEmptyString(
-    versionRaw,
-    `${context}.version`,
-  ).trim();
-  if (!version) {
-    throw new TypeError(`${context}.version must be a non-empty string`);
-  }
-  normalized.version = version;
-  const uaidLiteral =
-    manifest.uaid ?? manifest.uaid_literal ?? manifest.uaidLiteral;
-  normalized.uaid = normalizeUaidLiteral(uaidLiteral, `${context}.uaid`);
-  const dataspaceRaw =
-    manifest.dataspace ?? manifest.dataspace_id ?? manifest.dataspaceId;
-  normalized.dataspace = ToriiClient._normalizeUnsignedInteger(
-    dataspaceRaw,
-    `${context}.dataspace`,
-  );
-  const issuedMs = normalizeOptionalUnsignedInteger(
-    manifest.issued_ms ?? manifest.issuedMs,
-    `${context}.issued_ms`,
-  );
-  if (issuedMs !== undefined) {
-    normalized.issued_ms = issuedMs;
-  }
-  const activationEpoch = normalizeOptionalUnsignedInteger(
-    manifest.activation_epoch ?? manifest.activationEpoch,
-    `${context}.activation_epoch`,
-  );
-  if (activationEpoch !== undefined) {
-    normalized.activation_epoch = activationEpoch;
-  }
-  const expiryEpoch = normalizeOptionalUnsignedInteger(
-    manifest.expiry_epoch ?? manifest.expiryEpoch,
-    `${context}.expiry_epoch`,
-  );
-  if (expiryEpoch !== undefined) {
-    normalized.expiry_epoch = expiryEpoch;
-  }
-  if (manifest.accounts !== undefined && manifest.accounts !== null) {
-    normalized.accounts = requireStringArray(
-      manifest.accounts,
-      `${context}.accounts`,
-    ).map((account, index) =>
-      ToriiClient._normalizeAccountId(account, `${context}.accounts[${index}]`),
-    );
-  }
-  const entriesRaw = manifest.entries ?? manifest.Entries;
-  if (!Array.isArray(entriesRaw) || entriesRaw.length === 0) {
-    throw new TypeError(`${context}.entries must be a non-empty array`);
-  }
-  normalized.entries = entriesRaw.map((entry, index) => {
-    const record = ensureRecord(entry, `${context}.entries[${index}]`);
-    if (
-      record.effect === undefined ||
-      record.effect === null ||
-      typeof record.effect !== "object"
-    ) {
-      throw new TypeError(
-        `${context}.entries[${index}].effect must be an object`,
-      );
-    }
-    if (
-      record.scope !== undefined &&
-      record.scope !== null &&
-      !isPlainObject(record.scope)
-    ) {
-      throw new TypeError(
-        `${context}.entries[${index}].scope must be an object when present`,
-      );
-    }
-    if (
-      record.notes !== undefined &&
-      record.notes !== null &&
-      typeof record.notes !== "string"
-    ) {
-      throw new TypeError(
-        `${context}.entries[${index}].notes must be a string when present`,
-      );
-    }
-    return record;
-  });
-  return normalized;
+  return normalizeUaidManifest(manifest, context);
 }
 
 function normalizeOptionalUnsignedInteger(value, context) {
@@ -20086,63 +20370,81 @@ function normalizeRegisterContractCodeRequest(input) {
 }
 
 function normalizePublishSpaceDirectoryManifestRequest(input) {
-  const record = ensureRecord(input, "publishSpaceDirectoryManifest request");
-  if (record.manifest === undefined || record.manifest === null) {
-    throw new TypeError("publishSpaceDirectoryManifest.manifest is required");
-  }
-  const credentials = normalizeSecretFreeAuthority(
-    record,
-    "publishSpaceDirectoryManifest",
+  const candidate = ensureRecord(input, "publishSpaceDirectoryManifest request");
+  rejectPrivateKeyFields(candidate, "publishSpaceDirectoryManifest");
+  const record = requireExactUaidRecord(
+    candidate,
+    ["authority", "manifest"],
+    ["reason"],
+    "publishSpaceDirectoryManifest request",
   );
   const manifest = normalizeSpaceDirectoryManifestPayload(
     record.manifest,
     "publishSpaceDirectoryManifest.manifest",
   );
   const payload = {
-    ...credentials,
+    authority: requireExactAccountId(
+      record.authority,
+      "publishSpaceDirectoryManifest.authority",
+    ),
     manifest,
   };
-  const reason = optionalString(
-    record.reason,
-    "publishSpaceDirectoryManifest.reason",
-  );
-  if (reason !== null) {
-    payload.reason = reason;
+  if (Object.prototype.hasOwnProperty.call(record, "reason")) {
+    if (record.reason === null) {
+      throw new TypeError(
+        "publishSpaceDirectoryManifest.reason must be omitted instead of null",
+      );
+    }
+    if (typeof record.reason !== "string") {
+      throw new TypeError("publishSpaceDirectoryManifest.reason must be a string");
+    }
+    payload.reason = record.reason;
   }
   return payload;
 }
 
 function normalizeRevokeSpaceDirectoryManifestRequest(input) {
-  const record = ensureRecord(input, "revokeSpaceDirectoryManifest request");
-  const credentials = normalizeSecretFreeAuthority(
-    record,
-    "revokeSpaceDirectoryManifest",
+  const candidate = ensureRecord(input, "revokeSpaceDirectoryManifest request");
+  rejectPrivateKeyFields(candidate, "revokeSpaceDirectoryManifest");
+  const record = requireExactUaidRecord(
+    candidate,
+    ["authority", "uaid", "dataspaceId", "revokedEpoch"],
+    ["reason"],
+    "revokeSpaceDirectoryManifest request",
   );
   const uaid = normalizeUaidLiteral(
     record.uaid,
     "revokeSpaceDirectoryManifest.uaid",
   );
-  const dataspace = ToriiClient._normalizeUnsignedInteger(
-    record.dataspace ?? record.dataspaceId,
+  const dataspace = requireExactJsonUnsignedInteger(
+    record.dataspaceId,
     "revokeSpaceDirectoryManifest.dataspace",
+    { allowZero: true },
   );
-  const revokedEpoch = ToriiClient._normalizeUnsignedInteger(
-    record.revoked_epoch ?? record.revokedEpoch,
+  const revokedEpoch = requireExactJsonUnsignedInteger(
+    record.revokedEpoch,
     "revokeSpaceDirectoryManifest.revokedEpoch",
     { allowZero: true },
   );
   const payload = {
-    ...credentials,
+    authority: requireExactAccountId(
+      record.authority,
+      "revokeSpaceDirectoryManifest.authority",
+    ),
     uaid,
     dataspace,
     revoked_epoch: revokedEpoch,
   };
-  const reason = optionalString(
-    record.reason,
-    "revokeSpaceDirectoryManifest.reason",
-  );
-  if (reason !== null) {
-    payload.reason = reason;
+  if (Object.prototype.hasOwnProperty.call(record, "reason")) {
+    if (record.reason === null) {
+      throw new TypeError(
+        "revokeSpaceDirectoryManifest.reason must be omitted instead of null",
+      );
+    }
+    if (typeof record.reason !== "string") {
+      throw new TypeError("revokeSpaceDirectoryManifest.reason must be a string");
+    }
+    payload.reason = record.reason;
   }
   return payload;
 }
@@ -20312,6 +20614,7 @@ const {
   normalizeRequiredBase64Payload,
   normalizeUint64DecimalString,
   requireExactLowerHex32String,
+  requireCanonicalTransactionHashString,
   requireExactNonEmptyString,
   requireExactTokenString,
   requireGovernanceSelectorString,
@@ -20441,7 +20744,13 @@ function normalizeContractOperationReceipt(payload, context) {
     contract_address: optionalString(receipt.contract_address, `${context}.contract_address`),
     code_hash_hex: optionalHash(receipt.code_hash_hex, `${context}.code_hash_hex`),
     abi_hash_hex: optionalHash(receipt.abi_hash_hex, `${context}.abi_hash_hex`),
-    tx_hash_hex: optionalHash(receipt.tx_hash_hex, `${context}.tx_hash_hex`),
+    tx_hash_hex:
+      receipt.tx_hash_hex === undefined || receipt.tx_hash_hex === null
+        ? null
+        : requireCanonicalTransactionHashString(
+            receipt.tx_hash_hex,
+            `${context}.tx_hash_hex`,
+          ),
     entrypoint: optionalString(receipt.entrypoint, `${context}.entrypoint`),
     entrypoint_hash_hex: optionalHash(
       receipt.entrypoint_hash_hex,
@@ -20519,8 +20828,20 @@ function normalizeContractCallResponse(payload) {
       `${context}.contract_address`,
     );
   }
-  normalized.tx_hash_hex = requireOptionalExactLowerHex32String(record.tx_hash_hex, `${context}.tx_hash_hex`);
-  normalized.entrypoint_hash_hex = requireOptionalExactLowerHex32String(record.entrypoint_hash_hex, `${context}.entrypoint_hash_hex`);
+  normalized.tx_hash_hex =
+    record.tx_hash_hex === undefined || record.tx_hash_hex === null
+      ? null
+      : requireCanonicalTransactionHashString(
+          record.tx_hash_hex,
+          `${context}.tx_hash_hex`,
+        );
+  normalized.entrypoint_hash_hex =
+    record.entrypoint_hash_hex === undefined || record.entrypoint_hash_hex === null
+      ? null
+      : requireCanonicalTransactionHashString(
+          record.entrypoint_hash_hex,
+          `${context}.entrypoint_hash_hex`,
+        );
   normalized.entrypoint =
     record.entrypoint === undefined || record.entrypoint === null
       ? null
@@ -21526,14 +21847,20 @@ function normalizeMultisigContractCallResponse(
       record.instructions_hash,
       `${context}.instructions_hash`,
     ),
-    tx_hash_hex: requireOptionalExactLowerHex32String(
-      record.tx_hash_hex,
-      `${context}.tx_hash_hex`,
-    ),
-    executed_tx_hash_hex: requireOptionalExactLowerHex32String(
-      record.executed_tx_hash_hex,
-      `${context}.executed_tx_hash_hex`,
-    ),
+    tx_hash_hex:
+      record.tx_hash_hex === undefined || record.tx_hash_hex === null
+        ? null
+        : requireCanonicalTransactionHashString(
+            record.tx_hash_hex,
+            `${context}.tx_hash_hex`,
+          ),
+    executed_tx_hash_hex:
+      record.executed_tx_hash_hex === undefined || record.executed_tx_hash_hex === null
+        ? null
+        : requireCanonicalTransactionHashString(
+            record.executed_tx_hash_hex,
+            `${context}.executed_tx_hash_hex`,
+          ),
     creation_time_ms:
       record.creation_time_ms === undefined || record.creation_time_ms === null
         ? null
@@ -26677,7 +27004,10 @@ function normalizeSorafsPinRegisterResponse(
   }
   return {
     status: "submitted",
-    tx_hash_hex: normalizeHex32String(record.tx_hash_hex, `${context}.tx_hash_hex`),
+    tx_hash_hex: requireCanonicalTransactionHashString(
+      record.tx_hash_hex,
+      `${context}.tx_hash_hex`,
+    ),
     manifest_digest_hex: normalizeHex32String(
       record.manifest_digest_hex,
       `${context}.manifest_digest_hex`,
@@ -26695,14 +27025,14 @@ function normalizePipelineTransactionStatus(
     new Set(["hash", "status", "scope", "resolved_from"]),
     context,
   );
-  const hash = normalizeHex32String(record.hash, `${context}.hash`);
+  const hash = requireCanonicalTransactionHashString(record.hash, `${context}.hash`);
   const statusRecord = ensureRecord(record.status, `${context}.status`);
   assertSupportedOptionKeys(
     statusRecord,
     new Set(["kind", "block_height"]),
     `${context}.status`,
   );
-  const statusKind = requireNonEmptyString(
+  const statusKind = requireExactNonEmptyString(
     statusRecord.kind,
     `${context}.status.kind`,
   );
@@ -26713,15 +27043,15 @@ function normalizePipelineTransactionStatus(
       `${context}.status.kind`,
     );
   }
-  const scope = requireNonEmptyString(record.scope, `${context}.scope`);
-  if (!["local", "auto", "global"].includes(scope)) {
+  const scope = requireExactNonEmptyString(record.scope, `${context}.scope`);
+  if (!["local", "global"].includes(scope)) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
       `${context}.scope is unsupported`,
       `${context}.scope`,
     );
   }
-  const resolvedFrom = requireNonEmptyString(
+  const resolvedFrom = requireExactNonEmptyString(
     record.resolved_from,
     `${context}.resolved_from`,
   );
@@ -26734,7 +27064,7 @@ function normalizePipelineTransactionStatus(
   }
   const normalizedStatus = { kind: statusKind };
   if (statusRecord.block_height !== undefined) {
-    normalizedStatus.block_height = ToriiClient._normalizeUnsignedInteger(
+    normalizedStatus.block_height = requireExactJsonUnsignedInteger(
       statusRecord.block_height,
       `${context}.status.block_height`,
       { allowZero: false },
@@ -26750,15 +27080,11 @@ function normalizePipelineTransactionStatus(
 
 function assertPipelineTransactionStatusMatchesHash(payload, expectedHash, context) {
   const record = ensureRecord(payload, context);
-  const observedHash = normalizeHex32String(
+  const observedHash = requireCanonicalTransactionHashString(
     record.hash,
     `${context}.hash`,
   );
-  const matches =
-    expectedHash.length === 64
-      ? observedHash === expectedHash
-      : observedHash.startsWith(expectedHash);
-  if (!matches) {
+  if (observedHash !== expectedHash) {
     throw createValidationError(
       ValidationErrorCode.INVALID_HEX,
       `${context}.hash does not match requested transaction ${expectedHash}`,
@@ -26774,7 +27100,10 @@ function classifyPipelineTransactionStatusResolution(
   context,
 ) {
   const record = ensureRecord(payload, context);
-  const observedHash = normalizeHex32String(record.hash, `${context}.hash`);
+  const observedHash = requireCanonicalTransactionHashString(
+    record.hash,
+    `${context}.hash`,
+  );
   if (observedHash !== expectedHash) {
     throw createValidationError(
       ValidationErrorCode.INVALID_HEX,
@@ -26827,23 +27156,22 @@ function classifyPipelineTransactionStatusResolution(
         `${context}.status`,
       );
     }
-    if (resolvedFrom !== "cache" && resolvedFrom !== "state") {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context} Applied status must be cache- or state-resolved`,
-        `${context}.resolved_from`,
-      );
-    }
-  } else if (kind === "Rejected" || kind === "Expired") {
-    if (resolvedFrom !== "cache" && resolvedFrom !== "state") {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context} terminal failure must be cache- or state-resolved`,
-        `${context}.resolved_from`,
-      );
-    }
   }
   return { kind, resolvedFrom };
+}
+
+function requirePipelinePreflightUnsigned(
+  mapping,
+  key,
+  context,
+  { positive = false } = {},
+) {
+  const record = ensureRecord(mapping, context);
+  const numeric = requireNonNegativeIntegerLike(record[key], `${context}.${key}`);
+  if (positive && numeric === 0) {
+    throw new RangeError(`${context}.${key} must be positive`);
+  }
+  return numeric;
 }
 
 function normalizePipelinePreflight(payload, context = "pipeline preflight response") {
@@ -26873,90 +27201,130 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
   const queue = ensureRecord(record.queue, `${context}.queue`);
   const fees = ensureRecord(record.fees, `${context}.fees`);
   const normalized = {
-    schema_version: coerceNestedInt(record, "schema_version", context),
-    chain_height: coerceNestedInt(record, "chain_height", context),
+    schema_version: requirePipelinePreflightUnsigned(
+      record,
+      "schema_version",
+      context,
+      { positive: true },
+    ),
+    chain_height: requirePipelinePreflightUnsigned(record, "chain_height", context),
     sumeragi: {
-      block_time_ms: coerceNestedInt(sumeragi, "block_time_ms", `${context}.sumeragi`),
-      commit_time_ms: coerceNestedInt(sumeragi, "commit_time_ms", `${context}.sumeragi`),
-      stall_threshold_ms: coerceNestedInt(
+      block_time_ms: requirePipelinePreflightUnsigned(
+        sumeragi,
+        "block_time_ms",
+        `${context}.sumeragi`,
+      ),
+      commit_time_ms: requirePipelinePreflightUnsigned(
+        sumeragi,
+        "commit_time_ms",
+        `${context}.sumeragi`,
+      ),
+      stall_threshold_ms: requirePipelinePreflightUnsigned(
         sumeragi,
         "stall_threshold_ms",
         `${context}.sumeragi`,
       ),
     },
     admission: {
-      max_signatures: coerceNestedInt(admission, "max_signatures", `${context}.admission`),
-      max_instructions: coerceNestedInt(admission, "max_instructions", `${context}.admission`),
-      max_tx_bytes: coerceNestedInt(admission, "max_tx_bytes", `${context}.admission`),
-      max_decompressed_bytes: coerceNestedInt(
+      max_signatures: requirePipelinePreflightUnsigned(
+        admission,
+        "max_signatures",
+        `${context}.admission`,
+      ),
+      max_instructions: requirePipelinePreflightUnsigned(
+        admission,
+        "max_instructions",
+        `${context}.admission`,
+      ),
+      max_tx_bytes: requirePipelinePreflightUnsigned(
+        admission,
+        "max_tx_bytes",
+        `${context}.admission`,
+      ),
+      max_decompressed_bytes: requirePipelinePreflightUnsigned(
         admission,
         "max_decompressed_bytes",
         `${context}.admission`,
       ),
-      max_metadata_depth: coerceNestedInt(
+      max_metadata_depth: requirePipelinePreflightUnsigned(
         admission,
         "max_metadata_depth",
         `${context}.admission`,
       ),
     },
     block: {
-      max_transactions: coerceNestedInt(block, "max_transactions", `${context}.block`),
+      max_transactions: requirePipelinePreflightUnsigned(
+        block,
+        "max_transactions",
+        `${context}.block`,
+      ),
     },
     pipeline: {
-      signature_batch_max_ed25519: coerceNestedInt(
+      signature_batch_max_ed25519: requirePipelinePreflightUnsigned(
         pipeline,
         "signature_batch_max_ed25519",
         `${context}.pipeline`,
       ),
-      signature_batch_max_secp256k1: coerceNestedInt(
+      signature_batch_max_secp256k1: requirePipelinePreflightUnsigned(
         pipeline,
         "signature_batch_max_secp256k1",
         `${context}.pipeline`,
       ),
-      signature_batch_max_pqc: coerceNestedInt(
+      signature_batch_max_pqc: requirePipelinePreflightUnsigned(
         pipeline,
         "signature_batch_max_pqc",
         `${context}.pipeline`,
       ),
-      signature_batch_max_bls: coerceNestedInt(
+      signature_batch_max_bls: requirePipelinePreflightUnsigned(
         pipeline,
         "signature_batch_max_bls",
         `${context}.pipeline`,
       ),
-      overlay_max_instructions: coerceNestedInt(
+      overlay_max_instructions: requirePipelinePreflightUnsigned(
         pipeline,
         "overlay_max_instructions",
         `${context}.pipeline`,
       ),
-      ivm_max_decoded_instructions: coerceNestedInt(
+      ivm_max_cycles_upper_bound: requirePipelinePreflightUnsigned(
+        pipeline,
+        "ivm_max_cycles_upper_bound",
+        `${context}.pipeline`,
+        { positive: true },
+      ),
+      ivm_admission_cycle_limit: requirePipelinePreflightUnsigned(
+        pipeline,
+        "ivm_admission_cycle_limit",
+        `${context}.pipeline`,
+        { positive: true },
+      ),
+      ivm_max_decoded_instructions: requirePipelinePreflightUnsigned(
         pipeline,
         "ivm_max_decoded_instructions",
         `${context}.pipeline`,
       ),
     },
     queue: {
-      size: coerceNestedInt(queue, "size", `${context}.queue`),
-      queued: coerceNestedInt(queue, "queued", `${context}.queue`),
-      inflight: coerceNestedInt(queue, "inflight", `${context}.queue`),
+      size: requirePipelinePreflightUnsigned(queue, "size", `${context}.queue`),
+      queued: requirePipelinePreflightUnsigned(queue, "queued", `${context}.queue`),
+      inflight: requirePipelinePreflightUnsigned(queue, "inflight", `${context}.queue`),
     },
     fees: {
       fee_asset_id:
         fees.fee_asset_id === undefined || fees.fee_asset_id === null
           ? ""
           : String(fees.fee_asset_id),
-      fee_sink_account_id:
-        fees.fee_sink_account_id === undefined || fees.fee_sink_account_id === null
-          ? ""
-          : String(fees.fee_sink_account_id),
+      fee_sink_account_id: requireExactAccountId(
+        fees.fee_sink_account_id,
+        `${context}.fees.fee_sink_account_id`,
+      ),
       base_fee: fees.base_fee,
       per_byte_fee: fees.per_byte_fee,
       per_instruction_fee: fees.per_instruction_fee,
       per_gas_unit_fee: fees.per_gas_unit_fee,
-      sponsor_vault_custody_account_id:
-        fees.sponsor_vault_custody_account_id === undefined ||
-        fees.sponsor_vault_custody_account_id === null
-          ? ""
-          : String(fees.sponsor_vault_custody_account_id),
+      sponsor_vault_custody_account_id: requireExactAccountId(
+        fees.sponsor_vault_custody_account_id,
+        `${context}.fees.sponsor_vault_custody_account_id`,
+      ),
       settlement_mode:
         fees.settlement_mode === undefined || fees.settlement_mode === null
           ? ""
@@ -26964,7 +27332,11 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
       successful_claim_fee_exempt_authorities: parseStringArray(
         fees.successful_claim_fee_exempt_authorities,
         `${context}.fees.successful_claim_fee_exempt_authorities`,
-      ),
+      ).map((authority, index) =>
+        requireExactAccountId(
+          authority,
+          `${context}.fees.successful_claim_fee_exempt_authorities[${index}]`,
+        )),
     },
     raw: Object.freeze({ ...record }),
   };
@@ -28121,13 +28493,21 @@ function requireFiniteNumber(value, context) {
 
 function normalizeKaigiRelaySummaryList(payload) {
   const record = ensureRecord(payload ?? {}, "kaigi relay summary response");
-  const rawItems = Array.isArray(record.items) ? record.items : [];
+  const rawItems = requireDenseArray(
+    record.items,
+    "kaigi relay summary response.items",
+  );
+  if (rawItems.length > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS) {
+    throw new RangeError(
+      `kaigi relay summary response.items must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`,
+    );
+  }
   const items = rawItems.map((entry, index) =>
     normalizeKaigiRelaySummary(entry, `kaigi relay summary response.items[${index}]`),
   );
   return {
     total: ToriiClient._normalizeUnsignedInteger(
-      record.total ?? items.length ?? 0,
+      record.total,
       "kaigiRelay.total",
       { allowZero: true },
     ),
@@ -28139,18 +28519,18 @@ function normalizeKaigiRelaySummary(payload, context) {
   const record = ensureRecord(payload, context);
   const relayId = requireNonEmptyString(record.relay_id, `${context}.relay_id`);
   const domain = requireNonEmptyString(record.domain, `${context}.domain`);
-  const bandwidthClass = ToriiClient._normalizeUnsignedInteger(
-    record.bandwidth_class ?? 0,
+  const bandwidthClass = normalizeKaigiBandwidthClass(
+    record.bandwidth_class,
     `${context}.bandwidth_class`,
-    { allowZero: true },
   );
+  const hpkeFingerprintContext = `${context}.hpke_fingerprint_hex`;
   const hpkeFingerprint = normalizeHex32String(
-    record.hpke_fingerprint_hex,
-    `${context}.hpke_fingerprint_hex`,
+    requireExactNonEmptyString(record.hpke_fingerprint_hex, hpkeFingerprintContext),
+    hpkeFingerprintContext,
   );
   let status = null;
   if (record.status !== undefined && record.status !== null) {
-    const value = String(record.status).toLowerCase();
+    const value = requireNonEmptyString(record.status, `${context}.status`).toLowerCase();
     if (!KAIGI_HEALTH_STATUS_VALUES.has(value)) {
       throw new TypeError(`${context}.status must be healthy, degraded, or unavailable`);
     }
@@ -28174,12 +28554,23 @@ function normalizeKaigiRelaySummary(payload, context) {
   };
 }
 
+function normalizeKaigiBandwidthClass(value, context) {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new TypeError(`${context} must be an integer`);
+  }
+  if (value < 1 || value > 0xff) {
+    throw new RangeError(`${context} must be between 1 and 255`);
+  }
+  return value;
+}
+
 function normalizeKaigiRelayDetail(payload) {
   const record = ensureRecord(payload ?? {}, "kaigi relay detail");
   const relaySummary = normalizeKaigiRelaySummary(record.relay, "kaigi relay detail.relay");
-  const hpkePublicKey = requireNonEmptyString(
-    record.hpke_public_key_b64,
-    "kaigi relay detail.hpke_public_key_b64",
+  const hpkePublicKeyContext = "kaigi relay detail.hpke_public_key_b64";
+  const hpkePublicKey = normalizeRequiredExactBase64Payload(
+    requireExactNonEmptyString(record.hpke_public_key_b64, hpkePublicKeyContext),
+    hpkePublicKeyContext,
   );
   let reportedCall = null;
   if (record.reported_call !== undefined && record.reported_call !== null) {
@@ -28204,7 +28595,10 @@ function normalizeKaigiRelayDetail(payload) {
   }
   let notes = null;
   if (record.notes !== undefined && record.notes !== null) {
-    notes = String(record.notes);
+    if (typeof record.notes !== "string") {
+      throw new TypeError("kaigi relay detail.notes must be a string");
+    }
+    notes = record.notes;
   }
   let metrics = null;
   if (record.metrics !== undefined && record.metrics !== null) {
@@ -28228,22 +28622,22 @@ function normalizeKaigiRelayDomainMetrics(payload, context) {
       `${context}.domain`,
     ),
     registrations_total: ToriiClient._normalizeUnsignedInteger(
-      record.registrations_total ?? 0,
+      record.registrations_total,
       `${context}.registrations_total`,
       { allowZero: true },
     ),
     manifest_updates_total: ToriiClient._normalizeUnsignedInteger(
-      record.manifest_updates_total ?? 0,
+      record.manifest_updates_total,
       `${context}.manifest_updates_total`,
       { allowZero: true },
     ),
     failovers_total: ToriiClient._normalizeUnsignedInteger(
-      record.failovers_total ?? 0,
+      record.failovers_total,
       `${context}.failovers_total`,
       { allowZero: true },
     ),
     health_reports_total: ToriiClient._normalizeUnsignedInteger(
-      record.health_reports_total ?? 0,
+      record.health_reports_total,
       `${context}.health_reports_total`,
       { allowZero: true },
     ),
@@ -28252,38 +28646,46 @@ function normalizeKaigiRelayDomainMetrics(payload, context) {
 
 function normalizeKaigiRelayHealthSnapshot(payload) {
   const record = ensureRecord(payload ?? {}, "kaigi relay health snapshot");
-  const rawDomains = Array.isArray(record.domains) ? record.domains : [];
+  const rawDomains = requireDenseArray(
+    record.domains,
+    "kaigi relay health snapshot.domains",
+  );
+  if (rawDomains.length > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS) {
+    throw new RangeError(
+      `kaigi relay health snapshot.domains must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`,
+    );
+  }
   const domains = rawDomains.map((entry, index) =>
     normalizeKaigiRelayDomainMetrics(entry, `kaigi relay health snapshot.domains[${index}]`),
   );
   return {
     healthy_total: ToriiClient._normalizeUnsignedInteger(
-      record.healthy_total ?? 0,
+      record.healthy_total,
       "kaigi relay health snapshot.healthy_total",
       { allowZero: true },
     ),
     degraded_total: ToriiClient._normalizeUnsignedInteger(
-      record.degraded_total ?? 0,
+      record.degraded_total,
       "kaigi relay health snapshot.degraded_total",
       { allowZero: true },
     ),
     unavailable_total: ToriiClient._normalizeUnsignedInteger(
-      record.unavailable_total ?? 0,
+      record.unavailable_total,
       "kaigi relay health snapshot.unavailable_total",
       { allowZero: true },
     ),
     reports_total: ToriiClient._normalizeUnsignedInteger(
-      record.reports_total ?? 0,
+      record.reports_total,
       "kaigi relay health snapshot.reports_total",
       { allowZero: true },
     ),
     registrations_total: ToriiClient._normalizeUnsignedInteger(
-      record.registrations_total ?? 0,
+      record.registrations_total,
       "kaigi relay health snapshot.registrations_total",
       { allowZero: true },
     ),
     failovers_total: ToriiClient._normalizeUnsignedInteger(
-      record.failovers_total ?? 0,
+      record.failovers_total,
       "kaigi relay health snapshot.failovers_total",
       { allowZero: true },
     ),
@@ -28452,20 +28854,20 @@ function normalizeKaigiCallSignal(payload, context) {
             `${context}.participant_account_id`,
           ),
     created_at_ms: ToriiClient._normalizeUnsignedInteger(
-      record.created_at_ms ?? 0,
+      record.created_at_ms,
       `${context}.created_at_ms`,
       { allowZero: true },
     ),
-    metadata: ensureRecord(record.metadata ?? {}, `${context}.metadata`),
+    metadata: ensureRecord(record.metadata, `${context}.metadata`),
   };
 }
 
 function normalizeKaigiCallSignalsList(payload) {
   const record = ensureRecord(payload ?? {}, "kaigi call signals");
-  const rawItems = Array.isArray(record.items) ? record.items : [];
+  const rawItems = requireDenseArray(record.items, "kaigi call signals.items");
   return {
     total: ToriiClient._normalizeUnsignedInteger(
-      record.total ?? rawItems.length,
+      record.total,
       "kaigi call signals.total",
       { allowZero: true },
     ),
@@ -28488,7 +28890,7 @@ function normalizeKaigiCallEventData(payload) {
       call,
       status: requireNonEmptyString(record.status, "kaigi call event.status").toLowerCase(),
       ended_at_ms: ToriiClient._normalizeUnsignedInteger(
-        record.ended_at_ms ?? 0,
+        record.ended_at_ms,
         "kaigi call event.ended_at_ms",
         { allowZero: true },
       ),
@@ -28506,12 +28908,12 @@ function normalizeKaigiCallEventData(payload) {
       "kaigi call event.participant_count",
     ),
     commitment_count: ToriiClient._normalizeUnsignedInteger(
-      record.commitment_count ?? 0,
+      record.commitment_count,
       "kaigi call event.commitment_count",
       { allowZero: true },
     ),
     nullifier_count: ToriiClient._normalizeUnsignedInteger(
-      record.nullifier_count ?? 0,
+      record.nullifier_count,
       "kaigi call event.nullifier_count",
       { allowZero: true },
     ),
@@ -28544,10 +28946,9 @@ function normalizeKaigiRelayEventData(payload) {
       kind,
       domain,
       relay_id: relayId,
-      bandwidth_class: ToriiClient._normalizeUnsignedInteger(
-        record.bandwidth_class ?? 0,
+      bandwidth_class: normalizeKaigiBandwidthClass(
+        record.bandwidth_class,
         "kaigi relay event.bandwidth_class",
-        { allowZero: true },
       ),
       hpke_fingerprint_hex: normalizeHex32String(
         record.hpke_fingerprint_hex,
@@ -28577,7 +28978,7 @@ function normalizeKaigiRelayEventData(payload) {
     relay_id: relayId,
     status: statusValue,
     reported_at_ms: ToriiClient._normalizeUnsignedInteger(
-      record.reported_at_ms ?? 0,
+      record.reported_at_ms,
       "kaigi relay event.reported_at_ms",
       { allowZero: true },
     ),
@@ -28637,7 +29038,14 @@ function buildKaigiCallSignalsQuery(options = {}) {
   if (normalizedOptions) {
     assertSupportedOptionKeys(
       normalizedOptions,
-      new Set(["afterTimestampMs", "after_timestamp_ms", "limit", "offset", "signal"]),
+      new Set([
+        "afterTimestampMs",
+        "after_timestamp_ms",
+        "limit",
+        "offset",
+        "signal",
+        "canonicalAuth",
+      ]),
       "kaigi call signals options",
     );
   }
@@ -28669,7 +29077,11 @@ function buildKaigiCallSignalsQuery(options = {}) {
       { allowZero: true },
     );
   }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
+  return {
+    signal,
+    params: Object.keys(params).length === 0 ? undefined : params,
+    canonicalAuth: source.canonicalAuth,
+  };
 }
 
 function buildKaigiCallEventParams(options = {}) {
@@ -30458,7 +30870,10 @@ function normalizeContractEventListItem(value, context) {
     { allowZero: false },
   );
   const provenance = requireNonEmptyString(record.provenance, `${context}.provenance`);
-  const txHashHex = requireNonEmptyString(record.tx_hash_hex, `${context}.tx_hash_hex`);
+  const txHashHex = requireCanonicalTransactionHashString(
+    record.tx_hash_hex,
+    `${context}.tx_hash_hex`,
+  );
   const blockHeight = ToriiClient._normalizeUnsignedInteger(
     record.block_height,
     `${context}.block_height`,

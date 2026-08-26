@@ -1,4 +1,4 @@
-"""Source contract for the runtime-provider broker's optional backend setters."""
+"""Source contract for the runtime-provider broker backend setters."""
 
 from __future__ import annotations
 
@@ -11,13 +11,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 API_PATH = REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_broker" / "api.rs"
-MACRO_NAME = "define_optional_runtime_provider_backends_v1"
+MACRO_NAME = "define_runtime_provider_backends_v1"
 INVOCATION_MARKER = f"{MACRO_NAME}! {{"
-PUSH_METHOD = "with_appeal_finance_transaction_signer"
-EXPECTED_OPTIONAL_METHODS = (
+EXPECTED_METHODS = (
     "with_bootle_lantern_issuance",
-    "with_soracloud_runtime_mutation_signer",
-    "with_soracloud_hf_inference_credential_provider",
     "with_moderation_quarantine_key_wrapper",
     "with_privacy_cycle_prf_provider",
     "with_privacy_release_anchor",
@@ -30,6 +27,7 @@ EXPECTED_OPTIONAL_METHODS = (
     "with_governance_dag_checkpoint_store",
     "with_stream_token_signer",
     "with_stream_token_gateway_admission",
+    "with_appeal_finance_transaction_signer",
     "with_appeal_finance_checkpoint",
     "with_proof_outcome_transaction_signer",
     "with_repair_transaction_signer",
@@ -40,6 +38,7 @@ EXPECTED_OPTIONAL_METHODS = (
     "with_moderation_publication_handoff",
     "with_moderation_panel_notification",
     "with_moderation_checkpoint_store",
+    "with_moderation_panel_notification_archive",
     "with_provider_ingest_authenticated_source",
     "with_provider_ingest_signer_resolver",
     "with_provider_ingest_checkpoint_store",
@@ -67,22 +66,21 @@ EXPECTED_OPTIONAL_METHODS = (
     "with_evidence_viewer_erasure",
     "with_evidence_viewer_checkpoint_store",
     "with_evidence_viewer_compaction_archive",
-    "with_moderation_panel_notification_archive",
     "with_evidence_viewer_transparency_publisher",
+    "with_soracloud_runtime_mutation_signer",
 )
 EXPECTED_INVENTORY_SHA256 = (
-    "5f4b2adf9e9270f125ba22d6c5568ebf9c93b2c47b5f1406925d9acedae55124"
+    "af516aadd86f91d903592d4b10e115facaae321752203529458100cba397b53a"
 )
 EXPECTED_TEMPLATE_SHA256 = (
-    "4ea35e242e79986df77e5be281367e051524dc02e26af501fc76f1779c4355fb"
+    "e3f801cc46ad8482d68c4b4b7bf57b65f134c59cf5d385f15f99cc48ed831201"
 )
-EXPECTED_PUSH_SHA256 = "090e663e9904afa474e4cfe2c4145a32b1c6e79537b5e1210a354a2b2055bf9d"
 ENTRY_PATTERN = re.compile(
     r"(?P<docs>(?:        ///[^\n]*\n)+)"
-    r"        (?P<name>with_[A-Za-z0-9_]+)\(\n"
-    r"(?P<parameter>.*?)\n"
-    r"        \) => (?P<field>[A-Za-z0-9_]+);",
-    re.DOTALL,
+    r"        (?P<kind>optional|repeated) (?P<field>[A-Za-z0-9_]+): "
+    r"(?P<backend>[^\n]+?) => pub fn (?P<name>with_[A-Za-z0-9_]+)"
+    r"\((?P<argument>[A-Za-z0-9_]+)\)"
+    r"(?:, \"(?P<debug_label>[^\"]+)\")?;"
 )
 
 
@@ -91,8 +89,8 @@ def _require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def _balanced_braces(source: str, marker: str, offset: int = 0) -> tuple[int, int, str]:
-    start = source.index(marker, offset)
+def _balanced_braces(source: str, marker: str) -> tuple[int, int, str]:
+    start = source.index(marker)
     opening = source.index("{", start)
     depth = 0
     for index in range(opening, len(source)):
@@ -105,102 +103,61 @@ def _balanced_braces(source: str, marker: str, offset: int = 0) -> tuple[int, in
     raise AssertionError(f"unterminated brace block after {marker}")
 
 
-def _invocation_blocks(source: str) -> list[tuple[int, int, str]]:
-    blocks = []
-    offset = 0
-    while source.find(INVOCATION_MARKER, offset) >= 0:
-        block = _balanced_braces(source, INVOCATION_MARKER, offset)
-        blocks.append(block)
-        offset = block[1]
-    return blocks
-
-
-def _inventory(source: str) -> tuple[list[tuple[str, str, str, str, str]], list[int]]:
+def _inventory(source: str) -> list[tuple[str, str, str, str, str, str, str]]:
+    _start, _end, invocation = _balanced_braces(source, INVOCATION_MARKER)
+    struct_open = invocation.index("{")
+    struct_close = invocation.rfind("}")
+    body = invocation[struct_open + 1 : struct_close]
+    matches = list(ENTRY_PATTERN.finditer(body))
+    _require(len(matches) == len(EXPECTED_METHODS), "backend entry count changed")
+    residue = ENTRY_PATTERN.sub("", body)
+    _require(not residue.strip(), "backend macro invocation contains unparsed source")
     records = []
-    block_sizes = []
-    for _, _, body in _invocation_blocks(source):
-        matches = list(ENTRY_PATTERN.finditer(body))
-        residue = ENTRY_PATTERN.sub("", body)
-        _require(not residue.strip(), "optional-backend macro contains unparsed source")
-        block_sizes.append(len(matches))
-        for match in matches:
-            parameter = "".join(match.group("parameter").split())
-            argument, backend_type = parameter.split(":", 1)
-            backend_type = backend_type.rstrip(",").replace(",>", ">")
-            docs = "\n".join(
-                line.strip() for line in match.group("docs").rstrip("\n").splitlines()
+    for match in matches:
+        docs = "\n".join(
+            line.strip() for line in match.group("docs").rstrip("\n").splitlines()
+        )
+        backend = "".join(match.group("backend").split()).replace(",>", ">")
+        records.append(
+            (
+                match.group("kind"),
+                docs,
+                match.group("field"),
+                backend,
+                match.group("name"),
+                match.group("argument"),
+                match.group("debug_label") or "",
             )
-            records.append(
-                (
-                    docs,
-                    match.group("name"),
-                    argument,
-                    backend_type,
-                    match.group("field"),
-                )
-            )
-    return records, block_sizes
-
-
-def _push_method_hash(source: str) -> tuple[int, int, str]:
-    signature = f"    pub fn {PUSH_METHOD}("
-    method_start = source.index(signature)
-    attribute_start = source.rfind("    #[must_use]", 0, method_start)
-    item_start = attribute_start
-    while item_start:
-        previous = source.rfind("\n", 0, item_start - 1) + 1
-        line = source[previous:item_start]
-        if line.startswith("    ///") or not line.strip():
-            item_start = previous
-        else:
-            break
-    _, method_end, _ = _balanced_braces(source, signature)
-    compact = "".join(source[item_start:method_end].split())
-    return item_start, method_end, hashlib.sha256(compact.encode()).hexdigest()
+        )
+    return records
 
 
 def _validate_source(source: str) -> None:
-    records, block_sizes = _inventory(source)
-    _require(block_sizes == [15, 39], f"unexpected macro block sizes: {block_sizes}")
-    names = tuple(record[1] for record in records)
-    _require(names == EXPECTED_OPTIONAL_METHODS, "optional backend setter inventory changed")
-    payload = json.dumps(records, ensure_ascii=False, separators=(",", ":")).encode()
-    inventory_hash = hashlib.sha256(payload).hexdigest()
+    records = _inventory(source)
+    names = tuple(record[4] for record in records)
+    _require(names == EXPECTED_METHODS, "backend setter inventory changed")
+    repeated = [record for record in records if record[0] == "repeated"]
     _require(
-        inventory_hash == EXPECTED_INVENTORY_SHA256,
-        "setter docs, signature, argument, order, or field mapping changed",
+        len(repeated) == 1 and repeated[0][4] == "with_appeal_finance_transaction_signer",
+        "the exact repeated backend setter changed",
     )
-
+    payload = json.dumps(records, ensure_ascii=False, separators=(",", ":")).encode()
+    _require(
+        hashlib.sha256(payload).hexdigest() == EXPECTED_INVENTORY_SHA256,
+        "backend docs, kind, type, argument, order, or field mapping changed",
+    )
     template_start, template_end, _ = _balanced_braces(
-        source, f"macro_rules! {MACRO_NAME}"
+        source, "macro_rules! define_runtime_provider_backend_setter_v1"
     )
     template = "".join(source[template_start:template_end].split())
     _require(
         hashlib.sha256(template.encode()).hexdigest() == EXPECTED_TEMPLATE_SHA256,
-        "setter macro visibility, attributes, assignment, or return value changed",
+        "backend setter visibility, must-use posture, assignment, or return value changed",
     )
-
-    push_start, _, push_hash = _push_method_hash(source)
-    _require(push_hash == EXPECTED_PUSH_SHA256, "Vec-push builder changed or was absorbed")
-    explicit_with_methods = re.findall(r"^    pub fn (with_[A-Za-z0-9_]+)\(", source, re.MULTILINE)
-    _require(
-        explicit_with_methods == [PUSH_METHOD],
-        f"unexpected explicit with_* methods: {explicit_with_methods}",
-    )
-    blocks = _invocation_blocks(source)
-    _require(
-        blocks[0][1] < push_start < blocks[1][0],
-        "Vec-push builder no longer separates the two exact setter groups",
-    )
-    for *_, field in records:
-        _require(
-            source.count(f"{field}: None,") == 1,
-            f"optional backend field {field} is not initialized exactly once",
-        )
 
 
 class RuntimeProviderBrokerBackendSetterSourceTests(unittest.TestCase):
-    def test_optional_backend_setter_contract(self) -> None:
+    def test_backend_setter_contract(self) -> None:
         _validate_source(API_PATH.read_text(encoding="utf-8"))
 
     def test_contract_rejects_source_mutations(self) -> None:
@@ -210,34 +167,35 @@ class RuntimeProviderBrokerBackendSetterSourceTests(unittest.TestCase):
         assert first_entry is not None
         mutations = {
             "missing entry": source[: first_entry.start()] + source[first_entry.end() :],
+            "wrong kind": source.replace(
+                "optional bootle_lantern_issuance:",
+                "repeated bootle_lantern_issuance:",
+                1,
+            ),
             "wrong field": source.replace(
-                ") => bootle_lantern_issuance;",
-                ") => privacy_cycle_prf_provider;",
+                "optional bootle_lantern_issuance:",
+                "optional privacy_cycle_prf_provider:",
                 1,
             ),
             "changed rustdoc": source.replace(
                 "native Bootle/Lantern issuer", "mutated Bootle/Lantern issuer", 1
             ),
             "changed signature": source.replace(
-                "backend: Arc<dyn BootleLanternIssuanceBrokerBackendV1>,",
-                "backend: Arc<dyn sorafs_node::GovernanceDagRuntimeSigner>,",
+                "optional bootle_lantern_issuance: Arc<dyn BootleLanternIssuanceBrokerBackendV1>",
+                "optional bootle_lantern_issuance: Arc<dyn sorafs_node::GovernanceDagRuntimeSigner>",
                 1,
             ),
             "narrowed visibility": source.replace(
-                "pub fn $name(mut self", "pub(crate) fn $name(mut self", 1
+                "pub fn $method(mut self", "pub(crate) fn $method(mut self", 1
             ),
             "lost must-use": source.replace(
-                "            #[must_use]\n            pub fn $name",
-                "            pub fn $name",
+                "        #[must_use]\n        pub fn $method(mut self, $argument: $backend)",
+                "        pub fn $method(mut self, $argument: $backend)",
                 1,
             ),
-            "lost optional assignment": source.replace(
-                "Some($argument)", "$argument", 1
-            ),
-            "changed Vec-push builder": source.replace(
-                "self.appeal_finance_transaction_signers.push(signer);",
-                "self.appeal_finance_transaction_signers = vec![signer];",
-                1,
+            "lost optional assignment": source.replace("Some($argument)", "$argument", 1),
+            "changed repeated assignment": source.replace(
+                "self.$field.push($argument);", "self.$field = vec![$argument];", 1
             ),
         }
         for label, mutation in mutations.items():

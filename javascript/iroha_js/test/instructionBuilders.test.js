@@ -37,6 +37,7 @@ import {
   buildRecordKaigiUsageInstruction,
   buildSetKaigiRelayManifestInstruction,
   buildRegisterKaigiRelayInstruction,
+  buildReportKaigiRelayHealthInstruction,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
   buildRemoveSmartContractBytesInstruction,
@@ -220,7 +221,7 @@ function canonicalizeAssetIdUsingNorito(assetId) {
   return canonicalizeValue(decoded).Mint.Asset.destination;
 }
 
-function buildLocal8Literal(address) {
+function buildTruncatedCanonicalHexLiteral(address) {
   const canonicalHex = address.canonicalHex();
   const payload = Buffer.from(canonicalHex.slice(2), "hex");
   const digestStart = 2;
@@ -263,7 +264,8 @@ const SAMPLE_ACCOUNT_ADDRESS = AccountAddress.fromAccount({ publicKey: SAMPLE_PU
 const SAMPLE_ACCOUNT_I105_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105(SORA_I105_DISCRIMINANT);
 const SAMPLE_ACCOUNT_COMPRESSED_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105(SORA_I105_DISCRIMINANT);
 const SAMPLE_ACCOUNT_CANONICAL = exportedNormalizeAccountId(SAMPLE_ACCOUNT_I105_LITERAL);
-const SAMPLE_ACCOUNT_LOCAL8_LITERAL = buildLocal8Literal(SAMPLE_ACCOUNT_ADDRESS);
+const SAMPLE_ACCOUNT_TRUNCATED_HEX_LITERAL =
+  buildTruncatedCanonicalHexLiteral(SAMPLE_ACCOUNT_ADDRESS);
 
 function readCompactFieldPayload(buffer, offset, context) {
   let cursor = offset;
@@ -463,9 +465,9 @@ test("normalizeAccountId canonicalizes I105 and i105 (`sora`) encodings", () => 
   assert.equal(canonicalCompressed, SAMPLE_ACCOUNT_CANONICAL);
 });
 
-test("normalizeAccountId rejects Local-8 selectors", () => {
+test("normalizeAccountId rejects truncated canonical-hex inputs", () => {
   assert.throws(
-    () => exportedNormalizeAccountId(SAMPLE_ACCOUNT_LOCAL8_LITERAL),
+    () => exportedNormalizeAccountId(SAMPLE_ACCOUNT_TRUNCATED_HEX_LITERAL),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
       assert.match(String(error?.message), /canonical I105 account id/i);
@@ -1073,7 +1075,6 @@ test("buildRegisterAccountInstruction defaults metadata and validates", () => {
   const decodedAccount = decoded.Register.Account;
   assert.equal(decodedAccount.id, ACCOUNT_ID_CANONICAL);
   assert.deepEqual(decodedAccount.metadata, {});
-  assert.equal(decodedAccount.domain ?? null, null);
   assert.equal(decodedAccount.label ?? null, null);
   assert.equal(decodedAccount.uaid ?? null, null);
   assert.deepEqual(decodedAccount.opaque_ids, []);
@@ -1170,6 +1171,103 @@ test("buildSetAssetDefinitionAliasInstruction supports clearing aliases", () => 
 });
 
 const RELAY_ACCOUNT_ID = ACCOUNT_ID_CANONICAL;
+const THIRD_RELAY_ACCOUNT_ID = exportedNormalizeAccountId(
+  AccountAddress.fromAccount({
+    publicKey: hexToBytes(SEED_11_ED25519_PUBLIC_KEY_HEX),
+  }).toI105(SORA_I105_DISCRIMINANT),
+);
+
+function kaigiRelayHops() {
+  return [
+    {
+      relayId: RELAY_ACCOUNT_ID,
+      hpkePublicKey: Buffer.alloc(32, 0x01),
+      weight: 5,
+    },
+    {
+      relayId: SAMPLE_ACCOUNT_CANONICAL,
+      hpkePublicKey: Buffer.alloc(32, 0x02),
+      weight: 3,
+    },
+    {
+      relayId: THIRD_RELAY_ACCOUNT_ID,
+      hpkePublicKey: Buffer.alloc(32, 0x03),
+      weight: 4,
+    },
+  ];
+}
+
+function normalizedKaigiRelayHops() {
+  return kaigiRelayHops().map((hop) => ({
+    relay_id: hop.relayId,
+    hpke_public_key: hop.hpkePublicKey.toString("base64"),
+    weight: hop.weight,
+  }));
+}
+
+function assertKaigiManifestRejected(relayManifest, code, path) {
+  assert.throws(
+    () =>
+      buildCreateKaigiInstruction({
+        id: "wonderland.sora:weekly-sync",
+        host: ACCOUNT_ID,
+        relayManifest,
+      }),
+    (error) => {
+      assert.equal(error?.code, code);
+      assert.equal(error?.path, path);
+      return true;
+    },
+  );
+}
+
+baseTest("Kaigi relay manifests reject fewer than three hops", () => {
+  assertKaigiManifestRejected(
+    { expiryMs: 1700111000000 },
+    ValidationErrorCode.INVALID_OBJECT,
+    "call.relayManifest.hops",
+  );
+  assertKaigiManifestRejected(
+    { expiryMs: 1700111000000, hops: kaigiRelayHops().slice(0, 2) },
+    ValidationErrorCode.VALUE_OUT_OF_RANGE,
+    "call.relayManifest.hops",
+  );
+});
+
+baseTest("Kaigi relay manifests reject invalid hop contents", () => {
+  const duplicateHops = kaigiRelayHops();
+  duplicateHops[2].relayId = duplicateHops[0].relayId;
+  assertKaigiManifestRejected(
+    { expiryMs: 1700111000000, hops: duplicateHops },
+    ValidationErrorCode.INVALID_OBJECT,
+    "call.relayManifest.hops[2].relayId",
+  );
+
+  const emptyKeyHops = kaigiRelayHops();
+  emptyKeyHops[1].hpkePublicKey = Buffer.alloc(0);
+  assertKaigiManifestRejected(
+    { expiryMs: 1700111000000, hops: emptyKeyHops },
+    ValidationErrorCode.INVALID_STRING,
+    "call.relayManifest.hops[1].hpkePublicKey",
+  );
+
+  const zeroWeightHops = kaigiRelayHops();
+  zeroWeightHops[0].weight = 0;
+  assertKaigiManifestRejected(
+    { expiryMs: 1700111000000, hops: zeroWeightHops },
+    ValidationErrorCode.VALUE_OUT_OF_RANGE,
+    "call.relayManifest.hops[0].weight",
+  );
+
+  const sparseHops = new Array(3);
+  sparseHops[0] = kaigiRelayHops()[0];
+  sparseHops[2] = kaigiRelayHops()[2];
+  assertKaigiManifestRejected(
+    { expiryMs: 1700111000000, hops: sparseHops },
+    ValidationErrorCode.INVALID_OBJECT,
+    "call.relayManifest.hops[1]",
+  );
+});
 
 test("buildCreateKaigiInstruction normalizes relay manifest and metadata", () => {
   const instruction = buildCreateKaigiInstruction({
@@ -1186,13 +1284,7 @@ test("buildCreateKaigiInstruction normalizes relay manifest and metadata", () =>
     roomPolicy: "public",
     relayManifest: {
       expiryMs: 1700111000000,
-      hops: [
-        {
-          relayId: RELAY_ACCOUNT_ID,
-          hpkePublicKey: Buffer.alloc(32, 0x01),
-          weight: 5,
-        },
-      ],
+      hops: kaigiRelayHops(),
     },
   });
   const expected = {
@@ -1212,13 +1304,7 @@ test("buildCreateKaigiInstruction normalizes relay manifest and metadata", () =>
           room_policy: { policy: "Public", state: null },
           relay_manifest: {
             expiry_ms: 1700111000000,
-            hops: [
-              {
-                relay_id: RELAY_ACCOUNT_ID,
-                hpke_public_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
-                weight: 5,
-              },
-            ],
+            hops: normalizedKaigiRelayHops(),
           },
         },
         commitment: null,
@@ -1244,13 +1330,7 @@ test("noritoDecodeInstruction decodes Kaigi manifests", () => {
     gasRatePerMinute: 120,
     relayManifest: {
       expiryMs: 1700111000000,
-      hops: [
-        {
-          relayId: RELAY_ACCOUNT_ID,
-          hpkePublicKey: Buffer.alloc(32, 0x01),
-          weight: 5,
-        },
-      ],
+      hops: kaigiRelayHops(),
     },
   });
   const encoded = encodeInstruction(instruction);
@@ -1267,8 +1347,8 @@ test("buildCreateKaigiInstruction accepts privacy artifacts", () => {
     id: "wonderland.sora:private-room",
     host: ACCOUNT_ID,
     privacyMode: "ZkRosterV1",
-    commitment: { commitment: commitmentBytes, aliasTag: "host" },
-    nullifier: { digest: nullifierBytes, issuedAtMs: 7 },
+    commitment: { commitment: commitmentBytes },
+    nullifier: { digest: nullifierBytes, issuedAtMs: 0 },
     rosterRoot: rosterRootBytes,
     proof: proofBytes,
   });
@@ -1291,11 +1371,11 @@ test("buildCreateKaigiInstruction accepts privacy artifacts", () => {
         },
         commitment: {
           commitment: normalizedHashHex(commitmentBytes),
-          alias_tag: "host",
+          alias_tag: null,
         },
         nullifier: {
           digest: normalizedHashHex(nullifierBytes),
-          issued_at_ms: 7,
+          issued_at_ms: 0,
         },
         roster_root: normalizedHashHex(rosterRootBytes),
         proof: proofBytes.toString("base64"),
@@ -1319,7 +1399,7 @@ test("buildJoinKaigiInstruction normalizes buffers and hashes", () => {
     },
     nullifier: {
       digest: nullifierBytes,
-      issuedAtMs: 99,
+      issuedAtMs: 0,
     },
     rosterRoot: rosterRootBytes,
     proof: proofBytes,
@@ -1335,7 +1415,7 @@ test("buildJoinKaigiInstruction normalizes buffers and hashes", () => {
         },
         nullifier: {
           digest: normalizedHashHex(nullifierBytes),
-          issued_at_ms: 99,
+          issued_at_ms: 0,
         },
         roster_root: normalizedHashHex(rosterRootBytes),
         proof: proofBytes.toString("base64"),
@@ -1395,8 +1475,8 @@ test("buildEndKaigiInstruction accepts privacy artifacts", () => {
   const proofBytes = Buffer.from([0xaa, 0xbb, 0xcc]);
   const instruction = buildEndKaigiInstruction({
     callId: "wonderland.sora:weekly-sync",
-    commitment: { commitment: commitmentBytes, aliasTag: "host" },
-    nullifier: { digest: nullifierBytes, issuedAtMs: 13 },
+    commitment: { commitment: commitmentBytes },
+    nullifier: { digest: nullifierBytes, issuedAtMs: 0 },
     rosterRoot: rosterRootBytes,
     proof: proofBytes,
   });
@@ -1407,11 +1487,11 @@ test("buildEndKaigiInstruction accepts privacy artifacts", () => {
         ended_at_ms: null,
         commitment: {
           commitment: normalizedHashHex(commitmentBytes),
-          alias_tag: "host",
+          alias_tag: null,
         },
         nullifier: {
           digest: normalizedHashHex(nullifierBytes),
-          issued_at_ms: 13,
+          issued_at_ms: 0,
         },
         roster_root: normalizedHashHex(rosterRootBytes),
         proof: proofBytes.toString("base64"),
@@ -1420,6 +1500,59 @@ test("buildEndKaigiInstruction accepts privacy artifacts", () => {
   };
   assert.deepEqual(instruction, expected);
   assert.deepEqual(encodeAndDecode(instruction), expected);
+});
+
+baseTest("Kaigi privacy builders reject ledger-visible identity hints", () => {
+  const commitment = Buffer.alloc(32, 0x77);
+  const nullifier = Buffer.alloc(32, 0x88);
+  assert.throws(
+    () =>
+      buildCreateKaigiInstruction({
+        id: "wonderland.sora:private-room",
+        host: ACCOUNT_ID,
+        privacyMode: "ZkRosterV1",
+        commitment: { commitment, aliasTag: "host" },
+      }),
+    /aliasTag is off-chain only and must be omitted/u,
+  );
+  assert.throws(
+    () =>
+      buildEndKaigiInstruction({
+        callId: "wonderland.sora:private-room",
+        nullifier: { digest: nullifier, issuedAtMs: 1 },
+      }),
+    /issuedAtMs is off-chain only and must be zero/u,
+  );
+  assert.throws(
+    () =>
+      buildEndKaigiInstruction({
+        callId: "wonderland.sora:private-room",
+        nullifier: {
+          digest: nullifier,
+          issued_at_ms: 0,
+          issuedAtMs: 1,
+        },
+      }),
+    /issuedAtMs is off-chain only and must be zero/u,
+  );
+  assert.throws(
+    () =>
+      buildCreateKaigiInstruction({
+        id: "wonderland.sora:private-room",
+        host: ACCOUNT_ID,
+        privacyMode: { mode: "ZkRosterV1", state: { alias: "host" } },
+      }),
+    /privacyMode\.state must be null/u,
+  );
+  assert.throws(
+    () =>
+      buildCreateKaigiInstruction({
+        id: "wonderland.sora:private-room",
+        host: ACCOUNT_ID,
+        roomPolicy: { policy: "Authenticated", state: "hidden" },
+      }),
+    /roomPolicy\.state must be null/u,
+  );
 });
 
 test("buildRecordKaigiUsageInstruction handles optional commitment", () => {
@@ -1483,6 +1616,233 @@ test("buildRegisterKaigiRelayInstruction encodes hpke key", () => {
   };
   assert.deepEqual(instruction, expected);
   assert.deepEqual(encodeAndDecode(instruction), expected);
+  assertNativeAndPureInstructionParity(
+    instruction,
+    "Kaigi.RegisterKaigiRelay",
+  );
+});
+
+baseTest("RegisterKaigiRelay requires a non-zero bandwidth class", () => {
+  const baseRelay = {
+    relayId: RELAY_ACCOUNT_ID,
+    hpkePublicKey: Buffer.alloc(32, 0xaa),
+  };
+  for (const [bandwidthClass, code] of [
+    [undefined, ValidationErrorCode.INVALID_NUMERIC],
+    [0, ValidationErrorCode.VALUE_OUT_OF_RANGE],
+  ]) {
+    assert.throws(
+      () =>
+        buildRegisterKaigiRelayInstruction({
+          ...baseRelay,
+          ...(bandwidthClass === undefined ? {} : { bandwidthClass }),
+        }),
+      (error) => {
+        assert.equal(error?.code, code);
+        assert.equal(error?.path, "registerKaigiRelay.bandwidthClass");
+        return true;
+      },
+    );
+  }
+});
+
+baseTest("RegisterKaigiRelay encodes its HPKE key as a Norito Vec<u8>", () => {
+  const hpkePublicKey = Buffer.alloc(32, 0xaa);
+  const instruction = buildRegisterKaigiRelayInstruction({
+    relayId: RELAY_ACCOUNT_ID,
+    hpkePublicKey,
+    bandwidthClass: 7,
+  });
+  const encoded = Buffer.from(
+    withPureJsInstructionCodec(() => noritoEncodeInstruction(instruction)),
+  );
+  const keyOffset = encoded.indexOf(hpkePublicKey);
+  assert.ok(keyOffset >= 8, "encoded HPKE key must have a Vec length prefix");
+  const expectedLength = Buffer.alloc(8);
+  expectedLength.writeBigUInt64LE(BigInt(hpkePublicKey.length));
+  assert.deepEqual(encoded.subarray(keyOffset - 8, keyOffset), expectedLength);
+  assert.deepEqual(
+    withPureJsInstructionCodec(() => noritoDecodeInstruction(encoded)),
+    instruction,
+  );
+});
+
+test("buildReportKaigiRelayHealthInstruction normalizes relay feedback", () => {
+  const instruction = buildReportKaigiRelayHealthInstruction({
+    callId: "wonderland.sora:weekly-sync",
+    relayId: RELAY_ACCOUNT_ID,
+    status: "Degraded",
+    reportedAtMs: "1701123456789",
+    notes: "latency spike observed",
+  });
+  const expected = {
+    Kaigi: {
+      ReportKaigiRelayHealth: {
+        call_id: {
+          domain_id: "wonderland.sora",
+          call_name: "weekly-sync",
+        },
+        relay_id: RELAY_ACCOUNT_ID,
+        status: { status: "Degraded", state: null },
+        reported_at_ms: 1701123456789,
+        notes: "latency spike observed",
+      },
+    },
+  };
+  assert.deepEqual(instruction, expected);
+  assert.deepEqual(encodeAndDecode(instruction), expected);
+  assertNativeAndPureInstructionParity(
+    instruction,
+    "Kaigi.ReportKaigiRelayHealth",
+  );
+});
+
+baseTest("ReportKaigiRelayHealth validates status, timestamp, and notes", () => {
+  const report = {
+    callId: "wonderland.sora:weekly-sync",
+    relayId: RELAY_ACCOUNT_ID,
+    status: "Healthy",
+    reportedAtMs: 7,
+  };
+  const accepted = buildReportKaigiRelayHealthInstruction({
+    ...report,
+    notes: "😀".repeat(512),
+  });
+  assert.equal(
+    Array.from(accepted.Kaigi.ReportKaigiRelayHealth.notes).length,
+    512,
+  );
+  assert.deepEqual(
+    buildReportKaigiRelayHealthInstruction({
+      ...report,
+      callId: "Wonderland.SORA:cafe\u0301",
+    }).Kaigi.ReportKaigiRelayHealth.call_id,
+    {
+      domain_id: "wonderland.sora",
+      call_name: "caf\u00e9",
+    },
+  );
+
+  for (const [override, code, path] of [
+    [
+      { callId: "wonderland.sora:bad\u0000name" },
+      ValidationErrorCode.INVALID_STRING,
+      "reportKaigiRelayHealth.callId.call_name",
+    ],
+    [
+      { callId: "wonderland:weekly-sync" },
+      ValidationErrorCode.INVALID_STRING,
+      "reportKaigiRelayHealth.callId.domain_id",
+    ],
+    [
+      { relayId: "not-an-account" },
+      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      "reportKaigiRelayHealth.relayId",
+    ],
+    [
+      { status: "healthy" },
+      ValidationErrorCode.INVALID_STRING,
+      "reportKaigiRelayHealth.status",
+    ],
+    [
+      { reportedAtMs: -1 },
+      ValidationErrorCode.INVALID_NUMERIC,
+      "reportKaigiRelayHealth.reportedAtMs",
+    ],
+    [
+      { notes: "😀".repeat(513) },
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      "reportKaigiRelayHealth.notes",
+    ],
+    [
+      { notes: "\ud800" },
+      ValidationErrorCode.INVALID_STRING,
+      "reportKaigiRelayHealth.notes",
+    ],
+  ]) {
+    assert.throws(
+      () => buildReportKaigiRelayHealthInstruction({ ...report, ...override }),
+      (error) => {
+        assert.equal(error?.code, code);
+        assert.equal(error?.path, path);
+        return true;
+      },
+    );
+  }
+});
+
+baseTest("ReportKaigiRelayHealth pure-JS codec preserves canonical field order", () => {
+  const instruction = buildReportKaigiRelayHealthInstruction({
+    callId: "wonderland.sora:weekly-sync",
+    relayId: RELAY_ACCOUNT_ID,
+    status: "Degraded",
+    reportedAtMs: 1701123456789,
+    notes: "latency spike observed",
+  });
+  withPureJsInstructionCodec(() => {
+    const encoded = noritoEncodeInstruction(instruction);
+    const outer = validateNoritoFrame(encoded);
+    assert.equal(outer.flags, 0x02);
+    const wire = readCompactFieldPayload(
+      outer.payload,
+      0,
+      "ReportKaigiRelayHealth.wire",
+    );
+    const wireValue = readCompactFieldPayload(
+      wire.payload,
+      0,
+      "ReportKaigiRelayHealth.wire.value",
+    );
+    assert.equal(wireValue.next, wire.payload.length);
+    assert.equal(
+      wireValue.payload.toString("utf8"),
+      "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth",
+    );
+    const innerField = readCompactFieldPayload(
+      outer.payload,
+      wire.next,
+      "ReportKaigiRelayHealth.inner",
+    );
+    assert.equal(innerField.next, outer.payload.length);
+    const innerFrameLength = Number(innerField.payload.readBigUInt64LE(0));
+    const innerFrame = innerField.payload.subarray(8);
+    assert.equal(innerFrame.length, innerFrameLength);
+    const inner = validateNoritoFrame(innerFrame, {
+      expectedTypeName:
+        "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth",
+      expectedPaddingLength: 0,
+    });
+    const callId = readCompactFieldPayload(
+      inner.payload,
+      0,
+      "ReportKaigiRelayHealth.call_id",
+    );
+    const relayId = readCompactFieldPayload(
+      inner.payload,
+      callId.next,
+      "ReportKaigiRelayHealth.relay_id",
+    );
+    const status = readCompactFieldPayload(
+      inner.payload,
+      relayId.next,
+      "ReportKaigiRelayHealth.status",
+    );
+    const reportedAt = readCompactFieldPayload(
+      inner.payload,
+      status.next,
+      "ReportKaigiRelayHealth.reported_at_ms",
+    );
+    const notes = readCompactFieldPayload(
+      inner.payload,
+      reportedAt.next,
+      "ReportKaigiRelayHealth.notes",
+    );
+    assert.equal(notes.next, inner.payload.length);
+    assert.deepEqual(status.payload, Buffer.from([1, 0, 0, 0]));
+    assert.equal(reportedAt.payload.readBigUInt64LE(0), 1701123456789n);
+    assert.equal(notes.payload[0], 1);
+    assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+  });
 });
 
 baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () => {

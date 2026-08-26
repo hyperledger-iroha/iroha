@@ -804,8 +804,8 @@ fn streaming_soranet_overrides_apply() {
         .expect("config should load with soranet overrides");
     let soranet = &config.streaming.soranet;
     assert!(
-        soranet.enabled,
-        "override should keep SoraNet provisioning enabled"
+        !soranet.enabled,
+        "token-bearing SoraNet exit publication must remain disabled"
     );
     assert_eq!(
         soranet.exit_multiaddr, "/dns/test-exit/quic",
@@ -1393,11 +1393,7 @@ fn sorafs_penalty_and_telemetry_roundtrip() {
     assert_eq!(telemetry.max_window_gap, Duration::from_secs(7_200));
     let expected: Vec<_> = defaults::governance::sorafs_telemetry::submitters()
         .iter()
-        .map(|id| {
-            AccountId::parse_encoded(id)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .expect("default submitter must parse")
-        })
+        .map(|id| AccountId::parse_encoded(id).expect("default submitter must parse"))
         .collect();
     assert_eq!(telemetry.submitters, expected);
 }

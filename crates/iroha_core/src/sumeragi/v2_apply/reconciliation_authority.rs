@@ -121,7 +121,7 @@ fn recover_pending_canonical_terminal_outcome(
 fn recover_pending_release_terminal_outcome(
     queue: &Queue,
     kura: &Kura,
-    barrier: &LaneQueueReservationReleaseBarrierV3,
+    barrier: &LaneQueueReservationReleaseBarrierV1,
     finalization: crate::kura::AutonomousLaneQueueReleaseFinalizationAuthorization,
     source_outcome_authorization:
         crate::kura::AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization,
@@ -200,8 +200,8 @@ struct ReservationReconciliationGroupInput {
     /// ForgetCommit-prefix crash. Committed groups replace
     /// `group.ordered_keys` with the complete canonical MergeLedger membership
     /// during read-only preflight and resume against that full identity.
-    owned_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
-    release_barrier: Option<LaneQueueReservationReleaseBarrierV3>,
+    owned_keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
+    release_barrier: Option<LaneQueueReservationReleaseBarrierV1>,
     committed: bool,
     commit_authorization: Option<AutonomousLaneQueueCarrierCleanupAuthorization>,
 }
@@ -214,11 +214,11 @@ enum ReservationRetainDisposition {
 }
 enum ReservationReconciliationAction {
     Commit {
-        keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
+        keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
         authorization: AutonomousLaneQueueCarrierCleanupAuthorization,
     },
     Retain {
-        keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
+        keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
         disposition: ReservationRetainDisposition,
     },
     Retire {
@@ -228,7 +228,7 @@ enum ReservationReconciliationAction {
         snapshot_release: Option<AutonomousLaneRetirementSnapshotEvidenceV1>,
     },
     DirectRelease {
-        keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
+        keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
         authorization: StrictAbsenceDirectReleaseAuthorization,
     },
 }
@@ -236,14 +236,14 @@ enum ReservationReconciliationAction {
 #[must_use = "strict-absence direct-release authority must reach the Queue journal sink"]
 pub(crate) struct StrictAbsenceDirectReleaseAuthorization {
     reservation_group: LaneQueueReservationGroupBindingV1,
-    ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
+    ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
     checked_release:
         CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>,
 }
 impl StrictAbsenceDirectReleaseAuthorization {
     fn from_snapshot(
         snapshot: &LaneQueueReservationReconciliationSnapshotV1,
-        ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
+        ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
     ) -> Result<Self, V2ReservationLifecycleError> {
         let reservation_group =
             lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter()).map_err(
@@ -285,7 +285,7 @@ impl StrictAbsenceDirectReleaseAuthorization {
         &self,
     ) -> Option<(
         LaneQueueReservationGroupBindingV1,
-        &[crate::queue::LaneQueueReservationKeyV2],
+        &[crate::queue::LaneQueueReservationKeyV1],
         ProductionInFlightFirstReleaseTransitionProjection,
     )> {
         let recomputed =
@@ -337,7 +337,7 @@ pub(crate) struct LaneReservationReconciliationPlan {
     snapshot: LaneQueueReservationReconciliationSnapshotV1,
     replay_receipt: LaneReservationStartupReconciliationReceipt,
     actions: Vec<ReservationReconciliationAction>,
-    direct_release: Vec<crate::queue::LaneQueueReservationKeyV2>,
+    direct_release: Vec<crate::queue::LaneQueueReservationKeyV1>,
     deferred_terminal_recovery: AutonomousLifecycleDeferredTerminalRecoveryHandoff,
     network_id: NetworkId,
     recovered: usize,
@@ -366,7 +366,7 @@ pub(crate) enum LaneReservationSnapshotPlannerProjectionKind {
 #[must_use = "planner snapshot evidence must be consumed by Queue recovery"]
 pub(crate) struct LaneReservationSnapshotPlannerGroupEvidence {
     reservation_group: LaneQueueReservationGroupBindingV1,
-    ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
+    ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
     kind: LaneReservationSnapshotPlannerProjectionKind,
 }
 impl LaneReservationSnapshotPlannerGroupEvidence {
@@ -388,7 +388,7 @@ impl LaneReservationSnapshotPlannerGroupEvidence {
         self,
     ) -> (
         LaneQueueReservationGroupBindingV1,
-        Vec<crate::queue::LaneQueueReservationKeyV2>,
+        Vec<crate::queue::LaneQueueReservationKeyV1>,
         LaneReservationSnapshotPlannerProjectionKind,
     ) {
         (self.reservation_group, self.ordered_keys, self.kind)
@@ -411,7 +411,7 @@ impl LaneReservationSnapshotPlannerEvidence {
         snapshot: LaneQueueReservationReconciliationSnapshotV1,
         groups: Vec<(
             LaneQueueReservationGroupBindingV1,
-            Vec<crate::queue::LaneQueueReservationKeyV2>,
+            Vec<crate::queue::LaneQueueReservationKeyV1>,
             LaneReservationSnapshotPlannerProjectionKind,
         )>,
     ) -> Self {
@@ -658,12 +658,12 @@ fn exact_pending_merge_for_group(
         HashOf<TransactionEntrypoint>,
         (
             HashOf<MergeLedgerEntry>,
-            crate::queue::LaneQueueReservationKeyV2,
+            crate::queue::LaneQueueReservationKeyV1,
         ),
     >,
     pending_by_entry: &BTreeMap<
         HashOf<MergeLedgerEntry>,
-        Vec<crate::queue::LaneQueueReservationKeyV2>,
+        Vec<crate::queue::LaneQueueReservationKeyV1>,
     >,
 ) -> Result<bool, V2ReservationLifecycleError> {
     let mut entry_hash = None;

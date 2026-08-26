@@ -11,15 +11,16 @@
 use crate::{Run, RunContext};
 use eyre::{Report, Result, WrapErr, eyre};
 #[cfg(test)]
+use iroha::data_model::soracloud::SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1;
+#[cfg(test)]
 use iroha::data_model::{
     nexus::{DataSpaceId, FeeDebitSource},
     soracloud::{
-        SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
+        CanonicalRequestSignatureWitnessV1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
         SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SoraUploadedModelEncryptionRecipientV1,
         SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
-        SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
+        SoraUploadedModelPackageFormatV1, SoraUploadedModelWrappedKeyV1, SoracloudTxInstruction,
     },
-    transaction::SignedTransaction,
 };
 use iroha::{
     client::{
@@ -36,27 +37,39 @@ use iroha::{
         isi::{InstructionBox, decode_instruction_from_pair},
         metadata::Metadata,
         name::Name,
+        prelude::{FindTransactions, QueryBuilderExt, TransactionEntrypoint},
+        query::{
+            CommittedTxFilters,
+            dsl::CompoundPredicate,
+            parameters::{FetchSize, Pagination},
+        },
         smart_contract::manifest::ManifestProvenance,
         soracloud::{
-            AgentApartmentManifestV1, CANONICAL_REQUEST_WITNESS_VERSION_V1,
+            AgentApartmentManifestV1, AgentUpgradePolicyV1, CANONICAL_REQUEST_WITNESS_VERSION_V1,
             CanonicalRequestWitnessV1, SORA_APP_INFRA_MANIFEST_VERSION_V1,
             SORA_APP_INFRA_SERVICE_REF_VERSION_V1, SORA_APP_ROUTE_PROJECTION_VERSION_V1,
-            SORA_APP_STATIC_SITE_BINDING_VERSION_V1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-            SORA_INROU_MANIFEST_VERSION_V1, SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
-            SORA_STATE_BINDING_VERSION_V1, SecretEnvelopeV1, SoraAppInfraManifestV1,
-            SoraAppInfraServiceRefV1, SoraAppRouteProjectionV1, SoraAppStaticSiteBindingV1,
-            SoraArtifactDistributionPolicyV1, SoraArtifactKindV1, SoraArtifactRefV1,
-            SoraCertifiedResponsePolicyV1, SoraConfigExportV1, SoraContainerManifestV1,
-            SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
-            SoraHfModelFormatV1, SoraInrouGuestIsaV1, SoraInrouGuestOsV1, SoraInrouManifestV1,
-            SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1, SoraMailboxContractV1,
-            SoraModelHostCapabilityRecordV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
-            SoraPublishedInrouGuestImageArtifactV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
+            SORA_APP_STATIC_SITE_BINDING_VERSION_V1, SORA_CONTAINER_MANIFEST_VERSION_V1,
+            SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_INROU_MANIFEST_VERSION_V1,
+            SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
+            SORA_STATE_BINDING_VERSION_V1, SecretEnvelopeEncryptionV1, SecretEnvelopeV1,
+            SoraAgentRuntimeStatusV1, SoraAppInfraAuditEventV1, SoraAppInfraManifestV1,
+            SoraAppInfraServiceRefV1, SoraAppInfraStateV1, SoraAppRouteProjectionV1,
+            SoraAppStaticSiteBindingV1, SoraArtifactKindV1, SoraArtifactRefV1,
+            SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraConfigExportV1,
+            SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
+            SoraHfBackendFamilyV1, SoraHfModelFormatV1, SoraHfPlacementRecordV1,
+            SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
+            SoraHfSourceRecordV1, SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraInrouManifestV1,
+            SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
+            SoraMailboxContractV1, SoraModelHostCapabilityRecordV1, SoraNetworkAllowlistEntryV1,
+            SoraNetworkPolicyV1, SoraPublishedInrouGuestImageArtifactV1, SoraResourceLimitsV1,
+            SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceConfigEntryV1,
             SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-            SoraServiceLeaseStatusV1, SoraServiceManifestV1, SoraStateBindingV1,
-            SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
-            SoraUploadedModelBundleV1, encode_agent_artifact_allow_provenance_payload,
-            encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
+            SoraServiceLeaseReportingEpochRolloverV1, SoraServiceLeaseStatusV1,
+            SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
+            SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1, SoraTrainingJobStatusV1,
+            SoraUploadedModelBundleV1, SoracloudMutationDraftResponse, derive_hf_source_id_v1,
+            encode_agent_artifact_allow_provenance_payload, encode_agent_deploy_provenance_payload,
             encode_agent_lease_renew_provenance_payload,
             encode_agent_message_ack_provenance_payload,
             encode_agent_message_send_provenance_payload,
@@ -82,22 +95,28 @@ use iroha::{
             encode_training_job_retry_provenance_payload,
             encode_training_job_start_provenance_payload,
             encode_uploaded_model_bundle_register_provenance_payload,
-            encode_uploaded_model_finalize_provenance_payload, is_canonical_hf_commit_oid_v1,
+            encode_uploaded_model_finalize_provenance_payload,
+            is_canonical_agent_wallet_request_id_v1, is_canonical_hf_commit_oid_v1,
+            is_canonical_hf_repo_id_v1,
         },
         sorafs::pin_registry::StorageClass,
-        transaction::{Executable, FeePaymentIntent},
+        transaction::{
+            Executable, FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent,
+            TransactionBuilder,
+        },
     },
 };
 use iroha_core::soracloud_runtime::{
     HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
-    build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
+    SoracloudRuntimeHfSourcePlan, build_soracloud_hf_generated_agent_manifest,
+    build_soracloud_hf_generated_service_bundle,
 };
-use iroha_crypto::{Hash, KeyPair, Signature};
+use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
 use iroha_primitives::{json::Json, numeric::Quantity};
 #[cfg(test)]
-use iroha_torii_shared::{
-    FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest, FeeQuoteResponse,
-};
+use iroha_torii_shared::{FeeQuoteDecision, FeeQuoteObservation, FeeQuoteRequest};
+use iroha_torii_shared::{FeeQuoteResponse, PipelineTransactionStatusResponse};
+use iroha_version::codec::DecodeVersioned as _;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use rand::{
     rand_core::{TryCryptoRng, TryRngCore as _},
@@ -132,6 +151,303 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tiny_keccak::{Hasher as _, Sha3};
+
+/// CLI-only source image metadata. The explicit unit field forces the workspace
+/// JSON key to be exactly `null`; published objects belong only to admitted
+/// [`SoraInrouGuestImageV1`] values.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct UnpublishedInrouGuestImageWorkspaceV1 {
+    kernel_image_path: String,
+    rootfs_image_path: String,
+    #[norito(required)]
+    initrd_image_path: Option<String>,
+    published_artifact: (),
+}
+
+/// CLI-only Inrou source manifest used before guest-image publication.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct UnpublishedInrouManifestWorkspaceV1 {
+    schema_version: u16,
+    guest_images: BTreeMap<String, UnpublishedInrouGuestImageWorkspaceV1>,
+}
+
+/// CLI-only container source manifest. It cannot be encoded as an admitted
+/// deployment because its Inrou image references are strict-null markers.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct UnpublishedContainerManifestV1 {
+    schema_version: u16,
+    runtime: SoraContainerRuntimeV1,
+    bundle_hash: Hash,
+    bundle_path: String,
+    entrypoint: String,
+    args: Vec<String>,
+    env: BTreeMap<String, String>,
+    #[norito(required)]
+    inrou: Option<UnpublishedInrouManifestWorkspaceV1>,
+    required_config_names: Vec<String>,
+    required_secret_names: Vec<String>,
+    config_exports: Vec<SoraConfigExportV1>,
+    capabilities: SoraCapabilityPolicyV1,
+    resources: SoraResourceLimitsV1,
+    lifecycle: SoraLifecycleHooksV1,
+}
+
+/// Private pre-publication bundle. No signing or submission API accepts it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UnpublishedDeploymentBundleV1 {
+    container: UnpublishedContainerManifestV1,
+    service: SoraServiceManifestV1,
+}
+
+fn parse_unpublished_inrou_guest_isa(value: &str) -> Result<SoraInrouGuestIsaV1> {
+    SoraInrouGuestIsaV1::parse_key(value).ok_or_else(|| {
+        eyre!("unpublished Inrou workspace contains unsupported guest ISA `{value}`")
+    })
+}
+
+impl UnpublishedContainerManifestV1 {
+    fn from_non_inrou_manifest(container: SoraContainerManifestV1) -> Result<Self> {
+        if container.inrou.is_some() {
+            return Err(eyre!(
+                "an admitted Inrou manifest cannot be converted back into an unpublished workspace"
+            ));
+        }
+        Ok(Self {
+            schema_version: container.schema_version,
+            runtime: container.runtime,
+            bundle_hash: container.bundle_hash,
+            bundle_path: container.bundle_path,
+            entrypoint: container.entrypoint,
+            args: container.args,
+            env: container.env,
+            inrou: None,
+            required_config_names: container.required_config_names,
+            required_secret_names: container.required_secret_names,
+            config_exports: container.config_exports,
+            capabilities: container.capabilities,
+            resources: container.resources,
+            lifecycle: container.lifecycle,
+        })
+    }
+
+    fn workspace_hash(&self) -> Result<Hash> {
+        if self.runtime != SoraContainerRuntimeV1::Inrou {
+            let admitted = self.clone().into_admitted(BTreeMap::new())?;
+            return Ok(Hash::new(Encode::encode(&admitted)));
+        }
+        let bytes = json::to_vec(self).wrap_err("encode unpublished container workspace")?;
+        Ok(Hash::new(&bytes))
+    }
+
+    fn into_admitted(
+        self,
+        mut published_artifacts: BTreeMap<
+            SoraInrouGuestIsaV1,
+            SoraPublishedInrouGuestImageArtifactV1,
+        >,
+    ) -> Result<SoraContainerManifestV1> {
+        let inrou = self
+            .inrou
+            .map(|inrou| {
+                let mut guest_images = BTreeMap::new();
+                for (guest_isa, image) in inrou.guest_images {
+                    let guest_isa = parse_unpublished_inrou_guest_isa(&guest_isa)?;
+                    let published_artifact = published_artifacts.remove(&guest_isa).ok_or_else(|| {
+                        eyre!(
+                            "unpublished Inrou workspace guest ISA `{}` was not published",
+                            guest_isa.as_str()
+                        )
+                    })?;
+                    if guest_images
+                        .insert(
+                            guest_isa,
+                            SoraInrouGuestImageV1 {
+                                kernel_image_path: image.kernel_image_path,
+                                rootfs_image_path: image.rootfs_image_path,
+                                initrd_image_path: image.initrd_image_path,
+                                published_artifact,
+                            },
+                        )
+                        .is_some()
+                    {
+                        return Err(eyre!(
+                            "unpublished Inrou workspace repeats guest ISA `{}`",
+                            guest_isa.as_str()
+                        ));
+                    }
+                }
+                if !published_artifacts.is_empty() {
+                    return Err(eyre!(
+                        "publication returned guest-image artifacts absent from the source workspace"
+                    ));
+                }
+                Ok(SoraInrouManifestV1 {
+                    schema_version: inrou.schema_version,
+                    guest_images,
+                })
+            })
+            .transpose()?;
+        if inrou.is_none() && !published_artifacts.is_empty() {
+            return Err(eyre!(
+                "publication returned Inrou artifacts for a non-Inrou workspace"
+            ));
+        }
+        Ok(SoraContainerManifestV1 {
+            schema_version: self.schema_version,
+            runtime: self.runtime,
+            bundle_hash: self.bundle_hash,
+            bundle_path: self.bundle_path,
+            entrypoint: self.entrypoint,
+            args: self.args,
+            env: self.env,
+            inrou,
+            required_config_names: self.required_config_names,
+            required_secret_names: self.required_secret_names,
+            config_exports: self.config_exports,
+            capabilities: self.capabilities,
+            resources: self.resources,
+            lifecycle: self.lifecycle,
+        })
+    }
+}
+
+impl UnpublishedDeploymentBundleV1 {
+    fn into_admitted(
+        self,
+        published_artifacts: BTreeMap<SoraInrouGuestIsaV1, SoraPublishedInrouGuestImageArtifactV1>,
+    ) -> Result<SoraDeploymentBundleV1> {
+        let container = self.container.into_admitted(published_artifacts)?;
+        let mut service = self.service;
+        service.container.manifest_hash = Hash::new(Encode::encode(&container));
+        service.container.expected_schema_version = container.schema_version;
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+        bundle
+            .validate_for_admission()
+            .wrap_err("published deployment bundle failed first-release admission")?;
+        Ok(bundle)
+    }
+}
+
+fn validate_unpublished_inrou_source(
+    container: &UnpublishedContainerManifestV1,
+    service: &SoraServiceManifestV1,
+    inrou: &UnpublishedInrouManifestWorkspaceV1,
+) -> Result<()> {
+    if service.execution_plane != SoraServiceExecutionPlaneV1::HttpService {
+        return Err(eyre!(
+            "unpublished Inrou workspaces require the HttpService execution plane"
+        ));
+    }
+    if inrou.schema_version != SORA_INROU_MANIFEST_VERSION_V1 {
+        return Err(eyre!(
+            "unpublished Inrou schema_version must equal {SORA_INROU_MANIFEST_VERSION_V1}"
+        ));
+    }
+    if inrou.guest_images.is_empty() {
+        return Err(eyre!(
+            "unpublished Inrou workspace must include at least one guest image"
+        ));
+    }
+    SoraContainerManifestV1::validate_inrou_entrypoint(&container.entrypoint)
+        .wrap_err("validate unpublished Inrou entrypoint")?;
+    container
+        .capabilities
+        .network
+        .validate_for_inrou()
+        .wrap_err("validate unpublished Inrou egress policy")?;
+    for (guest_isa, image) in &inrou.guest_images {
+        parse_unpublished_inrou_guest_isa(guest_isa)?;
+        SoraInrouGuestImageV1::validate_source_fields(
+            &image.kernel_image_path,
+            &image.rootfs_image_path,
+            image.initrd_image_path.as_deref(),
+        )
+        .wrap_err("validate unpublished Inrou guest-image source fields")?;
+    }
+    Ok(())
+}
+
+fn validate_unpublished_deployment_source(bundle: &UnpublishedDeploymentBundleV1) -> Result<()> {
+    bundle
+        .service
+        .validate()
+        .wrap_err("validate unpublished service manifest")?;
+    if bundle.container.schema_version != SORA_CONTAINER_MANIFEST_VERSION_V1 {
+        return Err(eyre!(
+            "unpublished container schema_version must equal {SORA_CONTAINER_MANIFEST_VERSION_V1}"
+        ));
+    }
+    if bundle.service.container.expected_schema_version != bundle.container.schema_version {
+        return Err(eyre!(
+            "unpublished service container schema reference {} does not match source schema {}",
+            bundle.service.container.expected_schema_version,
+            bundle.container.schema_version
+        ));
+    }
+    let workspace_hash = bundle.container.workspace_hash()?;
+    if bundle.service.container.manifest_hash != workspace_hash {
+        return Err(eyre!(
+            "unpublished service container hash {} does not match source workspace hash {workspace_hash}",
+            bundle.service.container.manifest_hash
+        ));
+    }
+    let shared_projection = SoraContainerManifestV1 {
+        schema_version: bundle.container.schema_version,
+        runtime: SoraContainerRuntimeV1::Ivm,
+        bundle_hash: bundle.container.bundle_hash,
+        bundle_path: bundle.container.bundle_path.clone(),
+        entrypoint: bundle.container.entrypoint.clone(),
+        args: bundle.container.args.clone(),
+        env: bundle.container.env.clone(),
+        inrou: None,
+        required_config_names: bundle.container.required_config_names.clone(),
+        required_secret_names: bundle.container.required_secret_names.clone(),
+        config_exports: bundle.container.config_exports.clone(),
+        capabilities: bundle.container.capabilities.clone(),
+        resources: bundle.container.resources,
+        lifecycle: bundle.container.lifecycle.clone(),
+    };
+    shared_projection
+        .validate()
+        .wrap_err("validate unpublished container fields shared by every runtime")?;
+    SoraDeploymentBundleV1::validate_source_compatibility(
+        bundle.container.runtime,
+        &bundle.container.capabilities,
+        bundle.container.resources,
+        &bundle.container.lifecycle,
+        &bundle.service,
+    )
+    .wrap_err("validate unpublished deployment source compatibility")?;
+    match (&bundle.container.runtime, &bundle.container.inrou) {
+        (SoraContainerRuntimeV1::Inrou, Some(inrou)) => {
+            validate_unpublished_inrou_source(&bundle.container, &bundle.service, inrou)?;
+        }
+        (SoraContainerRuntimeV1::Inrou, None) => {
+            return Err(eyre!(
+                "unpublished Inrou workspace is missing its Inrou manifest"
+            ));
+        }
+        (_, Some(_)) => {
+            return Err(eyre!(
+                "only unpublished Inrou workspaces may carry Inrou metadata"
+            ));
+        }
+        (_, None) => {
+            bundle
+                .clone()
+                .into_admitted(BTreeMap::new())
+                .wrap_err("validate non-Inrou workspace as an admitted deployment")?;
+        }
+    }
+    Ok(())
+}
 macro_rules! define_torii_args {
     (
         $url_doc:literal, $token_doc:literal, $timeout_doc:literal;
@@ -163,7 +479,6 @@ const SORACLOUD_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS: u64 = 10_000;
 const AGENT_AUTONOMY_MAX_HASH_BYTES: usize = 256;
 const AGENT_AUTONOMY_MAX_REQUEST_BYTES: usize = 16 * 1024;
-const HF_REPO_ID_MAX_BYTES: usize = 256;
 const HF_MODEL_NAME_MAX_BYTES: usize = 128;
 const APP_STATIC_SITE_CONFIG_NAME: &str = "soracloud/app_static_site";
 const PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME: &str = "soracloud/public_service_discovery";
@@ -215,7 +530,7 @@ const TAIRA_INROU_CANARY_EPHEMERAL_STORAGE_BYTES_V1: u64 = 2 * 1024 * 1024 * 102
 const TAIRA_INROU_CANARY_ROOT_VOLUME_BYTES_V1: u64 = 8 * 1024 * 1024 * 1024;
 const TAIRA_INROU_CANARY_SHARED_VOLUME_BYTES_V1: u64 = 2 * 1024 * 1024 * 1024;
 const TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1: u64 = 10 * 1024 * 1024 * 1024;
-const TAIRA_INROU_CANARY_MAX_OPEN_FILES_V1: u32 = 512;
+const TAIRA_INROU_CANARY_MAX_OPEN_FILES_PER_PROCESS_V1: u32 = 512;
 const TAIRA_INROU_CANARY_MAX_TASKS_V1: u16 = 64;
 const INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES: u64 = BUNDLE_ARCHIVE_PROTOCOL_MAX_COMPRESSED_BYTES;
 const INROU_BUNDLE_PACK_MAX_SOURCE_BYTES: u64 = INROU_BUNDLE_PACK_MAX_ARCHIVE_BYTES - 1024 * 1024;
@@ -230,6 +545,10 @@ const SORACLOUD_HTTP_WITNESS_FILE_MAX_BYTES_V1: u64 =
 thread_local! {
     static SORACLOUD_SUBMISSION_CONFIG: RefCell<Option<ClientConfig>> = const { RefCell::new(None) };
     static SORACLOUD_FEE_PAYMENT: RefCell<Option<Result<FeePaymentIntent, String>>> = const { RefCell::new(None) };
+}
+#[cfg(test)]
+thread_local! {
+    static SORACLOUD_TEST_SUBMITTED_TX_HASH: RefCell<Option<Hash>> = const { RefCell::new(None) };
 }
 /// Soracloud control-plane commands.
 #[derive(clap::Subcommand, Debug)]
@@ -341,9 +660,6 @@ pub enum AgentCommand {
     /// Add an artifact hash (and optional provenance hash) to autonomy allowlist.
     #[command(name = "artifact-allow")]
     ArtifactAllow(AgentArtifactAllowArgs),
-    /// Approve an autonomous run under allowlist/provenance/budget guardrails.
-    #[command(name = "autonomy-run")]
-    AutonomyRun(AgentAutonomyRunArgs),
     /// Show autonomous-run policy state for an apartment.
     #[command(name = "autonomy-status")]
     AutonomyStatus(AgentAutonomyStatusArgs),
@@ -376,9 +692,6 @@ pub enum ModelCommand {
     /// Query model weight status in live Torii control-plane mode.
     #[command(name = "weight-status")]
     WeightStatus(ModelWeightStatusArgs),
-    /// Fetch the active uploaded-model encryption recipient from Torii.
-    #[command(name = "upload-encryption-recipient")]
-    UploadEncryptionRecipient(ModelUploadEncryptionRecipientArgs),
     /// Register a SoraFS-backed uploaded-model bundle into the model registry.
     #[command(name = "upload-register")]
     UploadRegister(ModelUploadRegisterArgs),
@@ -430,12 +743,8 @@ pub enum AppCommand {
     BuildAndSync(AppBuildAndSyncArgs),
     /// Simulate a prod-like release locally without live Torii mutation.
     Simulate(AppSimulateArgs),
-    /// Build, sync, and then deploy or upgrade every service referenced by an app manifest.
+    /// Build, validate, deploy, and live-verify every service referenced by an app manifest.
     Release(AppReleaseArgs),
-    /// Deploy every service referenced by an app manifest.
-    Deploy(AppDeployArgs),
-    /// Upgrade every service referenced by an app manifest.
-    Upgrade(AppDeployArgs),
     /// Show app-scoped Soracloud service status from the control plane.
     Status(AppStatusArgs),
 }
@@ -449,7 +758,6 @@ impl AppCommand {
                 | Self::LocalDev(_)
                 | Self::BuildAndSync(_)
                 | Self::Simulate(_)
-                | Self::Status(_)
         )
     }
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -465,22 +773,6 @@ impl AppCommand {
             }
             Self::Release(args) => {
                 let output = args.run(&context.config().account, &context.config().key_pair)?;
-                context.print_data(&output)
-            }
-            Self::Deploy(args) => {
-                let output = args.run(
-                    MutationMode::Deploy,
-                    &context.config().account,
-                    &context.config().key_pair,
-                )?;
-                context.print_data(&output)
-            }
-            Self::Upgrade(args) => {
-                let output = args.run(
-                    MutationMode::Upgrade,
-                    &context.config().account,
-                    &context.config().key_pair,
-                )?;
                 context.print_data(&output)
             }
             Self::Status(args) => context.print_data(&args.run()?),
@@ -520,9 +812,6 @@ impl ServiceCommand {
                 | Self::DeployWorkspace(_)
                 | Self::UpgradeWorkspace(_)
                 | Self::SyncManifests(_)
-                | Self::Status(_)
-                | Self::ConfigStatus(_)
-                | Self::SecretStatus(_)
         )
     }
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -583,10 +872,7 @@ impl ServiceCommand {
 }
 impl AgentCommand {
     fn allows_fallback_config(&self) -> bool {
-        matches!(
-            self,
-            Self::Status(_) | Self::MailboxStatus(_) | Self::AutonomyStatus(_)
-        )
+        false
     }
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -628,25 +914,13 @@ impl AgentCommand {
                 let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
-            Self::AutonomyRun(args) => {
-                let output = args.run(&context.config().account, &context.config().key_pair)?;
-                context.print_data(&output)
-            }
             Self::AutonomyStatus(args) => context.print_data(&args.run()?),
         }
     }
 }
 impl ModelCommand {
     fn allows_fallback_config(&self) -> bool {
-        matches!(
-            self,
-            Self::TrainingJobStatus(_)
-                | Self::ArtifactStatus(_)
-                | Self::WeightStatus(_)
-                | Self::UploadEncryptionRecipient(_)
-                | Self::UploadStatus(_)
-                | Self::HostStatus(_)
-        )
+        false
     }
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -681,7 +955,6 @@ impl ModelCommand {
                 context.print_data(&output)
             }
             Self::WeightStatus(args) => context.print_data(&args.run()?),
-            Self::UploadEncryptionRecipient(args) => context.print_data(&args.run()?),
             Self::UploadRegister(args) => {
                 let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
@@ -705,7 +978,7 @@ impl ModelCommand {
 }
 impl HfCommand {
     fn allows_fallback_config(&self) -> bool {
-        matches!(self, Self::Status(_))
+        false
     }
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -780,29 +1053,29 @@ impl InitArgs {
                 self.output_dir.display()
             )
         })?;
-        let service_name: Name = self
-            .service_name
-            .parse()
+        let service_name = parse_exact_name_arg("--service-name", &self.service_name)?
+            .parse::<Name>()
             .wrap_err("invalid --service-name for soracloud scaffold")?;
-        if self.service_version.trim().is_empty() {
-            return Err(eyre!("--service-version must not be empty"));
-        }
-        let mut container =
-            load_json::<SoraContainerManifestV1>(&workspace_fixture(DEFAULT_CONTAINER_MANIFEST))?;
+        let service_version =
+            require_exact_nonempty_arg("--service-version", &self.service_version)?;
+        let mut container = UnpublishedContainerManifestV1::from_non_inrou_manifest(load_json::<
+            SoraContainerManifestV1,
+        >(
+            &workspace_fixture(DEFAULT_CONTAINER_MANIFEST),
+        )?)?;
         let mut service =
             load_json::<SoraServiceManifestV1>(&workspace_fixture(DEFAULT_SERVICE_MANIFEST))?;
         apply_init_template_defaults(self.template, &service_name, &mut service, &mut container)?;
         service.service_name = service_name;
-        service.service_version = self.service_version;
-        let container_hash = Hash::new(Encode::encode(&container));
+        service.service_version = service_version;
+        let container_hash = container.workspace_hash()?;
         service.container.manifest_hash = container_hash;
         service.container.expected_schema_version = container.schema_version;
-        let bundle = SoraDeploymentBundleV1 {
-            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        let bundle = UnpublishedDeploymentBundleV1 {
             container: container.clone(),
             service: service.clone(),
         };
-        bundle.validate_for_admission()?;
+        validate_unpublished_deployment_source(&bundle)?;
         let container_path = self.output_dir.join("container_manifest.json");
         let service_path = self.output_dir.join("service_manifest.json");
         ensure_can_write(&container_path, self.overwrite)?;
@@ -819,8 +1092,8 @@ impl InitArgs {
             template: self.template.as_str().to_owned(),
             container_manifest_path: container_path.to_string_lossy().into_owned(),
             service_manifest_path: service_path.to_string_lossy().into_owned(),
-            container_manifest_hash: bundle.container_manifest_hash(),
-            service_manifest_hash: bundle.service_manifest_hash(),
+            container_manifest_hash: container_hash,
+            service_manifest_hash: Hash::new(Encode::encode(&service)),
             template_artifacts,
         })
     }
@@ -893,7 +1166,7 @@ pub struct SyncManifestsArgs {
     /// referenced service manifest pair is synchronized.
     #[arg(long, value_name = "PATH")]
     app_manifest: Option<PathBuf>,
-    /// Path to a `SoraContainerManifestV1` JSON document.
+    /// Path to an unpublished Soracloud container workspace JSON document.
     #[arg(long, value_name = "PATH", default_value = DEFAULT_CONTAINER_MANIFEST)]
     container: PathBuf,
     /// Path to a `SoraServiceManifestV1` JSON document.
@@ -951,7 +1224,7 @@ impl SyncManifestsArgs {
 /// Arguments for `soracloud service plan`.
 #[derive(clap::Args, Debug)]
 pub struct LocalPlanArgs {
-    /// Path to a `SoraContainerManifestV1` JSON document.
+    /// Path to an unpublished Soracloud container workspace JSON document.
     #[arg(long, value_name = "PATH", default_value = DEFAULT_CONTAINER_MANIFEST)]
     container: PathBuf,
     /// Path to a `SoraServiceManifestV1` JSON document.
@@ -966,7 +1239,7 @@ impl LocalPlanArgs {
 /// Arguments for `soracloud service dev`.
 #[derive(clap::Args, Debug)]
 pub struct LocalDevArgs {
-    /// Path to a `SoraContainerManifestV1` JSON document.
+    /// Path to an unpublished Soracloud container workspace JSON document.
     #[arg(long, value_name = "PATH", default_value = DEFAULT_CONTAINER_MANIFEST)]
     container: PathBuf,
     /// Path to a `SoraServiceManifestV1` JSON document.
@@ -1106,7 +1379,7 @@ impl LocalDevArgs {
 /// Arguments for `soracloud service build`.
 #[derive(clap::Args, Debug)]
 pub struct BuildAndSyncArgs {
-    /// Path to a `SoraContainerManifestV1` JSON document.
+    /// Path to an unpublished Soracloud container workspace JSON document.
     #[arg(long, value_name = "PATH", default_value = DEFAULT_CONTAINER_MANIFEST)]
     container: PathBuf,
     /// Path to a `SoraServiceManifestV1` JSON document.
@@ -1218,7 +1491,7 @@ impl BuildAndSyncArgs {
 /// Arguments for `soracloud service deploy` and `soracloud service upgrade`.
 #[derive(clap::Args, Debug)]
 pub struct WorkspaceMutationArgs {
-    /// Path to a `SoraContainerManifestV1` JSON document.
+    /// Path to an unpublished Soracloud container workspace JSON document.
     #[arg(long, value_name = "PATH", default_value = DEFAULT_CONTAINER_MANIFEST)]
     container: PathBuf,
     /// Path to a `SoraServiceManifestV1` JSON document.
@@ -1473,7 +1746,6 @@ impl AppInitArgs {
                 "torii.sora.internal",
                 [443],
             )]);
-        container.capabilities.allow_wallet_signing = false;
         container.capabilities.allow_state_writes = true;
         container.capabilities.allow_model_training = false;
         container.lifecycle.healthcheck_path = Some("/healthz".to_owned());
@@ -1641,38 +1913,31 @@ impl AppInitArgs {
         let Some(host) = self.public_host.as_deref() else {
             return Ok(format!("{default_host}.sora"));
         };
-        let host = host.trim();
-        if host.is_empty() {
-            return Err(eyre!("--public-host must not be empty"));
-        }
+        let host = require_exact_nonempty_arg("--public-host", host)?;
         if host.contains("://") || host.contains('/') {
             return Err(eyre!("--public-host must be a hostname only, got `{host}`"));
         }
-        Ok(host.to_owned())
+        Ok(host)
     }
     fn resolve_static_site_dist_dir(&self, default_dist_dir: &str) -> Result<String> {
         let Some(dist_dir) = self.static_site_dist_dir.as_deref() else {
             return Ok(default_dist_dir.to_owned());
         };
-        let dist_dir = dist_dir.trim();
-        if dist_dir.is_empty() {
-            return Err(eyre!("--static-site-dist-dir must not be empty"));
-        }
-        Ok(dist_dir.to_owned())
+        require_exact_nonempty_arg("--static-site-dist-dir", dist_dir)
     }
 }
 define_torii_args! {
-    " Torii base URL to execute deploy/upgrade against authoritative control-plane APIs.",
+    " Torii base URL for the canonical app-infra release mutation.",
     " Optional API token sent as `x-api-token` when mutating live control-plane APIs.",
     " HTTP timeout for Torii mutation requests.";
-    /// Arguments for `soracloud app deploy` and `soracloud app upgrade`.
-    pub struct AppDeployArgs {
+    /// Internal canonical app-infra mutation arguments used by `app release`.
+    pub struct AppReleaseMutationArgs {
         /// Path to a `SoracloudAppManifestV1` JSON document.
         #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
         manifest: PathBuf,
     }
 }
-impl AppDeployArgs {
+impl AppReleaseMutationArgs {
     fn run(
         self,
         mode: MutationMode,
@@ -1739,19 +2004,18 @@ impl AppDeployArgs {
             let container_manifest =
                 resolve_manifest_path(&manifest_dir, &service.container_manifest);
             let service_manifest = resolve_manifest_path(&manifest_dir, &service.service_manifest);
-            let container: SoraContainerManifestV1 = load_json(&container_manifest)?;
+            let container: UnpublishedContainerManifestV1 = load_json(&container_manifest)?;
             let service_manifest_payload: SoraServiceManifestV1 = load_json(&service_manifest)?;
             ensure_app_service_ref_matches_manifest_name(
                 &service.service_name,
                 &service_manifest,
                 &service_manifest_payload,
             )?;
-            let bundle = SoraDeploymentBundleV1 {
-                schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            let bundle = UnpublishedDeploymentBundleV1 {
                 container,
                 service: service_manifest_payload,
             };
-            bundle.validate_for_admission()?;
+            validate_unpublished_deployment_source(&bundle)?;
             let is_hosted_http = bundle.service.execution_plane
                 == SoraServiceExecutionPlaneV1::HttpService
                 && bundle.container.runtime == SoraContainerRuntimeV1::Inrou;
@@ -1803,7 +2067,6 @@ impl AppDeployArgs {
                 static_site_root_binding.as_ref(),
                 static_site_binding_attached,
             )?;
-            let mut bundle = bundle;
             let bundle_file = service
                 .bundle_file
                 .as_deref()
@@ -1817,13 +2080,14 @@ impl AppDeployArgs {
             let published_artifacts = publish_service_artifacts(
                 &bundle_file,
                 service_workspace_dir.as_deref(),
-                &mut bundle,
+                bundle,
                 &torii_url,
                 authority,
                 key_pair,
                 self.timeout_secs,
             )?;
-            let published_bundle = published_artifacts.bundle;
+            let bundle = published_artifacts.admitted_bundle;
+            let published_bundle = published_artifacts.published_bundle;
             let published_inrou_guest_images = published_artifacts.inrou_guest_images;
             let published_public_discovery = attach_public_service_discovery_config(
                 &bundle,
@@ -1864,7 +2128,7 @@ impl AppDeployArgs {
             }
             if !published_inrou_guest_images.is_empty() {
                 notes.push(
-                    "Inrou guest image members were published to SoraFS and will hydrate from immutable refs using the requested distribution policy"
+                    "Inrou guest image members were published to SoraFS and will hydrate from their exact immutable artifact refs"
                         .to_owned(),
                 );
             }
@@ -1933,54 +2197,7 @@ impl AppDeployArgs {
                     .to_owned(),
             );
         }
-        let report = build_soracloud_app_report(
-            manifest.app_name.clone(),
-            root.manifest_path.clone(),
-            true,
-            vec![
-                skipped_app_phase("build", "direct app deploy does not execute build scripts"),
-                app_phase_report(
-                    "sync_manifests",
-                    true,
-                    false,
-                    vec![format!(
-                        "synchronized {} service manifest pair(s)",
-                        synced_manifests.len()
-                    )],
-                ),
-                skipped_app_phase("doctor", "direct app deploy does not run app doctor"),
-                app_phase_report(
-                    "publish",
-                    true,
-                    false,
-                    vec![if static_site_publication.is_some() {
-                        "published static site and service artifacts required by the app".to_owned()
-                    } else {
-                        "published service artifacts required by the app".to_owned()
-                    }],
-                ),
-                app_phase_report(
-                    "sign",
-                    true,
-                    false,
-                    vec!["constructed signed app-infra request".to_owned()],
-                ),
-                app_phase_report("submit", true, false, notes.clone()),
-                skipped_app_phase("status", "direct app deploy does not fetch status"),
-                skipped_app_phase("verify", "run app status or release to verify live health"),
-            ],
-            Some(app_infra_manifest_hash),
-            routes.clone(),
-            app_report_services_from_mutation(&services),
-            manifest.static_site.clone(),
-            Vec::new(),
-            format!(
-                "Run `iroha soracloud app status --manifest {}` to inspect live app state.",
-                root.manifest_path
-            ),
-        );
         Ok(AppMutationOutput {
-            report,
             app_name: manifest.app_name,
             manifest_path: root.manifest_path,
             public_url: root.public_url,
@@ -2056,23 +2273,21 @@ impl AppStatusArgs {
         let app_infra_status = Some(app_payload);
         let source = "torii_app_infra".to_owned();
         let service_status_note = None;
-        let control_plane_services = payload
-            .get("control_plane")
-            .and_then(norito::json::Value::as_object)
-            .and_then(|control_plane| control_plane.get("services"))
-            .and_then(norito::json::Value::as_array)
-            .map(|services| {
-                services
-                    .iter()
-                    .filter_map(|entry| {
-                        entry
-                            .get("service_name")
-                            .and_then(norito::json::Value::as_str)
-                            .map(|name| (name.to_owned(), entry.clone()))
-                    })
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
+        let (_, control_plane) = decode_network_control_plane_snapshot(&payload)?;
+        let mut control_plane_services = BTreeMap::new();
+        for service in control_plane.services {
+            let service_name = service.service_name.clone();
+            let encoded = json::to_value(&service)
+                .wrap_err("failed to encode exact Soracloud service status")?;
+            if control_plane_services
+                .insert(service_name.clone(), encoded)
+                .is_some()
+            {
+                return Err(eyre!(
+                    "authoritative Soracloud control-plane status contains duplicate service `{service_name}`"
+                ));
+            }
+        }
         let mut services = Vec::with_capacity(manifest.services.len());
         let mut hosted_http_service_count = 0_u32;
         let mut deterministic_service_count = 0_u32;
@@ -2080,7 +2295,7 @@ impl AppStatusArgs {
             let container_path =
                 resolve_manifest_path(&manifest_dir, &service_ref.container_manifest);
             let service_path = resolve_manifest_path(&manifest_dir, &service_ref.service_manifest);
-            let container: SoraContainerManifestV1 = load_json(&container_path)?;
+            let container: UnpublishedContainerManifestV1 = load_json(&container_path)?;
             let service: SoraServiceManifestV1 = load_json(&service_path)?;
             ensure_app_service_ref_matches_manifest_name(
                 &service_ref.service_name,
@@ -2177,7 +2392,7 @@ impl AppStatusArgs {
                 skipped_app_phase("publish", "app status is read-only"),
                 skipped_app_phase("sign", "app status is read-only"),
                 skipped_app_phase("submit", "app status is read-only"),
-                app_phase_report("status", true, false, notes.clone()),
+                app_phase_report("status", ok, notes.clone()),
                 skipped_app_phase("verify", "status reports control-plane presence only"),
             ],
             None,
@@ -2259,24 +2474,21 @@ impl AppDoctorArgs {
             plan.workspace_scripts.local_dev.is_some()
                 && plan.workspace_scripts.build_and_sync.is_some()
                 && plan.workspace_scripts.doctor.is_some()
-                && plan.workspace_scripts.release.is_some()
-                && plan.workspace_scripts.deploy.is_some()
-                && plan.workspace_scripts.upgrade.is_some(),
+                && plan.workspace_scripts.release.is_some(),
             format!(
-                "root scripts local_dev={} build_and_sync={} doctor={} release={} deploy={} upgrade={}",
+                "root scripts local_dev={} build_and_sync={} doctor={} release={}",
                 plan.workspace_scripts.local_dev.is_some(),
                 plan.workspace_scripts.build_and_sync.is_some(),
                 plan.workspace_scripts.doctor.is_some(),
-                plan.workspace_scripts.release.is_some(),
-                plan.workspace_scripts.deploy.is_some(),
-                plan.workspace_scripts.upgrade.is_some()
+                plan.workspace_scripts.release.is_some()
             ),
         );
         let static_site = manifest.static_site.as_ref();
         push_check(
             "frontend_publish_mode",
             static_site.is_some_and(|site| {
-                site.publish_mode == APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY
+                (site.publish_mode == APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING
+                    || site.publish_mode == APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY)
                     && site.mount_path == "/"
                     && site.api_base_path.as_deref() == Some("/api")
             }),
@@ -2305,8 +2517,9 @@ impl AppDoctorArgs {
             })
             .collect::<Vec<_>>();
         push_check(
-            "split_plane_services",
-            !hosted_services.is_empty() && !deterministic_services.is_empty(),
+            "service_planes",
+            !plan.services.is_empty()
+                && hosted_services.len() + deterministic_services.len() == plan.services.len(),
             format!(
                 "hosted_http_services={} deterministic_services={}",
                 hosted_services.len(),
@@ -2318,9 +2531,10 @@ impl AppDoctorArgs {
             .all(|service| service.route_path_prefix.as_deref() == Some("/api/v1"));
         push_check(
             "live_route_prefix",
-            !hosted_services.is_empty() && live_prefix_ok,
+            hosted_services.is_empty() || live_prefix_ok,
             if hosted_services.is_empty() {
-                "no hosted HttpService + Inrou services declared".to_owned()
+                "no hosted HttpService + Inrou services declared; check is not applicable"
+                    .to_owned()
             } else {
                 hosted_services
                     .iter()
@@ -2340,7 +2554,7 @@ impl AppDoctorArgs {
             let container_path =
                 resolve_manifest_path(&manifest_dir, &service_ref.container_manifest);
             let service_path = resolve_manifest_path(&manifest_dir, &service_ref.service_manifest);
-            let container: SoraContainerManifestV1 = load_json(&container_path)?;
+            let container: UnpublishedContainerManifestV1 = load_json(&container_path)?;
             let service: SoraServiceManifestV1 = load_json(&service_path)?;
             let bundle_path = service_ref
                 .bundle_file
@@ -2415,22 +2629,25 @@ impl AppDoctorArgs {
                 .collect::<Vec<_>>()
                 .join(", "),
         );
-        let vault_routes_ok =
+        let deterministic_surface_ok =
             service_manifest_summaries
                 .iter()
                 .all(|(_service_name, container, service)| {
                     if service.execution_plane == SoraServiceExecutionPlaneV1::DeterministicService
                         && container.runtime == SoraContainerRuntimeV1::Ivm
                     {
-                        service.lease_volumes.is_empty()
-                            && service.handlers.iter().all(|handler| {
+                        let routes_are_declared = service
+                            .handlers
+                            .iter()
+                            .all(|handler| handler.route_path.is_some());
+                        let vault_surface_is_valid = service.state_bindings.is_empty()
+                            || (service.handlers.iter().all(|handler| {
                                 handler.route_path.as_deref().is_some_and(|path| {
                                     path.starts_with("/auth/")
                                         || path == "/auth/me"
                                         || path.starts_with("/v1/user/")
                                 })
-                            })
-                            && service.state_bindings.iter().all(|binding| {
+                            }) && service.state_bindings.iter().all(|binding| {
                                 matches!(
                                     binding.binding_name.as_ref(),
                                     "auth_challenges"
@@ -2438,14 +2655,17 @@ impl AppDoctorArgs {
                                         | "user_preferences"
                                         | "user_saved_searches"
                                 )
-                            })
+                            }));
+                        service.lease_volumes.is_empty()
+                            && routes_are_declared
+                            && vault_surface_is_valid
                     } else {
                         true
                     }
                 });
         push_check(
-            "vault_surface",
-            vault_routes_ok,
+            "deterministic_service_surface",
+            deterministic_surface_ok,
             service_manifest_summaries
                 .iter()
                 .filter(|(_, container, service)| {
@@ -2497,38 +2717,11 @@ impl AppDoctorArgs {
                     .join("; ")
             },
         );
-        let app_infra_bundles = service_manifest_summaries
-            .iter()
-            .map(|(_, container, service)| SoraDeploymentBundleV1 {
-                schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-                container: container.clone(),
-                service: service.clone(),
-            })
-            .collect::<Vec<_>>();
-        let app_infra_check = build_app_infra_manifest(&manifest, None, &app_infra_bundles);
-        let app_infra_manifest_hash = app_infra_check
-            .as_ref()
-            .ok()
-            .map(SoraAppInfraManifestV1::manifest_hash);
-        push_check(
-            "app_infra_manifest",
-            app_infra_check.is_ok(),
-            app_infra_check
-                .as_ref()
-                .map(|manifest| {
-                    format!(
-                        "canonical app infra manifest hash={} services={}",
-                        manifest.manifest_hash(),
-                        manifest.services.len()
-                    )
-                })
-                .unwrap_or_else(|error| format!("{error:#}")),
-        );
         let ok = failing_checks.is_empty();
         let mut notes = plan.notes.clone();
         if ok {
             notes.push(
-                "doctor validated the app workspace against the manifest-backed split-plane release contract"
+                "doctor validated local source artifacts and the split-plane release contract; the canonical app-infra manifest is validated only after release publishes immutable artifacts"
                     .to_owned(),
             );
         } else {
@@ -2548,14 +2741,14 @@ impl AppDoctorArgs {
             vec![
                 skipped_app_phase("build", "app doctor validates existing local artifacts"),
                 skipped_app_phase("sync_manifests", "app doctor does not mutate manifests"),
-                app_phase_report("doctor", ok, false, notes.clone()),
+                app_phase_report("doctor", ok, notes.clone()),
                 skipped_app_phase("publish", "app doctor does not publish artifacts"),
                 skipped_app_phase("sign", "app doctor does not sign requests"),
                 skipped_app_phase("submit", "app doctor does not submit transactions"),
                 skipped_app_phase("status", "app doctor does not query live status"),
                 skipped_app_phase("verify", "app doctor verifies local release readiness only"),
             ],
-            app_infra_manifest_hash,
+            None,
             plan.routes.clone(),
             app_report_services_from_plan(&plan.services),
             manifest.static_site.clone(),
@@ -2592,7 +2785,7 @@ pub struct AppReleaseArgs {
     /// Path to a `SoracloudAppManifestV1` JSON document.
     #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
     manifest: PathBuf,
-    /// Torii base URL to execute deploy/upgrade against authoritative control-plane APIs.
+    /// Torii base URL for the canonical app-infra release mutation.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
     /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
@@ -2601,9 +2794,6 @@ pub struct AppReleaseArgs {
     /// HTTP timeout for Torii mutation requests.
     #[arg(long, value_name = "SECS", default_value_t = 10)]
     timeout_secs: u64,
-    /// Skip the manifest-adjacent root build-and-sync step.
-    #[arg(long, default_value_t = false)]
-    skip_build: bool,
     /// Print the resolved release plan without executing it.
     #[arg(long, default_value_t = false)]
     dry_run: bool,
@@ -2614,57 +2804,31 @@ impl AppReleaseArgs {
         let uses_api_token = self.api_token.is_some();
         let mut notes = Vec::new();
         notes.push(
-            "release composes the manifest-adjacent build-and-sync path with one explicit deploy"
+            "release composes the manifest-adjacent build-and-sync path with one explicit deploy through one canonical app-infra submission"
                 .to_owned(),
         );
         if uses_api_token {
             notes.push("API token will be forwarded to the Torii control plane".to_owned());
         }
-        let build_and_sync = if self.skip_build {
-            notes.push("release skipped the root build-and-sync step".to_owned());
-            None
-        } else {
-            Some(
-                AppBuildAndSyncArgs {
-                    manifest: self.manifest.clone(),
-                    dry_run: self.dry_run,
-                }
-                .run()?,
-            )
-        };
-        if self.skip_build && !self.dry_run {
-            let manifest: SoracloudAppManifestV1 = load_json(&self.manifest)?;
-            manifest.validate()?;
-            let manifest_dir = self
-                .manifest
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .to_path_buf();
-            let synced = sync_app_manifest_service_refs(&manifest, &manifest_dir)
-                .wrap_err("failed to sync app service manifests after --skip-build")?;
-            notes.push(format!(
-                "release synchronized {} service manifest pair(s) after --skip-build",
-                synced.len()
-            ));
+        let build_and_sync = AppBuildAndSyncArgs {
+            manifest: self.manifest.clone(),
+            dry_run: self.dry_run,
         }
+        .run()?;
         let plan = build_app_local_plan_output(self.manifest.as_path())?;
+        let live_verification_targets = app_live_verification_targets(self.manifest.as_path())?;
+        notes.push(format!(
+            "release requires {} exact live route/health verification target(s)",
+            live_verification_targets.len()
+        ));
         notes.extend(plan.notes.iter().cloned());
         if self.dry_run {
             let report = build_soracloud_app_report(
                 plan.app_name.clone(),
                 plan.manifest_path.clone(),
-                true,
+                false,
                 vec![
-                    app_phase_report(
-                        "build",
-                        true,
-                        self.skip_build,
-                        vec![if self.skip_build {
-                            "build step would be skipped".to_owned()
-                        } else {
-                            "build script plan resolved".to_owned()
-                        }],
-                    ),
+                    skipped_app_phase("build", "dry-run only resolved the build script plan"),
                     skipped_app_phase("sync_manifests", "dry-run does not mutate manifests"),
                     skipped_app_phase("doctor", "dry-run does not run app doctor"),
                     skipped_app_phase("publish", "dry-run does not publish artifacts"),
@@ -2677,7 +2841,7 @@ impl AppReleaseArgs {
                 plan.routes.clone(),
                 app_report_services_from_plan(&plan.services),
                 None,
-                Vec::new(),
+                vec!["dry-run did not build, publish, submit, reconcile, or live-verify the release".to_owned()],
                 "Run `iroha soracloud app simulate` for a local non-mutating readiness report or `iroha soracloud app release` without --dry-run to deploy.".to_owned(),
             );
             return Ok(AppReleaseOutput {
@@ -2686,11 +2850,11 @@ impl AppReleaseArgs {
                 release_mode: "deploy".to_owned(),
                 torii_url,
                 uses_api_token,
-                skip_build: self.skip_build,
                 plan,
                 build_and_sync,
                 release_response: None,
                 status_response: None,
+                live_verifications: Vec::new(),
                 notes,
             });
         }
@@ -2704,13 +2868,13 @@ impl AppReleaseArgs {
                 doctor.report.blockers.join(", ")
             ));
         }
-        let deploy_args = AppDeployArgs {
+        let mutation_args = AppReleaseMutationArgs {
             manifest: self.manifest.clone(),
             torii_url: Some(torii_url.clone()),
             api_token: self.api_token.clone(),
             timeout_secs: self.timeout_secs,
         };
-        let release_response = deploy_args.run(MutationMode::Deploy, authority, key_pair)?;
+        let release_response = mutation_args.run(MutationMode::Deploy, authority, key_pair)?;
         let release_mode = "Deploy".to_owned();
         notes.extend(release_response.notes.iter().cloned());
         let status_response = AppStatusArgs {
@@ -2721,6 +2885,18 @@ impl AppReleaseArgs {
         }
         .run()?;
         notes.extend(status_response.notes.iter().cloned());
+        if !status_response.report.ok {
+            return Err(eyre!(
+                "release status contains app-level blockers: {}",
+                status_response.report.blockers.join(", ")
+            ));
+        }
+        let live_verifications =
+            verify_app_live_targets(&live_verification_targets, self.timeout_secs)?;
+        notes.push(format!(
+            "verified {} live route/health target(s) with exact 2xx responses",
+            live_verifications.len()
+        ));
         let app_infra_manifest_hash = release_response.app_infra_manifest_hash;
         let report = build_soracloud_app_report(
             plan.app_name.clone(),
@@ -2730,42 +2906,38 @@ impl AppReleaseArgs {
                 app_phase_report(
                     "build",
                     true,
-                    self.skip_build,
-                    vec![if self.skip_build {
-                        "build scripts were skipped by --skip-build".to_owned()
-                    } else {
-                        "build-and-sync script completed".to_owned()
-                    }],
+                    vec!["build-and-sync script completed".to_owned()],
                 ),
                 app_phase_report(
                     "sync_manifests",
                     true,
-                    false,
                     vec!["manifest hashes were synchronized before release submission".to_owned()],
                 ),
-                app_phase_report("doctor", true, false, doctor.notes.clone()),
-                app_phase_report("publish", true, false, release_response.notes.clone()),
-                app_phase_report(
-                    "sign",
-                    true,
-                    false,
-                    vec!["signed app-infra request".to_owned()],
-                ),
+                app_phase_report("doctor", true, doctor.notes.clone()),
+                app_phase_report("publish", true, release_response.notes.clone()),
+                app_phase_report("sign", true, vec!["signed app-infra request".to_owned()]),
                 app_phase_report(
                     "submit",
                     true,
-                    false,
                     vec![format!("release mode: {release_mode}")],
                 ),
                 app_phase_report(
                     "status",
                     status_response.report.ok,
-                    false,
                     status_response.notes.clone(),
                 ),
-                skipped_app_phase(
+                app_phase_report(
                     "verify",
-                    "Hayahi performs live health verification outside the generic app CLI",
+                    true,
+                    live_verifications
+                        .iter()
+                        .map(|verification| {
+                            format!(
+                                "{} returned HTTP {} at {}",
+                                verification.label, verification.status_code, verification.url
+                            )
+                        })
+                        .collect(),
                 ),
             ],
             app_infra_manifest_hash,
@@ -2774,7 +2946,7 @@ impl AppReleaseArgs {
             None,
             status_response.report.blockers.clone(),
             if status_response.report.ok {
-                "Release submitted and status returned without app-level blockers.".to_owned()
+                "Release submitted, reconciled against authoritative status, and passed live route/health verification.".to_owned()
             } else {
                 "Resolve status blockers before promoting the rollout.".to_owned()
             },
@@ -2785,11 +2957,11 @@ impl AppReleaseArgs {
             release_mode,
             torii_url,
             uses_api_token,
-            skip_build: self.skip_build,
             plan,
             build_and_sync,
             release_response: Some(release_response),
             status_response: Some(status_response),
+            live_verifications,
             notes,
         })
     }
@@ -2810,7 +2982,7 @@ impl AppSimulateArgs {
             .to_path_buf();
         let manifest: SoracloudAppManifestV1 = load_json(&manifest_path)?;
         manifest.validate()?;
-        let (synced_manifests, app_infra_bundles) =
+        let (synced_manifests, unpublished_bundles) =
             project_app_manifest_service_refs(&manifest, &manifest_dir)?;
         let plan = build_app_local_plan_output(&manifest_path)?;
         let planned_static_site = manifest
@@ -2820,17 +2992,6 @@ impl AppSimulateArgs {
                 plan_app_static_site_publication(&manifest, &manifest_dir, static_site, key_pair)
             })
             .transpose()?;
-        let app_infra_manifest =
-            build_app_infra_manifest(&manifest, planned_static_site.as_ref(), &app_infra_bundles)?;
-        let app_infra_manifest_hash = app_infra_manifest.manifest_hash();
-        let app_infra_request = signed_app_infra_request(
-            MutationMode::Deploy,
-            app_infra_manifest,
-            Vec::new(),
-            key_pair,
-        )?;
-        let app_infra_request_value = json::to_value(&app_infra_request)
-            .wrap_err("failed to encode simulated app request")?;
         let notes = vec![
             "simulate completed without live Torii reads or transaction submission".to_owned(),
             format!(
@@ -2839,7 +3000,10 @@ impl AppSimulateArgs {
             ),
             "would publish static site and service artifacts required by the app release"
                 .to_owned(),
-            "would submit a canonical app-infra deploy request".to_owned(),
+            format!(
+                "would publish {} source service bundle(s) before constructing an admitted app-infra request",
+                unpublished_bundles.len()
+            ),
         ];
         let report = build_soracloud_app_report(
             plan.app_name.clone(),
@@ -2850,7 +3014,6 @@ impl AppSimulateArgs {
                 app_phase_report(
                     "sync_manifests",
                     true,
-                    false,
                     vec![format!(
                         "manifest sync projection covers {} service manifest pair(s)",
                         synced_manifests.len()
@@ -2859,26 +3022,21 @@ impl AppSimulateArgs {
                 app_phase_report(
                     "doctor",
                     true,
-                    false,
                     vec!["local topology projection succeeded".to_owned()],
                 ),
-                app_phase_report(
+                skipped_app_phase(
                     "publish",
-                    true,
-                    false,
-                    vec!["SoraFS content hashes were computed locally".to_owned()],
+                    "simulate does not publish source guest images or service bundles",
                 ),
-                app_phase_report(
+                skipped_app_phase(
                     "sign",
-                    true,
-                    false,
-                    vec!["app-infra request provenance shape was signed locally".to_owned()],
+                    "an admitted app-infra request exists only after concrete artifact publication",
                 ),
                 skipped_app_phase("submit", "simulate never submits transactions"),
                 skipped_app_phase("status", "simulate never queries live Torii status"),
                 skipped_app_phase("verify", "simulate reports release readiness only"),
             ],
-            Some(app_infra_manifest_hash),
+            None,
             plan.routes.clone(),
             app_report_services_from_plan(&plan.services),
             manifest.static_site.clone(),
@@ -2892,7 +3050,7 @@ impl AppSimulateArgs {
             plan,
             synced_manifests,
             planned_static_site,
-            app_infra_request: Some(app_infra_request_value),
+            app_infra_request: None,
             notes,
         })
     }
@@ -3093,223 +3251,6 @@ impl AppBuildAndSyncArgs {
         })
     }
 }
-/// Arguments for `soracloud app doctor`.
-#[cfg(test)]
-#[derive(clap::Args, Debug)]
-pub struct AppDoctorWorkspaceArgs {
-    /// Path to a `SoracloudAppManifestV1` JSON document.
-    #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
-    manifest: PathBuf,
-    /// Print the resolved doctor command plan without executing it.
-    #[arg(long, default_value_t = false)]
-    dry_run: bool,
-}
-#[cfg(test)]
-impl AppDoctorWorkspaceArgs {
-    fn run(self) -> Result<AppDoctorWorkspaceOutput> {
-        let plan = build_app_local_plan_output(self.manifest.as_path())?;
-        let script_path = resolve_app_root_script(self.manifest.as_path(), "doctor.sh")?;
-        let working_dir = script_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let command = vec!["./doctor.sh".to_owned()];
-        if self.dry_run {
-            let mut notes = plan.notes.clone();
-            notes.push("doctor will run the manifest-adjacent root doctor script".to_owned());
-            return Ok(AppDoctorWorkspaceOutput {
-                app_name: plan.app_name,
-                public_url: plan.public_url,
-                hostname: plan.hostname.clone(),
-                manifest_path: self.manifest.to_string_lossy().into_owned(),
-                workspace_dir: plan.workspace_dir.clone(),
-                workspace_scripts: plan.workspace_scripts.clone(),
-                working_dir: working_dir.to_string_lossy().into_owned(),
-                script_path: script_path.to_string_lossy().into_owned(),
-                script_name: "doctor.sh".to_owned(),
-                mode: "dry_run".to_owned(),
-                has_mixed_planes: plan.has_mixed_planes,
-                hosted_http_service_count: plan.hosted_http_service_count,
-                deterministic_service_count: plan.deterministic_service_count,
-                frontend: plan.frontend.clone(),
-                services: plan.services.clone(),
-                routes: plan.routes.clone(),
-                command,
-                exit_status: None,
-                notes,
-            });
-        }
-        let status = ProcessCommand::new(&script_path)
-            .current_dir(&working_dir)
-            .status()
-            .wrap_err_with(|| {
-                format!(
-                    "failed to run doctor script `{}` resolved from `{}`",
-                    script_path.display(),
-                    self.manifest.display()
-                )
-            })?;
-        let exit_status = status.code();
-        if !status.success() {
-            let rendered_status = exit_status
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "terminated by signal".to_owned());
-            return Err(eyre!(
-                "doctor script `{}` exited with status {rendered_status}",
-                script_path.display()
-            ));
-        }
-        let mut notes = plan.notes;
-        notes.push("doctor completed through the manifest-adjacent root script".to_owned());
-        Ok(AppDoctorWorkspaceOutput {
-            app_name: plan.app_name,
-            public_url: plan.public_url,
-            hostname: plan.hostname.clone(),
-            manifest_path: self.manifest.to_string_lossy().into_owned(),
-            workspace_dir: plan.workspace_dir.clone(),
-            workspace_scripts: plan.workspace_scripts.clone(),
-            working_dir: working_dir.to_string_lossy().into_owned(),
-            script_path: script_path.to_string_lossy().into_owned(),
-            script_name: "doctor.sh".to_owned(),
-            mode: "completed".to_owned(),
-            has_mixed_planes: plan.has_mixed_planes,
-            hosted_http_service_count: plan.hosted_http_service_count,
-            deterministic_service_count: plan.deterministic_service_count,
-            frontend: plan.frontend.clone(),
-            services: plan.services.clone(),
-            routes: plan.routes.clone(),
-            command,
-            exit_status,
-            notes,
-        })
-    }
-}
-/// Arguments for `soracloud app deploy` and `soracloud app upgrade`.
-#[cfg(test)]
-#[derive(clap::Args, Debug)]
-pub struct AppWorkspaceMutationArgs {
-    /// Path to a `SoracloudAppManifestV1` JSON document.
-    #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
-    manifest: PathBuf,
-    /// Torii base URL forwarded to the workspace entrypoint through `TORII_URL`.
-    #[arg(long, value_name = "URL")]
-    torii_url: Option<String>,
-    /// Optional API token forwarded to the workspace entrypoint through `API_TOKEN`.
-    #[arg(long, value_name = "TOKEN")]
-    api_token: Option<String>,
-    /// HTTP timeout forwarded to the underlying deploy or upgrade command.
-    #[arg(long, value_name = "SECS", default_value_t = 10)]
-    timeout_secs: u64,
-    /// Print the resolved deploy or upgrade command plan without executing it.
-    #[arg(long, default_value_t = false)]
-    dry_run: bool,
-}
-#[cfg(test)]
-impl AppWorkspaceMutationArgs {
-    fn run(self, mode: MutationMode) -> Result<AppWorkspaceMutationScriptOutput> {
-        let plan = build_app_local_plan_output(self.manifest.as_path())?;
-        let script_name = mode.workspace_script_name();
-        let script_path = resolve_app_root_script(self.manifest.as_path(), script_name)?;
-        let working_dir = script_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
-        let command = build_app_workspace_mutation_command(script_name, self.timeout_secs);
-        let mut notes = plan.notes;
-        notes.push(format!(
-            "{} will run through the manifest-adjacent root script after exporting TORII_URL",
-            mode.label_lowercase()
-        ));
-        if self.api_token.is_some() {
-            notes.push(
-                "API token will be forwarded through API_TOKEN instead of the command line"
-                    .to_owned(),
-            );
-        }
-        if self.dry_run {
-            return Ok(AppWorkspaceMutationScriptOutput {
-                app_name: plan.app_name,
-                public_url: plan.public_url,
-                hostname: plan.hostname.clone(),
-                manifest_path: self.manifest.to_string_lossy().into_owned(),
-                workspace_dir: plan.workspace_dir.clone(),
-                workspace_scripts: plan.workspace_scripts.clone(),
-                working_dir: working_dir.to_string_lossy().into_owned(),
-                script_path: script_path.to_string_lossy().into_owned(),
-                script_name: script_name.to_owned(),
-                mode: "dry_run".to_owned(),
-                torii_url,
-                uses_api_token: self.api_token.is_some(),
-                has_mixed_planes: plan.has_mixed_planes,
-                hosted_http_service_count: plan.hosted_http_service_count,
-                deterministic_service_count: plan.deterministic_service_count,
-                frontend: plan.frontend.clone(),
-                services: plan.services.clone(),
-                routes: plan.routes.clone(),
-                command,
-                exit_status: None,
-                notes,
-            });
-        }
-        let mut process = ProcessCommand::new(&script_path);
-        process
-            .current_dir(&working_dir)
-            .env("TORII_URL", &torii_url);
-        if let Some(api_token) = self.api_token.as_deref() {
-            process.env("API_TOKEN", api_token);
-        }
-        process
-            .arg("--timeout-secs")
-            .arg(self.timeout_secs.to_string());
-        let status = process.status().wrap_err_with(|| {
-            format!(
-                "failed to run {} script `{}` resolved from `{}`",
-                mode.label_lowercase(),
-                script_path.display(),
-                self.manifest.display()
-            )
-        })?;
-        let exit_status = status.code();
-        if !status.success() {
-            let rendered_status = exit_status
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "terminated by signal".to_owned());
-            return Err(eyre!(
-                "{} script `{}` exited with status {rendered_status}",
-                mode.label_lowercase(),
-                script_path.display()
-            ));
-        }
-        notes.push(format!(
-            "{} completed through the manifest-adjacent root script",
-            mode.label_lowercase()
-        ));
-        Ok(AppWorkspaceMutationScriptOutput {
-            app_name: plan.app_name,
-            public_url: plan.public_url,
-            hostname: plan.hostname.clone(),
-            manifest_path: self.manifest.to_string_lossy().into_owned(),
-            workspace_dir: plan.workspace_dir.clone(),
-            workspace_scripts: plan.workspace_scripts.clone(),
-            working_dir: working_dir.to_string_lossy().into_owned(),
-            script_path: script_path.to_string_lossy().into_owned(),
-            script_name: script_name.to_owned(),
-            mode: "completed".to_owned(),
-            torii_url,
-            uses_api_token: self.api_token.is_some(),
-            has_mixed_planes: plan.has_mixed_planes,
-            hosted_http_service_count: plan.hosted_http_service_count,
-            deterministic_service_count: plan.deterministic_service_count,
-            frontend: plan.frontend.clone(),
-            services: plan.services.clone(),
-            routes: plan.routes.clone(),
-            command,
-            exit_status,
-            notes,
-        })
-    }
-}
 /// Arguments for `soracloud app release`.
 #[cfg(test)]
 #[derive(clap::Args, Debug)]
@@ -3332,7 +3273,7 @@ pub struct AppReleaseWorkspaceArgs {
 }
 #[cfg(test)]
 impl AppReleaseWorkspaceArgs {
-    fn run(self) -> Result<AppWorkspaceMutationScriptOutput> {
+    fn run(self) -> Result<AppReleaseWorkspaceScriptOutput> {
         let plan = build_app_local_plan_output(self.manifest.as_path())?;
         let script_path = resolve_app_root_script(self.manifest.as_path(), "release.sh")?;
         let working_dir = script_path
@@ -3340,7 +3281,7 @@ impl AppReleaseWorkspaceArgs {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
-        let command = build_app_workspace_mutation_command("release.sh", self.timeout_secs);
+        let command = build_app_release_workspace_command(self.timeout_secs);
         let mut notes = plan.notes;
         notes.push(
             "release will run through the manifest-adjacent root script after exporting TORII_URL"
@@ -3353,7 +3294,7 @@ impl AppReleaseWorkspaceArgs {
             );
         }
         if self.dry_run {
-            return Ok(AppWorkspaceMutationScriptOutput {
+            return Ok(AppReleaseWorkspaceScriptOutput {
                 app_name: plan.app_name,
                 public_url: plan.public_url,
                 hostname: plan.hostname.clone(),
@@ -3405,7 +3346,7 @@ impl AppReleaseWorkspaceArgs {
             ));
         }
         notes.push("release completed through the manifest-adjacent root script".to_owned());
-        Ok(AppWorkspaceMutationScriptOutput {
+        Ok(AppReleaseWorkspaceScriptOutput {
             app_name: plan.app_name,
             public_url: plan.public_url,
             hostname: plan.hostname.clone(),
@@ -3478,9 +3419,9 @@ fn build_service_workspace_mutation_command(
     command
 }
 #[cfg(test)]
-fn build_app_workspace_mutation_command(script_name: &str, timeout_secs: u64) -> Vec<String> {
+fn build_app_release_workspace_command(timeout_secs: u64) -> Vec<String> {
     vec![
-        format!("./{script_name}"),
+        "./release.sh".to_owned(),
         "--timeout-secs".to_owned(),
         timeout_secs.to_string(),
     ]
@@ -3491,21 +3432,27 @@ fn resolve_optional_workspace_service_name(
     service_manifest: Option<&Path>,
     command_name: &str,
 ) -> Result<Option<String>> {
-    let normalized_service_name = service_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+    let exact_service_name = service_name
+        .map(|value| {
+            let parsed: Name = value.parse().wrap_err("invalid --service-name")?;
+            if parsed.as_ref() != value {
+                return Err(eyre!(
+                    "--service-name must use its exact canonical V1 spelling"
+                ));
+            }
+            Ok(value)
+        })
+        .transpose()?;
     match (container_manifest, service_manifest) {
-        (None, None) => Ok(normalized_service_name),
+        (None, None) => Ok(exact_service_name),
         (Some(_), None) | (None, Some(_)) => Err(eyre!(
             "`{command_name}` requires both --container and --service when resolving the service name from workspace manifests"
         )),
         (Some(container_manifest), Some(service_manifest)) => {
-            let _: SoraContainerManifestV1 = load_json(container_manifest)?;
+            let _: UnpublishedContainerManifestV1 = load_json(container_manifest)?;
             let service: SoraServiceManifestV1 = load_json(service_manifest)?;
             let resolved_service_name = service.service_name.to_string();
-            if let Some(expected_service_name) = normalized_service_name
+            if let Some(expected_service_name) = exact_service_name
                 && expected_service_name != resolved_service_name
             {
                 return Err(eyre!(
@@ -3634,14 +3581,13 @@ fn build_service_workspace_plan(
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let container: SoraContainerManifestV1 = load_json(container_manifest)?;
+    let container: UnpublishedContainerManifestV1 = load_json(container_manifest)?;
     let service: SoraServiceManifestV1 = load_json(service_manifest)?;
-    let bundle = SoraDeploymentBundleV1 {
-        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+    let bundle = UnpublishedDeploymentBundleV1 {
         container: container.clone(),
         service: service.clone(),
     };
-    bundle.validate_for_admission().wrap_err_with(|| {
+    validate_unpublished_deployment_source(&bundle).wrap_err_with(|| {
         format!(
             "service `{}` is not locally admissible; run `iroha soracloud service sync-manifests --container {} --service {}` after manifest edits",
             service.service_name,
@@ -3774,20 +3720,6 @@ fn build_direct_service_mutation_output(
     if uses_api_token {
         notes.push("API token was forwarded to the Torii control plane".to_owned());
     }
-    let current_version = response
-        .get("current_version")
-        .and_then(norito::json::Value::as_str)
-        .map(ToOwned::to_owned);
-    let rollout_handle = response
-        .get("rollout_handle")
-        .and_then(norito::json::Value::as_str)
-        .map(ToOwned::to_owned);
-    let rollout_stage = response.get("rollout_stage").cloned();
-    let stage = response.get("stage").cloned();
-    let traffic_percent = response
-        .get("traffic_percent")
-        .and_then(norito::json::Value::as_u64)
-        .and_then(|value| u8::try_from(value).ok());
     ServiceMutationOutput {
         service_name: plan.service_name,
         container_manifest_path: container_manifest.to_string_lossy().into_owned(),
@@ -3814,11 +3746,6 @@ fn build_direct_service_mutation_output(
         published_public_discovery,
         published_bundle,
         published_inrou_guest_images,
-        current_version,
-        rollout_handle,
-        rollout_stage,
-        stage,
-        traffic_percent,
         response,
         notes,
     }
@@ -3836,36 +3763,24 @@ fn attach_service_plan_to_output(
     root.insert("service_plan".to_owned(), json::to_value(&service_plan)?);
     Ok(())
 }
-fn app_phase_report(
-    name: &str,
-    ok: bool,
-    skipped: bool,
-    diagnostics: Vec<String>,
-) -> SoracloudAppPhaseReportV1 {
+fn app_phase_report(name: &str, ok: bool, diagnostics: Vec<String>) -> SoracloudAppPhaseReportV1 {
     SoracloudAppPhaseReportV1 {
         name: name.to_owned(),
         ok,
-        skipped,
+        skipped: false,
         diagnostics,
     }
 }
 fn skipped_app_phase(name: &str, reason: &str) -> SoracloudAppPhaseReportV1 {
-    app_phase_report(name, true, true, vec![reason.to_owned()])
+    SoracloudAppPhaseReportV1 {
+        name: name.to_owned(),
+        ok: false,
+        skipped: true,
+        diagnostics: vec![reason.to_owned()],
+    }
 }
 fn app_report_services_from_plan(
     services: &[AppLocalServicePlanOutput],
-) -> Vec<SoracloudAppReportServiceV1> {
-    services
-        .iter()
-        .map(|service| SoracloudAppReportServiceV1 {
-            service_name: service.service_name.clone(),
-            execution_plane: service.execution_plane.clone(),
-            runtime: service.runtime.clone(),
-        })
-        .collect()
-}
-fn app_report_services_from_mutation(
-    services: &[AppServiceMutationOutput],
 ) -> Vec<SoracloudAppReportServiceV1> {
     services
         .iter()
@@ -3976,8 +3891,6 @@ fn build_app_root_projection(manifest_path: &Path, public_url: &str) -> Result<A
             build_and_sync: workspace_script_path_if_exists(&manifest_dir, "build-and-sync.sh"),
             doctor: workspace_script_path_if_exists(&manifest_dir, "doctor.sh"),
             release: workspace_script_path_if_exists(&manifest_dir, "release.sh"),
-            deploy: workspace_script_path_if_exists(&manifest_dir, "deploy.sh"),
-            upgrade: workspace_script_path_if_exists(&manifest_dir, "upgrade.sh"),
         },
     })
 }
@@ -4170,7 +4083,7 @@ define_torii_args! {
     " HTTP timeout for Torii mutation requests.";
     /// Arguments for `soracloud service deploy`.
     pub struct DeployArgs {
-        /// Path to a `SoraContainerManifestV1` JSON document.
+        /// Path to an unpublished Soracloud container workspace JSON document.
         #[arg(long, value_name = "PATH", default_value = DEFAULT_CONTAINER_MANIFEST)]
         container: PathBuf,
         /// Path to a `SoraServiceManifestV1` JSON document.
@@ -4197,14 +4110,10 @@ macro_rules! impl_service_bundle_mutation {
                 key_pair: &KeyPair,
             ) -> Result<ServiceMutationOutput> {
                 let plan = build_service_workspace_plan(&self.container, &self.service)?;
-                let container: SoraContainerManifestV1 = load_json(&self.container)?;
+                let container: UnpublishedContainerManifestV1 = load_json(&self.container)?;
                 let service: SoraServiceManifestV1 = load_json(&self.service)?;
-                let mut bundle = SoraDeploymentBundleV1 {
-                    schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-                    container,
-                    service,
-                };
-                bundle.validate_for_admission()?;
+                let bundle = UnpublishedDeploymentBundleV1 { container, service };
+                validate_unpublished_deployment_source(&bundle)?;
                 let mut initial_service_configs =
                     load_initial_service_configs(self.initial_configs.as_deref())?;
                 let initial_service_secrets =
@@ -4218,12 +4127,13 @@ macro_rules! impl_service_bundle_mutation {
                 let published_artifacts = publish_service_artifacts(
                     &self.bundle_file,
                     workspace_dir.as_deref(),
-                    &mut bundle,
+                    bundle,
                     &torii_url,
                     authority,
                     key_pair,
                     self.timeout_secs,
                 )?;
+                let bundle = published_artifacts.admitted_bundle;
                 let published_public_discovery = attach_public_service_discovery_config(
                     &bundle,
                     &mut initial_service_configs,
@@ -4252,7 +4162,7 @@ macro_rules! impl_service_bundle_mutation {
                     &torii_url,
                     self.api_token.is_some(),
                     published_public_discovery,
-                    published_artifacts.bundle,
+                    published_artifacts.published_bundle,
                     published_artifacts.inrou_guest_images,
                     response,
                 ))
@@ -4267,7 +4177,7 @@ define_torii_args! {
     " HTTP timeout for Torii mutation requests.";
     /// Arguments for `soracloud service upgrade`.
     pub struct UpgradeArgs {
-        /// Path to a `SoraContainerManifestV1` JSON document.
+        /// Path to an unpublished Soracloud container workspace JSON document.
         #[arg(long, value_name = "PATH", default_value = DEFAULT_CONTAINER_MANIFEST)]
         container: PathBuf,
         /// Path to a `SoraServiceManifestV1` JSON document.
@@ -4291,7 +4201,7 @@ pub struct StatusArgs {
     /// Optional service name filter.
     #[arg(long, value_name = "NAME")]
     service_name: Option<String>,
-    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service filter.
+    /// Optional unpublished Soracloud container workspace used to resolve the service filter.
     #[arg(long, value_name = "PATH")]
     container: Option<PathBuf>,
     /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service filter.
@@ -4339,7 +4249,7 @@ define_live_mutation_args! {
         /// Service name owning the config entry.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -4390,7 +4300,7 @@ define_live_mutation_args! {
         /// Service name owning the config entry.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -4438,7 +4348,7 @@ define_torii_args! {
         /// Service name owning the config entries.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -4479,7 +4389,7 @@ define_live_mutation_args! {
         /// Service name owning the secret entry.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -4527,7 +4437,7 @@ define_live_mutation_args! {
         /// Service name owning the secret entry.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -4575,7 +4485,7 @@ define_torii_args! {
         /// Service name owning the secret entries.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -4618,7 +4528,7 @@ define_torii_args! {
         /// Service name to roll back.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -4672,7 +4582,7 @@ define_torii_args! {
         /// Service name with an active rollout.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -4867,8 +4777,11 @@ define_live_mutation_args! {
         /// Apartment name issuing the spend request.
         #[arg(long, value_name = "NAME")]
         apartment_name: String,
+        /// Caller-selected unique wallet request identifier committed by the signed V1 request.
+        #[arg(long, value_name = "REQUEST", value_parser = parse_agent_wallet_request_id)]
+        request_id: String,
         /// Asset definition identifier (canonical unprefixed Base58 address).
-        #[arg(long, value_name = "ASSET")]
+        #[arg(long, value_name = "ASSET", value_parser = parse_agent_wallet_asset_definition)]
         asset_definition: String,
         /// Exact, positive spend amount.
         #[arg(long, value_name = "QUANTITY", value_parser = parse_positive_quantity)]
@@ -4878,9 +4791,12 @@ define_live_mutation_args! {
 impl AgentWalletSpendArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let asset_definition = parse_agent_wallet_asset_definition(&self.asset_definition)
+            .map_err(|error| eyre!("invalid --asset-definition: {error}"))?;
         let request = signed_agent_wallet_spend_request(
             &self.apartment_name,
-            &self.asset_definition,
+            &self.request_id,
+            &asset_definition,
             &self.amount,
             authority,
             key_pair,
@@ -4893,7 +4809,12 @@ impl AgentWalletSpendArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        build_wallet_spend_output(payload, &status_payload, &self.apartment_name)
+        build_wallet_spend_output(
+            payload,
+            &status_payload,
+            &self.apartment_name,
+            &self.request_id,
+        )
     }
 }
 define_live_mutation_args! {
@@ -4903,8 +4824,8 @@ define_live_mutation_args! {
         /// Apartment name owning the request.
         #[arg(long, value_name = "NAME")]
         apartment_name: String,
-        /// Wallet request identifier emitted by `agent wallet-spend`.
-        #[arg(long, value_name = "REQUEST")]
+        /// Caller-selected wallet request identifier supplied to the original `agent wallet-spend`.
+        #[arg(long, value_name = "REQUEST", value_parser = parse_agent_wallet_request_id)]
         request_id: String,
     }
 }
@@ -5003,6 +4924,13 @@ define_live_mutation_args! {
 impl AgentMessageSendArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let (_, mailbox_status_before) = fetch_torii_soracloud_agent_mailbox_status(
+            torii_url,
+            &self.to_apartment,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        let known_message_ids = mailbox_message_ids(&mailbox_status_before)?;
         let request = signed_agent_message_send_request(
             &self.from_apartment,
             &self.to_apartment,
@@ -5022,6 +4950,7 @@ impl AgentMessageSendArgs {
         build_message_send_output(
             payload,
             &mailbox_status_payload,
+            &known_message_ids,
             &self.from_apartment,
             &self.channel,
             &self.payload,
@@ -5043,6 +4972,13 @@ define_live_mutation_args! {
 impl AgentMessageAckArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let (_, mailbox_status_before) = fetch_torii_soracloud_agent_mailbox_status(
+            torii_url,
+            &self.apartment_name,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        mailbox_message_by_id(&mailbox_status_before, &self.message_id)?;
         let request = signed_agent_message_ack_request(
             &self.apartment_name,
             &self.message_id,
@@ -5057,7 +4993,12 @@ impl AgentMessageAckArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        build_message_ack_output(payload, &mailbox_status_payload, &self.message_id)
+        build_message_ack_output(
+            payload,
+            &mailbox_status_before,
+            &mailbox_status_payload,
+            &self.message_id,
+        )
     }
 }
 define_torii_args! {
@@ -5128,121 +5069,6 @@ impl AgentArtifactAllowArgs {
         )
     }
 }
-define_live_mutation_args! {
-    " Torii base URL for authoritative `agent/autonomy/run`.";
-    /// Arguments for `iroha soracloud agent autonomy-run`.
-    pub struct AgentAutonomyRunArgs {
-        /// Apartment name requesting autonomous execution.
-        #[arg(long, value_name = "NAME")]
-        apartment_name: String,
-        /// Artifact hash identifier.
-        #[arg(long, value_name = "HASH")]
-        artifact_hash: String,
-        /// Optional provenance hash for this run request.
-        #[arg(long, value_name = "HASH")]
-        provenance_hash: Option<String>,
-        /// Budget units requested for this run.
-        #[arg(long, value_name = "UNITS")]
-        budget_units: u64,
-        /// Human-readable run label.
-        #[arg(long, value_name = "LABEL")]
-        run_label: String,
-        /// Optional canonical JSON body to forward to the generated HF `/infer` handler.
-        #[arg(long, value_name = "JSON", conflicts_with = "workflow_input_json_file")]
-        workflow_input_json: Option<String>,
-        /// Optional path to a JSON file forwarded to the generated HF `/infer` handler.
-        #[arg(long, value_name = "PATH", conflicts_with = "workflow_input_json")]
-        workflow_input_json_file: Option<PathBuf>,
-    }
-}
-impl AgentAutonomyRunArgs {
-    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        if self.budget_units == 0 {
-            return Err(eyre!("--budget-units must be greater than zero"));
-        }
-        let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let apartment_name = self.apartment_name.clone();
-        let artifact_hash = self.artifact_hash.clone();
-        let provenance_hash = self.provenance_hash.clone();
-        let run_label = self.run_label.clone();
-        let api_token = self.api_token.clone();
-        let timeout_secs = self.timeout_secs;
-        let workflow_input_json = match (
-            self.workflow_input_json.as_deref(),
-            self.workflow_input_json_file.as_deref(),
-        ) {
-            (Some(raw), None) => Some(raw.to_owned()),
-            (None, Some(path)) => Some(fs::read_to_string(path).wrap_err_with(|| {
-                format!(
-                    "failed to read workflow input JSON from `{}`",
-                    path.display()
-                )
-            })?),
-            (None, None) => None,
-            (Some(_), Some(_)) => unreachable!("clap enforces workflow input exclusivity"),
-        };
-        let request = signed_agent_autonomy_run_request(
-            &self.apartment_name,
-            &self.artifact_hash,
-            self.provenance_hash.as_deref(),
-            self.budget_units,
-            &self.run_label,
-            workflow_input_json.as_deref(),
-            authority,
-            key_pair,
-        )?;
-        let (_, initial_payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/agent/autonomy/run",
-            &request,
-            api_token.as_deref(),
-            timeout_secs,
-        )?;
-        let (_, status_after_approval) = fetch_torii_soracloud_agent_autonomy_status(
-            torii_url,
-            &apartment_name,
-            api_token.as_deref(),
-            timeout_secs,
-        )?;
-        let run_id = find_agent_autonomy_run_id(
-            &status_after_approval,
-            &artifact_hash,
-            provenance_hash.as_deref(),
-            &run_label,
-        )?;
-        let finalize_request = AgentAutonomyFinalizeRequest {
-            apartment_name: apartment_name.clone(),
-            run_id: run_id.clone(),
-        };
-        let (_, finalize_payload) = post_torii_soracloud_mutation(
-            torii_url,
-            "v1/soracloud/agent/autonomy/run/finalize",
-            &finalize_request,
-            api_token.as_deref(),
-            timeout_secs,
-        )?;
-        let (_, mut final_status) = fetch_torii_soracloud_agent_autonomy_status(
-            torii_url,
-            &apartment_name,
-            api_token.as_deref(),
-            timeout_secs,
-        )?;
-        if let Some(root) = final_status.as_object_mut() {
-            root.insert("run_id".to_owned(), json::Value::String(run_id));
-            if let Some(value) = extract_json_field(&initial_payload, "submitted_tx_hash")? {
-                root.insert("approval_submitted_tx_hash".to_owned(), value);
-            }
-            if let Some(value) = extract_json_field(&finalize_payload, "submitted_tx_hash")? {
-                root.insert("finalize_submitted_tx_hash".to_owned(), value);
-            }
-            root.insert(
-                "submission_mode".to_owned(),
-                json::Value::String("client_signed".to_owned()),
-            );
-        }
-        Ok(final_status)
-    }
-}
 define_torii_args! {
     " Torii base URL for authoritative `agent/autonomy/status`.",
     " Optional API token sent as `x-api-token` when querying Torii.",
@@ -5275,7 +5101,7 @@ define_torii_args! {
         /// Service name that owns the training job.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -5371,7 +5197,7 @@ define_torii_args! {
         /// Service name that owns the training job.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -5437,7 +5263,7 @@ define_torii_args! {
         /// Service name that owns the training job.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -5485,7 +5311,7 @@ define_torii_args! {
         /// Service name that owns the training job.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -5528,7 +5354,7 @@ define_torii_args! {
         /// Service name that owns the model.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -5600,7 +5426,7 @@ define_torii_args! {
         /// Service name that owns the model artifact.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -5643,7 +5469,7 @@ define_torii_args! {
         /// Service name that owns the model.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -5723,7 +5549,7 @@ define_torii_args! {
         /// Service name that owns the model.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -5783,7 +5609,7 @@ define_torii_args! {
         /// Service name that owns the model.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -5839,7 +5665,7 @@ define_torii_args! {
         /// Service name that owns the model.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -5874,34 +5700,6 @@ impl ModelWeightStatusArgs {
     }
 }
 define_torii_args! {
-    " Torii base URL for authoritative `model/upload/encryption-recipient`.",
-    " Optional API token sent as `x-api-token` when querying Torii.",
-    " HTTP timeout for live control-plane query.";
-    /// Arguments for `iroha soracloud model upload-encryption-recipient`.
-    pub struct ModelUploadEncryptionRecipientArgs {
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to project the local service plan.
-        #[arg(long, value_name = "PATH")]
-        container: Option<PathBuf>,
-        /// Optional path to a `SoraServiceManifestV1` JSON document used to project the local service plan.
-        #[arg(long, value_name = "PATH")]
-        service: Option<PathBuf>,
-    }
-}
-impl ModelUploadEncryptionRecipientArgs {
-    fn run(self) -> Result<norito::json::Value> {
-        let service_plan =
-            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
-        let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let (_, mut payload) = fetch_torii_soracloud_uploaded_model_encryption_recipient(
-            torii_url,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
-        attach_service_plan_to_output(&mut payload, service_plan)?;
-        Ok(payload)
-    }
-}
-define_torii_args! {
     " Torii base URL for authoritative `model/upload/register`.",
     " Optional API token sent as `x-api-token`.",
     " HTTP timeout for live control-plane mutation.";
@@ -5916,7 +5714,7 @@ define_torii_args! {
         /// Service name that owns the uploaded model.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -5963,10 +5761,11 @@ fn apply_uploaded_model_register_service_name_override(
     let Some(service_name) = service_name else {
         return Ok(());
     };
+    let service_name = parse_exact_name_arg("resolved service name", service_name)?;
     bundle.service_name = service_name.parse().wrap_err_with(|| {
         format!("resolved service name `{service_name}` is not a valid Soracloud service name")
     })?;
-    finalize.service_name = service_name.to_owned();
+    finalize.service_name = service_name;
     Ok(())
 }
 define_torii_args! {
@@ -5978,7 +5777,7 @@ define_torii_args! {
         /// Service name that owns the uploaded model.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -6035,13 +5834,13 @@ define_live_mutation_args! {
         /// Full 40-character lowercase Hugging Face commit OID.
         #[arg(long, value_name = "COMMIT_OID")]
         revision: String,
-        /// Optional local model label. Defaults to the repo slug.
+        /// Exact local model label committed by the signed V1 request.
         #[arg(long, value_name = "NAME")]
-        model_name: Option<String>,
+        model_name: String,
         /// Soracloud service name bound to this lease membership.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -6051,7 +5850,7 @@ define_live_mutation_args! {
         #[arg(long, value_name = "NAME")]
         apartment_name: Option<String>,
         /// Shared-lease storage tier.
-        #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
+        #[arg(long, value_enum)]
         storage_class: HfStorageClassArg,
         /// Shared-lease window length in milliseconds.
         #[arg(long, value_name = "MS")]
@@ -6078,7 +5877,7 @@ impl HfDeployArgs {
         let request = signed_hf_deploy_request(
             &self.repo_id,
             &self.revision,
-            self.model_name.as_deref(),
+            &self.model_name,
             &service_name,
             self.apartment_name.as_deref(),
             self.storage_class.to_storage_class(),
@@ -6101,7 +5900,7 @@ impl HfDeployArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        let mut output = build_hf_mutation_output(payload, &status_payload)?;
+        let mut output = build_hf_mutation_output(payload, &status_payload, "Deploy")?;
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
@@ -6119,7 +5918,7 @@ define_torii_args! {
         #[arg(long, value_name = "COMMIT_OID")]
         revision: String,
         /// Shared-lease storage tier.
-        #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
+        #[arg(long, value_enum)]
         storage_class: HfStorageClassArg,
         /// Shared-lease window length in milliseconds.
         #[arg(long, value_name = "MS")]
@@ -6127,7 +5926,7 @@ define_torii_args! {
         /// Optional account filter for membership-specific status.
         #[arg(long, value_name = "ACCOUNT")]
         account_id: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to project the local service plan.
+        /// Optional unpublished Soracloud container workspace used to project the local service plan.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to project the local service plan.
@@ -6165,7 +5964,7 @@ define_live_mutation_args! {
         #[arg(long, value_name = "COMMIT_OID")]
         revision: String,
         /// Shared-lease storage tier.
-        #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
+        #[arg(long, value_enum)]
         storage_class: HfStorageClassArg,
         /// Shared-lease window length in milliseconds.
         #[arg(long, value_name = "MS")]
@@ -6173,7 +5972,7 @@ define_live_mutation_args! {
         /// Optional service binding to include in the signed leave request.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -6218,7 +6017,7 @@ impl HfLeaseLeaveArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        let mut output = build_hf_mutation_output(payload, &status_payload)?;
+        let mut output = build_hf_mutation_output(payload, &status_payload, "LeaseLeave")?;
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
@@ -6233,13 +6032,13 @@ define_live_mutation_args! {
         /// Full 40-character lowercase Hugging Face commit OID.
         #[arg(long, value_name = "COMMIT_OID")]
         revision: String,
-        /// Optional local model label. Defaults to the repo slug.
+        /// Exact local model label committed by the signed V1 request.
         #[arg(long, value_name = "NAME")]
-        model_name: Option<String>,
+        model_name: String,
         /// Soracloud service name bound to the renewed lease membership.
         #[arg(long, value_name = "NAME")]
         service_name: Option<String>,
-        /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+        /// Optional unpublished Soracloud container workspace used to resolve the service name.
         #[arg(long, value_name = "PATH")]
         container: Option<PathBuf>,
         /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
@@ -6249,7 +6048,7 @@ define_live_mutation_args! {
         #[arg(long, value_name = "NAME")]
         apartment_name: Option<String>,
         /// Shared-lease storage tier.
-        #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
+        #[arg(long, value_enum)]
         storage_class: HfStorageClassArg,
         /// Shared-lease window length in milliseconds.
         #[arg(long, value_name = "MS")]
@@ -6276,7 +6075,7 @@ impl HfLeaseRenewArgs {
         let request = signed_hf_lease_renew_request(
             &self.repo_id,
             &self.revision,
-            self.model_name.as_deref(),
+            &self.model_name,
             &service_name,
             self.apartment_name.as_deref(),
             self.storage_class.to_storage_class(),
@@ -6299,7 +6098,7 @@ impl HfLeaseRenewArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        let mut output = build_hf_mutation_output(payload, &status_payload)?;
+        let mut output = build_hf_mutation_output(payload, &status_payload, "LeaseRenew")?;
         attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
@@ -6508,10 +6307,12 @@ fn canonical_taira_inrou_canary_bundle_payload() -> Result<Vec<u8>> {
     )
     .wrap_err("encode the canonical Taira Inrou V1 server archive")
 }
-fn canonical_taira_inrou_canary_deploy_bundle() -> Result<(SoraDeploymentBundleV1, Vec<u8>)> {
-    let mut container: SoraContainerManifestV1 =
+fn canonical_taira_inrou_canary_deploy_bundle() -> Result<(UnpublishedDeploymentBundleV1, Vec<u8>)>
+{
+    let mut container = UnpublishedContainerManifestV1::from_non_inrou_manifest(
         json::from_str(TAIRA_INROU_CANARY_CONTAINER_TEMPLATE_V1)
-            .wrap_err("decode the embedded Taira Inrou container template")?;
+            .wrap_err("decode the embedded Taira Inrou container template")?,
+    )?;
     let mut service: SoraServiceManifestV1 = json::from_str(TAIRA_INROU_CANARY_SERVICE_TEMPLATE_V1)
         .wrap_err("decode the embedded Taira Inrou service template")?;
     let service_name: Name = TAIRA_INROU_CANARY_SERVICE_NAME_V1
@@ -6538,7 +6339,6 @@ fn canonical_taira_inrou_canary_deploy_bundle() -> Result<(SoraDeploymentBundleV
     container.required_secret_names.clear();
     container.config_exports.clear();
     container.capabilities.network = SoraNetworkPolicyV1::Isolated;
-    container.capabilities.allow_wallet_signing = false;
     container.capabilities.allow_state_writes = false;
     container.capabilities.allow_model_inference = false;
     container.capabilities.allow_model_training = false;
@@ -6549,8 +6349,9 @@ fn canonical_taira_inrou_canary_deploy_bundle() -> Result<(SoraDeploymentBundleV
     container.resources.ephemeral_storage_bytes =
         NonZeroU64::new(TAIRA_INROU_CANARY_EPHEMERAL_STORAGE_BYTES_V1)
             .expect("nonzero ephemeral budget");
-    container.resources.max_open_files =
-        NonZeroU32::new(TAIRA_INROU_CANARY_MAX_OPEN_FILES_V1).expect("nonzero file budget");
+    container.resources.max_open_files_per_process =
+        NonZeroU32::new(TAIRA_INROU_CANARY_MAX_OPEN_FILES_PER_PROCESS_V1)
+            .expect("nonzero per-process file budget");
     container.resources.max_tasks =
         NonZeroU16::new(TAIRA_INROU_CANARY_MAX_TASKS_V1).expect("nonzero task budget");
     container.lifecycle.healthcheck_path = Some(TAIRA_INROU_CANARY_HEALTHCHECK_V1.to_owned());
@@ -6558,22 +6359,17 @@ fn canonical_taira_inrou_canary_deploy_bundle() -> Result<(SoraDeploymentBundleV
         .inrou
         .as_mut()
         .ok_or_else(|| eyre!("canonical HTTP service template did not select Inrou"))?;
-    inrou.guest_os = SoraInrouGuestOsV1::DebianSlim;
     inrou
         .guest_images
-        .retain(|guest_isa, _| *guest_isa == SoraInrouGuestIsaV1::Aarch64);
+        .retain(|guest_isa, _| guest_isa == "aarch64");
     let aarch64 = inrou
         .guest_images
-        .get_mut(&SoraInrouGuestIsaV1::Aarch64)
+        .get_mut("aarch64")
         .ok_or_else(|| eyre!("canonical Inrou template is missing its AArch64 guest image"))?;
     aarch64.kernel_image_path = TAIRA_INROU_CANARY_KERNEL_PATH_V1.to_owned();
     aarch64.rootfs_image_path = TAIRA_INROU_CANARY_ROOTFS_PATH_V1.to_owned();
     aarch64.initrd_image_path = Some(TAIRA_INROU_CANARY_INITRD_PATH_V1.to_owned());
-    aarch64.distribution = SoraArtifactDistributionPolicyV1::default();
-    aarch64.published_artifact = None;
-    inrou.bootstrap_user_data_path = None;
-    inrou.ssh_authorized_keys.clear();
-
+    aarch64.published_artifact = ();
     service.service_name = service_name;
     service.service_version = TAIRA_INROU_CANARY_DEPLOY_VERSION_V1.to_owned();
     service.rollout.canary_percent = 100;
@@ -6603,19 +6399,15 @@ fn canonical_taira_inrou_canary_deploy_bundle() -> Result<(SoraDeploymentBundleV
             volume_name: "app_data".parse().expect("shared volume name"),
             kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
             storage_class: StorageClass::Warm,
-            mount_path: "/lease/app-data".to_owned(),
+            mount_path: "/var/lib/soracloud/volumes/app_data".to_owned(),
             max_total_bytes: NonZeroU64::new(TAIRA_INROU_CANARY_SHARED_VOLUME_BYTES_V1)
                 .expect("nonzero shared volume"),
         },
     ];
-    service.container.manifest_hash = Hash::new(Encode::encode(&container));
+    service.container.manifest_hash = container.workspace_hash()?;
     service.container.expected_schema_version = container.schema_version;
-    let bundle = SoraDeploymentBundleV1 {
-        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-        container,
-        service,
-    };
-    validate_taira_inrou_canary_bundle(&bundle, MutationMode::Deploy)?;
+    let bundle = UnpublishedDeploymentBundleV1 { container, service };
+    validate_unpublished_deployment_source(&bundle)?;
     validate_taira_inrou_canary_bundle_payload(&bundle_payload)?;
     Ok((bundle, bundle_payload))
 }
@@ -6658,7 +6450,6 @@ fn validate_taira_inrou_canary_container(container: &SoraContainerManifestV1) ->
     }
     let capabilities = &container.capabilities;
     if capabilities.network != SoraNetworkPolicyV1::Isolated
-        || capabilities.allow_wallet_signing
         || capabilities.allow_state_writes
         || capabilities.allow_model_inference
         || capabilities.allow_model_training
@@ -6671,7 +6462,8 @@ fn validate_taira_inrou_canary_container(container: &SoraContainerManifestV1) ->
     if resources.cpu_millis.get() != TAIRA_INROU_CANARY_CPU_MILLIS_V1
         || resources.memory_bytes.get() != TAIRA_INROU_CANARY_MEMORY_BYTES_V1
         || resources.ephemeral_storage_bytes.get() != TAIRA_INROU_CANARY_EPHEMERAL_STORAGE_BYTES_V1
-        || resources.max_open_files.get() != TAIRA_INROU_CANARY_MAX_OPEN_FILES_V1
+        || resources.max_open_files_per_process.get()
+            != TAIRA_INROU_CANARY_MAX_OPEN_FILES_PER_PROCESS_V1
         || resources.max_tasks.get() != TAIRA_INROU_CANARY_MAX_TASKS_V1
     {
         return Err(eyre!(
@@ -6687,21 +6479,6 @@ fn validate_taira_inrou_canary_container(container: &SoraContainerManifestV1) ->
         .inrou
         .as_ref()
         .ok_or_else(|| eyre!("Taira Inrou canary container is missing its Inrou manifest"))?;
-    if inrou.guest_os != SoraInrouGuestOsV1::DebianSlim {
-        return Err(eyre!(
-            "Taira Inrou canary requires the DebianSlim guest contract"
-        ));
-    }
-    if inrou.bootstrap_user_data_path.is_some() {
-        return Err(eyre!(
-            "Taira Inrou canary requires bootstrap user-data to remain disabled"
-        ));
-    }
-    if !inrou.ssh_authorized_keys.is_empty() {
-        return Err(eyre!(
-            "Taira Inrou canary requires SSH access to remain disabled"
-        ));
-    }
     if inrou.guest_images.len() != 1
         || !inrou
             .guest_images
@@ -6715,10 +6492,9 @@ fn validate_taira_inrou_canary_container(container: &SoraContainerManifestV1) ->
     if aarch64.kernel_image_path != TAIRA_INROU_CANARY_KERNEL_PATH_V1
         || aarch64.rootfs_image_path != TAIRA_INROU_CANARY_ROOTFS_PATH_V1
         || aarch64.initrd_image_path.as_deref() != Some(TAIRA_INROU_CANARY_INITRD_PATH_V1)
-        || aarch64.distribution != SoraArtifactDistributionPolicyV1::default()
     {
         return Err(eyre!(
-            "Taira Inrou canary requires the exact globally distributed AArch64 kernel, rootfs, and initrd paths"
+            "Taira Inrou canary requires the exact AArch64 kernel, rootfs, and initrd paths"
         ));
     }
     Ok(())
@@ -6788,7 +6564,7 @@ fn validate_taira_inrou_canary_storage(
         || shared.volume_name.as_ref() != "app_data"
         || shared.kind != SoraLeaseVolumeKindV1::ServiceLeaseVolume
         || shared.storage_class != StorageClass::Warm
-        || shared.mount_path != "/lease/app-data"
+        || shared.mount_path != "/var/lib/soracloud/volumes/app_data"
         || shared.max_total_bytes.get() != TAIRA_INROU_CANARY_SHARED_VOLUME_BYTES_V1
     {
         return Err(eyre!(
@@ -6832,7 +6608,8 @@ fn validate_taira_inrou_canary_bundle(
     validate_taira_inrou_canary_storage(&bundle.container, &bundle.service)?;
     Ok(())
 }
-fn validate_taira_inrou_canary_source_bundle(bundle: &SoraDeploymentBundleV1) -> Result<()> {
+fn validate_taira_inrou_canary_source_bundle(bundle: &UnpublishedDeploymentBundleV1) -> Result<()> {
+    validate_unpublished_deployment_source(bundle)?;
     let (canonical, _) = canonical_taira_inrou_canary_deploy_bundle()?;
     if bundle != &canonical {
         return Err(eyre!(
@@ -7470,15 +7247,11 @@ fn validate_generated_taira_inrou_workspace(output_dir: &Path) -> Result<()> {
         "Taira Inrou workspace service manifest",
         TAIRA_INROU_STAGE_SOURCE_MANIFEST_MAX_BYTES_V1,
     )?;
-    let container: SoraContainerManifestV1 =
+    let container: UnpublishedContainerManifestV1 =
         decode_taira_stage_json(&container_bytes, &container_path)?;
     let service: SoraServiceManifestV1 = decode_taira_stage_json(&service_bytes, &service_path)?;
-    let bundle = SoraDeploymentBundleV1 {
-        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-        container,
-        service,
-    };
-    validate_taira_inrou_canary_bundle(&bundle, MutationMode::Deploy)?;
+    let bundle = UnpublishedDeploymentBundleV1 { container, service };
+    validate_taira_inrou_canary_source_bundle(&bundle)?;
     let bundle_payload = taira_stage_regular_file_bytes(
         &bundle_path,
         "Taira Inrou workspace bundle",
@@ -7495,7 +7268,7 @@ fn validate_generated_taira_inrou_workspace(output_dir: &Path) -> Result<()> {
         .container
         .inrou
         .as_ref()
-        .and_then(|inrou| inrou.guest_images.get(&SoraInrouGuestIsaV1::Aarch64))
+        .and_then(|inrou| inrou.guest_images.get("aarch64"))
         .ok_or_else(|| eyre!("generated Taira Inrou workspace lost its AArch64 guest image"))?;
     let rootfs_member = inrou_member_path(&image.rootfs_image_path)?;
     let members = vec![
@@ -7617,8 +7390,8 @@ pub(crate) fn create_taira_inrou_canary_workspace(
             rootfs_file: TAIRA_INROU_WORKSPACE_ROOTFS_FILE_V1.to_owned(),
             initrd_file: TAIRA_INROU_WORKSPACE_INITRD_FILE_V1.to_owned(),
             bundle_hash: bundle.container.bundle_hash.to_string(),
-            container_manifest_hash: bundle.container_manifest_hash().to_string(),
-            service_manifest_hash: bundle.service_manifest_hash().to_string(),
+            container_manifest_hash: bundle.container.workspace_hash()?.to_string(),
+            service_manifest_hash: Hash::new(Encode::encode(&bundle.service)).to_string(),
             guest_total_bytes,
         })
     })();
@@ -8012,21 +7785,15 @@ pub(crate) fn stage_taira_inrou_canary_deployment(
         "Taira service manifest",
         TAIRA_INROU_STAGE_SOURCE_MANIFEST_MAX_BYTES_V1,
     )?;
-    let container: SoraContainerManifestV1 =
+    let container: UnpublishedContainerManifestV1 =
         decode_taira_stage_json(&container_bytes, container_path)?;
     let service: SoraServiceManifestV1 = decode_taira_stage_json(&service_bytes, service_path)?;
-    let mut bundle = SoraDeploymentBundleV1 {
-        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-        container,
-        service,
-    };
+    let mut bundle = UnpublishedDeploymentBundleV1 { container, service };
     // Both stages are derived from one canonical 1.0.0 source template.  The
     // stage owns the only allowed version transition so callers cannot smuggle
     // an arbitrary revision into the release canary.
-    validate_taira_inrou_canary_bundle(&bundle, MutationMode::Deploy)?;
     validate_taira_inrou_canary_source_bundle(&bundle)?;
     bundle.service.service_version = mode.taira_service_version().to_owned();
-    reject_prepublished_inrou_guest_images(&bundle)?;
     let bundle_bytes = taira_stage_regular_file_bytes(
         bundle_file,
         "Taira service bundle",
@@ -8066,7 +7833,7 @@ pub(crate) fn stage_taira_inrou_canary_deployment(
             .container
             .inrou
             .as_ref()
-            .and_then(|inrou| inrou.guest_images.get(&SoraInrouGuestIsaV1::Aarch64))
+            .and_then(|inrou| inrou.guest_images.get("aarch64"))
             .ok_or_else(|| eyre!("Taira AArch64 guest image disappeared during staging"))?;
         let rootfs_member_path = inrou_member_path(&image.rootfs_image_path)?;
         let rootfs_logical_path = rootfs_member_path
@@ -8102,7 +7869,6 @@ pub(crate) fn stage_taira_inrou_canary_deployment(
             .find_map(|(logical_path, size)| (logical_path == &rootfs_logical_path).then_some(size))
             .ok_or_else(|| eyre!("Taira rootfs disappeared from the exact guest-image layout"))?;
         validate_taira_inrou_rootfs_source_bytes(rootfs_source_bytes)?;
-        let distribution = image.distribution.clone();
         for (logical_path, source_metadata) in logical_member_paths.iter().zip(&source_metadata) {
             let member_path = logical_path.join("/");
             let source = inrou_dir.join(&member_path);
@@ -8140,19 +7906,13 @@ pub(crate) fn stage_taira_inrou_canary_deployment(
             &guest_manifest.bytes,
         )?;
         let guest_content_cid = encode_content_cid(&guest_manifest.manifest.root_cid);
-        let image = bundle
-            .container
-            .inrou
-            .as_mut()
-            .and_then(|inrou| inrou.guest_images.get_mut(&SoraInrouGuestIsaV1::Aarch64))
-            .ok_or_else(|| eyre!("Taira AArch64 guest image disappeared during rewrite"))?;
-        image.published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
-            manifest_digest_hex: guest_manifest.digest_hex.clone(),
-            content_cid: guest_content_cid.clone(),
-            manifest_id_hex: Some(guest_manifest.digest_hex.clone()),
-            distribution,
-        });
-        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+        let bundle = bundle.into_admitted(BTreeMap::from([(
+            SoraInrouGuestIsaV1::Aarch64,
+            SoraPublishedInrouGuestImageArtifactV1 {
+                manifest_digest_hex: guest_manifest.digest_hex.clone(),
+                content_cid: guest_content_cid.clone(),
+            },
+        )]))?;
         validate_taira_inrou_canary_bundle(&bundle, mode)?;
         let container_manifest_hash = bundle.container_manifest_hash().to_string();
         let service_manifest_hash = bundle.service_manifest_hash().to_string();
@@ -8634,11 +8394,10 @@ fn load_verified_taira_inrou_stage(
         .inrou
         .as_ref()
         .and_then(|inrou| inrou.guest_images.get(&SoraInrouGuestIsaV1::Aarch64))
-        .and_then(|image| image.published_artifact.as_ref())
+        .map(|image| &image.published_artifact)
         .ok_or_else(|| eyre!("Taira Inrou staged container lacks its published AArch64 ref"))?;
     if published.manifest_digest_hex != receipt.guest_manifest_digest_hex
         || published.content_cid != receipt.guest_content_cid
-        || published.manifest_id_hex.as_deref() != Some(receipt.guest_manifest_digest_hex.as_str())
     {
         return Err(eyre!(
             "Taira Inrou staged AArch64 ref does not match the exact staged manifest"
@@ -8651,68 +8410,37 @@ fn load_verified_taira_inrou_stage(
         guest_manifest,
     })
 }
+/// Immutable identity recovered by fully revalidating one retained Taira Inrou stage.
 #[derive(Clone, Debug)]
-pub(crate) struct TairaInrouCanaryDeployment {
+pub(crate) struct TairaInrouStageIdentity {
     pub service_name: String,
     pub service_version: String,
     pub route_host: String,
     pub route_path_prefix: String,
     pub healthcheck_path: String,
-    pub mutation_mode: String,
+    pub stage_mode: String,
     pub bundle_hash: String,
     pub bundle_content_cid: String,
     pub bundle_manifest_digest_hex: String,
     pub guest_content_cid: String,
     pub guest_manifest_digest_hex: String,
-    pub submitted_tx_hash: String,
-    pub mutation_response_digest: String,
+    pub container_manifest_hash: String,
+    pub service_manifest_hash: String,
 }
-fn require_taira_inrou_submitted_mutation(response: &json::Value) -> Result<String> {
-    let root = response
-        .as_object()
-        .ok_or_else(|| eyre!("Taira Inrou mutation response must be a JSON object"))?;
-    if root.get("submission_mode").and_then(json::Value::as_str) != Some("client_signed") {
-        return Err(eyre!(
-            "Taira Inrou canary requires one submitted mutation transaction; no-op mutation drafts are invalid"
-        ));
-    }
-    let submitted = root
-        .get("submitted_tx_hash")
-        .cloned()
-        .ok_or_else(|| eyre!("Taira Inrou mutation response is missing `submitted_tx_hash`"))?;
-    let hash: Hash = json::from_value(submitted.clone())
-        .wrap_err("Taira Inrou mutation response has an invalid `submitted_tx_hash`")?;
-    let canonical = json::to_value(&hash)
-        .wrap_err("failed to render the canonical Taira Inrou transaction hash")?;
-    if canonical != submitted {
-        return Err(eyre!(
-            "Taira Inrou mutation response has a non-canonical `submitted_tx_hash`"
-        ));
-    }
-    canonical
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| eyre!("canonical Taira Inrou transaction hash is not a JSON string"))
-}
-pub(crate) fn run_taira_inrou_canary_deployment(
+/// Revalidate a retained Taira Inrou stage without registering artifacts or submitting a mutation.
+pub(crate) fn load_taira_inrou_stage_identity(
     config: &ClientConfig,
-    fee_payment: FeePaymentIntent,
-    stage_dir: PathBuf,
-    torii_url: String,
-    api_token: Option<String>,
-    timeout_secs: u64,
+    stage_dir: &Path,
     requested_mode: crate::taira::InrouCanaryMode,
-) -> Result<TairaInrouCanaryDeployment> {
+) -> Result<TairaInrouStageIdentity> {
     let mode = MutationMode::from(requested_mode);
-    let staged = load_verified_taira_inrou_stage(&stage_dir, &config.key_pair, mode)?;
+    let staged = load_verified_taira_inrou_stage(stage_dir, &config.key_pair, mode)?;
     let route = staged
         .bundle
         .service
         .route
         .as_ref()
         .expect("verified Taira Inrou stage has a public route");
-    let route_host = route.host.clone();
-    let route_path_prefix = route.path_prefix.clone();
     let healthcheck_path = staged
         .bundle
         .container
@@ -8720,64 +8448,145 @@ pub(crate) fn run_taira_inrou_canary_deployment(
         .healthcheck_path
         .clone()
         .expect("verified Taira Inrou stage has /health");
-    SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
-        *slot.borrow_mut() = Some(config.clone());
-    });
-    SORACLOUD_FEE_PAYMENT.with(|slot| {
-        *slot.borrow_mut() = Some(Ok(fee_payment));
-    });
-    let authority = &config.account;
-    let key_pair = &config.key_pair;
-    register_built_sorafs_manifest(
-        &staged.bundle_manifest,
-        "preseeded Taira service bundle",
-        &torii_url,
-        authority,
-        key_pair,
-        timeout_secs,
-    )?;
-    register_built_sorafs_manifest(
-        &staged.guest_manifest,
-        "preseeded Taira AArch64 guest image",
-        &torii_url,
-        authority,
-        key_pair,
-        timeout_secs,
-    )?;
-    let service_name = staged.bundle.service.service_name.to_string();
-    let response = run_service_bundle_mutation(
-        mode,
-        staged.bundle,
-        BTreeMap::new(),
-        BTreeMap::new(),
-        &torii_url,
-        api_token.as_deref(),
-        timeout_secs,
-        authority,
-        key_pair,
-    )?;
-    let submitted_tx_hash = require_taira_inrou_submitted_mutation(&response)?;
-    let mutation_response_digest = Hash::new(json::to_vec(&response)?).to_string();
-    Ok(TairaInrouCanaryDeployment {
-        service_name,
+    Ok(TairaInrouStageIdentity {
+        service_name: staged.bundle.service.service_name.to_string(),
         service_version: staged.receipt.service_version,
-        route_host,
-        route_path_prefix,
+        route_host: route.host.clone(),
+        route_path_prefix: route.path_prefix.clone(),
         healthcheck_path,
-        mutation_mode: mode.label_lowercase().to_owned(),
+        stage_mode: mode.label_lowercase().to_owned(),
         bundle_hash: staged.receipt.bundle_hash,
         bundle_content_cid: staged.receipt.bundle_content_cid,
         bundle_manifest_digest_hex: staged.receipt.bundle_manifest_digest_hex,
         guest_content_cid: staged.receipt.guest_content_cid,
         guest_manifest_digest_hex: staged.receipt.guest_manifest_digest_hex,
-        submitted_tx_hash,
-        mutation_response_digest,
+        container_manifest_hash: staged.receipt.container_manifest_hash,
+        service_manifest_hash: staged.receipt.service_manifest_hash,
     })
 }
-#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+/// One exact ledger mutation in the ordered Taira Inrou canary protocol.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TairaInrouCanaryPreparedOperationV1 {
+    /// Register the canonical bundle manifest.
+    BundlePin,
+    /// Register the canonical guest-image manifest.
+    GuestPin,
+    /// Deploy or upgrade the canary service after both manifests are registered.
+    ServiceMutation,
+}
+
+impl TairaInrouCanaryPreparedOperationV1 {
+    /// Closed operation label committed by the prepared transaction.
+    pub(crate) const fn operation_label(self) -> &'static str {
+        match self {
+            Self::BundlePin => "bundle_pin",
+            Self::GuestPin => "guest_pin",
+            Self::ServiceMutation => "service_mutation",
+        }
+    }
+
+    /// Recovery-plan child kind bound into the transaction metadata.
+    pub(crate) const fn mutation_kind(self) -> &'static str {
+        match self {
+            Self::BundlePin => "inrou_bundle_pin",
+            Self::GuestPin => "inrou_guest_pin",
+            Self::ServiceMutation => "inrou_canary",
+        }
+    }
+}
+
+/// Prepare exactly one ledger transaction in the ordered Taira Inrou canary protocol.
+///
+/// The caller must prove and durably record the preceding child as Applied before
+/// invoking this function for the next child. Nothing is submitted here.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_taira_inrou_canary_operation(
+    config: &ClientConfig,
+    fee_payment: FeePaymentIntent,
+    binding: TairaMutationBindingV1,
+    stage_dir: &Path,
+    torii_url: &str,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+    requested_mode: crate::taira::InrouCanaryMode,
+    operation: TairaInrouCanaryPreparedOperationV1,
+) -> Result<PreparedSoracloudTransactionV1> {
+    binding.validate()?;
+    if binding.kind != operation.mutation_kind() || binding.phase != "pre_edge" {
+        return Err(eyre!(
+            "Taira Inrou prepared operation does not match its exact pre_edge child kind"
+        ));
+    }
+    let mode = MutationMode::from(requested_mode);
+    let staged = load_verified_taira_inrou_stage(stage_dir, &config.key_pair, mode)?;
+    match operation {
+        TairaInrouCanaryPreparedOperationV1::BundlePin => {
+            return prepare_built_sorafs_manifest_registration(
+                &staged.bundle_manifest,
+                operation.operation_label(),
+                fee_payment,
+                binding,
+                torii_url,
+                config,
+                timeout_secs,
+            );
+        }
+        TairaInrouCanaryPreparedOperationV1::GuestPin => {
+            return prepare_built_sorafs_manifest_registration(
+                &staged.guest_manifest,
+                operation.operation_label(),
+                fee_payment,
+                binding,
+                torii_url,
+                config,
+                timeout_secs,
+            );
+        }
+        TairaInrouCanaryPreparedOperationV1::ServiceMutation => {}
+    }
+    let initial_service_configs = BTreeMap::from([(
+        "public_reset_idempotency_v1".to_owned(),
+        Json::new(binding.idempotency_key.clone()),
+    )]);
+    let request = signed_bundle_request(
+        staged.bundle,
+        initial_service_configs,
+        BTreeMap::new(),
+        Some(&config.account),
+        &config.key_pair,
+    )?;
+    let endpoint_path = match mode {
+        MutationMode::Deploy => "v1/soracloud/deploy",
+        MutationMode::Upgrade => "v1/soracloud/upgrade",
+    };
+    SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
+        *slot.borrow_mut() = Some(config.clone());
+    });
+    SORACLOUD_FEE_PAYMENT.with(|slot| {
+        *slot.borrow_mut() = Some(Ok(fee_payment.clone()));
+    });
+    let requested = request_torii_soracloud_mutation_draft(
+        torii_url,
+        endpoint_path,
+        &request,
+        api_token,
+        timeout_secs,
+    )?;
+    let service_instructions = decode_soracloud_tx_instructions(&requested.draft)?;
+    prepare_soracloud_draft_transaction(
+        config,
+        fee_payment,
+        binding,
+        torii_url,
+        timeout_secs,
+        service_instructions,
+        operation.operation_label(),
+    )
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 enum HfStorageClassArg {
     Hot,
-    #[default]
     Warm,
     Cold,
 }
@@ -8846,6 +8655,7 @@ enum SoracloudAction {
     DecryptionRequest,
     CiphertextQuery,
     Rollout,
+    LeaseReportingEpochRollover,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(tag = "stage", content = "value")]
@@ -8901,13 +8711,12 @@ struct ControlPlaneServiceRevision {
     allow_model_inference: bool,
     allow_model_training: bool,
     runtime: SoraContainerRuntimeV1,
-    allow_wallet_signing: bool,
     allow_state_writes: bool,
     network: SoraNetworkPolicyV1,
     cpu_millis: u32,
     memory_bytes: u64,
     ephemeral_storage_bytes: u64,
-    max_open_files: u32,
+    max_open_files_per_process: u32,
     max_tasks: u16,
     start_grace_secs: u32,
     stop_grace_secs: u32,
@@ -9006,7 +8815,7 @@ struct ServiceStatusOutput {
     #[norito(required)]
     service_lease_status: Option<SoraServiceLeaseStatusV1>,
     #[norito(required)]
-    lease_expires_sequence: Option<u64>,
+    lease_expires_height: Option<u64>,
     #[norito(required)]
     prepaid_runtime_balance: Option<Quantity>,
     #[norito(required)]
@@ -9068,7 +8877,1523 @@ struct NetworkControlPlaneAuditEventV1 {
     break_glass: Option<bool>,
     #[norito(required)]
     break_glass_reason: Option<String>,
+    #[norito(required)]
+    lease_reporting_epoch_rollover: Option<SoraServiceLeaseReportingEpochRolloverV1>,
     signed_by: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ServiceConfigStatusEntryV1 {
+    config_name: String,
+    value_hash: Hash,
+    value_json: json::Value,
+    last_update_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ServiceConfigStatusResponseV1 {
+    schema_version: u16,
+    service_name: Name,
+    current_version: String,
+    config_generation: u64,
+    config_entry_count: u32,
+    configs: Vec<ServiceConfigStatusEntryV1>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ServiceSecretStatusEntryV1 {
+    secret_name: String,
+    encryption: SecretEnvelopeEncryptionV1,
+    key_id: String,
+    key_version: u32,
+    commitment: Hash,
+    ciphertext_bytes: u64,
+    last_update_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ServiceSecretStatusResponseV1 {
+    schema_version: u16,
+    service_name: Name,
+    current_version: String,
+    secret_generation: u64,
+    secret_entry_count: u32,
+    secrets: Vec<ServiceSecretStatusEntryV1>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct TrainingJobStatusEntryV1 {
+    service_name: Name,
+    model_name: Name,
+    job_id: String,
+    status: SoraTrainingJobStatusV1,
+    worker_group_size: u16,
+    target_steps: u32,
+    completed_steps: u32,
+    checkpoint_interval_steps: u32,
+    #[norito(required)]
+    last_checkpoint_step: Option<u32>,
+    checkpoint_count: u32,
+    retry_count: u8,
+    max_retries: u8,
+    step_compute_units: u64,
+    compute_budget_units: u64,
+    compute_consumed_units: u64,
+    compute_remaining_units: u64,
+    storage_budget_bytes: u64,
+    storage_consumed_bytes: u64,
+    storage_remaining_bytes: u64,
+    #[norito(required)]
+    latest_metrics_hash: Option<Hash>,
+    #[norito(required)]
+    last_failure_reason: Option<String>,
+    created_sequence: u64,
+    updated_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct TrainingJobStatusResponseV1 {
+    schema_version: u16,
+    job: TrainingJobStatusEntryV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ModelWeightVersionEntryV1 {
+    weight_version: String,
+    #[norito(required)]
+    parent_version: Option<String>,
+    training_job_id: String,
+    weight_artifact_hash: Hash,
+    dataset_ref: String,
+    training_config_hash: Hash,
+    reproducibility_hash: Hash,
+    provenance_attestation_hash: Hash,
+    registered_sequence: u64,
+    #[norito(required)]
+    promoted_sequence: Option<u64>,
+    #[norito(required)]
+    gate_report_hash: Option<Hash>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ModelWeightStatusEntryV1 {
+    service_name: Name,
+    model_name: Name,
+    #[norito(required)]
+    current_version: Option<String>,
+    version_count: u32,
+    versions: Vec<ModelWeightVersionEntryV1>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ModelWeightStatusResponseV1 {
+    schema_version: u16,
+    model: ModelWeightStatusEntryV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ModelArtifactStatusEntryV1 {
+    service_name: Name,
+    model_name: Name,
+    artifact_id: String,
+    training_job_id: String,
+    #[norito(required)]
+    weight_version: Option<String>,
+    weight_artifact_hash: Hash,
+    dataset_ref: String,
+    training_config_hash: Hash,
+    reproducibility_hash: Hash,
+    provenance_attestation_hash: Hash,
+    registered_sequence: u64,
+    #[norito(required)]
+    consumed_by_version: Option<String>,
+    #[norito(required)]
+    chunk_manifest_root: Option<Hash>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ModelArtifactStatusResponseV1 {
+    schema_version: u16,
+    service_name: Name,
+    model_name: Name,
+    artifact_count: u32,
+    artifact: ModelArtifactStatusEntryV1,
+    artifacts: Vec<ModelArtifactStatusEntryV1>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct UploadedModelStatusResponseV1 {
+    schema_version: u16,
+    bundle: SoraUploadedModelBundleV1,
+    #[norito(required)]
+    artifact: Option<ModelArtifactStatusEntryV1>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct ModelHostStatusResponseV1 {
+    schema_version: u16,
+    #[norito(required)]
+    validator_account_id: Option<AccountId>,
+    active_host_count: u32,
+    hosts: Vec<SoraModelHostCapabilityRecordV1>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AgentStatusResponseV1 {
+    schema_version: u16,
+    apartment_count: u32,
+    event_count: u32,
+    apartments: Vec<AgentApartmentStatusEntryV1>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AgentApartmentStatusEntryV1 {
+    apartment_name: Name,
+    manifest_hash: Hash,
+    status: SoraAgentRuntimeStatusV1,
+    lease_started_sequence: u64,
+    lease_expires_sequence: u64,
+    lease_remaining_ticks: u64,
+    restart_count: u32,
+    state_quota_bytes: u64,
+    tool_capability_count: u32,
+    policy_capability_count: u32,
+    revoked_policy_capability_count: u32,
+    pending_wallet_request_count: u32,
+    pending_mailbox_message_count: u32,
+    autonomy_budget_ceiling_units: u64,
+    autonomy_budget_remaining_units: u64,
+    artifact_allowlist_count: u32,
+    autonomy_run_count: u32,
+    process_generation: u64,
+    process_started_sequence: u64,
+    last_active_sequence: u64,
+    #[norito(required)]
+    last_checkpoint_sequence: Option<u64>,
+    checkpoint_count: u32,
+    persistent_state_total_bytes: u64,
+    persistent_state_key_count: u32,
+    spend_limit_count: u32,
+    upgrade_policy: AgentUpgradePolicyV1,
+    #[norito(required)]
+    last_restart_sequence: Option<u64>,
+    #[norito(required)]
+    last_restart_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AgentMailboxStatusResponseV1 {
+    schema_version: u16,
+    apartment_name: Name,
+    status: SoraAgentRuntimeStatusV1,
+    pending_message_count: u32,
+    event_count: u32,
+    messages: Vec<AgentMailboxMessageEntryV1>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AgentMailboxMessageEntryV1 {
+    message_id: String,
+    from_apartment: Name,
+    channel: String,
+    payload: String,
+    payload_hash: Hash,
+    enqueued_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AgentRuntimeReceiptRecordV1 {
+    receipt_id: Hash,
+    service_name: String,
+    service_version: String,
+    handler_name: String,
+    handler_class: SoraServiceHandlerClassV1,
+    request_commitment: Hash,
+    result_commitment: Hash,
+    certified_by: SoraCertifiedResponsePolicyV1,
+    emitted_sequence: u64,
+    #[norito(required)]
+    placement_id: Option<Hash>,
+    #[norito(required)]
+    selected_validator_account_id: Option<AccountId>,
+    #[norito(required)]
+    selected_peer_id: Option<String>,
+    #[norito(required)]
+    journal_artifact_hash: Option<Hash>,
+    #[norito(required)]
+    checkpoint_artifact_hash: Option<Hash>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AgentAutonomyExecutionAuditRecordV1 {
+    sequence: u64,
+    succeeded: bool,
+    result_commitment: Hash,
+    #[norito(required)]
+    service_name: Option<String>,
+    #[norito(required)]
+    service_version: Option<String>,
+    #[norito(required)]
+    handler_name: Option<String>,
+    #[norito(required)]
+    runtime_receipt_id: Option<Hash>,
+    #[norito(required)]
+    journal_artifact_hash: Option<Hash>,
+    #[norito(required)]
+    checkpoint_artifact_hash: Option<Hash>,
+    #[norito(required)]
+    reason: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AgentAutonomyAllowlistEntryV1 {
+    artifact_hash: String,
+    #[norito(required)]
+    provenance_hash: Option<String>,
+    added_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AgentAutonomyRunStatusRecordV1 {
+    run_id: String,
+    artifact_hash: String,
+    #[norito(required)]
+    provenance_hash: Option<String>,
+    budget_units: u64,
+    run_label: String,
+    #[norito(required)]
+    workflow_input_json: Option<String>,
+    approved_sequence: u64,
+    #[norito(required)]
+    authoritative_runtime_receipt: Option<AgentRuntimeReceiptRecordV1>,
+    #[norito(required)]
+    authoritative_execution_audit: Option<AgentAutonomyExecutionAuditRecordV1>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AgentAutonomyStatusResponseV1 {
+    apartment_name: Name,
+    sequence: u64,
+    status: SoraAgentRuntimeStatusV1,
+    lease_expires_sequence: u64,
+    lease_remaining_ticks: u64,
+    manifest_hash: Hash,
+    revoked_policy_capability_count: u32,
+    budget_ceiling_units: u64,
+    budget_remaining_units: u64,
+    allowlist_count: u32,
+    run_count: u32,
+    process_generation: u64,
+    process_started_sequence: u64,
+    last_active_sequence: u64,
+    #[norito(required)]
+    last_checkpoint_sequence: Option<u64>,
+    checkpoint_count: u32,
+    persistent_state_total_bytes: u64,
+    persistent_state_key_count: u32,
+    allowlist: Vec<AgentAutonomyAllowlistEntryV1>,
+    recent_runs: Vec<AgentAutonomyRunStatusRecordV1>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct HfSharedLeaseStatusResponseV1 {
+    schema_version: u16,
+    source: SoraHfSourceRecordV1,
+    #[norito(required)]
+    runtime_projection: Option<SoracloudRuntimeHfSourcePlan>,
+    #[norito(required)]
+    pool: Option<SoraHfSharedLeasePoolV1>,
+    #[norito(required)]
+    member: Option<SoraHfSharedLeaseMemberV1>,
+    #[norito(required)]
+    placement: Option<SoraHfPlacementRecordV1>,
+    #[norito(required)]
+    latest_audit_event: Option<SoraHfSharedLeaseAuditEventV1>,
+    audit_event_count: u32,
+    storage_base_fee: Quantity,
+    compute_reservation_fee: Quantity,
+    eligible_host_count: u32,
+    warm_host_count: u32,
+    importer_pending: bool,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AppInfraStatusResponseV1 {
+    schema_version: u16,
+    app_count: u32,
+    audit_event_count: u32,
+    apps: Vec<SoraAppInfraStateV1>,
+    recent_audit_events: Vec<SoraAppInfraAuditEventV1>,
+}
+
+fn exact_status_count(label: &str, advertised: u32, actual: usize) -> Result<()> {
+    let actual = u32::try_from(actual)
+        .wrap_err_with(|| format!("{label} exceeds the Soracloud V1 count range"))?;
+    if advertised != actual {
+        return Err(eyre!(
+            "{label} advertises {advertised} entries but contains {actual}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_canonical_status_text(context: &str, field: &str, value: &str) -> Result<()> {
+    if value.is_empty() || value.trim() != value {
+        return Err(eyre!("{context} contains a non-canonical `{field}` value"));
+    }
+    Ok(())
+}
+
+fn validate_model_identifier_v1(context: &str, field: &str, value: &str) -> Result<()> {
+    const MAX_IDENTIFIER_BYTES_V1: usize = 128;
+    validate_canonical_status_text(context, field, value)?;
+    if value.len() > MAX_IDENTIFIER_BYTES_V1
+        || value.chars().any(char::is_control)
+        || value.chars().any(|ch| ch.is_ascii_whitespace())
+        || !value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '#'))
+    {
+        return Err(eyre!(
+            "{context} contains an invalid Soracloud V1 `{field}` identifier"
+        ));
+    }
+    Ok(())
+}
+
+impl ServiceConfigStatusEntryV1 {
+    fn validate(&self) -> Result<()> {
+        let canonical_name = parse_service_material_name_arg("config_name", &self.config_name)?;
+        if canonical_name != self.config_name {
+            return Err(eyre!(
+                "Soracloud service-config status contains a non-canonical config_name"
+            ));
+        }
+        SoraServiceConfigEntryV1 {
+            schema_version: SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
+            config_name: self.config_name.clone(),
+            value_json: Json::from(self.value_json.clone()),
+            value_hash: self.value_hash,
+            last_update_sequence: self.last_update_sequence,
+        }
+        .validate()
+        .wrap_err("invalid Soracloud service-config status entry")
+    }
+}
+
+impl ServiceConfigStatusResponseV1 {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
+            return Err(eyre!(
+                "unsupported Soracloud service-config status schema version {}; expected {}",
+                self.schema_version,
+                SORACLOUD_STATUS_SCHEMA_VERSION_V1
+            ));
+        }
+        validate_canonical_status_text(
+            "Soracloud service-config status",
+            "current_version",
+            &self.current_version,
+        )?;
+        exact_status_count(
+            "Soracloud service-config status config_entry_count",
+            self.config_entry_count,
+            self.configs.len(),
+        )?;
+        let mut names = BTreeSet::new();
+        for entry in &self.configs {
+            entry.validate()?;
+            if !names.insert(entry.config_name.clone()) {
+                return Err(eyre!(
+                    "Soracloud service-config status contains duplicate config_name `{}`",
+                    entry.config_name
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ServiceSecretStatusEntryV1 {
+    fn validate(&self) -> Result<()> {
+        let canonical_name = parse_service_material_name_arg("secret_name", &self.secret_name)?;
+        if canonical_name != self.secret_name {
+            return Err(eyre!(
+                "Soracloud service-secret status contains a non-canonical secret_name"
+            ));
+        }
+        validate_canonical_status_text("Soracloud service-secret status", "key_id", &self.key_id)?;
+        if self.key_version == 0 || self.ciphertext_bytes == 0 || self.last_update_sequence == 0 {
+            return Err(eyre!(
+                "Soracloud service-secret status entry `{}` contains zero key, ciphertext, or sequence metadata",
+                self.secret_name
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl ServiceSecretStatusResponseV1 {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
+            return Err(eyre!(
+                "unsupported Soracloud service-secret status schema version {}; expected {}",
+                self.schema_version,
+                SORACLOUD_STATUS_SCHEMA_VERSION_V1
+            ));
+        }
+        validate_canonical_status_text(
+            "Soracloud service-secret status",
+            "current_version",
+            &self.current_version,
+        )?;
+        exact_status_count(
+            "Soracloud service-secret status secret_entry_count",
+            self.secret_entry_count,
+            self.secrets.len(),
+        )?;
+        let mut names = BTreeSet::new();
+        for entry in &self.secrets {
+            entry.validate()?;
+            if !names.insert(entry.secret_name.clone()) {
+                return Err(eyre!(
+                    "Soracloud service-secret status contains duplicate secret_name `{}`",
+                    entry.secret_name
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl TrainingJobStatusEntryV1 {
+    fn validate(&self) -> Result<()> {
+        validate_model_identifier_v1("Soracloud training-job status", "job_id", &self.job_id)?;
+        if self.worker_group_size == 0
+            || self.target_steps == 0
+            || self.checkpoint_interval_steps == 0
+            || self.checkpoint_interval_steps > self.target_steps
+            || self.completed_steps > self.target_steps
+            || self.retry_count > self.max_retries
+            || self.step_compute_units == 0
+            || self.compute_budget_units == 0
+            || self.compute_consumed_units > self.compute_budget_units
+            || self.compute_remaining_units
+                != self
+                    .compute_budget_units
+                    .saturating_sub(self.compute_consumed_units)
+            || self.storage_budget_bytes == 0
+            || self.storage_consumed_bytes > self.storage_budget_bytes
+            || self.storage_remaining_bytes
+                != self
+                    .storage_budget_bytes
+                    .saturating_sub(self.storage_consumed_bytes)
+            || self.created_sequence == 0
+            || self.updated_sequence < self.created_sequence
+        {
+            return Err(eyre!(
+                "Soracloud training-job status `{}` contains inconsistent progress, budget, or sequence metadata",
+                self.job_id
+            ));
+        }
+        if self
+            .last_checkpoint_step
+            .is_some_and(|step| step == 0 || step > self.completed_steps)
+        {
+            return Err(eyre!(
+                "Soracloud training-job status `{}` contains an invalid last_checkpoint_step",
+                self.job_id
+            ));
+        }
+        validate_optional_canonical_status_text(
+            "Soracloud training-job status",
+            "last_failure_reason",
+            self.last_failure_reason.as_deref(),
+        )?;
+        Ok(())
+    }
+}
+
+impl TrainingJobStatusResponseV1 {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
+            return Err(eyre!(
+                "unsupported Soracloud training-job status schema version {}; expected {}",
+                self.schema_version,
+                SORACLOUD_STATUS_SCHEMA_VERSION_V1
+            ));
+        }
+        self.job.validate()
+    }
+}
+
+impl ModelWeightVersionEntryV1 {
+    fn validate(&self) -> Result<()> {
+        validate_model_identifier_v1(
+            "Soracloud model-weight status",
+            "weight_version",
+            &self.weight_version,
+        )?;
+        if let Some(parent_version) = self.parent_version.as_deref() {
+            validate_model_identifier_v1(
+                "Soracloud model-weight status",
+                "parent_version",
+                parent_version,
+            )?;
+            if parent_version == self.weight_version {
+                return Err(eyre!(
+                    "Soracloud model-weight status version `{}` is its own parent",
+                    self.weight_version
+                ));
+            }
+        }
+        if !self.training_job_id.is_empty() {
+            validate_model_identifier_v1(
+                "Soracloud model-weight status",
+                "training_job_id",
+                &self.training_job_id,
+            )?;
+        }
+        validate_canonical_status_text(
+            "Soracloud model-weight status",
+            "dataset_ref",
+            &self.dataset_ref,
+        )?;
+        if self.registered_sequence == 0
+            || self.promoted_sequence.is_some() != self.gate_report_hash.is_some()
+            || self
+                .promoted_sequence
+                .is_some_and(|sequence| sequence < self.registered_sequence)
+        {
+            return Err(eyre!(
+                "Soracloud model-weight status version `{}` contains inconsistent promotion metadata",
+                self.weight_version
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl ModelWeightStatusResponseV1 {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
+            return Err(eyre!(
+                "unsupported Soracloud model-weight status schema version {}; expected {}",
+                self.schema_version,
+                SORACLOUD_STATUS_SCHEMA_VERSION_V1
+            ));
+        }
+        exact_status_count(
+            "Soracloud model-weight status version_count",
+            self.model.version_count,
+            self.model.versions.len(),
+        )?;
+        let mut previous: Option<&str> = None;
+        for version in &self.model.versions {
+            version.validate()?;
+            if previous.is_some_and(|previous| previous >= version.weight_version.as_str()) {
+                return Err(eyre!(
+                    "Soracloud model-weight status versions must be strictly sorted and duplicate-free"
+                ));
+            }
+            previous = Some(&version.weight_version);
+        }
+        if let Some(current_version) = self.model.current_version.as_deref() {
+            validate_model_identifier_v1(
+                "Soracloud model-weight status",
+                "current_version",
+                current_version,
+            )?;
+            if !self
+                .model
+                .versions
+                .iter()
+                .any(|version| version.weight_version == current_version)
+            {
+                return Err(eyre!(
+                    "Soracloud model-weight status current_version `{current_version}` has no matching version entry"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ModelArtifactStatusEntryV1 {
+    fn validate(&self) -> Result<()> {
+        validate_model_identifier_v1(
+            "Soracloud model-artifact status",
+            "artifact_id",
+            &self.artifact_id,
+        )?;
+        if !self.training_job_id.is_empty() {
+            validate_model_identifier_v1(
+                "Soracloud model-artifact status",
+                "training_job_id",
+                &self.training_job_id,
+            )?;
+        }
+        for (field, value) in [
+            ("weight_version", self.weight_version.as_deref()),
+            ("consumed_by_version", self.consumed_by_version.as_deref()),
+        ] {
+            if let Some(value) = value {
+                validate_model_identifier_v1("Soracloud model-artifact status", field, value)?;
+            }
+        }
+        validate_canonical_status_text(
+            "Soracloud model-artifact status",
+            "dataset_ref",
+            &self.dataset_ref,
+        )?;
+        if self.registered_sequence == 0 {
+            return Err(eyre!(
+                "Soracloud model-artifact status `{}` has zero registered_sequence",
+                self.artifact_id
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl ModelArtifactStatusResponseV1 {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
+            return Err(eyre!(
+                "unsupported Soracloud model-artifact status schema version {}; expected {}",
+                self.schema_version,
+                SORACLOUD_STATUS_SCHEMA_VERSION_V1
+            ));
+        }
+        exact_status_count(
+            "Soracloud model-artifact status artifact_count",
+            self.artifact_count,
+            self.artifacts.len(),
+        )?;
+        if self.artifacts.first() != Some(&self.artifact) {
+            return Err(eyre!(
+                "Soracloud model-artifact status primary artifact does not equal the first artifact entry"
+            ));
+        }
+        let mut artifact_ids = BTreeSet::new();
+        for (index, artifact) in self.artifacts.iter().enumerate() {
+            artifact.validate()?;
+            if artifact.service_name != self.service_name || artifact.model_name != self.model_name
+            {
+                return Err(eyre!(
+                    "Soracloud model-artifact status entry `{}` does not match the response identity",
+                    artifact.artifact_id
+                ));
+            }
+            if !artifact_ids.insert(artifact.artifact_id.clone()) {
+                return Err(eyre!(
+                    "Soracloud model-artifact status contains duplicate artifact_id `{}`",
+                    artifact.artifact_id
+                ));
+            }
+            if let Some(previous) = index
+                .checked_sub(1)
+                .and_then(|previous| self.artifacts.get(previous))
+                && (previous.registered_sequence < artifact.registered_sequence
+                    || (previous.registered_sequence == artifact.registered_sequence
+                        && previous.artifact_id >= artifact.artifact_id))
+            {
+                return Err(eyre!(
+                    "Soracloud model-artifact status entries are not in canonical newest-first order"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl UploadedModelStatusResponseV1 {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
+            return Err(eyre!(
+                "unsupported Soracloud uploaded-model status schema version {}; expected {}",
+                self.schema_version,
+                SORACLOUD_STATUS_SCHEMA_VERSION_V1
+            ));
+        }
+        self.bundle
+            .validate()
+            .wrap_err("invalid Soracloud uploaded-model status bundle")?;
+        if let Some(artifact) = self.artifact.as_ref() {
+            artifact.validate()?;
+            if artifact.service_name != self.bundle.service_name
+                || artifact.weight_version.as_deref() != Some(self.bundle.weight_version.as_str())
+                || artifact.chunk_manifest_root != Some(self.bundle.chunk_manifest_root)
+            {
+                return Err(eyre!(
+                    "Soracloud uploaded-model artifact does not bind the returned bundle"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ModelHostStatusResponseV1 {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
+            return Err(eyre!(
+                "unsupported Soracloud model-host status schema version {}; expected {}",
+                self.schema_version,
+                SORACLOUD_STATUS_SCHEMA_VERSION_V1
+            ));
+        }
+        exact_status_count(
+            "Soracloud model-host status active_host_count",
+            self.active_host_count,
+            self.hosts.len(),
+        )?;
+        let mut previous: Option<&AccountId> = None;
+        for host in &self.hosts {
+            host.validate()
+                .wrap_err("invalid Soracloud model-host status entry")?;
+            if previous.is_some_and(|previous| previous >= &host.validator_account_id) {
+                return Err(eyre!(
+                    "Soracloud model-host status entries must be strictly sorted and duplicate-free"
+                ));
+            }
+            previous = Some(&host.validator_account_id);
+        }
+        Ok(())
+    }
+}
+
+impl AgentApartmentStatusEntryV1 {
+    fn validate(&self) -> Result<()> {
+        if self.lease_started_sequence == 0
+            || self.lease_expires_sequence <= self.lease_started_sequence
+        {
+            return Err(eyre!(
+                "agent apartment `{}` has an invalid lease sequence interval",
+                self.apartment_name
+            ));
+        }
+        if self.state_quota_bytes == 0 || self.autonomy_budget_ceiling_units == 0 {
+            return Err(eyre!(
+                "agent apartment `{}` has zero state quota or autonomy budget ceiling",
+                self.apartment_name
+            ));
+        }
+        if self.autonomy_budget_remaining_units > self.autonomy_budget_ceiling_units {
+            return Err(eyre!(
+                "agent apartment `{}` has autonomy budget remaining above its ceiling",
+                self.apartment_name
+            ));
+        }
+        if self.process_generation == 0
+            || self.process_started_sequence == 0
+            || self.last_active_sequence < self.process_started_sequence
+        {
+            return Err(eyre!(
+                "agent apartment `{}` has invalid process sequence metadata",
+                self.apartment_name
+            ));
+        }
+        if self
+            .last_checkpoint_sequence
+            .is_some_and(|sequence| sequence == 0 || sequence > self.last_active_sequence)
+        {
+            return Err(eyre!(
+                "agent apartment `{}` has an invalid last checkpoint sequence",
+                self.apartment_name
+            ));
+        }
+        if self.last_restart_sequence.is_some() != self.last_restart_reason.is_some() {
+            return Err(eyre!(
+                "agent apartment `{}` has inconsistent restart metadata",
+                self.apartment_name
+            ));
+        }
+        if let Some(sequence) = self.last_restart_sequence
+            && (sequence == 0 || sequence > self.last_active_sequence)
+        {
+            return Err(eyre!(
+                "agent apartment `{}` has an invalid last restart sequence",
+                self.apartment_name
+            ));
+        }
+        if let Some(reason) = self.last_restart_reason.as_deref() {
+            validate_canonical_status_text(
+                "agent apartment status",
+                "last_restart_reason",
+                reason,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl AgentStatusResponseV1 {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
+            return Err(eyre!(
+                "unsupported Soracloud agent status schema version {}; expected {}",
+                self.schema_version,
+                SORACLOUD_STATUS_SCHEMA_VERSION_V1
+            ));
+        }
+        exact_status_count(
+            "Soracloud agent status apartment_count",
+            self.apartment_count,
+            self.apartments.len(),
+        )?;
+        let mut names = BTreeSet::new();
+        for apartment in &self.apartments {
+            apartment.validate()?;
+            if !names.insert(apartment.apartment_name.clone()) {
+                return Err(eyre!(
+                    "Soracloud agent status contains duplicate apartment `{}`",
+                    apartment.apartment_name
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl AgentMailboxMessageEntryV1 {
+    fn validate(&self) -> Result<()> {
+        validate_canonical_status_text("agent mailbox status", "message_id", &self.message_id)?;
+        validate_canonical_status_text("agent mailbox status", "channel", &self.channel)?;
+        if self.enqueued_sequence == 0 {
+            return Err(eyre!(
+                "agent mailbox message `{}` has zero enqueued_sequence",
+                self.message_id
+            ));
+        }
+        if self.payload_hash != Hash::new(self.payload.as_bytes()) {
+            return Err(eyre!(
+                "agent mailbox message `{}` payload_hash does not match its payload",
+                self.message_id
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl AgentMailboxStatusResponseV1 {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
+            return Err(eyre!(
+                "unsupported Soracloud agent mailbox schema version {}; expected {}",
+                self.schema_version,
+                SORACLOUD_STATUS_SCHEMA_VERSION_V1
+            ));
+        }
+        exact_status_count(
+            "Soracloud agent mailbox pending_message_count",
+            self.pending_message_count,
+            self.messages.len(),
+        )?;
+        let mut message_ids = BTreeSet::new();
+        for message in &self.messages {
+            message.validate()?;
+            if !message_ids.insert(message.message_id.clone()) {
+                return Err(eyre!(
+                    "Soracloud agent mailbox status contains duplicate message_id `{}`",
+                    message.message_id
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_optional_canonical_status_text(
+    context: &str,
+    field: &str,
+    value: Option<&str>,
+) -> Result<()> {
+    if let Some(value) = value {
+        validate_canonical_status_text(context, field, value)?;
+    }
+    Ok(())
+}
+
+impl AgentRuntimeReceiptRecordV1 {
+    fn validate(&self) -> Result<()> {
+        for (field, value) in [
+            ("service_name", self.service_name.as_str()),
+            ("service_version", self.service_version.as_str()),
+            ("handler_name", self.handler_name.as_str()),
+        ] {
+            validate_canonical_status_text("agent runtime receipt", field, value)?;
+        }
+        if self.emitted_sequence == 0 {
+            return Err(eyre!("agent runtime receipt has zero emitted_sequence"));
+        }
+        validate_optional_canonical_status_text(
+            "agent runtime receipt",
+            "selected_peer_id",
+            self.selected_peer_id.as_deref(),
+        )?;
+        Ok(())
+    }
+}
+
+impl AgentAutonomyExecutionAuditRecordV1 {
+    fn validate(&self) -> Result<()> {
+        if self.sequence == 0 {
+            return Err(eyre!("agent autonomy execution audit has zero sequence"));
+        }
+        for (field, value) in [
+            ("service_name", self.service_name.as_deref()),
+            ("service_version", self.service_version.as_deref()),
+            ("handler_name", self.handler_name.as_deref()),
+            ("reason", self.reason.as_deref()),
+        ] {
+            validate_optional_canonical_status_text(
+                "agent autonomy execution audit",
+                field,
+                value,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl AgentAutonomyRunStatusRecordV1 {
+    fn validate(&self) -> Result<()> {
+        for (field, value) in [
+            ("run_id", self.run_id.as_str()),
+            ("artifact_hash", self.artifact_hash.as_str()),
+            ("run_label", self.run_label.as_str()),
+        ] {
+            validate_canonical_status_text("agent autonomy run status", field, value)?;
+        }
+        validate_optional_canonical_status_text(
+            "agent autonomy run status",
+            "provenance_hash",
+            self.provenance_hash.as_deref(),
+        )?;
+        if self.budget_units == 0 || self.approved_sequence == 0 {
+            return Err(eyre!(
+                "agent autonomy run `{}` has zero budget or approved sequence",
+                self.run_id
+            ));
+        }
+        if let Some(workflow_input_json) = self.workflow_input_json.as_deref() {
+            parse_exact_agent_workflow_input_json(workflow_input_json)?;
+        }
+        if let Some(receipt) = self.authoritative_runtime_receipt.as_ref() {
+            receipt.validate()?;
+        }
+        if let Some(audit) = self.authoritative_execution_audit.as_ref() {
+            audit.validate()?;
+        }
+        Ok(())
+    }
+}
+
+impl AgentAutonomyStatusResponseV1 {
+    fn validate(&self) -> Result<()> {
+        let lease_state_matches = match self.status {
+            SoraAgentRuntimeStatusV1::Running => self.lease_expires_sequence > self.sequence,
+            SoraAgentRuntimeStatusV1::LeaseExpired => self.lease_expires_sequence <= self.sequence,
+        };
+        if self.sequence == 0
+            || !lease_state_matches
+            || self.lease_remaining_ticks
+                != self.lease_expires_sequence.saturating_sub(self.sequence)
+        {
+            return Err(eyre!(
+                "agent autonomy status for `{}` has invalid sequence or lease metadata",
+                self.apartment_name
+            ));
+        }
+        if self.budget_ceiling_units == 0 || self.budget_remaining_units > self.budget_ceiling_units
+        {
+            return Err(eyre!(
+                "agent autonomy status for `{}` has invalid budget metadata",
+                self.apartment_name
+            ));
+        }
+        if self.process_generation == 0
+            || self.process_started_sequence == 0
+            || self.last_active_sequence < self.process_started_sequence
+            || self.last_active_sequence > self.sequence
+        {
+            return Err(eyre!(
+                "agent autonomy status for `{}` has invalid process sequence metadata",
+                self.apartment_name
+            ));
+        }
+        if self
+            .last_checkpoint_sequence
+            .is_some_and(|sequence| sequence == 0 || sequence > self.last_active_sequence)
+        {
+            return Err(eyre!(
+                "agent autonomy status for `{}` has an invalid checkpoint sequence",
+                self.apartment_name
+            ));
+        }
+        exact_status_count(
+            "Soracloud agent autonomy allowlist_count",
+            self.allowlist_count,
+            self.allowlist.len(),
+        )?;
+        let recent_run_count = u32::try_from(self.recent_runs.len())
+            .wrap_err("Soracloud agent autonomy recent run list exceeds the V1 count range")?;
+        if recent_run_count > self.run_count {
+            return Err(eyre!(
+                "Soracloud agent autonomy recent run count exceeds run_count"
+            ));
+        }
+        let mut artifact_hashes = BTreeSet::new();
+        for rule in &self.allowlist {
+            validate_canonical_status_text(
+                "agent autonomy allowlist",
+                "artifact_hash",
+                &rule.artifact_hash,
+            )?;
+            validate_optional_canonical_status_text(
+                "agent autonomy allowlist",
+                "provenance_hash",
+                rule.provenance_hash.as_deref(),
+            )?;
+            if rule.added_sequence == 0 || !artifact_hashes.insert(rule.artifact_hash.clone()) {
+                return Err(eyre!(
+                    "agent autonomy status contains an invalid or duplicate allowlist artifact `{}`",
+                    rule.artifact_hash
+                ));
+            }
+        }
+        let mut run_ids = BTreeSet::new();
+        for run in &self.recent_runs {
+            run.validate()?;
+            if !run_ids.insert(run.run_id.clone()) {
+                return Err(eyre!(
+                    "agent autonomy status contains duplicate run_id `{}`",
+                    run.run_id
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_runtime_projection_name_list(
+    label: &str,
+    advertised: u32,
+    values: &[String],
+) -> Result<()> {
+    exact_status_count(label, advertised, values.len())?;
+    let mut previous: Option<&str> = None;
+    for value in values {
+        validate_canonical_status_text("Soracloud HF runtime projection", label, value)?;
+        if previous.is_some_and(|previous| previous >= value.as_str()) {
+            return Err(eyre!(
+                "Soracloud HF runtime projection `{label}` must be strictly sorted and duplicate-free"
+            ));
+        }
+        previous = Some(value);
+    }
+    Ok(())
+}
+
+impl HfSharedLeaseStatusResponseV1 {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
+            return Err(eyre!(
+                "unsupported Soracloud HF status schema version {}; expected {}",
+                self.schema_version,
+                SORACLOUD_STATUS_SCHEMA_VERSION_V1
+            ));
+        }
+        self.source
+            .validate()
+            .wrap_err("invalid Soracloud HF status source")?;
+        if let Some(runtime) = self.runtime_projection.as_ref() {
+            for (label, actual, expected) in [
+                (
+                    "source_id",
+                    runtime.source_id.as_str(),
+                    self.source.source_id.to_string(),
+                ),
+                (
+                    "repo_id",
+                    runtime.repo_id.as_str(),
+                    self.source.repo_id.clone(),
+                ),
+                (
+                    "resolved_revision",
+                    runtime.resolved_revision.as_str(),
+                    self.source.resolved_revision.clone(),
+                ),
+                (
+                    "model_name",
+                    runtime.model_name.as_str(),
+                    self.source.model_name.clone(),
+                ),
+                (
+                    "adapter_id",
+                    runtime.adapter_id.as_str(),
+                    self.source.adapter_id.clone(),
+                ),
+            ] {
+                if actual != expected.as_str() {
+                    return Err(eyre!(
+                        "Soracloud HF runtime projection `{label}` does not match its source record"
+                    ));
+                }
+            }
+            if runtime.authoritative_status != self.source.status {
+                return Err(eyre!(
+                    "Soracloud HF runtime projection status does not match its source record"
+                ));
+            }
+            validate_runtime_projection_name_list(
+                "bound_service_names",
+                runtime.bound_service_count,
+                &runtime.bound_service_names,
+            )?;
+            validate_runtime_projection_name_list(
+                "materialized_service_names",
+                runtime.materialized_service_count,
+                &runtime.materialized_service_names,
+            )?;
+            validate_runtime_projection_name_list(
+                "bound_apartment_names",
+                runtime.bound_apartment_count,
+                &runtime.bound_apartment_names,
+            )?;
+            validate_runtime_projection_name_list(
+                "materialized_apartment_names",
+                runtime.materialized_apartment_count,
+                &runtime.materialized_apartment_names,
+            )?;
+            let bound_services = runtime
+                .bound_service_names
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            if runtime
+                .materialized_service_names
+                .iter()
+                .any(|name| !bound_services.contains(name.as_str()))
+            {
+                return Err(eyre!(
+                    "Soracloud HF runtime projection materializes a service that is not bound"
+                ));
+            }
+            let bound_apartments = runtime
+                .bound_apartment_names
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            if runtime
+                .materialized_apartment_names
+                .iter()
+                .any(|name| !bound_apartments.contains(name.as_str()))
+            {
+                return Err(eyre!(
+                    "Soracloud HF runtime projection materializes an apartment that is not bound"
+                ));
+            }
+            if runtime.hydrating_service_count > runtime.materialized_service_count
+                || runtime.active_pool_count > runtime.pool_count
+            {
+                return Err(eyre!(
+                    "Soracloud HF runtime projection contains impossible aggregate counts"
+                ));
+            }
+            if runtime
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.is_empty() || error.trim() != error)
+            {
+                return Err(eyre!(
+                    "Soracloud HF runtime projection contains a non-canonical last_error"
+                ));
+            }
+        }
+        if let Some(pool) = self.pool.as_ref() {
+            pool.validate()
+                .wrap_err("invalid Soracloud HF status lease pool")?;
+            if pool.source_id != self.source.source_id {
+                return Err(eyre!(
+                    "Soracloud HF status pool source_id does not match the source record"
+                ));
+            }
+            if self.storage_base_fee != pool.base_fee {
+                return Err(eyre!(
+                    "Soracloud HF status storage_base_fee does not match the lease pool"
+                ));
+            }
+        } else if !self.storage_base_fee.is_zero() {
+            return Err(eyre!(
+                "Soracloud HF status without a lease pool must report zero storage_base_fee"
+            ));
+        }
+        if let Some(member) = self.member.as_ref() {
+            member
+                .validate()
+                .wrap_err("invalid Soracloud HF status lease member")?;
+            let pool = self.pool.as_ref().ok_or_else(|| {
+                eyre!("Soracloud HF status contains a member without a lease pool")
+            })?;
+            if member.pool_id != pool.pool_id || member.source_id != self.source.source_id {
+                return Err(eyre!(
+                    "Soracloud HF status member identifiers do not match the source and pool"
+                ));
+            }
+        }
+        if let Some(placement) = self.placement.as_ref() {
+            placement
+                .validate()
+                .wrap_err("invalid Soracloud HF status placement")?;
+            let pool = self.pool.as_ref().ok_or_else(|| {
+                eyre!("Soracloud HF status contains a placement without a lease pool")
+            })?;
+            if placement.pool_id != pool.pool_id || placement.source_id != self.source.source_id {
+                return Err(eyre!(
+                    "Soracloud HF status placement identifiers do not match the source and pool"
+                ));
+            }
+            if self.compute_reservation_fee != placement.total_reservation_fee
+                || self.eligible_host_count != placement.eligible_validator_count
+                || self.warm_host_count != placement.warm_host_count()
+            {
+                return Err(eyre!(
+                    "Soracloud HF status placement aggregate fields are inconsistent"
+                ));
+            }
+        } else if !self.compute_reservation_fee.is_zero()
+            || self.eligible_host_count != 0
+            || self.warm_host_count != 0
+        {
+            return Err(eyre!(
+                "Soracloud HF status without a placement must report zero placement aggregates"
+            ));
+        }
+        if let Some(event) = self.latest_audit_event.as_ref() {
+            event
+                .validate()
+                .wrap_err("invalid Soracloud HF status audit event")?;
+            if self.audit_event_count == 0 || event.source_id != self.source.source_id {
+                return Err(eyre!(
+                    "Soracloud HF status latest audit event is inconsistent with its aggregate"
+                ));
+            }
+            if let Some(pool) = self.pool.as_ref()
+                && event.pool_id != pool.pool_id
+            {
+                return Err(eyre!(
+                    "Soracloud HF status audit event pool_id does not match the lease pool"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl AppInfraStatusResponseV1 {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
+            return Err(eyre!(
+                "unsupported Soracloud app-infra status schema version {}; expected {}",
+                self.schema_version,
+                SORACLOUD_STATUS_SCHEMA_VERSION_V1
+            ));
+        }
+        exact_status_count(
+            "Soracloud app-infra status app_count",
+            self.app_count,
+            self.apps.len(),
+        )?;
+        let recent_count = u32::try_from(self.recent_audit_events.len())
+            .wrap_err("Soracloud app-infra recent audit list exceeds the V1 count range")?;
+        if recent_count > self.audit_event_count {
+            return Err(eyre!(
+                "Soracloud app-infra recent audit count {recent_count} exceeds total audit_event_count {}",
+                self.audit_event_count
+            ));
+        }
+        let mut app_names = BTreeSet::new();
+        for app in &self.apps {
+            app.validate()
+                .wrap_err("invalid Soracloud app-infra state entry")?;
+            if !app_names.insert(app.app_name.clone()) {
+                return Err(eyre!(
+                    "Soracloud app-infra status contains duplicate app `{}`",
+                    app.app_name
+                ));
+            }
+        }
+        let mut audit_sequences = BTreeSet::new();
+        for event in &self.recent_audit_events {
+            event
+                .validate()
+                .wrap_err("invalid Soracloud app-infra audit event")?;
+            if !audit_sequences.insert(event.sequence) {
+                return Err(eyre!(
+                    "Soracloud app-infra status contains duplicate audit sequence {}",
+                    event.sequence
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn decode_service_config_status(payload: &json::Value) -> Result<ServiceConfigStatusResponseV1> {
+    let status: ServiceConfigStatusResponseV1 = json::from_value(payload.clone())
+        .wrap_err("failed to decode exact Soracloud service-config status V1")?;
+    status.validate()?;
+    Ok(status)
+}
+
+fn decode_service_secret_status(payload: &json::Value) -> Result<ServiceSecretStatusResponseV1> {
+    let status: ServiceSecretStatusResponseV1 = json::from_value(payload.clone())
+        .wrap_err("failed to decode exact Soracloud service-secret status V1")?;
+    status.validate()?;
+    Ok(status)
+}
+
+fn decode_training_job_status(payload: &json::Value) -> Result<TrainingJobStatusResponseV1> {
+    let status: TrainingJobStatusResponseV1 = json::from_value(payload.clone())
+        .wrap_err("failed to decode exact Soracloud training-job status V1")?;
+    status.validate()?;
+    Ok(status)
+}
+
+fn decode_model_weight_status(payload: &json::Value) -> Result<ModelWeightStatusResponseV1> {
+    let status: ModelWeightStatusResponseV1 = json::from_value(payload.clone())
+        .wrap_err("failed to decode exact Soracloud model-weight status V1")?;
+    status.validate()?;
+    Ok(status)
+}
+
+fn decode_model_artifact_status(payload: &json::Value) -> Result<ModelArtifactStatusResponseV1> {
+    let status: ModelArtifactStatusResponseV1 = json::from_value(payload.clone())
+        .wrap_err("failed to decode exact Soracloud model-artifact status V1")?;
+    status.validate()?;
+    Ok(status)
+}
+
+fn decode_uploaded_model_status(payload: &json::Value) -> Result<UploadedModelStatusResponseV1> {
+    let status: UploadedModelStatusResponseV1 = json::from_value(payload.clone())
+        .wrap_err("failed to decode exact Soracloud uploaded-model status V1")?;
+    status.validate()?;
+    Ok(status)
+}
+
+fn decode_model_host_status(payload: &json::Value) -> Result<ModelHostStatusResponseV1> {
+    let status: ModelHostStatusResponseV1 = json::from_value(payload.clone())
+        .wrap_err("failed to decode exact Soracloud model-host status V1")?;
+    status.validate()?;
+    Ok(status)
+}
+
+fn decode_agent_status(payload: &json::Value) -> Result<AgentStatusResponseV1> {
+    let status: AgentStatusResponseV1 = json::from_value(payload.clone())
+        .wrap_err("failed to decode exact Soracloud agent status V1")?;
+    status.validate()?;
+    Ok(status)
+}
+
+fn decode_agent_mailbox_status(payload: &json::Value) -> Result<AgentMailboxStatusResponseV1> {
+    let status: AgentMailboxStatusResponseV1 = json::from_value(payload.clone())
+        .wrap_err("failed to decode exact Soracloud agent mailbox status V1")?;
+    status.validate()?;
+    Ok(status)
+}
+
+fn decode_agent_autonomy_status(payload: &json::Value) -> Result<AgentAutonomyStatusResponseV1> {
+    let status: AgentAutonomyStatusResponseV1 = json::from_value(payload.clone())
+        .wrap_err("failed to decode exact Soracloud agent autonomy status V1")?;
+    status.validate()?;
+    Ok(status)
+}
+
+fn decode_hf_shared_lease_status(payload: &json::Value) -> Result<HfSharedLeaseStatusResponseV1> {
+    let status: HfSharedLeaseStatusResponseV1 = json::from_value(payload.clone())
+        .wrap_err("failed to decode exact Soracloud HF shared-lease status V1")?;
+    status.validate()?;
+    Ok(status)
+}
+
+fn decode_app_infra_status(payload: &json::Value) -> Result<AppInfraStatusResponseV1> {
+    let status: AppInfraStatusResponseV1 = json::from_value(payload.clone())
+        .wrap_err("failed to decode exact Soracloud app-infra status V1")?;
+    status.validate()?;
+    Ok(status)
+}
+
+fn decode_network_control_plane_snapshot(
+    network_status: &norito::json::Value,
+) -> Result<(u16, NetworkControlPlaneSnapshotV1)> {
+    let schema_version = network_status
+        .get("schema_version")
+        .and_then(json::Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
+        .ok_or_else(|| eyre!("Soracloud network status must carry an unsigned `schema_version`"))?;
+    if schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
+        return Err(eyre!(
+            "unsupported Soracloud status schema version {schema_version}; expected {SORACLOUD_STATUS_SCHEMA_VERSION_V1}"
+        ));
+    }
+    let control_plane: NetworkControlPlaneSnapshotV1 = json::from_value(
+        network_status
+            .get("control_plane")
+            .cloned()
+            .ok_or_else(|| eyre!("Soracloud network status is missing `control_plane`"))?,
+    )
+    .wrap_err("failed to decode canonical Soracloud `control_plane` status")?;
+    if control_plane.schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
+        return Err(eyre!(
+            "unsupported Soracloud control-plane schema version {}; expected {}",
+            control_plane.schema_version,
+            SORACLOUD_STATUS_SCHEMA_VERSION_V1
+        ));
+    }
+    let decoded_service_count = u32::try_from(control_plane.services.len())
+        .wrap_err("Soracloud control-plane service list exceeds the V1 count range")?;
+    if control_plane.service_count != decoded_service_count {
+        return Err(eyre!(
+            "Soracloud control-plane service_count {} does not match {} decoded services",
+            control_plane.service_count,
+            decoded_service_count
+        ));
+    }
+    let recent_audit_count = u32::try_from(control_plane.recent_audit_events.len())
+        .wrap_err("Soracloud control-plane audit list exceeds the V1 count range")?;
+    if recent_audit_count > control_plane.audit_event_count {
+        return Err(eyre!(
+            "Soracloud control-plane recent audit count {recent_audit_count} exceeds total audit_event_count {}",
+            control_plane.audit_event_count
+        ));
+    }
+    Ok((schema_version, control_plane))
 }
 impl StatusOutput {
     fn from_network(
@@ -9076,49 +10401,8 @@ impl StatusOutput {
         network_status: norito::json::Value,
         service_plan: Option<ServiceLocalPlanOutput>,
     ) -> Result<Self> {
-        let schema_version = network_status
-            .get("schema_version")
-            .and_then(json::Value::as_u64)
-            .and_then(|value| u16::try_from(value).ok())
-            .ok_or_else(|| {
-                eyre!("Soracloud network status must carry an unsigned `schema_version`")
-            })?;
-        if schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
-            return Err(eyre!(
-                "unsupported Soracloud status schema version {schema_version}; expected {SORACLOUD_STATUS_SCHEMA_VERSION_V1}"
-            ));
-        }
-        let control_plane: NetworkControlPlaneSnapshotV1 = json::from_value(
-            network_status
-                .get("control_plane")
-                .cloned()
-                .ok_or_else(|| eyre!("Soracloud network status is missing `control_plane`"))?,
-        )
-        .wrap_err("failed to decode canonical Soracloud `control_plane` status")?;
-        if control_plane.schema_version != SORACLOUD_STATUS_SCHEMA_VERSION_V1 {
-            return Err(eyre!(
-                "unsupported Soracloud control-plane schema version {}; expected {}",
-                control_plane.schema_version,
-                SORACLOUD_STATUS_SCHEMA_VERSION_V1
-            ));
-        }
-        let decoded_service_count = u32::try_from(control_plane.services.len())
-            .wrap_err("Soracloud control-plane service list exceeds the V1 count range")?;
-        if control_plane.service_count != decoded_service_count {
-            return Err(eyre!(
-                "Soracloud control-plane service_count {} does not match {} decoded services",
-                control_plane.service_count,
-                decoded_service_count
-            ));
-        }
-        let recent_audit_count = u32::try_from(control_plane.recent_audit_events.len())
-            .wrap_err("Soracloud control-plane audit list exceeds the V1 count range")?;
-        if recent_audit_count > control_plane.audit_event_count {
-            return Err(eyre!(
-                "Soracloud control-plane recent audit count {recent_audit_count} exceeds total audit_event_count {}",
-                control_plane.audit_event_count
-            ));
-        }
+        let (schema_version, control_plane) =
+            decode_network_control_plane_snapshot(&network_status)?;
         let service_count = control_plane.service_count;
         let audit_event_count = control_plane.audit_event_count;
         let services = control_plane.services;
@@ -9155,15 +10439,9 @@ impl SoracloudAppManifestV1 {
                 SORACLOUD_APP_MANIFEST_VERSION_V1
             ));
         }
-        if self.app_name.trim().is_empty() {
-            return Err(eyre!("app manifest field `app_name` must not be empty"));
-        }
-        if let Some(app_version) = self.app_version.as_deref()
-            && app_version.trim().is_empty()
-        {
-            return Err(eyre!(
-                "app manifest field `app_version` must not be empty when provided"
-            ));
+        parse_exact_name_arg("app manifest field `app_name`", &self.app_name)?;
+        if let Some(app_version) = self.app_version.as_deref() {
+            require_exact_nonempty_arg("app manifest field `app_version`", app_version)?;
         }
         if !(self.public_url.starts_with("https://") || self.public_url.starts_with("http://")) {
             return Err(eyre!(
@@ -9244,9 +10522,7 @@ struct SoracloudAppServiceRefV1 {
 }
 impl SoracloudAppServiceRefV1 {
     fn validate(&self) -> Result<()> {
-        if self.service_name.trim().is_empty() {
-            return Err(eyre!("app service field `service_name` must not be empty"));
-        }
+        parse_exact_name_arg("app service field `service_name`", &self.service_name)?;
         if self.container_manifest.trim().is_empty() {
             return Err(eyre!(
                 "app service `{}` field `container_manifest` must not be empty",
@@ -9315,7 +10591,6 @@ struct SoracloudAppReportV1 {
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct AppMutationOutput {
-    report: SoracloudAppReportV1,
     app_name: String,
     manifest_path: String,
     public_url: String,
@@ -9431,16 +10706,6 @@ struct ServiceMutationOutput {
     published_public_discovery: Option<PublicServiceDiscoveryPublishOutput>,
     published_bundle: ServiceBundlePublishOutput,
     published_inrou_guest_images: Vec<InrouGuestImageArtifactPublishOutput>,
-    #[norito(required)]
-    current_version: Option<String>,
-    #[norito(required)]
-    rollout_handle: Option<String>,
-    #[norito(required)]
-    rollout_stage: Option<norito::json::Value>,
-    #[norito(required)]
-    stage: Option<norito::json::Value>,
-    #[norito(required)]
-    traffic_percent: Option<u8>,
     response: norito::json::Value,
     notes: Vec<String>,
 }
@@ -9554,20 +10819,26 @@ struct AppDoctorOutput {
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
+struct AppLiveVerificationOutput {
+    label: String,
+    url: String,
+    status_code: u16,
+}
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct AppReleaseOutput {
     report: SoracloudAppReportV1,
     mode: String,
     release_mode: String,
     torii_url: String,
     uses_api_token: bool,
-    skip_build: bool,
     plan: AppLocalPlanOutput,
-    #[norito(required)]
-    build_and_sync: Option<AppBuildAndSyncOutput>,
+    build_and_sync: AppBuildAndSyncOutput,
     #[norito(required)]
     release_response: Option<AppMutationOutput>,
     #[norito(required)]
     status_response: Option<AppStatusOutput>,
+    live_verifications: Vec<AppLiveVerificationOutput>,
     notes: Vec<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -9622,7 +10893,18 @@ struct AppLocalPlanOutput {
     routes: Vec<AppLocalRoutePlanOutput>,
     notes: Vec<String>,
 }
-type AppLocalWorkspaceScriptsOutput = ServiceWorkspaceScriptsOutput;
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct AppLocalWorkspaceScriptsOutput {
+    #[norito(required)]
+    local_dev: Option<String>,
+    #[norito(required)]
+    build_and_sync: Option<String>,
+    #[norito(required)]
+    doctor: Option<String>,
+    #[norito(required)]
+    release: Option<String>,
+}
 macro_rules! define_app_workspace_output {
     ($(#[$meta:meta])* $name:ident, [$($before_mode:tt)*], [$($after_mode:tt)*]) => {
         $(#[$meta])*
@@ -9658,13 +10940,7 @@ define_app_workspace_output!(AppLocalDevOutput, [], []);
 define_app_workspace_output!(AppBuildAndSyncOutput, [], []);
 define_app_workspace_output!(
     #[cfg(test)]
-    AppDoctorWorkspaceOutput,
-    [script_name: String,],
-    []
-);
-define_app_workspace_output!(
-    #[cfg(test)]
-    AppWorkspaceMutationScriptOutput,
+    AppReleaseWorkspaceScriptOutput,
     [script_name: String,],
     [torii_url: String, uses_api_token: bool,]
 );
@@ -9750,8 +11026,6 @@ struct AppStaticSitePublishOutput {
     cid_gateway_url: String,
     content_cid: String,
     manifest_digest_hex: String,
-    #[norito(required)]
-    manifest_id_hex: Option<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -9763,9 +11037,6 @@ struct InrouGuestImageArtifactPublishOutput {
     member_paths: Vec<String>,
     content_cid: String,
     manifest_digest_hex: String,
-    #[norito(required)]
-    manifest_id_hex: Option<String>,
-    distribution: SoraArtifactDistributionPolicyV1,
     note: String,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -9775,8 +11046,6 @@ struct ServiceBundlePublishOutput {
     bundle_file: String,
     content_cid: String,
     manifest_digest_hex: String,
-    #[norito(required)]
-    manifest_id_hex: Option<String>,
     bundle_hash: String,
     note: String,
 }
@@ -9784,13 +11053,11 @@ struct ServiceBundlePublishOutput {
 struct PublishedSorafsDirectoryArtifact {
     content_cid: String,
     manifest_digest_hex: String,
-    manifest_id_hex: Option<String>,
 }
 #[derive(Clone, Debug)]
 struct PublishedSorafsFileArtifact {
     content_cid: String,
     manifest_digest_hex: String,
-    manifest_id_hex: Option<String>,
     payload_hash: Hash,
 }
 #[derive(Clone, Debug)]
@@ -9820,8 +11087,6 @@ struct SoracloudPublicServiceDiscoveryV1 {
     public_discovery_url: String,
     public_discovery_cid_host_url: String,
     manifest_digest_hex: String,
-    #[norito(required)]
-    manifest_id_hex: Option<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -9844,8 +11109,6 @@ struct PublicServiceDiscoveryPublishOutput {
     public_discovery_url: String,
     public_discovery_cid_host_url: String,
     manifest_digest_hex: String,
-    #[norito(required)]
-    manifest_id_hex: Option<String>,
 }
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -10136,6 +11399,7 @@ struct AgentPolicyRevokePayload {
 #[norito(deny_unknown_fields)]
 struct AgentWalletSpendPayload {
     apartment_name: String,
+    request_id: String,
     asset_definition: String,
     amount: Quantity,
 }
@@ -10194,31 +11458,6 @@ struct AgentArtifactAllowPayload {
     artifact_hash: String,
     #[norito(required)]
     provenance_hash: Option<String>,
-}
-#[derive(
-    Clone,
-    Debug,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-#[norito(deny_unknown_fields)]
-struct AgentAutonomyRunPayload {
-    apartment_name: String,
-    artifact_hash: String,
-    #[norito(required)]
-    provenance_hash: Option<String>,
-    budget_units: u64,
-    run_label: String,
-    #[norito(required)]
-    workflow_input_json: Option<String>,
-}
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct AgentAutonomyFinalizeRequest {
-    apartment_name: String,
-    run_id: String,
 }
 #[derive(
     Clone,
@@ -10411,7 +11650,6 @@ signed_request_types! {
     SignedAgentMessageSendRequest => AgentMessageSendPayload;
     SignedAgentMessageAckRequest => AgentMessageAckPayload;
     SignedAgentArtifactAllowRequest => AgentArtifactAllowPayload;
-    SignedAgentAutonomyRunRequest => AgentAutonomyRunPayload;
     SignedTrainingJobStartRequest => TrainingJobStartPayload;
     SignedTrainingJobCheckpointRequest => TrainingJobCheckpointPayload;
     SignedTrainingJobRetryRequest => TrainingJobRetryPayload;
@@ -10513,19 +11751,14 @@ fn run_app_infra_mutation(
         MutationMode::Deploy => "v1/soracloud/apps/deploy",
         MutationMode::Upgrade => "v1/soracloud/apps/upgrade",
     };
-    let (endpoint, mut payload) =
+    let (endpoint, payload) =
         post_torii_soracloud_mutation(torii_url, endpoint_path, request, api_token, timeout_secs)?;
-    if let Some(root) = payload.as_object_mut() {
-        root.insert(
-            "app_infra_endpoint".to_owned(),
-            json::Value::String(endpoint),
-        );
-        root.insert(
-            "app_infra_manifest_hash".to_owned(),
-            json::to_value(&request.manifest.manifest_hash())?,
-        );
-    }
-    Ok(payload)
+    decode_soracloud_submission_receipt(&payload)?;
+    Ok(norito::json!({
+        "app_infra_endpoint": endpoint,
+        "app_infra_manifest_hash": (request.manifest.manifest_hash()),
+        "submission": payload,
+    }))
 }
 fn build_app_static_site_binding_value(
     app_name: &str,
@@ -10647,6 +11880,148 @@ fn join_service_route_path(path_prefix: &str, route_path: &str) -> String {
     }
     format!("{trimmed_prefix}/{}", route_path.trim_start_matches('/'))
 }
+
+#[derive(Clone, Debug)]
+struct AppLiveVerificationTarget {
+    label: String,
+    url: reqwest::Url,
+}
+
+fn app_live_verification_targets(manifest_path: &Path) -> Result<Vec<AppLiveVerificationTarget>> {
+    let manifest: SoracloudAppManifestV1 = load_json(manifest_path)?;
+    manifest.validate()?;
+    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let public_origin = normalize_app_public_origin_url(&manifest.public_url, manifest_path)?;
+    let public_hostname = public_origin
+        .host_str()
+        .ok_or_else(|| eyre!("app public URL is missing its hostname"))?;
+    let mut targets = BTreeMap::<String, String>::new();
+
+    for service_ref in &manifest.services {
+        let container_path = resolve_manifest_path(manifest_dir, &service_ref.container_manifest);
+        let service_path = resolve_manifest_path(manifest_dir, &service_ref.service_manifest);
+        let container: UnpublishedContainerManifestV1 = load_json(&container_path)?;
+        let service: SoraServiceManifestV1 = load_json(&service_path)?;
+        ensure_app_service_ref_matches_manifest_name(
+            &service_ref.service_name,
+            &service_path,
+            &service,
+        )?;
+        if service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
+            || container.runtime != SoraContainerRuntimeV1::Inrou
+        {
+            continue;
+        }
+        let route = service.route.as_ref().ok_or_else(|| {
+            eyre!(
+                "hosted app service `{}` is missing its public route",
+                service_ref.service_name
+            )
+        })?;
+        if route.visibility != SoraRouteVisibilityV1::Public {
+            return Err(eyre!(
+                "hosted app service `{}` must expose a public route for release verification",
+                service_ref.service_name
+            ));
+        }
+        if !route.host.eq_ignore_ascii_case(public_hostname) {
+            return Err(eyre!(
+                "hosted app service `{}` route host `{}` does not match app public host `{public_hostname}`",
+                service_ref.service_name,
+                route.host
+            ));
+        }
+        let healthcheck_path = container.lifecycle.healthcheck_path.as_deref().ok_or_else(|| {
+            eyre!(
+                "hosted app service `{}` must declare a healthcheck_path for live release verification",
+                service_ref.service_name
+            )
+        })?;
+        let mut url = public_origin.clone();
+        url.set_path(&join_service_route_path(
+            &route.path_prefix,
+            healthcheck_path,
+        ));
+        url.set_query(None);
+        url.set_fragment(None);
+        targets.insert(
+            url.to_string(),
+            format!("service `{}` healthcheck", service_ref.service_name),
+        );
+    }
+
+    if manifest
+        .static_site
+        .as_ref()
+        .is_some_and(|site| site.publish_mode == APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING)
+    {
+        targets.insert(
+            public_origin.to_string(),
+            "root-bound static site".to_owned(),
+        );
+    }
+    if targets.is_empty() {
+        return Err(eyre!(
+            "app release has no live verification target; V1 requires a public Inrou healthcheck or a root-bound static site"
+        ));
+    }
+    targets
+        .into_iter()
+        .map(|(url, label)| {
+            Ok(AppLiveVerificationTarget {
+                label,
+                url: reqwest::Url::parse(&url)
+                    .wrap_err("failed to retain canonical app verification URL")?,
+            })
+        })
+        .collect()
+}
+
+fn verify_app_live_targets(
+    targets: &[AppLiveVerificationTarget],
+    timeout_secs: u64,
+) -> Result<Vec<AppLiveVerificationOutput>> {
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .build()
+        .wrap_err("failed to build exact app live-verification HTTP client")?;
+    let mut verified = Vec::with_capacity(targets.len());
+    for target in targets {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let last_observation = match client
+                .get(target.url.clone())
+                .header(header::ACCEPT, HeaderValue::from_static("*/*"))
+                .send()
+            {
+                Ok(response) if response.status().is_success() => {
+                    verified.push(AppLiveVerificationOutput {
+                        label: target.label.clone(),
+                        url: target.url.to_string(),
+                        status_code: response.status().as_u16(),
+                    });
+                    break;
+                }
+                Ok(response) => format!("HTTP {}", response.status()),
+                Err(error) => error.to_string(),
+            };
+            if Instant::now() >= deadline {
+                return Err(eyre!(
+                    "live verification for {} at `{}` did not return a 2xx response within {} second(s): {last_observation}",
+                    target.label,
+                    target.url,
+                    timeout_secs.max(1)
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+    Ok(verified)
+}
+
 fn service_uses_public_inrou_http_route(bundle: &SoraDeploymentBundleV1) -> bool {
     bundle.service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
         && bundle.container.runtime == SoraContainerRuntimeV1::Inrou
@@ -10700,11 +12075,7 @@ fn fetch_existing_public_service_discovery_registry(
     api_token: Option<&str>,
     timeout_secs: u64,
 ) -> Result<Option<SoracloudPublicServiceDiscoveryRegistryV1>> {
-    let service_name = service_name
-        .trim()
-        .parse::<Name>()
-        .map(|name| name.to_string())
-        .wrap_err("invalid --service-name")?;
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/service/config/status")
@@ -10714,7 +12085,7 @@ fn fetch_existing_public_service_discovery_registry(
         query.append_pair("service_name", service_name.as_str());
         query.append_pair("config_name", PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME);
     }
-    let (_, status, body) = send_torii_soracloud_authenticated_get(
+    let (_, status, content_type, body) = send_torii_soracloud_authenticated_get(
         endpoint,
         api_token,
         timeout_secs,
@@ -10723,30 +12094,34 @@ fn fetch_existing_public_service_discovery_registry(
     if status == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
+    let payload = decode_exact_torii_json_success(
+        status,
+        content_type.as_ref(),
+        &body,
+        "Torii public-discovery config status",
+    )?;
+    let status = decode_service_config_status(&payload)?;
+    if status.service_name.to_string() != service_name
+        || status.configs.len() != 1
+        || status.configs[0].config_name != PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME
+    {
         return Err(eyre!(
-            "Torii /v1/soracloud/service/config/status returned {} while loading `{}`: {}",
-            status,
-            PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME,
-            body_text
+            "successful public-discovery config status must contain exactly the requested config entry"
         ));
     }
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii public discovery config status JSON payload")?;
-    let Some(entry) = payload
-        .get("configs")
-        .and_then(norito::json::Value::as_array)
-        .and_then(|configs| configs.first())
-    else {
-        return Ok(None);
-    };
-    let value_json = entry
-        .get("value_json")
-        .cloned()
-        .ok_or_else(|| eyre!("public discovery config payload is missing value_json"))?;
-    let registry: SoracloudPublicServiceDiscoveryRegistryV1 = json::from_value(value_json)
-        .wrap_err("failed to decode public service discovery registry JSON")?;
+    let registry: SoracloudPublicServiceDiscoveryRegistryV1 =
+        json::from_value(status.configs[0].value_json.clone())
+            .wrap_err("failed to decode public service discovery registry JSON")?;
+    if registry.schema_version != PUBLIC_SERVICE_DISCOVERY_SCHEMA_VERSION_V1
+        || registry.service_name != service_name
+        || registry.current_version.trim() != registry.current_version
+        || registry.current_version.is_empty()
+        || !registry.revisions.contains_key(&registry.current_version)
+    {
+        return Err(eyre!(
+            "public service discovery registry contains inconsistent V1 identity or revision metadata"
+        ));
+    }
     Ok(Some(registry))
 }
 fn encode_sorafs_manifest_for_storage(manifest: &ManifestV1) -> Result<(Vec<u8>, blake3::Hash)> {
@@ -10766,15 +12141,18 @@ fn signed_manifest_provenance(key_pair: &KeyPair, payload: &[u8]) -> Result<Mani
         signature: sign_soracloud_payload(key_pair, payload)?,
     })
 }
+fn sorafs_release_nonce_unix_nanos(now: SystemTime) -> Result<String> {
+    Ok(now
+        .duration_since(UNIX_EPOCH)
+        .wrap_err("SoraFS release governance clock precedes the Unix epoch")?
+        .as_nanos()
+        .to_string())
+}
 fn attach_sorafs_release_governance(
     mut manifest: ManifestV1,
     key_pair: &KeyPair,
 ) -> Result<ManifestV1> {
-    let release_nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos()
-        .to_string();
+    let release_nonce = sorafs_release_nonce_unix_nanos(SystemTime::now())?;
     manifest.metadata.push(MetadataEntry {
         key: "soracloud.release_nonce_unix_nanos".to_owned(),
         value: release_nonce,
@@ -10955,6 +12333,54 @@ fn register_built_sorafs_manifest(
         timeout_secs,
     )
 }
+
+fn prepare_built_sorafs_manifest_registration(
+    built: &BuiltSorafsManifest,
+    operation: &str,
+    requested_fee_payment: FeePaymentIntent,
+    binding: TairaMutationBindingV1,
+    torii_url: &str,
+    config: &ClientConfig,
+    timeout_secs: u64,
+) -> Result<PreparedSoracloudTransactionV1> {
+    let mut config = config.clone();
+    config.torii_api_url = url::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
+    config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = Client::new(config);
+    let instruction =
+        iroha::data_model::isi::sorafs::RegisterPinManifest::new(built.bytes.clone(), None, None);
+    let payload = client
+        .try_build_transaction_payload_from_items(
+            [InstructionBox::from(instruction)],
+            requested_fee_payment.clone(),
+            binding.metadata(operation)?,
+        )
+        .wrap_err("failed to build exact SoraFS pin-registration payload")?;
+    let payload = TransactionBuilder::from_payload(payload)
+        .wrap_err("failed to reconstruct exact SoraFS pin-registration payload")?
+        .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+        .into_payload()
+        .wrap_err("failed to finalize exact SoraFS pin-registration payload")?;
+    let quote = client
+        .quote_fees(&payload)
+        .wrap_err("failed to quote exact SoraFS pin-registration payload")?;
+    let mut payload = payload;
+    if !requested_fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
+        return Err(eyre!(
+            "SoraFS pin-registration fee quote changed payer or gas bound"
+        ));
+    }
+    quote
+        .intent
+        .validate()
+        .wrap_err("SoraFS pin-registration fee quote is invalid")?;
+    payload.fee_payment = quote.intent.clone();
+    let transaction = client
+        .try_sign_transaction_payload(payload)
+        .wrap_err("failed to sign exact SoraFS pin-registration payload")?;
+    PreparedSoracloudTransactionV1::from_signed(operation, binding, quote, transaction)
+}
 fn publish_public_service_discovery(
     bundle: &SoraDeploymentBundleV1,
     torii_url: &str,
@@ -11000,7 +12426,6 @@ fn publish_public_service_discovery(
         public_discovery_url: String::new(),
         public_discovery_cid_host_url: String::new(),
         manifest_digest_hex: String::new(),
-        manifest_id_hex: None,
     };
     write_json(
         &tempdir.path().join(PUBLIC_SERVICE_DISCOVERY_INDEX_DOCUMENT),
@@ -11041,7 +12466,6 @@ fn publish_public_service_discovery(
         key_pair,
         timeout_secs,
     )?;
-    let manifest_id_hex = None;
     let content_cid = encode_content_cid(&built.manifest.root_cid);
     let manifest_digest_hex = built.digest_hex;
     let mut public_discovery_url = base_url.clone();
@@ -11057,7 +12481,6 @@ fn publish_public_service_discovery(
         public_discovery_url: public_discovery_url.to_string(),
         public_discovery_cid_host_url: public_discovery_cid_host_url.clone(),
         manifest_digest_hex: manifest_digest_hex.clone(),
-        manifest_id_hex: manifest_id_hex.clone(),
         ..discovery_stub
     };
     let output = PublicServiceDiscoveryPublishOutput {
@@ -11070,7 +12493,6 @@ fn publish_public_service_discovery(
         public_discovery_url: public_discovery_url.to_string(),
         public_discovery_cid_host_url,
         manifest_digest_hex,
-        manifest_id_hex,
     };
     Ok((discovery, output))
 }
@@ -11164,11 +12586,7 @@ fn publish_app_static_site(
         key_pair,
         timeout_secs,
     )?;
-    let manifest_id_hex = None;
-    Ok(AppStaticSitePublishOutput {
-        manifest_id_hex,
-        ..planned
-    })
+    Ok(planned)
 }
 fn plan_app_static_site_publication(
     app_manifest: &SoracloudAppManifestV1,
@@ -11248,13 +12666,17 @@ fn plan_app_static_site_publication(
     let manifest_digest_hex = built.digest_hex;
     let mut cid_gateway_url = public_url.clone();
     cid_gateway_url.set_path(&format!("/sorafs/cid/{content_cid}"));
+    let canonical_public_url = public_url
+        .as_str()
+        .strip_suffix('/')
+        .ok_or_else(|| eyre!("canonical app public origin is missing its root path"))?
+        .to_owned();
     Ok(AppStaticSitePublishOutput {
         hostname,
-        public_url: public_url.to_string(),
+        public_url: canonical_public_url,
         cid_gateway_url: cid_gateway_url.to_string(),
         content_cid,
         manifest_digest_hex,
-        manifest_id_hex: None,
     })
 }
 fn publish_sorafs_directory_artifact(
@@ -11313,12 +12735,10 @@ fn publish_sorafs_directory_artifact(
         key_pair,
         timeout_secs,
     )?;
-    let manifest_id_hex = None;
     let content_cid = encode_content_cid(&built.manifest.root_cid);
     Ok(PublishedSorafsDirectoryArtifact {
         content_cid,
         manifest_digest_hex: built.digest_hex,
-        manifest_id_hex,
     })
 }
 fn publish_sorafs_file_artifact(
@@ -11380,12 +12800,10 @@ fn publish_sorafs_file_artifact(
         key_pair,
         timeout_secs,
     )?;
-    let manifest_id_hex = None;
     let content_cid = encode_content_cid(&built.manifest.root_cid);
     Ok(PublishedSorafsFileArtifact {
         content_cid,
         manifest_digest_hex: built.digest_hex,
-        manifest_id_hex,
         payload_hash,
     })
 }
@@ -11413,48 +12831,62 @@ fn validate_local_inrou_member(inrou_dir: &Path, member_path: &str) -> Result<St
             local_path.display()
         )
     })?;
-    if !metadata.is_file() {
+    if !metadata.is_file() || metadata.len() == 0 {
         return Err(eyre!(
-            "Inrou guest image member `{member_path}` resolved to `{}` but it is not a file",
+            "Inrou guest image member `{member_path}` resolved to `{}` but it is not a nonempty regular file",
             local_path.display()
         ));
     }
     Ok(relative_member)
 }
-#[derive(Debug)]
-struct PublishedServiceArtifacts {
-    bundle: ServiceBundlePublishOutput,
-    inrou_guest_images: Vec<InrouGuestImageArtifactPublishOutput>,
-}
-fn reject_prepublished_inrou_guest_images(bundle: &SoraDeploymentBundleV1) -> Result<()> {
-    let Some(inrou) = bundle.container.inrou.as_ref() else {
-        return Ok(());
-    };
-    let prepublished = inrou
-        .guest_images
-        .iter()
-        .filter_map(|(guest_isa, image)| image.published_artifact.as_ref().map(|_| guest_isa))
-        .map(|guest_isa| guest_isa.as_str())
-        .collect::<Vec<_>>();
-    if prepublished.is_empty() {
+fn validate_local_inrou_guest_image_sources(
+    service_workspace_dir: Option<&Path>,
+    bundle: &UnpublishedDeploymentBundleV1,
+) -> Result<()> {
+    if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
+        || bundle.container.runtime != SoraContainerRuntimeV1::Inrou
+    {
         return Ok(());
     }
-    Err(eyre!(
-        "service `{}` contains prepublished Inrou guest-image refs for [{}]; V1 requires local guest-image members and republishes them before every deploy or upgrade",
-        bundle.service.service_name,
-        prepublished.join(", ")
-    ))
+    let inrou = bundle.container.inrou.as_ref().ok_or_else(|| {
+        eyre!(
+            "service `{}` selects the Inrou runtime without mandatory guest-image source metadata",
+            bundle.service.service_name
+        )
+    })?;
+    let workspace_dir = service_workspace_dir.ok_or_else(|| {
+        eyre!(
+            "service `{}` uses Inrou but its container and service manifests are not in a shared workspace directory",
+            bundle.service.service_name
+        )
+    })?;
+    let inrou_dir = workspace_dir.join("inrou");
+    for image in inrou.guest_images.values() {
+        validate_local_inrou_member(&inrou_dir, &image.kernel_image_path)?;
+        validate_local_inrou_member(&inrou_dir, &image.rootfs_image_path)?;
+        if let Some(initrd_image_path) = image.initrd_image_path.as_deref() {
+            validate_local_inrou_member(&inrou_dir, initrd_image_path)?;
+        }
+    }
+    Ok(())
+}
+#[derive(Debug)]
+struct PublishedServiceArtifacts {
+    admitted_bundle: SoraDeploymentBundleV1,
+    published_bundle: ServiceBundlePublishOutput,
+    inrou_guest_images: Vec<InrouGuestImageArtifactPublishOutput>,
 }
 fn publish_service_artifacts(
     bundle_file: &Path,
     service_workspace_dir: Option<&Path>,
-    bundle: &mut SoraDeploymentBundleV1,
+    bundle: UnpublishedDeploymentBundleV1,
     torii_url: &str,
     authority: &AccountId,
     key_pair: &KeyPair,
     timeout_secs: u64,
 ) -> Result<PublishedServiceArtifacts> {
-    reject_prepublished_inrou_guest_images(bundle)?;
+    validate_unpublished_deployment_source(&bundle)?;
+    validate_local_inrou_guest_image_sources(service_workspace_dir, &bundle)?;
     let published = publish_sorafs_file_artifact(
         bundle_file,
         &format!("Soracloud service bundle ({})", bundle.service.service_name),
@@ -11471,44 +12903,51 @@ fn publish_service_artifacts(
             bundle.container.bundle_hash
         ));
     }
-    let service_bundle = ServiceBundlePublishOutput {
+    let published_bundle = ServiceBundlePublishOutput {
         service_name: bundle.service.service_name.to_string(),
         bundle_file: bundle_file.to_string_lossy().into_owned(),
         content_cid: published.content_cid,
         manifest_digest_hex: published.manifest_digest_hex,
-        manifest_id_hex: published.manifest_id_hex,
         bundle_hash: published.payload_hash.to_string(),
         note: "service bundle bytes were published to SoraFS for runtime hydration".to_owned(),
     };
-    let inrou_guest_images = publish_inrou_guest_image_artifacts(
+    let (inrou_guest_images, published_inrou_artifacts) = publish_inrou_guest_image_artifacts(
         service_workspace_dir,
-        bundle,
+        &bundle,
         torii_url,
         authority,
         key_pair,
         timeout_secs,
     )?;
+    let admitted_bundle = bundle.into_admitted(published_inrou_artifacts)?;
     Ok(PublishedServiceArtifacts {
-        bundle: service_bundle,
+        admitted_bundle,
+        published_bundle,
         inrou_guest_images,
     })
 }
 fn publish_inrou_guest_image_artifacts(
     service_workspace_dir: Option<&Path>,
-    bundle: &mut SoraDeploymentBundleV1,
+    bundle: &UnpublishedDeploymentBundleV1,
     torii_url: &str,
     authority: &AccountId,
     key_pair: &KeyPair,
     timeout_secs: u64,
-) -> Result<Vec<InrouGuestImageArtifactPublishOutput>> {
+) -> Result<(
+    Vec<InrouGuestImageArtifactPublishOutput>,
+    BTreeMap<SoraInrouGuestIsaV1, SoraPublishedInrouGuestImageArtifactV1>,
+)> {
     if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService
         || bundle.container.runtime != SoraContainerRuntimeV1::Inrou
     {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), BTreeMap::new()));
     }
-    let Some(inrou) = bundle.container.inrou.as_mut() else {
-        return Ok(Vec::new());
-    };
+    let inrou = bundle.container.inrou.as_ref().ok_or_else(|| {
+        eyre!(
+            "service `{}` selects the Inrou runtime without mandatory guest-image source metadata",
+            bundle.service.service_name
+        )
+    })?;
     let service_name = bundle.service.service_name.to_string();
     let workspace_dir = service_workspace_dir.ok_or_else(|| {
         eyre!(
@@ -11517,12 +12956,9 @@ fn publish_inrou_guest_image_artifacts(
     })?;
     let inrou_dir = workspace_dir.join("inrou");
     let mut outputs = Vec::new();
-    let guest_isas = inrou.guest_images.keys().copied().collect::<Vec<_>>();
-    for guest_isa in guest_isas {
-        let image = inrou
-            .guest_images
-            .get(&guest_isa)
-            .expect("guest image exists while publishing");
+    let mut published_artifacts = BTreeMap::new();
+    for (guest_isa_name, image) in &inrou.guest_images {
+        let guest_isa = parse_unpublished_inrou_guest_isa(guest_isa_name)?;
         let mut member_paths = vec![
             inrou_member_path(&image.kernel_image_path)?,
             inrou_member_path(&image.rootfs_image_path)?,
@@ -11530,7 +12966,6 @@ fn publish_inrou_guest_image_artifacts(
         if let Some(initrd_image_path) = image.initrd_image_path.as_deref() {
             member_paths.push(inrou_member_path(initrd_image_path)?);
         }
-        let distribution = image.distribution.clone();
         member_paths = member_paths
             .into_iter()
             .map(|member_path| {
@@ -11571,16 +13006,16 @@ fn publish_inrou_guest_image_artifacts(
             key_pair,
             timeout_secs,
         )?;
-        let image = inrou
-            .guest_images
-            .get_mut(&guest_isa)
-            .expect("guest image was validated before publishing");
-        image.published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
+        let artifact = SoraPublishedInrouGuestImageArtifactV1 {
             manifest_digest_hex: published.manifest_digest_hex.clone(),
             content_cid: published.content_cid.clone(),
-            manifest_id_hex: published.manifest_id_hex.clone(),
-            distribution: distribution.clone(),
-        });
+        };
+        if published_artifacts.insert(guest_isa, artifact).is_some() {
+            return Err(eyre!(
+                "unpublished Inrou workspace repeats guest ISA `{}`",
+                guest_isa.as_str()
+            ));
+        }
         outputs.push(InrouGuestImageArtifactPublishOutput {
             service_name: service_name.clone(),
             guest_isa: guest_isa.as_str().to_owned(),
@@ -11589,16 +13024,10 @@ fn publish_inrou_guest_image_artifacts(
             member_paths,
             content_cid: published.content_cid.clone(),
             manifest_digest_hex: published.manifest_digest_hex.clone(),
-            manifest_id_hex: published.manifest_id_hex.clone(),
-            distribution,
-            note: "hosts hydrate these members from SoraFS; geography targets are best-effort and fall back to lower observed latency when host geography is unknown".to_owned(),
+            note: "hosts hydrate these members from the exact authenticated SoraFS artifact reference in the admitted manifest".to_owned(),
         });
     }
-    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-    bundle
-        .validate_for_admission()
-        .wrap_err("published Inrou guest-image artifact refs made the deployment bundle invalid")?;
-    Ok(outputs)
+    Ok((outputs, published_artifacts))
 }
 fn compute_chunk_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
     let mut hasher = Sha3::v256();
@@ -11642,6 +13071,28 @@ fn signed_bundle_request(
     _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedBundleRequest> {
+    bundle
+        .validate_for_admission()
+        .wrap_err("deployment bundle failed canonical admission validation")?;
+    if let SoraNetworkPolicyV1::Allowlist(entries) = &bundle.container.capabilities.network {
+        for entry in entries {
+            if entry.host.is_empty()
+                || entry.host.trim() != entry.host
+                || entry.host.chars().any(char::is_control)
+                || entry.host.chars().any(char::is_whitespace)
+            {
+                return Err(eyre!(
+                    "container capability network allowlist host must use exact canonical V1 bytes"
+                ));
+            }
+        }
+    }
+    for config_name in initial_service_configs.keys() {
+        parse_service_material_name_arg("initial config name", config_name)?;
+    }
+    for secret_name in initial_service_secrets.keys() {
+        parse_service_material_name_arg("initial secret name", secret_name)?;
+    }
     let payload = encode_bundle_with_materials_provenance_payload(
         &bundle,
         &initial_service_configs,
@@ -11686,8 +13137,7 @@ fn build_app_infra_manifest(
     let app_version = derive_app_infra_version(app_manifest, &services);
     let manifest = SoraAppInfraManifestV1 {
         schema_version: SORA_APP_INFRA_MANIFEST_VERSION_V1,
-        app_name: app_manifest
-            .app_name
+        app_name: parse_exact_name_arg("app manifest field `app_name`", &app_manifest.app_name)?
             .parse()
             .wrap_err("app manifest field `app_name` is not a valid Iroha name")?,
         app_version,
@@ -11704,12 +13154,7 @@ fn derive_app_infra_version(
     app_manifest: &SoracloudAppManifestV1,
     services: &[SoraAppInfraServiceRefV1],
 ) -> String {
-    if let Some(app_version) = app_manifest
-        .app_version
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(app_version) = app_manifest.app_version.as_deref() {
         return app_version.to_owned();
     }
     let service_versions = services
@@ -11798,22 +13243,67 @@ fn app_service_shard_label(container: &SoraContainerManifestV1) -> Option<String
     }
 }
 fn parse_service_material_name_arg(flag_name: &str, value: &str) -> Result<String> {
-    let normalized = value.trim();
-    if normalized.is_empty() {
+    if value.is_empty() {
         return Err(eyre!("{flag_name} must not be empty"));
     }
-    if normalized.len() > 256 {
+    if value.trim() != value {
+        return Err(eyre!("{flag_name} must not contain surrounding whitespace"));
+    }
+    if value.len() > 256 {
         return Err(eyre!("{flag_name} exceeds max bytes (256)"));
     }
-    if normalized.starts_with('/') || normalized.contains("..") {
+    if value.starts_with('/') || value.contains("..") {
         return Err(eyre!(
             "{flag_name} must not contain leading `/` or parent path segments"
         ));
     }
-    if normalized.chars().any(|ch| ch.is_control()) {
+    if value.chars().any(char::is_control) {
         return Err(eyre!("{flag_name} must not contain control characters"));
     }
-    Ok(normalized.to_owned())
+    Ok(value.to_owned())
+}
+fn parse_exact_name_arg(flag_name: &str, value: &str) -> Result<String> {
+    if value.trim() != value {
+        return Err(eyre!(
+            "invalid {flag_name}: must not contain surrounding whitespace"
+        ));
+    }
+    let parsed: Name = value
+        .parse()
+        .wrap_err_with(|| format!("invalid {flag_name}"))?;
+    if parsed.as_ref() != value {
+        return Err(eyre!(
+            "{flag_name} must use its exact canonical V1 spelling"
+        ));
+    }
+    Ok(value.to_owned())
+}
+fn require_exact_nonempty_arg(flag_name: &str, value: &str) -> Result<String> {
+    if value.is_empty() {
+        return Err(eyre!("{flag_name} must not be empty"));
+    }
+    if value.trim() != value {
+        return Err(eyre!("{flag_name} must not contain surrounding whitespace"));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(eyre!("{flag_name} must not contain control characters"));
+    }
+    Ok(value.to_owned())
+}
+fn parse_training_identifier_arg(flag_name: &str, value: &str) -> Result<String> {
+    let value = require_exact_nonempty_arg(flag_name, value)?;
+    if value.len() > 128 {
+        return Err(eyre!("{flag_name} exceeds max bytes (128)"));
+    }
+    if !value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '#'))
+    {
+        return Err(eyre!(
+            "{flag_name} must use only ASCII letters, digits, or [- _ . : #]"
+        ));
+    }
+    Ok(value)
 }
 fn load_initial_service_configs(path: Option<&Path>) -> Result<BTreeMap<String, Json>> {
     let Some(path) = path else {
@@ -11871,11 +13361,7 @@ fn signed_service_config_set_request(
     key_pair: &KeyPair,
 ) -> Result<SignedServiceConfigSetRequest> {
     let payload = ServiceConfigSetPayload {
-        service_name: service_name
-            .trim()
-            .parse::<Name>()
-            .map(|name| name.to_string())
-            .wrap_err("invalid --service-name")?,
+        service_name: parse_exact_name_arg("--service-name", service_name)?,
         config_name: parse_service_material_name_arg("--config-name", config_name)?,
         value_json: Json::from(value_json),
     };
@@ -11897,11 +13383,7 @@ fn signed_service_config_delete_request(
     key_pair: &KeyPair,
 ) -> Result<SignedServiceConfigDeleteRequest> {
     let payload = ServiceConfigDeletePayload {
-        service_name: service_name
-            .trim()
-            .parse::<Name>()
-            .map(|name| name.to_string())
-            .wrap_err("invalid --service-name")?,
+        service_name: parse_exact_name_arg("--service-name", service_name)?,
         config_name: parse_service_material_name_arg("--config-name", config_name)?,
     };
     let encoded = encode_delete_service_config_provenance_payload(
@@ -11922,11 +13404,7 @@ fn signed_service_secret_set_request(
     key_pair: &KeyPair,
 ) -> Result<SignedServiceSecretSetRequest> {
     let payload = ServiceSecretSetPayload {
-        service_name: service_name
-            .trim()
-            .parse::<Name>()
-            .map(|name| name.to_string())
-            .wrap_err("invalid --service-name")?,
+        service_name: parse_exact_name_arg("--service-name", service_name)?,
         secret_name: parse_service_material_name_arg("--secret-name", secret_name)?,
         secret,
     };
@@ -11948,11 +13426,7 @@ fn signed_service_secret_delete_request(
     key_pair: &KeyPair,
 ) -> Result<SignedServiceSecretDeleteRequest> {
     let payload = ServiceSecretDeletePayload {
-        service_name: service_name
-            .trim()
-            .parse::<Name>()
-            .map(|name| name.to_string())
-            .wrap_err("invalid --service-name")?,
+        service_name: parse_exact_name_arg("--service-name", service_name)?,
         secret_name: parse_service_material_name_arg("--secret-name", secret_name)?,
     };
     let encoded = encode_delete_service_secret_provenance_payload(
@@ -11971,15 +13445,11 @@ fn signed_rollback_request(
     _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedRollbackRequest> {
-    if service_name.trim().is_empty() {
-        return Err(eyre!("--service-name must not be empty"));
-    }
-    if target_version.trim().is_empty() {
-        return Err(eyre!("--target-version must not be empty"));
-    }
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
+    let target_version = require_exact_nonempty_arg("--target-version", target_version)?;
     let payload = RollbackPayload {
-        service_name: service_name.to_string(),
-        target_version: target_version.to_owned(),
+        service_name,
+        target_version,
     };
     let encoded = encode_rollback_signature_payload(&payload)
         .wrap_err("failed to encode rollback payload for signing")?;
@@ -12004,12 +13474,8 @@ fn signed_rollout_request(
     _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedRolloutAdvanceRequest> {
-    if service_name.trim().is_empty() {
-        return Err(eyre!("--service-name must not be empty"));
-    }
-    if rollout_handle.trim().is_empty() {
-        return Err(eyre!("--rollout-handle must not be empty"));
-    }
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
+    let rollout_handle = require_exact_nonempty_arg("--rollout-handle", rollout_handle)?;
     if promote_to_percent.is_some_and(|value| value > 100) {
         return Err(eyre!("--promote-to-percent must be within 0..=100"));
     }
@@ -12023,8 +13489,8 @@ fn signed_rollout_request(
         (true, Some(_)) | (false, None) => {}
     }
     let payload = RolloutAdvancePayload {
-        service_name: service_name.to_string(),
-        rollout_handle: rollout_handle.to_string(),
+        service_name,
+        rollout_handle,
         healthy,
         promote_to_percent,
         governance_tx_hash,
@@ -12061,14 +13527,12 @@ fn signed_agent_lease_renew_request(
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentLeaseRenewRequest> {
-    if apartment_name.trim().is_empty() {
-        return Err(eyre!("--apartment-name must not be empty"));
-    }
+    let apartment_name = parse_exact_name_arg("--apartment-name", apartment_name)?;
     if lease_ticks == 0 {
         return Err(eyre!("--lease-ticks must be greater than zero"));
     }
     let payload = AgentLeaseRenewPayload {
-        apartment_name: apartment_name.to_owned(),
+        apartment_name,
         lease_ticks,
     };
     let encoded = encode_agent_lease_renew_signature_payload(&payload)
@@ -12078,23 +13542,27 @@ fn signed_agent_lease_renew_request(
         provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
-fn normalize_hf_token(flag_name: &str, value: &str, max_bytes: usize) -> Result<String> {
-    let normalized = value.trim();
-    if normalized.is_empty() {
+fn parse_exact_hf_token(flag_name: &str, value: &str, max_bytes: usize) -> Result<String> {
+    if value.is_empty() {
         return Err(eyre!("{flag_name} must not be empty"));
     }
-    if normalized.len() > max_bytes {
+    if value.len() > max_bytes {
         return Err(eyre!("{flag_name} exceeds max bytes ({max_bytes})"));
     }
-    if normalized.chars().any(char::is_whitespace) || normalized.chars().any(char::is_control) {
+    if value.chars().any(char::is_whitespace) || value.chars().any(char::is_control) {
         return Err(eyre!(
             "{flag_name} must not contain whitespace or control characters"
         ));
     }
-    Ok(normalized.to_owned())
+    Ok(value.to_owned())
 }
 fn parse_hf_repo_id_arg(repo_id: &str) -> Result<String> {
-    normalize_hf_token("--repo-id", repo_id, HF_REPO_ID_MAX_BYTES)
+    if !is_canonical_hf_repo_id_v1(repo_id) {
+        return Err(eyre!(
+            "--repo-id must be one exact fully-qualified `namespace/repository` identifier"
+        ));
+    }
+    Ok(repo_id.to_owned())
 }
 fn parse_hf_revision_arg(revision: &str) -> Result<String> {
     if !is_canonical_hf_commit_oid_v1(revision) {
@@ -12105,39 +13573,47 @@ fn parse_hf_revision_arg(revision: &str) -> Result<String> {
     Ok(revision.to_owned())
 }
 fn parse_hf_model_name_arg(model_name: &str) -> Result<String> {
-    normalize_hf_token("--model-name", model_name, HF_MODEL_NAME_MAX_BYTES)
-}
-fn default_hf_model_name(repo_id: &str) -> Result<String> {
-    let repo_id = parse_hf_repo_id_arg(repo_id)?;
-    let slug = repo_id
-        .rsplit('/')
-        .find(|segment| !segment.is_empty())
-        .unwrap_or(repo_id.as_str());
-    parse_hf_model_name_arg(slug)
+    parse_exact_hf_token("--model-name", model_name, HF_MODEL_NAME_MAX_BYTES)
 }
 fn parse_hf_service_name_arg(service_name: &str) -> Result<String> {
-    service_name
-        .trim()
+    let parsed = service_name
         .parse::<Name>()
-        .map(|name| name.to_string())
-        .wrap_err("invalid --service-name")
+        .wrap_err("invalid --service-name")?;
+    if parsed.as_ref() != service_name {
+        return Err(eyre!(
+            "--service-name must use its exact canonical V1 spelling"
+        ));
+    }
+    Ok(service_name.to_owned())
 }
 fn parse_hf_apartment_name_arg(apartment_name: Option<&str>) -> Result<Option<String>> {
     apartment_name
         .map(|name| {
-            name.trim()
-                .parse::<Name>()
-                .map(|name| name.to_string())
-                .wrap_err("invalid --apartment-name")
+            let parsed = name.parse::<Name>().wrap_err("invalid --apartment-name")?;
+            if parsed.as_ref() != name {
+                return Err(eyre!(
+                    "--apartment-name must use its exact canonical V1 spelling"
+                ));
+            }
+            Ok(name.to_owned())
         })
         .transpose()
 }
 fn parse_hf_account_id_arg(account_id: Option<&str>) -> Result<Option<String>> {
     account_id
         .map(|literal| {
-            AccountId::parse_encoded(literal.trim())
-                .map(|parsed| parsed.into_account_id().to_string())
-                .wrap_err("invalid --account-id")
+            if literal.trim() != literal {
+                return Err(eyre!(
+                    "--account-id must not contain surrounding whitespace"
+                ));
+            }
+            let parsed = AccountId::parse_encoded(literal).wrap_err("invalid --account-id")?;
+            if parsed.to_string() != literal {
+                return Err(eyre!(
+                    "--account-id must use its exact canonical V1 spelling"
+                ));
+            }
+            Ok(literal.to_owned())
         })
         .transpose()
 }
@@ -12145,10 +13621,18 @@ fn parse_asset_definition_arg(
     flag_name: &str,
     asset_definition: &str,
 ) -> Result<AssetDefinitionId> {
-    asset_definition
-        .trim()
+    if asset_definition.trim() != asset_definition {
+        return Err(eyre!("{flag_name} must not contain surrounding whitespace"));
+    }
+    let parsed: AssetDefinitionId = asset_definition
         .parse()
-        .wrap_err_with(|| format!("invalid {flag_name}"))
+        .wrap_err_with(|| format!("invalid {flag_name}"))?;
+    if parsed.to_string() != asset_definition {
+        return Err(eyre!(
+            "{flag_name} must use its exact canonical V1 spelling"
+        ));
+    }
+    Ok(parsed)
 }
 fn parse_positive_quantity(value: &str) -> std::result::Result<Quantity, String> {
     let quantity = value
@@ -12162,10 +13646,32 @@ fn parse_positive_quantity(value: &str) -> std::result::Result<Quantity, String>
     }
     Ok(quantity)
 }
+fn parse_agent_wallet_asset_definition(value: &str) -> std::result::Result<String, String> {
+    if value.trim() != value {
+        return Err("must not contain surrounding whitespace".to_owned());
+    }
+    let parsed = value
+        .parse::<AssetDefinitionId>()
+        .map_err(|error| format!("must be a canonical asset definition: {error}"))?;
+    if parsed.to_string() != value {
+        return Err(format!(
+            "must use canonical asset definition spelling `{parsed}`"
+        ));
+    }
+    Ok(value.to_owned())
+}
+fn parse_agent_wallet_request_id(value: &str) -> std::result::Result<String, String> {
+    if !is_canonical_agent_wallet_request_id_v1(value) {
+        return Err(
+            "must be a canonical V1 wallet request id (1..=128 bytes, no surrounding whitespace or control characters)"
+                .to_owned(),
+        );
+    }
+    Ok(value.to_owned())
+}
 fn hf_source_hash(repo_id: &str, resolved_revision: &str) -> Result<Hash> {
-    let payload = norito::to_bytes(&(repo_id, resolved_revision))
-        .wrap_err("failed to encode hf source id payload")?;
-    Ok(Hash::new(payload))
+    derive_hf_source_id_v1(repo_id, resolved_revision)
+        .wrap_err("failed to derive canonical domain-separated HF source id V1")
 }
 fn sign_generated_hf_service_provenance(
     bundle: &SoraDeploymentBundleV1,
@@ -12198,7 +13704,7 @@ fn sign_generated_hf_apartment_provenance(
 fn signed_hf_deploy_request(
     repo_id: &str,
     revision: &str,
-    model_name: Option<&str>,
+    model_name: &str,
     service_name: &str,
     apartment_name: Option<&str>,
     storage_class: StorageClass,
@@ -12216,10 +13722,7 @@ fn signed_hf_deploy_request(
     }
     let repo_id = parse_hf_repo_id_arg(repo_id)?;
     let resolved_revision = parse_hf_revision_arg(revision)?;
-    let model_name = match model_name {
-        Some(model_name) => parse_hf_model_name_arg(model_name)?,
-        None => default_hf_model_name(&repo_id)?,
-    };
+    let model_name = parse_hf_model_name_arg(model_name)?;
     let service_name = parse_hf_service_name_arg(service_name)?;
     let apartment_name = parse_hf_apartment_name_arg(apartment_name)?;
     let payload = HfDeployPayload {
@@ -12248,7 +13751,10 @@ fn signed_hf_deploy_request(
         &repo_id,
         &resolved_revision,
         &model_name,
-    );
+    )
+    .map_err(|error| {
+        eyre!("failed to build canonical generated HF metadata service bundle: {error}")
+    })?;
     let generated_apartment_provenance = apartment_name
         .as_deref()
         .map(|apartment_name| {
@@ -12256,7 +13762,8 @@ fn signed_hf_deploy_request(
                 .parse::<Name>()
                 .expect("validated HF apartment name must parse");
             let manifest =
-                build_soracloud_hf_generated_agent_manifest(apartment_name, &generated_bundle);
+                build_soracloud_hf_generated_agent_manifest(apartment_name, &generated_bundle)
+                    .map_err(|error| eyre!(error))?;
             sign_generated_hf_apartment_provenance(&manifest, key_pair)
         })
         .transpose()?;
@@ -12302,7 +13809,7 @@ fn signed_hf_lease_leave_request(
 fn signed_hf_lease_renew_request(
     repo_id: &str,
     revision: &str,
-    model_name: Option<&str>,
+    model_name: &str,
     service_name: &str,
     apartment_name: Option<&str>,
     storage_class: StorageClass,
@@ -12320,10 +13827,7 @@ fn signed_hf_lease_renew_request(
     }
     let repo_id = parse_hf_repo_id_arg(repo_id)?;
     let resolved_revision = parse_hf_revision_arg(revision)?;
-    let model_name = match model_name {
-        Some(model_name) => parse_hf_model_name_arg(model_name)?,
-        None => default_hf_model_name(&repo_id)?,
-    };
+    let model_name = parse_hf_model_name_arg(model_name)?;
     let service_name = parse_hf_service_name_arg(service_name)?;
     let apartment_name = parse_hf_apartment_name_arg(apartment_name)?;
     let payload = HfLeaseRenewPayload {
@@ -12352,7 +13856,10 @@ fn signed_hf_lease_renew_request(
         &repo_id,
         &resolved_revision,
         &model_name,
-    );
+    )
+    .map_err(|error| {
+        eyre!("failed to build canonical generated HF metadata service bundle: {error}")
+    })?;
     let generated_apartment_provenance = apartment_name
         .as_deref()
         .map(|apartment_name| {
@@ -12360,7 +13867,8 @@ fn signed_hf_lease_renew_request(
                 .parse::<Name>()
                 .expect("validated HF apartment name must parse");
             let manifest =
-                build_soracloud_hf_generated_agent_manifest(apartment_name, &generated_bundle);
+                build_soracloud_hf_generated_agent_manifest(apartment_name, &generated_bundle)
+                    .map_err(|error| eyre!(error))?;
             sign_generated_hf_apartment_provenance(&manifest, key_pair)
         })
         .transpose()?;
@@ -12379,9 +13887,8 @@ fn signed_model_host_advertise_request(
     authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedModelHostAdvertiseRequest> {
-    if args.peer_id.trim().is_empty() {
-        return Err(eyre!("--peer-id must not be empty"));
-    }
+    let peer_id = require_exact_nonempty_arg("--peer-id", &args.peer_id)?;
+    let host_class = require_exact_nonempty_arg("--host-class", &args.host_class)?;
     if args.backends.is_empty() {
         return Err(eyre!("--backends must not be empty"));
     }
@@ -12397,11 +13904,7 @@ fn signed_model_host_advertise_request(
             "--max-model-bytes, --max-disk-cache-bytes, --max-ram-bytes, and --max-concurrent-resident-models must be greater than zero"
         ));
     }
-    let advertised_at_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|err| eyre!("failed to determine current unix time: {err}"))?
-        .as_millis()
-        .min(u128::from(u64::MAX)) as u64;
+    let advertised_at_ms = soracloud_signature_timestamp_ms(SystemTime::now())?;
     let advertised_at_ms = advertised_at_ms.max(1);
     if args.heartbeat_expires_at_ms <= advertised_at_ms {
         return Err(eyre!(
@@ -12411,7 +13914,7 @@ fn signed_model_host_advertise_request(
     let capability = SoraModelHostCapabilityRecordV1 {
         schema_version: SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
         validator_account_id: authority.clone(),
-        peer_id: args.peer_id.trim().to_owned(),
+        peer_id,
         supported_backends: args
             .backends
             .into_iter()
@@ -12427,10 +13930,13 @@ fn signed_model_host_advertise_request(
         max_ram_bytes: args.max_ram_bytes,
         max_vram_bytes: args.max_vram_bytes,
         max_concurrent_resident_models: args.max_concurrent_resident_models,
-        host_class: args.host_class.trim().to_owned(),
+        host_class,
         advertised_at_ms,
         heartbeat_expires_at_ms: args.heartbeat_expires_at_ms,
     };
+    capability
+        .validate()
+        .wrap_err("model-host capability failed canonical V1 validation")?;
     let payload = ModelHostAdvertisePayload { capability };
     let encoded = encode_model_host_advertise_signature_payload(&payload)
         .wrap_err("failed to encode model host advertise payload for signing")?;
@@ -12478,15 +13984,11 @@ fn signed_agent_restart_request(
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentRestartRequest> {
-    if apartment_name.trim().is_empty() {
-        return Err(eyre!("--apartment-name must not be empty"));
-    }
-    if reason.trim().is_empty() {
-        return Err(eyre!("--reason must not be empty"));
-    }
+    let apartment_name = parse_exact_name_arg("--apartment-name", apartment_name)?;
+    let reason = require_exact_nonempty_arg("--reason", reason)?;
     let payload = AgentRestartPayload {
-        apartment_name: apartment_name.to_owned(),
-        reason: reason.to_owned(),
+        apartment_name,
+        reason,
     };
     let encoded = encode_agent_restart_signature_payload(&payload)
         .wrap_err("failed to encode agent restart payload for signing")?;
@@ -12502,16 +14004,15 @@ fn signed_agent_policy_revoke_request(
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentPolicyRevokeRequest> {
-    if apartment_name.trim().is_empty() {
-        return Err(eyre!("--apartment-name must not be empty"));
-    }
-    if capability.trim().is_empty() {
-        return Err(eyre!("--capability must not be empty"));
-    }
+    let apartment_name = parse_exact_name_arg("--apartment-name", apartment_name)?;
+    let capability = require_exact_nonempty_arg("--capability", capability)?;
+    let reason = reason
+        .map(|value| require_exact_nonempty_arg("--reason", value))
+        .transpose()?;
     let payload = AgentPolicyRevokePayload {
-        apartment_name: apartment_name.to_owned(),
-        capability: capability.to_owned(),
-        reason: reason.map(ToOwned::to_owned),
+        apartment_name,
+        capability,
+        reason,
     };
     let encoded = encode_agent_policy_revoke_signature_payload(&payload)
         .wrap_err("failed to encode agent policy revoke payload for signing")?;
@@ -12522,23 +14023,23 @@ fn signed_agent_policy_revoke_request(
 }
 fn signed_agent_wallet_spend_request(
     apartment_name: &str,
+    request_id: &str,
     asset_definition: &str,
     amount: &Quantity,
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentWalletSpendRequest> {
-    if apartment_name.trim().is_empty() {
-        return Err(eyre!("--apartment-name must not be empty"));
-    }
-    if asset_definition.trim().is_empty() {
-        return Err(eyre!("--asset-definition must not be empty"));
-    }
+    let apartment_name = parse_exact_name_arg("--apartment-name", apartment_name)?;
+    parse_agent_wallet_request_id(request_id).map_err(|error| eyre!("--request-id {error}"))?;
+    let asset_definition = parse_agent_wallet_asset_definition(asset_definition)
+        .map_err(|error| eyre!("invalid --asset-definition: {error}"))?;
     if amount.is_zero() {
         return Err(eyre!("--amount must be greater than zero"));
     }
     let payload = AgentWalletSpendPayload {
-        apartment_name: apartment_name.to_owned(),
-        asset_definition: asset_definition.to_owned(),
+        apartment_name,
+        request_id: request_id.to_owned(),
+        asset_definition,
         amount: amount.clone(),
     };
     let encoded = encode_agent_wallet_spend_signature_payload(&payload)
@@ -12554,14 +14055,10 @@ fn signed_agent_wallet_approve_request(
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentWalletApproveRequest> {
-    if apartment_name.trim().is_empty() {
-        return Err(eyre!("--apartment-name must not be empty"));
-    }
-    if request_id.trim().is_empty() {
-        return Err(eyre!("--request-id must not be empty"));
-    }
+    let apartment_name = parse_exact_name_arg("--apartment-name", apartment_name)?;
+    parse_agent_wallet_request_id(request_id).map_err(|error| eyre!("--request-id {error}"))?;
     let payload = AgentWalletApprovePayload {
-        apartment_name: apartment_name.to_owned(),
+        apartment_name,
         request_id: request_id.to_owned(),
     };
     let encoded = encode_agent_wallet_approve_signature_payload(&payload)
@@ -12579,23 +14076,15 @@ fn signed_agent_message_send_request(
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentMessageSendRequest> {
-    if from_apartment.trim().is_empty() {
-        return Err(eyre!("--from-apartment must not be empty"));
-    }
-    if to_apartment.trim().is_empty() {
-        return Err(eyre!("--to-apartment must not be empty"));
-    }
-    if channel.trim().is_empty() {
-        return Err(eyre!("--channel must not be empty"));
-    }
-    if payload.trim().is_empty() {
-        return Err(eyre!("--payload must not be empty"));
-    }
+    let from_apartment = parse_exact_name_arg("--from-apartment", from_apartment)?;
+    let to_apartment = parse_exact_name_arg("--to-apartment", to_apartment)?;
+    let channel = require_exact_nonempty_arg("--channel", channel)?;
+    let message_payload = require_exact_nonempty_arg("--payload", payload)?;
     let payload = AgentMessageSendPayload {
-        from_apartment: from_apartment.to_owned(),
-        to_apartment: to_apartment.to_owned(),
-        channel: channel.to_owned(),
-        payload: payload.to_owned(),
+        from_apartment,
+        to_apartment,
+        channel,
+        payload: message_payload,
     };
     let encoded = encode_agent_message_send_signature_payload(&payload)
         .wrap_err("failed to encode agent message send payload for signing")?;
@@ -12610,15 +14099,11 @@ fn signed_agent_message_ack_request(
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentMessageAckRequest> {
-    if apartment_name.trim().is_empty() {
-        return Err(eyre!("--apartment-name must not be empty"));
-    }
-    if message_id.trim().is_empty() {
-        return Err(eyre!("--message-id must not be empty"));
-    }
+    let apartment_name = parse_exact_name_arg("--apartment-name", apartment_name)?;
+    let message_id = require_exact_nonempty_arg("--message-id", message_id)?;
     let payload = AgentMessageAckPayload {
-        apartment_name: apartment_name.to_owned(),
-        message_id: message_id.to_owned(),
+        apartment_name,
+        message_id,
     };
     let encoded = encode_agent_message_ack_signature_payload(&payload)
         .wrap_err("failed to encode agent message ack payload for signing")?;
@@ -12649,26 +14134,30 @@ fn validate_hash_like_value(flag_name: &str, value: &str) -> Result<()> {
     }
     Ok(())
 }
-fn canonicalize_agent_workflow_input_json(workflow_input_json: &str) -> Result<String> {
-    let normalized = workflow_input_json.trim();
-    if normalized.is_empty() {
+fn parse_exact_agent_workflow_input_json(workflow_input_json: &str) -> Result<String> {
+    if workflow_input_json.is_empty() {
         return Err(eyre!("workflow input JSON must not be empty"));
     }
-    if normalized.len() > AGENT_AUTONOMY_MAX_REQUEST_BYTES {
+    if workflow_input_json.trim() != workflow_input_json {
+        return Err(eyre!(
+            "workflow input JSON must not contain surrounding whitespace"
+        ));
+    }
+    if workflow_input_json.len() > AGENT_AUTONOMY_MAX_REQUEST_BYTES {
         return Err(eyre!(
             "workflow input JSON exceeds max bytes ({AGENT_AUTONOMY_MAX_REQUEST_BYTES})"
         ));
     }
     let parsed: norito::json::Value =
-        json::from_str(normalized).wrap_err("workflow input JSON must be valid JSON")?;
+        json::from_str(workflow_input_json).wrap_err("workflow input JSON must be valid JSON")?;
     let canonical =
         json::to_json(&parsed).wrap_err("failed to canonicalize workflow input JSON")?;
-    if canonical.len() > AGENT_AUTONOMY_MAX_REQUEST_BYTES {
+    if canonical != workflow_input_json {
         return Err(eyre!(
-            "workflow input JSON exceeds max bytes ({AGENT_AUTONOMY_MAX_REQUEST_BYTES}) after canonicalization"
+            "workflow input JSON must already use the exact canonical Norito JSON spelling `{canonical}`"
         ));
     }
-    Ok(canonical)
+    Ok(workflow_input_json.to_owned())
 }
 fn signed_agent_artifact_allow_request(
     apartment_name: &str,
@@ -12677,15 +14166,13 @@ fn signed_agent_artifact_allow_request(
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentArtifactAllowRequest> {
-    if apartment_name.trim().is_empty() {
-        return Err(eyre!("--apartment-name must not be empty"));
-    }
-    validate_hash_like_value("--artifact-hash", artifact_hash.trim())?;
+    let apartment_name = parse_exact_name_arg("--apartment-name", apartment_name)?;
+    validate_hash_like_value("--artifact-hash", artifact_hash)?;
     if let Some(provenance_hash) = provenance_hash {
-        validate_hash_like_value("--provenance-hash", provenance_hash.trim())?;
+        validate_hash_like_value("--provenance-hash", provenance_hash)?;
     }
     let payload = AgentArtifactAllowPayload {
-        apartment_name: apartment_name.to_owned(),
+        apartment_name,
         artifact_hash: artifact_hash.to_owned(),
         provenance_hash: provenance_hash.map(ToOwned::to_owned),
     };
@@ -12696,49 +14183,6 @@ fn signed_agent_artifact_allow_request(
         provenance: signed_manifest_provenance(key_pair, &encoded)?,
     })
 }
-fn signed_agent_autonomy_run_request(
-    apartment_name: &str,
-    artifact_hash: &str,
-    provenance_hash: Option<&str>,
-    budget_units: u64,
-    run_label: &str,
-    workflow_input_json: Option<&str>,
-    _authority: &AccountId,
-    key_pair: &KeyPair,
-) -> Result<SignedAgentAutonomyRunRequest> {
-    if apartment_name.trim().is_empty() {
-        return Err(eyre!("--apartment-name must not be empty"));
-    }
-    validate_hash_like_value("--artifact-hash", artifact_hash.trim())?;
-    if let Some(provenance_hash) = provenance_hash {
-        validate_hash_like_value("--provenance-hash", provenance_hash.trim())?;
-    }
-    if budget_units == 0 {
-        return Err(eyre!("--budget-units must be greater than zero"));
-    }
-    let run_label = run_label.trim();
-    if run_label.is_empty() {
-        return Err(eyre!("--run-label must not be empty"));
-    }
-    let workflow_input_json = workflow_input_json
-        .map(canonicalize_agent_workflow_input_json)
-        .transpose()?;
-    let payload = AgentAutonomyRunPayload {
-        apartment_name: apartment_name.to_owned(),
-        artifact_hash: artifact_hash.to_owned(),
-        provenance_hash: provenance_hash.map(ToOwned::to_owned),
-        budget_units,
-        run_label: run_label.to_owned(),
-        workflow_input_json,
-    };
-    let encoded = encode_agent_autonomy_run_signature_payload(&payload)
-        .wrap_err("failed to encode agent autonomy run payload for signing")?;
-    Ok(SignedAgentAutonomyRunRequest {
-        payload,
-        provenance: signed_manifest_provenance(key_pair, &encoded)?,
-    })
-}
-#[allow(clippy::too_many_arguments)]
 fn signed_training_job_start_request(
     service_name: &str,
     model_name: &str,
@@ -12753,15 +14197,9 @@ fn signed_training_job_start_request(
     _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedTrainingJobStartRequest> {
-    if service_name.trim().is_empty() {
-        return Err(eyre!("--service-name must not be empty"));
-    }
-    if model_name.trim().is_empty() {
-        return Err(eyre!("--model-name must not be empty"));
-    }
-    if job_id.trim().is_empty() {
-        return Err(eyre!("--job-id must not be empty"));
-    }
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
+    let model_name = parse_exact_name_arg("--model-name", model_name)?;
+    let job_id = parse_training_identifier_arg("--job-id", job_id)?;
     if worker_group_size == 0 {
         return Err(eyre!("--worker-group-size must be greater than zero"));
     }
@@ -12783,9 +14221,9 @@ fn signed_training_job_start_request(
         return Err(eyre!("--storage-budget-bytes must be greater than zero"));
     }
     let payload = TrainingJobStartPayload {
-        service_name: service_name.to_owned(),
-        model_name: model_name.to_owned(),
-        job_id: job_id.to_owned(),
+        service_name,
+        model_name,
+        job_id,
         worker_group_size,
         target_steps,
         checkpoint_interval_steps,
@@ -12810,12 +14248,8 @@ fn signed_training_job_checkpoint_request(
     _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedTrainingJobCheckpointRequest> {
-    if service_name.trim().is_empty() {
-        return Err(eyre!("--service-name must not be empty"));
-    }
-    if job_id.trim().is_empty() {
-        return Err(eyre!("--job-id must not be empty"));
-    }
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
+    let job_id = parse_training_identifier_arg("--job-id", job_id)?;
     if completed_step == 0 {
         return Err(eyre!("--completed-step must be greater than zero"));
     }
@@ -12823,8 +14257,8 @@ fn signed_training_job_checkpoint_request(
         return Err(eyre!("--checkpoint-size-bytes must be greater than zero"));
     }
     let payload = TrainingJobCheckpointPayload {
-        service_name: service_name.to_owned(),
-        job_id: job_id.to_owned(),
+        service_name,
+        job_id,
         completed_step,
         checkpoint_size_bytes,
         metrics_hash,
@@ -12843,19 +14277,13 @@ fn signed_training_job_retry_request(
     _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedTrainingJobRetryRequest> {
-    if service_name.trim().is_empty() {
-        return Err(eyre!("--service-name must not be empty"));
-    }
-    if job_id.trim().is_empty() {
-        return Err(eyre!("--job-id must not be empty"));
-    }
-    if reason.trim().is_empty() {
-        return Err(eyre!("--reason must not be empty"));
-    }
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
+    let job_id = parse_training_identifier_arg("--job-id", job_id)?;
+    let reason = require_exact_nonempty_arg("--reason", reason)?;
     let payload = TrainingJobRetryPayload {
-        service_name: service_name.to_owned(),
-        job_id: job_id.to_owned(),
-        reason: reason.to_owned(),
+        service_name,
+        job_id,
+        reason,
     };
     let encoded = encode_training_job_retry_signature_payload(&payload)
         .wrap_err("failed to encode training job retry payload for signing")?;
@@ -12877,24 +14305,16 @@ fn signed_model_artifact_register_request(
     _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedModelArtifactRegisterRequest> {
-    if service_name.trim().is_empty() {
-        return Err(eyre!("--service-name must not be empty"));
-    }
-    if model_name.trim().is_empty() {
-        return Err(eyre!("--model-name must not be empty"));
-    }
-    if training_job_id.trim().is_empty() {
-        return Err(eyre!("--training-job-id must not be empty"));
-    }
-    if dataset_ref.trim().is_empty() {
-        return Err(eyre!("--dataset-ref must not be empty"));
-    }
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
+    let model_name = parse_exact_name_arg("--model-name", model_name)?;
+    let training_job_id = parse_training_identifier_arg("--training-job-id", training_job_id)?;
+    let dataset_ref = require_exact_nonempty_arg("--dataset-ref", dataset_ref)?;
     let payload = ModelArtifactRegisterPayload {
-        service_name: service_name.to_owned(),
-        model_name: model_name.to_owned(),
-        training_job_id: training_job_id.to_owned(),
+        service_name,
+        model_name,
+        training_job_id,
         weight_artifact_hash,
-        dataset_ref: dataset_ref.to_owned(),
+        dataset_ref,
         training_config_hash,
         reproducibility_hash,
         provenance_attestation_hash,
@@ -12921,32 +14341,22 @@ fn signed_model_weight_register_request(
     _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedModelWeightRegisterRequest> {
-    if service_name.trim().is_empty() {
-        return Err(eyre!("--service-name must not be empty"));
-    }
-    if model_name.trim().is_empty() {
-        return Err(eyre!("--model-name must not be empty"));
-    }
-    if weight_version.trim().is_empty() {
-        return Err(eyre!("--weight-version must not be empty"));
-    }
-    if training_job_id.trim().is_empty() {
-        return Err(eyre!("--training-job-id must not be empty"));
-    }
-    if parent_version.is_some_and(|value| value.trim().is_empty()) {
-        return Err(eyre!("--parent-version must not be empty when provided"));
-    }
-    if dataset_ref.trim().is_empty() {
-        return Err(eyre!("--dataset-ref must not be empty"));
-    }
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
+    let model_name = parse_exact_name_arg("--model-name", model_name)?;
+    let weight_version = parse_training_identifier_arg("--weight-version", weight_version)?;
+    let training_job_id = parse_training_identifier_arg("--training-job-id", training_job_id)?;
+    let parent_version = parent_version
+        .map(|value| parse_training_identifier_arg("--parent-version", value))
+        .transpose()?;
+    let dataset_ref = require_exact_nonempty_arg("--dataset-ref", dataset_ref)?;
     let payload = ModelWeightRegisterPayload {
-        service_name: service_name.to_owned(),
-        model_name: model_name.to_owned(),
-        weight_version: weight_version.to_owned(),
-        training_job_id: training_job_id.to_owned(),
-        parent_version: parent_version.map(ToOwned::to_owned),
+        service_name,
+        model_name,
+        weight_version,
+        training_job_id,
+        parent_version,
         weight_artifact_hash,
-        dataset_ref: dataset_ref.to_owned(),
+        dataset_ref,
         training_config_hash,
         reproducibility_hash,
         provenance_attestation_hash,
@@ -12967,19 +14377,13 @@ fn signed_model_weight_promote_request(
     _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedModelWeightPromoteRequest> {
-    if service_name.trim().is_empty() {
-        return Err(eyre!("--service-name must not be empty"));
-    }
-    if model_name.trim().is_empty() {
-        return Err(eyre!("--model-name must not be empty"));
-    }
-    if weight_version.trim().is_empty() {
-        return Err(eyre!("--weight-version must not be empty"));
-    }
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
+    let model_name = parse_exact_name_arg("--model-name", model_name)?;
+    let weight_version = parse_training_identifier_arg("--weight-version", weight_version)?;
     let payload = ModelWeightPromotePayload {
-        service_name: service_name.to_owned(),
-        model_name: model_name.to_owned(),
-        weight_version: weight_version.to_owned(),
+        service_name,
+        model_name,
+        weight_version,
         gate_approved,
         gate_report_hash,
     };
@@ -12998,23 +14402,15 @@ fn signed_model_weight_rollback_request(
     _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedModelWeightRollbackRequest> {
-    if service_name.trim().is_empty() {
-        return Err(eyre!("--service-name must not be empty"));
-    }
-    if model_name.trim().is_empty() {
-        return Err(eyre!("--model-name must not be empty"));
-    }
-    if target_version.trim().is_empty() {
-        return Err(eyre!("--target-version must not be empty"));
-    }
-    if reason.trim().is_empty() {
-        return Err(eyre!("--reason must not be empty"));
-    }
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
+    let model_name = parse_exact_name_arg("--model-name", model_name)?;
+    let target_version = parse_training_identifier_arg("--target-version", target_version)?;
+    let reason = require_exact_nonempty_arg("--reason", reason)?;
     let payload = ModelWeightRollbackPayload {
-        service_name: service_name.to_owned(),
-        model_name: model_name.to_owned(),
-        target_version: target_version.to_owned(),
-        reason: reason.to_owned(),
+        service_name,
+        model_name,
+        target_version,
+        reason,
     };
     let encoded = encode_model_weight_rollback_signature_payload(&payload)
         .wrap_err("failed to encode model weight rollback payload for signing")?;
@@ -13032,7 +14428,8 @@ fn signed_uploaded_model_register_request(
     bundle
         .validate()
         .wrap_err("invalid uploaded model bundle")?;
-    if finalize.service_name.trim() != bundle.service_name.as_ref() {
+    let service_name = parse_exact_name_arg("register service_name", &finalize.service_name)?;
+    if service_name != bundle.service_name.as_ref() {
         return Err(eyre!(
             "register finalize service_name `{}` must match bundle service_name `{}`",
             finalize.service_name,
@@ -13058,21 +14455,15 @@ fn signed_uploaded_model_register_request(
             "register finalize bundle_root must match bundle bundle_root"
         ));
     }
-    if finalize.model_name.trim().is_empty() {
-        return Err(eyre!("register model_name must not be empty"));
-    }
-    if finalize.artifact_id.trim().is_empty() {
-        return Err(eyre!("register artifact_id must not be empty"));
-    }
-    if finalize.dataset_ref.trim().is_empty() {
-        return Err(eyre!("register dataset_ref must not be empty"));
-    }
+    let model_name = parse_exact_name_arg("register model_name", &finalize.model_name)?;
+    let artifact_id = parse_training_identifier_arg("register artifact_id", &finalize.artifact_id)?;
+    let dataset_ref = require_exact_nonempty_arg("register dataset_ref", &finalize.dataset_ref)?;
     let payload = UploadedModelRegisterPayload {
         bundle,
-        model_name: finalize.model_name,
-        artifact_id: finalize.artifact_id,
+        model_name,
+        artifact_id,
         weight_artifact_hash: finalize.weight_artifact_hash,
-        dataset_ref: finalize.dataset_ref,
+        dataset_ref,
         training_config_hash: finalize.training_config_hash,
         reproducibility_hash: finalize.reproducibility_hash,
         provenance_attestation_hash: finalize.provenance_attestation_hash,
@@ -13153,6 +14544,7 @@ fn encode_agent_wallet_spend_signature_payload(
 ) -> Result<Vec<u8>> {
     encode_agent_wallet_spend_provenance_payload(
         payload.apartment_name.as_str(),
+        payload.request_id.as_str(),
         payload.asset_definition.as_str(),
         &payload.amount,
     )
@@ -13195,27 +14587,24 @@ fn encode_agent_artifact_allow_signature_payload(
     )
     .wrap_err("failed to encode agent artifact allow signature payload tuple")
 }
-fn encode_agent_autonomy_run_signature_payload(
-    payload: &AgentAutonomyRunPayload,
-) -> Result<Vec<u8>> {
-    encode_agent_autonomy_run_provenance_payload(
-        payload.apartment_name.as_str(),
-        payload.artifact_hash.as_str(),
-        payload.provenance_hash.as_deref(),
-        payload.budget_units,
-        payload.run_label.as_str(),
-        payload.workflow_input_json.as_deref(),
-    )
-    .wrap_err("failed to encode agent autonomy run signature payload tuple")
-}
 fn encode_hf_deploy_signature_payload(payload: &HfDeployPayload) -> Result<Vec<u8>> {
+    let repo_id = parse_hf_repo_id_arg(&payload.repo_id)?;
     let resolved_revision = parse_hf_revision_arg(&payload.revision)?;
+    let model_name = parse_hf_model_name_arg(&payload.model_name)?;
+    let service_name = parse_hf_service_name_arg(&payload.service_name)?;
+    let apartment_name = parse_hf_apartment_name_arg(payload.apartment_name.as_deref())?;
+    if payload.lease_term_ms == 0 {
+        return Err(eyre!("lease_term_ms must be greater than zero"));
+    }
+    if payload.base_fee.is_zero() {
+        return Err(eyre!("base_fee must be greater than zero"));
+    }
     encode_hf_shared_lease_join_provenance_payload(
-        payload.repo_id.as_str(),
+        repo_id.as_str(),
         resolved_revision.as_str(),
-        payload.model_name.as_str(),
-        payload.service_name.as_str(),
-        payload.apartment_name.as_deref(),
+        model_name.as_str(),
+        service_name.as_str(),
+        apartment_name.as_deref(),
         payload.storage_class,
         payload.lease_term_ms,
         &payload.lease_asset_definition_id,
@@ -13224,25 +14613,45 @@ fn encode_hf_deploy_signature_payload(payload: &HfDeployPayload) -> Result<Vec<u
     .wrap_err("failed to encode hf deploy signature payload tuple")
 }
 fn encode_hf_lease_leave_signature_payload(payload: &HfLeaseLeavePayload) -> Result<Vec<u8>> {
+    let repo_id = parse_hf_repo_id_arg(&payload.repo_id)?;
     let resolved_revision = parse_hf_revision_arg(&payload.revision)?;
+    let service_name = payload
+        .service_name
+        .as_deref()
+        .map(parse_hf_service_name_arg)
+        .transpose()?;
+    let apartment_name = parse_hf_apartment_name_arg(payload.apartment_name.as_deref())?;
+    if payload.lease_term_ms == 0 {
+        return Err(eyre!("lease_term_ms must be greater than zero"));
+    }
     encode_hf_shared_lease_leave_provenance_payload(
-        payload.repo_id.as_str(),
+        repo_id.as_str(),
         resolved_revision.as_str(),
         payload.storage_class,
         payload.lease_term_ms,
-        payload.service_name.as_deref(),
-        payload.apartment_name.as_deref(),
+        service_name.as_deref(),
+        apartment_name.as_deref(),
     )
     .wrap_err("failed to encode hf lease leave signature payload tuple")
 }
 fn encode_hf_lease_renew_signature_payload(payload: &HfLeaseRenewPayload) -> Result<Vec<u8>> {
+    let repo_id = parse_hf_repo_id_arg(&payload.repo_id)?;
     let resolved_revision = parse_hf_revision_arg(&payload.revision)?;
+    let model_name = parse_hf_model_name_arg(&payload.model_name)?;
+    let service_name = parse_hf_service_name_arg(&payload.service_name)?;
+    let apartment_name = parse_hf_apartment_name_arg(payload.apartment_name.as_deref())?;
+    if payload.lease_term_ms == 0 {
+        return Err(eyre!("lease_term_ms must be greater than zero"));
+    }
+    if payload.base_fee.is_zero() {
+        return Err(eyre!("base_fee must be greater than zero"));
+    }
     encode_hf_shared_lease_renew_provenance_payload(
-        payload.repo_id.as_str(),
+        repo_id.as_str(),
         resolved_revision.as_str(),
-        payload.model_name.as_str(),
-        payload.service_name.as_str(),
-        payload.apartment_name.as_deref(),
+        model_name.as_str(),
+        service_name.as_str(),
+        apartment_name.as_deref(),
         payload.storage_class,
         payload.lease_term_ms,
         &payload.lease_asset_definition_id,
@@ -13436,11 +14845,16 @@ fn load_soracloud_http_witness(path: &Path) -> Result<CanonicalRequestWitnessV1>
     }
     Ok(witness)
 }
+#[derive(Debug)]
+struct SoracloudMutationAuth {
+    headers: Vec<(&'static str, String)>,
+    expected_response_signers: Vec<PublicKey>,
+}
 fn build_soracloud_mutation_auth_headers(
     submission_config: &ClientConfig,
     endpoint: &reqwest::Url,
     body: &[u8],
-) -> Result<Vec<(&'static str, String)>> {
+) -> Result<SoracloudMutationAuth> {
     build_soracloud_mutation_auth_headers_with_rng(submission_config, endpoint, body, &mut OsRng)
 }
 fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
@@ -13448,7 +14862,7 @@ fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
     endpoint: &reqwest::Url,
     body: &[u8],
     rng: &mut R,
-) -> Result<Vec<(&'static str, String)>> {
+) -> Result<SoracloudMutationAuth> {
     if let Some(witness_file) = submission_config.soracloud_http_witness_file.as_deref() {
         let witness = load_soracloud_http_witness(witness_file)?;
         if witness.subject_account != submission_config.account {
@@ -13472,14 +14886,38 @@ fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
         }
         let witness_header = canonical_request_witness_header_value(&witness)
             .wrap_err("failed to encode Soracloud witness header")?;
+        if witness.signatures.is_empty() {
+            return Err(eyre!(
+                "Soracloud canonical request witness must contain at least one signature"
+            ));
+        }
+        let expected_response_signers = witness
+            .signatures
+            .iter()
+            .map(|signature| signature.signer.clone())
+            .collect();
         let mut headers = Vec::new();
         headers
             .try_reserve_exact(1)
             .wrap_err("failed to reserve Soracloud witness header")?;
         headers.push((HEADER_IROHA_WITNESS, witness_header));
-        return Ok(headers);
+        return Ok(SoracloudMutationAuth {
+            headers,
+            expected_response_signers,
+        });
     }
-    build_soracloud_signature_auth_headers_with_rng(submission_config, "POST", endpoint, body, rng)
+    let expected_response_signers = vec![submission_config.key_pair.public_key().clone()];
+    let headers = build_soracloud_signature_auth_headers_with_rng(
+        submission_config,
+        "POST",
+        endpoint,
+        body,
+        rng,
+    )?;
+    Ok(SoracloudMutationAuth {
+        headers,
+        expected_response_signers,
+    })
 }
 fn build_soracloud_read_auth_headers(
     submission_config: &ClientConfig,
@@ -13551,42 +14989,464 @@ fn build_soracloud_signature_auth_headers_with_rng<R: TryCryptoRng>(
     headers.push((HEADER_IROHA_NONCE, nonce));
     Ok(headers)
 }
-fn decode_soracloud_tx_instructions(payload: &json::Value) -> Result<Vec<InstructionBox>> {
-    let instructions = payload
-        .get("tx_instructions")
-        .and_then(json::Value::as_array)
-        .ok_or_else(|| eyre!("Soracloud mutation draft response is missing `tx_instructions`"))?;
-    let mut decoded = Vec::with_capacity(instructions.len());
-    for entry in instructions {
-        let wire_id = entry
-            .get("wire_id")
-            .and_then(json::Value::as_str)
-            .ok_or_else(|| eyre!("Soracloud tx instruction is missing `wire_id`"))?;
-        let payload_hex = entry
-            .get("payload_hex")
-            .and_then(json::Value::as_str)
-            .ok_or_else(|| eyre!("Soracloud tx instruction is missing `payload_hex`"))?;
-        let payload_bytes = hex::decode(payload_hex)
+const SORACLOUD_MUTATION_SUBMISSION_RECEIPT_VERSION_V1: u16 = 1;
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct SoracloudMutationSubmissionReceiptV1 {
+    schema_version: u16,
+    authority: AccountId,
+    signed_by: PublicKey,
+    instruction_count: NonZeroU32,
+    submitted_tx_hash: Hash,
+}
+impl SoracloudMutationSubmissionReceiptV1 {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != SORACLOUD_MUTATION_SUBMISSION_RECEIPT_VERSION_V1 {
+            return Err(eyre!(
+                "unsupported Soracloud mutation submission receipt schema version {}; expected {}",
+                self.schema_version,
+                SORACLOUD_MUTATION_SUBMISSION_RECEIPT_VERSION_V1
+            ));
+        }
+        Ok(())
+    }
+}
+fn decode_soracloud_submission_receipt(
+    payload: &json::Value,
+) -> Result<SoracloudMutationSubmissionReceiptV1> {
+    let receipt: SoracloudMutationSubmissionReceiptV1 = json::from_value(payload.clone())
+        .wrap_err("failed to decode exact Soracloud mutation submission receipt")?;
+    receipt.validate()?;
+    Ok(receipt)
+}
+fn decode_soracloud_tx_instructions(
+    draft: &SoracloudMutationDraftResponse,
+) -> Result<Vec<InstructionBox>> {
+    draft
+        .validate()
+        .map_err(|error| eyre!("invalid Soracloud mutation draft response: {error}"))?;
+    let mut decoded = Vec::with_capacity(draft.tx_instructions.len());
+    for entry in &draft.tx_instructions {
+        let payload_bytes = hex::decode(&entry.payload_hex)
             .wrap_err("failed to decode Soracloud tx instruction hex payload")?;
-        let instruction = decode_instruction_from_pair(wire_id, &payload_bytes)
+        let instruction = decode_instruction_from_pair(&entry.wire_id, &payload_bytes)
             .wrap_err("failed to decode Soracloud instruction skeleton")?;
         decoded.push(instruction);
     }
     Ok(decoded)
 }
+/// One canonical signed transaction prepared for durable, byte-identical replay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PreparedSoracloudTransactionV1 {
+    /// Closed operation label bound by the caller's durable mutation plan.
+    pub operation: String,
+    /// Exact fixed-V1 Norito bytes submitted to Torii.
+    pub wire: Vec<u8>,
+    /// Canonical lowercase hexadecimal Iroha hash of the signed transaction.
+    pub tx_hash_hex: String,
+    /// Exact signature-bound fee intent carried by `wire`.
+    pub fee_payment: FeePaymentIntent,
+    /// Exact Torii quote whose intent was signed into `wire`.
+    pub fee_quote: FeeQuoteResponse,
+    /// Reset authorization and mutation identity duplicated in transaction metadata.
+    pub binding: TairaMutationBindingV1,
+}
+
+/// Exact public-reset identity signed into every prepared ledger transaction.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub(crate) struct TairaMutationBindingV1 {
+    pub authorization_sha256: String,
+    pub authorization_nonce: String,
+    pub kind: String,
+    pub phase: String,
+    pub idempotency_key: String,
+    pub execution_expires_at_unix_ms: u64,
+}
+
+impl PreparedSoracloudTransactionV1 {
+    fn from_signed(
+        operation: &str,
+        binding: TairaMutationBindingV1,
+        fee_quote: FeeQuoteResponse,
+        transaction: SignedTransaction,
+    ) -> Result<Self> {
+        validate_prepared_soracloud_operation(operation)?;
+        binding.validate()?;
+        transaction
+            .verify_signature()
+            .wrap_err("prepared Soracloud transaction signature is invalid")?;
+        let wire = transaction
+            .encode_wire_v1()
+            .wrap_err("failed to encode canonical prepared Soracloud transaction")?;
+        let prepared = Self {
+            operation: operation.to_owned(),
+            tx_hash_hex: hex::encode(transaction.hash().as_ref()),
+            fee_payment: transaction.fee_payment_intent().clone(),
+            fee_quote,
+            binding,
+            wire,
+        };
+        prepared.decode_and_validate()?;
+        Ok(prepared)
+    }
+
+    pub(crate) fn decode_and_validate(&self) -> Result<SignedTransaction> {
+        validate_prepared_soracloud_operation(&self.operation)?;
+        if self.tx_hash_hex.len() != 64
+            || !self
+                .tx_hash_hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || !self.tx_hash_hex.as_bytes().last().is_some_and(|byte| {
+                matches!(byte, b'1' | b'3' | b'5' | b'7' | b'9' | b'b' | b'd' | b'f')
+            })
+        {
+            return Err(eyre!(
+                "prepared Soracloud transaction hash must be exactly 64 lowercase hexadecimal characters with the Iroha hash marker set"
+            ));
+        }
+        let transaction = SignedTransaction::decode_all_versioned(&self.wire)
+            .wrap_err("failed to decode exact prepared Soracloud transaction wire")?;
+        transaction
+            .verify_signature()
+            .wrap_err("prepared Soracloud transaction signature is invalid")?;
+        let canonical = transaction
+            .encode_wire_v1()
+            .wrap_err("failed to re-encode prepared Soracloud transaction")?;
+        if canonical != self.wire {
+            return Err(eyre!(
+                "prepared Soracloud transaction wire is not canonical fixed-V1 Norito"
+            ));
+        }
+        let actual_hash = hex::encode(transaction.hash().as_ref());
+        if actual_hash != self.tx_hash_hex {
+            return Err(eyre!(
+                "prepared Soracloud transaction hash does not match its exact wire bytes"
+            ));
+        }
+        if transaction.fee_payment_intent() != &self.fee_payment {
+            return Err(eyre!(
+                "prepared Soracloud transaction fee identity does not match its exact wire bytes"
+            ));
+        }
+        if self.fee_quote.intent != self.fee_payment {
+            return Err(eyre!(
+                "prepared Soracloud fee quote does not match the signed fee identity"
+            ));
+        }
+        let expected_metadata = self.binding.metadata(&self.operation)?;
+        if transaction.metadata() != &expected_metadata {
+            return Err(eyre!(
+                "prepared Soracloud transaction metadata does not exactly bind the reset authorization and mutation"
+            ));
+        }
+        Ok(transaction)
+    }
+}
+
+impl TairaMutationBindingV1 {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.authorization_sha256.len() != 64
+            || !self
+                .authorization_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || self.idempotency_key.len() != 64
+            || !self
+                .idempotency_key
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || self.authorization_nonce.len() != 32
+            || !self.authorization_nonce.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+            })
+            || self.kind.is_empty()
+            || self.phase.is_empty()
+            || !self.kind.bytes().chain(self.phase.bytes()).all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+            })
+            || self.execution_expires_at_unix_ms == 0
+        {
+            return Err(eyre!(
+                "Taira mutation binding is outside the exact first-release grammar"
+            ));
+        }
+        Ok(())
+    }
+
+    fn metadata(&self, operation: &str) -> Result<Metadata> {
+        self.validate()?;
+        validate_prepared_soracloud_operation(operation)?;
+        let binding_json = json::to_json(self)
+            .wrap_err("failed to encode exact Taira mutation binding metadata")?;
+        let entries = [
+            ("taira_public_reset_binding", Json::new(binding_json)),
+            (
+                "taira_public_reset_authorization_sha256",
+                Json::new(self.authorization_sha256.clone()),
+            ),
+            (
+                "taira_public_reset_authorization_nonce",
+                Json::new(self.authorization_nonce.clone()),
+            ),
+            (
+                "taira_public_reset_mutation_kind",
+                Json::new(self.kind.clone()),
+            ),
+            (
+                "taira_public_reset_mutation_phase",
+                Json::new(self.phase.clone()),
+            ),
+            (
+                "taira_public_reset_idempotency_key",
+                Json::new(self.idempotency_key.clone()),
+            ),
+            (
+                "taira_public_reset_execution_expires_at_unix_ms",
+                Json::new(self.execution_expires_at_unix_ms),
+            ),
+            (
+                "taira_public_reset_mutation_operation",
+                Json::new(operation.to_owned()),
+            ),
+        ];
+        let mut metadata = Metadata::default();
+        for (key, value) in entries {
+            let key: Name = key
+                .parse()
+                .wrap_err("Taira mutation metadata key is invalid")?;
+            if metadata.insert(key, value).is_some() {
+                return Err(eyre!("duplicate Taira mutation metadata key"));
+            }
+        }
+        Ok(metadata)
+    }
+}
+
+fn validate_prepared_soracloud_operation(operation: &str) -> Result<()> {
+    match operation {
+        "bundle_pin" | "guest_pin" | "service_mutation" => Ok(()),
+        _ => Err(eyre!(
+            "prepared Soracloud transaction operation must be bundle_pin, guest_pin, or service_mutation"
+        )),
+    }
+}
+
+fn soracloud_transaction_client(
+    config: &ClientConfig,
+    torii_url: &str,
+    timeout_secs: u64,
+) -> Result<Client> {
+    let mut config = config.clone();
+    config.torii_api_url = url::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
+    config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
+    Ok(Client::new(config))
+}
+
+/// Quote and sign one exact Soracloud draft without submitting it.
+pub(crate) fn prepare_soracloud_draft_transaction(
+    config: &ClientConfig,
+    requested_fee_payment: FeePaymentIntent,
+    binding: TairaMutationBindingV1,
+    torii_url: &str,
+    timeout_secs: u64,
+    instructions: Vec<InstructionBox>,
+    operation: &str,
+) -> Result<PreparedSoracloudTransactionV1> {
+    if instructions.is_empty() {
+        return Err(eyre!(
+            "Soracloud mutation draft must contain at least one transaction instruction"
+        ));
+    }
+    let client = soracloud_transaction_client(config, torii_url, timeout_secs)?;
+    let executable = Executable::Instructions(instructions.into());
+    let mut payload = client
+        .try_build_transaction_payload(
+            executable,
+            requested_fee_payment.clone(),
+            binding.metadata(operation)?,
+        )
+        .wrap_err("failed to build exact unsigned Soracloud mutation payload")?;
+    let quote = client
+        .quote_fees(&payload)
+        .wrap_err("failed to quote exact Soracloud mutation fees")?;
+    if !requested_fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
+        return Err(eyre!(
+            "fee quote changed the selected payer, sponsor revision, or gas bound"
+        ));
+    }
+    quote
+        .intent
+        .validate()
+        .wrap_err("fee quote returned an invalid Soracloud payment intent")?;
+    payload.fee_payment = quote.intent.clone();
+    let transaction = client
+        .try_sign_transaction_payload(payload)
+        .wrap_err("failed to sign the exact quoted Soracloud mutation payload")?;
+    PreparedSoracloudTransactionV1::from_signed(operation, binding, quote, transaction)
+}
+
+/// Submit one already prepared canonical Soracloud transaction verbatim.
+pub(crate) fn submit_prepared_soracloud_transaction(
+    config: &ClientConfig,
+    torii_url: &str,
+    timeout_secs: u64,
+    prepared: &PreparedSoracloudTransactionV1,
+) -> Result<Hash> {
+    let transaction = prepared.decode_and_validate()?;
+    let client = soracloud_transaction_client(config, torii_url, timeout_secs)?;
+    client
+        .submit_transaction_blocking(&transaction)
+        .map(Into::into)
+        .wrap_err("failed to submit exact prepared Soracloud mutation transaction")
+}
+
+/// Read-only finality classification of one exact prepared Soracloud transaction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PreparedSoracloudRecoveryV1 {
+    /// The exact transaction hash is not yet globally observable.
+    Absent,
+    /// The exact transaction is globally state-resolved `Applied` and its canonical wire is proven.
+    Applied {
+        /// Positive committed block height.
+        block_height: u64,
+        /// Lowercase transaction hash proving the committed exact envelope.
+        evidence_sha256: String,
+    },
+    /// The exact transaction exists but is not terminal.
+    Pending {
+        /// Canonical pipeline state.
+        terminal_kind: String,
+    },
+    /// The exact transaction reached a terminal non-Applied state.
+    Rejected {
+        /// Canonical rejection or expiry class.
+        terminal_kind: String,
+    },
+}
+
+/// Classify one exact prepared Soracloud transaction without submitting it.
+///
+/// Applied classification includes a one-result, hash-filtered committed query;
+/// this never scans the transaction set.
+pub(crate) fn recover_prepared_soracloud_transaction(
+    config: &ClientConfig,
+    torii_url: &str,
+    timeout_secs: u64,
+    prepared: &PreparedSoracloudTransactionV1,
+) -> Result<PreparedSoracloudRecoveryV1> {
+    let expected = prepared.decode_and_validate()?;
+    let client = soracloud_transaction_client(config, torii_url, timeout_secs)?;
+    let Some(status) = client
+        .get_transaction_status_response_global(expected.hash())
+        .wrap_err("read-only exact Soracloud transaction status lookup failed")?
+    else {
+        return Ok(PreparedSoracloudRecoveryV1::Absent);
+    };
+    if status.hash != prepared.tx_hash_hex || status.scope != "global" {
+        return Err(eyre!(
+            "Soracloud transaction status differs from the exact prepared identity"
+        ));
+    }
+    match status.status.kind.as_str() {
+        "Applied" if soracloud_status_is_final_applied(&status) => {
+            let block_height = status
+                .status
+                .block_height
+                .filter(|height| *height > 0)
+                .ok_or_else(|| eyre!("Applied Soracloud transaction omits its block height"))?;
+            verify_committed_prepared_soracloud_transaction(&client, prepared, &expected)?;
+            Ok(PreparedSoracloudRecoveryV1::Applied {
+                block_height,
+                evidence_sha256: prepared.tx_hash_hex.clone(),
+            })
+        }
+        "Rejected" | "Expired" if soracloud_status_is_final_failure(&status) => {
+            Ok(PreparedSoracloudRecoveryV1::Rejected {
+                terminal_kind: status.status.kind,
+            })
+        }
+        "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired" => {
+            Ok(PreparedSoracloudRecoveryV1::Pending {
+                terminal_kind: status.status.kind,
+            })
+        }
+        other => Err(eyre!(
+            "Soracloud transaction status has unsupported kind `{other}`"
+        )),
+    }
+}
+
+fn soracloud_status_is_final_applied(status: &PipelineTransactionStatusResponse) -> bool {
+    status.status.kind == "Applied" && status.scope == "global" && status.resolved_from == "state"
+}
+
+fn soracloud_status_is_final_failure(status: &PipelineTransactionStatusResponse) -> bool {
+    matches!(status.status.kind.as_str(), "Rejected" | "Expired")
+        && status.scope == "global"
+        && status.resolved_from == "state"
+}
+
+fn verify_committed_prepared_soracloud_transaction(
+    client: &Client,
+    prepared: &PreparedSoracloudTransactionV1,
+    expected: &SignedTransaction,
+) -> Result<()> {
+    let entrypoint_hash = expected.hash_as_entrypoint();
+    let one = NonZeroU64::new(1).expect("nonzero committed lookup bound");
+    let committed = client
+        .query(FindTransactions::new())
+        .filter(CompoundPredicate::from_filters(CommittedTxFilters {
+            entry_eq: Some(entrypoint_hash),
+            ..CommittedTxFilters::default()
+        }))
+        .with_pagination(Pagination::new(Some(one), 0))
+        .with_fetch_size(FetchSize::new(Some(one)))
+        .execute_all()
+        .wrap_err("bounded committed Soracloud transaction proof query failed")?;
+    let [committed] = committed.as_slice() else {
+        return Err(eyre!(
+            "Applied Soracloud status lacks one exact committed transaction proof"
+        ));
+    };
+    if committed.result().is_err() {
+        return Err(eyre!(
+            "Applied Soracloud status resolves to a failed committed transaction"
+        ));
+    }
+    let TransactionEntrypoint::External(transaction) = committed.entrypoint() else {
+        return Err(eyre!(
+            "Applied Soracloud status resolves to a non-external entrypoint"
+        ));
+    };
+    let wire = transaction
+        .encode_wire_v1()
+        .map_err(|error| eyre!("failed to encode committed Soracloud transaction: {error}"))?;
+    if wire != prepared.wire
+        || transaction.hash() != expected.hash()
+        || transaction.hash_as_entrypoint() != entrypoint_hash
+        || transaction.metadata() != expected.metadata()
+    {
+        return Err(eyre!(
+            "committed Soracloud transaction differs from the prepared exact envelope"
+        ));
+    }
+    Ok(())
+}
+
 fn submit_soracloud_draft_transaction(
     torii_url: &str,
     timeout_secs: u64,
     instructions: Vec<InstructionBox>,
-) -> Result<Option<Hash>> {
-    if instructions.is_empty() {
-        return Ok(None);
+) -> Result<Hash> {
+    #[cfg(test)]
+    if let Some(hash) = SORACLOUD_TEST_SUBMITTED_TX_HASH.with(|slot| *slot.borrow()) {
+        return Ok(hash);
     }
-    let mut config = soracloud_submission_config()?;
-    config.torii_api_url = url::Url::parse(torii_url)
-        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
-    config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = Client::new(config);
+    let config = soracloud_submission_config()?;
+    let client = soracloud_transaction_client(&config, torii_url, timeout_secs)?;
     let requested_fee_payment = soracloud_fee_payment()?;
     let executable = Executable::Instructions(instructions.into());
     let mut payload = client
@@ -13615,22 +15475,50 @@ fn submit_soracloud_draft_transaction(
     client
         .submit_transaction_blocking(&transaction)
         .map(Into::into)
-        .map(Some)
         .wrap_err("failed to submit Soracloud mutation transaction")
 }
-fn extract_json_field(payload: &json::Value, field: &str) -> Result<Option<json::Value>> {
-    Ok(payload
-        .as_object()
-        .map(|root| root.get(field).cloned())
-        .flatten())
+fn decode_exact_torii_json_success(
+    status: reqwest::StatusCode,
+    content_type: Option<&HeaderValue>,
+    body: &[u8],
+    response_context: &str,
+) -> Result<json::Value> {
+    if status != reqwest::StatusCode::OK {
+        return Err(eyre!(
+            "{response_context} returned HTTP {status}; expected exactly 200 OK: {}",
+            String::from_utf8_lossy(body)
+        ));
+    }
+    let content_type = content_type.ok_or_else(|| {
+        eyre!("{response_context} 200 OK response is missing Content-Type: application/json")
+    })?;
+    if content_type.as_bytes() != b"application/json" {
+        return Err(eyre!(
+            "{response_context} 200 OK response has Content-Type `{}`; expected exactly `application/json`",
+            String::from_utf8_lossy(content_type.as_bytes())
+        ));
+    }
+    if body.is_empty() {
+        return Err(eyre!(
+            "{response_context} 200 OK response has an empty JSON body"
+        ));
+    }
+    json::from_slice(body)
+        .wrap_err_with(|| format!("failed to decode exact {response_context} JSON body"))
 }
-fn post_torii_soracloud_mutation<T>(
+struct RequestedSoracloudMutationDraft {
+    endpoint: String,
+    draft: SoracloudMutationDraftResponse,
+    instruction_count: NonZeroU32,
+}
+
+fn request_torii_soracloud_mutation_draft<T>(
     torii_url: &str,
     endpoint_path: &str,
     request_payload: &T,
     api_token: Option<&str>,
     timeout_secs: u64,
-) -> Result<(String, norito::json::Value)>
+) -> Result<RequestedSoracloudMutationDraft>
 where
     T: JsonSerialize + ?Sized,
 {
@@ -13641,7 +15529,7 @@ where
     let body = json::to_vec(request_payload)
         .wrap_err("failed to encode soracloud mutation request payload")?;
     let submission_config = soracloud_submission_config()?;
-    let auth_headers = build_soracloud_mutation_auth_headers(&submission_config, &endpoint, &body)?;
+    let auth = build_soracloud_mutation_auth_headers(&submission_config, &endpoint, &body)?;
     let timeout = Duration::from_secs(timeout_secs.max(1));
     let client = BlockingHttpClient::builder()
         .timeout(timeout)
@@ -13657,7 +15545,7 @@ where
             HeaderValue::from_static("application/json"),
         )
         .body(body);
-    for (name, value) in auth_headers {
+    for (name, value) in auth.headers {
         request = request.header(name, value);
     }
     if let Some(token) = api_token {
@@ -13667,43 +15555,81 @@ where
         .send()
         .wrap_err_with(|| format!("failed to call `{}`", endpoint.as_str()))?;
     let status = response.status();
+    let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
     let body = response
         .bytes()
         .wrap_err("failed to read Torii mutation response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
+    let payload = decode_exact_torii_json_success(
+        status,
+        content_type.as_ref(),
+        &body,
+        &format!("Torii /{endpoint_path} mutation draft"),
+    )?;
+    let draft: SoracloudMutationDraftResponse = json::from_value(payload)
+        .wrap_err("failed to decode exact Torii Soracloud mutation draft response")?;
+    draft
+        .validate()
+        .wrap_err("Torii returned an invalid Soracloud mutation draft response")?;
+    if draft.authority != submission_config.account {
         return Err(eyre!(
-            "Torii /{endpoint_path} returned {}: {}",
-            status,
-            body_text
+            "Torii Soracloud mutation draft authority `{}` does not match configured transaction authority `{}`",
+            draft.authority,
+            submission_config.account
         ));
     }
-    let mut payload: norito::json::Value =
-        json::from_slice(&body).wrap_err("failed to decode Torii mutation JSON payload")?;
-    let instructions = decode_soracloud_tx_instructions(&payload)?;
+    if !auth
+        .expected_response_signers
+        .iter()
+        .any(|signer| signer == &draft.signed_by)
+    {
+        return Err(eyre!(
+            "Torii Soracloud mutation draft signer `{}` is not one of the authenticated request signers",
+            draft.signed_by
+        ));
+    }
+    let instruction_count = NonZeroU32::new(
+        u32::try_from(draft.tx_instructions.len())
+            .wrap_err("Soracloud mutation draft instruction count exceeds the V1 range")?,
+    )
+    .ok_or_else(|| eyre!("Soracloud mutation draft must contain at least one instruction"))?;
+    Ok(RequestedSoracloudMutationDraft {
+        endpoint: endpoint.to_string(),
+        draft,
+        instruction_count,
+    })
+}
+
+fn post_torii_soracloud_mutation<T>(
+    torii_url: &str,
+    endpoint_path: &str,
+    request_payload: &T,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)>
+where
+    T: JsonSerialize + ?Sized,
+{
+    let requested = request_torii_soracloud_mutation_draft(
+        torii_url,
+        endpoint_path,
+        request_payload,
+        api_token,
+        timeout_secs,
+    )?;
+    let instructions = decode_soracloud_tx_instructions(&requested.draft)?;
     let submitted_tx_hash =
         submit_soracloud_draft_transaction(torii_url, timeout_secs, instructions)?;
-    if let Some(root) = payload.as_object_mut() {
-        root.insert(
-            "submitted_tx_hash".to_owned(),
-            json::to_value(&submitted_tx_hash)?,
-        );
-        root.insert(
-            "submission_mode".to_owned(),
-            json::Value::String(
-                if submitted_tx_hash.is_some() {
-                    "client_signed"
-                } else {
-                    "client_signed_noop"
-                }
-                .to_owned(),
-            ),
-        );
-    }
-    Ok((endpoint.to_string(), payload))
-}
-fn action_value(label: &str) -> json::Value {
-    norito::json!({ "action": label })
+    let receipt = SoracloudMutationSubmissionReceiptV1 {
+        schema_version: SORACLOUD_MUTATION_SUBMISSION_RECEIPT_VERSION_V1,
+        authority: requested.draft.authority,
+        signed_by: requested.draft.signed_by,
+        instruction_count: requested.instruction_count,
+        submitted_tx_hash,
+    };
+    Ok((
+        requested.endpoint,
+        json::to_value(&receipt).wrap_err("failed to encode Soracloud submission receipt")?,
+    ))
 }
 fn merge_submission_metadata(
     target: &mut json::Value,
@@ -13714,86 +15640,113 @@ fn merge_submission_metadata(
             "expected JSON object when merging Soracloud submission metadata"
         ));
     };
-    if let Some(value) = extract_json_field(mutation_payload, "submitted_tx_hash")? {
-        root.insert("submitted_tx_hash".to_owned(), value);
-    }
-    if let Some(value) = extract_json_field(mutation_payload, "submission_mode")? {
-        root.insert("submission_mode".to_owned(), value);
-    }
+    let receipt = decode_soracloud_submission_receipt(mutation_payload)?;
+    root.insert(
+        "submission".to_owned(),
+        json::to_value(&receipt).wrap_err("failed to encode Soracloud submission receipt")?,
+    );
     Ok(())
 }
-fn control_plane_service_from_status<'a>(
-    payload: &'a json::Value,
+fn control_plane_service_from_status(
+    payload: &json::Value,
     service_name: &str,
-) -> Result<&'a json::Value> {
-    payload
-        .get("control_plane")
-        .and_then(json::Value::as_object)
-        .and_then(|control_plane| control_plane.get("services"))
-        .and_then(json::Value::as_array)
-        .and_then(|services| {
-            services.iter().find(|service| {
-                service
-                    .get("service_name")
-                    .and_then(json::Value::as_str)
-                    .is_some_and(|name| name == service_name)
-            })
-        })
-        .ok_or_else(|| {
-            eyre!(
-                "service `{service_name}` not found in authoritative Soracloud control-plane status"
-            )
-        })
+) -> Result<ServiceStatusOutput> {
+    let (_, snapshot) = decode_network_control_plane_snapshot(payload)?;
+    let mut matches = snapshot
+        .services
+        .into_iter()
+        .filter(|service| service.service_name == service_name);
+    let service = matches.next().ok_or_else(|| {
+        eyre!("service `{service_name}` not found in authoritative Soracloud control-plane status")
+    })?;
+    if matches.next().is_some() {
+        return Err(eyre!(
+            "authoritative Soracloud control-plane status contains duplicate service `{service_name}`"
+        ));
+    }
+    Ok(service)
 }
-fn agent_apartment_from_status<'a>(
-    payload: &'a json::Value,
+fn agent_apartment_from_status(
+    payload: &json::Value,
     apartment_name: &str,
-) -> Result<&'a json::Value> {
-    payload
-        .get("apartments")
-        .and_then(json::Value::as_array)
-        .and_then(|apartments| {
-            apartments.iter().find(|apartment| {
-                apartment
-                    .get("apartment_name")
-                    .and_then(json::Value::as_str)
-                    .is_some_and(|name| name == apartment_name)
-            })
-        })
-        .ok_or_else(|| {
-            eyre!("apartment `{apartment_name}` not found in authoritative Soracloud agent status")
-        })
+) -> Result<AgentApartmentStatusEntryV1> {
+    let expected = parse_exact_name_arg("apartment status name", apartment_name)?
+        .parse::<Name>()
+        .wrap_err("invalid apartment name for authoritative Soracloud agent status lookup")?;
+    let status = decode_agent_status(payload)?;
+    let mut matches = status
+        .apartments
+        .into_iter()
+        .filter(|apartment| apartment.apartment_name == expected);
+    let apartment = matches.next().ok_or_else(|| {
+        eyre!("apartment `{apartment_name}` not found in authoritative Soracloud agent status")
+    })?;
+    if matches.next().is_some() {
+        return Err(eyre!(
+            "authoritative Soracloud agent status contains duplicate apartment `{apartment_name}`"
+        ));
+    }
+    Ok(apartment)
 }
-fn mailbox_message_from_status<'a>(
-    payload: &'a json::Value,
+
+fn mailbox_message_ids(payload: &json::Value) -> Result<BTreeSet<String>> {
+    Ok(decode_agent_mailbox_status(payload)?
+        .messages
+        .into_iter()
+        .map(|message| message.message_id)
+        .collect())
+}
+
+fn mailbox_message_by_id(
+    payload: &json::Value,
+    message_id: &str,
+) -> Result<AgentMailboxMessageEntryV1> {
+    let status = decode_agent_mailbox_status(payload)?;
+    let mut matches = status
+        .messages
+        .into_iter()
+        .filter(|message| message.message_id == message_id);
+    let message = matches.next().ok_or_else(|| {
+        eyre!("mailbox message `{message_id}` was not found in authoritative status")
+    })?;
+    if matches.next().is_some() {
+        return Err(eyre!(
+            "authoritative mailbox status contains duplicate message_id `{message_id}`"
+        ));
+    }
+    Ok(message)
+}
+
+fn new_mailbox_message_from_status(
+    payload: &json::Value,
+    known_message_ids: &BTreeSet<String>,
     from_apartment: &str,
     channel: &str,
     message_payload: &str,
-) -> Result<&'a json::Value> {
-    payload
-        .get("messages")
-        .and_then(json::Value::as_array)
-        .and_then(|messages| {
-            messages.iter().find(|message| {
-                message
-                    .get("from_apartment")
-                    .and_then(json::Value::as_str)
-                    .is_some_and(|value| value == from_apartment)
-                    && message
-                        .get("channel")
-                        .and_then(json::Value::as_str)
-                        .is_some_and(|value| value == channel)
-                    && message
-                        .get("payload")
-                        .and_then(json::Value::as_str)
-                        .is_some_and(|value| value == message_payload)
-            })
-        })
-        .ok_or_else(|| {
-            eyre!(
-                "mailbox message from `{from_apartment}` on channel `{channel}` was not found in authoritative status"
-            )
-        })
+) -> Result<AgentMailboxMessageEntryV1> {
+    let expected_from = parse_exact_name_arg("sender apartment name", from_apartment)?
+        .parse::<Name>()
+        .wrap_err("invalid sender apartment name for mailbox status lookup")?;
+    let status = decode_agent_mailbox_status(payload)?;
+    let mut matches = status.messages.into_iter().filter(|message| {
+        !known_message_ids.contains(&message.message_id)
+            && message.from_apartment == expected_from
+            && message.channel == channel
+            && message.payload == message_payload
+    });
+    let message = matches.next().ok_or_else(|| {
+        eyre!(
+            "authoritative mailbox status did not return one newly enqueued message from `{from_apartment}` on channel `{channel}`"
+        )
+    })?;
+    if let Some(ambiguous) = matches.next() {
+        return Err(eyre!(
+            "authoritative mailbox status returned multiple newly enqueued matching messages (`{}` and `{}`)",
+            message.message_id,
+            ambiguous.message_id
+        ));
+    }
+    Ok(message)
 }
 fn build_service_mutation_output(
     mutation_payload: json::Value,
@@ -13801,31 +15754,15 @@ fn build_service_mutation_output(
     service_name: &str,
     action_label: &str,
 ) -> Result<json::Value> {
-    let mut output = control_plane_service_from_status(status_payload, service_name)?.clone();
-    let service = output
-        .as_object()
-        .ok_or_else(|| eyre!("service snapshot must be a JSON object"))?
-        .clone();
+    let service = control_plane_service_from_status(status_payload, service_name)?;
+    let mut output = json::to_value(&service).wrap_err("encode exact service status output")?;
     let Some(root) = output.as_object_mut() else {
         return Err(eyre!("service snapshot must be a JSON object"));
     };
-    root.insert("action".to_owned(), action_value(action_label));
-    if let Some(rollout) = service
-        .get("active_rollout")
-        .or_else(|| service.get("last_rollout"))
-        .and_then(json::Value::as_object)
-    {
-        if let Some(value) = rollout.get("rollout_handle").cloned() {
-            root.insert("rollout_handle".to_owned(), value);
-        }
-        if let Some(value) = rollout.get("stage").cloned() {
-            root.insert("rollout_stage".to_owned(), value.clone());
-            root.insert("stage".to_owned(), value);
-        }
-        if let Some(value) = rollout.get("traffic_percent").cloned() {
-            root.insert("traffic_percent".to_owned(), value);
-        }
-    }
+    root.insert(
+        "action".to_owned(),
+        json::Value::String(action_label.to_owned()),
+    );
     merge_submission_metadata(&mut output, &mutation_payload)?;
     Ok(output)
 }
@@ -13835,46 +15772,34 @@ fn build_agent_mutation_output(
     apartment_name: &str,
     action_label: &str,
 ) -> Result<json::Value> {
-    let mut output = agent_apartment_from_status(status_payload, apartment_name)?.clone();
-    let apartment = output
-        .as_object()
-        .ok_or_else(|| eyre!("agent apartment snapshot must be a JSON object"))?
-        .clone();
+    let apartment = agent_apartment_from_status(status_payload, apartment_name)?;
+    let mut output =
+        json::to_value(&apartment).wrap_err("failed to encode exact agent apartment status V1")?;
     let Some(root) = output.as_object_mut() else {
         return Err(eyre!("agent apartment snapshot must be a JSON object"));
     };
-    root.insert("action".to_owned(), action_value(action_label));
-    if let Some(value) = apartment.get("pending_wallet_request_count").cloned() {
-        root.insert("pending_request_count".to_owned(), value);
-    }
-    if let Some(value) = apartment.get("autonomy_budget_remaining_units").cloned() {
-        root.insert("budget_remaining_units".to_owned(), value);
-    }
-    if let Some(value) = apartment.get("artifact_allowlist_count").cloned() {
-        root.insert("allowlist_count".to_owned(), value);
-    }
-    if let Some(value) = apartment.get("autonomy_run_count").cloned() {
-        root.insert("run_count".to_owned(), value);
-    }
+    root.insert(
+        "action".to_owned(),
+        json::Value::String(action_label.to_owned()),
+    );
     merge_submission_metadata(&mut output, &mutation_payload)?;
     Ok(output)
 }
 fn build_hf_mutation_output(
     mutation_payload: json::Value,
     status_payload: &json::Value,
+    action_label: &str,
 ) -> Result<json::Value> {
-    let mut output = status_payload.clone();
-    let latest_action = status_payload
-        .get("latest_audit_event")
-        .and_then(json::Value::as_object)
-        .and_then(|event| event.get("action"))
-        .cloned();
+    let status = decode_hf_shared_lease_status(status_payload)?;
+    let mut output = json::to_value(&status)
+        .wrap_err("failed to encode exact Soracloud HF shared-lease status V1")?;
     let Some(root) = output.as_object_mut() else {
         return Err(eyre!("hf shared-lease status must be a JSON object"));
     };
-    if let Some(value) = latest_action {
-        root.insert("action".to_owned(), value);
-    }
+    root.insert(
+        "action".to_owned(),
+        json::Value::String(action_label.to_owned()),
+    );
     merge_submission_metadata(&mut output, &mutation_payload)?;
     Ok(output)
 }
@@ -13882,62 +15807,80 @@ fn build_wallet_spend_output(
     mutation_payload: json::Value,
     status_payload: &json::Value,
     apartment_name: &str,
+    request_id: &str,
 ) -> Result<json::Value> {
+    parse_agent_wallet_request_id(request_id).map_err(|error| eyre!("request_id {error}"))?;
     let mut output = build_agent_mutation_output(
         mutation_payload,
         status_payload,
         apartment_name,
-        "WalletSpendRequested",
+        "WalletSpendSubmitted",
     )?;
-    let last_active_sequence = output
-        .get("last_active_sequence")
-        .and_then(json::Value::as_u64)
-        .ok_or_else(|| eyre!("agent status is missing `last_active_sequence`"))?;
     let Some(root) = output.as_object_mut() else {
         return Err(eyre!("wallet spend output must be a JSON object"));
     };
     root.insert(
         "request_id".to_owned(),
-        json::Value::String(format!("{apartment_name}:wallet:{last_active_sequence}")),
+        json::Value::String(request_id.to_owned()),
     );
     Ok(output)
 }
 fn build_message_send_output(
     mutation_payload: json::Value,
     mailbox_status_payload: &json::Value,
+    known_message_ids: &BTreeSet<String>,
     from_apartment: &str,
     channel: &str,
     message_payload: &str,
 ) -> Result<json::Value> {
-    let mut output = mailbox_status_payload.clone();
-    let message_id = mailbox_message_from_status(
+    let mailbox_status = decode_agent_mailbox_status(mailbox_status_payload)?;
+    let mut output = json::to_value(&mailbox_status)
+        .wrap_err("failed to encode exact Soracloud agent mailbox status V1")?;
+    let message_id = new_mailbox_message_from_status(
         mailbox_status_payload,
+        known_message_ids,
         from_apartment,
         channel,
         message_payload,
     )?
-    .get("message_id")
-    .and_then(json::Value::as_str)
-    .ok_or_else(|| eyre!("mailbox status entry is missing `message_id`"))?
-    .to_owned();
+    .message_id;
     let Some(root) = output.as_object_mut() else {
         return Err(eyre!("mailbox status must be a JSON object"));
     };
-    root.insert("action".to_owned(), action_value("MessageEnqueued"));
+    root.insert(
+        "action".to_owned(),
+        json::Value::String("MessageEnqueued".to_owned()),
+    );
     root.insert("message_id".to_owned(), json::Value::String(message_id));
     merge_submission_metadata(&mut output, &mutation_payload)?;
     Ok(output)
 }
 fn build_message_ack_output(
     mutation_payload: json::Value,
+    mailbox_status_before: &json::Value,
     mailbox_status_payload: &json::Value,
     message_id: &str,
 ) -> Result<json::Value> {
-    let mut output = mailbox_status_payload.clone();
+    mailbox_message_by_id(mailbox_status_before, message_id)?;
+    let status_after = decode_agent_mailbox_status(mailbox_status_payload)?;
+    if status_after
+        .messages
+        .iter()
+        .any(|message| message.message_id == message_id)
+    {
+        return Err(eyre!(
+            "authoritative mailbox status still contains acknowledged message `{message_id}`"
+        ));
+    }
+    let mut output = json::to_value(&status_after)
+        .wrap_err("failed to encode exact Soracloud agent mailbox status V1")?;
     let Some(root) = output.as_object_mut() else {
         return Err(eyre!("mailbox status must be a JSON object"));
     };
-    root.insert("action".to_owned(), action_value("MessageAcknowledged"));
+    root.insert(
+        "action".to_owned(),
+        json::Value::String("MessageAcknowledged".to_owned()),
+    );
     root.insert(
         "message_id".to_owned(),
         json::Value::String(message_id.to_owned()),
@@ -13945,45 +15888,17 @@ fn build_message_ack_output(
     merge_submission_metadata(&mut output, &mutation_payload)?;
     Ok(output)
 }
-fn find_agent_autonomy_run_id(
-    status_payload: &json::Value,
-    artifact_hash: &str,
-    provenance_hash: Option<&str>,
-    run_label: &str,
-) -> Result<String> {
-    let runs = status_payload
-        .get("recent_runs")
-        .and_then(json::Value::as_array)
-        .ok_or_else(|| eyre!("agent autonomy status response is missing `recent_runs`"))?;
-    let matched = runs
-        .iter()
-        .filter(|entry| {
-            entry.get("artifact_hash").and_then(json::Value::as_str) == Some(artifact_hash)
-                && entry.get("run_label").and_then(json::Value::as_str) == Some(run_label)
-                && entry.get("provenance_hash").and_then(json::Value::as_str) == provenance_hash
-        })
-        .max_by_key(|entry| {
-            entry.get("approved_sequence")
-                .and_then(json::Value::as_u64)
-                .unwrap_or(0)
-        })
-        .ok_or_else(|| {
-            eyre!(
-                "failed to resolve approved autonomy run for artifact `{artifact_hash}` and label `{run_label}`"
-            )
-        })?;
-    matched
-        .get("run_id")
-        .and_then(json::Value::as_str)
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| eyre!("agent autonomy status entry is missing `run_id`"))
-}
 fn send_torii_soracloud_authenticated_get(
     endpoint: reqwest::Url,
     api_token: Option<&str>,
     timeout_secs: u64,
     response_context: &'static str,
-) -> Result<(reqwest::Url, reqwest::StatusCode, Vec<u8>)> {
+) -> Result<(
+    reqwest::Url,
+    reqwest::StatusCode,
+    Option<HeaderValue>,
+    Vec<u8>,
+)> {
     let submission_config = soracloud_submission_config()
         .wrap_err("Soracloud protected GET requires an initialized local account signer")?;
     let auth_headers = build_soracloud_read_auth_headers(&submission_config, &endpoint)?;
@@ -14006,11 +15921,12 @@ fn send_torii_soracloud_authenticated_get(
         .send()
         .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
     let status = response.status();
+    let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
     let body = response
         .bytes()
         .wrap_err_with(|| format!("failed to read {response_context} response body"))?
         .to_vec();
-    Ok((endpoint, status, body))
+    Ok((endpoint, status, content_type, body))
 }
 fn fetch_torii_soracloud_authenticated_json(
     endpoint: reqwest::Url,
@@ -14018,22 +15934,14 @@ fn fetch_torii_soracloud_authenticated_json(
     timeout_secs: u64,
     response_context: &'static str,
 ) -> Result<(String, norito::json::Value)> {
-    let (endpoint, status, body) = send_torii_soracloud_authenticated_get(
+    let (endpoint, status, content_type, body) = send_torii_soracloud_authenticated_get(
         endpoint,
         api_token,
         timeout_secs,
         response_context,
     )?;
-    if !status.is_success() {
-        return Err(eyre!(
-            "Torii {} returned {}: {}",
-            endpoint.path(),
-            status,
-            String::from_utf8_lossy(&body)
-        ));
-    }
-    let payload = json::from_slice(&body)
-        .wrap_err_with(|| format!("failed to decode {response_context} JSON payload"))?;
+    let payload =
+        decode_exact_torii_json_success(status, content_type.as_ref(), &body, response_context)?;
     Ok((endpoint.to_string(), payload))
 }
 fn fetch_torii_soracloud_status(
@@ -14052,7 +15960,7 @@ fn fetch_torii_soracloud_status(
         timeout_secs,
         "Torii Soracloud status",
     )?;
-    filter_soracloud_status_payload(&mut payload, service_name);
+    filter_soracloud_status_payload(&mut payload, service_name)?;
     Ok((endpoint, payload))
 }
 fn fetch_torii_soracloud_app_infra_status(
@@ -14063,11 +15971,10 @@ fn fetch_torii_soracloud_app_infra_status(
 ) -> Result<(String, norito::json::Value)> {
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
-    if let Some(app_name) = app_name.map(str::trim).filter(|value| !value.is_empty()) {
-        let app_name = app_name
-            .parse::<Name>()
-            .map(|name| name.to_string())
-            .wrap_err("invalid app name for /v1/soracloud/apps/{app_name}/status")?;
+    let app_name = app_name
+        .map(|name| parse_exact_name_arg("--app-name", name))
+        .transpose()?;
+    if let Some(app_name) = app_name.as_deref() {
         endpoint = endpoint
             .join(&format!("v1/soracloud/apps/{app_name}/status"))
             .wrap_err(
@@ -14078,60 +15985,85 @@ fn fetch_torii_soracloud_app_infra_status(
             .join("v1/soracloud/apps/status")
             .wrap_err("failed to derive /v1/soracloud/apps/status URL from --torii-url")?;
     }
-    fetch_torii_soracloud_authenticated_json(
+    let (endpoint, payload) = fetch_torii_soracloud_authenticated_json(
         endpoint,
         api_token,
         timeout_secs,
         "Torii Soracloud app-infra status",
-    )
+    )?;
+    let status = decode_app_infra_status(&payload)?;
+    if let Some(expected_app_name) = app_name.as_deref() {
+        let expected_app_name = expected_app_name
+            .parse::<Name>()
+            .wrap_err("invalid expected app name")?;
+        if status.apps.len() != 1 || status.apps[0].app_name != expected_app_name {
+            return Err(eyre!(
+                "Soracloud app-infra status did not return exactly app `{expected_app_name}`"
+            ));
+        }
+        if status
+            .recent_audit_events
+            .iter()
+            .any(|event| event.app_name != expected_app_name)
+        {
+            return Err(eyre!(
+                "Soracloud app-infra status returned audit events for an unexpected app"
+            ));
+        }
+    }
+    let payload =
+        json::to_value(&status).wrap_err("failed to encode exact Soracloud app-infra status V1")?;
+    Ok((endpoint, payload))
 }
-fn filter_soracloud_status_payload(payload: &mut norito::json::Value, service_name: Option<&str>) {
-    let Some(service_name) = service_name
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return;
+fn filter_soracloud_status_payload(
+    payload: &mut norito::json::Value,
+    service_name: Option<&str>,
+) -> Result<()> {
+    decode_network_control_plane_snapshot(payload)?;
+    let Some(service_name) = service_name else {
+        return Ok(());
     };
-    let Some(root) = payload.as_object_mut() else {
-        return;
-    };
-    let Some(control_plane) = root.get_mut("control_plane") else {
-        return;
-    };
-    let Some(control_plane_map) = control_plane.as_object_mut() else {
-        return;
-    };
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
+    let root = payload
+        .as_object_mut()
+        .ok_or_else(|| eyre!("Soracloud status must be a JSON object"))?;
+    let control_plane = root
+        .get_mut("control_plane")
+        .ok_or_else(|| eyre!("Soracloud network status is missing `control_plane`"))?;
+    let control_plane_map = control_plane
+        .as_object_mut()
+        .ok_or_else(|| eyre!("Soracloud `control_plane` status must be a JSON object"))?;
     let filtered_service_count = {
-        let Some(services) = control_plane_map
+        let services = control_plane_map
             .get_mut("services")
             .and_then(norito::json::Value::as_array_mut)
-        else {
-            return;
-        };
+            .ok_or_else(|| eyre!("Soracloud control-plane status is missing `services`"))?;
         services.retain(|entry| {
             entry
                 .as_object()
                 .and_then(|service| service.get("service_name"))
                 .and_then(norito::json::Value::as_str)
-                == Some(service_name)
+                == Some(service_name.as_str())
         });
-        u64::try_from(services.len()).unwrap_or(u64::MAX)
+        u64::try_from(services.len())
+            .wrap_err("filtered Soracloud service count exceeds the V1 range")?
     };
-    if let Some(service_count) = control_plane_map.get_mut("service_count") {
-        *service_count = norito::json::Value::from(filtered_service_count);
-    }
-    if let Some(audit_events) = control_plane_map
+    let service_count = control_plane_map
+        .get_mut("service_count")
+        .ok_or_else(|| eyre!("Soracloud control-plane status is missing `service_count`"))?;
+    *service_count = norito::json::Value::from(filtered_service_count);
+    let audit_events = control_plane_map
         .get_mut("recent_audit_events")
         .and_then(norito::json::Value::as_array_mut)
-    {
-        audit_events.retain(|entry| {
-            entry
-                .as_object()
-                .and_then(|event| event.get("service_name"))
-                .and_then(norito::json::Value::as_str)
-                == Some(service_name)
-        });
-    }
+        .ok_or_else(|| eyre!("Soracloud control-plane status is missing `recent_audit_events`"))?;
+    audit_events.retain(|entry| {
+        entry
+            .as_object()
+            .and_then(|event| event.get("service_name"))
+            .and_then(norito::json::Value::as_str)
+            == Some(service_name.as_str())
+    });
+    Ok(())
 }
 fn fetch_torii_soracloud_service_config_status(
     torii_url: &str,
@@ -14140,11 +16072,7 @@ fn fetch_torii_soracloud_service_config_status(
     api_token: Option<&str>,
     timeout_secs: u64,
 ) -> Result<(String, norito::json::Value)> {
-    let service_name = service_name
-        .trim()
-        .parse::<Name>()
-        .map(|name| name.to_string())
-        .wrap_err("invalid --service-name")?;
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
     let config_name = config_name
         .map(|value| parse_service_material_name_arg("--config-name", value))
         .transpose()?;
@@ -14159,12 +16087,28 @@ fn fetch_torii_soracloud_service_config_status(
             query.append_pair("config_name", config_name);
         }
     }
-    fetch_torii_soracloud_authenticated_json(
+    let (endpoint, payload) = fetch_torii_soracloud_authenticated_json(
         endpoint,
         api_token,
         timeout_secs,
         "Torii Soracloud service-config status",
-    )
+    )?;
+    let status = decode_service_config_status(&payload)?;
+    if status.service_name.to_string() != service_name {
+        return Err(eyre!(
+            "Soracloud service-config status returned an unexpected service"
+        ));
+    }
+    if let Some(expected_config) = config_name.as_deref()
+        && (status.configs.len() != 1 || status.configs[0].config_name != expected_config)
+    {
+        return Err(eyre!(
+            "Soracloud service-config status did not return exactly the requested config `{expected_config}`"
+        ));
+    }
+    let payload = json::to_value(&status)
+        .wrap_err("failed to encode exact Soracloud service-config status V1")?;
+    Ok((endpoint, payload))
 }
 fn fetch_torii_soracloud_service_secret_status(
     torii_url: &str,
@@ -14173,11 +16117,7 @@ fn fetch_torii_soracloud_service_secret_status(
     api_token: Option<&str>,
     timeout_secs: u64,
 ) -> Result<(String, norito::json::Value)> {
-    let service_name = service_name
-        .trim()
-        .parse::<Name>()
-        .map(|name| name.to_string())
-        .wrap_err("invalid --service-name")?;
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
     let secret_name = secret_name
         .map(|value| parse_service_material_name_arg("--secret-name", value))
         .transpose()?;
@@ -14192,12 +16132,28 @@ fn fetch_torii_soracloud_service_secret_status(
             query.append_pair("secret_name", secret_name);
         }
     }
-    fetch_torii_soracloud_authenticated_json(
+    let (endpoint, payload) = fetch_torii_soracloud_authenticated_json(
         endpoint,
         api_token,
         timeout_secs,
         "Torii Soracloud service-secret status",
-    )
+    )?;
+    let status = decode_service_secret_status(&payload)?;
+    if status.service_name.to_string() != service_name {
+        return Err(eyre!(
+            "Soracloud service-secret status returned an unexpected service"
+        ));
+    }
+    if let Some(expected_secret) = secret_name.as_deref()
+        && (status.secrets.len() != 1 || status.secrets[0].secret_name != expected_secret)
+    {
+        return Err(eyre!(
+            "Soracloud service-secret status did not return exactly the requested secret `{expected_secret}`"
+        ));
+    }
+    let payload = json::to_value(&status)
+        .wrap_err("failed to encode exact Soracloud service-secret status V1")?;
+    Ok((endpoint, payload))
 }
 fn fetch_torii_soracloud_agent_status(
     torii_url: &str,
@@ -14209,19 +16165,39 @@ fn fetch_torii_soracloud_agent_status(
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/agent/status")
         .wrap_err("failed to derive /v1/soracloud/agent/status URL from --torii-url")?;
-    if let Some(apartment_name) = apartment_name
-        && !apartment_name.trim().is_empty()
-    {
+    let apartment_name = apartment_name
+        .map(|name| parse_exact_name_arg("--apartment-name", name))
+        .transpose()?;
+    if let Some(apartment_name) = apartment_name.as_deref() {
         endpoint
             .query_pairs_mut()
-            .append_pair("apartment_name", apartment_name.trim());
+            .append_pair("apartment_name", apartment_name);
     }
-    fetch_torii_soracloud_authenticated_json(
+    let (endpoint, payload) = fetch_torii_soracloud_authenticated_json(
         endpoint,
         api_token,
         timeout_secs,
         "Torii Soracloud agent status",
-    )
+    )?;
+    let status = decode_agent_status(&payload)?;
+    if let Some(expected_apartment) = apartment_name.as_deref() {
+        let expected_apartment = expected_apartment
+            .parse::<Name>()
+            .wrap_err("invalid expected apartment name")?;
+        if status.apartments.len() > 1
+            || status
+                .apartments
+                .first()
+                .is_some_and(|entry| entry.apartment_name != expected_apartment)
+        {
+            return Err(eyre!(
+                "Soracloud agent status filter returned an unexpected apartment"
+            ));
+        }
+    }
+    let payload =
+        json::to_value(&status).wrap_err("failed to encode exact Soracloud agent status V1")?;
+    Ok((endpoint, payload))
 }
 fn fetch_torii_soracloud_agent_mailbox_status(
     torii_url: &str,
@@ -14229,23 +16205,33 @@ fn fetch_torii_soracloud_agent_mailbox_status(
     api_token: Option<&str>,
     timeout_secs: u64,
 ) -> Result<(String, norito::json::Value)> {
-    let apartment_name = apartment_name.trim();
-    if apartment_name.is_empty() {
-        return Err(eyre!("--apartment-name must not be empty"));
-    }
+    let apartment_name = parse_exact_name_arg("--apartment-name", apartment_name)?;
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/agent/mailbox/status")
         .wrap_err("failed to derive /v1/soracloud/agent/mailbox/status URL from --torii-url")?;
     endpoint
         .query_pairs_mut()
-        .append_pair("apartment_name", apartment_name);
-    fetch_torii_soracloud_authenticated_json(
+        .append_pair("apartment_name", apartment_name.as_str());
+    let (endpoint, payload) = fetch_torii_soracloud_authenticated_json(
         endpoint,
         api_token,
         timeout_secs,
         "Torii Soracloud agent-mailbox status",
-    )
+    )?;
+    let status = decode_agent_mailbox_status(&payload)?;
+    let expected_apartment = apartment_name
+        .parse::<Name>()
+        .wrap_err("invalid expected mailbox apartment name")?;
+    if status.apartment_name != expected_apartment {
+        return Err(eyre!(
+            "Soracloud mailbox status returned apartment `{}` instead of `{expected_apartment}`",
+            status.apartment_name
+        ));
+    }
+    let payload = json::to_value(&status)
+        .wrap_err("failed to encode exact Soracloud agent mailbox status V1")?;
+    Ok((endpoint, payload))
 }
 fn fetch_torii_soracloud_agent_autonomy_status(
     torii_url: &str,
@@ -14253,23 +16239,33 @@ fn fetch_torii_soracloud_agent_autonomy_status(
     api_token: Option<&str>,
     timeout_secs: u64,
 ) -> Result<(String, norito::json::Value)> {
-    let apartment_name = apartment_name.trim();
-    if apartment_name.is_empty() {
-        return Err(eyre!("--apartment-name must not be empty"));
-    }
+    let apartment_name = parse_exact_name_arg("--apartment-name", apartment_name)?;
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/agent/autonomy/status")
         .wrap_err("failed to derive /v1/soracloud/agent/autonomy/status URL from --torii-url")?;
     endpoint
         .query_pairs_mut()
-        .append_pair("apartment_name", apartment_name);
-    fetch_torii_soracloud_authenticated_json(
+        .append_pair("apartment_name", apartment_name.as_str());
+    let (endpoint, payload) = fetch_torii_soracloud_authenticated_json(
         endpoint,
         api_token,
         timeout_secs,
         "Torii Soracloud agent-autonomy status",
-    )
+    )?;
+    let status = decode_agent_autonomy_status(&payload)?;
+    let expected_apartment = apartment_name
+        .parse::<Name>()
+        .wrap_err("invalid expected autonomy apartment name")?;
+    if status.apartment_name != expected_apartment {
+        return Err(eyre!(
+            "Soracloud agent autonomy status returned apartment `{}` instead of `{expected_apartment}`",
+            status.apartment_name
+        ));
+    }
+    let payload = json::to_value(&status)
+        .wrap_err("failed to encode exact Soracloud agent autonomy status V1")?;
+    Ok((endpoint, payload))
 }
 fn fetch_torii_soracloud_training_job_status(
     torii_url: &str,
@@ -14278,28 +16274,31 @@ fn fetch_torii_soracloud_training_job_status(
     api_token: Option<&str>,
     timeout_secs: u64,
 ) -> Result<(String, norito::json::Value)> {
-    let service_name = service_name.trim();
-    let job_id = job_id.trim();
-    if service_name.is_empty() {
-        return Err(eyre!("--service-name must not be empty"));
-    }
-    if job_id.is_empty() {
-        return Err(eyre!("--job-id must not be empty"));
-    }
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
+    let job_id = parse_training_identifier_arg("--job-id", job_id)?;
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/training/job/status")
         .wrap_err("failed to derive /v1/soracloud/training/job/status URL from --torii-url")?;
     endpoint
         .query_pairs_mut()
-        .append_pair("service_name", service_name)
-        .append_pair("job_id", job_id);
-    fetch_torii_soracloud_authenticated_json(
+        .append_pair("service_name", service_name.as_str())
+        .append_pair("job_id", job_id.as_str());
+    let (endpoint, payload) = fetch_torii_soracloud_authenticated_json(
         endpoint,
         api_token,
         timeout_secs,
         "Torii Soracloud training-job status",
-    )
+    )?;
+    let status = decode_training_job_status(&payload)?;
+    if status.job.service_name.to_string() != service_name || status.job.job_id != job_id {
+        return Err(eyre!(
+            "Soracloud training-job status returned an unexpected service or job"
+        ));
+    }
+    let payload = json::to_value(&status)
+        .wrap_err("failed to encode exact Soracloud training-job status V1")?;
+    Ok((endpoint, payload))
 }
 fn fetch_torii_soracloud_model_artifact_status(
     torii_url: &str,
@@ -14308,28 +16307,36 @@ fn fetch_torii_soracloud_model_artifact_status(
     api_token: Option<&str>,
     timeout_secs: u64,
 ) -> Result<(String, norito::json::Value)> {
-    let service_name = service_name.trim();
-    let training_job_id = training_job_id.trim();
-    if service_name.is_empty() {
-        return Err(eyre!("--service-name must not be empty"));
-    }
-    if training_job_id.is_empty() {
-        return Err(eyre!("--training-job-id must not be empty"));
-    }
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
+    let training_job_id = parse_training_identifier_arg("--training-job-id", training_job_id)?;
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/model/artifact/status")
         .wrap_err("failed to derive /v1/soracloud/model/artifact/status URL from --torii-url")?;
     endpoint
         .query_pairs_mut()
-        .append_pair("service_name", service_name)
-        .append_pair("training_job_id", training_job_id);
-    fetch_torii_soracloud_authenticated_json(
+        .append_pair("service_name", service_name.as_str())
+        .append_pair("training_job_id", training_job_id.as_str());
+    let (endpoint, payload) = fetch_torii_soracloud_authenticated_json(
         endpoint,
         api_token,
         timeout_secs,
         "Torii Soracloud model-artifact status",
-    )
+    )?;
+    let status = decode_model_artifact_status(&payload)?;
+    if status.service_name.to_string() != service_name
+        || status
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.training_job_id != training_job_id)
+    {
+        return Err(eyre!(
+            "Soracloud model-artifact status returned an unexpected service or training job"
+        ));
+    }
+    let payload = json::to_value(&status)
+        .wrap_err("failed to encode exact Soracloud model-artifact status V1")?;
+    Ok((endpoint, payload))
 }
 fn fetch_torii_soracloud_model_weight_status(
     torii_url: &str,
@@ -14338,68 +16345,33 @@ fn fetch_torii_soracloud_model_weight_status(
     api_token: Option<&str>,
     timeout_secs: u64,
 ) -> Result<(String, norito::json::Value)> {
-    let service_name = service_name.trim();
-    let model_name = model_name.trim();
-    if service_name.is_empty() {
-        return Err(eyre!("--service-name must not be empty"));
-    }
-    if model_name.is_empty() {
-        return Err(eyre!("--model-name must not be empty"));
-    }
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
+    let model_name = parse_exact_name_arg("--model-name", model_name)?;
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/model/weight/status")
         .wrap_err("failed to derive /v1/soracloud/model/weight/status URL from --torii-url")?;
     endpoint
         .query_pairs_mut()
-        .append_pair("service_name", service_name)
-        .append_pair("model_name", model_name);
-    fetch_torii_soracloud_authenticated_json(
+        .append_pair("service_name", service_name.as_str())
+        .append_pair("model_name", model_name.as_str());
+    let (endpoint, payload) = fetch_torii_soracloud_authenticated_json(
         endpoint,
         api_token,
         timeout_secs,
         "Torii Soracloud model-weight status",
-    )
-}
-fn fetch_torii_soracloud_uploaded_model_encryption_recipient(
-    torii_url: &str,
-    api_token: Option<&str>,
-    timeout_secs: u64,
-) -> Result<(String, norito::json::Value)> {
-    let endpoint = reqwest::Url::parse(torii_url)
-        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
-        .join("v1/soracloud/model/upload/encryption-recipient")
-        .wrap_err(
-            "failed to derive /v1/soracloud/model/upload/encryption-recipient URL from --torii-url",
-        )?;
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for uploaded-model encryption recipient")?;
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii uploaded-model encryption recipient response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
+    )?;
+    let status = decode_model_weight_status(&payload)?;
+    if status.model.service_name.to_string() != service_name
+        || status.model.model_name.to_string() != model_name
+    {
         return Err(eyre!(
-            "Torii /v1/soracloud/model/upload/encryption-recipient returned {}: {}",
-            status,
-            body_text
+            "Soracloud model-weight status returned an unexpected service or model"
         ));
     }
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii uploaded-model encryption recipient JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    let payload = json::to_value(&status)
+        .wrap_err("failed to encode exact Soracloud model-weight status V1")?;
+    Ok((endpoint, payload))
 }
 #[allow(clippy::too_many_arguments)]
 fn fetch_torii_soracloud_uploaded_model_status(
@@ -14413,49 +16385,72 @@ fn fetch_torii_soracloud_uploaded_model_status(
     api_token: Option<&str>,
     timeout_secs: u64,
 ) -> Result<(String, norito::json::Value)> {
-    let service_name = service_name.trim();
-    let weight_version = weight_version.trim();
-    if service_name.is_empty() {
-        return Err(eyre!("--service-name must not be empty"));
-    }
-    if weight_version.is_empty() {
-        return Err(eyre!("--weight-version must not be empty"));
-    }
-    let model_id = model_id.map(str::trim).filter(|value| !value.is_empty());
-    let model_name = model_name.map(str::trim).filter(|value| !value.is_empty());
+    let service_name = parse_exact_name_arg("--service-name", service_name)?;
+    let weight_version = parse_training_identifier_arg("--weight-version", weight_version)?;
     if model_id.is_none() && model_name.is_none() {
         return Err(eyre!("--model-id or --model-name is required"));
     }
+    let model_id = model_id
+        .map(|model_id| parse_training_identifier_arg("--model-id", model_id))
+        .transpose()?;
+    let model_name = model_name
+        .map(|model_name| parse_exact_name_arg("--model-name", model_name))
+        .transpose()?;
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join(endpoint_path)
         .wrap_err_with(|| format!("failed to derive /{endpoint_path} URL from --torii-url"))?;
     {
         let mut query = endpoint.query_pairs_mut();
-        query.append_pair("service_name", service_name);
-        query.append_pair("weight_version", weight_version);
-        if let Some(model_id) = model_id {
+        query.append_pair("service_name", service_name.as_str());
+        query.append_pair("weight_version", weight_version.as_str());
+        if let Some(model_id) = model_id.as_deref() {
             query.append_pair("model_id", model_id);
         }
-        if let Some(model_name) = model_name {
+        if let Some(model_name) = model_name.as_deref() {
             query.append_pair("model_name", model_name);
         }
         if let Some(bundle_root) = bundle_root {
             query.append_pair("bundle_root", &json::to_json(&bundle_root)?);
         }
     }
-    fetch_torii_soracloud_authenticated_json(
+    let (endpoint, payload) = fetch_torii_soracloud_authenticated_json(
         endpoint,
         api_token,
         timeout_secs,
         "Torii Soracloud uploaded-model status",
-    )
+    )?;
+    let status = decode_uploaded_model_status(&payload)?;
+    if status.bundle.service_name.to_string() != service_name
+        || status.bundle.weight_version != weight_version
+        || model_id
+            .as_deref()
+            .is_some_and(|expected| status.bundle.model_id != expected)
+        || bundle_root.is_some_and(|expected| status.bundle.bundle_root != expected)
+    {
+        return Err(eyre!(
+            "Soracloud uploaded-model status returned an unexpected service, model, version, or bundle"
+        ));
+    }
+    if let Some(expected_model_name) = model_name.as_deref()
+        && status
+            .artifact
+            .as_ref()
+            .is_none_or(|artifact| artifact.model_name.as_ref() != expected_model_name)
+    {
+        return Err(eyre!(
+            "Soracloud uploaded-model status did not bind requested model_name `{expected_model_name}`"
+        ));
+    }
+    let payload = json::to_value(&status)
+        .wrap_err("failed to encode exact Soracloud uploaded-model status V1")?;
+    Ok((endpoint, payload))
 }
 const fn storage_class_query_label(storage_class: StorageClass) -> &'static str {
     match storage_class {
-        StorageClass::Hot => "Hot",
-        StorageClass::Warm => "Warm",
-        StorageClass::Cold => "Cold",
+        StorageClass::Hot => "hot",
+        StorageClass::Warm => "warm",
+        StorageClass::Cold => "cold",
     }
 }
 fn fetch_torii_soracloud_hf_status(
@@ -14474,7 +16469,7 @@ fn fetch_torii_soracloud_hf_status(
     let repo_id = parse_hf_repo_id_arg(repo_id)?;
     let revision = parse_hf_revision_arg(revision)?;
     let account_id = parse_hf_account_id_arg(account_id)?;
-    let storage_class = storage_class_query_label(storage_class);
+    let storage_class_label = storage_class_query_label(storage_class);
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/hf/status")
@@ -14484,18 +16479,47 @@ fn fetch_torii_soracloud_hf_status(
         query
             .append_pair("repo_id", repo_id.as_str())
             .append_pair("revision", revision.as_str())
-            .append_pair("storage_class", storage_class)
+            .append_pair("storage_class", storage_class_label)
             .append_pair("lease_term_ms", &lease_term_ms.to_string());
         if let Some(account_id) = account_id.as_deref() {
             query.append_pair("account_id", account_id);
         }
     }
-    fetch_torii_soracloud_authenticated_json(
+    let (endpoint, payload) = fetch_torii_soracloud_authenticated_json(
         endpoint,
         api_token,
         timeout_secs,
         "Torii Soracloud HF status",
-    )
+    )?;
+    let status = decode_hf_shared_lease_status(&payload)?;
+    if status.source.repo_id != repo_id || status.source.resolved_revision != revision {
+        return Err(eyre!(
+            "Soracloud HF status source does not match the requested repository and revision"
+        ));
+    }
+    if let Some(pool) = status.pool.as_ref()
+        && (pool.storage_class != storage_class || pool.lease_term_ms != lease_term_ms)
+    {
+        return Err(eyre!(
+            "Soracloud HF status pool does not match the requested storage class and lease term"
+        ));
+    }
+    match (account_id.as_deref(), status.member.as_ref()) {
+        (Some(expected), Some(member)) if member.account_id.to_string() != expected => {
+            return Err(eyre!(
+                "Soracloud HF status member does not match the requested account"
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(eyre!(
+                "Soracloud HF status returned an account member without an account filter"
+            ));
+        }
+        _ => {}
+    }
+    let payload = json::to_value(&status)
+        .wrap_err("failed to encode exact Soracloud HF shared-lease status V1")?;
+    Ok((endpoint, payload))
 }
 fn fetch_torii_soracloud_model_host_status(
     torii_url: &str,
@@ -14513,12 +16537,38 @@ fn fetch_torii_soracloud_model_host_status(
             .query_pairs_mut()
             .append_pair("account_id", validator_account_id);
     }
-    fetch_torii_soracloud_authenticated_json(
+    let (endpoint, payload) = fetch_torii_soracloud_authenticated_json(
         endpoint,
         api_token,
         timeout_secs,
         "Torii Soracloud model-host status",
-    )
+    )?;
+    let status = decode_model_host_status(&payload)?;
+    match (
+        validator_account_id.as_deref(),
+        status.validator_account_id.as_ref(),
+    ) {
+        (Some(expected), Some(actual)) if actual.to_string() == expected => {}
+        (None, None) => {}
+        _ => {
+            return Err(eyre!(
+                "Soracloud model-host status returned an unexpected validator filter identity"
+            ));
+        }
+    }
+    if let Some(expected) = status.validator_account_id.as_ref()
+        && status
+            .hosts
+            .iter()
+            .any(|host| &host.validator_account_id != expected)
+    {
+        return Err(eyre!(
+            "Soracloud model-host status returned a host outside the requested validator filter"
+        ));
+    }
+    let payload = json::to_value(&status)
+        .wrap_err("failed to encode exact Soracloud model-host status V1")?;
+    Ok((endpoint, payload))
 }
 fn require_torii_url<'a>(torii_url: Option<&'a str>) -> Result<&'a str> {
     torii_url
@@ -14579,8 +16629,8 @@ fn project_sync_manifest_pair(
     service_path: &Path,
     bundle_file: Option<&Path>,
     service_name_override: Option<&str>,
-) -> Result<(SyncManifestEntryOutput, SoraDeploymentBundleV1)> {
-    let mut container: SoraContainerManifestV1 = load_json(container_path)?;
+) -> Result<(SyncManifestEntryOutput, UnpublishedDeploymentBundleV1)> {
+    let mut container: UnpublishedContainerManifestV1 = load_json(container_path)?;
     let mut service: SoraServiceManifestV1 = load_json(service_path)?;
     if let Some(expected_service_name) = service_name_override {
         ensure_app_service_ref_matches_manifest_name(
@@ -14598,22 +16648,21 @@ fn project_sync_manifest_pair(
         })?;
         container.bundle_hash = Hash::new(&bundle_bytes);
     }
-    service.container.manifest_hash = Hash::new(Encode::encode(&container));
+    service.container.manifest_hash = container.workspace_hash()?;
     service.container.expected_schema_version = container.schema_version;
-    let bundle = SoraDeploymentBundleV1 {
-        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+    let bundle = UnpublishedDeploymentBundleV1 {
         container: container.clone(),
         service: service.clone(),
     };
-    bundle.validate_for_admission()?;
+    validate_unpublished_deployment_source(&bundle)?;
     let entry = SyncManifestEntryOutput {
         service_name: service_name_override
             .map(str::to_owned)
             .unwrap_or_else(|| service.service_name.to_string()),
         container_manifest_path: container_path.to_string_lossy().into_owned(),
         service_manifest_path: service_path.to_string_lossy().into_owned(),
-        container_manifest_hash: bundle.container_manifest_hash(),
-        service_manifest_hash: bundle.service_manifest_hash(),
+        container_manifest_hash: service.container.manifest_hash,
+        service_manifest_hash: Hash::new(Encode::encode(&service)),
         bundle_file: bundle_file.map(|path| path.to_string_lossy().into_owned()),
         bundle_hash: container.bundle_hash,
     };
@@ -14622,7 +16671,10 @@ fn project_sync_manifest_pair(
 fn project_app_manifest_service_refs(
     manifest: &SoracloudAppManifestV1,
     manifest_dir: &Path,
-) -> Result<(Vec<SyncManifestEntryOutput>, Vec<SoraDeploymentBundleV1>)> {
+) -> Result<(
+    Vec<SyncManifestEntryOutput>,
+    Vec<UnpublishedDeploymentBundleV1>,
+)> {
     let mut outputs = Vec::with_capacity(manifest.services.len());
     let mut bundles = Vec::with_capacity(manifest.services.len());
     for service in &manifest.services {
@@ -15664,36 +17716,29 @@ fn auth_state_binding(name: &str, prefix: &str) -> SoraStateBindingV1 {
         4_194_304
     )
 }
-fn default_inrou_manifest() -> SoraInrouManifestV1 {
-    SoraInrouManifestV1 {
+fn default_inrou_manifest() -> UnpublishedInrouManifestWorkspaceV1 {
+    UnpublishedInrouManifestWorkspaceV1 {
         schema_version: SORA_INROU_MANIFEST_VERSION_V1,
-        guest_os: SoraInrouGuestOsV1::DebianSlim,
         guest_images: std::collections::BTreeMap::from([
             (
-                iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
-                iroha_data_model::soracloud::SoraInrouGuestImageV1 {
+                "x86_64".to_owned(),
+                UnpublishedInrouGuestImageWorkspaceV1 {
                     kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
                     rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
                     initrd_image_path: None,
-                    distribution:
-                        iroha_data_model::soracloud::SoraArtifactDistributionPolicyV1::default(),
-                    published_artifact: None,
+                    published_artifact: (),
                 },
             ),
             (
-                iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64,
-                iroha_data_model::soracloud::SoraInrouGuestImageV1 {
+                "aarch64".to_owned(),
+                UnpublishedInrouGuestImageWorkspaceV1 {
                     kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
                     rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
                     initrd_image_path: None,
-                    distribution:
-                        iroha_data_model::soracloud::SoraArtifactDistributionPolicyV1::default(),
-                    published_artifact: None,
+                    published_artifact: (),
                 },
             ),
         ]),
-        bootstrap_user_data_path: None,
-        ssh_authorized_keys: Vec::new(),
     }
 }
 fn default_generic_http_service_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
@@ -15709,7 +17754,7 @@ fn default_generic_http_service_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1>
             volume_name: "app_data".parse().expect("literal volume name is valid"),
             kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
             storage_class: StorageClass::Warm,
-            mount_path: "/lease/app-data".to_owned(),
+            mount_path: "/var/lib/soracloud/volumes/app_data".to_owned(),
             max_total_bytes: NonZeroU64::new(536_870_912).expect("nonzero literal"),
         },
     ]
@@ -15729,7 +17774,7 @@ fn default_split_app_live_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
                 .expect("literal volume name is valid"),
             kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
             storage_class: StorageClass::Hot,
-            mount_path: "/lease/shared-cache".to_owned(),
+            mount_path: "/var/lib/soracloud/volumes/shared_cache".to_owned(),
             max_total_bytes: NonZeroU64::new(536_870_912).expect("nonzero literal"),
         },
         SoraLeaseVolumeBindingV1 {
@@ -15738,7 +17783,7 @@ fn default_split_app_live_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
                 .expect("literal volume name is valid"),
             kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
             storage_class: StorageClass::Warm,
-            mount_path: "/lease/search-sessions".to_owned(),
+            mount_path: "/var/lib/soracloud/volumes/search_sessions".to_owned(),
             max_total_bytes: NonZeroU64::new(268_435_456).expect("nonzero literal"),
         },
         SoraLeaseVolumeBindingV1 {
@@ -15747,7 +17792,7 @@ fn default_split_app_live_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
                 .expect("literal volume name is valid"),
             kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
             storage_class: StorageClass::Warm,
-            mount_path: "/lease/collector-state".to_owned(),
+            mount_path: "/var/lib/soracloud/volumes/collector_state".to_owned(),
             max_total_bytes: NonZeroU64::new(268_435_456).expect("nonzero literal"),
         },
         SoraLeaseVolumeBindingV1 {
@@ -15756,7 +17801,7 @@ fn default_split_app_live_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
                 .expect("literal volume name is valid"),
             kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
             storage_class: StorageClass::Warm,
-            mount_path: "/lease/runtime-cache".to_owned(),
+            mount_path: "/var/lib/soracloud/volumes/runtime_cache".to_owned(),
             max_total_bytes: NonZeroU64::new(268_435_456).expect("nonzero literal"),
         },
     ]
@@ -15765,9 +17810,12 @@ fn build_split_app_live_service_bundle(
     app_name: &str,
     host: &str,
     app_version: &str,
-) -> Result<SoraDeploymentBundleV1> {
-    let mut container =
-        load_json::<SoraContainerManifestV1>(&workspace_fixture(DEFAULT_CONTAINER_MANIFEST))?;
+) -> Result<UnpublishedDeploymentBundleV1> {
+    let mut container = UnpublishedContainerManifestV1::from_non_inrou_manifest(load_json::<
+        SoraContainerManifestV1,
+    >(
+        &workspace_fixture(DEFAULT_CONTAINER_MANIFEST),
+    )?)?;
     let mut service =
         load_json::<SoraServiceManifestV1>(&workspace_fixture(DEFAULT_SERVICE_MANIFEST))?;
     let service_name: Name = format!("{app_name}_live")
@@ -15785,7 +17833,6 @@ fn build_split_app_live_service_bundle(
         .env
         .insert("SORACLOUD_HTTP_PORT".to_owned(), "8787".to_owned());
     container.capabilities.network = SoraNetworkPolicyV1::Isolated;
-    container.capabilities.allow_wallet_signing = false;
     container.capabilities.allow_state_writes = false;
     container.capabilities.allow_model_inference = false;
     container.capabilities.allow_model_training = false;
@@ -15805,14 +17852,10 @@ fn build_split_app_live_service_bundle(
     service.lease_volumes = default_split_app_live_lease_volumes();
     service.handlers.clear();
     service.artifacts.clear();
-    service.container.manifest_hash = Hash::new(Encode::encode(&container));
+    service.container.manifest_hash = container.workspace_hash()?;
     service.container.expected_schema_version = container.schema_version;
-    let bundle = SoraDeploymentBundleV1 {
-        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-        container,
-        service,
-    };
-    bundle.validate_for_admission()?;
+    let bundle = UnpublishedDeploymentBundleV1 { container, service };
+    validate_unpublished_deployment_source(&bundle)?;
     Ok(bundle)
 }
 fn build_split_app_vault_service_bundle(
@@ -15854,7 +17897,6 @@ fn build_split_app_vault_service_bundle(
         SoraNetworkAllowlistEntryV1::new("torii.sora.internal", [443]),
         SoraNetworkAllowlistEntryV1::new("wallet.sora.internal", [443]),
     ]);
-    container.capabilities.allow_wallet_signing = true;
     container.capabilities.allow_state_writes = true;
     container.capabilities.allow_model_inference = false;
     container.capabilities.allow_model_training = false;
@@ -15928,35 +17970,35 @@ fn build_split_app_vault_service_bundle(
         ),
         service_handler(
             "auth_login",
-            SoraServiceHandlerClassV1::PrivateUpdate,
+            SoraServiceHandlerClassV1::Update,
             "complete_auth_login",
             Some("/auth/login"),
             SoraCertifiedResponsePolicyV1::None,
-            Some(("private_updates", 256, 131_072, 2_880)),
+            Some(("auth_updates", 256, 131_072, 2_880)),
         ),
         service_handler(
             "auth_logout",
-            SoraServiceHandlerClassV1::PrivateUpdate,
+            SoraServiceHandlerClassV1::Update,
             "close_auth_session",
             Some("/auth/logout"),
             SoraCertifiedResponsePolicyV1::None,
-            Some(("private_updates", 256, 131_072, 2_880)),
+            Some(("auth_updates", 256, 131_072, 2_880)),
         ),
         service_handler(
             "user_preferences_put",
-            SoraServiceHandlerClassV1::PrivateUpdate,
+            SoraServiceHandlerClassV1::Update,
             "store_user_preferences",
             Some("/v1/user/preferences"),
             SoraCertifiedResponsePolicyV1::None,
-            Some(("private_updates", 256, 131_072, 2_880)),
+            Some(("user_updates", 256, 131_072, 2_880)),
         ),
         service_handler(
             "saved_searches_post",
-            SoraServiceHandlerClassV1::PrivateUpdate,
+            SoraServiceHandlerClassV1::Update,
             "store_saved_search",
             Some("/v1/user/saved-searches"),
             SoraCertifiedResponsePolicyV1::None,
-            Some(("private_updates", 256, 131_072, 2_880)),
+            Some(("user_updates", 256, 131_072, 2_880)),
         ),
     ];
     service.artifacts = vec![
@@ -15985,7 +18027,7 @@ fn apply_init_template_defaults(
     template: InitTemplate,
     service_name: &Name,
     service: &mut SoraServiceManifestV1,
-    container: &mut SoraContainerManifestV1,
+    container: &mut UnpublishedContainerManifestV1,
 ) -> Result<()> {
     let dns_label = normalized_service_label(service_name.as_ref());
     let host = format!("{dns_label}.sora");
@@ -16008,7 +18050,6 @@ fn apply_init_template_defaults(
                 .env
                 .insert("SORACLOUD_HTTP_PORT".to_owned(), "8787".to_owned());
             container.capabilities.network = SoraNetworkPolicyV1::Isolated;
-            container.capabilities.allow_wallet_signing = false;
             container.capabilities.allow_state_writes = false;
             container.capabilities.allow_model_inference = false;
             container.capabilities.allow_model_training = false;
@@ -16041,7 +18082,6 @@ fn apply_init_template_defaults(
                     "torii.sora.internal",
                     [443],
                 )]);
-            container.capabilities.allow_wallet_signing = false;
             container.capabilities.allow_state_writes = false;
             container.capabilities.allow_model_training = false;
             container.lifecycle.healthcheck_path = Some("/healthz".to_owned());
@@ -16096,7 +18136,6 @@ fn apply_init_template_defaults(
                 SoraNetworkAllowlistEntryV1::new("torii.sora.internal", [443]),
                 SoraNetworkAllowlistEntryV1::new("wallet.sora.internal", [443]),
             ]);
-            container.capabilities.allow_wallet_signing = true;
             container.capabilities.allow_state_writes = true;
             container.capabilities.allow_model_inference = false;
             container.capabilities.allow_model_training = false;
@@ -16172,7 +18211,6 @@ fn apply_init_template_defaults(
                     "torii.sora.internal",
                     [443],
                 )]);
-            container.capabilities.allow_wallet_signing = false;
             container.capabilities.allow_state_writes = true;
             container.capabilities.allow_model_training = false;
             container.lifecycle.healthcheck_path = Some("/pii/api/healthz".to_owned());
@@ -16233,12 +18271,12 @@ fn apply_init_template_defaults(
                     Some(("updates", 512, 65_536, 1_440)),
                 ),
                 service_handler(
-                    "private_update",
-                    SoraServiceHandlerClassV1::PrivateUpdate,
-                    "apply_private_update",
-                    Some("/private/update"),
+                    "ciphertext_update",
+                    SoraServiceHandlerClassV1::Update,
+                    "apply_ciphertext_update",
+                    Some("/ciphertext/update"),
                     SoraCertifiedResponsePolicyV1::None,
-                    Some(("private_updates", 256, 131_072, 2_880)),
+                    Some(("ciphertext_updates", 256, 131_072, 2_880)),
                 ),
             ];
             service.artifacts = vec![
@@ -16250,7 +18288,7 @@ fn apply_init_template_defaults(
                 service_artifact(
                     SoraArtifactKindV1::Checkpoint,
                     "/checkpoints/pii.chk",
-                    Some("private_update"),
+                    Some("ciphertext_update"),
                 ),
             ];
             Ok(())
@@ -16290,7 +18328,6 @@ fn apply_init_template_defaults(
                 SoraNetworkAllowlistEntryV1::new("torii.sora.internal", [443]),
                 SoraNetworkAllowlistEntryV1::new("wallet.sora.internal", [443]),
             ]);
-            container.capabilities.allow_wallet_signing = true;
             container.capabilities.allow_state_writes = true;
             container.capabilities.allow_model_training = false;
             container.lifecycle.healthcheck_path = Some("/api/healthz".to_owned());
@@ -16427,35 +18464,35 @@ fn apply_init_template_defaults(
                 ),
                 service_handler(
                     "auth_login",
-                    SoraServiceHandlerClassV1::PrivateUpdate,
+                    SoraServiceHandlerClassV1::Update,
                     "complete_auth_login",
                     Some("/auth/login"),
                     SoraCertifiedResponsePolicyV1::None,
-                    Some(("private_updates", 256, 131_072, 2_880)),
+                    Some(("auth_updates", 256, 131_072, 2_880)),
                 ),
                 service_handler(
                     "auth_logout",
-                    SoraServiceHandlerClassV1::PrivateUpdate,
+                    SoraServiceHandlerClassV1::Update,
                     "close_auth_session",
                     Some("/auth/logout"),
                     SoraCertifiedResponsePolicyV1::None,
-                    Some(("private_updates", 256, 131_072, 2_880)),
+                    Some(("auth_updates", 256, 131_072, 2_880)),
                 ),
                 service_handler(
                     "user_preferences_put",
-                    SoraServiceHandlerClassV1::PrivateUpdate,
+                    SoraServiceHandlerClassV1::Update,
                     "store_user_preferences",
                     Some("/v1/user/preferences"),
                     SoraCertifiedResponsePolicyV1::None,
-                    Some(("private_updates", 256, 131_072, 2_880)),
+                    Some(("user_updates", 256, 131_072, 2_880)),
                 ),
                 service_handler(
                     "saved_searches_create",
-                    SoraServiceHandlerClassV1::PrivateUpdate,
+                    SoraServiceHandlerClassV1::Update,
                     "store_saved_search",
                     Some("/v1/user/saved-searches"),
                     SoraCertifiedResponsePolicyV1::None,
-                    Some(("private_updates", 256, 131_072, 2_880)),
+                    Some(("user_updates", 256, 131_072, 2_880)),
                 ),
             ];
             service.artifacts = vec![
@@ -16585,8 +18622,6 @@ fn scaffold_single_api_app_template(
         ),
         (output_dir.join("doctor.sh"), single_api_doctor_sh()),
         (output_dir.join("release.sh"), single_api_release_sh()),
-        (output_dir.join("deploy.sh"), single_api_deploy_sh()),
-        (output_dir.join("upgrade.sh"), single_api_upgrade_sh()),
         (
             output_dir.join(".gitignore"),
             "web/node_modules/\nweb/dist/\nservices/api/build/\nservices/api/tmp/\n".to_owned(),
@@ -16851,8 +18886,6 @@ fn scaffold_split_app_template(
         ),
         (output_dir.join("doctor.sh"), split_app_doctor_sh()),
         (output_dir.join("release.sh"), split_app_release_sh()),
-        (output_dir.join("deploy.sh"), split_app_deploy_sh()),
-        (output_dir.join("upgrade.sh"), split_app_upgrade_sh()),
         (
             output_dir.join(".gitignore"),
             "frontend/node_modules/\nfrontend/dist/\nservices/live/build/\nservices/live/tmp/\nservices/vault/build/\nservices/vault/tmp/\n"
@@ -16877,8 +18910,6 @@ fn scaffold_split_app_existing_repo_template(
         ),
         (output_dir.join("doctor.sh"), split_app_doctor_sh()),
         (output_dir.join("release.sh"), split_app_release_sh()),
-        (output_dir.join("deploy.sh"), split_app_deploy_sh()),
-        (output_dir.join("upgrade.sh"), split_app_upgrade_sh()),
         (
             output_dir.join(".gitignore"),
             "services/live/build/\nservices/live/tmp/\nservices/vault/build/\nservices/vault/tmp/\n"
@@ -17303,14 +19334,6 @@ fn split_app_release_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     include_str!("soracloud/templates/v1/static/split_app_release.sh").replace("{prelude}", prelude)
 }
-fn split_app_deploy_sh() -> String {
-    let prelude = iroha_shell_command_prelude();
-    include_str!("soracloud/templates/v1/split_app_deploy.sh").replace("{prelude}", prelude)
-}
-fn split_app_upgrade_sh() -> String {
-    let prelude = iroha_shell_command_prelude();
-    include_str!("soracloud/templates/v1/static/split_app_upgrade.sh").replace("{prelude}", prelude)
-}
 fn split_app_readme(app_name: &str, package_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/split_app_readme.tmpl"),
@@ -17367,15 +19390,6 @@ fn single_api_release_sh() -> String {
     include_str!("soracloud/templates/v1/static/single_api_release.sh")
         .replace("{prelude}", prelude)
 }
-fn single_api_deploy_sh() -> String {
-    let prelude = iroha_shell_command_prelude();
-    include_str!("soracloud/templates/v1/static/single_api_deploy.sh").replace("{prelude}", prelude)
-}
-fn single_api_upgrade_sh() -> String {
-    let prelude = iroha_shell_command_prelude();
-    include_str!("soracloud/templates/v1/static/single_api_upgrade.sh")
-        .replace("{prelude}", prelude)
-}
 fn single_api_app_readme(app_name: &str, package_name: &str) -> String {
     render_template(
         include_str!("soracloud/assets/v1/single_api_app_readme.tmpl"),
@@ -17407,11 +19421,11 @@ fn hayahi_app_readme(service_name: &str) -> String {
 mod tests {
     use super::*;
     use iroha::data_model::soracloud::{
-        SECRET_ENVELOPE_VERSION_V1, SecretEnvelopeEncryptionV1, SoraInrouGuestImageV1,
-        SoraInrouGuestIsaV1, SoraServiceExecutionPlaneV1,
+        SECRET_ENVELOPE_VERSION_V1, SecretEnvelopeEncryptionV1, SoraInrouGuestIsaV1,
+        SoraServiceExecutionPlaneV1,
     };
     use iroha_crypto::Algorithm;
-    use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
+    use iroha_version::codec::EncodeVersioned as _;
     use norito::json::Value;
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     const TEST_HF_COMMIT_OID: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -17421,6 +19435,7 @@ mod tests {
         net::{TcpListener, TcpStream},
         path::Path,
         process::Command,
+        str::FromStr as _,
         sync::{
             Arc, Mutex,
             atomic::{AtomicBool, Ordering},
@@ -17429,13 +19444,48 @@ mod tests {
         time::Duration,
         time::{Instant, SystemTime, UNIX_EPOCH},
     };
-    fn canonical_taira_inrou_bundle_fixture() -> SoraDeploymentBundleV1 {
+    fn sample_published_inrou_artifact(seed: u8) -> SoraPublishedInrouGuestImageArtifactV1 {
+        SoraPublishedInrouGuestImageArtifactV1 {
+            manifest_digest_hex: hex::encode([seed; 32]),
+            content_cid: encode_content_cid(&sorafs_manifest::canonical_manifest_root_cid(
+                [seed; 32],
+            )),
+        }
+    }
+    fn canonical_taira_inrou_source_fixture() -> UnpublishedDeploymentBundleV1 {
         canonical_taira_inrou_canary_deploy_bundle()
             .expect("build canonical Taira Inrou deploy bundle")
             .0
     }
+    fn admit_taira_inrou_source(source: UnpublishedDeploymentBundleV1) -> SoraDeploymentBundleV1 {
+        source
+            .into_admitted(BTreeMap::from([(
+                SoraInrouGuestIsaV1::Aarch64,
+                sample_published_inrou_artifact(0xAB),
+            )]))
+            .expect("publish canonical Taira Inrou source")
+    }
+    fn canonical_taira_inrou_bundle_fixture() -> SoraDeploymentBundleV1 {
+        admit_taira_inrou_source(canonical_taira_inrou_source_fixture())
+    }
+    fn taira_test_tempdir(prefix: &str) -> tempfile::TempDir {
+        let target_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
+        let target_dir =
+            fs::canonicalize(target_dir).expect("canonical workspace target directory");
+        tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir_in(target_dir)
+            .expect("workspace target tempdir")
+    }
     fn refresh_taira_container_reference(bundle: &mut SoraDeploymentBundleV1) {
         bundle.service.container.manifest_hash = Hash::new(Encode::encode(&bundle.container));
+        bundle.service.container.expected_schema_version = bundle.container.schema_version;
+    }
+    fn refresh_taira_source_container_reference(bundle: &mut UnpublishedDeploymentBundleV1) {
+        bundle.service.container.manifest_hash = bundle
+            .container
+            .workspace_hash()
+            .expect("hash unpublished Taira container");
         bundle.service.container.expected_schema_version = bundle.container.schema_version;
     }
     fn assert_taira_canary_validation_error(bundle: &SoraDeploymentBundleV1, needle: &str) {
@@ -17443,32 +19493,179 @@ mod tests {
             .expect_err("noncanonical Taira canary must fail");
         assert!(error.to_string().contains(needle), "{error}");
     }
+    fn taira_source_guest_image_json(value: &mut Value) -> &mut BTreeMap<String, Value> {
+        value
+            .as_object_mut()
+            .and_then(|container| container.get_mut("inrou"))
+            .and_then(Value::as_object_mut)
+            .and_then(|inrou| inrou.get_mut("guest_images"))
+            .and_then(Value::as_object_mut)
+            .and_then(|images| images.get_mut("aarch64"))
+            .and_then(Value::as_object_mut)
+            .expect("canonical Taira source AArch64 image object")
+    }
+    #[test]
+    fn unpublished_inrou_workspace_json_requires_explicit_null_artifact() {
+        let source = canonical_taira_inrou_source_fixture();
+        let canonical =
+            norito::json::to_value(&source.container).expect("encode unpublished Taira container");
+        let decoded: UnpublishedContainerManifestV1 = norito::json::from_value(canonical.clone())
+            .expect("explicit-null unpublished container must decode");
+        assert_eq!(decoded, source.container);
+        assert!(
+            taira_source_guest_image_json(&mut canonical.clone())
+                .get("published_artifact")
+                .is_some_and(Value::is_null)
+        );
+
+        let mut missing = canonical.clone();
+        assert!(
+            taira_source_guest_image_json(&mut missing)
+                .remove("published_artifact")
+                .is_some()
+        );
+        norito::json::from_value::<UnpublishedContainerManifestV1>(missing)
+            .expect_err("omitted unpublished artifact marker must fail");
+
+        let mut object = canonical.clone();
+        taira_source_guest_image_json(&mut object).insert(
+            "published_artifact".to_owned(),
+            norito::json::to_value(&sample_published_inrou_artifact(0xA1))
+                .expect("encode forbidden artifact object"),
+        );
+        norito::json::from_value::<UnpublishedContainerManifestV1>(object)
+            .expect_err("prepublished artifact object must fail draft decoding");
+
+        let mut unknown = canonical;
+        taira_source_guest_image_json(&mut unknown)
+            .insert("retired_v0".to_owned(), Value::from(true));
+        norito::json::from_value::<UnpublishedContainerManifestV1>(unknown)
+            .expect_err("unpublished guest image must reject unknown fields");
+    }
+    #[test]
+    fn unpublished_inrou_publication_constructs_admitted_bundle_and_refreshes_hash() {
+        let source = canonical_taira_inrou_source_fixture();
+        let source_hash = source.service.container.manifest_hash;
+        let admitted = admit_taira_inrou_source(source);
+        admitted
+            .validate_for_admission()
+            .expect("publication must return an admission-valid bundle");
+        assert_ne!(admitted.service.container.manifest_hash, source_hash);
+        assert_eq!(
+            admitted.service.container.manifest_hash,
+            Hash::new(Encode::encode(&admitted.container))
+        );
+        assert_eq!(
+            admitted
+                .container
+                .inrou
+                .as_ref()
+                .expect("Inrou manifest")
+                .guest_images[&SoraInrouGuestIsaV1::Aarch64]
+                .published_artifact,
+            sample_published_inrou_artifact(0xAB)
+        );
+
+        canonical_taira_inrou_source_fixture()
+            .into_admitted(BTreeMap::new())
+            .expect_err("every draft guest ISA must have a published artifact");
+        canonical_taira_inrou_source_fixture()
+            .into_admitted(BTreeMap::from([
+                (
+                    SoraInrouGuestIsaV1::Aarch64,
+                    sample_published_inrou_artifact(0xA2),
+                ),
+                (
+                    SoraInrouGuestIsaV1::X8664,
+                    sample_published_inrou_artifact(0xA3),
+                ),
+            ]))
+            .expect_err("publication must reject artifacts absent from the source workspace");
+
+        let dual_source =
+            build_split_app_live_service_bundle("dual_source", "dual-source.sora", "1.0.0")
+                .expect("build dual-ISA unpublished source");
+        let dual_admitted = dual_source
+            .into_admitted(BTreeMap::from([
+                (
+                    SoraInrouGuestIsaV1::X8664,
+                    sample_published_inrou_artifact(0xB1),
+                ),
+                (
+                    SoraInrouGuestIsaV1::Aarch64,
+                    sample_published_inrou_artifact(0xB2),
+                ),
+            ]))
+            .expect("publication must fill every source guest ISA");
+        let images = &dual_admitted
+            .container
+            .inrou
+            .as_ref()
+            .expect("dual-ISA admitted manifest")
+            .guest_images;
+        assert_eq!(images.len(), 2);
+        assert_eq!(
+            images[&SoraInrouGuestIsaV1::X8664].published_artifact,
+            sample_published_inrou_artifact(0xB1)
+        );
+        assert_eq!(
+            images[&SoraInrouGuestIsaV1::Aarch64].published_artifact,
+            sample_published_inrou_artifact(0xB2)
+        );
+    }
+    #[test]
+    fn unpublished_source_validation_reuses_common_container_rules() {
+        validate_unpublished_deployment_source(&canonical_taira_inrou_source_fixture())
+            .expect("canonical unpublished source must validate");
+        UnpublishedContainerManifestV1::from_non_inrou_manifest(
+            canonical_taira_inrou_bundle_fixture().container,
+        )
+        .expect_err("an admitted Inrou manifest must never be downgraded to a workspace draft");
+        let mut invalid = canonical_taira_inrou_source_fixture();
+        invalid.container.bundle_path.clear();
+        refresh_taira_source_container_reference(&mut invalid);
+        validate_unpublished_deployment_source(&invalid)
+            .expect_err("common container bundle-path validation must run before upload");
+
+        let mut missing_healthcheck = canonical_taira_inrou_source_fixture();
+        missing_healthcheck.container.lifecycle.healthcheck_path = None;
+        refresh_taira_source_container_reference(&mut missing_healthcheck);
+        validate_unpublished_deployment_source(&missing_healthcheck)
+            .expect_err("cross-manifest lifecycle validation must run before upload");
+    }
     #[test]
     fn taira_inrou_canary_validator_accepts_exact_v1_bundle() {
         let bundle = canonical_taira_inrou_bundle_fixture();
         validate_taira_inrou_canary_bundle(&bundle, MutationMode::Deploy)
             .expect("canonical Taira Inrou V1 bundle");
-        validate_taira_inrou_canary_source_bundle(&bundle)
+        let source = canonical_taira_inrou_source_fixture();
+        validate_taira_inrou_canary_source_bundle(&source)
             .expect("canonical Taira Inrou V1 source bundle");
     }
     #[test]
     fn taira_inrou_canary_source_rejects_valid_noncanonical_policy_values() {
-        let mut lifecycle = canonical_taira_inrou_bundle_fixture();
+        let mut lifecycle = canonical_taira_inrou_source_fixture();
         lifecycle.container.lifecycle.start_grace_secs =
             NonZeroU32::new(lifecycle.container.lifecycle.start_grace_secs.get() + 1)
                 .expect("nonzero lifecycle grace");
-        refresh_taira_container_reference(&mut lifecycle);
-        validate_taira_inrou_canary_bundle(&lifecycle, MutationMode::Deploy)
-            .expect("generic admission still accepts the alternate lifecycle");
+        refresh_taira_source_container_reference(&mut lifecycle);
+        validate_taira_inrou_canary_bundle(
+            &admit_taira_inrou_source(lifecycle.clone()),
+            MutationMode::Deploy,
+        )
+        .expect("generic admission still accepts the alternate lifecycle");
         validate_taira_inrou_canary_source_bundle(&lifecycle)
             .expect_err("release staging must reject an alternate lifecycle");
 
-        let mut rollout = canonical_taira_inrou_bundle_fixture();
+        let mut rollout = canonical_taira_inrou_source_fixture();
         rollout.service.rollout.health_window_secs =
             NonZeroU32::new(rollout.service.rollout.health_window_secs.get() + 1)
                 .expect("nonzero rollout window");
-        validate_taira_inrou_canary_bundle(&rollout, MutationMode::Deploy)
-            .expect("generic admission still accepts the alternate rollout policy");
+        validate_taira_inrou_canary_bundle(
+            &admit_taira_inrou_source(rollout.clone()),
+            MutationMode::Deploy,
+        )
+        .expect("generic admission still accepts the alternate rollout policy");
         validate_taira_inrou_canary_source_bundle(&rollout)
             .expect_err("release staging must reject an alternate rollout policy");
     }
@@ -17519,45 +19716,8 @@ mod tests {
         );
     }
     #[test]
-    fn taira_inrou_canary_requires_one_real_submitted_mutation() {
-        let hash = Hash::new(b"taira-inrou-v1-submitted-mutation");
-        let canonical_hash = json::to_value(&hash).expect("encode canonical transaction hash");
-        let submitted = norito::json!({
-            "submission_mode": "client_signed",
-            "submitted_tx_hash": (canonical_hash.clone()),
-        });
-        assert_eq!(
-            require_taira_inrou_submitted_mutation(&submitted)
-                .expect("one client-signed transaction is release evidence"),
-            canonical_hash.as_str().expect("hash JSON is a string")
-        );
-
-        for invalid in [
-            norito::json!({
-                "submission_mode": "client_signed_noop",
-                "submitted_tx_hash": null,
-            }),
-            norito::json!({
-                "submission_mode": "client_signed",
-                "submitted_tx_hash": null,
-            }),
-            norito::json!({
-                "submission_mode": "client_signed",
-                "submitted_tx_hash": "not-a-hash",
-            }),
-        ] {
-            assert!(
-                require_taira_inrou_submitted_mutation(&invalid).is_err(),
-                "no-op, absent, and malformed transaction evidence must fail"
-            );
-        }
-    }
-    #[test]
     fn taira_inrou_workspace_generator_emits_exact_private_deploy_layout() {
-        let temp = tempfile::Builder::new()
-            .prefix("taira-inrou-workspace-")
-            .tempdir_in("target")
-            .expect("target tempdir");
+        let temp = taira_test_tempdir("taira-inrou-workspace-");
         let kernel = temp.path().join("kernel.source");
         let rootfs = temp.path().join("rootfs.source");
         let initrd = temp.path().join("initrd.source");
@@ -17630,17 +19790,13 @@ mod tests {
             bundle_payload,
             canonical_taira_inrou_canary_bundle_payload().expect("canonical bundle")
         );
-        let container: SoraContainerManifestV1 =
+        let container: UnpublishedContainerManifestV1 =
             load_json(&output.join("container_manifest.json")).expect("generated container");
         let service: SoraServiceManifestV1 =
             load_json(&output.join("service_manifest.json")).expect("generated service");
-        let generated = SoraDeploymentBundleV1 {
-            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-            container,
-            service,
-        };
-        validate_taira_inrou_canary_bundle(&generated, MutationMode::Deploy)
-            .expect("generated deploy bundle is canonical");
+        let generated = UnpublishedDeploymentBundleV1 { container, service };
+        validate_taira_inrou_canary_source_bundle(&generated)
+            .expect("generated deploy source is canonical");
         assert_eq!(generated.container.bundle_hash, Hash::new(&bundle_payload));
         assert_eq!(
             receipt.bundle_hash,
@@ -17648,11 +19804,63 @@ mod tests {
         );
         assert_eq!(
             receipt.container_manifest_hash,
-            generated.container_manifest_hash().to_string()
+            generated
+                .container
+                .workspace_hash()
+                .expect("hash generated source container")
+                .to_string()
         );
         assert_eq!(
             receipt.service_manifest_hash,
-            generated.service_manifest_hash().to_string()
+            Hash::new(Encode::encode(&generated.service)).to_string()
+        );
+
+        let stage_dir = temp.path().join("stage");
+        let stage_key = soracloud_fixture_key_pair(0x6A);
+        let stage_receipt = stage_taira_inrou_canary_deployment(
+            crate::taira::InrouCanaryMode::Deploy,
+            &output.join("container_manifest.json"),
+            &output.join("service_manifest.json"),
+            &output.join("bundle.tgz"),
+            &stage_dir,
+            &stage_key,
+        )
+        .expect("consume strict-null Taira source into an admitted stage");
+        let staged = load_verified_taira_inrou_stage(&stage_dir, &stage_key, MutationMode::Deploy)
+            .expect("verify admitted Taira stage");
+        let mut stage_config = crate::fallback_config();
+        stage_config.key_pair = stage_key.clone();
+        let read_only_identity = load_taira_inrou_stage_identity(
+            &stage_config,
+            &stage_dir,
+            crate::taira::InrouCanaryMode::Deploy,
+        )
+        .expect("revalidate retained stage without mutation");
+        assert_eq!(
+            read_only_identity.container_manifest_hash,
+            stage_receipt.container_manifest_hash
+        );
+        assert_eq!(
+            read_only_identity.service_manifest_hash,
+            stage_receipt.service_manifest_hash
+        );
+        assert_eq!(read_only_identity.stage_mode, "deploy");
+        let published = &staged
+            .bundle
+            .container
+            .inrou
+            .as_ref()
+            .expect("staged Inrou manifest")
+            .guest_images[&SoraInrouGuestIsaV1::Aarch64]
+            .published_artifact;
+        assert_eq!(
+            published.manifest_digest_hex,
+            stage_receipt.guest_manifest_digest_hex
+        );
+        assert_eq!(published.content_cid, stage_receipt.guest_content_cid);
+        assert_eq!(
+            staged.bundle.service.container.manifest_hash,
+            Hash::new(Encode::encode(&staged.bundle.container))
         );
 
         #[cfg(unix)]
@@ -17686,10 +19894,7 @@ mod tests {
     fn taira_inrou_workspace_generator_rejects_linked_or_empty_assets_before_creation() {
         use std::os::unix::fs::symlink;
 
-        let temp = tempfile::Builder::new()
-            .prefix("taira-inrou-workspace-inputs-")
-            .tempdir_in("target")
-            .expect("target tempdir");
+        let temp = taira_test_tempdir("taira-inrou-workspace-inputs-");
         let kernel = temp.path().join("kernel.source");
         let linked_kernel = temp.path().join("kernel.link");
         let rootfs = temp.path().join("rootfs.source");
@@ -17731,12 +19936,6 @@ mod tests {
         validate_taira_inrou_canary_bundle_payload(&trailing)
             .expect_err("trailing archive bytes must fail");
     }
-    fn python3_available() -> bool {
-        Command::new("python3")
-            .arg("--version")
-            .output()
-            .is_ok_and(|output| output.status.success())
-    }
     fn taira_inrou_canary_python_command() -> Command {
         let mut command = Command::new("python3");
         command
@@ -17753,24 +19952,6 @@ mod tests {
     }
     #[test]
     fn taira_inrou_canary_python_server_rejects_missing_or_blank_version() {
-        let source = std::str::from_utf8(TAIRA_INROU_CANARY_SERVER_SOURCE_V1)
-            .expect("canonical Python source is UTF-8");
-        for required in [
-            "PORT",
-            "HTTP_SERVICE_NAME",
-            "SORACLOUD_REPLICA_SLOT",
-            "SORACLOUD_SERVICE_VERSION",
-        ] {
-            assert!(
-                source.contains(required),
-                "missing required input {required}"
-            );
-        }
-        if !python3_available() {
-            eprintln!("python3 unavailable; validated static Taira Inrou server inputs");
-            return;
-        }
-
         for blank_version in [false, true] {
             let mut command = taira_inrou_canary_python_command();
             command
@@ -17805,10 +19986,6 @@ mod tests {
     }
     #[test]
     fn taira_inrou_canary_python_server_emits_exact_health_identity() {
-        if !python3_available() {
-            eprintln!("python3 unavailable; skipping Taira Inrou server runtime smoke");
-            return;
-        }
         let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve loopback port");
         let port = reserved.local_addr().expect("reserved address").port();
         drop(reserved);
@@ -17897,12 +20074,11 @@ mod tests {
     fn taira_inrou_canary_validator_rejects_non_atomic_rollout() {
         let mut bundle = canonical_taira_inrou_bundle_fixture();
         bundle.service.rollout.canary_percent = 99;
-        assert_taira_canary_validation_error(&bundle, "rollout.canary_percent = 100");
+        assert_taira_canary_validation_error(&bundle, "use 0 or 100");
     }
     #[test]
     fn taira_inrou_canary_validator_accepts_published_v1_bundle() {
         let mut bundle = canonical_taira_inrou_bundle_fixture();
-        let digest_hex = "ab".repeat(32);
         bundle
             .container
             .inrou
@@ -17911,14 +20087,12 @@ mod tests {
             .guest_images
             .get_mut(&SoraInrouGuestIsaV1::Aarch64)
             .expect("AArch64 image")
-            .published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
-            manifest_digest_hex: digest_hex.clone(),
+            .published_artifact = SoraPublishedInrouGuestImageArtifactV1 {
+            manifest_digest_hex: "ab".repeat(32),
             content_cid: encode_content_cid(&sorafs_manifest::canonical_manifest_root_cid(
                 [0xAB; 32],
             )),
-            manifest_id_hex: Some(digest_hex),
-            distribution: SoraArtifactDistributionPolicyV1::default(),
-        });
+        };
         refresh_taira_container_reference(&mut bundle);
         validate_taira_inrou_canary_bundle(&bundle, MutationMode::Deploy)
             .expect("canonical published Taira Inrou V1 bundle");
@@ -17948,26 +20122,19 @@ mod tests {
         assert_taira_canary_validation_error(&env_bundle, "requires exactly");
     }
     #[test]
-    fn taira_inrou_canary_validator_rejects_guest_access_and_path_drift() {
-        let mut ssh = canonical_taira_inrou_bundle_fixture();
-        ssh.container
-            .inrou
-            .as_mut()
-            .expect("Inrou manifest")
-            .ssh_authorized_keys
-            .push("ssh-ed25519 AAAATEST taira-canary".to_owned());
-        refresh_taira_container_reference(&mut ssh);
-        assert_taira_canary_validation_error(&ssh, "SSH access");
-
-        let mut bootstrap = canonical_taira_inrou_bundle_fixture();
-        bootstrap
-            .container
-            .inrou
-            .as_mut()
-            .expect("Inrou manifest")
-            .bootstrap_user_data_path = Some("/inrou/bootstrap.yml".to_owned());
-        refresh_taira_container_reference(&mut bootstrap);
-        assert_taira_canary_validation_error(&bootstrap, "bootstrap user-data");
+    fn taira_inrou_canary_rejects_retired_ssh_field_and_path_drift() {
+        let mut retired_ssh = json::to_value(&canonical_taira_inrou_bundle_fixture().container)
+            .expect("encode canonical canary container");
+        retired_ssh
+            .get_mut("inrou")
+            .and_then(json::Value::as_object_mut)
+            .expect("encoded Inrou manifest")
+            .insert(
+                "ssh_authorized_keys".to_owned(),
+                norito::json!(["ssh-ed25519 AAAATEST taira-canary"]),
+            );
+        json::from_value::<SoraContainerManifestV1>(retired_ssh)
+            .expect_err("the retired first-release SSH field must be rejected");
 
         let mut guest_path = canonical_taira_inrou_bundle_fixture();
         guest_path
@@ -17980,7 +20147,10 @@ mod tests {
             .expect("AArch64 image")
             .rootfs_image_path = "/inrou/aarch64/other.ext4".to_owned();
         refresh_taira_container_reference(&mut guest_path);
-        assert_taira_canary_validation_error(&guest_path, "exact globally distributed AArch64");
+        assert_taira_canary_validation_error(
+            &guest_path,
+            "each ISA must use its exact /inrou/<isa>/vmlinux",
+        );
     }
     #[test]
     fn taira_inrou_canary_validator_rejects_storage_geometry_drift() {
@@ -18085,10 +20255,7 @@ mod tests {
     }
     #[test]
     fn taira_stage_regular_file_read_enforces_exact_byte_limit() {
-        let temp = tempfile::Builder::new()
-            .prefix("taira-stage-read-limit-")
-            .tempdir_in("target")
-            .expect("target tempdir");
+        let temp = taira_test_tempdir("taira-stage-read-limit-");
         let source = temp.path().join("source.bin");
         fs::write(&source, [1_u8, 2, 3, 4]).expect("write boundary source");
         assert_eq!(
@@ -18121,10 +20288,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn taira_streaming_plan_matches_canonical_eager_directory_plan() {
-        let temp = tempfile::Builder::new()
-            .prefix("taira-streaming-plan-")
-            .tempdir_in("target")
-            .expect("target tempdir");
+        let temp = taira_test_tempdir("taira-streaming-plan-");
         let aarch64 = temp.path().join("aarch64");
         fs::create_dir(&aarch64).expect("aarch64 directory");
         fs::write(aarch64.join("initrd.img"), vec![0x11; 333_333]).expect("initrd");
@@ -18147,10 +20311,7 @@ mod tests {
     #[test]
     fn taira_stage_creation_rejects_symlinked_intermediate_parent() {
         use std::os::unix::fs::symlink;
-        let temp = tempfile::Builder::new()
-            .prefix("taira-stage-parent-")
-            .tempdir_in("target")
-            .expect("target tempdir");
+        let temp = taira_test_tempdir("taira-stage-parent-");
         let real_parent = temp.path().join("real");
         fs::create_dir(&real_parent).expect("real parent");
         let linked_parent = temp.path().join("linked");
@@ -18163,7 +20324,7 @@ mod tests {
         );
         assert!(!real_parent.join("stage").exists());
     }
-    const STATIC_ASSETS_V1: [&str; 22] = [
+    const STATIC_ASSETS_V1: [&str; 21] = [
         include_str!("soracloud/assets/v1/tests/http_local.sh"),
         include_str!("soracloud/assets/v1/tests/exit_130.sh"),
         include_str!("soracloud/assets/v1/tests/http_build_sync.sh"),
@@ -18173,7 +20334,6 @@ mod tests {
         include_str!("soracloud/assets/v1/tests/exit_130.sh"),
         include_str!("soracloud/assets/v1/tests/app_build_sync.sh"),
         include_str!("soracloud/assets/v1/tests/app_release.sh"),
-        include_str!("soracloud/assets/v1/tests/app_upgrade.sh"),
         include_str!("soracloud/assets/v1/tests/split_release_build.sh"),
         include_str!("soracloud/assets/v1/tests/inrou_reuse_build.sh"),
         concat!(
@@ -18675,9 +20835,12 @@ mod tests {
     #[test]
     fn generated_http_service_build_uses_offline_canonical_bundle_packer() {
         let script = http_service_build_sh("service.tgz");
-        assert!(script.contains("IROHA_CARGO=(cargo)"));
         assert!(script.contains("IROHA_BIN"));
-        assert!(script.contains("IROHA_MANIFEST_PATH"));
+        assert!(script.contains("IROHA_BIN_SHA256"));
+        assert!(script.contains("must be an absolute, executable, non-symlinked regular file"));
+        assert!(!script.contains("IROHA_MANIFEST_PATH"));
+        assert!(!script.contains("IROHA_SOURCE_DIR"));
+        assert!(!script.contains("cargo run"));
         assert!(script.contains("\"${IROHA_CMD[@]}\" soracloud service bundle-pack"));
         assert!(script.contains("--source \"$SCRIPT_DIR/app/server.mjs\""));
         assert!(script.contains("--archive-path \"app/server.mjs\""));
@@ -18686,6 +20849,22 @@ mod tests {
         assert!(!script.contains("tar -czf"));
         assert!(!script.contains("STAGING_DIR"));
         assert!(!script.contains("rm -rf"));
+    }
+    #[test]
+    fn generated_contract_builds_require_digest_qualified_koto_binary() {
+        for script in [
+            hayahi_app_build_sh(),
+            single_api_api_build_sh(),
+            single_api_api_verify_build_sh(),
+            split_app_vault_build_sh(),
+            split_app_vault_verify_build_sh(),
+        ] {
+            assert!(script.contains("KOTO_BIN must name the absolute"));
+            assert!(script.contains("KOTO_BIN_SHA256"));
+            assert!(script.contains("operator-qualified same-revision SHA-256"));
+            assert!(!script.contains("command -v koto"));
+            assert!(!script.contains("cargo run"));
+        }
     }
     #[test]
     fn bundle_pack_parses_as_offline_service_command() {
@@ -18717,6 +20896,213 @@ mod tests {
         assert!(parsed.command.allows_fallback_config());
     }
     #[test]
+    fn protected_status_commands_never_allow_offline_fallback_identity() {
+        use clap::Parser as _;
+        #[derive(clap::Parser)]
+        struct SoracloudParser {
+            #[command(subcommand)]
+            command: super::Command,
+        }
+        for command in [
+            vec!["soracloud", "app", "status"],
+            vec!["soracloud", "service", "status"],
+            vec!["soracloud", "agent", "status"],
+            vec![
+                "soracloud",
+                "model",
+                "training-job-status",
+                "--service-name",
+                "trainer",
+                "--job-id",
+                "job1",
+            ],
+            vec![
+                "soracloud",
+                "hf",
+                "status",
+                "--repo-id",
+                "openai/gpt-oss",
+                "--revision",
+                TEST_HF_COMMIT_OID,
+                "--storage-class",
+                "warm",
+                "--lease-term-ms",
+                "60000",
+            ],
+        ] {
+            let parsed = SoracloudParser::try_parse_from(&command)
+                .unwrap_or_else(|error| panic!("failed to parse {command:?}: {error}"));
+            assert!(
+                !parsed.command.allows_fallback_config(),
+                "protected command {command:?} must require a real client configuration"
+            );
+        }
+    }
+    #[test]
+    fn hf_cli_requires_explicit_v1_model_and_storage_inputs() {
+        use clap::Parser as _;
+
+        #[derive(clap::Parser, Debug)]
+        struct HfParser {
+            #[command(subcommand)]
+            command: HfCommand,
+        }
+        let asset_definition = hf_shared_lease_asset_definition().to_string();
+        let deploy = [
+            "hf",
+            "deploy",
+            "--repo-id",
+            "openai/gpt-oss",
+            "--revision",
+            TEST_HF_COMMIT_OID,
+            "--model-name",
+            "gpt-oss",
+            "--service-name",
+            "hf_service",
+            "--storage-class",
+            "warm",
+            "--lease-term-ms",
+            "60000",
+            "--lease-asset-definition",
+            asset_definition.as_str(),
+            "--base-fee",
+            "1",
+        ];
+        HfParser::try_parse_from(deploy).expect("parse explicit HF deploy V1 inputs");
+
+        let without_model = deploy
+            .into_iter()
+            .filter(|value| !matches!(*value, "--model-name" | "gpt-oss"))
+            .collect::<Vec<_>>();
+        HfParser::try_parse_from(without_model)
+            .expect_err("HF deploy must not synthesize model_name from repo_id");
+        let without_storage = deploy
+            .into_iter()
+            .filter(|value| !matches!(*value, "--storage-class" | "warm"))
+            .collect::<Vec<_>>();
+        HfParser::try_parse_from(without_storage)
+            .expect_err("HF deploy must not default storage_class");
+
+        for command in ["status", "lease-leave"] {
+            HfParser::try_parse_from([
+                "hf",
+                command,
+                "--repo-id",
+                "openai/gpt-oss",
+                "--revision",
+                TEST_HF_COMMIT_OID,
+                "--lease-term-ms",
+                "60000",
+            ])
+            .expect_err("HF status and leave must require explicit storage_class");
+        }
+        let renew = [
+            "hf",
+            "lease-renew",
+            "--repo-id",
+            "openai/gpt-oss",
+            "--revision",
+            TEST_HF_COMMIT_OID,
+            "--model-name",
+            "gpt-oss",
+            "--service-name",
+            "hf_service",
+            "--storage-class",
+            "warm",
+            "--lease-term-ms",
+            "60000",
+            "--lease-asset-definition",
+            asset_definition.as_str(),
+            "--base-fee",
+            "1",
+        ];
+        HfParser::try_parse_from(renew).expect("parse explicit HF renew V1 inputs");
+        let without_model = renew
+            .into_iter()
+            .filter(|value| !matches!(*value, "--model-name" | "gpt-oss"))
+            .collect::<Vec<_>>();
+        HfParser::try_parse_from(without_model)
+            .expect_err("HF renew must not synthesize model_name from repo_id");
+        let without_storage = renew
+            .into_iter()
+            .filter(|value| !matches!(*value, "--storage-class" | "warm"))
+            .collect::<Vec<_>>();
+        HfParser::try_parse_from(without_storage)
+            .expect_err("HF renew must not default storage_class");
+    }
+    #[test]
+    fn hf_cli_identity_parsers_reject_normalization_and_trim_aliases() {
+        assert_eq!(
+            parse_hf_model_name_arg("gpt_oss").expect("canonical HF model name"),
+            "gpt_oss"
+        );
+        assert_eq!(
+            parse_hf_service_name_arg("café").expect("canonical NFC service name"),
+            "café"
+        );
+        assert_eq!(
+            parse_hf_apartment_name_arg(Some("ops_agent")).expect("canonical apartment name"),
+            Some("ops_agent".to_owned())
+        );
+        for noncanonical in [" gpt_oss", "gpt_oss ", "gpt oss"] {
+            parse_hf_model_name_arg(noncanonical)
+                .expect_err("HF model-name whitespace aliases must fail");
+        }
+        for noncanonical in [" café", "cafe\u{301}"] {
+            parse_hf_service_name_arg(noncanonical)
+                .expect_err("service-name trim and NFC aliases must fail");
+        }
+        for noncanonical in [" ops_agent", "ops_agent "] {
+            parse_hf_apartment_name_arg(Some(noncanonical))
+                .expect_err("apartment-name trim aliases must fail");
+        }
+        parse_asset_definition_arg(
+            "--lease-asset-definition",
+            &format!(" {}", hf_shared_lease_asset_definition()),
+        )
+        .expect_err("lease asset surrounding whitespace must fail");
+        parse_hf_account_id_arg(Some(" account"))
+            .expect_err("account surrounding whitespace must fail before parsing");
+    }
+    #[test]
+    fn signed_soracloud_cli_helpers_reject_exact_input_drift() {
+        assert_eq!(
+            parse_exact_name_arg("--service-name", "café").expect("canonical NFC name"),
+            "café"
+        );
+        assert_eq!(
+            parse_service_material_name_arg("--config-name", "runtime/config")
+                .expect("canonical material name"),
+            "runtime/config"
+        );
+        assert_eq!(
+            parse_training_identifier_arg("--job-id", "job-1")
+                .expect("canonical training identifier"),
+            "job-1"
+        );
+        assert_eq!(
+            require_exact_nonempty_arg("--run-label", "nightly-run").expect("canonical exact text"),
+            "nightly-run"
+        );
+
+        for noncanonical in [" café", "cafe\u{301}", "café "] {
+            parse_exact_name_arg("--service-name", noncanonical)
+                .expect_err("Name trim and NFC aliases must fail");
+        }
+        for noncanonical in [" config", "config ", "/config", "a/../config"] {
+            parse_service_material_name_arg("--config-name", noncanonical)
+                .expect_err("material-name aliases must fail");
+        }
+        for noncanonical in [" job-1", "job-1 ", "job 1", "jób-1"] {
+            parse_training_identifier_arg("--job-id", noncanonical)
+                .expect_err("training identifier aliases must fail");
+        }
+        for noncanonical in [" nightly-run", "nightly-run ", "nightly\nrun"] {
+            require_exact_nonempty_arg("--run-label", noncanonical)
+                .expect_err("exact text aliases must fail");
+        }
+    }
+    #[test]
     fn app_init_template_accepts_only_canonical_v1_names() {
         use clap::ValueEnum as _;
 
@@ -18732,6 +21118,53 @@ mod tests {
             AppInitTemplate::from_str("nexus-split-app", false).is_err(),
             "first-release CLI must reject the retired template alias"
         );
+    }
+    #[test]
+    fn app_cli_exposes_only_the_mandatory_release_mutation_path() {
+        use clap::Parser as _;
+
+        #[derive(clap::Parser)]
+        struct AppParser {
+            #[command(subcommand)]
+            command: AppCommand,
+        }
+
+        for retired in ["deploy", "upgrade"] {
+            assert!(
+                AppParser::try_parse_from(["app", retired]).is_err(),
+                "direct app mutation command `{retired}` must not be part of V1"
+            );
+        }
+        assert!(
+            AppParser::try_parse_from([
+                "app",
+                "release",
+                "--manifest",
+                "app_manifest.json",
+                "--torii-url",
+                "http://127.0.0.1:8080",
+                "--skip-build",
+            ])
+            .is_err(),
+            "V1 app release must reject the retired build bypass"
+        );
+        assert!(
+            AppParser::try_parse_from([
+                "app",
+                "doctor",
+                "--manifest",
+                "app_manifest.json",
+                "--dry-run",
+            ])
+            .is_err(),
+            "V1 app doctor has no advertised dry-run mode"
+        );
+    }
+    #[test]
+    fn skipped_app_phases_are_never_reported_ok() {
+        let phase = skipped_app_phase("verify", "not executed");
+        assert!(phase.skipped);
+        assert!(!phase.ok);
     }
     #[test]
     fn positive_quantity_parser_accepts_exact_sub_nano_and_wide_values() {
@@ -18872,9 +21305,912 @@ mod tests {
         load_json(&workspace_fixture(DEFAULT_AGENT_APARTMENT_MANIFEST))
             .expect("agent apartment fixture")
     }
+    fn agent_apartment_status_fixture(
+        apartment_name: &str,
+        last_active_sequence: u64,
+    ) -> AgentApartmentStatusEntryV1 {
+        AgentApartmentStatusEntryV1 {
+            apartment_name: apartment_name.parse().expect("canonical apartment name"),
+            manifest_hash: Hash::new(format!("{apartment_name}:manifest").as_bytes()),
+            status: SoraAgentRuntimeStatusV1::Running,
+            lease_started_sequence: 1,
+            lease_expires_sequence: 1_000,
+            lease_remaining_ticks: 1_000_u64.saturating_sub(last_active_sequence),
+            restart_count: 0,
+            state_quota_bytes: 4_096,
+            tool_capability_count: 1,
+            policy_capability_count: 1,
+            revoked_policy_capability_count: 0,
+            pending_wallet_request_count: 0,
+            pending_mailbox_message_count: 0,
+            autonomy_budget_ceiling_units: 100,
+            autonomy_budget_remaining_units: 90,
+            artifact_allowlist_count: 0,
+            autonomy_run_count: 0,
+            process_generation: 1,
+            process_started_sequence: 1,
+            last_active_sequence,
+            last_checkpoint_sequence: None,
+            checkpoint_count: 0,
+            persistent_state_total_bytes: 0,
+            persistent_state_key_count: 0,
+            spend_limit_count: 1,
+            upgrade_policy: AgentUpgradePolicyV1::Governed,
+            last_restart_sequence: None,
+            last_restart_reason: None,
+        }
+    }
+    fn agent_status_fixture(apartments: Vec<AgentApartmentStatusEntryV1>) -> json::Value {
+        json::to_value(&AgentStatusResponseV1 {
+            schema_version: SORACLOUD_STATUS_SCHEMA_VERSION_V1,
+            apartment_count: u32::try_from(apartments.len()).expect("fixture count"),
+            event_count: 3,
+            apartments,
+        })
+        .expect("encode exact agent status fixture")
+    }
+    fn mailbox_message_fixture(
+        message_id: &str,
+        from_apartment: &str,
+        channel: &str,
+        payload: &str,
+        enqueued_sequence: u64,
+    ) -> AgentMailboxMessageEntryV1 {
+        AgentMailboxMessageEntryV1 {
+            message_id: message_id.to_owned(),
+            from_apartment: from_apartment.parse().expect("canonical sender apartment"),
+            channel: channel.to_owned(),
+            payload: payload.to_owned(),
+            payload_hash: Hash::new(payload.as_bytes()),
+            enqueued_sequence,
+        }
+    }
+    fn mailbox_status_fixture(messages: Vec<AgentMailboxMessageEntryV1>) -> json::Value {
+        json::to_value(&AgentMailboxStatusResponseV1 {
+            schema_version: SORACLOUD_STATUS_SCHEMA_VERSION_V1,
+            apartment_name: "worker_agent".parse().expect("canonical apartment name"),
+            status: SoraAgentRuntimeStatusV1::Running,
+            pending_message_count: u32::try_from(messages.len()).expect("fixture count"),
+            event_count: 4,
+            messages,
+        })
+        .expect("encode exact mailbox status fixture")
+    }
+    fn autonomy_status_fixture() -> AgentAutonomyStatusResponseV1 {
+        AgentAutonomyStatusResponseV1 {
+            apartment_name: "ops_agent".parse().expect("canonical apartment name"),
+            sequence: 10,
+            status: SoraAgentRuntimeStatusV1::Running,
+            lease_expires_sequence: 100,
+            lease_remaining_ticks: 90,
+            manifest_hash: Hash::new(b"agent autonomy manifest"),
+            revoked_policy_capability_count: 0,
+            budget_ceiling_units: 100,
+            budget_remaining_units: 90,
+            allowlist_count: 1,
+            run_count: 1,
+            process_generation: 1,
+            process_started_sequence: 1,
+            last_active_sequence: 10,
+            last_checkpoint_sequence: None,
+            checkpoint_count: 0,
+            persistent_state_total_bytes: 0,
+            persistent_state_key_count: 0,
+            allowlist: vec![AgentAutonomyAllowlistEntryV1 {
+                artifact_hash: "hash:agent-artifact#1".to_owned(),
+                provenance_hash: None,
+                added_sequence: 2,
+            }],
+            recent_runs: vec![AgentAutonomyRunStatusRecordV1 {
+                run_id: "ops_agent:autonomy:9".to_owned(),
+                artifact_hash: "hash:agent-artifact#1".to_owned(),
+                provenance_hash: None,
+                budget_units: 10,
+                run_label: "fixture".to_owned(),
+                workflow_input_json: None,
+                approved_sequence: 9,
+                authoritative_runtime_receipt: None,
+                authoritative_execution_audit: None,
+            }],
+        }
+    }
+    fn hf_status_fixture() -> HfSharedLeaseStatusResponseV1 {
+        HfSharedLeaseStatusResponseV1 {
+            schema_version: SORACLOUD_STATUS_SCHEMA_VERSION_V1,
+            source: SoraHfSourceRecordV1 {
+                schema_version: 1,
+                source_id: iroha::data_model::soracloud::derive_hf_source_id_v1(
+                    "openai/gpt-oss",
+                    TEST_HF_COMMIT_OID,
+                )
+                .expect("canonical HF source id"),
+                repo_id: "openai/gpt-oss".to_owned(),
+                resolved_revision: TEST_HF_COMMIT_OID.to_owned(),
+                model_name: "gpt-oss".to_owned(),
+                adapter_id: "transformers".to_owned(),
+                normalized_runtime_hash: Hash::new(b"normalized HF runtime"),
+                resource_profile: None,
+                status: iroha::data_model::soracloud::SoraHfSourceStatusV1::PendingImport,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+                last_error: None,
+            },
+            runtime_projection: None,
+            pool: None,
+            member: None,
+            placement: None,
+            latest_audit_event: None,
+            audit_event_count: 0,
+            storage_base_fee: Quantity::zero(),
+            compute_reservation_fee: Quantity::zero(),
+            eligible_host_count: 0,
+            warm_host_count: 0,
+            importer_pending: true,
+        }
+    }
+    fn app_infra_status_fixture() -> AppInfraStatusResponseV1 {
+        app_infra_status_fixture_for_name("test_app")
+    }
+    fn app_infra_status_fixture_for_name(app_name: &str) -> AppInfraStatusResponseV1 {
+        let container = fixture_container();
+        let mut service = fixture_service();
+        service.container.manifest_hash = Hash::new(Encode::encode(&container));
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+        let manifest = SoraAppInfraManifestV1 {
+            schema_version: SORA_APP_INFRA_MANIFEST_VERSION_V1,
+            app_name: app_name.parse().expect("canonical app name"),
+            app_version: "1.0.0".to_owned(),
+            public_url: "https://test.invalid".to_owned(),
+            static_site: None,
+            services: vec![
+                build_app_infra_service_ref(&bundle).expect("canonical app service reference"),
+            ],
+        };
+        let manifest_hash = manifest.manifest_hash();
+        let app_name = manifest.app_name.clone();
+        let key_pair = soracloud_fixture_key_pair(0x73);
+        AppInfraStatusResponseV1 {
+            schema_version: SORACLOUD_STATUS_SCHEMA_VERSION_V1,
+            app_count: 1,
+            audit_event_count: 1,
+            apps: vec![SoraAppInfraStateV1 {
+                schema_version: 1,
+                app_name: app_name.clone(),
+                current_app_version: manifest.app_version.clone(),
+                current_manifest_hash: manifest_hash,
+                revision_count: 1,
+                deployed_sequence: 1,
+                updated_sequence: 1,
+                manifest,
+            }],
+            recent_audit_events: vec![SoraAppInfraAuditEventV1 {
+                schema_version: 1,
+                sequence: 1,
+                action: iroha::data_model::soracloud::SoraAppInfraActionV1::Deploy,
+                app_name,
+                from_version: None,
+                to_version: "1.0.0".to_owned(),
+                app_manifest_hash: manifest_hash,
+                service_count: 1,
+                signer: key_pair.public_key().clone(),
+            }],
+        }
+    }
+    fn service_config_status_fixture(
+        service_name: &str,
+        config_name: &str,
+    ) -> ServiceConfigStatusResponseV1 {
+        let value_json = norito::json!({"enabled": true});
+        let value_hash = SoraServiceConfigEntryV1 {
+            schema_version: SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
+            config_name: config_name.to_owned(),
+            value_json: Json::from(value_json.clone()),
+            value_hash: Hash::new(b"placeholder"),
+            last_update_sequence: 1,
+        }
+        .canonical_value_hash()
+        .expect("canonical config value hash");
+        ServiceConfigStatusResponseV1 {
+            schema_version: SORACLOUD_STATUS_SCHEMA_VERSION_V1,
+            service_name: service_name.parse().expect("canonical service name"),
+            current_version: "1.0.0".to_owned(),
+            config_generation: 1,
+            config_entry_count: 1,
+            configs: vec![ServiceConfigStatusEntryV1 {
+                config_name: config_name.to_owned(),
+                value_hash,
+                value_json,
+                last_update_sequence: 1,
+            }],
+        }
+    }
+    fn service_secret_status_fixture(
+        service_name: &str,
+        secret_name: &str,
+    ) -> ServiceSecretStatusResponseV1 {
+        ServiceSecretStatusResponseV1 {
+            schema_version: SORACLOUD_STATUS_SCHEMA_VERSION_V1,
+            service_name: service_name.parse().expect("canonical service name"),
+            current_version: "1.0.0".to_owned(),
+            secret_generation: 1,
+            secret_entry_count: 1,
+            secrets: vec![ServiceSecretStatusEntryV1 {
+                secret_name: secret_name.to_owned(),
+                encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
+                key_id: "kms/test".to_owned(),
+                key_version: 1,
+                commitment: Hash::new(b"secret commitment"),
+                ciphertext_bytes: 32,
+                last_update_sequence: 1,
+            }],
+        }
+    }
+    fn training_job_status_fixture(
+        service_name: &str,
+        job_id: &str,
+    ) -> TrainingJobStatusResponseV1 {
+        TrainingJobStatusResponseV1 {
+            schema_version: SORACLOUD_STATUS_SCHEMA_VERSION_V1,
+            job: TrainingJobStatusEntryV1 {
+                service_name: service_name.parse().expect("canonical service name"),
+                model_name: "fare-model".parse().expect("canonical model name"),
+                job_id: job_id.to_owned(),
+                status: SoraTrainingJobStatusV1::Running,
+                worker_group_size: 1,
+                target_steps: 100,
+                completed_steps: 10,
+                checkpoint_interval_steps: 10,
+                last_checkpoint_step: Some(10),
+                checkpoint_count: 1,
+                retry_count: 0,
+                max_retries: 3,
+                step_compute_units: 10,
+                compute_budget_units: 1_000,
+                compute_consumed_units: 100,
+                compute_remaining_units: 900,
+                storage_budget_bytes: 1_024,
+                storage_consumed_bytes: 64,
+                storage_remaining_bytes: 960,
+                latest_metrics_hash: Some(Hash::new(b"metrics")),
+                last_failure_reason: None,
+                created_sequence: 1,
+                updated_sequence: 2,
+            },
+        }
+    }
+    fn model_artifact_status_fixture(
+        service_name: &str,
+        training_job_id: &str,
+    ) -> ModelArtifactStatusResponseV1 {
+        let artifact = ModelArtifactStatusEntryV1 {
+            service_name: service_name.parse().expect("canonical service name"),
+            model_name: "fare-model".parse().expect("canonical model name"),
+            artifact_id: training_job_id.to_owned(),
+            training_job_id: training_job_id.to_owned(),
+            weight_version: None,
+            weight_artifact_hash: Hash::new(b"weights"),
+            dataset_ref: "dataset:v1".to_owned(),
+            training_config_hash: Hash::new(b"training config"),
+            reproducibility_hash: Hash::new(b"reproducibility"),
+            provenance_attestation_hash: Hash::new(b"provenance"),
+            registered_sequence: 2,
+            consumed_by_version: None,
+            chunk_manifest_root: None,
+        };
+        ModelArtifactStatusResponseV1 {
+            schema_version: SORACLOUD_STATUS_SCHEMA_VERSION_V1,
+            service_name: artifact.service_name.clone(),
+            model_name: artifact.model_name.clone(),
+            artifact_count: 1,
+            artifact: artifact.clone(),
+            artifacts: vec![artifact],
+        }
+    }
+    fn model_weight_status_fixture(
+        service_name: &str,
+        model_name: &str,
+    ) -> ModelWeightStatusResponseV1 {
+        ModelWeightStatusResponseV1 {
+            schema_version: SORACLOUD_STATUS_SCHEMA_VERSION_V1,
+            model: ModelWeightStatusEntryV1 {
+                service_name: service_name.parse().expect("canonical service name"),
+                model_name: model_name.parse().expect("canonical model name"),
+                current_version: Some("v1".to_owned()),
+                version_count: 1,
+                versions: vec![ModelWeightVersionEntryV1 {
+                    weight_version: "v1".to_owned(),
+                    parent_version: None,
+                    training_job_id: "job-1".to_owned(),
+                    weight_artifact_hash: Hash::new(b"weights"),
+                    dataset_ref: "dataset:v1".to_owned(),
+                    training_config_hash: Hash::new(b"training config"),
+                    reproducibility_hash: Hash::new(b"reproducibility"),
+                    provenance_attestation_hash: Hash::new(b"provenance"),
+                    registered_sequence: 2,
+                    promoted_sequence: Some(3),
+                    gate_report_hash: Some(Hash::new(b"gate report")),
+                }],
+            },
+        }
+    }
+    fn model_host_status_fixture() -> ModelHostStatusResponseV1 {
+        let validator_public_key = soracloud_fixture_key_pair(0x78).public_key().clone();
+        let validator_account_id = AccountId::new(validator_public_key.clone());
+        let host = SoraModelHostCapabilityRecordV1 {
+            schema_version: SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
+            validator_account_id: validator_account_id.clone(),
+            peer_id: iroha::data_model::peer::PeerId::from(validator_public_key).to_string(),
+            supported_backends: BTreeSet::from([SoraHfBackendFamilyV1::Transformers]),
+            supported_formats: BTreeSet::from([SoraHfModelFormatV1::Safetensors]),
+            max_model_bytes: 1_024,
+            max_disk_cache_bytes: 2_048,
+            max_ram_bytes: 2_048,
+            max_vram_bytes: 0,
+            max_concurrent_resident_models: 1,
+            host_class: "cpu.small".to_owned(),
+            advertised_at_ms: 1,
+            heartbeat_expires_at_ms: 2,
+        };
+        ModelHostStatusResponseV1 {
+            schema_version: SORACLOUD_STATUS_SCHEMA_VERSION_V1,
+            validator_account_id: Some(validator_account_id),
+            active_host_count: 1,
+            hosts: vec![host],
+        }
+    }
     fn soracloud_fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid Soracloud keypair")
+    }
+    #[test]
+    fn agent_status_v1_is_closed_and_rejects_duplicate_apartments() {
+        let apartment = agent_apartment_status_fixture("ops_agent", 10);
+        let canonical = agent_status_fixture(vec![apartment.clone()]);
+        decode_agent_status(&canonical).expect("decode exact agent status V1");
+
+        let mut unknown_root = canonical.clone();
+        unknown_root
+            .as_object_mut()
+            .expect("agent status object")
+            .insert("legacy_apartments".to_owned(), json::Value::Null);
+        let _ = decode_agent_status(&unknown_root).expect_err("unknown root field must fail");
+
+        let mut unknown_apartment = canonical.clone();
+        unknown_apartment
+            .get_mut("apartments")
+            .and_then(json::Value::as_array_mut)
+            .and_then(|apartments| apartments.first_mut())
+            .and_then(json::Value::as_object_mut)
+            .expect("agent apartment object")
+            .insert("legacy_runtime".to_owned(), json::Value::Null);
+        let _ =
+            decode_agent_status(&unknown_apartment).expect_err("unknown apartment field must fail");
+
+        let mut missing_apartment_field = canonical.clone();
+        missing_apartment_field
+            .get_mut("apartments")
+            .and_then(json::Value::as_array_mut)
+            .and_then(|apartments| apartments.first_mut())
+            .and_then(json::Value::as_object_mut)
+            .expect("agent apartment object")
+            .remove("last_checkpoint_sequence");
+        let _ = decode_agent_status(&missing_apartment_field)
+            .expect_err("required nullable apartment field must not be omitted");
+
+        let duplicate = agent_status_fixture(vec![apartment.clone(), apartment]);
+        let error = decode_agent_status(&duplicate).expect_err("duplicate apartment must fail");
+        assert!(error.to_string().contains("duplicate apartment"), "{error}");
+    }
+    #[test]
+    fn mailbox_status_v1_selects_exactly_one_new_matching_message() {
+        let old = mailbox_message_fixture(
+            "worker_agent:mail:2",
+            "ops_agent",
+            "ops.sync",
+            "rotate-key-42",
+            2,
+        );
+        let new = mailbox_message_fixture(
+            "worker_agent:mail:3",
+            "ops_agent",
+            "ops.sync",
+            "rotate-key-42",
+            3,
+        );
+        let before = mailbox_status_fixture(vec![old.clone()]);
+        let known = mailbox_message_ids(&before).expect("decode baseline message ids");
+        let after = mailbox_status_fixture(vec![old, new.clone()]);
+        let selected = new_mailbox_message_from_status(
+            &after,
+            &known,
+            "ops_agent",
+            "ops.sync",
+            "rotate-key-42",
+        )
+        .expect("select the one new matching message");
+        assert_eq!(selected.message_id, new.message_id);
+
+        let key_pair = soracloud_fixture_key_pair(0x74);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let output = build_message_send_output(
+            mock_soracloud_submission_receipt(&authority, &key_pair),
+            &after,
+            &known,
+            "ops_agent",
+            "ops.sync",
+            "rotate-key-42",
+        )
+        .expect("build exact message send output");
+        assert_eq!(
+            output.get("message_id").and_then(json::Value::as_str),
+            Some("worker_agent:mail:3")
+        );
+
+        let ambiguous = mailbox_status_fixture(vec![
+            mailbox_message_fixture(
+                "worker_agent:mail:2",
+                "ops_agent",
+                "ops.sync",
+                "rotate-key-42",
+                2,
+            ),
+            new,
+            mailbox_message_fixture(
+                "worker_agent:mail:4",
+                "ops_agent",
+                "ops.sync",
+                "rotate-key-42",
+                4,
+            ),
+        ]);
+        let error = new_mailbox_message_from_status(
+            &ambiguous,
+            &known,
+            "ops_agent",
+            "ops.sync",
+            "rotate-key-42",
+        )
+        .expect_err("multiple new matching messages must fail");
+        assert!(
+            error.to_string().contains("multiple newly enqueued"),
+            "{error}"
+        );
+    }
+    #[test]
+    fn mailbox_status_v1_is_closed_and_ack_requires_exact_removal() {
+        let message =
+            mailbox_message_fixture("worker_agent:mail:7", "ops_agent", "ops.sync", "ack-me", 7);
+        let before = mailbox_status_fixture(vec![message]);
+        let after = mailbox_status_fixture(Vec::new());
+        let key_pair = soracloud_fixture_key_pair(0x75);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let _ = build_message_ack_output(
+            mock_soracloud_submission_receipt(&authority, &key_pair),
+            &before,
+            &after,
+            "worker_agent:mail:7",
+        )
+        .expect("acknowledged message must be absent after mutation");
+        let _ = build_message_ack_output(
+            mock_soracloud_submission_receipt(&authority, &key_pair),
+            &before,
+            &before,
+            "worker_agent:mail:7",
+        )
+        .expect_err("message still present after ack must fail");
+
+        let mut unknown_message = before;
+        unknown_message
+            .get_mut("messages")
+            .and_then(json::Value::as_array_mut)
+            .and_then(|messages| messages.first_mut())
+            .and_then(json::Value::as_object_mut)
+            .expect("mailbox message object")
+            .insert("legacy_id".to_owned(), json::Value::Null);
+        let _ = decode_agent_mailbox_status(&unknown_message)
+            .expect_err("unknown mailbox message field must fail");
+
+        let mut missing_message_field = mailbox_status_fixture(vec![mailbox_message_fixture(
+            "worker_agent:mail:8",
+            "ops_agent",
+            "ops.sync",
+            "missing-field",
+            8,
+        )]);
+        missing_message_field
+            .get_mut("messages")
+            .and_then(json::Value::as_array_mut)
+            .and_then(|messages| messages.first_mut())
+            .and_then(json::Value::as_object_mut)
+            .expect("mailbox message object")
+            .remove("payload_hash");
+        let _ = decode_agent_mailbox_status(&missing_message_field)
+            .expect_err("missing mailbox message field must fail");
+    }
+    #[test]
+    fn autonomy_status_v1_rejects_unknown_fields_and_duplicate_run_ids() {
+        let canonical_status = autonomy_status_fixture();
+        let canonical =
+            json::to_value(&canonical_status).expect("encode exact autonomy status fixture");
+        decode_agent_autonomy_status(&canonical).expect("decode exact autonomy status V1");
+
+        let mut unknown_run = canonical.clone();
+        unknown_run
+            .get_mut("recent_runs")
+            .and_then(json::Value::as_array_mut)
+            .and_then(|runs| runs.first_mut())
+            .and_then(json::Value::as_object_mut)
+            .expect("autonomy run object")
+            .insert("legacy_receipt".to_owned(), json::Value::Null);
+        let _ =
+            decode_agent_autonomy_status(&unknown_run).expect_err("unknown run field must fail");
+
+        let mut duplicate_status = canonical_status;
+        duplicate_status.run_count = 2;
+        duplicate_status
+            .recent_runs
+            .push(duplicate_status.recent_runs[0].clone());
+        let duplicate = json::to_value(&duplicate_status).expect("encode duplicate run fixture");
+        let error = decode_agent_autonomy_status(&duplicate)
+            .expect_err("duplicate autonomy run id must fail");
+        assert!(error.to_string().contains("duplicate run_id"), "{error}");
+    }
+    #[test]
+    fn hf_status_v1_is_closed_at_root_and_nested_source() {
+        let canonical =
+            json::to_value(&hf_status_fixture()).expect("encode exact HF status fixture");
+        decode_hf_shared_lease_status(&canonical).expect("decode exact HF status V1");
+
+        let mut unknown_root = canonical.clone();
+        unknown_root
+            .as_object_mut()
+            .expect("HF status object")
+            .insert("legacy_fee".to_owned(), json::Value::Null);
+        let _ = decode_hf_shared_lease_status(&unknown_root)
+            .expect_err("unknown HF root field must fail");
+
+        let mut unknown_source = canonical;
+        unknown_source
+            .get_mut("source")
+            .and_then(json::Value::as_object_mut)
+            .expect("HF source object")
+            .insert("branch".to_owned(), json::Value::String("main".to_owned()));
+        let _ = decode_hf_shared_lease_status(&unknown_source)
+            .expect_err("unknown HF source field must fail");
+
+        let mut missing_nullable =
+            json::to_value(&hf_status_fixture()).expect("encode exact HF status fixture");
+        missing_nullable
+            .as_object_mut()
+            .expect("HF status object")
+            .remove("pool");
+        let _ = decode_hf_shared_lease_status(&missing_nullable)
+            .expect_err("required nullable HF field must not be omitted");
+    }
+    #[test]
+    fn app_infra_status_v1_is_closed_and_rejects_duplicate_apps() {
+        let canonical_status = app_infra_status_fixture();
+        let canonical =
+            json::to_value(&canonical_status).expect("encode exact app-infra status fixture");
+        decode_app_infra_status(&canonical).expect("decode exact app-infra status V1");
+
+        let mut unknown_state = canonical.clone();
+        unknown_state
+            .get_mut("apps")
+            .and_then(json::Value::as_array_mut)
+            .and_then(|apps| apps.first_mut())
+            .and_then(json::Value::as_object_mut)
+            .expect("app state object")
+            .insert("legacy_version".to_owned(), json::Value::Null);
+        let _ =
+            decode_app_infra_status(&unknown_state).expect_err("unknown app state field must fail");
+
+        let mut missing_apps = canonical;
+        missing_apps
+            .as_object_mut()
+            .expect("app-infra status object")
+            .remove("apps");
+        let _ = decode_app_infra_status(&missing_apps).expect_err("missing app list must fail");
+
+        let mut duplicate_status = canonical_status;
+        duplicate_status.app_count = 2;
+        duplicate_status.apps.push(duplicate_status.apps[0].clone());
+        let duplicate = json::to_value(&duplicate_status).expect("encode duplicate app fixture");
+        let error = decode_app_infra_status(&duplicate).expect_err("duplicate app must fail");
+        assert!(error.to_string().contains("duplicate app"), "{error}");
+    }
+    #[test]
+    fn exact_torii_json_success_rejects_alternate_status_content_type_and_body() {
+        let json_content_type = HeaderValue::from_static("application/json");
+        let text_content_type = HeaderValue::from_static("text/plain");
+        let valid_body = br#"{"schema_version":1}"#;
+
+        let _ = decode_exact_torii_json_success(
+            reqwest::StatusCode::CREATED,
+            Some(&json_content_type),
+            valid_body,
+            "fixture",
+        )
+        .expect_err("alternate 2xx status must fail");
+        let _ =
+            decode_exact_torii_json_success(reqwest::StatusCode::OK, None, valid_body, "fixture")
+                .expect_err("missing JSON content type must fail");
+        let _ = decode_exact_torii_json_success(
+            reqwest::StatusCode::OK,
+            Some(&text_content_type),
+            valid_body,
+            "fixture",
+        )
+        .expect_err("non-JSON content type must fail");
+        let _ = decode_exact_torii_json_success(
+            reqwest::StatusCode::OK,
+            Some(&json_content_type),
+            &[],
+            "fixture",
+        )
+        .expect_err("bodyless JSON success must fail");
+        let _ = decode_exact_torii_json_success(
+            reqwest::StatusCode::OK,
+            Some(&json_content_type),
+            b"not-json",
+            "fixture",
+        )
+        .expect_err("malformed JSON success must fail");
+        assert_eq!(
+            decode_exact_torii_json_success(
+                reqwest::StatusCode::OK,
+                Some(&json_content_type),
+                valid_body,
+                "fixture",
+            )
+            .expect("exact 200 JSON response"),
+            norito::json!({"schema_version": 1})
+        );
+    }
+    #[test]
+    fn remaining_status_v1_dtos_are_closed_and_validate_invariants() {
+        macro_rules! closed_status_case {
+            ($fixture:expr, $decoder:ident, $label:literal) => {{
+                let canonical = json::to_value(&$fixture).expect(concat!("encode ", $label));
+                $decoder(&canonical).expect(concat!("decode ", $label));
+                let mut unknown = canonical;
+                unknown
+                    .as_object_mut()
+                    .expect(concat!($label, " object"))
+                    .insert("retired_v0".to_owned(), json::Value::Null);
+                let _ = $decoder(&unknown).expect_err(concat!($label, " unknown field must fail"));
+            }};
+        }
+        closed_status_case!(
+            service_config_status_fixture("echo_console", "demo_config"),
+            decode_service_config_status,
+            "service-config status"
+        );
+        closed_status_case!(
+            service_secret_status_fixture("echo_console", "demo_secret"),
+            decode_service_secret_status,
+            "service-secret status"
+        );
+        closed_status_case!(
+            training_job_status_fixture("echo_console", "job-1"),
+            decode_training_job_status,
+            "training-job status"
+        );
+        closed_status_case!(
+            model_artifact_status_fixture("echo_console", "job-1"),
+            decode_model_artifact_status,
+            "model-artifact status"
+        );
+        closed_status_case!(
+            model_weight_status_fixture("echo_console", "fare-model"),
+            decode_model_weight_status,
+            "model-weight status"
+        );
+        closed_status_case!(
+            uploaded_model_status_fixture("echo_console", "fare-model", "v1"),
+            decode_uploaded_model_status,
+            "uploaded-model status"
+        );
+        closed_status_case!(
+            model_host_status_fixture(),
+            decode_model_host_status,
+            "model-host status"
+        );
+        let mut config = service_config_status_fixture("echo_console", "demo_config");
+        config.config_entry_count = 0;
+        let config = json::to_value(&config).expect("encode malformed config status");
+        let _ = decode_service_config_status(&config).expect_err("config count mismatch must fail");
+
+        let mut training = training_job_status_fixture("echo_console", "job-1");
+        training.job.compute_remaining_units += 1;
+        let training = json::to_value(&training).expect("encode malformed training status");
+        let _ =
+            decode_training_job_status(&training).expect_err("training budget mismatch must fail");
+
+        let mut artifact = model_artifact_status_fixture("echo_console", "job-1");
+        artifact.artifact_count = 0;
+        let artifact = json::to_value(&artifact).expect("encode malformed artifact status");
+        let _ =
+            decode_model_artifact_status(&artifact).expect_err("artifact count mismatch must fail");
+
+        let mut weight = model_weight_status_fixture("echo_console", "fare-model");
+        weight.model.version_count = 0;
+        let weight = json::to_value(&weight).expect("encode malformed weight status");
+        let _ = decode_model_weight_status(&weight).expect_err("weight count mismatch must fail");
+
+        let mut host = model_host_status_fixture();
+        host.active_host_count = 0;
+        let host = json::to_value(&host).expect("encode malformed host status");
+        let _ = decode_model_host_status(&host).expect_err("host count mismatch must fail");
+    }
+    #[test]
+    fn public_discovery_config_status_reserves_none_for_exact_not_found() {
+        let mut route =
+            reqwest::Url::parse("http://fixture.invalid/v1/soracloud/service/config/status")
+                .expect("fixture URL");
+        route
+            .query_pairs_mut()
+            .append_pair("service_name", "echo_console")
+            .append_pair("config_name", PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME);
+        let path = format!("{}?{}", route.path(), route.query().expect("fixture query"));
+        let mut empty_success =
+            service_config_status_fixture("echo_console", PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME);
+        empty_success.config_entry_count = 0;
+        empty_success.configs.clear();
+        let malformed_server = MockHttpServer::start(BTreeMap::from([(
+            path.clone(),
+            MockHttpResponse::json(
+                json::to_vec(&empty_success).expect("encode empty successful config status"),
+            ),
+        )]));
+        install_mock_protected_read_signer();
+        let error = fetch_existing_public_service_discovery_registry(
+            &malformed_server.base_url,
+            "echo_console",
+            None,
+            5,
+        )
+        .expect_err("malformed 200 discovery config status must fail");
+        assert!(error.to_string().contains("exactly the requested config"));
+
+        let not_found_server = MockHttpServer::start(BTreeMap::new());
+        install_mock_protected_read_signer();
+        assert!(
+            fetch_existing_public_service_discovery_registry(
+                &not_found_server.base_url,
+                "echo_console",
+                None,
+                5,
+            )
+            .expect("exact 404 means no existing registry")
+            .is_none()
+        );
+    }
+    #[test]
+    fn wallet_spend_v1_requires_and_emits_the_caller_request_id() {
+        use clap::Parser as _;
+
+        #[derive(clap::Parser, Debug)]
+        struct AgentParser {
+            #[command(subcommand)]
+            command: AgentCommand,
+        }
+        let base = [
+            "agent",
+            "wallet-spend",
+            "--apartment-name",
+            "ops_agent",
+            "--asset-definition",
+            "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            "--amount",
+            "1",
+        ];
+        let _ =
+            AgentParser::try_parse_from(base).expect_err("wallet-spend must require --request-id");
+        let _ = AgentParser::try_parse_from([
+            "agent",
+            "wallet-spend",
+            "--apartment-name",
+            "ops_agent",
+            "--request-id",
+            "wallet-spend-fixture-1",
+            "--asset-definition",
+            " 61CtjvNd9T3THAR65GsMVHr82Bjc",
+            "--amount",
+            "1",
+        ])
+        .expect_err("wallet-spend must reject surrounding asset-definition whitespace");
+        for invalid in [" wallet-spend-fixture-1", "wallet\nspend"] {
+            let _ = parse_agent_wallet_request_id(invalid)
+                .expect_err("non-canonical wallet request id must fail");
+        }
+        let _ = parse_agent_wallet_request_id(&"x".repeat(129))
+            .expect_err("oversized wallet request id must fail");
+        let parsed = AgentParser::try_parse_from([
+            "agent",
+            "wallet-spend",
+            "--apartment-name",
+            "ops_agent",
+            "--request-id",
+            "wallet-spend-fixture-1",
+            "--asset-definition",
+            "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            "--amount",
+            "1",
+        ])
+        .expect("parse exact wallet-spend V1 arguments");
+        let AgentCommand::WalletSpend(args) = parsed.command else {
+            panic!("expected wallet-spend command")
+        };
+        assert_eq!(args.request_id, "wallet-spend-fixture-1");
+
+        let status = agent_status_fixture(vec![agent_apartment_status_fixture("ops_agent", 10)]);
+        let key_pair = soracloud_fixture_key_pair(0x76);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let output = build_wallet_spend_output(
+            mock_soracloud_submission_receipt(&authority, &key_pair),
+            &status,
+            "ops_agent",
+            "wallet-spend-fixture-1",
+        )
+        .expect("build wallet-spend output with exact caller id");
+        assert_eq!(
+            output.get("request_id").and_then(json::Value::as_str),
+            Some("wallet-spend-fixture-1")
+        );
+
+        let payload = AgentWalletSpendPayload {
+            apartment_name: "ops_agent".to_owned(),
+            request_id: "wallet-spend-fixture-1".to_owned(),
+            asset_definition: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
+            amount: "1".parse().expect("canonical amount"),
+        };
+        let canonical = json::to_value(&payload).expect("encode wallet-spend payload");
+        let mut missing = canonical.clone();
+        missing
+            .as_object_mut()
+            .expect("wallet-spend object")
+            .remove("request_id");
+        let _ = json::from_value::<AgentWalletSpendPayload>(missing)
+            .expect_err("wallet-spend payload must require request_id");
+        let mut unknown = canonical;
+        unknown
+            .as_object_mut()
+            .expect("wallet-spend object")
+            .insert("sequence".to_owned(), norito::json!(7));
+        let _ = json::from_value::<AgentWalletSpendPayload>(unknown)
+            .expect_err("wallet-spend payload must reject inferred sequence");
+    }
+    #[test]
+    fn generated_hf_autonomy_run_command_is_not_published() {
+        use clap::Parser as _;
+
+        #[derive(clap::Parser, Debug)]
+        struct AgentParser {
+            #[command(subcommand)]
+            command: AgentCommand,
+        }
+
+        let error = AgentParser::try_parse_from(["agent", "autonomy-run"])
+            .expect_err("generated-HF autonomy-run ingress must not parse");
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+    }
+    #[test]
+    fn wallet_approve_v1_rejects_noncanonical_request_ids_before_signing() {
+        let key_pair = soracloud_fixture_key_pair(0x77);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        for invalid in ["", " request-1", "request-1 ", "request\nid"] {
+            let _ =
+                signed_agent_wallet_approve_request("ops_agent", invalid, &authority, &key_pair)
+                    .expect_err("non-canonical wallet approval request id must fail");
+        }
+        let oversized = "x".repeat(129);
+        let _ = signed_agent_wallet_approve_request("ops_agent", &oversized, &authority, &key_pair)
+            .expect_err("oversized wallet approval request id must fail");
     }
     fn assert_signed_mutation_omits_inline_signing_material<T: JsonSerialize + ?Sized>(
         request: &T,
@@ -19011,7 +22347,7 @@ mod tests {
             family: "hf-transformers".to_owned(),
             modalities: vec!["text".to_owned()],
             plaintext_root: Hash::new(b"plaintext-root"),
-            runtime_format: SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors,
+            package_format: SoraUploadedModelPackageFormatV1::NormalizedHuggingFaceSafetensorsV1,
             bundle_root: Hash::new(b"bundle-root"),
             sorafs_manifest_digest: iroha::data_model::sorafs::pin_registry::ManifestDigest::new(
                 [0xA5; 32],
@@ -19024,6 +22360,35 @@ mod tests {
             wrapped_bundle_key: sample_uploaded_model_wrapped_key(),
             pricing_policy: Default::default(),
             decryption_policy_ref: "policy://release/default".to_owned(),
+        }
+    }
+    fn uploaded_model_status_fixture(
+        service_name: &str,
+        model_name: &str,
+        weight_version: &str,
+    ) -> UploadedModelStatusResponseV1 {
+        let mut bundle = sample_uploaded_model_bundle();
+        bundle.service_name = service_name.parse().expect("canonical service name");
+        bundle.weight_version = weight_version.to_owned();
+        let artifact = ModelArtifactStatusEntryV1 {
+            service_name: bundle.service_name.clone(),
+            model_name: model_name.parse().expect("canonical model name"),
+            artifact_id: "upload-artifact-1".to_owned(),
+            training_job_id: String::new(),
+            weight_version: Some(weight_version.to_owned()),
+            weight_artifact_hash: Hash::new(b"uploaded weights"),
+            dataset_ref: "dataset:private-upload".to_owned(),
+            training_config_hash: Hash::new(b"upload training config"),
+            reproducibility_hash: Hash::new(b"upload reproducibility"),
+            provenance_attestation_hash: Hash::new(b"upload provenance"),
+            registered_sequence: 3,
+            consumed_by_version: Some(weight_version.to_owned()),
+            chunk_manifest_root: Some(bundle.chunk_manifest_root),
+        };
+        UploadedModelStatusResponseV1 {
+            schema_version: SORACLOUD_STATUS_SCHEMA_VERSION_V1,
+            bundle,
+            artifact: Some(artifact),
         }
     }
     fn sample_uploaded_model_finalize_payload() -> UploadedModelFinalizePayload {
@@ -19066,11 +22431,16 @@ mod tests {
         let payload = Instruction::dyn_encode(&*instruction);
         let framed =
             frame_instruction_payload(wire_id, &payload).expect("frame soracloud instruction");
-        let response = json::from_str(&format!(
-            r#"{{"tx_instructions":[{{"wire_id":"{wire_id}","payload_hex":"{}"}}]}}"#,
-            hex::encode(framed)
-        ))
-        .expect("build draft response");
+        let key_pair = soracloud_fixture_key_pair(0x31);
+        let response = SoracloudMutationDraftResponse {
+            ok: true,
+            authority: AccountId::new(key_pair.public_key().clone()),
+            signed_by: key_pair.public_key().clone(),
+            tx_instructions: vec![SoracloudTxInstruction {
+                wire_id: wire_id.to_owned(),
+                payload_hex: hex::encode(framed),
+            }],
+        };
         let decoded =
             decode_soracloud_tx_instructions(&response).expect("decode framed instructions");
         let decoded_instruction = decoded.first().expect("single instruction");
@@ -19088,17 +22458,35 @@ mod tests {
             iroha::data_model::isi::soracloud::UpgradeSoracloudService,
         >(&[1_u8, 2, 3], norito::core::default_encode_flags())
         .expect("frame opaque payload");
-        let response = json::from_str(&format!(
-            r#"{{"tx_instructions":[{{"wire_id":"{wire_id}","payload_hex":"{}"}}]}}"#,
-            hex::encode(&framed)
-        ))
-        .expect("build draft response");
+        let key_pair = soracloud_fixture_key_pair(0x32);
+        let response = SoracloudMutationDraftResponse {
+            ok: true,
+            authority: AccountId::new(key_pair.public_key().clone()),
+            signed_by: key_pair.public_key().clone(),
+            tx_instructions: vec![SoracloudTxInstruction {
+                wire_id: wire_id.to_owned(),
+                payload_hex: hex::encode(&framed),
+            }],
+        };
         let error = decode_soracloud_tx_instructions(&response).expect_err("raw draft rejected");
         assert!(
             error
                 .to_string()
                 .contains("failed to decode Soracloud instruction skeleton")
         );
+    }
+    #[test]
+    fn decode_soracloud_tx_instructions_rejects_empty_draft() {
+        let key_pair = soracloud_fixture_key_pair(0x33);
+        let response = SoracloudMutationDraftResponse {
+            ok: true,
+            authority: AccountId::new(key_pair.public_key().clone()),
+            signed_by: key_pair.public_key().clone(),
+            tx_instructions: Vec::new(),
+        };
+        let error = decode_soracloud_tx_instructions(&response)
+            .expect_err("empty mutation drafts must be rejected");
+        assert!(error.to_string().contains("at least one"));
     }
     #[test]
     fn publish_app_static_site_queues_finalized_registry_ingest_and_keeps_cid_gateway_url() {
@@ -19148,7 +22536,7 @@ mod tests {
         )
         .expect("publish should register finalized provider ingest");
         assert_eq!(publication.hostname, "travel-ops.sora");
-        assert_eq!(publication.public_url, "https://travel-ops.sora/");
+        assert_eq!(publication.public_url, "https://travel-ops.sora");
         assert!(publication.content_cid.starts_with('b'));
         assert_eq!(
             publication.cid_gateway_url,
@@ -19157,7 +22545,6 @@ mod tests {
                 publication.content_cid
             )
         );
-        assert_eq!(publication.manifest_id_hex, None);
         let register_request = server
             .requests()
             .into_iter()
@@ -19512,6 +22899,160 @@ mod tests {
             request.method == "POST" && request.path == iroha_torii_shared::uri::FEES_QUOTE
         }));
     }
+
+    #[test]
+    fn taira_mutation_binding_requires_exact_public_reset_nonce_grammar() {
+        let fixture = |nonce: &str| TairaMutationBindingV1 {
+            authorization_sha256: "ab".repeat(32),
+            authorization_nonce: nonce.to_owned(),
+            kind: "inrou_bundle_pin".to_owned(),
+            phase: "pre_edge".to_owned(),
+            idempotency_key: "cd".repeat(32),
+            execution_expires_at_unix_ms: 1,
+        };
+        assert!(
+            fixture("0123456789abcdef_123456789abcde-")
+                .validate()
+                .is_ok()
+        );
+        for invalid in [
+            "short",
+            "0123456789abcdef0123456789abcdefx",
+            "0123456789abcdef0123456789abcdeF",
+            "0123456789abcdef0123456789abcde.",
+        ] {
+            assert!(fixture(invalid).validate().is_err(), "accepted `{invalid}`");
+        }
+    }
+
+    #[test]
+    fn prepared_inrou_operations_have_one_exact_child_identity() {
+        for (operation, label, kind) in [
+            (
+                TairaInrouCanaryPreparedOperationV1::BundlePin,
+                "bundle_pin",
+                "inrou_bundle_pin",
+            ),
+            (
+                TairaInrouCanaryPreparedOperationV1::GuestPin,
+                "guest_pin",
+                "inrou_guest_pin",
+            ),
+            (
+                TairaInrouCanaryPreparedOperationV1::ServiceMutation,
+                "service_mutation",
+                "inrou_canary",
+            ),
+        ] {
+            assert_eq!(operation.operation_label(), label);
+            assert_eq!(operation.mutation_kind(), kind);
+        }
+    }
+
+    #[test]
+    fn prepared_inrou_pin_preserves_exact_sponsor_fee_identity() {
+        let server = MockHttpServer::start(BTreeMap::new());
+        let key_pair = soracloud_fixture_key_pair(0x5A);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut config = crate::fallback_config();
+        config.account = authority.clone();
+        config.key_pair = key_pair;
+        config.torii_api_url = server.base_url.parse().expect("mock Torii URL");
+        let manifest = ManifestBuilder::new()
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xA1; 32]))
+            .dag_codec(DagCodecId(0x71))
+            .chunking_profile(ChunkingProfileV1::from_descriptor(
+                chunker_registry::default_descriptor(),
+            ))
+            .chunk_digest_sha3_256([0xB2; 32])
+            .por_root([0xC3; 32])
+            .content_length(1)
+            .car_digest([0xD4; 32])
+            .car_size(1)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("build exact pin manifest");
+        let bytes = manifest.encode().expect("encode exact pin manifest");
+        let built = BuiltSorafsManifest {
+            digest_hex: hex::encode(manifest.digest().expect("manifest digest").as_bytes()),
+            manifest,
+            bytes,
+        };
+        let sponsor = iroha::data_model::nexus::FeeSponsorProgramId::new(
+            authority,
+            Name::from_str("public-reset").expect("sponsor program name"),
+        );
+        let requested = FeePaymentIntent::sponsor(sponsor.clone(), 7, Vec::new(), None);
+        let binding = TairaMutationBindingV1 {
+            authorization_sha256: "ab".repeat(32),
+            authorization_nonce: "0123456789abcdef_123456789abcde-".to_owned(),
+            kind: "inrou_bundle_pin".to_owned(),
+            phase: "pre_edge".to_owned(),
+            idempotency_key: "cd".repeat(32),
+            execution_expires_at_unix_ms: u64::MAX,
+        };
+        let prepared = prepare_built_sorafs_manifest_registration(
+            &built,
+            "bundle_pin",
+            requested.clone(),
+            binding,
+            &server.base_url,
+            &config,
+            1,
+        )
+        .expect("prepare sponsored pin transaction");
+        assert_eq!(prepared.fee_payment, requested);
+        assert_eq!(prepared.fee_quote.intent, requested);
+        assert_eq!(prepared.fee_payment.sponsor_program(), Some((&sponsor, 7)));
+        assert!(prepared.tx_hash_hex.as_bytes().last().is_some_and(|byte| {
+            matches!(byte, b'1' | b'3' | b'5' | b'7' | b'9' | b'b' | b'd' | b'f')
+        }));
+        let mut marker_cleared = prepared.clone();
+        marker_cleared.tx_hash_hex.replace_range(63..64, "0");
+        let error = marker_cleared
+            .decode_and_validate()
+            .expect_err("marker-cleared prepared transaction hash must fail closed");
+        assert!(error.to_string().contains("Iroha hash marker set"));
+    }
+
+    #[test]
+    fn prepared_soracloud_recovery_accepts_only_global_state_finality() {
+        let response = |kind: &str, scope: &str, resolved_from: &str| {
+            PipelineTransactionStatusResponse::new(
+                format!("{}b", "a".repeat(63)),
+                iroha_torii_shared::PipelineTransactionStatus {
+                    kind: kind.to_owned(),
+                    block_height: Some(7),
+                },
+                scope.to_owned(),
+                resolved_from.to_owned(),
+            )
+        };
+        assert!(soracloud_status_is_final_applied(&response(
+            "Applied", "global", "state"
+        )));
+        for (scope, resolved_from) in [("global", "cache"), ("global", "queue"), ("local", "state")]
+        {
+            assert!(!soracloud_status_is_final_applied(&response(
+                "Applied", scope, resolved_from
+            )));
+        }
+        for kind in ["Rejected", "Expired"] {
+            assert!(soracloud_status_is_final_failure(&response(
+                kind, "global", "state"
+            )));
+            for (scope, resolved_from) in
+                [("global", "cache"), ("global", "queue"), ("local", "state")]
+            {
+                assert!(!soracloud_status_is_final_failure(&response(
+                    kind,
+                    scope,
+                    resolved_from
+                )));
+            }
+        }
+    }
+
     #[test]
     fn mock_http_server_helpers_track_sorafs_pin_registration_digest() {
         let manifest = ManifestBuilder::new()
@@ -20055,6 +23596,9 @@ mod tests {
         SORACLOUD_FEE_PAYMENT.with(|slot| {
             *slot.borrow_mut() = Some(Ok(FeePaymentIntent::authority(Vec::new(), None)));
         });
+        SORACLOUD_TEST_SUBMITTED_TX_HASH.with(|slot| {
+            *slot.borrow_mut() = Some(Hash::new(b"soracloud-cli-test-submission"));
+        });
     }
     fn install_mock_protected_read_signer() {
         let key_pair = soracloud_fixture_key_pair(0x2f);
@@ -20062,23 +23606,82 @@ mod tests {
         install_mock_submission_config(&authority, &key_pair);
     }
     fn mock_control_plane_status_payload(service_names: &[&str]) -> norito::json::Value {
+        let services = service_names
+            .iter()
+            .map(|service_name| ServiceStatusOutput {
+                service_name: (*service_name).to_owned(),
+                current_version: "1.0.0".to_owned(),
+                revision_count: 1,
+                config_generation: 0,
+                secret_generation: 0,
+                config_entry_count: 0,
+                secret_entry_count: 0,
+                quota_class: None,
+                service_lease_status: None,
+                lease_expires_height: None,
+                prepaid_runtime_balance: None,
+                remaining_runtime_balance: None,
+                public_discovery_content_cid: None,
+                public_discovery_url: None,
+                public_discovery_cid_host_url: None,
+                latest_revision: None,
+                active_rollout: None,
+                last_rollout: None,
+            })
+            .collect::<Vec<_>>();
+        let service_count =
+            u32::try_from(services.len()).expect("mock service count fits the V1 range");
         norito::json!({
             "schema_version": 1,
             "control_plane": {
-                "service_count": (service_names.len()),
-                "services": (service_names
-                    .iter()
-                    .map(|service_name| {
-                        norito::json!({
-                            "service_name": (*service_name),
-                            "current_version": "1.0.0",
-                            "revision_count": 1
-                        })
-                    })
-                    .collect::<Vec<_>>()),
+                "schema_version": 1,
+                "service_count": service_count,
+                "audit_event_count": 0,
+                "services": services,
                 "recent_audit_events": []
             }
         })
+    }
+    fn mock_soracloud_draft_response(
+        authority: &AccountId,
+        key_pair: &KeyPair,
+    ) -> norito::json::Value {
+        use iroha::data_model::{
+            domain::Domain,
+            isi::{Instruction, Register, frame_instruction_payload},
+        };
+
+        let instruction = InstructionBox::from(Register::domain(Domain::new(
+            iroha_data_model::domain::DomainId::try_new("soracloud_cli_test", "universal")
+                .expect("canonical mock domain id"),
+        )));
+        let wire_id = Instruction::id(&*instruction);
+        let payload = Instruction::dyn_encode(&*instruction);
+        let framed = frame_instruction_payload(wire_id, &payload)
+            .expect("frame canonical Soracloud mock instruction");
+        json::to_value(&SoracloudMutationDraftResponse {
+            ok: true,
+            authority: authority.clone(),
+            signed_by: key_pair.public_key().clone(),
+            tx_instructions: vec![SoracloudTxInstruction {
+                wire_id: wire_id.to_owned(),
+                payload_hex: hex::encode(framed),
+            }],
+        })
+        .expect("encode exact Soracloud mutation draft response")
+    }
+    fn mock_soracloud_submission_receipt(
+        authority: &AccountId,
+        key_pair: &KeyPair,
+    ) -> norito::json::Value {
+        json::to_value(&SoracloudMutationSubmissionReceiptV1 {
+            schema_version: SORACLOUD_MUTATION_SUBMISSION_RECEIPT_VERSION_V1,
+            authority: authority.clone(),
+            signed_by: key_pair.public_key().clone(),
+            instruction_count: NonZeroU32::new(1).expect("nonzero instruction count"),
+            submitted_tx_hash: Hash::new(b"submitted transaction"),
+        })
+        .expect("encode exact Soracloud submission receipt")
     }
     fn mock_bundle_mutation_server(
         mutation_route: &str,
@@ -20104,30 +23707,88 @@ mod tests {
                     json::to_vec(status_payload).expect("encode status response"),
                 ),
             ),
+            (
+                "/v1/soracloud/apps/travel_ops/status".to_owned(),
+                MockHttpResponse::json(
+                    json::to_vec(&app_infra_status_fixture_for_name("travel_ops"))
+                        .expect("encode app-infra status response"),
+                ),
+            ),
+            (
+                "/api/v1/health".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: br#"{"status":"ready"}"#.to_vec(),
+                },
+            ),
+            (
+                "/".to_owned(),
+                MockHttpResponse {
+                    content_type: "text/html",
+                    body: b"<!doctype html><title>ready</title>".to_vec(),
+                },
+            ),
         ]))
+    }
+
+    fn point_split_app_live_route_at_mock_server(dir: &Path, base_url: &str) {
+        let parsed = reqwest::Url::parse(base_url).expect("parse mock server URL");
+        let hostname = parsed.host_str().expect("mock server hostname").to_owned();
+        let manifest_path = dir.join("app_manifest.json");
+        let mut manifest: SoracloudAppManifestV1 =
+            load_json(&manifest_path).expect("load app manifest");
+        manifest.public_url = base_url.to_owned();
+        write_json(&manifest_path, &manifest).expect("write mock app public URL");
+        let service_path = dir.join("services/live/service_manifest.json");
+        let mut service: SoraServiceManifestV1 =
+            load_json(&service_path).expect("load live service manifest");
+        service.route.as_mut().expect("live service route").host = hostname;
+        write_json(&service_path, &service).expect("write mock live service route");
     }
     fn assert_workspace_script(path: Option<&str>, file_name: &str) {
         assert!(path.is_some_and(|path| path.ends_with(file_name)));
     }
-    fn assert_local_workspace_scripts(scripts: &ServiceWorkspaceScriptsOutput) {
+    fn assert_service_workspace_scripts(scripts: &ServiceWorkspaceScriptsOutput) {
         assert_workspace_script(scripts.local_dev.as_deref(), "dev.sh");
         assert_workspace_script(scripts.build_and_sync.as_deref(), "build-and-sync.sh");
-        assert_mutation_workspace_scripts(scripts);
+        assert_service_mutation_workspace_scripts(scripts);
     }
-    fn assert_mutation_workspace_scripts(scripts: &ServiceWorkspaceScriptsOutput) {
+    fn assert_service_mutation_workspace_scripts(scripts: &ServiceWorkspaceScriptsOutput) {
         assert_workspace_script(scripts.deploy.as_deref(), "deploy.sh");
         assert_workspace_script(scripts.upgrade.as_deref(), "upgrade.sh");
     }
+    fn assert_app_workspace_scripts(scripts: &AppLocalWorkspaceScriptsOutput) {
+        assert_workspace_script(scripts.local_dev.as_deref(), "dev.sh");
+        assert_workspace_script(scripts.build_and_sync.as_deref(), "build-and-sync.sh");
+        assert_workspace_script(scripts.doctor.as_deref(), "doctor.sh");
+        assert_workspace_script(scripts.release.as_deref(), "release.sh");
+    }
     #[test]
-    fn direct_service_mutation_output_hoists_authoritative_status_fields() {
-        let response = norito::json!({
-            "service_name": "echo_console",
-            "current_version": "1.1.0",
-            "rollout_handle": "echo_console:rollout:2",
-            "rollout_stage": { "stage": "Canary" },
-            "stage": { "stage": "Canary" },
-            "traffic_percent": 25
-        });
+    fn app_live_verification_rejects_non_success_status() {
+        let server = MockHttpServer::start(BTreeMap::new());
+        let target = AppLiveVerificationTarget {
+            label: "missing healthcheck".to_owned(),
+            url: reqwest::Url::parse(&format!("{}/missing", server.base_url))
+                .expect("parse live verification URL"),
+        };
+        let error = verify_app_live_targets(&[target], 1)
+            .expect_err("a non-2xx live route must block release success");
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("missing healthcheck"), "{diagnostic}");
+        assert!(diagnostic.contains("HTTP 404"), "{diagnostic}");
+    }
+    #[test]
+    fn direct_service_mutation_output_keeps_one_exact_authoritative_snapshot() {
+        let status = mock_control_plane_status_payload(&["echo_console"]);
+        let key_pair = soracloud_fixture_key_pair(0x34);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let response = build_service_mutation_output(
+            mock_soracloud_submission_receipt(&authority, &key_pair),
+            &status,
+            "echo_console",
+            "Upgrade",
+        )
+        .expect("build exact service mutation response");
         let output = build_direct_service_mutation_output(
             Path::new("container_manifest.json"),
             Path::new("service_manifest.json"),
@@ -20163,35 +23824,51 @@ mod tests {
                 bundle_file: "service.tgz".to_owned(),
                 content_cid: "bcanary".to_owned(),
                 manifest_digest_hex: "aa".repeat(32),
-                manifest_id_hex: None,
                 bundle_hash: Hash::new(b"service bundle").to_string(),
                 note: "published".to_owned(),
             },
             Vec::new(),
             response,
         );
-        assert_eq!(output.current_version.as_deref(), Some("1.1.0"));
-        assert_eq!(
-            output.rollout_handle.as_deref(),
-            Some("echo_console:rollout:2")
-        );
-        assert_eq!(output.traffic_percent, Some(25));
         assert_eq!(
             output
-                .rollout_stage
-                .as_ref()
-                .and_then(|stage| stage.get("stage"))
+                .response
+                .get("current_version")
                 .and_then(norito::json::Value::as_str),
-            Some("Canary")
+            Some("1.0.0")
         );
-        assert_eq!(
+        assert!(
             output
-                .stage
-                .as_ref()
-                .and_then(|stage| stage.get("stage"))
-                .and_then(norito::json::Value::as_str),
-            Some("Canary")
+                .response
+                .get("active_rollout")
+                .is_some_and(|v| v.is_null())
         );
+        assert!(
+            output
+                .response
+                .get("last_rollout")
+                .is_some_and(|v| v.is_null())
+        );
+        assert!(
+            output
+                .response
+                .get("submission")
+                .is_some_and(json::Value::is_object)
+        );
+        let encoded = json::to_value(&output).expect("encode exact direct service output");
+        let root = encoded.as_object().expect("direct service output object");
+        for retired in [
+            "rollout_handle",
+            "rollout_stage",
+            "stage",
+            "traffic_percent",
+            "current_version",
+        ] {
+            assert!(
+                !root.contains_key(retired),
+                "retired flattened field `{retired}` must remain absent"
+            );
+        }
     }
     fn mock_hf_status_path(
         base_url: &str,
@@ -20267,7 +23944,7 @@ mod tests {
             secret_entry_count: 0,
             quota_class: None,
             service_lease_status: None,
-            lease_expires_sequence: None,
+            lease_expires_height: None,
             prepaid_runtime_balance: None,
             remaining_runtime_balance: None,
             public_discovery_content_cid: Some("bafyteststatus".to_owned()),
@@ -20302,13 +23979,12 @@ mod tests {
                 allow_model_inference: false,
                 allow_model_training: false,
                 runtime: SoraContainerRuntimeV1::Inrou,
-                allow_wallet_signing: false,
                 allow_state_writes: false,
                 network: SoraNetworkPolicyV1::Isolated,
                 cpu_millis: 1_000,
                 memory_bytes: 256 * 1024 * 1024,
                 ephemeral_storage_bytes: 512 * 1024 * 1024,
-                max_open_files: 1_024,
+                max_open_files_per_process: 1_024,
                 max_tasks: 64,
                 start_grace_secs: 30,
                 stop_grace_secs: 30,
@@ -20357,6 +24033,7 @@ mod tests {
             consent_evidence_hash: None,
             break_glass: None,
             break_glass_reason: None,
+            lease_reporting_epoch_rollover: None,
             signed_by: "validator".to_owned(),
         })
         .expect("encode control-plane audit event");
@@ -20494,33 +24171,48 @@ mod tests {
     }
     #[test]
     fn filter_soracloud_status_payload_filters_embedded_control_plane_snapshot() {
-        let mut payload = norito::json!({
-            "schema_version": 1,
-            "control_plane": {
-                "service_count": 2,
-                "services": [
-                    {
-                        "service_name": "alpha",
-                        "current_version": "1.0.0"
-                    },
-                    {
-                        "service_name": "beta",
-                        "current_version": "2.0.0"
-                    }
-                ],
-                "recent_audit_events": [
-                    {
-                        "service_name": "alpha",
-                        "action": "deploy"
-                    },
-                    {
-                        "service_name": "beta",
-                        "action": "upgrade"
-                    }
-                ]
-            }
-        });
-        filter_soracloud_status_payload(&mut payload, Some("beta"));
+        let mut payload = mock_control_plane_status_payload(&["alpha", "beta"]);
+        let audit_events = ["alpha", "beta"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, service_name)| NetworkControlPlaneAuditEventV1 {
+                sequence: u64::try_from(index + 1).expect("small sequence"),
+                action: SoracloudAction::Deploy,
+                service_name: service_name.to_owned(),
+                from_version: None,
+                to_version: "1.0.0".to_owned(),
+                service_manifest_hash: Hash::new(service_name.as_bytes()),
+                container_manifest_hash: Hash::new(service_name.as_bytes()),
+                binding_name: None,
+                state_key: None,
+                config_name: None,
+                secret_name: None,
+                governance_tx_hash: None,
+                rollout_handle: None,
+                policy_name: None,
+                policy_snapshot_hash: None,
+                jurisdiction_tag: None,
+                consent_evidence_hash: None,
+                break_glass: None,
+                break_glass_reason: None,
+                lease_reporting_epoch_rollover: None,
+                signed_by: "fixture-signer".to_owned(),
+            })
+            .collect::<Vec<_>>();
+        let control_plane = payload
+            .get_mut("control_plane")
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("control_plane object");
+        control_plane.insert(
+            "audit_event_count".to_owned(),
+            norito::json::Value::from(2_u64),
+        );
+        control_plane.insert(
+            "recent_audit_events".to_owned(),
+            json::to_value(&audit_events).expect("encode canonical audit events"),
+        );
+        filter_soracloud_status_payload(&mut payload, Some("beta"))
+            .expect("filter canonical control-plane status");
         let control_plane = payload
             .get("control_plane")
             .and_then(norito::json::Value::as_object)
@@ -20643,6 +24335,20 @@ mod tests {
         assert!(error.to_string().contains("--service-name"));
         assert!(error.to_string().contains("--container"));
         assert!(error.to_string().contains("--service"));
+        resolve_required_workspace_service_name(
+            Some(" echo_console".to_owned()),
+            None,
+            None,
+            "iroha soracloud service config-status",
+        )
+        .expect_err("service-name surrounding whitespace must fail rather than be trimmed");
+        resolve_required_workspace_service_name(
+            Some("cafe\u{301}".to_owned()),
+            None,
+            None,
+            "iroha soracloud service config-status",
+        )
+        .expect_err("service-name NFC aliases must fail rather than be normalized");
     }
     #[test]
     fn config_status_args_can_resolve_service_name_from_manifest_pair() {
@@ -20650,15 +24356,7 @@ mod tests {
             "config_status_service_filter_from_manifest_pair",
             InitTemplate::HttpService,
         );
-        let response = norito::json!({
-            "service_name": "echo_console",
-            "configs": [
-                {
-                    "config_name": "soracloud/app_static_site",
-                    "value": {"ok": true}
-                }
-            ]
-        });
+        let response = service_config_status_fixture("echo_console", "demo_config");
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/service/config/status?service_name=echo_console&config_name=demo_config"
                 .to_owned(),
@@ -20693,14 +24391,7 @@ mod tests {
             "secret_status_service_filter_from_manifest_pair",
             InitTemplate::HttpService,
         );
-        let response = norito::json!({
-            "service_name": "echo_console",
-            "secrets": [
-                {
-                    "secret_name": "demo_secret"
-                }
-            ]
-        });
+        let response = service_secret_status_fixture("echo_console", "demo_secret");
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/service/secret/status?service_name=echo_console&secret_name=demo_secret"
                 .to_owned(),
@@ -20735,8 +24426,10 @@ mod tests {
             "rollback_service_name_from_manifest_pair",
             InitTemplate::HttpService,
         );
+        let key_pair = soracloud_fixture_key_pair(0x14);
+        let authority = AccountId::new(key_pair.public_key().clone());
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
-        let rollback_response = norito::json!({ "tx_instructions": [] });
+        let rollback_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = MockHttpServer::start(BTreeMap::from([
             (
                 "/v1/soracloud/rollback".to_owned(),
@@ -20751,8 +24444,6 @@ mod tests {
                 ),
             ),
         ]));
-        let key_pair = soracloud_fixture_key_pair(0x14);
-        let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = RollbackArgs {
             service_name: None,
@@ -20779,33 +24470,36 @@ mod tests {
             "rollout_service_name_from_manifest_pair",
             InitTemplate::HttpService,
         );
-        let status_payload = norito::json!({
-            "schema_version": 1,
-            "control_plane": {
-                "service_count": 1,
-                "services": [
-                    {
-                        "service_name": "echo_console",
-                        "current_version": "1.0.0",
-                        "revision_count": 2,
-                        "active_rollout": {
-                            "rollout_handle": "echo_console:rollout:2",
-                            "candidate_version": "1.1.0",
-                            "canary_percent": 10,
-                            "traffic_percent": 50,
-                            "stage": { "stage": "Promoted" },
-                            "health_failures": 0,
-                            "max_health_failures": 1,
-                            "health_window_secs": 60,
-                            "created_sequence": 1,
-                            "updated_sequence": 2
-                        }
-                    }
-                ],
-                "recent_audit_events": []
-            }
-        });
-        let rollout_response = norito::json!({ "tx_instructions": [] });
+        let key_pair = soracloud_fixture_key_pair(0x15);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut status_payload = mock_control_plane_status_payload(&["echo_console"]);
+        let service = status_payload
+            .get_mut("control_plane")
+            .and_then(json::Value::as_object_mut)
+            .and_then(|control_plane| control_plane.get_mut("services"))
+            .and_then(json::Value::as_array_mut)
+            .and_then(|services| services.first_mut())
+            .and_then(json::Value::as_object_mut)
+            .expect("exact rollout service status fixture");
+        service.insert("revision_count".to_owned(), json::Value::from(2_u32));
+        service.insert(
+            "active_rollout".to_owned(),
+            json::to_value(&RolloutRuntimeState {
+                rollout_handle: "echo_console:rollout:2".to_owned(),
+                baseline_version: Some("1.0.0".to_owned()),
+                candidate_version: "1.1.0".to_owned(),
+                canary_percent: 10,
+                traffic_percent: 50,
+                stage: RolloutStage::Promoted,
+                health_failures: 0,
+                max_health_failures: 1,
+                health_window_secs: 60,
+                created_sequence: 1,
+                updated_sequence: 2,
+            })
+            .expect("encode exact rollout state"),
+        );
+        let rollout_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = MockHttpServer::start(BTreeMap::from([
             (
                 "/v1/soracloud/rollout".to_owned(),
@@ -20820,8 +24514,6 @@ mod tests {
                 ),
             ),
         ]));
-        let key_pair = soracloud_fixture_key_pair(0x15);
-        let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = RolloutArgs {
             service_name: None,
@@ -20862,14 +24554,8 @@ mod tests {
             604_800_000,
             Some(&authority_id),
         );
-        let status_payload = norito::json!({
-            "repo_id": "openai/gpt-oss",
-            "storage_class": "Warm",
-            "lease_term_ms": 604_800_000,
-            "members": [],
-            "latest_audit_event": { "action": "HfDeploy" }
-        });
-        let deploy_response = norito::json!({ "tx_instructions": [] });
+        let status_payload = hf_status_fixture();
+        let deploy_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = MockHttpServer::start(BTreeMap::from([
             (
                 "/v1/soracloud/hf/deploy".to_owned(),
@@ -20888,7 +24574,7 @@ mod tests {
         let output = HfDeployArgs {
             repo_id: "openai/gpt-oss".to_owned(),
             revision: TEST_HF_COMMIT_OID.to_owned(),
-            model_name: None,
+            model_name: "gpt-oss".to_owned(),
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
             service: Some(dir.join("service_manifest.json")),
@@ -20928,12 +24614,7 @@ mod tests {
             "hf_status_service_plan_from_manifest_pair",
             InitTemplate::HttpService,
         );
-        let status_payload = norito::json!({
-            "repo_id": "openai/gpt-oss",
-            "storage_class": "Warm",
-            "lease_term_ms": 604_800_000,
-            "members": []
-        });
+        let status_payload = hf_status_fixture();
         let status_path = mock_hf_status_path(
             "http://127.0.0.1:1",
             "openai/gpt-oss",
@@ -20965,7 +24646,11 @@ mod tests {
         .expect("hf status should succeed");
         assert_manifest_pair_service_plan(&output);
         assert_eq!(
-            output.get("repo_id").and_then(norito::json::Value::as_str),
+            output
+                .get("source")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|source| source.get("repo_id"))
+                .and_then(norito::json::Value::as_str),
             Some("openai/gpt-oss")
         );
         let request = server
@@ -21002,14 +24687,8 @@ mod tests {
             604_800_000,
             Some(&authority_id),
         );
-        let status_payload = norito::json!({
-            "repo_id": "openai/gpt-oss",
-            "storage_class": "Warm",
-            "lease_term_ms": 604_800_000,
-            "members": [],
-            "latest_audit_event": { "action": "HfLeaseLeave" }
-        });
-        let leave_response = norito::json!({ "tx_instructions": [] });
+        let status_payload = hf_status_fixture();
+        let leave_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = MockHttpServer::start(BTreeMap::from([
             (
                 "/v1/soracloud/hf/lease/leave".to_owned(),
@@ -21065,14 +24744,8 @@ mod tests {
             604_800_000,
             Some(&authority_id),
         );
-        let status_payload = norito::json!({
-            "repo_id": "openai/gpt-oss",
-            "storage_class": "Warm",
-            "lease_term_ms": 604_800_000,
-            "members": [],
-            "latest_audit_event": { "action": "HfLeaseRenew" }
-        });
-        let renew_response = norito::json!({ "tx_instructions": [] });
+        let status_payload = hf_status_fixture();
+        let renew_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = MockHttpServer::start(BTreeMap::from([
             (
                 "/v1/soracloud/hf/lease/renew".to_owned(),
@@ -21091,7 +24764,7 @@ mod tests {
         let output = HfLeaseRenewArgs {
             repo_id: "openai/gpt-oss".to_owned(),
             revision: TEST_HF_COMMIT_OID.to_owned(),
-            model_name: None,
+            model_name: "gpt-oss".to_owned(),
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
             service: Some(dir.join("service_manifest.json")),
@@ -21149,7 +24822,9 @@ mod tests {
                 }
                 .run()
                 .expect("http-service init should succeed");
-                let response = norito::json!({ "tx_instructions": [] });
+                let key_pair = soracloud_fixture_key_pair($seed);
+                let authority = AccountId::new(key_pair.public_key().clone());
+                let response = mock_soracloud_draft_response(&authority, &key_pair);
                 let server = MockHttpServer::start(BTreeMap::from([(
                     $endpoint.to_owned(),
                     MockHttpResponse {
@@ -21157,8 +24832,6 @@ mod tests {
                         body: json::to_vec(&response).expect($response_label),
                     },
                 )]));
-                let key_pair = soracloud_fixture_key_pair($seed);
-                let authority = AccountId::new(key_pair.public_key().clone());
                 install_mock_submission_config(&authority, &key_pair);
                 let output = $args {
                     service_name: None,
@@ -21225,12 +24898,6 @@ mod tests {
                 }
                 .run()
                 .expect($success);
-                assert_eq!(
-                    output
-                        .get("service_name")
-                        .and_then(norito::json::Value::as_str),
-                    Some("echo_console")
-                );
                 assert_manifest_pair_service_plan(&output);
                 let request = server
                     .requests()
@@ -21297,11 +24964,7 @@ mod tests {
         training_job_status_args_can_resolve_service_name_from_manifest_pair,
         temp: "training_job_status_service_name_from_manifest_pair",
         endpoint: "/v1/soracloud/training/job/status?service_name=echo_console&job_id=job-1",
-        response: norito::json!({
-            "service_name": "echo_console",
-            "job_id": "job-1",
-            "status": "running"
-        }),
+        response: training_job_status_fixture("echo_console", "job-1"),
         response_label: "encode training status response",
         args: TrainingJobStatusArgs {
             job_id: "job-1".to_owned(),
@@ -21332,11 +24995,7 @@ mod tests {
         model_artifact_status_args_can_resolve_service_name_from_manifest_pair,
         temp: "model_artifact_status_service_name_from_manifest_pair",
         endpoint: "/v1/soracloud/model/artifact/status?service_name=echo_console&training_job_id=job-1",
-        response: norito::json!({
-            "service_name": "echo_console",
-            "training_job_id": "job-1",
-            "artifact_status": "registered"
-        }),
+        response: model_artifact_status_fixture("echo_console", "job-1"),
         response_label: "encode model artifact status response",
         args: ModelArtifactStatusArgs {
             training_job_id: "job-1".to_owned(),
@@ -21400,11 +25059,7 @@ mod tests {
         model_weight_status_args_can_resolve_service_name_from_manifest_pair,
         temp: "model_weight_status_service_name_from_manifest_pair",
         endpoint: "/v1/soracloud/model/weight/status?service_name=echo_console&model_name=fare-model",
-        response: norito::json!({
-            "service_name": "echo_console",
-            "model_name": "fare-model",
-            "current_weight_version": "v1"
-        }),
+        response: model_weight_status_fixture("echo_console", "fare-model"),
         response_label: "encode model weight status response",
         args: ModelWeightStatusArgs {
             model_name: "fare-model".to_owned(),
@@ -21416,11 +25071,7 @@ mod tests {
         model_upload_status_args_can_resolve_service_name_from_manifest_pair,
         temp: "model_upload_status_service_name_from_manifest_pair",
         endpoint: "/v1/soracloud/model/upload/status?service_name=echo_console&weight_version=v1&model_name=fare-model",
-        response: norito::json!({
-            "service_name": "echo_console",
-            "weight_version": "v1",
-            "model_name": "fare-model"
-        }),
+        response: uploaded_model_status_fixture("echo_console", "fare-model", "v1"),
         response_label: "encode model upload status response",
         args: ModelUploadStatusArgs {
             weight_version: "v1".to_owned(),
@@ -21431,51 +25082,6 @@ mod tests {
         success: "model upload-status should succeed",
         request_label: "model upload status request",
     );
-    #[test]
-    fn model_upload_encryption_recipient_args_can_attach_service_plan_from_manifest_pair() {
-        let (dir, _) = service_fixture(
-            "model_upload_encryption_recipient_service_plan_from_manifest_pair",
-            InitTemplate::HttpService,
-        );
-        let recipient_response = json::Value::Object(norito::json::Map::from_iter([(
-            "recipient".to_owned(),
-            json::to_value(&sample_uploaded_model_encryption_recipient())
-                .expect("encode uploaded-model recipient"),
-        )]));
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/model/upload/encryption-recipient".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&recipient_response)
-                    .expect("encode uploaded-model recipient response"),
-            },
-        )]));
-        let output = ModelUploadEncryptionRecipientArgs {
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run()
-        .expect("model upload-encryption-recipient should succeed");
-        assert_manifest_pair_service_plan(&output);
-        assert!(
-            output
-                .get("recipient")
-                .and_then(norito::json::Value::as_object)
-                .is_some()
-        );
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| request.method == "GET")
-            .expect("model upload encryption recipient request");
-        assert_eq!(
-            request.path,
-            "/v1/soracloud/model/upload/encryption-recipient"
-        );
-    }
     #[test]
     fn fetch_torii_status_rejects_invalid_url() {
         let err = fetch_torii_soracloud_status("not-a-url", None, None, 5)
@@ -21653,43 +25259,35 @@ mod tests {
     }
     #[test]
     fn signed_inrou_bundle_request_uses_canonical_guest_images_signature() {
-        let mut container = fixture_container();
-        container.runtime = SoraContainerRuntimeV1::Inrou;
-        container.inrou = Some(SoraInrouManifestV1 {
-            schema_version: SORA_INROU_MANIFEST_VERSION_V1,
-            guest_os: SoraInrouGuestOsV1::DebianSlim,
-            guest_images: BTreeMap::from([
-                (
-                    SoraInrouGuestIsaV1::X8664,
-                    SoraInrouGuestImageV1 {
-                        kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
-                        rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
-                        initrd_image_path: None,
-                        distribution: SoraArtifactDistributionPolicyV1::default(),
-                        published_artifact: None,
-                    },
-                ),
-                (
-                    SoraInrouGuestIsaV1::Aarch64,
-                    SoraInrouGuestImageV1 {
-                        kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
-                        rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
-                        initrd_image_path: None,
-                        distribution: SoraArtifactDistributionPolicyV1::default(),
-                        published_artifact: None,
-                    },
-                ),
-            ]),
-            bootstrap_user_data_path: None,
-            ssh_authorized_keys: vec!["ssh-ed25519 test soracloud".to_owned()],
-        });
-        let mut service = fixture_service();
-        service.container.manifest_hash = Hash::new(Encode::encode(&container));
-        let bundle = SoraDeploymentBundleV1 {
-            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-            container,
-            service,
-        };
+        let bundle = build_split_app_live_service_bundle(
+            "signed_inrou_bundle",
+            "signed-inrou-bundle.sora",
+            "1.0.0",
+        )
+        .expect("build unpublished dual-ISA Inrou bundle")
+        .into_admitted(BTreeMap::from([
+            (
+                SoraInrouGuestIsaV1::X8664,
+                sample_published_inrou_artifact(0x31),
+            ),
+            (
+                SoraInrouGuestIsaV1::Aarch64,
+                sample_published_inrou_artifact(0x32),
+            ),
+        ]))
+        .expect("construct admitted dual-ISA Inrou bundle");
+        assert_eq!(
+            bundle
+                .container
+                .inrou
+                .as_ref()
+                .expect("Inrou manifest")
+                .guest_images
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![SoraInrouGuestIsaV1::X8664, SoraInrouGuestIsaV1::Aarch64,]
+        );
         let key_pair = soracloud_fixture_key_pair(0x23);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_bundle_request(
@@ -21839,7 +25437,7 @@ mod tests {
         let request = signed_hf_deploy_request(
             "openai/gpt-oss",
             TEST_HF_COMMIT_OID,
-            None,
+            "gpt-oss",
             "hf_lease_a",
             Some("ops_agent"),
             StorageClass::Warm,
@@ -21873,7 +25471,8 @@ mod tests {
                         "openai/gpt-oss",
                         TEST_HF_COMMIT_OID,
                         "gpt-oss",
-                    ),
+                    )
+                    .expect("canonical generated HF metadata service bundle"),
                     &BTreeMap::new(),
                     &BTreeMap::new(),
                 )
@@ -21906,7 +25505,7 @@ mod tests {
         let request = signed_hf_lease_renew_request(
             "openai/gpt-oss",
             TEST_HF_COMMIT_OID,
-            None,
+            "gpt-oss",
             "hf_lease_renew",
             Some("ops_agent"),
             StorageClass::Warm,
@@ -21936,7 +25535,8 @@ mod tests {
             .min(u128::from(u64::MAX)) as u64;
         let request = signed_model_host_advertise_request(
             ModelHostAdvertiseArgs {
-                peer_id: "12D3KooWTestHostPeer".to_owned(),
+                peer_id: iroha::data_model::peer::PeerId::from(key_pair.public_key().clone())
+                    .to_string(),
                 backends: vec![ModelHostBackendArg::Transformers],
                 formats: vec![ModelHostModelFormatArg::Safetensors],
                 max_model_bytes: 16 * 1024 * 1024,
@@ -21999,6 +25599,7 @@ mod tests {
             let amount = "0.001".parse().expect("canonical exact amount");
             signed_agent_wallet_spend_request(
                 "ops_agent",
+                "wallet-spend-fixture-1",
                 "61CtjvNd9T3THAR65GsMVHr82Bjc",
                 &amount,
                 authority,
@@ -22059,29 +25660,6 @@ mod tests {
         encode_agent_artifact_allow_signature_payload,
         "signed agent artifact allow request"
     );
-    #[test]
-    fn signed_agent_autonomy_run_request_uses_verifiable_signature() {
-        let key_pair = soracloud_fixture_key_pair(0x33);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_agent_autonomy_run_request(
-            "ops_agent",
-            "hash:ABCD0123#01",
-            Some("hash:PROV0001#01"),
-            120,
-            "nightly-train-step-1",
-            Some("{\n  \"inputs\": [\"alpha\", \"beta\"],\n  \"parameters\": {\"max_new_tokens\": 4}\n}"),
-            &authority,
-            &key_pair,
-        )
-        .expect("signed agent autonomy run request");
-        let payload =
-            encode_agent_autonomy_run_signature_payload(&request.payload).expect("encode payload");
-        assert_signed_request_signature(&request, &request.provenance, &payload);
-        assert_eq!(
-            request.payload.workflow_input_json.as_deref(),
-            Some("{\"inputs\":[\"alpha\",\"beta\"],\"parameters\":{\"max_new_tokens\":4}}")
-        );
-    }
     signed_request_signature_case!(
         signed_training_job_start_request_uses_verifiable_signature,
         0x34,
@@ -22198,6 +25776,92 @@ mod tests {
         "signed model weight rollback request"
     );
     #[test]
+    fn signed_training_and_model_builders_reject_input_rewrites() {
+        let key_pair = soracloud_fixture_key_pair(0x7B);
+        let authority = AccountId::new(key_pair.public_key().clone());
+
+        signed_training_job_start_request(
+            " web_portal",
+            "model-1",
+            "job-1",
+            1,
+            1,
+            1,
+            0,
+            1,
+            1,
+            1,
+            Some(&authority),
+            &key_pair,
+        )
+        .expect_err("training start must reject padded service names");
+        signed_training_job_checkpoint_request(
+            "web_portal",
+            "job-1 ",
+            1,
+            1,
+            Hash::new(b"metrics"),
+            Some(&authority),
+            &key_pair,
+        )
+        .expect_err("training checkpoint must reject padded job IDs");
+        signed_training_job_retry_request(
+            "web_portal",
+            "job-1",
+            " retry",
+            Some(&authority),
+            &key_pair,
+        )
+        .expect_err("training retry must reject padded reasons");
+        signed_model_artifact_register_request(
+            "web_portal",
+            "model-1",
+            "job-1",
+            Hash::new(b"weight"),
+            " dataset://v1",
+            Hash::new(b"config"),
+            Hash::new(b"repro"),
+            Hash::new(b"attestation"),
+            Some(&authority),
+            &key_pair,
+        )
+        .expect_err("model artifact registration must reject padded dataset refs");
+        signed_model_weight_register_request(
+            "web_portal",
+            "model-1",
+            "v1 ",
+            "job-1",
+            None,
+            Hash::new(b"weight"),
+            "dataset://v1",
+            Hash::new(b"config"),
+            Hash::new(b"repro"),
+            Hash::new(b"attestation"),
+            Some(&authority),
+            &key_pair,
+        )
+        .expect_err("model weight registration must reject padded versions");
+        signed_model_weight_promote_request(
+            "web_portal",
+            "cafe\u{301}",
+            "v1",
+            true,
+            Hash::new(b"gate"),
+            Some(&authority),
+            &key_pair,
+        )
+        .expect_err("model promotion must reject NFC aliases");
+        signed_model_weight_rollback_request(
+            "web_portal",
+            "model-1",
+            "v0",
+            " regression",
+            Some(&authority),
+            &key_pair,
+        )
+        .expect_err("model rollback must reject padded reasons");
+    }
+    #[test]
     fn bundle_signature_payload_layout_is_canonical_layout() {
         let container = fixture_container();
         let mut service = fixture_service();
@@ -22263,6 +25927,44 @@ mod tests {
             .insert("retired_v0".to_owned(), norito::json::Value::from(true));
         norito::json::from_value::<SignedBundleRequest>(unknown)
             .expect_err("signed bundle request must reject unknown fields");
+
+        let mut container = fixture_container();
+        let mut service = fixture_service();
+        service.container.manifest_hash = Hash::new(Encode::encode(&container));
+        signed_bundle_request(
+            SoraDeploymentBundleV1 {
+                schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+                container: container.clone(),
+                service: service.clone(),
+            },
+            BTreeMap::from([(
+                " padded-config".to_owned(),
+                Json::from(norito::json!({"enabled": true})),
+            )]),
+            BTreeMap::new(),
+            Some(&authority),
+            &key_pair,
+        )
+        .expect_err("initial config keys must be exact before signing");
+
+        container.capabilities.network =
+            SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
+                " api.example.test",
+                [443],
+            )]);
+        service.container.manifest_hash = Hash::new(Encode::encode(&container));
+        signed_bundle_request(
+            SoraDeploymentBundleV1 {
+                schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+                container,
+                service,
+            },
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Some(&authority),
+            &key_pair,
+        )
+        .expect_err("padded network allowlist hosts must fail before signing");
     }
     #[test]
     fn signed_app_infra_request_requires_explicit_service_vectors_and_closed_fields() {
@@ -22483,10 +26185,10 @@ mod tests {
             AppSimulateOutput,
             AppServiceStatusOutput,
             AppLocalPlanOutput,
+            AppLocalWorkspaceScriptsOutput,
             AppLocalDevOutput,
             AppBuildAndSyncOutput,
-            AppDoctorWorkspaceOutput,
-            AppWorkspaceMutationScriptOutput,
+            AppReleaseWorkspaceScriptOutput,
             AppLocalFrontendPlanOutput,
             AppLocalServicePlanOutput,
             AppLocalServiceWorkspaceScriptsOutput,
@@ -22810,9 +26512,6 @@ mod tests {
             SignedAgentMessageAckRequest,
             AgentArtifactAllowPayload,
             SignedAgentArtifactAllowRequest,
-            AgentAutonomyRunPayload,
-            SignedAgentAutonomyRunRequest,
-            AgentAutonomyFinalizeRequest,
             TrainingJobStartPayload,
             SignedTrainingJobStartRequest,
             TrainingJobCheckpointPayload,
@@ -22981,19 +26680,6 @@ mod tests {
             "agent artifact-allow payload"
         );
         assert_required_nullable!(
-            AgentAutonomyRunPayload {
-                apartment_name: "ops_agent".to_owned(),
-                artifact_hash: "hash:ABCD0123#01".to_owned(),
-                provenance_hash: None,
-                budget_units: 120,
-                run_label: "nightly".to_owned(),
-                workflow_input_json: None,
-            },
-            AgentAutonomyRunPayload,
-            ["provenance_hash", "workflow_input_json"],
-            "agent autonomy-run payload"
-        );
-        assert_required_nullable!(
             ModelWeightRegisterPayload {
                 service_name: "web_portal".to_owned(),
                 model_name: "model-1".to_owned(),
@@ -23061,6 +26747,7 @@ mod tests {
         agent_wallet_spend_signature_payload_layout_is_canonical_tuple,
         payload = AgentWalletSpendPayload {
             apartment_name: "ops_agent".to_owned(),
+            request_id: "wallet-spend-wide-amount-1".to_owned(),
             asset_definition: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
             amount: "340282366920938463463374607431768211456.0000000001"
                 .parse()
@@ -23069,6 +26756,7 @@ mod tests {
         encode_agent_wallet_spend_signature_payload,
         (
             payload.apartment_name.as_str(),
+            payload.request_id.as_str(),
             payload.asset_definition.as_str(),
             payload.amount.clone(),
         ),
@@ -23130,43 +26818,54 @@ mod tests {
             payload.provenance_hash.as_deref(),
         )
     );
-    signature_payload_layout_case!(
-        agent_autonomy_run_signature_payload_layout_is_canonical_tuple,
-        payload = AgentAutonomyRunPayload {
-            apartment_name: "ops_agent".to_owned(),
-            artifact_hash: "hash:ABCD0123#01".to_owned(),
-            provenance_hash: Some("hash:PROV0001#01".to_owned()),
-            budget_units: 120,
-            run_label: "nightly-train-step-1".to_owned(),
-            workflow_input_json: Some("{\"inputs\":\"nightly\"}".to_owned()),
-        },
-        encode_agent_autonomy_run_signature_payload,
-        (
-            payload.apartment_name.as_str(),
-            payload.artifact_hash.as_str(),
-            payload.provenance_hash.as_deref(),
-            payload.budget_units,
-            payload.run_label.as_str(),
-            payload.workflow_input_json.as_deref(),
-        )
-    );
     #[test]
-    fn canonicalize_agent_workflow_input_json_compacts_payload() {
-        let canonical = canonicalize_agent_workflow_input_json(
-            "{\n  \"inputs\": [\"alpha\", \"beta\"],\n  \"parameters\": {\"max_new_tokens\": 4}\n}",
-        )
-        .expect("canonicalize workflow input JSON");
+    fn agent_workflow_input_json_parser_requires_exact_canonical_bytes() {
+        let canonical = "{\"inputs\":[\"alpha\",\"beta\"],\"parameters\":{\"max_new_tokens\":4}}";
         assert_eq!(
-            canonical,
-            "{\"inputs\":[\"alpha\",\"beta\"],\"parameters\":{\"max_new_tokens\":4}}"
+            parse_exact_agent_workflow_input_json(canonical)
+                .expect("accept canonical workflow input JSON"),
+            canonical
         );
+        for noncanonical in [
+            "{\n  \"inputs\": [\"alpha\", \"beta\"],\n  \"parameters\": {\"max_new_tokens\": 4}\n}",
+            " {\"inputs\":[]}",
+            "{\"b\":1,\"a\":2}",
+        ] {
+            parse_exact_agent_workflow_input_json(noncanonical)
+                .expect_err("non-canonical workflow JSON bytes must be rejected");
+        }
     }
     #[test]
-    fn default_hf_model_name_uses_repo_slug() {
+    fn hf_repo_id_argument_requires_one_exact_fully_qualified_identity() {
         assert_eq!(
-            default_hf_model_name("openai/gpt-oss").expect("derive model name"),
-            "gpt-oss"
+            parse_hf_repo_id_arg("OpenAI/GPT-OSS").expect("canonical repository identity"),
+            "OpenAI/GPT-OSS"
         );
+        for noncanonical in ["GPT-OSS", "OpenAI//GPT-OSS", " OpenAI/GPT-OSS"] {
+            parse_hf_repo_id_arg(noncanonical)
+                .expect_err("repository aliases and whitespace must be rejected");
+        }
+    }
+    #[test]
+    fn hf_source_hash_is_the_domain_separated_authoritative_v1_id() {
+        let actual =
+            hf_source_hash("openai/gpt-oss", TEST_HF_COMMIT_OID).expect("derive CLI HF source id");
+        let expected = Hash::new(
+            norito::to_bytes(&(
+                "soracloud:hf-source-id:v1",
+                "openai/gpt-oss",
+                TEST_HF_COMMIT_OID,
+            ))
+            .expect("encode exact domain-separated HF source preimage"),
+        );
+        let retired_undomained = Hash::new(
+            norito::to_bytes(&("openai/gpt-oss", TEST_HF_COMMIT_OID))
+                .expect("encode retired undomained tuple"),
+        );
+        assert_eq!(actual, expected);
+        assert_ne!(actual, retired_undomained);
+        let _ = hf_source_hash("openai/gpt-oss", "main")
+            .expect_err("mutable revisions must not produce an HF source id");
     }
     #[test]
     fn hf_revision_argument_requires_full_lowercase_commit_oid() {
@@ -23537,12 +27236,12 @@ mod tests {
         assert!(error.contains("bundle_root must match"));
     }
     #[test]
-    fn signed_uploaded_model_register_request_rejects_empty_finalize_fields() {
+    fn signed_uploaded_model_register_request_rejects_noncanonical_finalize_fields() {
         let bundle = sample_uploaded_model_bundle();
         let mut finalize = sample_uploaded_model_finalize_payload();
         finalize.model_name = " \t ".to_owned();
         let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
-        assert!(error.contains("model_name must not be empty"));
+        assert!(error.contains("register model_name"));
         let mut finalize = sample_uploaded_model_finalize_payload();
         finalize.artifact_id.clear();
         let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
@@ -23550,13 +27249,33 @@ mod tests {
         let mut finalize = sample_uploaded_model_finalize_payload();
         finalize.dataset_ref = "\n".to_owned();
         let error = uploaded_model_register_validation_error(bundle, finalize);
-        assert!(error.contains("dataset_ref must not be empty"));
-    }
-    #[test]
-    fn fetch_uploaded_model_recipient_rejects_invalid_url() {
-        let err = fetch_torii_soracloud_uploaded_model_encryption_recipient("not-a-url", None, 5)
-            .expect_err("invalid URL must fail");
-        assert!(err.to_string().contains("invalid --torii-url"));
+        assert!(error.contains("dataset_ref must not contain surrounding whitespace"));
+
+        let bundle = sample_uploaded_model_bundle();
+        let mutations: [fn(&mut UploadedModelFinalizePayload); 4] = [
+            |finalize: &mut UploadedModelFinalizePayload| {
+                finalize.service_name = format!(" {}", finalize.service_name);
+            },
+            |finalize: &mut UploadedModelFinalizePayload| {
+                finalize.model_name = format!("{} ", finalize.model_name);
+            },
+            |finalize: &mut UploadedModelFinalizePayload| {
+                finalize.artifact_id = format!(" {}", finalize.artifact_id);
+            },
+            |finalize: &mut UploadedModelFinalizePayload| {
+                finalize.dataset_ref = format!("{} ", finalize.dataset_ref);
+            },
+        ];
+        for mutate in mutations {
+            let mut finalize = sample_uploaded_model_finalize_payload();
+            mutate(&mut finalize);
+            let error = uploaded_model_register_validation_error(bundle.clone(), finalize);
+            assert!(
+                error.contains("exact canonical")
+                    || error.contains("surrounding whitespace")
+                    || error.contains("only ASCII")
+            );
+        }
     }
     #[test]
     fn fetch_uploaded_model_status_rejects_invalid_url() {
@@ -23575,7 +27294,7 @@ mod tests {
         assert!(err.to_string().contains("invalid --torii-url"));
     }
     #[test]
-    fn fetch_uploaded_model_status_requires_model_identifier_before_network() {
+    fn fetch_uploaded_model_status_rejects_blank_model_name_before_network() {
         let err = fetch_torii_soracloud_uploaded_model_status(
             "http://127.0.0.1:1",
             "v1/soracloud/model/upload/status",
@@ -23587,11 +27306,8 @@ mod tests {
             None,
             5,
         )
-        .expect_err("missing uploaded-model identifier must fail locally");
-        assert!(
-            err.to_string()
-                .contains("--model-id or --model-name is required")
-        );
+        .expect_err("blank uploaded-model name must fail locally");
+        assert!(err.to_string().contains("invalid --model-name"));
     }
     include!("soracloud/network_auth_tests.rs");
     #[test]
@@ -23616,6 +27332,24 @@ mod tests {
         let error = soracloud_signature_timestamp_ms_from_elapsed(Duration::new(u64::MAX, 0))
             .expect_err("millisecond overflow must fail");
         assert!(error.to_string().contains("exceeds u64 milliseconds"));
+    }
+    #[test]
+    fn sorafs_release_nonce_fails_closed_before_unix_epoch() {
+        let before_epoch = UNIX_EPOCH
+            .checked_sub(Duration::from_nanos(1))
+            .expect("representable pre-epoch timestamp");
+        let error = sorafs_release_nonce_unix_nanos(before_epoch)
+            .expect_err("pre-epoch release governance nonce must fail");
+        assert!(error.to_string().contains("precedes the Unix epoch"));
+        assert_eq!(
+            sorafs_release_nonce_unix_nanos(
+                UNIX_EPOCH
+                    .checked_add(Duration::from_nanos(1_234))
+                    .expect("representable timestamp"),
+            )
+            .expect("canonical release nonce"),
+            "1234"
+        );
     }
     #[test]
     fn build_soracloud_mutation_auth_headers_rejects_witness_account_mismatch() {
@@ -23706,7 +27440,9 @@ mod tests {
     fn deploy_returns_manifest_backed_service_projection() {
         let (dir, _) = service_fixture("deploy_service_projection", InitTemplate::HttpService);
         let bundle_file = prepare_http_service_bundle(&dir, "deploy");
-        let deploy_response = norito::json!({ "tx_instructions": [] });
+        let key_pair = soracloud_fixture_key_pair(0x20);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let deploy_response = mock_soracloud_draft_response(&authority, &key_pair);
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = mock_bundle_mutation_server(
             "/v1/soracloud/deploy",
@@ -23715,8 +27451,6 @@ mod tests {
             "encode public discovery pin register response",
             "encode deploy response",
         );
-        let key_pair = soracloud_fixture_key_pair(0x20);
-        let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = DeployArgs {
             container: dir.join("container_manifest.json"),
@@ -23761,13 +27495,163 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("1.0.0")
         );
+        let deploy_request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/deploy")
+            .expect("capture admitted deploy request");
+        let body: Value = json::from_slice(&deploy_request.body).expect("decode deploy request");
+        for guest_isa in ["x86_64", "aarch64"] {
+            let artifact = body
+                .pointer(&format!(
+                    "/bundle/container/inrou/guest_images/{guest_isa}/published_artifact"
+                ))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "published deploy request must contain a concrete artifact for {guest_isa}"
+                    )
+                });
+            assert!(artifact.contains_key("manifest_digest_hex"));
+            assert!(!artifact.contains_key("manifest_id_hex"));
+        }
         assert_notes_contain(&output.notes, "live Torii status");
+    }
+    #[test]
+    fn deploy_guest_publication_failure_never_signs_or_submits_a_service_mutation() {
+        let (dir, _) = service_fixture("deploy_missing_guest_member", InitTemplate::HttpService);
+        let bundle_file = prepare_http_service_bundle(&dir, "deploy-missing-guest");
+        fs::remove_file(dir.join("http-service/inrou/aarch64/rootfs.ext4"))
+            .expect("remove one required guest-image member");
+        let key_pair = soracloud_fixture_key_pair(0x7A);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
+        let status_payload = mock_control_plane_status_payload(&["echo_console"]);
+        let server = mock_bundle_mutation_server(
+            "/v1/soracloud/deploy",
+            &draft_response,
+            &status_payload,
+            "encode pin register response",
+            "encode deploy response",
+        );
+        install_mock_submission_config(&authority, &key_pair);
+        let error = DeployArgs {
+            container: dir.join("container_manifest.json"),
+            service: dir.join("service_manifest.json"),
+            bundle_file,
+            initial_configs: None,
+            initial_secrets: None,
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(MutationMode::Deploy, &authority, &key_pair)
+        .expect_err("missing guest member must stop publication before mutation signing");
+        assert!(
+            format!("{error:#}").contains("missing Inrou guest image member"),
+            "unexpected publication error: {error:#}"
+        );
+        assert!(
+            server.requests().is_empty(),
+            "guest-image preflight must fail before bundle pin, registration, signing, or mutation"
+        );
+    }
+    #[test]
+    fn deploy_nonportable_inrou_entrypoint_fails_before_any_upload() {
+        let (dir, _) = service_fixture("deploy_nonportable_entrypoint", InitTemplate::HttpService);
+        let bundle_file = prepare_http_service_bundle(&dir, "deploy-nonportable-entrypoint");
+        let container_path = dir.join("container_manifest.json");
+        let service_path = dir.join("service_manifest.json");
+        let mut container: UnpublishedContainerManifestV1 =
+            load_json(&container_path).expect("load unpublished container workspace");
+        container.entrypoint = "/app\\server.mjs".to_owned();
+        let mut service: SoraServiceManifestV1 =
+            load_json(&service_path).expect("load unpublished service manifest");
+        service.container.manifest_hash = container
+            .workspace_hash()
+            .expect("hash malformed unpublished workspace exactly");
+        write_json(&container_path, &container).expect("write malformed container workspace");
+        write_json(&service_path, &service).expect("write linked service manifest");
+
+        let key_pair = soracloud_fixture_key_pair(0x7B);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
+        let status_payload = mock_control_plane_status_payload(&["echo_console"]);
+        let server = mock_bundle_mutation_server(
+            "/v1/soracloud/deploy",
+            &draft_response,
+            &status_payload,
+            "encode pin register response",
+            "encode deploy response",
+        );
+        install_mock_submission_config(&authority, &key_pair);
+        let error = DeployArgs {
+            container: container_path,
+            service: service_path,
+            bundle_file,
+            initial_configs: None,
+            initial_secrets: None,
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(MutationMode::Deploy, &authority, &key_pair)
+        .expect_err("nonportable Inrou entrypoint must fail before publication");
+        assert!(
+            format!("{error:#}").contains("entrypoint"),
+            "unexpected entrypoint validation error: {error:#}"
+        );
+        assert!(
+            server.requests().is_empty(),
+            "entrypoint preflight must fail before every SoraFS and Torii request"
+        );
+    }
+    #[test]
+    fn deploy_empty_inrou_guest_image_fails_before_any_upload() {
+        let (dir, _) = service_fixture("deploy_empty_guest_image", InitTemplate::HttpService);
+        let bundle_file = prepare_http_service_bundle(&dir, "deploy-empty-guest-image");
+        fs::write(dir.join("http-service/inrou/aarch64/rootfs.ext4"), b"")
+            .expect("truncate one required guest-image member");
+        let key_pair = soracloud_fixture_key_pair(0x7C);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
+        let status_payload = mock_control_plane_status_payload(&["echo_console"]);
+        let server = mock_bundle_mutation_server(
+            "/v1/soracloud/deploy",
+            &draft_response,
+            &status_payload,
+            "encode pin register response",
+            "encode deploy response",
+        );
+        install_mock_submission_config(&authority, &key_pair);
+        let error = DeployArgs {
+            container: dir.join("container_manifest.json"),
+            service: dir.join("service_manifest.json"),
+            bundle_file,
+            initial_configs: None,
+            initial_secrets: None,
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(MutationMode::Deploy, &authority, &key_pair)
+        .expect_err("empty Inrou guest image must fail before publication");
+        assert!(
+            format!("{error:#}").contains("nonempty regular file"),
+            "unexpected empty guest-image error: {error:#}"
+        );
+        assert!(
+            server.requests().is_empty(),
+            "empty guest-image preflight must fail before every SoraFS and Torii request"
+        );
     }
     #[test]
     fn upgrade_returns_manifest_backed_service_projection() {
         let (dir, _) = service_fixture("upgrade_service_projection", InitTemplate::HttpService);
         let bundle_file = prepare_http_service_bundle(&dir, "upgrade");
-        let upgrade_response = norito::json!({ "tx_instructions": [] });
+        let key_pair = soracloud_fixture_key_pair(0x3F);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let upgrade_response = mock_soracloud_draft_response(&authority, &key_pair);
         let status_payload = mock_control_plane_status_payload(&["echo_console"]);
         let server = mock_bundle_mutation_server(
             "/v1/soracloud/upgrade",
@@ -23776,8 +27660,6 @@ mod tests {
             "encode public discovery pin register response",
             "encode upgrade response",
         );
-        let key_pair = soracloud_fixture_key_pair(0x3F);
-        let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let output = UpgradeArgs {
             container: dir.join("container_manifest.json"),
@@ -23833,7 +27715,7 @@ mod tests {
         );
         assert_eq!(output.template, "http-service");
         assert_scaffold_file_contract(&dir, "init_http_service_template_scaffolds_inrou_service");
-        let container: SoraContainerManifestV1 =
+        let container: UnpublishedContainerManifestV1 =
             load_json(&dir.join("container_manifest.json")).expect("container manifest");
         assert_eq!(container.runtime, SoraContainerRuntimeV1::Inrou);
         assert_eq!(container.bundle_path, "/app/server.mjs");
@@ -23846,8 +27728,14 @@ mod tests {
                 .inrou
                 .as_ref()
                 .expect("Inrou manifest")
-                .ssh_authorized_keys
-                .is_empty()
+                .guest_images
+                .values()
+                .all(|image| {
+                    norito::json::to_value(image)
+                        .expect("serialize unpublished guest image")
+                        .get("published_artifact")
+                        .is_some_and(Value::is_null)
+                })
         );
         let service: SoraServiceManifestV1 =
             load_json(&dir.join("service_manifest.json")).expect("service manifest");
@@ -23906,7 +27794,7 @@ mod tests {
         assert_eq!(output.lease_volume_count, 2);
         assert_eq!(output.handler_count, 0);
         assert!(output.workspace_dir.contains("http_service_local_plan"));
-        assert_local_workspace_scripts(&output.workspace_scripts);
+        assert_service_workspace_scripts(&output.workspace_scripts);
         assert!(
             output
                 .routes
@@ -24347,16 +28235,13 @@ mod tests {
                 .map(|mailbox| mailbox.queue_name.as_ref()),
             Some("updates")
         );
-        assert_eq!(
-            service.handlers[2].class,
-            SoraServiceHandlerClassV1::PrivateUpdate
-        );
+        assert_eq!(service.handlers[2].class, SoraServiceHandlerClassV1::Update);
         assert_eq!(
             service.handlers[2]
                 .mailbox
                 .as_ref()
                 .map(|mailbox| mailbox.queue_name.as_ref()),
-            Some("private_updates")
+            Some("ciphertext_updates")
         );
         assert_eq!(service.artifacts.len(), 2);
         assert_eq!(service.artifacts[0].kind, SoraArtifactKindV1::Journal);
@@ -24488,7 +28373,7 @@ mod tests {
                 .any(|service| service.bundle_file.as_deref()
                     == Some("services/vault/build/vault-api.to"))
         );
-        let live_container: SoraContainerManifestV1 =
+        let live_container: UnpublishedContainerManifestV1 =
             load_json(&dir.join("services/live/container_manifest.json")).expect("live container");
         let live_service: SoraServiceManifestV1 =
             load_json(&dir.join("services/live/service_manifest.json")).expect("live service");
@@ -24511,11 +28396,10 @@ mod tests {
         assert_eq!(live_service.replicas.get(), 1);
         assert_eq!(live_service.lease_volumes.len(), 5);
         let inrou = live_container.inrou.expect("live inrou manifest");
-        assert_eq!(inrou.guest_os, SoraInrouGuestOsV1::DebianSlim);
         assert_eq!(
             inrou
                 .guest_images
-                .get(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664)
+                .get("x86_64")
                 .expect("x86_64 guest image")
                 .kernel_image_path,
             "/inrou/x86_64/vmlinux"
@@ -24523,7 +28407,7 @@ mod tests {
         assert_eq!(
             inrou
                 .guest_images
-                .get(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664)
+                .get("x86_64")
                 .expect("x86_64 guest image")
                 .rootfs_image_path,
             "/inrou/x86_64/rootfs.ext4"
@@ -24531,7 +28415,7 @@ mod tests {
         assert_eq!(
             inrou
                 .guest_images
-                .get(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64)
+                .get("aarch64")
                 .expect("aarch64 guest image")
                 .kernel_image_path,
             "/inrou/aarch64/vmlinux"
@@ -24539,12 +28423,11 @@ mod tests {
         assert_eq!(
             inrou
                 .guest_images
-                .get(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64)
+                .get("aarch64")
                 .expect("aarch64 guest image")
                 .rootfs_image_path,
             "/inrou/aarch64/rootfs.ext4"
         );
-        assert!(inrou.ssh_authorized_keys.is_empty());
         let vault_container: SoraContainerManifestV1 =
             load_json(&dir.join("services/vault/container_manifest.json"))
                 .expect("vault container");
@@ -24703,7 +28586,7 @@ mod tests {
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
         assert!(output.workspace_dir.contains("split_app_local_plan"));
-        assert_local_workspace_scripts(&output.workspace_scripts);
+        assert_app_workspace_scripts(&output.workspace_scripts);
         assert_eq!(
             output
                 .frontend
@@ -24788,7 +28671,7 @@ mod tests {
                     && route.route_kind == "handler"
                     && route.handler_name.as_deref() == Some("user_preferences_put")
                     && route.path == "/api/v1/user/preferences"
-                    && route.handler_class.as_deref() == Some("PrivateUpdate"))
+                    && route.handler_class.as_deref() == Some("Update"))
         );
         assert!(output.notes.iter().any(|note| note.contains("CID-only")));
     }
@@ -24848,7 +28731,7 @@ mod tests {
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(output.workspace_dir.contains("split_app_local_dev_dry_run"));
-        assert_local_workspace_scripts(&output.workspace_scripts);
+        assert_app_workspace_scripts(&output.workspace_scripts);
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
@@ -24948,7 +28831,7 @@ mod tests {
                 .workspace_dir
                 .contains("split_app_build_and_sync_dry_run")
         );
-        assert_local_workspace_scripts(&output.workspace_scripts);
+        assert_app_workspace_scripts(&output.workspace_scripts);
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
@@ -25006,34 +28889,6 @@ mod tests {
         assert_notes_contain(&output.notes, "build-and-sync completed");
     }
     #[test]
-    fn app_doctor_workspace_split_app_dry_run_reports_manifest_adjacent_script() {
-        let (dir, _) = split_app_fixture("split_app_doctor_workspace_dry_run");
-        let output = AppDoctorWorkspaceArgs {
-            manifest: dir.join("app_manifest.json"),
-            dry_run: true,
-        }
-        .run()
-        .expect("app doctor dry-run should succeed");
-        assert_eq!(output.mode, "dry_run");
-        assert_eq!(output.hostname, "travel-ops.sora");
-        assert!(output.manifest_path.ends_with("app_manifest.json"));
-        assert!(
-            output
-                .workspace_dir
-                .contains("split_app_doctor_workspace_dry_run")
-        );
-        assert_optional_path_ends_with(output.workspace_scripts.doctor.as_deref(), "doctor.sh");
-        assert_optional_path_ends_with(output.workspace_scripts.release.as_deref(), "release.sh");
-        assert_eq!(output.script_name, "doctor.sh");
-        assert_eq!(output.command, vec!["./doctor.sh".to_owned()]);
-        assert!(output.script_path.ends_with("doctor.sh"));
-        assert!(output.has_mixed_planes);
-        assert_eq!(output.hosted_http_service_count, 1);
-        assert_eq!(output.deterministic_service_count, 1);
-        assert_eq!(output.services.len(), 2);
-        assert!(output.notes.iter().any(|note| note.contains("doctor")));
-    }
-    #[test]
     fn app_release_workspace_executes_manifest_adjacent_script() {
         if !bash_available() {
             return;
@@ -25078,101 +28933,6 @@ mod tests {
         assert!(args.contains("--timeout-secs"));
         assert!(args.contains("29"));
         assert_notes_contain(&output.notes, "release completed");
-    }
-    #[test]
-    fn app_deploy_workspace_split_app_dry_run_reports_manifest_adjacent_script() {
-        let (dir, _) = split_app_fixture("split_app_deploy_workspace_dry_run");
-        let output = AppWorkspaceMutationArgs {
-            manifest: dir.join("app_manifest.json"),
-            torii_url: Some("http://127.0.0.1:8080".to_owned()),
-            api_token: Some("token".to_owned()),
-            timeout_secs: 41,
-            dry_run: true,
-        }
-        .run(MutationMode::Deploy)
-        .expect("app deploy dry-run should succeed");
-        assert_eq!(output.mode, "dry_run");
-        assert_eq!(output.hostname, "travel-ops.sora");
-        assert!(output.manifest_path.ends_with("app_manifest.json"));
-        assert!(
-            output
-                .workspace_dir
-                .contains("split_app_deploy_workspace_dry_run")
-        );
-        assert_mutation_workspace_scripts(&output.workspace_scripts);
-        assert_eq!(output.script_name, "deploy.sh");
-        assert_eq!(output.torii_url, "http://127.0.0.1:8080");
-        assert!(output.uses_api_token);
-        assert!(output.has_mixed_planes);
-        assert_eq!(output.hosted_http_service_count, 1);
-        assert_eq!(output.deterministic_service_count, 1);
-        assert_eq!(
-            output.command,
-            vec![
-                "./deploy.sh".to_owned(),
-                "--timeout-secs".to_owned(),
-                "41".to_owned(),
-            ]
-        );
-        assert!(output.script_path.ends_with("deploy.sh"));
-        assert_eq!(output.services.len(), 2);
-        assert!(
-            output
-                .services
-                .iter()
-                .any(|service| service.service_name == "travel-ops_vault"
-                    && service.workspace_dir.ends_with("services/vault"))
-        );
-        assert_notes_contain(&output.notes, "exporting TORII_URL");
-    }
-    #[test]
-    fn app_upgrade_workspace_executes_manifest_adjacent_script() {
-        if !bash_available() {
-            return;
-        }
-        let (dir, _) = single_api_fixture("single_api_upgrade_workspace_run");
-        let upgrade_script = dir.join("upgrade.sh");
-        fs::write(&upgrade_script, STATIC_ASSETS_V1[9]).expect("write app upgrade script");
-        mark_template_file_executable(&upgrade_script).expect("mark app upgrade executable");
-        let output = AppWorkspaceMutationArgs {
-            manifest: dir.join("app_manifest.json"),
-            torii_url: Some("http://127.0.0.1:8080".to_owned()),
-            api_token: Some("top-secret".to_owned()),
-            timeout_secs: 23,
-            dry_run: false,
-        }
-        .run(MutationMode::Upgrade)
-        .expect("app upgrade execution should succeed");
-        assert_eq!(output.mode, "completed");
-        assert_eq!(output.hostname, "travel-ops.sora");
-        assert!(
-            output
-                .workspace_dir
-                .contains("single_api_upgrade_workspace_run")
-        );
-        assert_mutation_workspace_scripts(&output.workspace_scripts);
-        assert_eq!(output.exit_status, Some(0));
-        assert_eq!(output.script_name, "upgrade.sh");
-        assert_eq!(output.torii_url, "http://127.0.0.1:8080");
-        assert!(output.uses_api_token);
-        assert_eq!(output.services.len(), 1);
-        assert!(output
-            .routes
-            .iter()
-            .any(|route| route.service_name == "travel-ops_api" && route.path == "/api/healthz"));
-        assert_eq!(
-            fs::read_to_string(dir.join("app-upgrade-torii.txt")).expect("read app upgrade torii"),
-            "http://127.0.0.1:8080"
-        );
-        assert_eq!(
-            fs::read_to_string(dir.join("app-upgrade-token.txt")).expect("read app upgrade token"),
-            "top-secret"
-        );
-        let args =
-            fs::read_to_string(dir.join("app-upgrade-args.txt")).expect("read app upgrade args");
-        assert!(args.contains("--timeout-secs"));
-        assert!(args.contains("23"));
-        assert_notes_contain(&output.notes, "upgrade completed");
     }
     #[test]
     fn app_doctor_validates_split_app_release_contract() {
@@ -25221,11 +28981,18 @@ mod tests {
                 .any(|check| check.name == "live_storage_plane" && check.status == "pass")
         );
         assert!(
+            output.checks.iter().any(
+                |check| check.name == "deterministic_service_surface" && check.status == "pass"
+            )
+        );
+        assert!(
             output
                 .checks
                 .iter()
-                .any(|check| check.name == "vault_surface" && check.status == "pass")
+                .all(|check| check.name != "app_infra_manifest"),
+            "local doctor must not claim that the post-publication app-infra manifest was validated"
         );
+        assert!(output.notes.iter().all(|note| !note.contains("deferred")));
         assert!(
             output
                 .routes
@@ -25233,6 +29000,40 @@ mod tests {
                 .any(|route| route.service_name == "travel-ops_vault"
                     && route.path == "/api/auth/challenge")
         );
+    }
+    #[test]
+    fn app_doctor_accepts_single_api_root_binding_release_contract() {
+        let (dir, _) = single_api_fixture("single_api_doctor");
+        fs::create_dir_all(dir.join("web/dist")).expect("create web dist");
+        fs::write(
+            dir.join("web/dist/index.html"),
+            "<!doctype html><title>Travel Ops</title>",
+        )
+        .expect("write web index");
+        fs::create_dir_all(dir.join("services/api/build")).expect("create API build dir");
+        fs::write(
+            dir.join("services/api/build/api-service.to"),
+            b"doctor-single-api-bundle",
+        )
+        .expect("write API bundle");
+        let output = AppDoctorArgs {
+            manifest: dir.join("app_manifest.json"),
+        }
+        .run()
+        .expect("doctor should produce a report");
+        assert!(output.ok, "single-api doctor checks: {:?}", output.checks);
+        assert!(!output.has_mixed_planes);
+        assert_eq!(output.hosted_http_service_count, 0);
+        assert_eq!(output.deterministic_service_count, 1);
+        assert!(
+            output
+                .checks
+                .iter()
+                .any(|check| { check.name == "frontend_publish_mode" && check.status == "pass" })
+        );
+        assert!(output.checks.iter().any(|check| {
+            check.name == "deterministic_service_surface" && check.status == "pass"
+        }));
     }
     #[test]
     fn app_doctor_rejects_any_hosted_live_route_outside_api_v1() {
@@ -25263,7 +29064,7 @@ mod tests {
         let admin_bundle_path = artifact_dir.join("admin-api.tgz");
         fs::create_dir_all(&artifact_dir).expect("create artifact dir");
         fs::write(&admin_bundle_path, b"doctor-admin-bundle").expect("write admin bundle");
-        let admin_container: SoraContainerManifestV1 =
+        let admin_container: UnpublishedContainerManifestV1 =
             load_json(&dir.join("services/live/container_manifest.json")).expect("live container");
         let mut admin_service: SoraServiceManifestV1 =
             load_json(&dir.join("services/live/service_manifest.json")).expect("live service");
@@ -25321,7 +29122,6 @@ mod tests {
             torii_url: Some("http://127.0.0.1:8080".to_owned()),
             api_token: Some("token".to_owned()),
             timeout_secs: 41,
-            skip_build: false,
             dry_run: true,
         }
         .run(&authority, &key_pair)
@@ -25330,16 +29130,10 @@ mod tests {
         assert_eq!(output.release_mode, "deploy");
         assert_eq!(output.torii_url, "http://127.0.0.1:8080");
         assert!(output.uses_api_token);
-        assert!(!output.skip_build);
         assert!(output.release_response.is_none());
         assert_eq!(output.plan.hostname, "travel-ops.sora");
         assert!(output.plan.has_mixed_planes);
-        assert!(
-            output
-                .build_and_sync
-                .as_ref()
-                .is_some_and(|build| build.mode == "dry_run")
-        );
+        assert_eq!(output.build_and_sync.mode, "dry_run");
         assert_notes_contain(&output.notes, "one explicit deploy");
     }
     #[test]
@@ -25349,11 +29143,13 @@ mod tests {
         }
         let (dir, _) = split_app_fixture("split_app_release_run");
         let build_script = dir.join("build-and-sync.sh");
-        fs::write(&build_script, STATIC_ASSETS_V1[10]).expect("write release build script");
+        fs::write(&build_script, STATIC_ASSETS_V1[9]).expect("write release build script");
         mark_template_file_executable(&build_script).expect("mark release build script executable");
         let status_payload =
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
-        let draft_response = norito::json!({ "tx_instructions": [] });
+        let key_pair = soracloud_fixture_key_pair(0x41);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = mock_bundle_mutation_server(
             "/v1/soracloud/apps/deploy",
             &draft_response,
@@ -25361,28 +29157,21 @@ mod tests {
             "encode pin register response",
             "encode deploy response",
         );
-        let key_pair = soracloud_fixture_key_pair(0x41);
-        let authority = AccountId::new(key_pair.public_key().clone());
+        point_split_app_live_route_at_mock_server(&dir, &server.base_url);
         install_mock_submission_config(&authority, &key_pair);
         let output = AppReleaseArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
-            skip_build: false,
             dry_run: false,
         }
         .run(&authority, &key_pair)
         .expect("release should succeed");
         assert_eq!(output.mode, "completed");
         assert_eq!(output.release_mode, "Deploy");
-        assert_eq!(output.plan.hostname, "travel-ops.sora");
-        assert!(
-            output
-                .build_and_sync
-                .as_ref()
-                .is_some_and(|build| build.mode == "completed")
-        );
+        assert_eq!(output.plan.hostname, "127.0.0.1");
+        assert_eq!(output.build_and_sync.mode, "completed");
         let release_response = output
             .release_response
             .as_ref()
@@ -25402,11 +29191,17 @@ mod tests {
             .find(|service| service.service_name == "travel-ops_vault")
             .expect("vault service output");
         assert!(!vault_service.published_bundle.content_cid.is_empty());
+        assert!(release_response.published_static_site.is_some());
+        assert_eq!(output.live_verifications.len(), 1);
+        assert_eq!(output.live_verifications[0].status_code, 200);
+        assert!(output.live_verifications[0].url.ends_with("/api/v1/health"));
+        assert!(output.report.ok);
         assert!(
-            release_response
-                .published_static_site
-                .as_ref()
-                .is_some_and(|publication| publication.manifest_id_hex.is_none())
+            output
+                .report
+                .phases
+                .iter()
+                .any(|phase| { phase.name == "verify" && phase.ok && !phase.skipped })
         );
         let deploy_requests = server
             .requests()
@@ -25424,36 +29219,28 @@ mod tests {
         }
         let (dir, _) = split_app_fixture("split_app_release_reuse_guest_images");
         let build_script = dir.join("build-and-sync.sh");
-        fs::write(&build_script, STATIC_ASSETS_V1[11]).expect("write release build script");
+        fs::write(&build_script, STATIC_ASSETS_V1[10]).expect("write release build script");
         mark_template_file_executable(&build_script).expect("mark release build script executable");
         let live_container_path = dir.join("services/live/container_manifest.json");
-        let mut live_container: SoraContainerManifestV1 =
-            load_json(&live_container_path).expect("live container");
-        let inrou = live_container.inrou.as_mut().expect("live inrou manifest");
-        inrou
-            .guest_images
-            .get_mut(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664)
-            .expect("x86_64 guest image")
-            .published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
-            manifest_digest_hex: "a".repeat(64),
-            content_cid: encode_content_cid(&sorafs_manifest::canonical_manifest_root_cid(
-                [0xAA; 32],
-            )),
-            manifest_id_hex: Some("a".repeat(64)),
-            distribution: SoraArtifactDistributionPolicyV1::default(),
-        });
-        inrou
-            .guest_images
-            .get_mut(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64)
-            .expect("aarch64 guest image")
-            .published_artifact = Some(SoraPublishedInrouGuestImageArtifactV1 {
-            manifest_digest_hex: "c".repeat(64),
-            content_cid: encode_content_cid(&sorafs_manifest::canonical_manifest_root_cid(
-                [0xCC; 32],
-            )),
-            manifest_id_hex: Some("c".repeat(64)),
-            distribution: SoraArtifactDistributionPolicyV1::default(),
-        });
+        let mut live_container: Value = load_json(&live_container_path).expect("live container");
+        let guest_images = live_container
+            .as_object_mut()
+            .and_then(|container| container.get_mut("inrou"))
+            .and_then(Value::as_object_mut)
+            .and_then(|inrou| inrou.get_mut("guest_images"))
+            .and_then(Value::as_object_mut)
+            .expect("live guest-image map");
+        for (guest_isa, seed) in [("x86_64", 0xAA), ("aarch64", 0xCC)] {
+            guest_images
+                .get_mut(guest_isa)
+                .and_then(Value::as_object_mut)
+                .expect("guest-image object")
+                .insert(
+                    "published_artifact".to_owned(),
+                    norito::json::to_value(&sample_published_inrou_artifact(seed))
+                        .expect("encode forbidden prepublished artifact"),
+                );
+        }
         write_json(&live_container_path, &live_container).expect("write live container manifest");
         fs::create_dir_all(dir.join("services/live/build")).expect("create live build dir");
         fs::create_dir_all(dir.join("services/vault/build")).expect("create vault build dir");
@@ -25467,18 +29254,12 @@ mod tests {
             b"release-vault-bundle",
         )
         .expect("write vault bundle");
-        SyncManifestsArgs {
-            app_manifest: Some(dir.join("app_manifest.json")),
-            container: PathBuf::from(DEFAULT_CONTAINER_MANIFEST),
-            service: PathBuf::from(DEFAULT_SERVICE_MANIFEST),
-            bundle_file: None,
-        }
-        .run()
-        .expect("sync app manifests after injecting published refs");
         fs::remove_dir_all(dir.join("services/live/inrou")).expect("remove local inrou staging");
         let status_payload =
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
-        let draft_response = norito::json!({ "tx_instructions": [] });
+        let key_pair = soracloud_fixture_key_pair(0x42);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = mock_bundle_mutation_server(
             "/v1/soracloud/apps/deploy",
             &draft_response,
@@ -25486,26 +29267,26 @@ mod tests {
             "encode pin register response",
             "encode deploy response",
         );
-        let key_pair = soracloud_fixture_key_pair(0x42);
-        let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
         let error = AppReleaseArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
-            skip_build: false,
             dry_run: false,
         }
         .run(&authority, &key_pair)
         .expect_err("V1 release must reject prepublished guest images");
+        let rendered_error = format!("{error:#}");
         assert!(
-            format!("{error:#}").contains("prepublished Inrou guest-image refs"),
+            rendered_error.contains("published_artifact")
+                || rendered_error.contains("expected null"),
             "unexpected release error: {error:#}"
         );
-        assert!(!server.requests().iter().any(|request| {
-            request.method == "POST" && request.path == "/v1/soracloud/apps/deploy"
-        }));
+        assert!(
+            server.requests().is_empty(),
+            "draft decoding must fail before pin, register, or mutation requests"
+        );
     }
     #[test]
     fn app_local_plan_rejects_app_service_name_mismatch() {
@@ -25654,12 +29435,12 @@ mod tests {
     }
     #[test]
     fn app_manifest_rejects_missing_static_site_publish_mode() {
-        let error = json::from_str::<SoracloudAppManifestV1>(STATIC_ASSETS_V1[12])
+        let error = json::from_str::<SoracloudAppManifestV1>(STATIC_ASSETS_V1[11])
             .expect_err("first-release app manifests must declare static-site publish_mode");
-        assert!(matches!(
-            error,
-            json::Error::MissingField { ref field } if field == "publish_mode"
-        ));
+        assert!(
+            error.to_string().contains("missing field `publish_mode`"),
+            "unexpected missing publish_mode error: {error}"
+        );
     }
     #[test]
     fn app_manifest_json_is_closed_and_requires_explicit_nullable_and_vector_keys() {
@@ -25753,11 +29534,10 @@ mod tests {
         };
         let publication = AppStaticSitePublishOutput {
             hostname: "travel-ops.sora".to_owned(),
-            public_url: "https://travel-ops.sora/".to_owned(),
+            public_url: "https://travel-ops.sora".to_owned(),
             cid_gateway_url: "https://travel-ops.sora/sorafs/cid/bafytest".to_owned(),
             content_cid: "bafytest".to_owned(),
             manifest_digest_hex: "abcd".repeat(16),
-            manifest_id_hex: None,
         };
         let plan = plan_app_static_site_root_binding(
             "travel_ops",
@@ -25780,11 +29560,10 @@ mod tests {
         };
         let publication = AppStaticSitePublishOutput {
             hostname: "travel-ops.sora".to_owned(),
-            public_url: "https://travel-ops.sora/".to_owned(),
+            public_url: "https://travel-ops.sora".to_owned(),
             cid_gateway_url: "https://travel-ops.sora/sorafs/cid/bafytest".to_owned(),
             content_cid: "bafytest".to_owned(),
             manifest_digest_hex: "abcd".repeat(16),
-            manifest_id_hex: None,
         };
         let plan = plan_app_static_site_root_binding(
             "travel_ops",
@@ -25809,11 +29588,10 @@ mod tests {
         };
         let publication = AppStaticSitePublishOutput {
             hostname: "travel-ops.sora".to_owned(),
-            public_url: "https://travel-ops.sora/".to_owned(),
+            public_url: "https://travel-ops.sora".to_owned(),
             cid_gateway_url: "https://travel-ops.sora/sorafs/cid/bafytest".to_owned(),
             content_cid: "bafytest".to_owned(),
             manifest_digest_hex: "abcd".repeat(16),
-            manifest_id_hex: None,
         };
         let plan = plan_app_static_site_root_binding(
             "travel_ops",
@@ -25936,10 +29714,7 @@ mod tests {
                 .map(|mailbox| mailbox.queue_name.as_ref()),
             Some("auth_updates")
         );
-        assert_eq!(
-            service.handlers[8].class,
-            SoraServiceHandlerClassV1::PrivateUpdate
-        );
+        assert_eq!(service.handlers[8].class, SoraServiceHandlerClassV1::Update);
         assert_eq!(
             service.handlers[8].route_path.as_deref(),
             Some("/auth/login")
@@ -26186,7 +29961,7 @@ mod tests {
                 .iter()
                 .any(|service| service.bundle_hash == Hash::new(b"scaffold-vault-bundle"))
         );
-        let live_container: SoraContainerManifestV1 =
+        let live_container: UnpublishedContainerManifestV1 =
             load_json(&dir.join("services/live/container_manifest.json")).expect("live container");
         let live_service: SoraServiceManifestV1 =
             load_json(&dir.join("services/live/service_manifest.json")).expect("live service");
@@ -26196,7 +29971,9 @@ mod tests {
         );
         assert_eq!(
             live_service.container.manifest_hash,
-            Hash::new(Encode::encode(&live_container))
+            live_container
+                .workspace_hash()
+                .expect("hash synced live source container")
         );
         let vault_container: SoraContainerManifestV1 =
             load_json(&dir.join("services/vault/container_manifest.json"))
@@ -26252,34 +30029,18 @@ mod tests {
     #[test]
     fn app_status_filters_control_plane_status_to_split_app_services() {
         let (dir, _) = split_app_fixture("split_app_status");
-        let payload = norito::json!({
-            "schema_version": 1,
-            "control_plane": {
-                "service_count": 3,
-                "services": [
-                    {
-                        "service_name": "travel-ops_live",
-                        "current_version": "1.0.0",
-                        "execution_plane": "HttpService"
-                    },
-                    {
-                        "service_name": "travel-ops_vault",
-                        "current_version": "1.0.0",
-                        "execution_plane": "DeterministicService"
-                    },
-                    {
-                        "service_name": "unrelated_service",
-                        "current_version": "9.9.9",
-                        "execution_plane": "HttpService"
-                    }
-                ]
-            }
-        });
+        let payload = mock_control_plane_status_payload(&[
+            "travel-ops_live",
+            "travel-ops_vault",
+            "unrelated_service",
+        ]);
         let encoded = json::to_vec(&payload).expect("encode status payload");
+        let app_encoded = json::to_vec(&app_infra_status_fixture_for_name("travel_ops"))
+            .expect("encode exact app-infra status payload");
         let server = MockHttpServer::start(BTreeMap::from([
             (
                 "/v1/soracloud/apps/travel_ops/status".to_owned(),
-                MockHttpResponse::json(encoded.clone()),
+                MockHttpResponse::json(app_encoded),
             ),
             (
                 "/v1/soracloud/status".to_owned(),
@@ -26300,7 +30061,7 @@ mod tests {
         assert_eq!(output.public_url, "https://travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(output.workspace_dir.contains("split_app_status"));
-        assert_local_workspace_scripts(&output.workspace_scripts);
+        assert_app_workspace_scripts(&output.workspace_scripts);
         assert_eq!(
             output
                 .static_site
@@ -26426,24 +30187,14 @@ mod tests {
     #[test]
     fn app_status_keeps_missing_manifest_services_visible() {
         let (dir, _) = split_app_fixture("split_app_status_missing_service");
-        let payload = norito::json!({
-            "schema_version": 1,
-            "control_plane": {
-                "service_count": 1,
-                "services": [
-                    {
-                        "service_name": "travel-ops_live",
-                        "current_version": "1.0.0",
-                        "execution_plane": "HttpService"
-                    }
-                ]
-            }
-        });
+        let payload = mock_control_plane_status_payload(&["travel-ops_live"]);
         let encoded = json::to_vec(&payload).expect("encode status payload");
+        let app_encoded = json::to_vec(&app_infra_status_fixture_for_name("travel_ops"))
+            .expect("encode exact app-infra status payload");
         let server = MockHttpServer::start(BTreeMap::from([
             (
                 "/v1/soracloud/apps/travel_ops/status".to_owned(),
-                MockHttpResponse::json(encoded.clone()),
+                MockHttpResponse::json(app_encoded),
             ),
             (
                 "/v1/soracloud/status".to_owned(),
@@ -26466,7 +30217,7 @@ mod tests {
                 .workspace_dir
                 .contains("split_app_status_missing_service")
         );
-        assert_mutation_workspace_scripts(&output.workspace_scripts);
+        assert_app_workspace_scripts(&output.workspace_scripts);
         assert_eq!(output.services.len(), 2);
         let live = output
             .services
@@ -26502,24 +30253,14 @@ mod tests {
     #[test]
     fn app_status_projects_single_api_frontend_root_binding_url() {
         let (dir, _) = single_api_fixture("single_api_status_root_binding");
-        let payload = norito::json!({
-            "schema_version": 1,
-            "control_plane": {
-                "service_count": 1,
-                "services": [
-                    {
-                        "service_name": "travel-ops_api",
-                        "current_version": "1.0.0",
-                        "execution_plane": "DeterministicService"
-                    }
-                ]
-            }
-        });
+        let payload = mock_control_plane_status_payload(&["travel-ops_api"]);
         let encoded = json::to_vec(&payload).expect("encode status payload");
+        let app_encoded = json::to_vec(&app_infra_status_fixture_for_name("travel_ops"))
+            .expect("encode exact app-infra status payload");
         let server = MockHttpServer::start(BTreeMap::from([
             (
                 "/v1/soracloud/apps/travel_ops/status".to_owned(),
-                MockHttpResponse::json(encoded.clone()),
+                MockHttpResponse::json(app_encoded),
             ),
             (
                 "/v1/soracloud/status".to_owned(),
@@ -26542,7 +30283,7 @@ mod tests {
                 .workspace_dir
                 .contains("single_api_status_root_binding")
         );
-        assert_mutation_workspace_scripts(&output.workspace_scripts);
+        assert_app_workspace_scripts(&output.workspace_scripts);
         assert!(!output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 0);
         assert_eq!(output.deterministic_service_count, 1);
@@ -26587,8 +30328,10 @@ mod tests {
             b"deploy-single-api-bundle",
         )
         .expect("write api bundle");
+        let key_pair = soracloud_fixture_key_pair(0x43);
+        let authority = AccountId::new(key_pair.public_key().clone());
         let status_payload = mock_control_plane_status_payload(&["travel-ops_api"]);
-        let draft_response = norito::json!({ "tx_instructions": [] });
+        let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = mock_bundle_mutation_server(
             "/v1/soracloud/apps/deploy",
             &draft_response,
@@ -26596,10 +30339,8 @@ mod tests {
             "encode pin register response",
             "encode deploy draft response",
         );
-        let key_pair = soracloud_fixture_key_pair(0x43);
-        let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
-        let output = AppDeployArgs {
+        let output = AppReleaseMutationArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some(server.base_url.clone()),
             api_token: None,
@@ -26614,7 +30355,7 @@ mod tests {
                 .workspace_dir
                 .contains("single_api_root_binding_deploy")
         );
-        assert_mutation_workspace_scripts(&output.workspace_scripts);
+        assert_app_workspace_scripts(&output.workspace_scripts);
         assert!(!output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 0);
         assert_eq!(output.deterministic_service_count, 1);
@@ -26663,8 +30404,7 @@ mod tests {
             .published_static_site
             .as_ref()
             .expect("root-binding app should publish a static site");
-        assert_eq!(publication.public_url, "https://travel-ops.sora/");
-        assert_eq!(publication.manifest_id_hex, None);
+        assert_eq!(publication.public_url, "https://travel-ops.sora");
         assert!(publication.content_cid.starts_with('b'));
         assert_eq!(
             publication.cid_gateway_url,
@@ -26723,7 +30463,7 @@ mod tests {
         let key_pair = soracloud_fixture_key_pair(0x44);
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
-        let error = AppDeployArgs {
+        let error = AppReleaseMutationArgs {
             manifest: manifest_path,
             torii_url: Some(server.base_url.clone()),
             api_token: None,
@@ -26750,7 +30490,9 @@ mod tests {
             b"app-infra-deploy-bundle",
         )
         .expect("write api bundle");
-        let draft_response = norito::json!({ "tx_instructions": [] });
+        let key_pair = soracloud_fixture_key_pair(0x45);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = MockHttpServer::start(BTreeMap::from([
             (
                 "/v1/sorafs/pin/register".to_owned(),
@@ -26766,10 +30508,8 @@ mod tests {
                 ),
             ),
         ]));
-        let key_pair = soracloud_fixture_key_pair(0x45);
-        let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
-        let output = AppDeployArgs {
+        let output = AppReleaseMutationArgs {
             manifest: manifest_path,
             torii_url: Some(server.base_url.clone()),
             api_token: None,
@@ -26837,7 +30577,9 @@ mod tests {
         .expect("write vault bundle");
         let status_payload =
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
-        let draft_response = norito::json!({ "tx_instructions": [] });
+        let key_pair = soracloud_fixture_key_pair(0x46);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = mock_bundle_mutation_server(
             "/v1/soracloud/apps/deploy",
             &draft_response,
@@ -26845,10 +30587,8 @@ mod tests {
             "encode pin register response",
             "encode deploy draft response",
         );
-        let key_pair = soracloud_fixture_key_pair(0x46);
-        let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
-        let output = AppDeployArgs {
+        let output = AppReleaseMutationArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some(server.base_url.clone()),
             api_token: None,
@@ -26859,7 +30599,7 @@ mod tests {
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(output.workspace_dir.contains("split_app_cid_only_deploy"));
-        assert_mutation_workspace_scripts(&output.workspace_scripts);
+        assert_app_workspace_scripts(&output.workspace_scripts);
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
@@ -26946,8 +30686,7 @@ mod tests {
             .published_static_site
             .as_ref()
             .expect("cid-only app should publish a static site");
-        assert_eq!(publication.public_url, "https://travel-ops.sora/");
-        assert_eq!(publication.manifest_id_hex, None);
+        assert_eq!(publication.public_url, "https://travel-ops.sora");
         assert!(publication.content_cid.starts_with('b'));
         assert_eq!(
             publication.cid_gateway_url,
@@ -27007,7 +30746,9 @@ mod tests {
         .expect("write vault bundle");
         let status_payload =
             mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
-        let draft_response = norito::json!({ "tx_instructions": [] });
+        let key_pair = soracloud_fixture_key_pair(0x47);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let draft_response = mock_soracloud_draft_response(&authority, &key_pair);
         let server = mock_bundle_mutation_server(
             "/v1/soracloud/apps/upgrade",
             &draft_response,
@@ -27015,10 +30756,8 @@ mod tests {
             "encode pin register response",
             "encode upgrade draft response",
         );
-        let key_pair = soracloud_fixture_key_pair(0x47);
-        let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
-        let output = AppDeployArgs {
+        let output = AppReleaseMutationArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some(server.base_url.clone()),
             api_token: None,
@@ -27029,7 +30768,7 @@ mod tests {
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(output.workspace_dir.contains("split_app_cid_only_upgrade"));
-        assert_mutation_workspace_scripts(&output.workspace_scripts);
+        assert_app_workspace_scripts(&output.workspace_scripts);
         assert_eq!(output.mode, "upgrade");
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);
@@ -27064,7 +30803,6 @@ mod tests {
             .published_static_site
             .as_ref()
             .expect("cid-only app should publish a static site");
-        assert_eq!(publication.manifest_id_hex, None);
         assert!(publication.content_cid.starts_with('b'));
         let upgrade_request = server
             .requests()
@@ -27244,7 +30982,7 @@ mod tests {
                 "parsePositiveIntEnv",
                 "parsePublicOrigin",
             ],
-            STATIC_ASSETS_V1[13],
+            STATIC_ASSETS_V1[12],
         );
     }
     #[test]
@@ -27259,7 +30997,7 @@ mod tests {
                 "statePutIfAbsent",
                 "stateEntries",
             ],
-            STATIC_ASSETS_V1[14],
+            STATIC_ASSETS_V1[13],
         );
     }
     #[test]
@@ -27273,8 +31011,8 @@ mod tests {
                 "shared state adapter putIfAbsent(key, value) must return boolean",
                 "shared state adapter entries(prefix) must return [key, value][]",
             ],
+            STATIC_ASSETS_V1[14],
             STATIC_ASSETS_V1[15],
-            STATIC_ASSETS_V1[16],
         );
     }
     #[test]
@@ -27289,7 +31027,7 @@ mod tests {
                 "buildSetCookieHeader",
                 "getSessionFromRequest",
             ],
-            STATIC_ASSETS_V1[17],
+            STATIC_ASSETS_V1[16],
         );
     }
     #[test]
@@ -27304,7 +31042,7 @@ mod tests {
                 "releaseChallengeConsumeLock",
                 "challengeExpiredStateKey",
             ],
-            STATIC_ASSETS_V1[18],
+            STATIC_ASSETS_V1[17],
         );
     }
     #[test]
@@ -27320,7 +31058,7 @@ mod tests {
                 "AUTH_ORIGIN_MISMATCH",
                 "AUTH_SIGNATURE_INVALID",
             ],
-            STATIC_ASSETS_V1[19],
+            STATIC_ASSETS_V1[18],
         );
     }
     #[test]
@@ -27335,7 +31073,7 @@ mod tests {
                 "handleAuthMe",
                 "handleAuthLogout",
             ],
-            STATIC_ASSETS_V1[20],
+            STATIC_ASSETS_V1[19],
         );
     }
     #[test]
@@ -27345,7 +31083,7 @@ mod tests {
             "pii_auth_core_handlers_bad_requests.mjs",
             &[],
             &["readJson", "sendAuthError", "INVALID_REQUEST"],
-            STATIC_ASSETS_V1[21],
+            STATIC_ASSETS_V1[20],
         );
     }
     #[test]
@@ -27362,7 +31100,7 @@ mod tests {
         }
         assert_eq!(
             hex::encode(digest.finalize()),
-            "4d61fd4094ec8dc4a815d7933c4b040baa664665d3afad38c87f551858ac323c"
+            "6d187b88d5f46f58474ad9237ab5e4997047f90dd5d6302dbf718bbea9ab8df1"
         );
         assert_eq!(
             webapp_api_server_mjs().strip_prefix(soracloud_auth_core_mjs()),

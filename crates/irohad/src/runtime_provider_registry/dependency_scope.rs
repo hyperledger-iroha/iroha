@@ -106,9 +106,6 @@ pub(super) fn dependency_is_present(
             deps.sorafs_evidence_viewer_transparency_publisher.is_some()
         }
         Slot::SoracloudRuntimeMutationSigner => deps.soracloud_runtime_mutation_signer.is_some(),
-        Slot::SoracloudHfInferenceCredentialProvider => {
-            deps.soracloud_hf_inference_credential_provider.is_some()
-        }
         Slot::MusubiProviderAttestationClockSeal => {
             deps.sorafs_musubi_provider_attestation_clock_seal.is_some()
         }
@@ -141,13 +138,6 @@ pub(super) fn has_unrequested_dependency(
             bindings,
             IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner,
             dependencies.soracloud_runtime_mutation_signer.is_some(),
-        )
-        || dependency_is_unrequested(
-            bindings,
-            IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider,
-            dependencies
-                .soracloud_hf_inference_credential_provider
-                .is_some(),
         )
         || has_unrequested_musubi_provider_attestation_dependency(bindings, dependencies)
 }

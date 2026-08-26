@@ -956,21 +956,6 @@ fn make_server_observation(
             )
             .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
         }
-        slot if slot
-            == IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id() =>
-        {
-            let exact = soracloud_hf_credential_binding_from_wire(binding).map_err(server_error)?;
-            crate::soracloud_hf_credential::qualify_soracloud_hf_inference_credential_provider_v1(
-                exact,
-                Arc::clone(
-                    backends
-                        .soracloud_hf_inference_credential_provider
-                        .as_ref()
-                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?,
-                ),
-            )
-            .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-        }
         slot if slot == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id() => {
             let source = server_backend!(backends, provider_ingest_authenticated_source);
             let qualification = source
@@ -1501,11 +1486,7 @@ fn validate_exact_backend_set(
             && requested(IrohaRuntimeProviderSlotV1::EvidenceViewerTransparencyPublisher)
                 == backends.evidence_viewer_transparency_publisher.is_some()
             && requested(IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner)
-                == backends.soracloud_runtime_mutation_signer.is_some()
-            && requested(IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider)
-                == backends
-                    .soracloud_hf_inference_credential_provider
-                    .is_some();
+                == backends.soracloud_runtime_mutation_signer.is_some();
     if !exact_backend_set {
         return Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch);
     }
@@ -1825,49 +1806,6 @@ fn qualified_soracloud_runtime_signer(
         Arc::clone(broker_backend!(state, soracloud_runtime_mutation_signer)),
     )
     .map_err(soracloud_runtime_signer_qualification_error)
-}
-fn soracloud_hf_credential_qualification_error(
-    error: crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationErrorV1,
-) -> BrokerError {
-    use crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationErrorV1 as Error;
-    match error {
-        Error::ProviderUnavailable => BrokerError::Unavailable,
-        Error::InvalidProviderHandle
-        | Error::InvalidProviderQualification
-        | Error::ProviderInactive
-        | Error::TestProviderRejected
-        | Error::HandleMismatch
-        | Error::RevisionMismatch
-        | Error::PolicyDigestMismatch
-        | Error::ProviderDrift => BrokerError::StaleOrRevoked,
-    }
-}
-fn qualified_soracloud_hf_credential_provider(
-    state: &BrokerServerStateV1,
-    binding: &ProviderBindingWireV1,
-) -> Result<
-    Arc<dyn crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>,
-    BrokerError,
-> {
-    let exact = soracloud_hf_credential_binding_from_wire(binding)?;
-    crate::soracloud_hf_credential::qualify_soracloud_hf_inference_credential_provider_v1(
-        exact,
-        Arc::clone(broker_backend!(
-            state,
-            soracloud_hf_inference_credential_provider
-        )),
-    )
-    .map_err(soracloud_hf_credential_qualification_error)
-}
-fn soracloud_hf_credential_operation_error(
-    error: crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1,
-) -> BrokerError {
-    use crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1 as Error;
-    match error {
-        Error::Unavailable => BrokerError::Unavailable,
-        Error::Refused | Error::InvalidResponse => BrokerError::Rejected,
-        Error::QualificationChanged => BrokerError::StaleOrRevoked,
-    }
 }
 fn map_soracloud_runtime_signing_error(
     error: crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1,

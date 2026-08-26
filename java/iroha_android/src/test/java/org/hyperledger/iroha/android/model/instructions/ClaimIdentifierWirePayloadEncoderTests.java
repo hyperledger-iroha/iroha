@@ -54,7 +54,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
             sampleOpening("identifier_lookup_retail", signatureHex),
             "opaque:" + "44".repeat(32),
             "55".repeat(32),
-            "uaid:" + "66".repeat(32),
+            "uaid:" + "66".repeat(31) + "67",
             ACCOUNT_ID);
     final IdentifierResolutionReceipt receipt =
         new IdentifierResolutionReceipt(
@@ -123,7 +123,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
             sampleOpening("email_retail", signatureHex),
             "opaque:" + "44".repeat(32),
             "55".repeat(32),
-            "uaid:" + "66".repeat(32),
+            "uaid:" + "66".repeat(31) + "67",
             ACCOUNT_ID);
     final IdentifierResolutionReceipt receipt =
         new IdentifierResolutionReceipt(
@@ -292,7 +292,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
             sampleOpening("identifier_lookup_retail", signatureHex),
             "opaque:" + "44".repeat(32),
             "55".repeat(32),
-            "uaid:" + "66".repeat(32),
+            "uaid:" + "66".repeat(31) + "67",
             accountId);
     return new IdentifierResolutionReceipt(
         payload, new IdentifierReceiptAttestation("signed", signatureHex, null, null));

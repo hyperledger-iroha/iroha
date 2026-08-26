@@ -114,6 +114,10 @@ impl Kura {
         Ok(remaining)
     }
     fn complete_recovered_prune_intent(&self, intent: &KuraPruneIntentV3) -> Result<()> {
+        // Reconciliation may remove only the interrupted prune suffix. The
+        // retained log and carrier index must already be exactly aligned before
+        // recovery mutates any remaining canonical sidecars.
+        self.validate_committed_merge_carrier_alignment()?;
         self.preflight_recovered_prune_capacity_before_mutation(intent)?;
         // Merge reconciliation runs before this method and uses the durable
         // block height to remove future carriers and their merge-log suffix.

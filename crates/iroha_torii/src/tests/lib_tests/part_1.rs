@@ -1,13 +1,4 @@
 // for `collect`
-use std::{
-    collections::HashSet,
-    net::SocketAddr,
-    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
-    path::PathBuf,
-    str::FromStr,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
 use super::*;
 use axum::{
     extract::State,
@@ -60,6 +51,15 @@ use iroha_test_samples::ALICE_ID;
 #[cfg(feature = "app_api")]
 use jsonwebtoken::EncodingKey;
 use nonzero_ext::nonzero;
+use std::{
+    collections::HashSet,
+    net::SocketAddr,
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    path::PathBuf,
+    str::FromStr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 const PREBUILT_QUARANTINE_PROVIDER_HANDLE: &str = "kms://moderation/quarantine/primary";
 const PREBUILT_QUARANTINE_PROVIDER_QUALIFICATION:
     sorafs_node::ModerationQuarantineKeyProviderQualificationV1 =
@@ -1512,31 +1512,29 @@ fn stark_fri_backend_labels_require_non_empty_profile() {
     assert!(!is_stark_fri_v1_backend("stark/fri-v2"));
 }
 #[test]
-fn parse_pipeline_status_scope_defaults_to_global_and_trims_case() {
+fn parse_pipeline_status_scope_accepts_only_exact_current_values() {
     assert_eq!(
         parse_pipeline_status_scope(None).expect("default scope"),
         PipelineStatusReadScope::Global
     );
     assert_eq!(
-        parse_pipeline_status_scope(Some("")).expect("blank scope"),
+        parse_pipeline_status_scope(Some("global")).expect("global scope"),
         PipelineStatusReadScope::Global
     );
     assert_eq!(
-        parse_pipeline_status_scope(Some(" GLOBAL ")).expect("case-insensitive global"),
-        PipelineStatusReadScope::Global
-    );
-    assert_eq!(
-        parse_pipeline_status_scope(Some(" local ")).expect("case-insensitive local"),
+        parse_pipeline_status_scope(Some("local")).expect("local scope"),
         PipelineStatusReadScope::Local
-    );
-    assert_eq!(
-        parse_pipeline_status_scope(Some(" AUTO ")).expect("auto scope compatibility"),
-        PipelineStatusReadScope::Global
     );
 }
 #[test]
-fn parse_pipeline_status_scope_rejects_injected_values() {
+fn parse_pipeline_status_scope_rejects_noncanonical_and_injected_values() {
     for raw in [
+        "",
+        "auto",
+        "AUTO",
+        " global",
+        "global ",
+        "LOCAL",
         "auto&scope=local",
         "global&scope=local",
         "local,global",
@@ -1545,7 +1543,7 @@ fn parse_pipeline_status_scope_rejects_injected_values() {
     ] {
         let err = parse_pipeline_status_scope(Some(raw)).expect_err("invalid scope");
         assert!(
-            format!("{err:?}").contains("expected local|global|auto"),
+            format!("{err:?}").contains("expected local|global"),
             "unexpected error for {raw:?}: {err:?}"
         );
     }
@@ -1666,7 +1664,6 @@ async fn iso_audit_messages_endpoint_rejects_disabled_bridge() {
 pub(crate) fn test_inrou_manifest() -> iroha_data_model::soracloud::SoraInrouManifestV1 {
     iroha_data_model::soracloud::SoraInrouManifestV1 {
         schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
-        guest_os: iroha_data_model::soracloud::SoraInrouGuestOsV1::DebianSlim,
         guest_images: std::collections::BTreeMap::from([
             (
                 iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
@@ -1674,8 +1671,13 @@ pub(crate) fn test_inrou_manifest() -> iroha_data_model::soracloud::SoraInrouMan
                     kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
                     rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
                     initrd_image_path: None,
-                    distribution: Default::default(),
-                    published_artifact: None,
+                    published_artifact:
+                        iroha_data_model::soracloud::SoraPublishedInrouGuestImageArtifactV1 {
+                            manifest_digest_hex: "31".repeat(32),
+                            content_cid:
+                                "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
+                                    .to_owned(),
+                        },
                 },
             ),
             (
@@ -1684,13 +1686,16 @@ pub(crate) fn test_inrou_manifest() -> iroha_data_model::soracloud::SoraInrouMan
                     kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
                     rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
                     initrd_image_path: None,
-                    distribution: Default::default(),
-                    published_artifact: None,
+                    published_artifact:
+                        iroha_data_model::soracloud::SoraPublishedInrouGuestImageArtifactV1 {
+                            manifest_digest_hex: "32".repeat(32),
+                            content_cid:
+                                "bafyr6ibsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgi"
+                                    .to_owned(),
+                        },
                 },
             ),
         ]),
-        bootstrap_user_data_path: None,
-        ssh_authorized_keys: vec!["ssh-ed25519 test-key torii-tests".to_owned()],
     }
 }
 fn sample_identifier_policy(
@@ -2240,14 +2245,14 @@ async fn tx_history_viewer_from_headers_rejects_duplicate_authorization_headers(
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {
-            jwt: Some(TxHistoryJwtConfig {
-                algorithm: JwtAlgorithm::HS256,
-                key: TxHistoryJwtKey::Hmac(secret.as_bytes().to_vec()),
-                issuer: Some("pk-cbdc-dev".to_string()),
-                audience: Some("pk-cbdc".to_string()),
-            }),
-            ..TxHistoryAccessPolicy::default()
-        });
+        jwt: Some(TxHistoryJwtConfig {
+            algorithm: JwtAlgorithm::HS256,
+            key: TxHistoryJwtKey::Hmac(secret.as_bytes().to_vec()),
+            issuer: Some("pk-cbdc-dev".to_string()),
+            audience: Some("pk-cbdc".to_string()),
+        }),
+        ..TxHistoryAccessPolicy::default()
+    });
     let mut headers = HeaderMap::new();
     let authorization = format!("Bearer {token}")
         .parse()

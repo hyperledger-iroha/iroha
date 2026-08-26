@@ -746,14 +746,13 @@ fn instruction_box_lossy_deserialize_maps_trailing_pair_bytes_to_invalid_instruc
     );
 }
 #[test]
-fn const_vec_instruction_box_decodes_with_varint_tail() {
+fn const_vec_instruction_box_rejects_zeroed_varint_element_length() {
     let _guard = RegistryGuard::set(instruction_registry![Log]);
     let instruction = InstructionBox::from(Log {
         level: Level::INFO,
         msg: "varint tail regression".to_owned(),
     });
-    let expected = vec![instruction.clone()];
-    let original = ConstVec::from(expected.clone());
+    let original = ConstVec::from(vec![instruction]);
     let framed = norito::core::to_bytes(&original).expect("serialize ConstVec<InstructionBox>");
     let flags = framed[norito::core::Header::SIZE - 1];
     let payload = &framed[norito::core::Header::SIZE..];
@@ -762,31 +761,29 @@ fn const_vec_instruction_box_decodes_with_varint_tail() {
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         norito::core::read_seq_len_slice(&mutated).expect("sequence header")
     };
-    eprintln!("const_vec len={len} used_hdr={used_hdr}");
-    assert_eq!(len, expected.len());
+    assert_eq!(len, 1);
     {
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         let mut cursor = used_hdr;
         for _ in 0..len {
             let (_, hdr) =
                 norito::core::read_len_dyn_slice(&mutated[cursor..]).expect("element header");
-            eprintln!("const_vec element hdr={hdr}");
             for byte in &mut mutated[cursor..cursor + hdr] {
                 *byte = 0;
             }
             cursor += hdr;
         }
     }
-    let decoded = {
+    let error = {
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
-        let (value, used) =
-            norito::core::decode_field_canonical::<ConstVec<InstructionBox>>(&mutated)
-                .expect("decode const vec from tail offsets");
-        assert!(used > 0);
-        value
+        norito::core::decode_field_canonical::<ConstVec<InstructionBox>>(&mutated)
+            .expect_err("zeroed element length must not activate a tail-offset fallback")
     };
     norito::core::reset_decode_state();
-    assert_eq!(decoded.into_vec(), expected);
+    assert!(
+        matches!(error, norito::core::Error::LengthMismatch),
+        "unexpected rejection for zeroed element length: {error:?}"
+    );
 }
 #[test]
 fn encode_as_instruction_box_uses_encode() {

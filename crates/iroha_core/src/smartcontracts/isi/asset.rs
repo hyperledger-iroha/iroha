@@ -635,6 +635,9 @@ pub mod isi {
                     account_label,
                     state_transaction.block_unix_timestamp_ms(),
                 )
+                .map_err(|error| {
+                    InstructionExecutionError::InvariantViolation(error.to_string().into())
+                })?
                 .as_ref()
                     != Some(account_id)
                 {
@@ -906,26 +909,27 @@ pub mod isi {
         if binding.allowed_domains.is_empty() {
             return Ok(());
         }
-        let alias_domains: BTreeSet<_> = state_transaction
-            .world
-            .bound_account_aliases(subject)
-            .into_iter()
-            .filter(|alias| {
-                crate::sns::resolve_active_account_alias(
-                    &state_transaction.world,
-                    &state_transaction.nexus.dataspace_catalog,
-                    alias,
-                    state_transaction.block_unix_timestamp_ms(),
-                )
-                .as_ref()
-                    == Some(subject)
-            })
-            .filter_map(|alias| {
-                alias
+        let mut alias_domains = BTreeSet::new();
+        for alias in state_transaction.world.bound_account_aliases(subject) {
+            let resolved = crate::sns::resolve_active_account_alias(
+                &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
+                &alias,
+                state_transaction.block_unix_timestamp_ms(),
+            )
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(error.to_string().into())
+            })?;
+            if resolved.as_ref() == Some(subject)
+                && let Some(domain_id) = alias
                     .domain_id(&state_transaction.nexus.dataspace_catalog)
-                    .expect("bound account alias dataspace must exist in catalog")
-            })
-            .collect();
+                    .map_err(|error| {
+                        InstructionExecutionError::InvariantViolation(error.to_string().into())
+                    })?
+            {
+                alias_domains.insert(domain_id);
+            }
+        }
         let matching_domains = binding
             .allowed_domains
             .iter()
@@ -1117,23 +1121,21 @@ pub mod isi {
         account_id: &AccountId,
     ) -> Result<Option<DataSpaceId>, Error> {
         state_transaction.world.account(account_id)?;
-        let mut linked_dataspaces: BTreeSet<_> = state_transaction
-            .world
-            .bound_account_aliases(account_id)
-            .into_iter()
-            .filter(|alias| {
-                crate::sns::resolve_active_account_alias(
-                    &state_transaction.world,
-                    &state_transaction.nexus.dataspace_catalog,
-                    alias,
-                    state_transaction.block_unix_timestamp_ms(),
-                )
-                .as_ref()
-                    == Some(account_id)
-            })
-            .map(|alias| alias.dataspace)
-            .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
-            .collect();
+        let mut linked_dataspaces = BTreeSet::new();
+        for alias in state_transaction.world.bound_account_aliases(account_id) {
+            let resolved = crate::sns::resolve_active_account_alias(
+                &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
+                &alias,
+                state_transaction.block_unix_timestamp_ms(),
+            )
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(error.to_string().into())
+            })?;
+            if resolved.as_ref() == Some(account_id) && alias.dataspace != DataSpaceId::UNIVERSAL {
+                linked_dataspaces.insert(alias.dataspace);
+            }
+        }
         if let Ok(account) = state_transaction.world.account(account_id)
             && let Some(uaid) = account.as_ref().uaid().copied()
             && let Some(bindings) = state_transaction.world.uaid_dataspaces.get(&uaid)
@@ -6236,9 +6238,7 @@ pub mod query {
             };
             match field {
                 "account" | "account_id" | "owner" | "id.account" => {
-                    if let Ok(account_id) = AccountId::parse_encoded(raw)
-                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                    {
+                    if let Ok(account_id) = AccountId::parse_encoded(raw) {
                         self.subjects.insert(account_id.subject_id());
                     }
                 }
@@ -6375,9 +6375,7 @@ pub mod query {
                     }
                 }
                 "owner" | "owned_by" | "account" | "account_id" => {
-                    if let Ok(account_id) = AccountId::parse_encoded(raw)
-                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                    {
+                    if let Ok(account_id) = AccountId::parse_encoded(raw) {
                         self.owners.insert(account_id.subject_id());
                     }
                 }

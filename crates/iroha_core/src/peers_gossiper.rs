@@ -1484,11 +1484,6 @@ mod tests {
             quic_datagram_max_payload_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get(),
             quic_datagram_receive_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
             quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-            tls_enabled: false,
-            tls_fallback_to_plain: true,
-            tls_listen_address: None,
-            tls_inbound_only: false,
-            prefer_ws_fallback: false,
             p2p_queue_cap_high: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_HIGH,
             p2p_queue_cap_low: iroha_config::parameters::defaults::network::P2P_QUEUE_CAP_LOW,
             p2p_post_queue_cap: iroha_config::parameters::defaults::network::P2P_POST_QUEUE_CAP,
@@ -1569,7 +1564,6 @@ mod tests {
                 iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_HEALTH.get(),
             max_frame_bytes_other:
                 iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_OTHER.get(),
-            tls_only_v1_3: true,
             quic_max_idle_timeout: None,
         };
         let network = IrohaNetwork::closed_for_tests();

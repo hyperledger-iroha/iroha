@@ -11,7 +11,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc, Mutex, RwLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Instant,
 };
@@ -27,6 +27,7 @@ pub struct CircuitRegistry {
     next_id: AtomicU64,
     max_entries: usize,
     inner: RwLock<CircuitRegistryInner>,
+    unavailable: AtomicBool,
 }
 #[derive(Debug, Default)]
 struct CircuitRegistryInner {
@@ -82,6 +83,9 @@ pub enum CircuitAdmissionError {
     /// The bounded registry could not reserve storage for another circuit.
     #[error("circuit registry memory capacity is unavailable")]
     MemoryCapacity,
+    /// Circuit registry state is unavailable and cannot make an admission decision.
+    #[error("circuit registry state is unavailable")]
+    StateUnavailable,
 }
 impl Default for CircuitRegistry {
     fn default() -> Self {
@@ -89,6 +93,7 @@ impl Default for CircuitRegistry {
             next_id: AtomicU64::new(0),
             max_entries: CONGESTION_MAX_ACTIVE_CIRCUITS_V1,
             inner: RwLock::new(CircuitRegistryInner::default()),
+            unavailable: AtomicBool::new(false),
         }
     }
 }
@@ -99,6 +104,12 @@ impl CircuitRegistry {
             next_id: AtomicU64::new(0),
             max_entries: max_entries.clamp(1, CONGESTION_MAX_ACTIVE_CIRCUITS_V1),
             inner: RwLock::new(CircuitRegistryInner::default()),
+            unavailable: AtomicBool::new(false),
+        }
+    }
+    fn mark_unavailable(&self) {
+        if !self.unavailable.swap(true, Ordering::AcqRel) {
+            warn!("circuit registry state poisoned; rejecting future circuit admission");
         }
     }
     /// Registers a new circuit and returns its identifier.
@@ -108,7 +119,13 @@ impl CircuitRegistry {
         negotiated: &NegotiatedCapabilities,
         constant_rate_neighbor_cap: Option<u16>,
     ) -> Result<RegisterCircuitOutcome, CircuitAdmissionError> {
-        let mut guard = self.inner.write().expect("circuit registry poisoned");
+        if self.unavailable.load(Ordering::Acquire) {
+            return Err(CircuitAdmissionError::StateUnavailable);
+        }
+        let mut guard = self.inner.write().map_err(|_| {
+            self.mark_unavailable();
+            CircuitAdmissionError::StateUnavailable
+        })?;
         if guard.entries.len() >= self.max_entries {
             return Err(CircuitAdmissionError::CircuitCapacity {
                 limit: self.max_entries,
@@ -153,7 +170,16 @@ impl CircuitRegistry {
     }
     /// Removes a circuit entry if present.
     pub fn remove(&self, circuit_id: u64) -> Option<CircuitRemoval> {
-        let mut guard = self.inner.write().expect("circuit registry poisoned");
+        let mut guard = match self.inner.write() {
+            Ok(guard) => guard,
+            Err(error) => {
+                // Admission is permanently disabled by the latch, but cleanup
+                // still needs a best-effort path that cannot panic in Drop or
+                // connection-shutdown handling.
+                self.mark_unavailable();
+                error.into_inner()
+            }
+        };
         guard.entries.remove(&circuit_id).map(|state| {
             let constant_rate_active = if state.constant_rate.is_some() {
                 guard.constant_rate_active = guard.constant_rate_active.saturating_sub(1);
@@ -170,19 +196,37 @@ impl CircuitRegistry {
     /// Returns the number of active circuits currently tracked.
     #[must_use]
     pub fn active_len(&self) -> usize {
-        let guard = self.inner.read().expect("circuit registry poisoned");
+        let guard = match self.inner.read() {
+            Ok(guard) => guard,
+            Err(error) => {
+                self.mark_unavailable();
+                error.into_inner()
+            }
+        };
         guard.entries.len()
     }
     /// Returns the number of active constant-rate circuits.
     #[must_use]
     pub fn constant_rate_active_len(&self) -> u64 {
-        let guard = self.inner.read().expect("circuit registry poisoned");
+        let guard = match self.inner.read() {
+            Ok(guard) => guard,
+            Err(error) => {
+                self.mark_unavailable();
+                error.into_inner()
+            }
+        };
         guard.constant_rate_active
     }
     /// Returns the list of active constant-rate neighbors sorted deterministically.
     #[must_use]
     pub fn constant_rate_neighbors(&self) -> Vec<SocketAddr> {
-        let guard = self.inner.read().expect("circuit registry poisoned");
+        let guard = match self.inner.read() {
+            Ok(guard) => guard,
+            Err(error) => {
+                self.mark_unavailable();
+                error.into_inner()
+            }
+        };
         let mut neighbors = guard
             .entries
             .values()
@@ -221,11 +265,20 @@ pub fn spawn_padding_task(
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             ticker.tick().await;
-            if let Some(budget) = budget.as_ref()
-                && !budget.try_acquire(safe_cell_size as u64, Instant::now())
-            {
-                metrics.record_padding_cell_throttled();
-                continue;
+            if let Some(budget) = budget.as_ref() {
+                match budget.try_acquire(safe_cell_size as u64, Instant::now()) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        metrics.record_padding_cell_throttled();
+                        continue;
+                    }
+                    Err(error) => {
+                        metrics.record_padding_cell_throttled();
+                        warn!(%error, "padding budget state unavailable; closing connection");
+                        connection.close(0u32.into(), b"padding budget state unavailable");
+                        break;
+                    }
+                }
             }
             match connection.send_datagram(payload.clone()) {
                 Ok(()) => {
@@ -252,6 +305,7 @@ pub struct PaddingBudget {
     limit_per_sec: u64,
     burst_bytes: u64,
     state: Mutex<TokenBucketState>,
+    unavailable: AtomicBool,
 }
 #[derive(Debug)]
 struct TokenBucketState {
@@ -270,6 +324,7 @@ impl PaddingBudget {
                 last_refill: Instant::now(),
                 tokens: burst,
             }),
+            unavailable: AtomicBool::new(false),
         }
     }
     /// Build a [`PaddingBudget`] from the relay padding configuration when enabled.
@@ -290,13 +345,24 @@ impl PaddingBudget {
         }
         Some(Self::new(limit, burst))
     }
-    /// Attempt to reserve `cost` bytes from the bucket. Returns `true` when
-    /// sufficient tokens exist, otherwise `false`.
-    pub fn try_acquire(&self, cost: u64, now: Instant) -> bool {
+    /// Attempt to reserve `cost` bytes from the bucket.
+    ///
+    /// Returns `Ok(true)` when sufficient tokens exist, `Ok(false)` when the
+    /// bounded rate is exhausted, and [`PaddingBudgetError::StateUnavailable`]
+    /// when the accounting state can no longer make a trustworthy decision.
+    pub fn try_acquire(&self, cost: u64, now: Instant) -> Result<bool, PaddingBudgetError> {
         if self.limit_per_sec == 0 {
-            return true;
+            return Ok(true);
         }
-        let mut guard = self.state.lock().expect("padding budget lock poisoned");
+        if self.unavailable.load(Ordering::Acquire) {
+            return Err(PaddingBudgetError::StateUnavailable);
+        }
+        let mut guard = self.state.lock().map_err(|_| {
+            if !self.unavailable.swap(true, Ordering::AcqRel) {
+                warn!("padding budget state poisoned; rejecting future cover-traffic accounting");
+            }
+            PaddingBudgetError::StateUnavailable
+        })?;
         let elapsed = now.saturating_duration_since(guard.last_refill);
         if elapsed.as_nanos() > 0 {
             let added = ((self.limit_per_sec as u128) * elapsed.as_nanos()) / 1_000_000_000u128;
@@ -308,9 +374,9 @@ impl PaddingBudget {
         }
         if guard.tokens >= cost {
             guard.tokens -= cost;
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
     #[must_use]
@@ -321,6 +387,13 @@ impl PaddingBudget {
     pub fn burst_bytes(&self) -> u64 {
         self.burst_bytes
     }
+}
+/// Errors returned by global padding-budget accounting.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum PaddingBudgetError {
+    /// Token-bucket state is unavailable and cover-traffic policy cannot continue safely.
+    #[error("padding budget state is unavailable")]
+    StateUnavailable,
 }
 #[cfg(test)]
 mod tests {
@@ -427,17 +500,17 @@ mod tests {
     fn padding_budget_blocks_when_exhausted() {
         let budget = PaddingBudget::new(1024, 2048);
         let now = Instant::now();
-        assert!(budget.try_acquire(1024, now));
-        assert!(budget.try_acquire(1024, now));
-        assert!(!budget.try_acquire(1024, now));
+        assert_eq!(budget.try_acquire(1024, now), Ok(true));
+        assert_eq!(budget.try_acquire(1024, now), Ok(true));
+        assert_eq!(budget.try_acquire(1024, now), Ok(false));
     }
     #[test]
     fn padding_budget_refills_after_interval() {
         let budget = PaddingBudget::new(1024, 2048);
         let now = Instant::now();
-        assert!(budget.try_acquire(1024, now));
+        assert_eq!(budget.try_acquire(1024, now), Ok(true));
         let later = now + Duration::from_millis(1_000);
-        assert!(budget.try_acquire(1024, later));
+        assert_eq!(budget.try_acquire(1024, later), Ok(true));
     }
     #[test]
     fn padding_budget_from_config_enforces_cell_floor() {
@@ -449,7 +522,29 @@ mod tests {
         };
         let budget = PaddingBudget::from_config(&config).expect("budget enabled");
         let now = Instant::now();
-        assert!(budget.try_acquire(1500, now));
+        assert_eq!(budget.try_acquire(1500, now), Ok(true));
+    }
+    #[test]
+    fn poisoned_padding_budget_latches_state_unavailable() {
+        let budget = Arc::new(PaddingBudget::new(1024, 2048));
+        let poison_target = Arc::clone(&budget);
+        let poisoned = std::thread::spawn(move || {
+            let _guard = poison_target.state.lock().expect("padding budget lock");
+            panic!("poison padding budget state");
+        })
+        .join();
+        assert!(poisoned.is_err(), "poisoning worker must panic");
+
+        assert_eq!(
+            budget.try_acquire(1024, Instant::now()),
+            Err(PaddingBudgetError::StateUnavailable)
+        );
+        budget.state.clear_poison();
+        assert_eq!(
+            budget.try_acquire(1024, Instant::now()),
+            Err(PaddingBudgetError::StateUnavailable),
+            "clearing the mutex poison bit must not reopen cover-traffic accounting"
+        );
     }
     #[test]
     fn registry_reports_constant_rate_neighbors() {
@@ -472,5 +567,37 @@ mod tests {
         let mut neighbors = registry.constant_rate_neighbors();
         neighbors.sort();
         assert_eq!(neighbors, vec![remote_a, remote_b]);
+    }
+    #[test]
+    fn poisoned_registry_rejects_future_admission_and_cleanup_does_not_panic() {
+        let registry = Arc::new(CircuitRegistry::default());
+        let remote = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4_436);
+        let outcome = registry
+            .register(remote, &sample_negotiated(), None)
+            .expect("initial registry insert");
+        let poison_target = Arc::clone(&registry);
+        let poisoned = std::thread::spawn(move || {
+            let _guard = poison_target.inner.write().expect("circuit registry lock");
+            panic!("poison circuit registry state");
+        })
+        .join();
+        assert!(poisoned.is_err(), "poisoning worker must panic");
+
+        let next_remote = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4_437);
+        assert_eq!(
+            registry.register(next_remote, &sample_negotiated(), None),
+            Err(CircuitAdmissionError::StateUnavailable)
+        );
+        assert!(
+            registry.remove(outcome.circuit_id).is_some(),
+            "cleanup should recover the poisoned guard without panicking"
+        );
+        assert_eq!(registry.active_len(), 0);
+        registry.inner.clear_poison();
+        assert_eq!(
+            registry.register(next_remote, &sample_negotiated(), None),
+            Err(CircuitAdmissionError::StateUnavailable),
+            "clearing the lock poison bit must not reopen admission"
+        );
     }
 }

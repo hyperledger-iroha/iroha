@@ -1885,10 +1885,6 @@ function parseSumeragiNposDiagnostics(value) {
     "epoch_seed",
     "prf_height",
     "prf_view",
-    "vrf_penalty_epoch",
-    "vrf_committed_no_reveal_total",
-    "vrf_no_participation_total",
-    "vrf_late_reveals_total",
   ];
   const record = assertExactSumeragiRecord(value, fields, context);
   const epochLength = parseSumeragiUnsigned(
@@ -1924,22 +1920,6 @@ function parseSumeragiNposDiagnostics(value) {
     epoch_seed: epochSeed,
     prf_height: parseSumeragiUnsigned(record.prf_height, `${context}.prf_height`),
     prf_view: parseSumeragiUnsigned(record.prf_view, `${context}.prf_view`),
-    vrf_penalty_epoch: parseSumeragiUnsigned(
-      record.vrf_penalty_epoch,
-      `${context}.vrf_penalty_epoch`,
-    ),
-    vrf_committed_no_reveal_total: parseSumeragiUnsigned(
-      record.vrf_committed_no_reveal_total,
-      `${context}.vrf_committed_no_reveal_total`,
-    ),
-    vrf_no_participation_total: parseSumeragiUnsigned(
-      record.vrf_no_participation_total,
-      `${context}.vrf_no_participation_total`,
-    ),
-    vrf_late_reveals_total: parseSumeragiUnsigned(
-      record.vrf_late_reveals_total,
-      `${context}.vrf_late_reveals_total`,
-    ),
   });
 }
 

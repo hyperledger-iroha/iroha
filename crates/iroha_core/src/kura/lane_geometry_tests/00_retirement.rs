@@ -2076,8 +2076,8 @@ fn autonomous_retirement_payload_for_routes(
         epoch,
         producer,
     );
-    let reservation = crate::queue::LaneQueueReservationKeyV2 {
-        version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+    let reservation = crate::queue::LaneQueueReservationKeyV1 {
+        version: crate::queue::LaneQueueReservationKeyV1::VERSION,
         entrypoint_hash,
         queue_plan_admission_binding_hash: Hash::new(
             b"geometry-retirement-queue-plan-admission-binding",

@@ -11,7 +11,15 @@ import pytest
 import requests
 from iroha_torii_client.client import canonical_request_message
 
-from iroha_python import NetworkId, OperatorSigningContext, ToriiClient
+from iroha_python import (
+    KaigiRelayDetail,
+    KaigiRelayHealthSnapshot,
+    KaigiRelaySummary,
+    KaigiRelaySummaryList,
+    NetworkId,
+    OperatorSigningContext,
+    ToriiClient,
+)
 from iroha_python.crypto import Ed25519KeyPair
 
 
@@ -48,6 +56,127 @@ def response(status: int, payload: object | None = None) -> requests.Response:
 
 def context() -> OperatorSigningContext:
     return OperatorSigningContext(NETWORK_ID, KEY_PAIR)
+
+
+def relay_summary_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "relay_id": RELAY_ID,
+        "domain": "kaigi.core",
+        "bandwidth_class": 3,
+        "hpke_fingerprint_hex": "ab" * 32,
+        "status": "healthy",
+        "reported_at_ms": 123,
+    }
+    payload.update(overrides)
+    return payload
+
+
+@pytest.mark.parametrize("bandwidth_class", [1, 255])
+def test_kaigi_relay_summary_accepts_u8_bandwidth_boundaries(
+    bandwidth_class: int,
+) -> None:
+    summary = KaigiRelaySummary.from_payload(
+        relay_summary_payload(bandwidth_class=bandwidth_class)
+    )
+
+    assert summary.bandwidth_class == bandwidth_class
+
+
+@pytest.mark.parametrize("bandwidth_class", [0, -1, 256])
+def test_kaigi_relay_summary_rejects_out_of_range_bandwidth(
+    bandwidth_class: int,
+) -> None:
+    with pytest.raises(ValueError, match=r"bandwidth_class must be within 1\.\.=255"):
+        KaigiRelaySummary.from_payload(
+            relay_summary_payload(bandwidth_class=bandwidth_class)
+        )
+
+
+def test_kaigi_relay_summary_requires_bandwidth_class() -> None:
+    payload = relay_summary_payload()
+    del payload["bandwidth_class"]
+
+    with pytest.raises(ValueError, match="bandwidth_class is required"):
+        KaigiRelaySummary.from_payload(payload)
+
+
+def test_kaigi_relay_summary_rejects_boolean_bandwidth() -> None:
+    with pytest.raises(TypeError, match="bandwidth_class must be an integer"):
+        KaigiRelaySummary.from_payload(relay_summary_payload(bandwidth_class=True))
+
+
+@pytest.mark.parametrize("reported_at_ms", [True, 1.5, -1, 1 << 64])
+def test_kaigi_relay_summary_rejects_lossy_or_out_of_range_timestamps(
+    reported_at_ms: object,
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=r"reported_at_ms must"):
+        KaigiRelaySummary.from_payload(
+            relay_summary_payload(reported_at_ms=reported_at_ms)
+        )
+
+
+def test_kaigi_relay_summary_requires_a_32_byte_fingerprint() -> None:
+    with pytest.raises(ValueError, match="must contain 64 hex characters"):
+        KaigiRelaySummary.from_payload(
+            relay_summary_payload(hpke_fingerprint_hex="ab")
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"total": 0, "items": False},
+        {"items": []},
+        {"total": 501, "items": [{}] * 501},
+    ],
+)
+def test_kaigi_relay_summary_list_rejects_malformed_or_oversized_envelopes(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=r"(?:items|total).*(?:array|required|limit)"):
+        KaigiRelaySummaryList.from_payload(payload)
+
+
+def test_kaigi_relay_detail_rejects_non_string_notes_and_non_object_optionals() -> None:
+    base: dict[str, object] = {
+        "relay": relay_summary_payload(),
+        "hpke_public_key_b64": "QUJDRA==",
+    }
+    for field, value in (("notes", 7), ("reported_call", []), ("metrics", [])):
+        with pytest.raises(TypeError, match=field):
+            KaigiRelayDetail.from_payload({**base, field: value})
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "healthy_total": 0,
+            "degraded_total": 0,
+            "unavailable_total": 0,
+            "reports_total": 0,
+            "registrations_total": 0,
+            "failovers_total": 0,
+            "domains": False,
+        },
+        {
+            "healthy_total": 0,
+            "degraded_total": 0,
+            "unavailable_total": 0,
+            "registrations_total": 0,
+            "failovers_total": 0,
+            "domains": [],
+        },
+    ],
+)
+def test_kaigi_relay_health_rejects_malformed_required_fields(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(
+        (TypeError, ValueError),
+        match=r"(?:domains|reports_total).*(?:array|required)",
+    ):
+        KaigiRelayHealthSnapshot.from_payload(payload)
 
 
 def assert_exact_signature(call: dict[str, Any], target: str) -> None:

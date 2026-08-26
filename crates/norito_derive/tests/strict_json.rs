@@ -9,6 +9,9 @@ struct StrictInner {
 }
 #[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
+struct StrictEmpty {}
+#[derive(Debug, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
 struct StrictOuter {
     child: StrictInner,
     children: Vec<StrictInner>,
@@ -111,6 +114,20 @@ fn named_struct_rejects_unknown_fields_without_changing_permissive_default() {
     let permissive = json::from_slice::<Permissive>(br#"{"value":1,"future":2}"#)
         .expect("unannotated struct remains permissive");
     assert_eq!(permissive, Permissive { value: 1 });
+}
+#[test]
+fn empty_named_struct_accepts_only_an_empty_object() {
+    assert_eq!(
+        json::from_slice::<StrictEmpty>(br#"{}"#).expect("empty strict object"),
+        StrictEmpty {}
+    );
+    assert_eq!(
+        json::to_json(&StrictEmpty {}).expect("serialize empty strict object"),
+        "{}"
+    );
+    let error = json::from_slice::<StrictEmpty>(br#"{"retired":true}"#)
+        .expect_err("empty strict object must reject every field");
+    assert_unknown_field(error, "retired");
 }
 #[test]
 fn strictness_applies_to_nested_objects_and_array_elements() {

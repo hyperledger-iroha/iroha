@@ -815,11 +815,6 @@ mod tests {
                     defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
                 quic_datagram_send_buffer_bytes:
                     defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-                tls_enabled: false,
-                tls_fallback_to_plain: true,
-                tls_listen_address: None,
-                tls_inbound_only: false,
-                prefer_ws_fallback: false,
                 p2p_queue_cap_high: NonZeroUsize::new(128).unwrap(),
                 p2p_queue_cap_low: NonZeroUsize::new(512).unwrap(),
                 p2p_post_queue_cap: NonZeroUsize::new(128).unwrap(),
@@ -894,7 +889,6 @@ mod tests {
                     iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_HEALTH.get(),
                 max_frame_bytes_other:
                     iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_OTHER.get(),
-                tls_only_v1_3: true,
                 quic_max_idle_timeout: None,
             },
             genesis: Genesis {
@@ -948,8 +942,6 @@ mod tests {
                     iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_INFLIGHT,
                 soracloud_mutation_max_body_bytes:
                     iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES,
-                soracloud_upload_max_body_bytes:
-                    iroha_config::parameters::defaults::torii::SORACLOUD_UPLOAD_MAX_BODY_BYTES,
                 require_api_token: false,
                 api_tokens: Vec::new(),
                 api_fee_asset_id: None,
@@ -1669,7 +1661,6 @@ mod tests {
                     iroha_data_model::account::AccountId::parse_encoded(
                         &iroha_config::parameters::defaults::governance::sorafs_pin_fee::treasury_account(),
                     )
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .expect("default SoraFS pin fee treasury account"),
                 sorafs_pricing: PricingScheduleRecord::launch_default(),
                 alias_teu_minimum: iroha_config::parameters::defaults::governance::alias_teu_minimum(),

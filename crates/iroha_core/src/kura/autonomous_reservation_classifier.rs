@@ -1,7 +1,7 @@
 macro_rules! kura_autonomous_reservation_classifier_methods {
     () => {
     fn autonomous_reservation_key_matches_group(
-        key: &LaneQueueReservationKeyV2,
+        key: &LaneQueueReservationKeyV1,
         identity: &LaneQueueReservationGroupIdentityV1,
     ) -> bool {
         key.lane_id == identity.lane_id
@@ -231,7 +231,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
         scanned_entries: &mut usize,
         decoded_bytes: &mut u64,
     ) -> std::result::Result<
-        Option<AutonomousLaneEntrypointClaimV3>,
+        Option<AutonomousLaneEntrypointClaimV1>,
         AutonomousLaneReservationEvidenceError,
     > {
         if !Self::autonomous_lane_entrypoint_claim_file_exists(path)? {
@@ -309,7 +309,7 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                 decoded_bytes,
             )?;
             let expected_active =
-                AutonomousLaneEntrypointClaimV3::new(payload, *entrypoint_hash);
+                AutonomousLaneEntrypointClaimV1::new(payload, *entrypoint_hash);
             if existing.as_ref().is_some_and(|claim| {
                 !self.autonomous_lane_entrypoint_claim_path_matches(claim, &path)
             }) {
@@ -330,12 +330,12 @@ macro_rules! kura_autonomous_reservation_classifier_methods {
                 continue;
             };
             let retirement_hash = retirement_hash.expect("retirement digest exists");
-            let pending = AutonomousLaneEntrypointClaimV3::release_pending_for_payload(
+            let pending = AutonomousLaneEntrypointClaimV1::release_pending_for_payload(
                 payload,
                 *entrypoint_hash,
                 retirement_hash,
             );
-            let released = AutonomousLaneEntrypointClaimV3::released_for_payload(
+            let released = AutonomousLaneEntrypointClaimV1::released_for_payload(
                 payload,
                 *entrypoint_hash,
                 retirement_hash,

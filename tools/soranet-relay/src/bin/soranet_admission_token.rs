@@ -53,16 +53,18 @@ impl SecretBytes {
     fn len(&self) -> usize {
         self.0.len()
     }
+    fn clear(&mut self) {
+        self.0.resize(self.0.capacity(), 0);
+        zeroize::Zeroize::zeroize(self.0.as_mut_slice());
+        self.0.clear();
+    }
     fn into_vec(mut self) -> Vec<u8> {
         std::mem::take(&mut self.0)
     }
 }
 impl Drop for SecretBytes {
     fn drop(&mut self) {
-        // Best-effort wipe without adding package metadata to this developer
-        // tool. The signing backend also owns internal copies during use.
-        self.0.fill(0);
-        std::hint::black_box(self.0.as_mut_slice());
+        self.clear();
     }
 }
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -541,8 +543,7 @@ fn command_mint(args: MintArgs) -> Result<(), String> {
     let mut seed = [0u8; 32];
     rng().fill_bytes(&mut seed);
     let mut rng = StdRng::from_seed(seed);
-    seed.fill(0);
-    std::hint::black_box(&seed);
+    zeroize::Zeroize::zeroize(&mut seed);
     let bundle = mint_token(&request, &mut rng).map_err(|err| err.to_string())?;
     let output = render_bundle(&bundle, args.format)?;
     write_secret_output(args.output.as_deref(), output.as_slice())
@@ -993,6 +994,17 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
         }
+    }
+    #[test]
+    fn secret_bytes_debug_is_redacted_and_clear_wipes_the_full_allocation() {
+        let mut allocation = Vec::with_capacity(64);
+        allocation.extend_from_slice(b"issuer-secret");
+        let mut secret = SecretBytes::new(allocation);
+        assert_eq!(format!("{secret:?}"), "<redacted secret bytes>");
+
+        secret.clear();
+        assert!(secret.as_slice().is_empty());
+        assert_eq!(secret.0.capacity(), 64);
     }
     #[test]
     fn key_file_limits_match_largest_supported_mldsa_suite() {

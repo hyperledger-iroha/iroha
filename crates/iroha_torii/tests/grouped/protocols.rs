@@ -6,8 +6,6 @@ mod connect_gating;
 mod mcp_endpoints;
 #[path = "../norito_ingress.rs"]
 mod norito_ingress;
-#[path = "../p2p_ws.rs"]
-mod p2p_ws;
 #[path = "../ws_proof_integration.rs"]
 mod ws_proof_integration;
 #[path = "../ws_proof_json_mapping.rs"]

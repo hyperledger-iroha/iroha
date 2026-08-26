@@ -23,7 +23,7 @@ use crate::{
     },
     data_model::{
         ChainId,
-        block::SignedBlock,
+        block::{BlockHeader, SignedBlock},
         events::pipeline::{
             BlockEventFilter, BlockStatus, PipelineEventBox, PipelineEventFilterBox,
             TransactionEventFilter, TransactionStatus,
@@ -103,6 +103,7 @@ pub use iroha_torii_shared::validation_fee_api::{
     ValidationFeeVerifiedPolicyProjectionV1, decode_validation_fee_proposal_cursor_v1,
 };
 use iroha_torii_shared::{
+    AccountOnboardingCurrentStateRequestV1, AccountOnboardingCurrentStateResponseV1,
     AccountReadResponse, ErrorEnvelope, FeeQuoteRequest, FeeQuoteResponse,
     FeeSponsorProgramByIdRequest, NORITO_V1_WEBSOCKET_SUBPROTOCOL,
     PipelineTransactionStatusResponse, TriggerCompletionListResponse,
@@ -113,7 +114,7 @@ use iroha_torii_shared::{
     },
     uri as torii_uri,
 };
-use iroha_version::codec::EncodeVersioned;
+use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned};
 use norito::{
     decode_from_bytes,
     derive::{
@@ -142,7 +143,7 @@ use sorafs_orchestrator::{
     },
 };
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fmt::{self, Write as _},
     future::Future,
     num::{NonZeroU32, NonZeroU64},
@@ -160,6 +161,8 @@ const NODE_STATUS_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const NODE_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
 const SORACLOUD_STATUS_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES: usize = 64 * 1024;
+const ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES: usize =
+    iroha_torii_shared::ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES;
 const TRANSACTION_ENTRYPOINT_HASH_HEADER: &str = "x-iroha-entrypoint-hash";
 const SIGNED_TRANSACTION_HASH_HEADER: &str = "x-iroha-signed-transaction-hash";
 const FEE_QUOTE_RESPONSE_MAX_BYTES: usize = 64 * 1024;
@@ -1010,8 +1013,10 @@ pub struct AccountOnboardingPlanRequestV1 {
     pub alias: String,
     /// Canonical domainless account identifier to create or repair.
     pub account_id: String,
-    /// Optional unscoped permission names selected from the server allowlist.
-    #[norito(default)]
+    /// Explicit unscoped permission names selected from the server allowlist.
+    ///
+    /// The field is mandatory in V1 JSON; an empty array means that no
+    /// additional permission is requested.
     pub permissions: Vec<String>,
 }
 impl AccountOnboardingPlanRequestV1 {
@@ -1050,8 +1055,7 @@ impl AccountOnboardingPlanRequestV1 {
             .to_string();
         ensure_canonical_i105_account_id(&self.account_id, "account_id")?;
         let parsed_account = AccountId::parse_encoded(&self.account_id)
-            .map_err(|error| eyre!("invalid canonical account_id: {error}"))?
-            .into_account_id();
+            .map_err(|error| eyre!("invalid canonical account_id: {error}"))?;
         let account_id = parsed_account.to_string();
         if account_id != self.account_id {
             return Err(eyre!(
@@ -1104,7 +1108,10 @@ pub struct AccountOnboardingPlanBodyV1 {
     /// Exact framed instructions for the one server-signed transaction.
     pub instructions: Vec<AliasFramedInstructionV1>,
     /// Optional native auto-renew follow-up that the owner must sign locally.
-    #[norito(default)]
+    ///
+    /// The slot is always encoded in V1 JSON; `null` means that no owner
+    /// follow-up is required.
+    #[norito(required)]
     pub owner_auto_renew_instruction: Option<AliasFramedInstructionV1>,
     /// Last block timestamp at which this receipt may be applied.
     pub valid_until_ms: u64,
@@ -1391,7 +1398,7 @@ pub fn decode_and_verify_account_onboarding_plan_for_request(
             || receipt.body.resource.instruction_index.is_some()
         {
             return Err(eyre!(
-                "only an exact unchanged onboarding receipt may omit instructions"
+                "only an exact no-op onboarding receipt may omit instructions"
             ));
         }
     } else if receipt.body.resource.instruction_index != Some(0) {
@@ -1461,39 +1468,239 @@ pub fn decode_and_verify_account_onboarding_plan_for_request(
     }
     Ok(instructions)
 }
-/// Apply request containing exactly one previously issued onboarding receipt.
+/// Public-reset mutation identity committed by every prepared transaction.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
-pub struct AccountOnboardingApplyRequestV1 {
-    /// Exact stateless receipt returned by the planning endpoint.
+pub struct TairaPublicResetMutationBindingV1 {
+    /// Exact immutable binding schema.
+    pub schema: String,
+    /// SHA-256 of the admitted reset authorization.
+    pub authorization_sha256: String,
+    /// Exact authorization nonce.
+    pub authorization_nonce: String,
+    /// Exact operation kind: `onboarding` or `faucet`.
+    pub kind: String,
+    /// Canonical reset phase label.
+    pub phase: String,
+    /// Exact mutation idempotency digest.
+    pub idempotency_key: String,
+    /// Absolute execution deadline from the admitted authorization.
+    pub execution_expires_at_unix_ms: u64,
+}
+impl TairaPublicResetMutationBindingV1 {
+    /// Current immutable binding schema.
+    pub const SCHEMA: &'static str = "iroha.taira.public-reset.mutation-binding.v1";
+}
+/// Prepare request consuming one authenticated semantic onboarding receipt.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingPrepareRequestV1 {
+    /// Exact immutable request schema.
+    pub schema: String,
+    /// Public-reset mutation identity.
+    pub binding: TairaPublicResetMutationBindingV1,
+    /// Receipt returned by the planner.
     pub receipt: AccountOnboardingPlanReceiptV1,
 }
-/// Sponsored onboarding apply result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
-pub enum AccountOnboardingStatusV1 {
-    /// One atomic transaction was queued.
-    #[codec(index = 0)]
-    Queued,
-    /// Missing derived or allowlisted ancillary state was queued for repair.
-    #[codec(index = 1)]
-    Repaired,
-    /// Exact desired state already existed; no transaction was queued.
-    #[codec(index = 2)]
-    Unchanged,
+impl AccountOnboardingPrepareRequestV1 {
+    /// Current immutable request schema.
+    pub const SCHEMA: &'static str = "iroha.accounts.onboard.prepare.v1";
 }
-/// Result returned after applying a sponsored onboarding receipt.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AccountOnboardingResponseV1 {
-    /// Canonical target account identifier.
+/// Authenticated exact sponsored-onboarding transaction prepared by Torii.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingPreparedTransactionV1 {
+    /// Exact immutable prepared-transaction schema.
+    pub schema: String,
+    /// Public-reset mutation identity committed by transaction metadata.
+    pub binding: TairaPublicResetMutationBindingV1,
+    /// Exact operation label, always `onboarding`.
+    pub operation: String,
+    /// Exact signed semantic receipt consumed during prepare.
+    pub receipt: AccountOnboardingPlanReceiptV1,
+    /// Domain-separated receipt hash.
+    pub semantic_hash_hex: String,
+    /// Canonical target account.
     pub account_id: String,
-    /// Canonical account alias.
+    /// Canonical target alias.
     pub alias: String,
-    /// Queued transaction hash, absent for an exact unchanged replay.
-    pub tx_hash_hex: Option<String>,
-    /// Apply result classification.
-    pub status: AccountOnboardingStatusV1,
-    /// Live alias disposition observed immediately before apply.
+    /// Live disposition used to derive the transaction.
     pub disposition: AliasPlanDispositionV1,
+    /// Hash of the exact signed transaction.
+    pub transaction_hash_hex: String,
+    /// Canonical fixed-V1 signed-transaction wire as lowercase hexadecimal.
+    pub signed_transaction_wire_hex: String,
+    /// SHA-256 of the exact canonical transaction wire.
+    pub signed_transaction_wire_sha256: String,
+    /// Exact signature-bound fee-payment intent.
+    pub fee_payment: FeePaymentIntent,
+    /// Onboarding-authority signature authenticating every preceding field.
+    pub server_signature: Signature,
+}
+impl AccountOnboardingPreparedTransactionV1 {
+    /// Current immutable prepared-transaction schema.
+    pub const SCHEMA: &'static str = "iroha.taira.prepared-transaction.v1";
+    /// Exact operation label.
+    pub const OPERATION: &'static str = "onboarding";
+}
+/// Authenticated nonterminal result requiring a fresh account-and-alias state proof.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingProofRequiredPrepareResponseV1 {
+    /// Exact immutable result schema.
+    pub schema: String,
+    /// Public-reset mutation identity checked by Torii.
+    pub binding: TairaPublicResetMutationBindingV1,
+    /// Exact operation label, always `onboarding`.
+    pub operation: String,
+    /// Exact nonterminal result label, always `ProofRequired`.
+    pub outcome: String,
+    /// Exact live-state proof required before a coordinator may terminalize the result.
+    pub proof_kind: String,
+    /// Domain-separated semantic receipt hash.
+    pub semantic_hash_hex: String,
+    /// Canonical target account.
+    pub account_id: String,
+    /// Canonical target alias.
+    pub alias: String,
+    /// Exact observed no-op disposition; this is not itself a current-state proof.
+    pub disposition: AliasPlanDispositionV1,
+    /// Onboarding-authority signature authenticating the result.
+    pub server_signature: Signature,
+}
+impl AccountOnboardingProofRequiredPrepareResponseV1 {
+    /// Current immutable proof-required result schema.
+    pub const SCHEMA: &'static str = "iroha.accounts.onboard.prepare-proof-required.v1";
+    /// Exact nonterminal outcome.
+    pub const OUTCOME: &'static str = "ProofRequired";
+    /// Exact proof contract a coordinator must satisfy using one fresh atomic observation.
+    pub const PROOF_KIND: &'static str = "account_alias_current_state";
+}
+/// Fresh ledger classification for an authenticated onboarding proof requirement.
+///
+/// Every variant is derived from one Torii state snapshot and carries that snapshot's exact
+/// nonzero committed height and block hash. Only [`Self::Applied`] proves that both the exact
+/// account and exact alias target exist in that snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccountOnboardingCurrentStateV1 {
+    /// The exact typed account exists and the exact typed alias resolves to it.
+    Applied {
+        /// Committed height anchoring the atomic observation.
+        block_height: NonZeroU64,
+        /// Committed block hash anchoring the atomic observation.
+        block_hash: HashOf<BlockHeader>,
+    },
+    /// The exact typed account exists, but the exact typed alias does not resolve.
+    AliasAbsent {
+        /// Committed height anchoring the atomic observation.
+        block_height: NonZeroU64,
+        /// Committed block hash anchoring the atomic observation.
+        block_hash: HashOf<BlockHeader>,
+    },
+    /// The exact typed account exists, but the exact typed alias resolves to another account.
+    AliasConflict {
+        /// Committed height anchoring the atomic observation.
+        block_height: NonZeroU64,
+        /// Committed block hash anchoring the atomic observation.
+        block_hash: HashOf<BlockHeader>,
+    },
+}
+/// Closed result of onboarding preparation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AccountOnboardingPrepareResponseV1 {
+    /// An exact signed transaction is ready for explicit submission.
+    Prepared(AccountOnboardingPreparedTransactionV1),
+    /// No transaction exists; one fresh atomic account-and-alias observation is required.
+    ProofRequired(AccountOnboardingProofRequiredPrepareResponseV1),
+}
+/// Solved faucet proof-of-work claim.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
+#[norito(deny_unknown_fields)]
+pub struct AccountFaucetClaimV1 {
+    /// Canonical domainless target account.
+    pub account_id: String,
+    /// Committed block height anchoring proof-of-work.
+    #[norito(default)]
+    pub pow_anchor_height: Option<u64>,
+    /// Canonical lowercase hexadecimal proof nonce.
+    #[norito(default)]
+    pub pow_nonce_hex: Option<String>,
+}
+/// Prepare request consuming one solved faucet claim.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
+#[norito(deny_unknown_fields)]
+pub struct AccountFaucetPrepareRequestV1 {
+    /// Exact immutable request schema.
+    pub schema: String,
+    /// Public-reset mutation identity.
+    pub binding: TairaPublicResetMutationBindingV1,
+    /// Solved faucet claim.
+    pub claim: AccountFaucetClaimV1,
+}
+impl AccountFaucetPrepareRequestV1 {
+    /// Current immutable request schema.
+    pub const SCHEMA: &'static str = "iroha.accounts.faucet.prepare.v1";
+}
+/// Authenticated exact faucet transaction prepared by Torii.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
+#[norito(deny_unknown_fields)]
+pub struct AccountFaucetPreparedTransactionV1 {
+    /// Exact immutable prepared-transaction schema.
+    pub schema: String,
+    /// Public-reset mutation identity committed by transaction metadata.
+    pub binding: TairaPublicResetMutationBindingV1,
+    /// Exact operation label, always `faucet`.
+    pub operation: String,
+    /// Exact solved semantic claim consumed during prepare.
+    pub claim: AccountFaucetClaimV1,
+    /// Domain-separated claim hash.
+    pub semantic_hash_hex: String,
+    /// Canonical target account.
+    pub account_id: String,
+    /// Canonical faucet asset definition.
+    pub asset_definition_id: String,
+    /// Canonical destination asset.
+    pub asset_id: String,
+    /// Exact transfer amount.
+    pub amount: Quantity,
+    /// Hash of the exact signed transaction.
+    pub transaction_hash_hex: String,
+    /// Canonical fixed-V1 signed-transaction wire as lowercase hexadecimal.
+    pub signed_transaction_wire_hex: String,
+    /// SHA-256 of the exact canonical transaction wire.
+    pub signed_transaction_wire_sha256: String,
+    /// Exact signature-bound fee-payment intent.
+    pub fee_payment: FeePaymentIntent,
+    /// Faucet-authority signature authenticating every preceding field.
+    pub server_signature: Signature,
+}
+impl AccountFaucetPreparedTransactionV1 {
+    /// Current immutable prepared-transaction schema.
+    pub const SCHEMA: &'static str = "iroha.taira.prepared-transaction.v1";
+    /// Exact operation label.
+    pub const OPERATION: &'static str = "faucet";
+}
+/// Canonical terminal or nonterminal state for an exact submitted hash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreparedTransactionOutcomeV1 {
+    /// The exact transaction has applied.
+    Applied,
+    /// The exact transaction is queued, approved, or committed but not yet applied.
+    Pending,
+    /// The exact transaction reached a definitive rejection or expiry.
+    Rejected,
+}
+/// Reconciled result of submitting one exact prepared transaction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedTransactionSubmitResponseV1 {
+    /// Public-reset mutation identity from the submitted envelope.
+    pub binding: TairaPublicResetMutationBindingV1,
+    /// Exact operation label.
+    pub operation: String,
+    /// Hash of the only transaction considered by the request.
+    pub transaction_hash_hex: String,
+    /// Canonical status for that exact hash.
+    pub outcome: PreparedTransactionOutcomeV1,
 }
 /// Canonical account-alias resolution returned by Torii.
 ///
@@ -1866,15 +2073,229 @@ struct AccountAliasesByAccountWireV1 {
     #[norito(skip_serializing_if = "Option::is_none")]
     source: Option<String>,
 }
+#[derive(Clone, Debug, JsonDeserialize)]
+struct PreparedResponseSchemaProbeV1 {
+    schema: String,
+}
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-struct AccountOnboardingResponseWireV1 {
+struct PreparedTransactionSubmitResponseWireV1 {
+    schema: String,
+    binding: TairaPublicResetMutationBindingV1,
+    operation: String,
+    transaction_hash_hex: String,
+    outcome: String,
+}
+#[derive(Clone)]
+struct AccountOnboardingPreparedSignaturePayloadV1 {
+    schema: String,
+    binding: TairaPublicResetMutationBindingV1,
+    operation: String,
+    receipt: AccountOnboardingPlanReceiptV1,
+    semantic_hash_hex: String,
     account_id: String,
     alias: String,
-    #[norito(default)]
-    tx_hash_hex: Option<String>,
-    status: String,
     disposition: AliasPlanDispositionV1,
+    transaction_hash_hex: String,
+    signed_transaction_wire_hex: String,
+    signed_transaction_wire_sha256: String,
+}
+impl From<&AccountOnboardingPreparedTransactionV1> for AccountOnboardingPreparedSignaturePayloadV1 {
+    fn from(value: &AccountOnboardingPreparedTransactionV1) -> Self {
+        Self {
+            schema: value.schema.clone(),
+            binding: value.binding.clone(),
+            operation: value.operation.clone(),
+            receipt: value.receipt.clone(),
+            semantic_hash_hex: value.semantic_hash_hex.clone(),
+            account_id: value.account_id.clone(),
+            alias: value.alias.clone(),
+            disposition: value.disposition,
+            transaction_hash_hex: value.transaction_hash_hex.clone(),
+            signed_transaction_wire_hex: value.signed_transaction_wire_hex.clone(),
+            signed_transaction_wire_sha256: value.signed_transaction_wire_sha256.clone(),
+        }
+    }
+}
+#[derive(Clone)]
+struct AccountOnboardingProofRequiredSignaturePayloadV1 {
+    schema: String,
+    binding: TairaPublicResetMutationBindingV1,
+    operation: String,
+    outcome: String,
+    proof_kind: String,
+    semantic_hash_hex: String,
+    account_id: String,
+    alias: String,
+    disposition: AliasPlanDispositionV1,
+}
+impl From<&AccountOnboardingProofRequiredPrepareResponseV1>
+    for AccountOnboardingProofRequiredSignaturePayloadV1
+{
+    fn from(value: &AccountOnboardingProofRequiredPrepareResponseV1) -> Self {
+        Self {
+            schema: value.schema.clone(),
+            binding: value.binding.clone(),
+            operation: value.operation.clone(),
+            outcome: value.outcome.clone(),
+            proof_kind: value.proof_kind.clone(),
+            semantic_hash_hex: value.semantic_hash_hex.clone(),
+            account_id: value.account_id.clone(),
+            alias: value.alias.clone(),
+            disposition: value.disposition,
+        }
+    }
+}
+#[derive(Clone)]
+struct AccountFaucetPreparedSignaturePayloadV1 {
+    schema: String,
+    binding: TairaPublicResetMutationBindingV1,
+    operation: String,
+    claim: AccountFaucetClaimV1,
+    semantic_hash_hex: String,
+    account_id: String,
+    asset_definition_id: String,
+    asset_id: String,
+    amount: Quantity,
+    transaction_hash_hex: String,
+    signed_transaction_wire_hex: String,
+    signed_transaction_wire_sha256: String,
+}
+impl From<&AccountFaucetPreparedTransactionV1> for AccountFaucetPreparedSignaturePayloadV1 {
+    fn from(value: &AccountFaucetPreparedTransactionV1) -> Self {
+        Self {
+            schema: value.schema.clone(),
+            binding: value.binding.clone(),
+            operation: value.operation.clone(),
+            claim: value.claim.clone(),
+            semantic_hash_hex: value.semantic_hash_hex.clone(),
+            account_id: value.account_id.clone(),
+            asset_definition_id: value.asset_definition_id.clone(),
+            asset_id: value.asset_id.clone(),
+            amount: value.amount.clone(),
+            transaction_hash_hex: value.transaction_hash_hex.clone(),
+            signed_transaction_wire_hex: value.signed_transaction_wire_hex.clone(),
+            signed_transaction_wire_sha256: value.signed_transaction_wire_sha256.clone(),
+        }
+    }
+}
+
+fn prepared_binding_ref(
+    binding: &TairaPublicResetMutationBindingV1,
+) -> iroha_torii_shared::prepared_transaction::PreparedMutationBindingRefV1<'_> {
+    iroha_torii_shared::prepared_transaction::PreparedMutationBindingRefV1 {
+        schema: &binding.schema,
+        authorization_sha256: &binding.authorization_sha256,
+        authorization_nonce: &binding.authorization_nonce,
+        kind: &binding.kind,
+        phase: &binding.phase,
+        idempotency_key: &binding.idempotency_key,
+        execution_expires_at_unix_ms: binding.execution_expires_at_unix_ms,
+    }
+}
+
+fn prepared_disposition_text(disposition: AliasPlanDispositionV1) -> &'static str {
+    match disposition {
+        AliasPlanDispositionV1::NoOp => "no_op",
+        AliasPlanDispositionV1::Repair => "repair",
+        AliasPlanDispositionV1::Create => "create",
+        AliasPlanDispositionV1::Conflict => "conflict",
+    }
+}
+
+fn decode_prepared_transcript_wire(wire_hex: &str) -> Result<Vec<u8>> {
+    if wire_hex.is_empty()
+        || wire_hex.len() % 2 != 0
+        || wire_hex
+            .bytes()
+            .any(|byte| !(byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    {
+        return Err(eyre!(
+            "prepared transaction transcript wire is not canonical lowercase hexadecimal"
+        ));
+    }
+    hex::decode(wire_hex).wrap_err("decode prepared transaction transcript wire")
+}
+
+impl PreparedSignatureTranscriptV1 for AccountOnboardingPreparedSignaturePayloadV1 {
+    fn signature_transcript(&self) -> Result<Vec<u8>> {
+        if self.operation != AccountOnboardingPreparedTransactionV1::OPERATION
+            || self.semantic_hash_hex != hex::encode(self.receipt.plan_hash.as_ref())
+        {
+            return Err(eyre!(
+                "prepared onboarding signature fields do not match the signed receipt"
+            ));
+        }
+        let wire = decode_prepared_transcript_wire(&self.signed_transaction_wire_hex)?;
+        Ok(
+            iroha_torii_shared::prepared_transaction::onboarding_prepared_signature_transcript_v1(
+                iroha_torii_shared::prepared_transaction::OnboardingPreparedSignatureFieldsV1 {
+                    envelope_schema: &self.schema,
+                    binding: prepared_binding_ref(&self.binding),
+                    semantic_hash_hex: &self.semantic_hash_hex,
+                    account_id: &self.account_id,
+                    alias: &self.alias,
+                    disposition: prepared_disposition_text(self.disposition),
+                    transaction_hash_hex: &self.transaction_hash_hex,
+                    signed_transaction_wire_sha256: &self.signed_transaction_wire_sha256,
+                    signed_transaction_wire: &wire,
+                },
+            ),
+        )
+    }
+}
+
+impl PreparedSignatureTranscriptV1 for AccountOnboardingProofRequiredSignaturePayloadV1 {
+    fn signature_transcript(&self) -> Result<Vec<u8>> {
+        if self.operation != AccountOnboardingPreparedTransactionV1::OPERATION {
+            return Err(eyre!(
+                "prepared onboarding proof-required operation is invalid"
+            ));
+        }
+        Ok(
+            iroha_torii_shared::prepared_transaction::onboarding_proof_required_signature_transcript_v1(
+                iroha_torii_shared::prepared_transaction::OnboardingProofRequiredSignatureFieldsV1 {
+                    envelope_schema: &self.schema,
+                    binding: prepared_binding_ref(&self.binding),
+                    outcome: &self.outcome,
+                    proof_kind: &self.proof_kind,
+                    semantic_hash_hex: &self.semantic_hash_hex,
+                    account_id: &self.account_id,
+                    alias: &self.alias,
+                    disposition: prepared_disposition_text(self.disposition),
+                },
+            ),
+        )
+    }
+}
+
+impl PreparedSignatureTranscriptV1 for AccountFaucetPreparedSignaturePayloadV1 {
+    fn signature_transcript(&self) -> Result<Vec<u8>> {
+        if self.operation != AccountFaucetPreparedTransactionV1::OPERATION {
+            return Err(eyre!("prepared faucet operation is invalid"));
+        }
+        let wire = decode_prepared_transcript_wire(&self.signed_transaction_wire_hex)?;
+        let amount = self.amount.to_string();
+        Ok(
+            iroha_torii_shared::prepared_transaction::faucet_prepared_signature_transcript_v1(
+                iroha_torii_shared::prepared_transaction::FaucetPreparedSignatureFieldsV1 {
+                    envelope_schema: &self.schema,
+                    binding: prepared_binding_ref(&self.binding),
+                    claim_account_id: &self.claim.account_id,
+                    claim_pow_anchor_height: self.claim.pow_anchor_height,
+                    claim_pow_nonce_hex: self.claim.pow_nonce_hex.as_deref(),
+                    semantic_hash_hex: &self.semantic_hash_hex,
+                    account_id: &self.account_id,
+                    asset_definition_id: &self.asset_definition_id,
+                    asset_id: &self.asset_id,
+                    amount: &amount,
+                    transaction_hash_hex: &self.transaction_hash_hex,
+                    signed_transaction_wire_sha256: &self.signed_transaction_wire_sha256,
+                    signed_transaction_wire: &wire,
+                },
+            ),
+        )
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
@@ -4029,15 +4450,23 @@ fn parse_canonical_i105_account_id(value: &str, field: &str) -> Result<AccountId
     }
     let parsed = AccountId::parse_encoded(trimmed)
         .map_err(|err| eyre!("{field} must be a canonical I105 account id: {err}"))?;
-    if parsed.canonical() != value {
+    if parsed.to_string() != value {
         return Err(eyre!(
             "{field} must use the canonical domainless I105 representation"
         ));
     }
-    Ok(parsed.into_account_id())
+    Ok(parsed)
 }
 fn ensure_canonical_i105_account_id(value: &str, field: &str) -> Result<()> {
     parse_canonical_i105_account_id(value, field).map(drop)
+}
+fn ensure_typed_account_id_is_canonical(account_id: &AccountId, field: &str) -> Result<()> {
+    let canonical = account_id.to_string();
+    let reparsed = parse_canonical_i105_account_id(&canonical, field)?;
+    if &reparsed != account_id {
+        return Err(eyre!("{field} must be a canonical domainless account id"));
+    }
+    Ok(())
 }
 fn parse_canonical_account_alias(value: &str, field: &str) -> Result<AccountAliasName> {
     let alias = value
@@ -4216,16 +4645,334 @@ fn decode_account_aliases_by_account(
         )),
     }
 }
+const FAUCET_CLAIM_HASH_DOMAIN_V1: &[u8] = b"iroha:accounts:faucet:claim:v1\0";
+const PREPARED_BINDING_METADATA_KEY_V1: &str = "taira_public_reset_binding";
+const PREPARED_OPERATION_METADATA_KEY_V1: &str = "taira_prepared_operation";
+const PREPARED_SEMANTIC_HASH_METADATA_KEY_V1: &str = "taira_prepared_semantic_hash";
+
+fn lower_hex_with_len(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn validate_prepared_mutation_binding(
+    binding: &TairaPublicResetMutationBindingV1,
+    expected_kind: &str,
+    require_active: bool,
+) -> Result<()> {
+    let nonce_is_canonical = binding.authorization_nonce.len() == 32
+        && binding.authorization_nonce.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        });
+    let phase_is_canonical = !binding.phase.is_empty()
+        && binding.phase.len() <= 128
+        && binding.phase.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        });
+    let now_ms: u64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    if binding.schema != TairaPublicResetMutationBindingV1::SCHEMA
+        || binding.kind != expected_kind
+        || !lower_hex_with_len(&binding.authorization_sha256, 64)
+        || !nonce_is_canonical
+        || !phase_is_canonical
+        || !lower_hex_with_len(&binding.idempotency_key, 64)
+        || (require_active && binding.execution_expires_at_unix_ms <= now_ms)
+    {
+        return Err(eyre!(
+            "prepared transaction binding is noncanonical, expired, or belongs to another operation"
+        ));
+    }
+    Ok(())
+}
+
+trait PreparedSignatureTranscriptV1 {
+    fn signature_transcript(&self) -> Result<Vec<u8>>;
+}
+
+fn verify_prepared_payload_signature(
+    payload: &impl PreparedSignatureTranscriptV1,
+    signature: &Signature,
+    authority: &AccountId,
+) -> Result<()> {
+    let key = authority
+        .try_signatory()
+        .ok_or_else(|| eyre!("prepared transaction authority is not a single-signatory account"))?;
+    let transcript = payload.signature_transcript()?;
+    let hash = iroha_torii_shared::prepared_transaction::prepared_signature_digest_v1(&transcript);
+    signature
+        .verify(key, hash.as_ref())
+        .wrap_err("prepared transaction envelope signature is invalid")
+}
+
+fn decode_canonical_prepared_transaction(
+    transaction_hash_hex: &str,
+    wire_hex: &str,
+    wire_sha256: &str,
+) -> Result<SignedTransaction> {
+    if !lower_hex_with_len(transaction_hash_hex, 64)
+        || !lower_hex_with_len(wire_sha256, 64)
+        || wire_hex.is_empty()
+        || wire_hex.len() % 2 != 0
+        || !wire_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(eyre!(
+            "prepared transaction hashes or wire hexadecimal are noncanonical"
+        ));
+    }
+    let wire = hex::decode(wire_hex).wrap_err("decode prepared transaction wire hexadecimal")?;
+    if hex::encode(Sha256::digest(&wire)) != wire_sha256 {
+        return Err(eyre!(
+            "prepared transaction wire SHA-256 does not match the envelope"
+        ));
+    }
+    let transaction = SignedTransaction::decode_all_versioned(&wire)
+        .wrap_err("decode fixed-V1 prepared SignedTransaction wire")?;
+    let canonical = transaction
+        .encode_wire_v1()
+        .wrap_err("re-encode canonical prepared SignedTransaction wire")?;
+    if canonical != wire
+        || hex::encode(transaction.hash().as_ref()) != transaction_hash_hex
+        || hex::encode(Sha256::digest(&canonical)) != wire_sha256
+    {
+        return Err(eyre!(
+            "prepared transaction wire, hash, or canonical re-encoding changed identity"
+        ));
+    }
+    transaction
+        .verify_signature()
+        .wrap_err("prepared transaction signature is invalid")?;
+    Ok(transaction)
+}
+
+fn faucet_claim_hash(claim: &AccountFaucetClaimV1) -> Hash {
+    let encoded = claim.encode();
+    Hash::new_from_chunks(&[FAUCET_CLAIM_HASH_DOMAIN_V1, encoded.as_slice()])
+}
+
+fn expected_prepared_transaction_metadata(
+    binding: &TairaPublicResetMutationBindingV1,
+    operation: &str,
+    semantic_hash_hex: &str,
+) -> Result<Metadata> {
+    let binding_value = norito::json::to_value(binding)
+        .wrap_err("encode prepared transaction binding as Norito JSON")?;
+    let binding_json = iroha_primitives::json::Json::from_norito_value_ref(&binding_value)
+        .wrap_err("canonicalize prepared transaction binding metadata")?;
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        PREPARED_BINDING_METADATA_KEY_V1
+            .parse()
+            .expect("static binding metadata key"),
+        binding_json,
+    );
+    metadata.insert(
+        PREPARED_OPERATION_METADATA_KEY_V1
+            .parse()
+            .expect("static operation metadata key"),
+        iroha_primitives::json::Json::new(operation.to_owned()),
+    );
+    metadata.insert(
+        PREPARED_SEMANTIC_HASH_METADATA_KEY_V1
+            .parse()
+            .expect("static semantic-hash metadata key"),
+        iroha_primitives::json::Json::new(semantic_hash_hex.to_owned()),
+    );
+    Ok(metadata)
+}
+
 fn onboarding_disposition_transition_allowed(
     planned: AliasPlanDispositionV1,
-    live: AliasPlanDispositionV1,
+    prepared: AliasPlanDispositionV1,
 ) -> bool {
     use AliasPlanDispositionV1::{Create, NoOp, Repair};
     matches!(
-        (planned, live),
+        (planned, prepared),
         (Create, Create | Repair | NoOp) | (Repair, Repair | NoOp) | (NoOp, NoOp)
     )
 }
+
+fn instructions_are_ordered_subset(actual: &[InstructionBox], planned: &[InstructionBox]) -> bool {
+    let mut actual = actual.iter();
+    let mut next = actual.next();
+    for instruction in planned {
+        if next.is_some_and(|candidate| candidate == instruction) {
+            next = actual.next();
+        }
+    }
+    next.is_none()
+}
+
+fn validate_account_faucet_claim(claim: &AccountFaucetClaimV1) -> Result<AccountId> {
+    ensure_canonical_i105_account_id(&claim.account_id, "claim.account_id")?;
+    let account_id = AccountId::parse_encoded(&claim.account_id)
+        .map_err(|error| eyre!("invalid faucet claim account_id: {error}"))?;
+    if account_id.to_string() != claim.account_id {
+        return Err(eyre!(
+            "faucet claim account_id must use its canonical domainless representation"
+        ));
+    }
+    if let Some(nonce) = claim.pow_nonce_hex.as_deref()
+        && (nonce.is_empty()
+            || nonce.len() % 2 != 0
+            || !nonce
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    {
+        return Err(eyre!(
+            "faucet proof nonce must use nonempty canonical lowercase hexadecimal"
+        ));
+    }
+    Ok(account_id)
+}
+
+fn validate_faucet_transaction_identity(
+    prepared: &AccountFaucetPreparedTransactionV1,
+    transaction: &SignedTransaction,
+) -> Result<()> {
+    let account_id = validate_account_faucet_claim(&prepared.claim)?;
+    let asset_definition_id: AssetDefinitionId = prepared
+        .asset_definition_id
+        .parse()
+        .wrap_err("parse prepared faucet asset definition")?;
+    if asset_definition_id.to_string() != prepared.asset_definition_id {
+        return Err(eyre!("prepared faucet asset definition is not canonical"));
+    }
+    let destination_asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
+    if destination_asset_id.to_string() != prepared.asset_id {
+        return Err(eyre!(
+            "prepared faucet destination asset differs from the exact claim"
+        ));
+    }
+    let source_asset_id = AssetId::new(asset_definition_id, transaction.authority().clone());
+    let transfer: InstructionBox = iroha_data_model::isi::Transfer::asset_quantity(
+        source_asset_id,
+        prepared.amount.clone(),
+        account_id.clone(),
+    )
+    .into();
+    let without_registration = vec![transfer.clone()];
+    let with_registration = vec![
+        InstructionBox::from(iroha_data_model::isi::Register::account(
+            iroha_data_model::account::Account::new(account_id),
+        )),
+        transfer,
+    ];
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        return Err(eyre!(
+            "prepared faucet transaction must contain a direct instruction sequence"
+        ));
+    };
+    if instructions.as_ref() != without_registration.as_slice()
+        && instructions.as_ref() != with_registration.as_slice()
+    {
+        return Err(eyre!(
+            "prepared faucet transaction instructions differ from its exact claim"
+        ));
+    }
+    Ok(())
+}
+
+/// Authenticate a nonterminal onboarding proof requirement without constructing a signing client.
+///
+/// Success authenticates only the exact request, receipt, reset binding, and Torii result. It does
+/// not prove current ledger state; callers must obtain one fresh atomic account-and-alias
+/// observation before terminalizing the operation.
+///
+/// # Errors
+/// Returns an error for a substituted request or result, a network mismatch, noncanonical fields,
+/// or an invalid receipt or prepared-result signature.
+pub fn verify_account_onboarding_proof_required_result_v1(
+    expected_network_id: NetworkId,
+    request: &AccountOnboardingPlanRequestV1,
+    proof_required: &AccountOnboardingProofRequiredPrepareResponseV1,
+    receipt: &AccountOnboardingPlanReceiptV1,
+    binding: &TairaPublicResetMutationBindingV1,
+) -> Result<()> {
+    validate_prepared_mutation_binding(
+        &proof_required.binding,
+        AccountOnboardingPreparedTransactionV1::OPERATION,
+        false,
+    )?;
+    if proof_required.schema != AccountOnboardingProofRequiredPrepareResponseV1::SCHEMA
+        || proof_required.operation != AccountOnboardingPreparedTransactionV1::OPERATION
+        || proof_required.outcome != AccountOnboardingProofRequiredPrepareResponseV1::OUTCOME
+        || proof_required.proof_kind != AccountOnboardingProofRequiredPrepareResponseV1::PROOF_KIND
+        || &proof_required.binding != binding
+        || proof_required.semantic_hash_hex != hex::encode(receipt.plan_hash.as_ref())
+        || proof_required.account_id != receipt.body.request.account_id
+        || proof_required.alias != receipt.body.request.alias
+        || proof_required.disposition != AliasPlanDispositionV1::NoOp
+    {
+        return Err(eyre!(
+            "proof-required onboarding result differs from its exact receipt or binding"
+        ));
+    }
+    decode_and_verify_account_onboarding_plan_for_request(expected_network_id, request, receipt)?;
+    verify_prepared_payload_signature(
+        &AccountOnboardingProofRequiredSignaturePayloadV1::from(proof_required),
+        &proof_required.server_signature,
+        &receipt.body.authority,
+    )
+}
+
+fn parse_prepared_submit_response(
+    response: &Response<Vec<u8>>,
+    expected_binding: &TairaPublicResetMutationBindingV1,
+    expected_operation: &str,
+    expected_hash: &str,
+) -> Result<PreparedTransactionSubmitResponseV1> {
+    if !matches!(response.status(), StatusCode::OK | StatusCode::ACCEPTED) {
+        return Err(eyre!(
+            "prepared transaction submission failed with HTTP status {}",
+            response.status()
+        ));
+    }
+    let wire: PreparedTransactionSubmitResponseWireV1 =
+        norito::json::from_slice(response.body())
+            .wrap_err("decode prepared transaction submit response")?;
+    if wire.schema != "iroha.taira.prepared-transaction-submit.v1"
+        || &wire.binding != expected_binding
+        || wire.operation != expected_operation
+        || wire.transaction_hash_hex != expected_hash
+        || !lower_hex_with_len(&wire.transaction_hash_hex, 64)
+    {
+        return Err(eyre!(
+            "prepared transaction submit response is not bound to the exact envelope"
+        ));
+    }
+    let outcome = match wire.outcome.as_str() {
+        "Applied" => PreparedTransactionOutcomeV1::Applied,
+        "Pending" => PreparedTransactionOutcomeV1::Pending,
+        "Rejected" => PreparedTransactionOutcomeV1::Rejected,
+        other => {
+            return Err(eyre!(
+                "prepared transaction submit response has unknown outcome `{other}`"
+            ));
+        }
+    };
+    if response.status() == StatusCode::ACCEPTED && outcome != PreparedTransactionOutcomeV1::Pending
+    {
+        return Err(eyre!(
+            "HTTP 202 prepared transaction response must have outcome Pending"
+        ));
+    }
+    Ok(PreparedTransactionSubmitResponseV1 {
+        binding: wire.binding,
+        operation: wire.operation,
+        transaction_hash_hex: wire.transaction_hash_hex,
+        outcome,
+    })
+}
+
 fn validate_account_onboarding_token(token: &str) -> Result<&str> {
     let bytes = token.as_bytes();
     if !(32..=256).contains(&bytes.len()) || !bytes.iter().all(|byte| (0x21..=0x7e).contains(byte))
@@ -5753,10 +6500,15 @@ pub struct UaidPortfolioQuery {
 impl UaidPortfolioQuery {
     fn apply(&self, mut builder: DefaultRequestBuilder) -> Result<DefaultRequestBuilder> {
         if let Some(asset_id) = self.asset_id.as_deref() {
-            let normalized = iroha_data_model::asset::AssetId::parse_literal(asset_id)
+            let parsed = iroha_data_model::asset::AssetId::parse_literal(asset_id)
                 .map_err(|err| eyre!("uaid portfolio query.asset_id is invalid: {err}"))?
                 .to_string();
-            builder = builder.param("asset_id", &normalized);
+            if parsed != asset_id {
+                return Err(eyre!(
+                    "uaid portfolio query.asset_id must use its exact canonical spelling"
+                ));
+            }
+            builder = builder.param("asset_id", asset_id);
         }
         Ok(builder)
     }
@@ -5823,6 +6575,30 @@ pub enum UaidManifestStatusFilter {
     /// Return every manifest regardless of lifecycle.
     All,
 }
+
+/// Count policy requested from and reported by the UAID manifest endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UaidManifestCountMode {
+    /// Count every filtered manifest exactly.
+    Exact,
+    /// Bound work to the requested page plus one continuation probe.
+    Bounded,
+}
+impl UaidManifestCountMode {
+    fn as_query_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Bounded => "bounded",
+        }
+    }
+    fn from_str(raw: &str, context: &str) -> Result<Self> {
+        match raw {
+            "exact" => Ok(Self::Exact),
+            "bounded" => Ok(Self::Bounded),
+            _ => Err(eyre!("{context} must be exactly `exact` or `bounded`")),
+        }
+    }
+}
 impl UaidManifestStatusFilter {
     fn as_query_str(self) -> &'static str {
         match self {
@@ -5843,6 +6619,8 @@ pub struct UaidManifestQuery {
     pub limit: Option<u32>,
     /// Number of manifests to skip before collecting results.
     pub offset: Option<u32>,
+    /// Optional exact or bounded count policy.
+    pub count_mode: Option<UaidManifestCountMode>,
 }
 impl UaidManifestQuery {
     fn apply(&self, mut builder: DefaultRequestBuilder) -> DefaultRequestBuilder {
@@ -5857,6 +6635,9 @@ impl UaidManifestQuery {
         }
         if let Some(offset) = self.offset {
             builder = builder.param("offset", &offset);
+        }
+        if let Some(count_mode) = self.count_mode {
+            builder = builder.param("count_mode", count_mode.as_query_str());
         }
         builder
     }
@@ -5882,49 +6663,54 @@ pub struct UaidManifestRecord {
 /// Response returned by `/v1/space-directory/uaids/{uaid}/manifests`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UaidManifestsResponse {
-    /// Canonical UAID literal (`uaid:<64-hex>`).
+    /// Canonical UAID literal (`uaid:<64-lowercase-hex>`).
     pub uaid: String,
-    /// Optional total count returned by Torii when pagination is enabled.
-    pub total: Option<u64>,
+    /// Total count under the reported count policy.
+    pub total: u64,
+    /// Whether another manifest follows this page.
+    pub has_more: bool,
+    /// Count policy used by Torii for this page.
+    pub count_mode: UaidManifestCountMode,
     /// Manifest entries visible to the caller.
     pub manifests: Vec<UaidManifestRecord>,
 }
 impl UaidPortfolioResponse {
-    fn from_value(value: JsonValue) -> Result<Self> {
+    fn from_value(value: JsonValue, expected_uaid: &str) -> Result<Self> {
         let JsonValue::Object(map) = value else {
             return Err(eyre!("uaid portfolio response must be an object"));
         };
+        require_exact_fields(
+            &map,
+            &["uaid", "totals", "dataspaces"],
+            "uaid portfolio response",
+        )?;
         let uaid_raw = require_string(map.get("uaid"), "uaid portfolio response.uaid")?;
         let uaid = canonicalize_uaid_literal(uaid_raw, "uaid portfolio response.uaid")?;
-        let totals = match map.get("totals") {
-            Some(JsonValue::Object(obj)) => {
-                let accounts = parse_optional_u64(
-                    obj.get("accounts"),
-                    "uaid portfolio response.totals.accounts",
-                )?
-                .unwrap_or(0);
-                let positions = parse_optional_u64(
-                    obj.get("positions"),
-                    "uaid portfolio response.totals.positions",
-                )?
-                .unwrap_or(0);
-                UaidPortfolioTotals {
-                    accounts,
-                    positions,
-                }
-            }
-            Some(JsonValue::Null) | None => UaidPortfolioTotals {
-                accounts: 0,
-                positions: 0,
-            },
-            Some(_) => {
-                return Err(eyre!(
-                    "uaid portfolio response.totals must be an object when present"
-                ));
-            }
+        if uaid != expected_uaid {
+            return Err(eyre!(
+                "uaid portfolio response.uaid does not match the requested UAID"
+            ));
+        }
+        let Some(JsonValue::Object(totals_map)) = map.get("totals") else {
+            return Err(eyre!("uaid portfolio response.totals must be an object"));
+        };
+        require_exact_fields(
+            totals_map,
+            &["accounts", "positions"],
+            "uaid portfolio response.totals",
+        )?;
+        let totals = UaidPortfolioTotals {
+            accounts: parse_required_json_u64(
+                totals_map.get("accounts"),
+                "uaid portfolio response.totals.accounts",
+            )?,
+            positions: parse_required_json_u64(
+                totals_map.get("positions"),
+                "uaid portfolio response.totals.positions",
+            )?,
         };
         let dataspace_entries =
-            owned_array(map.get("dataspaces"), "uaid portfolio response.dataspaces")?;
+            required_owned_array(map.get("dataspaces"), "uaid portfolio response.dataspaces")?;
         let dataspaces = dataspace_entries
             .into_iter()
             .enumerate()
@@ -5935,6 +6721,30 @@ impl UaidPortfolioResponse {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+        let mut unique_accounts = BTreeSet::new();
+        let mut position_count = 0_u64;
+        for dataspace in &dataspaces {
+            for account in &dataspace.accounts {
+                unique_accounts.insert(account.account_id.as_str());
+                let row_positions = u64::try_from(account.assets.len())
+                    .map_err(|_| eyre!("uaid portfolio response position count overflows u64"))?;
+                position_count = position_count
+                    .checked_add(row_positions)
+                    .ok_or_else(|| eyre!("uaid portfolio response position count overflows u64"))?;
+            }
+        }
+        if unique_accounts.len() > 1 {
+            return Err(eyre!(
+                "uaid portfolio response must contain at most one universal account"
+            ));
+        }
+        let account_count = u64::try_from(unique_accounts.len())
+            .map_err(|_| eyre!("uaid portfolio response account count overflows u64"))?;
+        if totals.accounts != account_count || totals.positions != position_count {
+            return Err(eyre!(
+                "uaid portfolio response.totals do not match the portfolio tree"
+            ));
+        }
         Ok(Self {
             uaid,
             totals,
@@ -5947,18 +6757,28 @@ impl UaidPortfolioDataspace {
         let JsonValue::Object(map) = value else {
             return Err(eyre!("{context} must be an object"));
         };
+        require_exact_fields(
+            &map,
+            &["dataspace_id", "dataspace_alias", "accounts"],
+            context,
+        )?;
         let dataspace_id =
-            parse_required_u64(map.get("dataspace_id"), &format!("{context}.dataspace_id"))?;
-        let dataspace_alias = parse_optional_string(
+            parse_required_json_u64(map.get("dataspace_id"), &format!("{context}.dataspace_id"))?;
+        let dataspace_alias = parse_required_nullable_string(
             map.get("dataspace_alias"),
             &format!("{context}.dataspace_alias"),
         )?;
-        let account_entries = owned_array(map.get("accounts"), &format!("{context}.accounts"))?;
+        let account_entries =
+            required_owned_array(map.get("accounts"), &format!("{context}.accounts"))?;
         let accounts = account_entries
             .into_iter()
             .enumerate()
             .map(|(index, entry)| {
-                UaidPortfolioAccount::from_value(entry, &format!("{context}.accounts[{index}]"))
+                UaidPortfolioAccount::from_value(
+                    entry,
+                    dataspace_id,
+                    &format!("{context}.accounts[{index}]"),
+                )
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
@@ -5969,19 +6789,29 @@ impl UaidPortfolioDataspace {
     }
 }
 impl UaidPortfolioAccount {
-    fn from_value(value: JsonValue, context: &str) -> Result<Self> {
+    fn from_value(value: JsonValue, dataspace_id: u64, context: &str) -> Result<Self> {
         let JsonValue::Object(map) = value else {
             return Err(eyre!("{context} must be an object"));
         };
+        require_exact_fields(&map, &["account_id", "label", "assets"], context)?;
         let account_id =
             require_string(map.get("account_id"), &format!("{context}.account_id"))?.to_owned();
-        let label = parse_optional_string(map.get("label"), &format!("{context}.label"))?;
-        let asset_entries = owned_array(map.get("assets"), &format!("{context}.assets"))?;
+        let parsed_account = iroha_data_model::account::AccountId::parse_encoded(&account_id)
+            .map_err(|err| {
+                eyre!("{context}.account_id must be a canonical I105 account id: {err}")
+            })?;
+        let label = parse_required_nullable_string(map.get("label"), &format!("{context}.label"))?;
+        let asset_entries = required_owned_array(map.get("assets"), &format!("{context}.assets"))?;
         let assets = asset_entries
             .into_iter()
             .enumerate()
             .map(|(index, entry)| {
-                UaidPortfolioAsset::from_value(entry, &format!("{context}.assets[{index}]"))
+                UaidPortfolioAsset::from_value(
+                    entry,
+                    &parsed_account,
+                    dataspace_id,
+                    &format!("{context}.assets[{index}]"),
+                )
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
@@ -5992,19 +6822,67 @@ impl UaidPortfolioAccount {
     }
 }
 impl UaidPortfolioAsset {
-    fn from_value(value: JsonValue, context: &str) -> Result<Self> {
+    fn from_value(
+        value: JsonValue,
+        expected_account: &iroha_data_model::account::AccountId,
+        expected_dataspace: u64,
+        context: &str,
+    ) -> Result<Self> {
         let JsonValue::Object(map) = value else {
             return Err(eyre!("{context} must be an object"));
         };
+        require_exact_fields(
+            &map,
+            &["asset_id", "asset_definition_id", "quantity"],
+            context,
+        )?;
         let asset_id =
             require_string(map.get("asset_id"), &format!("{context}.asset_id"))?.to_owned();
+        let parsed_asset = iroha_data_model::asset::AssetId::parse_literal(&asset_id)
+            .map_err(|err| eyre!("{context}.asset_id must be canonical: {err}"))?;
+        if parsed_asset.to_string() != asset_id {
+            return Err(eyre!(
+                "{context}.asset_id must use its exact canonical spelling"
+            ));
+        }
         let asset_definition_id = require_string(
             map.get("asset_definition_id"),
             &format!("{context}.asset_definition_id"),
         )?
         .to_owned();
+        let parsed_definition =
+            iroha_data_model::asset::AssetDefinitionId::parse_address_literal(&asset_definition_id)
+                .map_err(|err| eyre!("{context}.asset_definition_id must be canonical: {err}"))?;
+        if parsed_definition.to_string() != asset_definition_id {
+            return Err(eyre!(
+                "{context}.asset_definition_id must use its exact canonical spelling"
+            ));
+        }
+        if parsed_asset.definition() != &parsed_definition
+            || parsed_asset.account() != expected_account
+        {
+            return Err(eyre!(
+                "{context}.asset_id does not match its account and definition"
+            ));
+        }
+        if let iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) =
+            parsed_asset.scope()
+            && dataspace.as_u64() != expected_dataspace
+        {
+            return Err(eyre!(
+                "{context}.asset_id dataspace scope does not match its row"
+            ));
+        }
         let quantity =
             require_string(map.get("quantity"), &format!("{context}.quantity"))?.to_owned();
+        let parsed_quantity: Quantity =
+            norito::json::from_value(JsonValue::String(quantity.clone()))
+                .wrap_err_with(|| format!("{context}.quantity must be a canonical quantity"))?;
+        if parsed_quantity.to_string() != quantity {
+            return Err(eyre!(
+                "{context}.quantity must use its exact canonical spelling"
+            ));
+        }
         Ok(Self {
             asset_id,
             asset_definition_id,
@@ -6013,14 +6891,20 @@ impl UaidPortfolioAsset {
     }
 }
 impl UaidBindingsResponse {
-    fn from_value(value: JsonValue) -> Result<Self> {
+    fn from_value(value: JsonValue, expected_uaid: &str) -> Result<Self> {
         let JsonValue::Object(map) = value else {
             return Err(eyre!("uaid bindings response must be an object"));
         };
+        require_exact_fields(&map, &["uaid", "dataspaces"], "uaid bindings response")?;
         let uaid_raw = require_string(map.get("uaid"), "uaid bindings response.uaid")?;
         let uaid = canonicalize_uaid_literal(uaid_raw, "uaid bindings response.uaid")?;
+        if uaid != expected_uaid {
+            return Err(eyre!(
+                "uaid bindings response.uaid does not match the requested UAID"
+            ));
+        }
         let dataspace_entries =
-            owned_array(map.get("dataspaces"), "uaid bindings response.dataspaces")?;
+            required_owned_array(map.get("dataspaces"), "uaid bindings response.dataspaces")?;
         let dataspaces = dataspace_entries
             .into_iter()
             .enumerate()
@@ -6031,6 +6915,15 @@ impl UaidBindingsResponse {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+        let unique_accounts = dataspaces
+            .iter()
+            .flat_map(|entry| entry.accounts.iter().map(String::as_str))
+            .collect::<BTreeSet<_>>();
+        if unique_accounts.len() > 1 {
+            return Err(eyre!(
+                "uaid bindings response must contain at most one universal account"
+            ));
+        }
         Ok(Self { uaid, dataspaces })
     }
 }
@@ -6039,13 +6932,24 @@ impl UaidBindingsDataspace {
         let JsonValue::Object(map) = value else {
             return Err(eyre!("{context} must be an object"));
         };
+        require_exact_fields(
+            &map,
+            &["dataspace_id", "dataspace_alias", "accounts"],
+            context,
+        )?;
         let dataspace_id =
-            parse_required_u64(map.get("dataspace_id"), &format!("{context}.dataspace_id"))?;
-        let dataspace_alias = parse_optional_string(
+            parse_required_json_u64(map.get("dataspace_id"), &format!("{context}.dataspace_id"))?;
+        let dataspace_alias = parse_required_nullable_string(
             map.get("dataspace_alias"),
             &format!("{context}.dataspace_alias"),
         )?;
-        let accounts = string_array(map.get("accounts"), &format!("{context}.accounts"))?;
+        let accounts =
+            canonical_account_array(map.get("accounts"), &format!("{context}.accounts"))?;
+        if accounts.len() > 1 {
+            return Err(eyre!(
+                "{context}.accounts must contain at most one universal account"
+            ));
+        }
         Ok(Self {
             dataspace_id,
             dataspace_alias,
@@ -6054,40 +6958,79 @@ impl UaidBindingsDataspace {
     }
 }
 impl UaidManifestsResponse {
-    fn from_value(value: JsonValue) -> Result<Self> {
+    fn from_value(value: JsonValue, expected_uaid: &str) -> Result<Self> {
         let JsonValue::Object(map) = value else {
             return Err(eyre!("uaid manifests response must be an object"));
         };
+        require_exact_fields(
+            &map,
+            &["uaid", "total", "has_more", "count_mode", "manifests"],
+            "uaid manifests response",
+        )?;
         let uaid_raw = require_string(map.get("uaid"), "uaid manifests response.uaid")?;
         let uaid = canonicalize_uaid_literal(uaid_raw, "uaid manifests response.uaid")?;
-        let total = parse_optional_u64(map.get("total"), "uaid manifests response.total")?;
+        if uaid != expected_uaid {
+            return Err(eyre!(
+                "uaid manifests response.uaid does not match the requested UAID"
+            ));
+        }
+        let total = parse_required_json_u64(map.get("total"), "uaid manifests response.total")?;
+        let has_more =
+            parse_required_bool(map.get("has_more"), "uaid manifests response.has_more")?;
+        let count_mode_raw =
+            require_string(map.get("count_mode"), "uaid manifests response.count_mode")?;
+        let count_mode =
+            UaidManifestCountMode::from_str(count_mode_raw, "uaid manifests response.count_mode")?;
         let manifest_entries =
-            owned_array(map.get("manifests"), "uaid manifests response.manifests")?;
+            required_owned_array(map.get("manifests"), "uaid manifests response.manifests")?;
         let manifests = manifest_entries
             .into_iter()
             .enumerate()
             .map(|(index, entry)| {
                 UaidManifestRecord::from_value(
                     entry,
+                    &uaid,
                     &format!("uaid manifests response.manifests[{index}]"),
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+        let page_len = u64::try_from(manifests.len())
+            .map_err(|_| eyre!("uaid manifests response page length overflows u64"))?;
+        if total < page_len {
+            return Err(eyre!(
+                "uaid manifests response.total cannot be smaller than the page"
+            ));
+        }
         Ok(Self {
             uaid,
             total,
+            has_more,
+            count_mode,
             manifests,
         })
     }
 }
 impl UaidManifestRecord {
-    fn from_value(value: JsonValue, context: &str) -> Result<Self> {
+    fn from_value(value: JsonValue, expected_uaid: &str, context: &str) -> Result<Self> {
         let JsonValue::Object(map) = value else {
             return Err(eyre!("{context} must be an object"));
         };
+        require_exact_fields(
+            &map,
+            &[
+                "dataspace_id",
+                "dataspace_alias",
+                "manifest_hash",
+                "status",
+                "lifecycle",
+                "accounts",
+                "manifest",
+            ],
+            context,
+        )?;
         let dataspace_id =
-            parse_required_u64(map.get("dataspace_id"), &format!("{context}.dataspace_id"))?;
-        let dataspace_alias = parse_optional_string(
+            parse_required_json_u64(map.get("dataspace_id"), &format!("{context}.dataspace_id"))?;
+        let dataspace_alias = parse_required_nullable_string(
             map.get("dataspace_alias"),
             &format!("{context}.dataspace_alias"),
         )?;
@@ -6095,21 +7038,45 @@ impl UaidManifestRecord {
             map.get("manifest_hash"),
             &format!("{context}.manifest_hash"),
         )?;
-        let manifest_hash =
-            canonicalize_hex32_literal(manifest_hash_raw, &format!("{context}.manifest_hash"))?;
+        let manifest_hash = require_exact_lower_hex32_literal(
+            manifest_hash_raw,
+            &format!("{context}.manifest_hash"),
+        )?;
         let status_raw = require_string(map.get("status"), &format!("{context}.status"))?;
         let status = UaidManifestStatus::from_str(status_raw, &format!("{context}.status"))?;
         let lifecycle_value = map
             .get("lifecycle")
             .cloned()
-            .unwrap_or_else(|| JsonValue::Object(JsonMap::new()));
+            .ok_or_else(|| eyre!("{context}.lifecycle is missing"))?;
         let lifecycle =
             UaidManifestLifecycle::from_value(lifecycle_value, &format!("{context}.lifecycle"))?;
-        let accounts = string_array(map.get("accounts"), &format!("{context}.accounts"))?;
+        let derived_status = if lifecycle.revocation.is_some() {
+            UaidManifestStatus::Revoked
+        } else if lifecycle.expired_epoch.is_some() {
+            UaidManifestStatus::Expired
+        } else if lifecycle.activated_epoch.is_some() {
+            UaidManifestStatus::Active
+        } else {
+            UaidManifestStatus::Pending
+        };
+        if status != derived_status {
+            return Err(eyre!("{context}.status does not match its lifecycle"));
+        }
+        let accounts =
+            canonical_account_array(map.get("accounts"), &format!("{context}.accounts"))?;
+        if accounts.len() > 1 {
+            return Err(eyre!(
+                "{context}.accounts must contain at most one universal account"
+            ));
+        }
         let manifest_value = map
             .get("manifest")
             .ok_or_else(|| eyre!("{context}.manifest is missing"))?;
         let manifest = parse_manifest(manifest_value, &format!("{context}.manifest"))?;
+        if manifest.uaid.to_string() != expected_uaid || manifest.dataspace.as_u64() != dataspace_id
+        {
+            return Err(eyre!("{context}.manifest identity does not match its row"));
+        }
         Ok(Self {
             dataspace_id,
             dataspace_alias,
@@ -6126,20 +7093,26 @@ impl UaidManifestLifecycle {
         let JsonValue::Object(map) = value else {
             return Err(eyre!("{context} must be an object"));
         };
-        let activated_epoch = parse_optional_u64(
+        require_exact_fields(
+            &map,
+            &["activated_epoch", "expired_epoch", "revocation"],
+            context,
+        )?;
+        let activated_epoch = parse_required_nullable_json_u64(
             map.get("activated_epoch"),
             &format!("{context}.activated_epoch"),
         )?;
-        let expired_epoch = parse_optional_u64(
+        let expired_epoch = parse_required_nullable_json_u64(
             map.get("expired_epoch"),
             &format!("{context}.expired_epoch"),
         )?;
         let revocation = match map.get("revocation") {
-            Some(JsonValue::Null) | None => None,
+            Some(JsonValue::Null) => None,
             Some(other) => Some(UaidManifestRevocation::from_value(
                 other.clone(),
                 &format!("{context}.revocation"),
             )?),
+            None => return Err(eyre!("{context}.revocation is missing")),
         };
         Ok(Self {
             activated_epoch,
@@ -6153,20 +7126,33 @@ impl UaidManifestRevocation {
         let JsonValue::Object(map) = value else {
             return Err(eyre!("{context} must be an object"));
         };
-        let epoch = parse_required_u64(map.get("epoch"), &format!("{context}.epoch"))?;
-        let reason = parse_optional_string(map.get("reason"), &format!("{context}.reason"))?;
+        require_exact_fields(&map, &["epoch", "reason"], context)?;
+        let epoch = parse_required_json_u64(map.get("epoch"), &format!("{context}.epoch"))?;
+        let reason =
+            parse_required_nullable_string(map.get("reason"), &format!("{context}.reason"))?;
         Ok(Self { epoch, reason })
     }
 }
 fn canonicalize_uaid_literal(literal: &str, context: &str) -> Result<String> {
-    let trimmed = literal.trim();
-    if trimmed.is_empty() {
-        return Err(eyre!("{context} must be a non-empty UAID literal"));
+    if literal.is_empty() || literal.trim() != literal {
+        return Err(eyre!(
+            "{context} must be an exact canonical `uaid:<lowercase-hex>` literal"
+        ));
     }
-    let uaid = UniversalAccountId::from_str(trimmed).wrap_err_with(|| {
-        format!("{context} must be `uaid:<hex>` or a 64-hex digest with LSB set to 1")
+    let uaid = UniversalAccountId::from_str(literal).wrap_err_with(|| {
+        format!("{context} must be an exact canonical `uaid:<lowercase-hex>` literal")
     })?;
-    Ok(uaid.to_string())
+    let canonical = uaid.to_string();
+    if canonical != literal
+        || !literal.as_bytes().last().is_some_and(|byte| {
+            matches!(*byte, b'1' | b'3' | b'5' | b'7' | b'9' | b'b' | b'd' | b'f')
+        })
+    {
+        return Err(eyre!(
+            "{context} must be a canonical UAID with its least significant bit set to 1"
+        ));
+    }
+    Ok(canonical)
 }
 fn canonicalize_hex32_literal(literal: &str, context: &str) -> Result<String> {
     let trimmed = literal.trim();
@@ -6257,6 +7243,97 @@ fn require_string<'a>(value: Option<&'a JsonValue>, context: &str) -> Result<&'a
         Some(other) => Err(eyre!("{context} must be a string (got {other:?})")),
         None => Err(eyre!("{context} is missing")),
     }
+}
+fn require_exact_fields(map: &JsonMap, fields: &[&str], context: &str) -> Result<()> {
+    let missing = fields
+        .iter()
+        .copied()
+        .filter(|field| !map.contains_key(*field))
+        .collect::<Vec<_>>();
+    let unexpected = map
+        .keys()
+        .map(String::as_str)
+        .filter(|field| !fields.contains(field))
+        .collect::<Vec<_>>();
+    if missing.is_empty() && unexpected.is_empty() {
+        return Ok(());
+    }
+    Err(eyre!(
+        "{context} must use the exact server fields (missing: {missing:?}; unexpected: {unexpected:?})"
+    ))
+}
+fn parse_required_json_u64(value: Option<&JsonValue>, context: &str) -> Result<u64> {
+    match value {
+        Some(JsonValue::Number(number)) => number
+            .as_u64()
+            .ok_or_else(|| eyre!("{context} must be a non-negative JSON integer")),
+        Some(other) => Err(eyre!(
+            "{context} must be a non-negative JSON integer (got {other:?})"
+        )),
+        None => Err(eyre!("{context} is missing")),
+    }
+}
+fn parse_required_nullable_json_u64(
+    value: Option<&JsonValue>,
+    context: &str,
+) -> Result<Option<u64>> {
+    match value {
+        Some(JsonValue::Null) => Ok(None),
+        Some(other) => parse_required_json_u64(Some(other), context).map(Some),
+        None => Err(eyre!("{context} is missing")),
+    }
+}
+fn parse_required_bool(value: Option<&JsonValue>, context: &str) -> Result<bool> {
+    match value {
+        Some(JsonValue::Bool(value)) => Ok(*value),
+        Some(other) => Err(eyre!("{context} must be a boolean (got {other:?})")),
+        None => Err(eyre!("{context} is missing")),
+    }
+}
+fn parse_required_nullable_string(
+    value: Option<&JsonValue>,
+    context: &str,
+) -> Result<Option<String>> {
+    match value {
+        Some(JsonValue::String(text)) => Ok(Some(text.to_owned())),
+        Some(JsonValue::Null) => Ok(None),
+        Some(other) => Err(eyre!("{context} must be a string or null (got {other:?})")),
+        None => Err(eyre!("{context} is missing")),
+    }
+}
+fn required_owned_array(value: Option<&JsonValue>, context: &str) -> Result<Vec<JsonValue>> {
+    match value {
+        Some(JsonValue::Array(items)) => Ok(items.clone()),
+        Some(other) => Err(eyre!("{context} must be an array (got {other:?})")),
+        None => Err(eyre!("{context} is missing")),
+    }
+}
+fn canonical_account_array(value: Option<&JsonValue>, context: &str) -> Result<Vec<String>> {
+    required_owned_array(value, context)?
+        .into_iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let JsonValue::String(literal) = entry else {
+                return Err(eyre!("{context}[{index}] must be a string"));
+            };
+            iroha_data_model::account::AccountId::parse_encoded(&literal).map_err(|err| {
+                eyre!("{context}[{index}] must be a canonical I105 account id: {err}")
+            })?;
+            Ok(literal)
+        })
+        .collect()
+}
+fn require_exact_lower_hex32_literal(literal: &str, context: &str) -> Result<String> {
+    if literal.len() != 64
+        || !literal
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(eyre!(
+            "{context} must contain exactly 64 lowercase hexadecimal characters"
+        ));
+    }
+    Ok(literal.to_owned())
 }
 fn parse_optional_string(value: Option<&JsonValue>, context: &str) -> Result<Option<String>> {
     match value {
@@ -7560,7 +8637,7 @@ impl Client {
         )?;
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
-    /// GET `/v1/sumeragi/vrf/penalties/:epoch` — VRF penalties snapshot for the given epoch.
+    /// GET `/v1/sumeragi/vrf/penalties/:epoch` — authoritative VRF penalty report.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
@@ -10202,74 +11279,8 @@ mod evidence_http_tests {
         );
     }
     include!("client/activation_evidence_tests.rs");
-    fn transaction_hash_pair(
-        seed: u8,
-    ) -> (HashOf<SignedTransaction>, HashOf<TransactionEntrypoint>) {
-        let hash = Hash::prehashed([seed; Hash::LENGTH]);
-        (
-            HashOf::from_untyped_unchecked(hash),
-            HashOf::from_untyped_unchecked(hash),
-        )
-    }
-    fn committed_transaction_fixture(
-        block_seed: u8,
-        outcome: core::result::Result<
-            iroha_data_model::transaction::DataTriggerSequence,
-            TransactionRejectionReason,
-        >,
-        sign_context: &str,
-    ) -> (
-        HashOf<SignedTransaction>,
-        HashOf<TransactionEntrypoint>,
-        iroha_data_model::query::CommittedTransaction,
-    ) {
-        use crate::crypto::{MerkleProof, PrivateKey, PublicKey};
-        let public_key: PublicKey =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-                .parse()
-                .unwrap();
-        let private_key: PrivateKey =
-            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
-                .parse()
-                .unwrap();
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            AccountId::new(public_key),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .try_sign(&private_key)
-        .expect(sign_context);
-        let hash = tx.hash();
-        let entry = TransactionEntrypoint::External(tx);
-        let entry_hash = entry.hash();
-        let result = iroha_data_model::transaction::TransactionResult::new(outcome);
-        let committed = iroha_data_model::query::CommittedTransaction {
-            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([block_seed; Hash::LENGTH])),
-            entrypoint_hash: entry_hash,
-            entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
-            entrypoint: entry,
-            result_hash: result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
-            result,
-            merge_inclusion: None,
-        };
-        (hash, entry_hash, committed)
-    }
-    fn committed_query_response(
-        transactions: Vec<iroha_data_model::query::CommittedTransaction>,
-    ) -> HttpResponse<Vec<u8>> {
-        use iroha_data_model::query::{
-            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
-        };
-        let response = QueryResponse::Iterable(QueryOutput {
-            batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::CommittedTransaction(
-                transactions,
-            )),
-            remaining_items: Some(0),
-            has_more: false,
-            continue_cursor: None,
-        });
-        norito_response(StatusCode::OK, &response)
+    fn transaction_hash(seed: u8) -> HashOf<SignedTransaction> {
+        HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
     }
     fn captured_pipeline_status(
         seed: u8,
@@ -10279,19 +11290,24 @@ mod evidence_http_tests {
         capture_requests(response, || {
             let client = client_with_base_url(base_url());
             mark_data_model_compatible(&client);
-            let (hash, entry_hash) = transaction_hash_pair(seed);
+            let hash = transaction_hash(seed);
             if confirmation {
-                client.transaction_confirmation_status(hash, entry_hash)
+                client.transaction_confirmation_status(hash)
             } else {
-                client.transaction_pipeline_status(hash, entry_hash)
+                client.transaction_pipeline_status(hash)
             }
         })
     }
-    fn local_pipeline_response(status: &Value, resolved_from: &str) -> HttpResponse<Vec<u8>> {
+    fn pipeline_response(
+        hash: &str,
+        status: &Value,
+        scope: &str,
+        resolved_from: &str,
+    ) -> HttpResponse<Vec<u8>> {
         let payload = norito::json!({
-            "hash": "deadbeef",
+            "hash": hash,
             "status": status,
-            "scope": "local",
+            "scope": scope,
             "resolved_from": resolved_from,
         });
         json_response(
@@ -10316,297 +11332,291 @@ mod evidence_http_tests {
         );
     }
     #[test]
-    fn pipeline_status_404_returns_none_without_committed_query() {
+    fn pipeline_status_404_returns_none_from_exact_global_query() {
         let (result, snapshots) =
             captured_pipeline_status(0x11, empty_response(StatusCode::NOT_FOUND), false);
         let status = result.expect("pipeline status query");
         assert!(status.is_none());
         assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
-        assert_status_scope(&snapshots[0], "local");
+        assert_status_scope(&snapshots[0], "global");
     }
     #[test]
-    fn pipeline_status_empty_body_falls_back_to_committed_query() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: crate::http_default::RequestSnapshot| {
-                let path = snapshot.url.path().to_string();
-                store.lock().expect("lock snapshot store").push(snapshot);
-                match path.as_str() {
-                    "/v1/pipeline/transactions/status" => Ok(empty_response(StatusCode::OK)),
-                    p if p == torii_uri::QUERY => Ok(committed_query_response(Vec::new())),
-                    path => Err(eyre::eyre!("unexpected request path: {path}")),
-                }
-            }
-        };
-        let result = with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            mark_data_model_compatible(&client);
-            let hash =
-                HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
-                    Hash::prehashed([0x22; Hash::LENGTH]),
-                );
-            let entry_hash: HashOf<crate::data_model::transaction::TransactionEntrypoint> =
-                HashOf::from_untyped_unchecked(Hash::prehashed([0x22; Hash::LENGTH]));
-            client.transaction_confirmation_status(hash, entry_hash)
-        });
-        let status = result.expect("confirmation status query");
-        assert!(status.is_none());
-        let snapshots = store.lock().expect("snapshot lock");
-        assert_request_paths(
-            &snapshots,
-            &["/v1/pipeline/transactions/status", torii_uri::QUERY],
+    fn pipeline_status_200_requires_an_exact_payload() {
+        let (result, snapshots) =
+            captured_pipeline_status(0x22, empty_response(StatusCode::OK), true);
+        result.expect_err("empty 200 response must fail closed");
+        assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
+        assert_status_scope(&snapshots[0], "global");
+    }
+    #[test]
+    fn pipeline_status_rejects_retired_202_and_204_responses() {
+        for status in [StatusCode::ACCEPTED, StatusCode::NO_CONTENT] {
+            let (result, snapshots) = captured_pipeline_status(0x22, empty_response(status), true);
+            let err = result.expect_err("only exact 200 or 404 status is allowed");
+            assert!(
+                err.to_string()
+                    .contains("Failed to get pipeline transaction status")
+            );
+            assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
+            assert_status_scope(&snapshots[0], "global");
+        }
+    }
+    #[test]
+    fn pipeline_status_accepts_only_state_resolved_applied_as_success() {
+        let hash = transaction_hash(0x23).to_string();
+        let response = pipeline_response(
+            &hash,
+            &norito::json!({ "kind": "Applied", "block_height": 9 }),
+            "global",
+            "state",
         );
-    }
-    #[test]
-    fn pipeline_status_queued_stays_local_without_committed_query() {
-        let response = local_pipeline_response(&norito::json!({ "kind": "Queued" }), "queue");
         let (result, snapshots) = captured_pipeline_status(0x23, response, true);
         assert_eq!(
             result.expect("confirmation status query"),
-            Some(super::TxConfirmationStatus::Queued)
+            Some(super::TxConfirmationStatus::Applied)
         );
         assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
-        assert_status_scope(&snapshots[0], "local");
+        assert_status_scope(&snapshots[0], "global");
     }
     #[test]
-    fn pipeline_status_queued_does_not_preemptively_query_committed_state() {
-        let (hash, entry_hash, committed) = committed_transaction_fixture(
-            0x25,
-            Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
-            "queued status fixture transaction should sign",
+    fn pipeline_status_cached_applied_is_not_confirmation() {
+        let hash = transaction_hash(0x25).to_string();
+        let response = pipeline_response(
+            &hash,
+            &norito::json!({ "kind": "Applied", "block_height": 9 }),
+            "global",
+            "cache",
         );
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let payload = norito::json!({
-            "hash": "deadbeef",
-            "status": { "kind": "Queued" },
-            "scope": "local",
-            "resolved_from": "queue",
-        });
-        let status_body = norito::json::to_string(&payload).expect("status payload");
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let path = snapshot.url.path().to_string();
-                store.lock().expect("lock snapshot store").push(snapshot);
-                match path.as_str() {
-                    "/v1/pipeline/transactions/status" => {
-                        Ok(json_response(StatusCode::OK, &status_body))
-                    }
-                    p if p == torii_uri::QUERY => {
-                        Ok(committed_query_response(vec![committed.clone()]))
-                    }
-                    path => Err(eyre::eyre!("unexpected request path: {path}")),
-                }
-            }
-        };
-        let result = with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            mark_data_model_compatible(&client);
-            client.transaction_confirmation_status(hash, entry_hash)
-        });
-        assert_eq!(
-            result.expect("confirmation status query"),
-            Some(super::TxConfirmationStatus::Queued)
-        );
-        let snapshots = store.lock().expect("snapshot lock");
+        let (result, snapshots) = captured_pipeline_status(0x25, response, true);
+        assert_eq!(result.expect("confirmation status query"), None);
         assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
-        assert_status_scope(&snapshots[0], "local");
+        assert_status_scope(&snapshots[0], "global");
     }
     #[test]
-    fn pipeline_status_approved_with_height_stays_local() {
-        let response = local_pipeline_response(
-            &norito::json!({ "kind": "Approved", "block_height": 9 }),
+    fn pipeline_status_state_rejection_is_a_fixed_failure_without_committed_query() {
+        let hash = transaction_hash(0x27).to_string();
+        let response = pipeline_response(
+            &hash,
+            &norito::json!({ "kind": "Rejected", "block_height": 9 }),
+            "global",
             "state",
         );
-        let (result, snapshots) = captured_pipeline_status(0x24, response, true);
+        let (result, snapshots) = captured_pipeline_status(0x27, response, true);
         assert_eq!(
             result.expect("confirmation status query"),
-            Some(super::TxConfirmationStatus::Approved(
-                std::num::NonZeroU64::new(9)
-            ))
+            Some(super::TxConfirmationStatus::Rejected(None))
         );
         assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
-        assert_status_scope(&snapshots[0], "local");
+        assert_status_scope(&snapshots[0], "global");
     }
     #[test]
-    fn pipeline_status_approved_without_height_stays_local() {
-        let response = local_pipeline_response(&norito::json!({ "kind": "Approved" }), "state");
-        let (result, snapshots) = captured_pipeline_status(0x24, response, true);
-        assert_eq!(
-            result.expect("confirmation status query"),
-            Some(super::TxConfirmationStatus::Approved(None))
-        );
-        assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
-        assert_status_scope(&snapshots[0], "local");
+    fn pipeline_status_cached_failures_are_not_confirmation() {
+        for (seed, kind) in [(0x2b, "Rejected"), (0x2d, "Expired")] {
+            let hash = transaction_hash(seed).to_string();
+            let response = pipeline_response(
+                &hash,
+                &norito::json!({ "kind": kind, "block_height": 9 }),
+                "global",
+                "cache",
+            );
+            let (result, snapshots) = captured_pipeline_status(seed, response, true);
+            assert_eq!(result.expect("confirmation status query"), None);
+            assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
+            assert_status_scope(&snapshots[0], "global");
+        }
     }
     #[test]
-    fn pipeline_status_rejection_without_reason_uses_committed_query() {
-        let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-            "nope".to_string(),
-        ));
-        let (hash, entry_hash, committed) = committed_transaction_fixture(
-            0x33,
-            Err(reason.clone()),
-            "rejection status fixture transaction should sign",
+    fn pipeline_status_rejects_unbound_or_noncanonical_hashes() {
+        let expected = transaction_hash(0x29);
+        let other = transaction_hash(0x2b).to_string();
+        let payload = iroha_torii_shared::PipelineTransactionStatusResponse::new(
+            other,
+            iroha_torii_shared::PipelineTransactionStatus {
+                kind: "Applied".to_owned(),
+                block_height: Some(9),
+            },
+            "global".to_owned(),
+            "state".to_owned(),
         );
-        let status_payload = norito::json!({
-            "hash": "deadbeef",
-            "status": { "kind": "Rejected" },
-            "scope": "local",
-            "resolved_from": "state",
-        });
-        let status_body = norito::json::to_string(&status_payload).expect("status payload");
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let path = snapshot.url.path().to_string();
-                store.lock().expect("lock snapshot store").push(snapshot);
-                match path.as_str() {
-                    "/v1/pipeline/transactions/status" => {
-                        Ok(json_response(StatusCode::OK, &status_body))
-                    }
-                    p if p == torii_uri::QUERY => {
-                        Ok(committed_query_response(vec![committed.clone()]))
-                    }
-                    path => Err(eyre::eyre!("unexpected request path: {path}")),
-                }
-            }
-        };
-        let result = with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            mark_data_model_compatible(&client);
-            client.transaction_confirmation_status(hash, entry_hash)
-        });
-        assert_eq!(
-            result.expect("confirmation status query"),
-            Some(super::TxConfirmationStatus::Rejected(Some(reason)))
+        let err = validate_global_pipeline_status_response(&payload, expected)
+            .expect_err("response hash must bind to request");
+        assert!(
+            err.to_string()
+                .contains("does not match requested transaction")
         );
-        let snapshots = store.lock().expect("snapshot lock");
-        assert_request_paths(
-            &snapshots,
-            &["/v1/pipeline/transactions/status", torii_uri::QUERY],
+        for hash in [
+            expected.to_string().to_ascii_uppercase(),
+            format!("{}0", &expected.to_string()[..63]),
+        ] {
+            let mut malformed = payload.clone();
+            malformed.hash = hash;
+            let err = validate_global_pipeline_status_response(&malformed, expected)
+                .expect_err("noncanonical response hash must fail");
+            assert!(err.to_string().contains("Iroha hash marker set"));
+        }
+    }
+    #[test]
+    fn pipeline_status_rejects_non_global_scope_and_unknown_source() {
+        let expected = transaction_hash(0x2d);
+        let mut payload = iroha_torii_shared::PipelineTransactionStatusResponse::new(
+            expected.to_string(),
+            iroha_torii_shared::PipelineTransactionStatus {
+                kind: "Applied".to_owned(),
+                block_height: Some(9),
+            },
+            "local".to_owned(),
+            "state".to_owned(),
         );
-        assert_status_scope(&snapshots[0], "local");
+        let err = validate_global_pipeline_status_response(&payload, expected)
+            .expect_err("local confirmation response must fail");
+        assert!(err.to_string().contains("scope must be exactly `global`"));
+        payload.scope = "global".to_owned();
+        payload.resolved_from = "legacy".to_owned();
+        let err = validate_global_pipeline_status_response(&payload, expected)
+            .expect_err("unknown resolution source must fail");
+        assert!(err.to_string().contains("cache|queue|state"));
+    }
+    #[test]
+    fn pipeline_status_rejects_unknown_root_and_nested_fields() {
+        let hash = transaction_hash(0x2f);
+        for payload in [
+            norito::json!({
+                "hash": hash.to_string(),
+                "status": { "kind": "Applied", "block_height": 9 },
+                "scope": "global",
+                "resolved_from": "state",
+                "legacy": true,
+            }),
+            norito::json!({
+                "hash": hash.to_string(),
+                "status": { "kind": "Applied", "block_height": 9, "legacy": true },
+                "scope": "global",
+                "resolved_from": "state",
+            }),
+        ] {
+            let body = norito::json::to_string(&payload).expect("status payload");
+            let (result, snapshots) =
+                capture_requests(json_response(StatusCode::OK, &body), || {
+                    client_with_base_url(base_url()).get_transaction_status_response_global(hash)
+                });
+            result.expect_err("unknown pipeline status fields must fail closed");
+            assert_eq!(snapshots.len(), 1);
+        }
     }
     fn wait_status_case(
         seed: u8,
         status: &Value,
         resolved_from: &str,
-        terminal_statuses: Vec<TransactionWaitTerminalStatus>,
-        expectation: &str,
-    ) -> (TransactionWaitOutcome, String, RequestSnapshot) {
-        let (hash, _) = transaction_hash_pair(seed);
+    ) -> (Result<TransactionWaitOutcome>, String, Vec<RequestSnapshot>) {
+        let hash = transaction_hash(seed);
         let expected_hash = hash.to_string();
         let payload = norito::json!({
             "hash": expected_hash,
             "status": status,
-            "scope": "local",
+            "scope": "global",
             "resolved_from": resolved_from,
         });
         let response = json_response(
             StatusCode::OK,
             &norito::json::to_string(&payload).expect("status payload"),
         );
-        let (outcome, snapshot) = capture_request(response, || {
-            client_with_base_url(base_url()).wait_for_transaction_terminal_status(
+        let (outcome, snapshots) = capture_requests(response, || {
+            client_with_base_url(base_url()).wait_for_transaction_applied(
                 hash,
                 TransactionWaitOptions {
-                    timeout: Duration::from_millis(50),
+                    timeout: Duration::from_millis(5),
                     poll_interval: Duration::from_millis(1),
-                    terminal_statuses,
                 },
             )
         });
-        (outcome.expect(expectation), expected_hash, snapshot)
+        (outcome, expected_hash, snapshots)
     }
     #[test]
-    fn wait_for_transaction_terminal_status_returns_configured_rejection() {
-        let (outcome, expected_hash, snapshot) = wait_status_case(
+    fn wait_for_transaction_applied_returns_only_state_applied() {
+        let (outcome, expected_hash, snapshots) = wait_status_case(
             0x31,
-            &norito::json!({ "kind": "Rejected" }),
+            &norito::json!({ "kind": "Applied", "block_height": 7 }),
             "state",
-            vec![TransactionWaitTerminalStatus::Rejected],
-            "configured rejection should be returned",
         );
+        let outcome = outcome.expect("state-resolved Applied should be returned");
         assert_eq!(outcome.hash, expected_hash);
-        assert_eq!(outcome.terminal_kind, "Rejected");
+        assert_eq!(outcome.terminal_kind, "Applied");
         assert_eq!(outcome.attempts, 1);
-        assert_status_scope(&snapshot, "global");
+        assert_eq!(snapshots.len(), 1);
+        assert_status_scope(&snapshots[0], "global");
     }
     #[test]
-    fn wait_for_transaction_terminal_status_returns_configured_expiry() {
-        let (outcome, expected_hash, snapshot) = wait_status_case(
-            0x32,
-            &norito::json!({ "kind": "Expired" }),
-            "state",
-            vec![TransactionWaitTerminalStatus::Expired],
-            "configured expiry should be returned",
-        );
-        assert_eq!(outcome.hash, expected_hash);
-        assert_eq!(outcome.terminal_kind, "Expired");
-        assert_eq!(outcome.attempts, 1);
-        assert_status_scope(&snapshot, "global");
+    fn wait_for_transaction_applied_rejects_fixed_failures() {
+        for (seed, kind) in [(0x33, "Rejected"), (0x35, "Expired")] {
+            let (result, _, snapshots) =
+                wait_status_case(seed, &norito::json!({ "kind": kind }), "state");
+            let err = result.expect_err("terminal failure must fail the wait");
+            assert!(err.to_string().contains("fixed terminal failure status"));
+            assert_eq!(snapshots.len(), 1);
+            assert_status_scope(&snapshots[0], "global");
+        }
     }
     #[test]
-    fn wait_for_transaction_terminal_status_uses_local_scope_for_non_terminal_target() {
-        let (outcome, expected_hash, snapshot) = wait_status_case(
-            0x33,
-            &norito::json!({ "kind": "Queued" }),
-            "queue",
-            vec![TransactionWaitTerminalStatus::Queued],
-            "configured queued status should be returned",
-        );
-        assert_eq!(outcome.hash, expected_hash);
-        assert_eq!(outcome.terminal_kind, "Queued");
-        assert_eq!(outcome.attempts, 1);
-        assert_status_scope(&snapshot, "local");
-    }
-    #[test]
-    fn wait_for_transaction_terminal_status_uses_local_scope_for_mixed_targets() {
-        let (outcome, expected_hash, snapshot) = wait_status_case(
-            0x34,
-            &norito::json!({ "kind": "Approved", "block_height": 7 }),
+    fn wait_for_transaction_applied_ignores_cached_applied() {
+        let (result, _, snapshots) = wait_status_case(
+            0x37,
+            &norito::json!({ "kind": "Applied", "block_height": 7 }),
             "cache",
-            vec![
-                TransactionWaitTerminalStatus::Rejected,
-                TransactionWaitTerminalStatus::Approved,
-            ],
-            "mixed targets should stop on approved status",
         );
-        assert_eq!(outcome.hash, expected_hash);
-        assert_eq!(outcome.terminal_kind, "Approved");
-        assert_eq!(outcome.block_height, Some(7));
-        assert_status_scope(&snapshot, "local");
+        let err = result.expect_err("cached Applied must not confirm finality");
+        assert!(err.to_string().contains("state-resolved Applied"));
+        assert!(snapshots.len() > 1);
+        assert!(snapshots.iter().all(|snapshot| {
+            snapshot
+                .url
+                .query_pairs()
+                .any(|(key, value)| key == "scope" && value == "global")
+        }));
     }
     #[test]
-    fn wait_for_transaction_terminal_status_scope_is_global_for_terminal_only_targets() {
-        assert_eq!(
-            transaction_wait_status_scope(&[
-                TransactionWaitTerminalStatus::Applied,
-                TransactionWaitTerminalStatus::Rejected,
-                TransactionWaitTerminalStatus::Expired,
-            ]),
-            "global"
+    fn wait_for_transaction_applied_ignores_cached_failures() {
+        for (seed, kind) in [(0x3b, "Rejected"), (0x3d, "Expired")] {
+            let (result, _, snapshots) =
+                wait_status_case(seed, &norito::json!({ "kind": kind }), "cache");
+            let error = result.expect_err("cached failure must not terminalize the wait");
+            assert!(error.to_string().contains("state-resolved Applied"));
+            assert!(snapshots.len() > 1);
+            assert!(snapshots.iter().all(|snapshot| {
+                snapshot
+                    .url
+                    .query_pairs()
+                    .any(|(key, value)| key == "scope" && value == "global")
+            }));
+        }
+    }
+    #[test]
+    fn wait_for_transaction_applied_rejects_zero_poll_interval_without_http() {
+        let hash = transaction_hash(0x39);
+        let (result, snapshots) = capture_requests(
+            empty_response(StatusCode::INTERNAL_SERVER_ERROR),
+            || {
+                client_with_base_url(base_url()).wait_for_transaction_applied(
+                    hash,
+                    TransactionWaitOptions {
+                        timeout: Duration::from_millis(5),
+                        poll_interval: Duration::ZERO,
+                    },
+                )
+            },
         );
-        assert_eq!(
-            transaction_wait_status_scope(&[TransactionWaitTerminalStatus::Committed]),
-            "local"
+        let error = result.expect_err("zero poll interval must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("poll_interval must be greater than zero")
         );
-        assert_eq!(
-            transaction_wait_status_scope(&[
-                TransactionWaitTerminalStatus::Expired,
-                TransactionWaitTerminalStatus::Queued,
-            ]),
-            "local"
-        );
+        assert!(snapshots.is_empty(), "invalid timing must fail before HTTP");
     }
     #[derive(Clone, Copy)]
     enum StatusResponseRequest {
         Default,
         Local,
-        Auto,
+        Global,
     }
     fn typed_status_response_snapshot(
         seed: u8,
@@ -10617,7 +11627,7 @@ mod evidence_http_tests {
         request: StatusResponseRequest,
     ) -> RequestSnapshot {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
-        let (hash, _) = transaction_hash_pair(seed);
+        let hash = transaction_hash(seed);
         let payload = PipelineTransactionStatusResponse::new(
             hash.to_string(),
             PipelineTransactionStatus {
@@ -10636,7 +11646,9 @@ mod evidence_http_tests {
             match request {
                 StatusResponseRequest::Default => client.get_transaction_status_response(hash),
                 StatusResponseRequest::Local => client.get_transaction_status_response_local(hash),
-                StatusResponseRequest::Auto => client.get_transaction_status_response_auto(hash),
+                StatusResponseRequest::Global => {
+                    client.get_transaction_status_response_global(hash)
+                }
             }
         });
         assert_eq!(
@@ -10652,7 +11664,7 @@ mod evidence_http_tests {
         snapshot
     }
     #[test]
-    fn get_transaction_status_response_requests_json_and_decodes_typed_payload() {
+    fn get_transaction_status_response_omits_scope_for_global_default() {
         let snapshot = typed_status_response_snapshot(
             0x44,
             "Queued",
@@ -10670,7 +11682,7 @@ mod evidence_http_tests {
         );
         assert!(
             snapshot.url.query_pairs().all(|(key, _)| key != "scope"),
-            "generic status lookups should use Torii's strict local default"
+            "omitted status scope must use Torii's first-release global default"
         );
     }
     #[test]
@@ -10686,14 +11698,14 @@ mod evidence_http_tests {
         assert_status_scope(&snapshot, "local");
     }
     #[test]
-    fn get_transaction_status_response_auto_sets_global_scope() {
+    fn get_transaction_status_response_global_sets_global_scope() {
         let snapshot = typed_status_response_snapshot(
             0x45,
             "Committed",
             Some(7),
             "global",
             "state",
-            StatusResponseRequest::Auto,
+            StatusResponseRequest::Global,
         );
         assert_status_scope(&snapshot, "global");
     }
@@ -10785,63 +11797,13 @@ mod evidence_http_tests {
         result.expect("Sumeragi evidence list JSON");
         assert_json_accept(&snapshot, "/v1/sumeragi/evidence");
     }
-    #[test]
-    fn transaction_committed_limits_query_params() {
-        use iroha_data_model::query::{QueryRequest, SignedQuery};
-        use iroha_version::codec::DecodeVersioned;
-        let (hash, entry_hash, committed) = committed_transaction_fixture(
-            0x44,
-            Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
-            "committed transaction fixture should sign",
-        );
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let responder = {
-            let store = Arc::clone(&store);
-            move |snapshot: RequestSnapshot| {
-                let path = snapshot.url.path().to_string();
-                store.lock().expect("lock snapshot store").push(snapshot);
-                match path.as_str() {
-                    p if p == torii_uri::QUERY => {
-                        Ok(committed_query_response(vec![committed.clone()]))
-                    }
-                    path => Err(eyre::eyre!("unexpected request path: {path}")),
-                }
-            }
-        };
-        let result = with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            mark_data_model_compatible(&client);
-            client.transaction_committed(hash, entry_hash)
-        });
-        assert_eq!(
-            result.expect("committed query"),
-            Some(super::TxConfirmationStatus::Applied)
-        );
-        let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 1);
-        let signed =
-            SignedQuery::decode_all_versioned(&snapshots[0].body).expect("decode signed query");
-        match signed.payload.request {
-            QueryRequest::Start(start) => {
-                let one = NonZeroU64::new(1).expect("nonzero");
-                assert_eq!(start.params.pagination.limit_value(), Some(one));
-                assert_eq!(start.params.pagination.offset_value(), 0);
-                assert_eq!(start.params.fetch_size.fetch_size, Some(one));
-            }
-            _ => panic!("expected start query"),
-        }
-    }
-    fn assert_connection_refused_confirmation(seed: u8, committed_fallback: bool) {
+    fn assert_connection_refused_confirmation(seed: u8) {
         use std::io::{Error, ErrorKind};
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
             let store = Arc::clone(&store);
             move |snapshot: RequestSnapshot| {
-                let pipeline = snapshot.url.path() == "/v1/pipeline/transactions/status";
                 store.lock().expect("lock snapshot store").push(snapshot);
-                if committed_fallback && pipeline {
-                    return Ok(empty_response(StatusCode::NOT_FOUND));
-                }
                 Err(eyre::Report::from(Error::new(
                     ErrorKind::ConnectionRefused,
                     "torii down",
@@ -10851,8 +11813,7 @@ mod evidence_http_tests {
         let result = with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
             mark_data_model_compatible(&client);
-            let (hash, entry_hash) = transaction_hash_pair(seed);
-            client.transaction_confirmation_status(hash, entry_hash)
+            client.transaction_confirmation_status(transaction_hash(seed))
         });
         let err = result.expect_err("connection refusal should fail fast");
         assert!(
@@ -10860,28 +11821,12 @@ mod evidence_http_tests {
             "unexpected error: {err:?}"
         );
         let snapshots = store.lock().expect("snapshot lock");
-        if !committed_fallback {
-            assert_eq!(
-                snapshots.len(),
-                1,
-                "should not fall back to committed query"
-            );
-        }
-        let expected = if committed_fallback {
-            vec!["/v1/pipeline/transactions/status", torii_uri::QUERY]
-        } else {
-            vec!["/v1/pipeline/transactions/status"]
-        };
-        assert_request_paths(&snapshots, &expected);
-        assert_status_scope(&snapshots[0], "local");
+        assert_request_paths(&snapshots, &["/v1/pipeline/transactions/status"]);
+        assert_status_scope(&snapshots[0], "global");
     }
     #[test]
     fn transaction_confirmation_status_stops_on_connection_refused_pipeline_lookup() {
-        assert_connection_refused_confirmation(0x45, false);
-    }
-    #[test]
-    fn transaction_confirmation_status_stops_on_connection_refused_committed_fallback() {
-        assert_connection_refused_confirmation(0x46, true);
+        assert_connection_refused_confirmation(0x45);
     }
 }
 /// Private structure to incapsulate error reporting for HTTP response.
@@ -11090,52 +12035,19 @@ pub enum TxConfirmationStatus {
 pub const DEFAULT_TRANSACTION_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default poll interval used by the explicit transaction-wait helper.
 pub const DEFAULT_TRANSACTION_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(500);
-/// Pipeline statuses that may terminate an explicit wait request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransactionWaitTerminalStatus {
-    /// Stop when the transaction is first observed in the queue.
-    Queued,
-    /// Stop when the transaction is approved for inclusion in a block.
-    Approved,
-    /// Stop when the transaction reaches Kura persistence.
-    Committed,
-    /// Stop when the transaction is fully applied.
-    Applied,
-    /// Stop when the transaction is rejected.
-    Rejected,
-    /// Stop when the transaction expires before execution.
-    Expired,
-}
-impl TransactionWaitTerminalStatus {
-    /// Return the canonical Torii pipeline status label.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Queued => "Queued",
-            Self::Approved => "Approved",
-            Self::Committed => "Committed",
-            Self::Applied => "Applied",
-            Self::Rejected => "Rejected",
-            Self::Expired => "Expired",
-        }
-    }
-}
-/// Options controlling the explicit transaction-wait helper.
+/// Timing options for the fixed global transaction-finality wait.
 #[derive(Debug, Clone)]
 pub struct TransactionWaitOptions {
     /// Maximum time to spend polling before the wait fails.
     pub timeout: Duration,
-    /// Interval between `/v1/pipeline/transactions/status` polls.
+    /// Nonzero interval between `/v1/pipeline/transactions/status` polls.
     pub poll_interval: Duration,
-    /// Statuses that should stop the wait before an applied/rejected/expired outcome.
-    pub terminal_statuses: Vec<TransactionWaitTerminalStatus>,
 }
 impl Default for TransactionWaitOptions {
     fn default() -> Self {
         Self {
             timeout: DEFAULT_TRANSACTION_WAIT_TIMEOUT,
             poll_interval: DEFAULT_TRANSACTION_WAIT_POLL_INTERVAL,
-            terminal_statuses: vec![TransactionWaitTerminalStatus::Applied],
         }
     }
 }
@@ -11144,7 +12056,7 @@ impl Default for TransactionWaitOptions {
 pub struct TransactionWaitOutcome {
     /// Hex-encoded signed transaction hash that was polled.
     pub hash: String,
-    /// Pipeline status kind that stopped the wait.
+    /// Fixed terminal success kind (`Applied`).
     pub terminal_kind: String,
     /// Number of status polls issued before the wait completed.
     pub attempts: u64,
@@ -11194,16 +12106,6 @@ fn is_tx_confirmation_connection_refused(err: &eyre::Report) -> bool {
             .downcast_ref::<std::io::Error>()
             .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::ConnectionRefused)
     })
-}
-fn mark_tx_confirmation_transport_error_final(
-    err: eyre::Report,
-    context: &'static str,
-) -> eyre::Report {
-    if is_tx_confirmation_connection_refused(&err) {
-        tx_confirmation_final_report(err.wrap_err(context))
-    } else {
-        err
-    }
 }
 fn unwrap_final_tx_confirmation_error(err: eyre::Report) -> eyre::Report {
     match err.downcast::<TxConfirmationFinalError>() {
@@ -12489,7 +13391,6 @@ impl Client {
         let (submit_result_sender, submit_result_receiver) =
             tokio::sync::oneshot::channel::<Result<(), eyre::Report>>();
         let hash = transaction.hash();
-        let entry_hash = transaction.hash_as_entrypoint();
         tracing::debug!(%hash, ?transaction, "Submitting transaction");
         thread::scope(|spawner| {
             let submitter_handle = spawner.spawn(move || {
@@ -12499,12 +13400,8 @@ impl Client {
                 let result = self.submit_transaction(transaction).map(|_| ());
                 let _ = submit_result_sender.send(result);
             });
-            let confirmation_res = self.listen_for_tx_confirmation(
-                init_sender,
-                submit_result_receiver,
-                hash,
-                entry_hash,
-            );
+            let confirmation_res =
+                self.listen_for_tx_confirmation(init_sender, submit_result_receiver, hash);
             match submitter_handle.join() {
                 Ok(()) => confirmation_res,
                 Err(_) => Err(eyre!("Transaction submitter thread panicked")),
@@ -12528,7 +13425,6 @@ impl Client {
         init_sender: tokio::sync::oneshot::Sender<bool>,
         submit_result_receiver: tokio::sync::oneshot::Receiver<Result<(), eyre::Report>>,
         hash: HashOf<SignedTransaction>,
-        entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<HashOf<SignedTransaction>> {
         debug!(
             %hash,
@@ -12583,7 +13479,6 @@ impl Client {
                             Self::tx_confirmation_poll_interval(client.transaction_status_timeout);
                         let mut submit_result_receiver = Some(submit_result_receiver);
                         let hash_for_check = hash;
-                        let entry_hash_for_check = entry_hash;
                         let result = if let Some(ref mut iterator) = event_iterator {
                             tokio::time::timeout_at(
                                 deadline,
@@ -12593,12 +13488,7 @@ impl Client {
                                     max_queued_duration,
                                     poll_interval,
                                     submit_result_receiver.take(),
-                                    || {
-                                        client.transaction_confirmation_status(
-                                            hash_for_check,
-                                            entry_hash_for_check,
-                                        )
-                                    },
+                                    || client.transaction_confirmation_status(hash_for_check),
                                 ),
                             )
                             .await
@@ -12612,12 +13502,7 @@ impl Client {
                                     max_queued_duration,
                                     poll_interval,
                                     submit_result_receiver.take(),
-                                    || {
-                                        client.transaction_confirmation_status(
-                                            hash_for_check,
-                                            entry_hash_for_check,
-                                        )
-                                    },
+                                    || client.transaction_confirmation_status(hash_for_check),
                                 ),
                             )
                             .await
@@ -12652,8 +13537,8 @@ impl Client {
                                         ?err,
                                         "tx confirmation stream returned error; falling back to pipeline status query"
                                     );
-                                    Self::resolve_committed_fallback(
-                                        || client.transaction_confirmation_status(hash, entry_hash),
+                                    Self::resolve_global_status_fallback(
+                                        || client.transaction_confirmation_status(hash),
                                         hash,
                                         Duration::from_millis(200),
                                         3,
@@ -12668,8 +13553,8 @@ impl Client {
                                     %hash,
                                     "tx confirmation timed out; falling back to pipeline status query"
                                 );
-                                Self::resolve_committed_fallback(
-                                    || client.transaction_confirmation_status(hash, entry_hash),
+                                Self::resolve_global_status_fallback(
+                                    || client.transaction_confirmation_status(hash),
                                     hash,
                                     Duration::from_millis(200),
                                     3,
@@ -12749,7 +13634,7 @@ impl Client {
             candidate
         }
     }
-    async fn resolve_committed_fallback<F>(
+    async fn resolve_global_status_fallback<F>(
         check: F,
         hash: HashOf<SignedTransaction>,
         delay: Duration,
@@ -12760,7 +13645,7 @@ impl Client {
     where
         F: FnMut() -> Result<Option<TxConfirmationStatus>>,
     {
-        let outcome = Self::retry_transaction_committed(check, delay, retries)
+        let outcome = Self::retry_transaction_final_status(check, delay, retries)
             .await
             .wrap_err(context)?;
         outcome.map_or_else(
@@ -12780,7 +13665,7 @@ impl Client {
             },
         )
     }
-    async fn retry_transaction_committed<F>(
+    async fn retry_transaction_final_status<F>(
         mut check: F,
         delay: Duration,
         retries: usize,
@@ -12832,81 +13717,52 @@ impl Client {
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| eyre!("retry_transaction_committed exhausted")))
-    }
-    fn committed_transaction_matches_hash(
-        tx: &crate::data_model::query::CommittedTransaction,
-        target: HashOf<SignedTransaction>,
-        entry_hash: HashOf<TransactionEntrypoint>,
-    ) -> bool {
-        if tx.entrypoint_hash().as_ref() == entry_hash.as_ref() {
-            return true;
-        }
-        if hashes_match(&target, tx.entrypoint_hash().as_ref()) {
-            return true;
-        }
-        match tx.entrypoint() {
-            crate::data_model::transaction::TransactionEntrypoint::External(entry) => {
-                entry.hash() == target
-            }
-            crate::data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
-                reveal.signed_transaction().hash() == target
-            }
-            crate::data_model::transaction::TransactionEntrypoint::SealedCommitment(_)
-            | crate::data_model::transaction::TransactionEntrypoint::Time(_) => false,
-        }
+        Err(last_err.unwrap_or_else(|| eyre!("retry_transaction_final_status exhausted")))
     }
     fn transaction_confirmation_status(
         &self,
         hash: HashOf<SignedTransaction>,
-        entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<Option<TxConfirmationStatus>> {
-        match self.transaction_pipeline_status(hash, entry_hash) {
-            Ok(Some(TxConfirmationStatus::Rejected(None))) => self
-                .transaction_committed(hash, entry_hash)
-                .map(|committed| committed.or(Some(TxConfirmationStatus::Rejected(None))))
-                .map_err(|err| {
-                    mark_tx_confirmation_transport_error_final(
-                        err,
-                        "committed transaction query failed because Torii is unreachable",
-                    )
-                }),
-            Ok(Some(status)) => Ok(Some(status)),
-            Ok(None) => self.transaction_committed(hash, entry_hash).map_err(|err| {
-                mark_tx_confirmation_transport_error_final(
-                    err,
-                    "committed transaction query failed because Torii is unreachable",
-                )
-            }),
-            Err(err) => {
-                if is_tx_confirmation_connection_refused(&err) {
-                    return Err(tx_confirmation_final_report(err.wrap_err(
-                        "pipeline transaction status query failed because Torii is unreachable",
-                    )));
-                }
-                warn!(
-                    %hash,
-                    ?err,
-                    "pipeline status query failed; falling back to committed query"
-                );
-                self.transaction_committed(hash, entry_hash).map_err(|err| {
-                    mark_tx_confirmation_transport_error_final(
-                        err,
-                        "committed transaction query failed because Torii is unreachable",
-                    )
-                })
+        self.transaction_pipeline_status(hash).map_err(|err| {
+            if is_tx_confirmation_connection_refused(&err) {
+                tx_confirmation_final_report(err.wrap_err(
+                    "global pipeline transaction status query failed because Torii is unreachable",
+                ))
+            } else {
+                err
             }
-        }
+        })
     }
     fn transaction_pipeline_status(
         &self,
         hash: HashOf<SignedTransaction>,
-        _entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<Option<TxConfirmationStatus>> {
-        match self.get_transaction_status_response_with_scope(hash, Some("local")) {
-            Ok(Some(payload)) => Ok(tx_confirmation_status_from_pipeline_response(&payload)),
-            Ok(None) => Ok(None),
-            Err(err) => Err(err),
+        let Some(payload) = self.get_transaction_status_response_global(hash)? else {
+            return Ok(None);
+        };
+        let status = validate_global_pipeline_status_response(&payload, hash)?;
+        match (status, payload.resolved_from.as_str()) {
+            (
+                status @ (TxConfirmationStatus::Applied
+                | TxConfirmationStatus::Rejected(_)
+                | TxConfirmationStatus::Expired),
+                "state",
+            ) => Ok(Some(status)),
+            (
+                TxConfirmationStatus::Applied
+                | TxConfirmationStatus::Rejected(_)
+                | TxConfirmationStatus::Expired,
+                "cache" | "queue",
+            )
+            | (
+                TxConfirmationStatus::Queued
+                | TxConfirmationStatus::Approved(_)
+                | TxConfirmationStatus::Committed,
+                _,
+            ) => Ok(None),
+            (_, source) => Err(eyre!(
+                "pipeline status response has unsupported resolved_from `{source}`"
+            )),
         }
     }
     fn get_transaction_status_response_with_scope(
@@ -12914,7 +13770,7 @@ impl Client {
         hash: HashOf<SignedTransaction>,
         scope: Option<&str>,
     ) -> Result<Option<PipelineTransactionStatusResponse>> {
-        let hash_hex = bytes_to_hex(hash.as_ref());
+        let hash_hex = hash.to_string();
         let url = join_torii_url(&self.torii_url, "v1/pipeline/transactions/status");
         let builder = self
             .default_request(HttpMethod::GET, url)
@@ -12928,18 +13784,16 @@ impl Client {
         };
         let resp = self.send_builder(builder)?;
         match resp.status() {
-            StatusCode::OK | StatusCode::ACCEPTED => {
-                if resp.body().is_empty() {
-                    return Ok(None);
-                }
+            StatusCode::OK => {
                 let payload: PipelineTransactionStatusResponse =
                     Self::parse_typed_json_ok_response(
                         &resp,
                         "Failed to get pipeline transaction status",
                     )?;
+                validate_pipeline_status_response(&payload, hash, scope.unwrap_or("global"))?;
                 Ok(Some(payload))
             }
-            StatusCode::NO_CONTENT | StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::NOT_FOUND => Ok(None),
             status => Err(eyre!(
                 "Failed to get pipeline transaction status: {} {}",
                 status,
@@ -12947,7 +13801,8 @@ impl Client {
             )),
         }
     }
-    /// GET `/v1/pipeline/transactions/status` — typed pipeline status lookup by signed transaction hash.
+    /// GET `/v1/pipeline/transactions/status` — typed global pipeline status lookup by signed
+    /// transaction hash. In V1, omitting `scope` means `global`.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response has an unexpected content type,
@@ -12976,7 +13831,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response has an unexpected content type,
     /// or the typed JSON payload cannot be decoded.
-    pub fn get_transaction_status_response_auto(
+    pub fn get_transaction_status_response_global(
         &self,
         hash: HashOf<SignedTransaction>,
     ) -> Result<Option<PipelineTransactionStatusResponse>> {
@@ -13035,7 +13890,8 @@ impl Client {
             )),
         }
     }
-    /// GET `/v1/pipeline/transactions/status` — convenience status lookup mapped to [`TxConfirmationStatus`].
+    /// GET `/v1/pipeline/transactions/status` — convenience global status lookup mapped to
+    /// [`TxConfirmationStatus`]. In V1, omitting `scope` means `global`.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response has an unexpected content type,
@@ -13049,14 +13905,17 @@ impl Client {
             .as_ref()
             .and_then(tx_confirmation_status_from_pipeline_response))
     }
-    /// Poll `/v1/pipeline/transactions/status` until the transaction reaches a configured stop state.
+    /// Poll exact global pipeline status until state-resolved `Applied` finality.
     ///
-    /// Applied, rejected, and expired always stop the wait because they are terminal outcomes.
+    /// State-resolved `Rejected` and `Expired` are fixed failure outcomes. Cached or queued
+    /// terminal hints and every non-final status continue polling; callers cannot weaken this
+    /// first-release finality rule.
     ///
     /// # Errors
-    /// Returns an error if polling fails consistently, the endpoint returns an unknown status kind,
-    /// or the timeout elapses before a stop state is observed.
-    pub fn wait_for_transaction_terminal_status(
+    /// Returns an error if polling fails, the response is not bound to the requested canonical
+    /// hash/global scope, the transaction is rejected or expires, or the timeout elapses before
+    /// state-resolved `Applied` is observed.
+    pub fn wait_for_transaction_applied(
         &self,
         hash: HashOf<SignedTransaction>,
         options: TransactionWaitOptions,
@@ -13064,9 +13923,9 @@ impl Client {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
-        rt.block_on(self.wait_for_transaction_terminal_status_async(hash, options))
+        rt.block_on(self.wait_for_transaction_applied_async(hash, options))
     }
-    async fn wait_for_transaction_terminal_status_async(
+    async fn wait_for_transaction_applied_async(
         &self,
         hash: HashOf<SignedTransaction>,
         options: TransactionWaitOptions,
@@ -13074,102 +13933,62 @@ impl Client {
         let TransactionWaitOptions {
             timeout,
             poll_interval,
-            terminal_statuses,
         } = options;
+        if poll_interval == Duration::ZERO {
+            return Err(eyre!(
+                "transaction wait poll_interval must be greater than zero"
+            ));
+        }
         let start = Instant::now();
-        let poll_interval = if poll_interval == Duration::ZERO {
-            Duration::from_millis(1)
-        } else {
-            poll_interval
-        };
-        let stop_statuses = if terminal_statuses.is_empty() {
-            TransactionWaitOptions::default().terminal_statuses
-        } else {
-            terminal_statuses
-        };
-        let poll_scope = transaction_wait_status_scope(&stop_statuses);
-        let target_description = format_transaction_wait_target(&stop_statuses);
         let mut attempts = 0_u64;
         let mut last_status: Option<String> = None;
         loop {
             attempts = attempts.saturating_add(1);
-            if let Some(response) =
-                self.get_transaction_status_response_with_scope(hash, Some(poll_scope))?
-            {
+            if let Some(response) = self.get_transaction_status_response_global(hash)? {
                 let kind = response.status.kind.as_str();
                 last_status = Some(kind.to_owned());
-                if tx_confirmation_status_from_pipeline_response(&response).is_none() {
-                    return Err(eyre!(
-                        "unsupported pipeline status kind `{kind}` for transaction {}; last_status={kind}",
-                        response.hash
-                    ));
-                }
-                if should_stop_waiting_on_pipeline_kind(kind, &stop_statuses) {
-                    let block_height = response.status.block_height;
-                    let scope = response.scope.clone();
-                    let resolved_from = response.resolved_from.clone();
-                    return Ok(TransactionWaitOutcome {
-                        hash: response.hash.clone(),
-                        terminal_kind: kind.to_owned(),
-                        attempts,
-                        elapsed_ms: elapsed_ms_u64(start.elapsed()),
-                        block_height,
-                        scope,
-                        resolved_from,
-                        r#final: response,
-                    });
-                }
-                if should_error_on_unrequested_transaction_failure(kind, &stop_statuses) {
-                    return Err(eyre!(
-                        "transaction {} reached terminal failure status `{kind}` before {target_description}; last_status={kind}",
-                        response.hash
-                    ));
+                match validate_global_pipeline_status_response(&response, hash)? {
+                    TxConfirmationStatus::Applied if response.resolved_from == "state" => {
+                        let block_height = response.status.block_height;
+                        let scope = response.scope.clone();
+                        let resolved_from = response.resolved_from.clone();
+                        return Ok(TransactionWaitOutcome {
+                            hash: response.hash.clone(),
+                            terminal_kind: kind.to_owned(),
+                            attempts,
+                            elapsed_ms: elapsed_ms_u64(start.elapsed()),
+                            block_height,
+                            scope,
+                            resolved_from,
+                            r#final: response,
+                        });
+                    }
+                    TxConfirmationStatus::Rejected(_) | TxConfirmationStatus::Expired
+                        if response.resolved_from == "state" =>
+                    {
+                        return Err(eyre!(
+                            "transaction {} reached state-resolved fixed terminal failure status `{kind}`; last_status={kind}",
+                            response.hash
+                        ));
+                    }
+                    TxConfirmationStatus::Applied
+                    | TxConfirmationStatus::Rejected(_)
+                    | TxConfirmationStatus::Expired
+                    | TxConfirmationStatus::Queued
+                    | TxConfirmationStatus::Approved(_)
+                    | TxConfirmationStatus::Committed => {}
                 }
             }
             let elapsed = start.elapsed();
             if elapsed >= timeout {
                 let last_status = last_status.unwrap_or_else(|| "not_observed".to_owned());
                 return Err(eyre!(
-                    "transaction did not reach {target_description} within {} ms; last_status={last_status}",
+                    "transaction did not reach state-resolved Applied within {} ms; last_status={last_status}",
                     timeout.as_millis()
                 ));
             }
             tokio::time::sleep(poll_interval.min(timeout.saturating_sub(elapsed))).await;
         }
-    }
-    fn transaction_committed(
-        &self,
-        hash: HashOf<SignedTransaction>,
-        entry_hash: HashOf<TransactionEntrypoint>,
-    ) -> Result<Option<TxConfirmationStatus>> {
-        use crate::data_model::query::{
-            CommittedTxFilters,
-            dsl::CompoundPredicate,
-            parameters::{FetchSize, Pagination},
-            transaction::prelude::FindTransactions,
-        };
-        let one = NonZeroU64::new(1).expect("nonzero");
-        let filters = CommittedTxFilters {
-            entry_eq: Some(entry_hash),
-            ..Default::default()
-        };
-        let snapshot = self
-            .query(FindTransactions::new())
-            .filter(CompoundPredicate::from_filters(filters))
-            .with_pagination(Pagination::new(Some(one), 0))
-            .with_fetch_size(FetchSize::new(Some(one)))
-            .execute_all()?;
-        let outcome = snapshot
-            .iter()
-            .find(|tx| Self::committed_transaction_matches_hash(tx, hash, entry_hash))
-            .map(|tx| tx_confirmation_status_from_committed_result(tx.result()));
-        debug!(
-            %hash,
-            snapshot_len = snapshot.len(),
-            found = outcome.is_some(),
-            "transaction_committed snapshot check"
-        );
-        Ok(outcome)
     }
     fn transaction_headers_without_content_type(&self) -> HashMap<String, String> {
         let mut headers = self.headers.clone();
@@ -13192,8 +14011,8 @@ impl Client {
         .body(payload.as_bytes().to_vec())
         .max_response_bytes(TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES)
     }
-    /// Submits and waits until the transaction is either rejected or committed.
-    /// Returns rejection reason if transaction was rejected.
+    /// Submits and waits for globally resolved `Applied` finality.
+    /// Returns rejection reason if the transaction is rejected.
     ///
     /// # Errors
     /// Fails if sending transaction to peer fails or if it response with error
@@ -13207,8 +14026,8 @@ impl Client {
     {
         self.submit_all_blocking(core::iter::once(instruction), fee_payment)
     }
-    /// Submits and waits until the transaction is either rejected or committed.
-    /// Returns rejection reason if transaction was rejected.
+    /// Submits and waits for globally resolved `Applied` finality.
+    /// Returns rejection reason if the transaction is rejected.
     ///
     /// # Errors
     /// Fails if sending transaction to peer fails or if it response with error
@@ -13222,9 +14041,9 @@ impl Client {
     {
         self.submit_all_blocking_with_metadata(instructions, fee_payment, Metadata::default())
     }
-    /// Submits and waits until the transaction is either rejected or committed.
+    /// Submits and waits for globally resolved `Applied` finality.
     /// Allows to specify [`Metadata`] of [`TransactionBuilder`].
-    /// Returns rejection reason if transaction was rejected.
+    /// Returns rejection reason if the transaction is rejected.
     ///
     /// # Errors
     /// Fails if sending transaction to peer fails or if it response with error
@@ -13239,9 +14058,9 @@ impl Client {
     {
         self.submit_all_blocking_with_metadata(core::iter::once(instruction), fee_payment, metadata)
     }
-    /// Submits and waits until the transaction is either rejected or committed.
+    /// Submits and waits for globally resolved `Applied` finality.
     /// Allows to specify [`Metadata`] of [`TransactionBuilder`].
-    /// Returns rejection reason if transaction was rejected.
+    /// Returns rejection reason if the transaction is rejected.
     ///
     /// # Errors
     /// Fails if sending transaction to peer fails or if it response with error
@@ -14038,20 +14857,29 @@ impl Client {
         }
         decode_and_verify_account_onboarding_plan_for_request(self.network_id, request, receipt)
     }
-    /// Token-authenticated apply of one exact sponsored-onboarding receipt.
+    /// Token-authenticated non-mutating preparation of one exact onboarding transaction.
     ///
     /// # Errors
-    /// Returns an error if the receipt is invalid for this client, token
-    /// validation or JSON encoding fails, or the HTTP call fails.
-    pub fn post_account_onboarding_apply(
+    /// Returns an error if the receipt or binding is invalid, the token is malformed, JSON
+    /// encoding fails, or the HTTP call fails.
+    pub fn post_account_onboarding_prepare(
         &self,
+        request: &AccountOnboardingPlanRequestV1,
         receipt: &AccountOnboardingPlanReceiptV1,
+        binding: &TairaPublicResetMutationBindingV1,
         onboarding_token: &str,
     ) -> Result<Response<Vec<u8>>> {
-        self.verify_account_onboarding_plan_for_request(&receipt.body.request, receipt)?;
+        self.verify_account_onboarding_plan_for_request(request, receipt)?;
+        validate_prepared_mutation_binding(
+            binding,
+            AccountOnboardingPreparedTransactionV1::OPERATION,
+            true,
+        )?;
         let token = validate_account_onboarding_token(onboarding_token)?;
-        let url = join_torii_url(&self.torii_url, "v1/accounts/onboard");
-        let body = norito::json::to_vec(&AccountOnboardingApplyRequestV1 {
+        let url = join_torii_url(&self.torii_url, "v1/accounts/onboard/prepare");
+        let body = norito::json::to_vec(&AccountOnboardingPrepareRequestV1 {
+            schema: AccountOnboardingPrepareRequestV1::SCHEMA.to_owned(),
+            binding: binding.clone(),
             receipt: receipt.clone(),
         })?;
         self.send_builder(
@@ -14062,114 +14890,429 @@ impl Client {
                 .body(body),
         )
     }
-    /// Revalidate and apply one stateless sponsored-onboarding receipt.
-    ///
-    /// Exact replay returns [`AccountOnboardingStatusV1::Unchanged`] without a
-    /// transaction hash. Create and repair results contain one queued hash.
+
+    /// Prepare and locally authenticate an exact transaction or nonterminal live-proof requirement.
     ///
     /// # Errors
-    /// Returns an error for receipt, token, HTTP, response-decoding, or response
-    /// consistency failures.
-    pub fn apply_account_onboarding(
+    /// Returns an error for HTTP failure, a malformed closed response, envelope tampering, or a
+    /// transaction that does not match this client's network and exact receipt.
+    pub fn prepare_account_onboarding_transaction(
         &self,
+        request: &AccountOnboardingPlanRequestV1,
         receipt: &AccountOnboardingPlanReceiptV1,
+        binding: &TairaPublicResetMutationBindingV1,
         onboarding_token: &str,
-    ) -> Result<AccountOnboardingResponseV1> {
-        let response = self.post_account_onboarding_apply(receipt, onboarding_token)?;
-        if !matches!(response.status(), StatusCode::OK | StatusCode::ACCEPTED) {
+    ) -> Result<AccountOnboardingPrepareResponseV1> {
+        let response =
+            self.post_account_onboarding_prepare(request, receipt, binding, onboarding_token)?;
+        if response.status() != StatusCode::OK {
             return Err(eyre!(
-                "account onboarding apply failed with HTTP status {}",
+                "account onboarding preparation failed with HTTP status {}",
                 response.status()
             ));
         }
-        let wire: AccountOnboardingResponseWireV1 = norito::json::from_slice(response.body())
-            .wrap_err("decode account onboarding apply response")?;
-        let status = match wire.status.as_str() {
-            "Queued" => AccountOnboardingStatusV1::Queued,
-            "Repaired" => AccountOnboardingStatusV1::Repaired,
-            "Unchanged" => AccountOnboardingStatusV1::Unchanged,
-            _ => {
-                return Err(eyre!(
-                    "account onboarding response has unknown status `{}`",
-                    wire.status
-                ));
+        let probe: PreparedResponseSchemaProbeV1 = norito::json::from_slice(response.body())
+            .wrap_err("decode account onboarding prepare response schema")?;
+        match probe.schema.as_str() {
+            AccountOnboardingPreparedTransactionV1::SCHEMA => {
+                let prepared: AccountOnboardingPreparedTransactionV1 =
+                    norito::json::from_slice(response.body())
+                        .wrap_err("decode prepared onboarding transaction")?;
+                self.verify_account_onboarding_prepared_transaction(
+                    request, &prepared, receipt, binding,
+                )?;
+                Ok(AccountOnboardingPrepareResponseV1::Prepared(prepared))
             }
-        };
-        let result = AccountOnboardingResponseV1 {
-            account_id: wire.account_id,
-            alias: wire.alias,
-            tx_hash_hex: wire.tx_hash_hex,
-            status,
-            disposition: wire.disposition,
-        };
-        ensure_canonical_i105_account_id(&result.account_id, "response.account_id")?;
-        let alias = result
-            .alias
-            .parse::<AccountAliasName>()
-            .map_err(|error| eyre!("invalid response alias: {error}"))?
-            .to_string();
-        if result.account_id != receipt.body.request.account_id
-            || alias != receipt.body.request.alias
-            || result.alias != alias
+            AccountOnboardingProofRequiredPrepareResponseV1::SCHEMA => {
+                let proof_required: AccountOnboardingProofRequiredPrepareResponseV1 =
+                    norito::json::from_slice(response.body())
+                        .wrap_err("decode proof-required onboarding prepare result")?;
+                self.verify_account_onboarding_proof_required_result(
+                    request,
+                    &proof_required,
+                    receipt,
+                    binding,
+                )?;
+                Ok(AccountOnboardingPrepareResponseV1::ProofRequired(
+                    proof_required,
+                ))
+            }
+            schema => Err(eyre!(
+                "account onboarding prepare response has unsupported schema `{schema}`"
+            )),
+        }
+    }
+
+    /// Verify an authenticated onboarding transaction prepared for this client and receipt.
+    ///
+    /// # Errors
+    /// Returns an error for any substituted field, noncanonical wire/hash, invalid signature,
+    /// wrong network, or mismatched semantic receipt.
+    pub fn verify_account_onboarding_prepared_transaction(
+        &self,
+        request: &AccountOnboardingPlanRequestV1,
+        prepared: &AccountOnboardingPreparedTransactionV1,
+        receipt: &AccountOnboardingPlanReceiptV1,
+        binding: &TairaPublicResetMutationBindingV1,
+    ) -> Result<SignedTransaction> {
+        validate_prepared_mutation_binding(
+            &prepared.binding,
+            AccountOnboardingPreparedTransactionV1::OPERATION,
+            false,
+        )?;
+        if prepared.schema != AccountOnboardingPreparedTransactionV1::SCHEMA
+            || prepared.operation != AccountOnboardingPreparedTransactionV1::OPERATION
+            || &prepared.binding != binding
+            || &prepared.receipt != receipt
+            || prepared.semantic_hash_hex != hex::encode(receipt.plan_hash.as_ref())
+            || prepared.account_id != receipt.body.request.account_id
+            || prepared.alias != receipt.body.request.alias
+            || !onboarding_disposition_transition_allowed(
+                receipt.body.resource.disposition,
+                prepared.disposition,
+            )
         {
             return Err(eyre!(
-                "account onboarding response account or alias differs from the receipt"
+                "prepared onboarding envelope differs from its exact receipt or binding"
             ));
         }
-        if !onboarding_disposition_transition_allowed(
-            receipt.body.resource.disposition,
-            result.disposition,
-        ) {
+        let planned_instructions = decode_and_verify_account_onboarding_plan_for_request(
+            self.network_id,
+            request,
+            receipt,
+        )?;
+        verify_prepared_payload_signature(
+            &AccountOnboardingPreparedSignaturePayloadV1::from(prepared),
+            &prepared.server_signature,
+            &receipt.body.authority,
+        )?;
+        let transaction = decode_canonical_prepared_transaction(
+            &prepared.transaction_hash_hex,
+            &prepared.signed_transaction_wire_hex,
+            &prepared.signed_transaction_wire_sha256,
+        )?;
+        let Executable::Instructions(instructions) = transaction.instructions() else {
             return Err(eyre!(
-                "account onboarding response disposition is not an allowed transition from the receipt"
+                "prepared onboarding transaction must contain a direct instruction sequence"
+            ));
+        };
+        let expected_metadata = expected_prepared_transaction_metadata(
+            binding,
+            AccountOnboardingPreparedTransactionV1::OPERATION,
+            &prepared.semantic_hash_hex,
+        )?;
+        if transaction.network_id() != Some(&self.network_id)
+            || transaction.authority() != &receipt.body.authority
+            || transaction.payload().fee_payment != prepared.fee_payment
+            || transaction.metadata() != &expected_metadata
+            || instructions.is_empty()
+            || !instructions_are_ordered_subset(instructions.as_ref(), &planned_instructions)
+        {
+            return Err(eyre!(
+                "prepared onboarding transaction network, authority, or fee intent was substituted"
             ));
         }
-        match result.status {
-            AccountOnboardingStatusV1::Unchanged => {
-                if response.status() != StatusCode::OK
-                    || result.tx_hash_hex.is_some()
-                    || result.disposition != AliasPlanDispositionV1::NoOp
-                {
-                    return Err(eyre!(
-                        "unchanged account onboarding response has an invalid status, hash, or disposition"
-                    ));
-                }
-            }
-            AccountOnboardingStatusV1::Queued => {
-                let tx_hash = result.tx_hash_hex.as_deref().ok_or_else(|| {
-                    eyre!("queued account onboarding response is missing tx_hash_hex")
-                })?;
-                if response.status() != StatusCode::ACCEPTED
-                    || result.disposition != AliasPlanDispositionV1::Create
-                    || tx_hash.len() != 64
-                    || tx_hash != tx_hash.to_ascii_lowercase()
-                    || hex::decode(tx_hash).is_err()
-                {
-                    return Err(eyre!(
-                        "queued account onboarding response has an invalid status or tx_hash_hex"
-                    ));
-                }
-            }
-            AccountOnboardingStatusV1::Repaired => {
-                let tx_hash = result.tx_hash_hex.as_deref().ok_or_else(|| {
-                    eyre!("repaired account onboarding response is missing tx_hash_hex")
-                })?;
-                if response.status() != StatusCode::ACCEPTED
-                    || !matches!(
-                        result.disposition,
-                        AliasPlanDispositionV1::Repair | AliasPlanDispositionV1::NoOp
-                    )
-                    || tx_hash.len() != 64
-                    || tx_hash != tx_hash.to_ascii_lowercase()
-                    || hex::decode(tx_hash).is_err()
-                {
-                    return Err(eyre!(
-                        "repaired account onboarding response has an invalid status, hash, or disposition"
-                    ));
-                }
-            }
+        Ok(transaction)
+    }
+
+    /// Authenticate a nonterminal onboarding result against the exact request receipt.
+    ///
+    /// Success does not prove current ledger state. Before treating the operation as applied,
+    /// callers must freshly prove in one atomic observation that the account exists and the exact
+    /// alias resolves to the same universal account identity.
+    ///
+    /// # Errors
+    /// Returns an error for any substituted result field or invalid authority signature.
+    pub fn verify_account_onboarding_proof_required_result(
+        &self,
+        request: &AccountOnboardingPlanRequestV1,
+        proof_required: &AccountOnboardingProofRequiredPrepareResponseV1,
+        receipt: &AccountOnboardingPlanReceiptV1,
+        binding: &TairaPublicResetMutationBindingV1,
+    ) -> Result<()> {
+        verify_account_onboarding_proof_required_result_v1(
+            self.network_id,
+            request,
+            proof_required,
+            receipt,
+            binding,
+        )
+    }
+
+    /// Freshly prove the exact account-and-alias state from one committed state snapshot.
+    ///
+    /// Torii resolves both identities and the anchoring height/hash inside one state view. The
+    /// client sends exactly one closed V1 request and accepts only the matching closed V1 response.
+    /// [`AccountOnboardingCurrentStateV1::Applied`] is returned only when that atomic observation
+    /// reports both the exact account and the exact alias target.
+    ///
+    /// # Errors
+    /// Returns an error for noncanonical typed inputs, transport or HTTP failure, a malformed or
+    /// substituted response, a foreign network, a zero committed height, a noncanonical alias
+    /// target, or an absent expected account.
+    pub fn prove_account_onboarding_current_state(
+        &self,
+        account_id: &AccountId,
+        alias: &AccountAliasName,
+    ) -> Result<AccountOnboardingCurrentStateV1> {
+        ensure_typed_account_id_is_canonical(account_id, "account_id")?;
+        ensure_typed_account_alias_is_canonical(alias, "alias")?;
+        let request = AccountOnboardingCurrentStateRequestV1::new(account_id, alias);
+        request
+            .validate_exact()
+            .map_err(|error| eyre!("invalid onboarding current-state request: {error}"))?;
+        let body = norito::json::to_vec(&request)
+            .wrap_err("encode atomic onboarding current-state request")?;
+        let url = join_torii_url(&self.torii_url, "v1/accounts/onboarding/current-state");
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+                .header(http::header::ACCEPT, APPLICATION_JSON)
+                .max_response_bytes(ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES),
+        )?;
+        if response.status() != StatusCode::OK {
+            return Err(eyre!(
+                "atomic onboarding current-state request returned HTTP status {}",
+                response.status()
+            ));
         }
-        Ok(result)
+        let content_type = Self::response_content_type(&response);
+        if !Self::is_exact_json_content_type(content_type) {
+            return Err(eyre!(
+                "atomic onboarding current-state response has invalid content-type `{content_type}`"
+            ));
+        }
+        let response: AccountOnboardingCurrentStateResponseV1 =
+            norito::json::from_slice(response.body())
+                .wrap_err("decode atomic onboarding current-state response")?;
+        let (block_height, alias_target) = response
+            .validate_for(&request, &self.network_id)
+            .map_err(|error| eyre!("invalid atomic onboarding current-state response: {error}"))?;
+        if !response.account_exists {
+            return Err(eyre!(
+                "atomic onboarding current-state response reports the expected account absent"
+            ));
+        }
+        let block_hash = response.observed_block_hash;
+
+        Ok(match alias_target {
+            Some(target) if &target == account_id => AccountOnboardingCurrentStateV1::Applied {
+                block_height,
+                block_hash,
+            },
+            Some(_) => AccountOnboardingCurrentStateV1::AliasConflict {
+                block_height,
+                block_hash,
+            },
+            None => AccountOnboardingCurrentStateV1::AliasAbsent {
+                block_height,
+                block_hash,
+            },
+        })
+    }
+
+    /// Submit only one already authenticated exact onboarding envelope.
+    ///
+    /// # Errors
+    /// Returns an error if local verification, token validation, JSON encoding, or HTTP fails.
+    pub fn post_prepared_account_onboarding(
+        &self,
+        request: &AccountOnboardingPlanRequestV1,
+        prepared: &AccountOnboardingPreparedTransactionV1,
+        onboarding_token: &str,
+    ) -> Result<Response<Vec<u8>>> {
+        self.verify_account_onboarding_prepared_transaction(
+            request,
+            prepared,
+            &prepared.receipt,
+            &prepared.binding,
+        )?;
+        let token = validate_account_onboarding_token(onboarding_token)?;
+        let url = join_torii_url(&self.torii_url, "v1/accounts/onboard");
+        let body = norito::json::to_vec(prepared)?;
+        validate_prepared_mutation_binding(
+            &prepared.binding,
+            AccountOnboardingPreparedTransactionV1::OPERATION,
+            true,
+        )?;
+        self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+                .header(http::header::ACCEPT, APPLICATION_JSON)
+                .header("x-iroha-onboarding-token", token)
+                .body(body),
+        )
+    }
+
+    /// Submit and reconcile one exact prepared onboarding hash.
+    ///
+    /// # Errors
+    /// Returns an error for HTTP failure or any response that is not bound to the exact envelope.
+    pub fn submit_prepared_account_onboarding_transaction(
+        &self,
+        request: &AccountOnboardingPlanRequestV1,
+        prepared: &AccountOnboardingPreparedTransactionV1,
+        onboarding_token: &str,
+    ) -> Result<PreparedTransactionSubmitResponseV1> {
+        let response =
+            self.post_prepared_account_onboarding(request, prepared, onboarding_token)?;
+        parse_prepared_submit_response(
+            &response,
+            &prepared.binding,
+            AccountOnboardingPreparedTransactionV1::OPERATION,
+            &prepared.transaction_hash_hex,
+        )
+    }
+
+    /// Non-mutating faucet preparation for one solved claim.
+    ///
+    /// # Errors
+    /// Returns an error for a noncanonical binding or claim, JSON failure, or HTTP failure.
+    pub fn post_account_faucet_prepare(
+        &self,
+        claim: &AccountFaucetClaimV1,
+        binding: &TairaPublicResetMutationBindingV1,
+    ) -> Result<Response<Vec<u8>>> {
+        validate_prepared_mutation_binding(
+            binding,
+            AccountFaucetPreparedTransactionV1::OPERATION,
+            true,
+        )?;
+        validate_account_faucet_claim(claim)?;
+        let url = join_torii_url(&self.torii_url, "v1/accounts/faucet/prepare");
+        let body = norito::json::to_vec(&AccountFaucetPrepareRequestV1 {
+            schema: AccountFaucetPrepareRequestV1::SCHEMA.to_owned(),
+            binding: binding.clone(),
+            claim: claim.clone(),
+        })?;
+        self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+                .header(http::header::ACCEPT, APPLICATION_JSON)
+                .body(body),
+        )
+    }
+
+    /// Prepare and locally authenticate one exact faucet transaction.
+    ///
+    /// # Errors
+    /// Returns an error for HTTP failure, malformed JSON, or any substituted signed field.
+    pub fn prepare_account_faucet_transaction(
+        &self,
+        claim: &AccountFaucetClaimV1,
+        binding: &TairaPublicResetMutationBindingV1,
+    ) -> Result<AccountFaucetPreparedTransactionV1> {
+        let response = self.post_account_faucet_prepare(claim, binding)?;
+        if response.status() != StatusCode::OK {
+            return Err(eyre!(
+                "account faucet preparation failed with HTTP status {}",
+                response.status()
+            ));
+        }
+        let prepared: AccountFaucetPreparedTransactionV1 =
+            norito::json::from_slice(response.body())
+                .wrap_err("decode prepared faucet transaction")?;
+        self.verify_account_faucet_prepared_transaction(&prepared, claim, binding)?;
+        Ok(prepared)
+    }
+
+    /// Verify one authenticated faucet transaction against its exact claim and binding.
+    ///
+    /// # Errors
+    /// Returns an error for noncanonical wire, invalid signatures, wrong network, or substitution.
+    pub fn verify_account_faucet_prepared_transaction(
+        &self,
+        prepared: &AccountFaucetPreparedTransactionV1,
+        claim: &AccountFaucetClaimV1,
+        binding: &TairaPublicResetMutationBindingV1,
+    ) -> Result<SignedTransaction> {
+        validate_prepared_mutation_binding(
+            &prepared.binding,
+            AccountFaucetPreparedTransactionV1::OPERATION,
+            false,
+        )?;
+        validate_account_faucet_claim(claim)?;
+        if prepared.schema != AccountFaucetPreparedTransactionV1::SCHEMA
+            || prepared.operation != AccountFaucetPreparedTransactionV1::OPERATION
+            || &prepared.binding != binding
+            || &prepared.claim != claim
+            || prepared.semantic_hash_hex != hex::encode(faucet_claim_hash(claim).as_ref())
+            || prepared.account_id != claim.account_id
+        {
+            return Err(eyre!(
+                "prepared faucet envelope differs from its exact claim or binding"
+            ));
+        }
+        let transaction = decode_canonical_prepared_transaction(
+            &prepared.transaction_hash_hex,
+            &prepared.signed_transaction_wire_hex,
+            &prepared.signed_transaction_wire_sha256,
+        )?;
+        let expected_metadata = expected_prepared_transaction_metadata(
+            binding,
+            AccountFaucetPreparedTransactionV1::OPERATION,
+            &prepared.semantic_hash_hex,
+        )?;
+        if transaction.network_id() != Some(&self.network_id)
+            || transaction.payload().fee_payment != prepared.fee_payment
+            || transaction.metadata() != &expected_metadata
+        {
+            return Err(eyre!(
+                "prepared faucet transaction network or fee intent was substituted"
+            ));
+        }
+        verify_prepared_payload_signature(
+            &AccountFaucetPreparedSignaturePayloadV1::from(prepared),
+            &prepared.server_signature,
+            transaction.authority(),
+        )?;
+        validate_faucet_transaction_identity(prepared, &transaction)?;
+        Ok(transaction)
+    }
+
+    /// Submit only one already authenticated exact faucet envelope.
+    ///
+    /// # Errors
+    /// Returns an error if local verification, JSON encoding, or HTTP fails.
+    pub fn post_prepared_account_faucet(
+        &self,
+        prepared: &AccountFaucetPreparedTransactionV1,
+    ) -> Result<Response<Vec<u8>>> {
+        self.verify_account_faucet_prepared_transaction(
+            prepared,
+            &prepared.claim,
+            &prepared.binding,
+        )?;
+        let url = join_torii_url(&self.torii_url, "v1/accounts/faucet");
+        let body = norito::json::to_vec(prepared)?;
+        validate_prepared_mutation_binding(
+            &prepared.binding,
+            AccountFaucetPreparedTransactionV1::OPERATION,
+            true,
+        )?;
+        self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+                .header(http::header::ACCEPT, APPLICATION_JSON)
+                .body(body),
+        )
+    }
+
+    /// Submit and reconcile one exact prepared faucet hash.
+    ///
+    /// # Errors
+    /// Returns an error for HTTP failure or a response not bound to the exact envelope.
+    pub fn submit_prepared_account_faucet_transaction(
+        &self,
+        prepared: &AccountFaucetPreparedTransactionV1,
+    ) -> Result<PreparedTransactionSubmitResponseV1> {
+        let response = self.post_prepared_account_faucet(prepared)?;
+        parse_prepared_submit_response(
+            &response,
+            &prepared.binding,
+            AccountFaucetPreparedTransactionV1::OPERATION,
+            &prepared.transaction_hash_hex,
+        )
     }
     /// Fetch the authenticated account-onboarding readiness report.
     ///
@@ -18493,7 +19636,7 @@ impl Client {
         };
         let resp = self.send_builder(builder)?;
         let payload = Self::parse_json_ok_response(&resp, "uaid portfolio request")?;
-        UaidPortfolioResponse::from_value(payload)
+        UaidPortfolioResponse::from_value(payload, &canonical)
     }
     /// GET `/v1/space-directory/uaids/{uaid}` — dataspace bindings for a UAID.
     ///
@@ -18524,7 +19667,7 @@ impl Client {
         };
         let resp = self.send_builder(builder)?;
         let payload = Self::parse_json_ok_response(&resp, "uaid bindings request")?;
-        UaidBindingsResponse::from_value(payload)
+        UaidBindingsResponse::from_value(payload, &canonical)
     }
     /// GET `/v1/space-directory/uaids/{uaid}/manifests` — capability manifests bound to a UAID.
     ///
@@ -18548,7 +19691,7 @@ impl Client {
         };
         let resp = self.send_builder(builder)?;
         let payload = Self::parse_json_ok_response(&resp, "uaid manifests request")?;
-        UaidManifestsResponse::from_value(payload)
+        UaidManifestsResponse::from_value(payload, &canonical)
     }
     /// GET `/v1/explorer/accounts/{account_id}/qr` — share-ready QR metadata.
     ///
@@ -18947,76 +20090,68 @@ fn tx_confirmation_status_from_kind(
         _ => None,
     }
 }
-fn tx_confirmation_status_from_committed_result(
-    result: &crate::data_model::transaction::TransactionResult,
-) -> TxConfirmationStatus {
-    match &result.0 {
-        Ok(_) => TxConfirmationStatus::Applied,
-        Err(reason) => TxConfirmationStatus::Rejected(Some(reason.clone())),
+fn is_canonical_signed_transaction_hash_text(value: &str) -> bool {
+    value.len() == crate::crypto::Hash::LENGTH * 2
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        && value.as_bytes().last().is_some_and(|byte| {
+            matches!(byte, b'1' | b'3' | b'5' | b'7' | b'9' | b'b' | b'd' | b'f')
+        })
+}
+fn validate_pipeline_status_response(
+    payload: &PipelineTransactionStatusResponse,
+    expected_hash: HashOf<SignedTransaction>,
+    expected_scope: &str,
+) -> Result<()> {
+    let expected_hash = expected_hash.to_string();
+    if !is_canonical_signed_transaction_hash_text(&payload.hash) {
+        return Err(eyre!(
+            "pipeline status hash must be exactly 64 lowercase hexadecimal digits with the Iroha hash marker set"
+        ));
     }
+    if payload.hash != expected_hash {
+        return Err(eyre!(
+            "pipeline status response hash {} does not match requested transaction {expected_hash}",
+            payload.hash
+        ));
+    }
+    if payload.scope != expected_scope {
+        return Err(eyre!(
+            "pipeline status response scope must be exactly `{expected_scope}`, got `{}`",
+            payload.scope,
+        ));
+    }
+    if !matches!(payload.resolved_from.as_str(), "cache" | "queue" | "state") {
+        return Err(eyre!(
+            "pipeline status response resolved_from must be exactly cache|queue|state, got `{}`",
+            payload.resolved_from
+        ));
+    }
+    tx_confirmation_status_from_pipeline_response(payload).map_or_else(
+        || {
+            Err(eyre!(
+                "unsupported pipeline status kind `{}` for transaction {expected_hash}",
+                payload.status.kind
+            ))
+        },
+        |_| Ok(()),
+    )
 }
-fn should_stop_waiting_on_pipeline_kind(
-    kind: &str,
-    terminal_statuses: &[TransactionWaitTerminalStatus],
-) -> bool {
-    matches!(kind, "Applied")
-        || terminal_statuses
-            .iter()
-            .any(|status| status.as_str().eq_ignore_ascii_case(kind))
-}
-fn transaction_wait_status_scope(
-    terminal_statuses: &[TransactionWaitTerminalStatus],
-) -> &'static str {
-    if terminal_statuses.iter().any(|status| {
-        matches!(
-            status,
-            TransactionWaitTerminalStatus::Queued
-                | TransactionWaitTerminalStatus::Approved
-                | TransactionWaitTerminalStatus::Committed
+fn validate_global_pipeline_status_response(
+    payload: &PipelineTransactionStatusResponse,
+    expected_hash: HashOf<SignedTransaction>,
+) -> Result<TxConfirmationStatus> {
+    validate_pipeline_status_response(payload, expected_hash, "global")?;
+    tx_confirmation_status_from_pipeline_response(payload).ok_or_else(|| {
+        eyre!(
+            "unsupported pipeline status kind `{}` for transaction {expected_hash}",
+            payload.status.kind
         )
-    }) {
-        "local"
-    } else {
-        "global"
-    }
-}
-fn should_error_on_unrequested_transaction_failure(
-    kind: &str,
-    terminal_statuses: &[TransactionWaitTerminalStatus],
-) -> bool {
-    matches!(kind, "Rejected" | "Expired")
-        && !terminal_statuses
-            .iter()
-            .any(|status| status.as_str().eq_ignore_ascii_case(kind))
-}
-fn format_transaction_wait_target(terminal_statuses: &[TransactionWaitTerminalStatus]) -> String {
-    terminal_statuses
-        .iter()
-        .map(|status| status.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
+    })
 }
 fn elapsed_ms_u64(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-}
-#[doc(hidden)]
-pub async fn listen_for_tx_confirmation_stream<S>(
-    event_iterator: &mut S,
-    hash: HashOf<SignedTransaction>,
-    max_queued_duration: Duration,
-) -> Result<HashOf<SignedTransaction>>
-where
-    S: Stream<Item = Result<EventBox>> + Unpin,
-{
-    listen_for_tx_confirmation_stream_with_status_check(
-        event_iterator,
-        hash,
-        max_queued_duration,
-        Duration::ZERO,
-        None,
-        || Ok(None),
-    )
-    .await
 }
 #[allow(clippy::too_many_lines)]
 async fn listen_for_tx_confirmation_stream_with_status_check<S, F>(
@@ -19031,22 +20166,19 @@ where
     S: Stream<Item = Result<EventBox>> + Unpin,
     F: FnMut() -> Result<Option<TxConfirmationStatus>>,
 {
+    if poll_interval == Duration::ZERO {
+        return Err(tx_confirmation_final_report(eyre!(
+            "transaction confirmation requires authoritative global status polling"
+        )));
+    }
     // Keep track of the block height in which the transaction was approved
     // so we can later detect the corresponding block finalization event.
     let mut block_height = None;
     // Track when the transaction first entered the queue.
     let mut queued_at: Option<tokio::time::Instant> = None;
-    let poll_enabled = poll_interval != Duration::ZERO;
-    let poll_interval = if poll_enabled {
-        poll_interval
-    } else {
-        Duration::from_secs(3600)
-    };
     let first_poll_at = tokio::time::Instant::now() + poll_interval;
     let mut poll = tokio::time::interval_at(first_poll_at, poll_interval);
-    if poll_enabled {
-        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    }
+    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut stream_open = true;
     let mut submit_result_receiver = submit_result_receiver;
     loop {
@@ -19084,7 +20216,7 @@ where
                     "transaction queued for too long"
                 )));
             }
-            _ = poll.tick(), if poll_enabled => {
+            _ = poll.tick() => {
                 match status_check() {
                     Ok(Some(status)) => match status {
                         TxConfirmationStatus::Queued => {
@@ -19177,7 +20309,7 @@ where
                         }
                         PipelineEventBox::Block(block_event) => {
                             let event_height = block_event.header().height();
-                            if block_height.is_none() && poll_enabled {
+                            if block_height.is_none() {
                                 match status_check() {
                                     Ok(Some(status)) => match status {
                                         TxConfirmationStatus::Queued => {
@@ -19238,9 +20370,6 @@ where
                                             status = ?block_event.status(),
                                             "transaction applied observed in block event"
                                         );
-                                        if !poll_enabled {
-                                            return Some(Ok(hash));
-                                        }
                                         match status_check() {
                                             Ok(Some(TxConfirmationStatus::Applied)) => {
                                                 return Some(Ok(hash));
@@ -19287,15 +20416,6 @@ where
                                             }
                                         }
                                     }
-                                    BlockStatus::Committed if !poll_enabled => {
-                                        debug!(
-                                            %hash,
-                                            height = block_event.header().height().get(),
-                                            status = ?block_event.status(),
-                                            "transaction committed observed in block event"
-                                        );
-                                        return Some(Ok(hash));
-                                    }
                                     BlockStatus::Committed => {
                                         debug!(
                                             %hash,
@@ -19335,26 +20455,12 @@ where
                     }
                     Some(Ok(_)) => {}
                     Some(Err(err)) => {
-                        if poll_enabled {
-                            warn!(%hash, ?err, "tx confirmation stream error; falling back to pipeline status query");
-                            stream_open = false;
-                        } else {
-                            return Err(err);
-                        }
+                        warn!(%hash, ?err, "tx confirmation stream error; falling back to pipeline status query");
+                        stream_open = false;
                     }
                     None => {
-                        if poll_enabled {
-                            warn!(%hash, "tx confirmation stream closed; falling back to pipeline status query");
-                            stream_open = false;
-                        } else {
-                            warn!(
-                                %hash,
-                                "event stream closed before tx reached committed/applied"
-                            );
-                            return Err(eyre!(
-                                "Connection dropped without `Committed/Applied` or `Rejected` event",
-                            ));
-                        }
+                        warn!(%hash, "tx confirmation stream closed; falling back to pipeline status query");
+                        stream_open = false;
                     }
                 }
             }
@@ -19374,37 +20480,20 @@ fn contains_tx_hash(
         _ => false,
     })
 }
-fn hashes_match(target: &HashOf<SignedTransaction>, entry_hash: impl AsRef<[u8]>) -> bool {
-    target.as_ref() == entry_hash.as_ref()
-}
 #[cfg(test)]
 mod subscription_http_tests {
     include!("client/subscription_http_tests.rs");
 }
 #[cfg(test)]
 mod tx_hash_tests {
-    use super::hashes_match;
     use crate::{
         crypto::{Hash, HashOf},
-        data_model::transaction::{SignedTransaction, TransactionEntrypoint},
+        data_model::transaction::SignedTransaction,
     };
     use eyre::eyre;
     use std::time::Duration;
-    #[test]
-    fn hashes_match_compares_bytes() {
-        let tx_hash: HashOf<SignedTransaction> =
-            HashOf::from_untyped_unchecked(Hash::prehashed([1_u8; Hash::LENGTH]));
-        let entry_match: HashOf<TransactionEntrypoint> =
-            HashOf::from_untyped_unchecked(Hash::prehashed([1_u8; Hash::LENGTH]));
-        let entry_other: HashOf<TransactionEntrypoint> =
-            HashOf::from_untyped_unchecked(Hash::prehashed([2_u8; Hash::LENGTH]));
-        let entry_bytes = [1_u8; Hash::LENGTH];
-        assert!(hashes_match(&tx_hash, entry_match.as_ref()));
-        assert!(!hashes_match(&tx_hash, entry_other.as_ref()));
-        assert!(hashes_match(&tx_hash, entry_bytes));
-    }
     #[tokio::test]
-    async fn retry_transaction_committed_retries_and_succeeds() {
+    async fn retry_transaction_final_status_retries_and_succeeds() {
         use std::sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
@@ -19412,7 +20501,7 @@ mod tx_hash_tests {
         // First attempt fails, second succeeds
         let attempts = Arc::new(AtomicUsize::new(0));
         let attempts_clone = Arc::clone(&attempts);
-        let result = super::Client::retry_transaction_committed(
+        let result = super::Client::retry_transaction_final_status(
             move || {
                 let count = attempts_clone.fetch_add(1, Ordering::SeqCst);
                 if count == 0 {
@@ -19434,14 +20523,14 @@ mod tx_hash_tests {
         assert!(attempts.load(Ordering::SeqCst) >= 3);
     }
     #[tokio::test]
-    async fn retry_transaction_committed_retries_on_empty_status() {
+    async fn retry_transaction_final_status_retries_on_empty_status() {
         use std::sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
         let attempts = Arc::new(AtomicUsize::new(0));
         let attempts_clone = Arc::clone(&attempts);
-        let result = super::Client::retry_transaction_committed(
+        let result = super::Client::retry_transaction_final_status(
             move || {
                 let count = attempts_clone.fetch_add(1, Ordering::SeqCst);
                 match count {
@@ -19461,14 +20550,14 @@ mod tx_hash_tests {
         assert!(attempts.load(Ordering::SeqCst) >= 4);
     }
     #[tokio::test]
-    async fn retry_transaction_committed_ignores_non_terminal_statuses() {
+    async fn retry_transaction_final_status_ignores_non_terminal_statuses() {
         use std::sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
         let attempts = Arc::new(AtomicUsize::new(0));
         let attempts_clone = Arc::clone(&attempts);
-        let result = super::Client::retry_transaction_committed(
+        let result = super::Client::retry_transaction_final_status(
             move || {
                 let count = attempts_clone.fetch_add(1, Ordering::SeqCst);
                 match count {
@@ -19489,8 +20578,8 @@ mod tx_hash_tests {
         assert!(attempts.load(Ordering::SeqCst) >= 4);
     }
     #[tokio::test]
-    async fn retry_transaction_committed_propagates_failure() {
-        let result = super::Client::retry_transaction_committed(
+    async fn retry_transaction_final_status_propagates_failure() {
+        let result = super::Client::retry_transaction_final_status(
             || Err(eyre!("always fails")),
             Duration::from_millis(0),
             1,
@@ -19499,14 +20588,14 @@ mod tx_hash_tests {
         assert!(result.is_err());
     }
     #[tokio::test]
-    async fn retry_transaction_committed_stops_on_final_error() {
+    async fn retry_transaction_final_status_stops_on_final_error() {
         use std::sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
         };
         let attempts = Arc::new(AtomicUsize::new(0));
         let attempts_clone = Arc::clone(&attempts);
-        let result = super::Client::retry_transaction_committed(
+        let result = super::Client::retry_transaction_final_status(
             move || {
                 attempts_clone.fetch_add(1, Ordering::SeqCst);
                 Err(super::tx_confirmation_final_report(eyre!(
@@ -19526,9 +20615,9 @@ mod tx_hash_tests {
         );
     }
     #[tokio::test]
-    async fn retry_transaction_committed_returns_rejection() {
+    async fn retry_transaction_final_status_returns_rejection() {
         use crate::data_model::{ValidationFail, transaction::error::TransactionRejectionReason};
-        let result = super::Client::retry_transaction_committed(
+        let result = super::Client::retry_transaction_final_status(
             || {
                 let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
                     "nope".to_string(),
@@ -19567,10 +20656,10 @@ mod tx_hash_tests {
         assert_eq!(filters, expected);
     }
     #[tokio::test]
-    async fn resolve_committed_fallback_returns_hash_or_fallback_error() {
+    async fn resolve_global_status_fallback_returns_hash_or_fallback_error() {
         let hash: HashOf<SignedTransaction> =
             HashOf::from_untyped_unchecked(Hash::prehashed([4_u8; Hash::LENGTH]));
-        let resolved = super::Client::resolve_committed_fallback(
+        let resolved = super::Client::resolve_global_status_fallback(
             || Ok(Some(super::TxConfirmationStatus::Applied)),
             hash,
             Duration::from_millis(0),
@@ -19581,7 +20670,7 @@ mod tx_hash_tests {
         .await
         .expect("expected fallback to resolve");
         assert_eq!(resolved, hash);
-        let err = super::Client::resolve_committed_fallback(
+        let err = super::Client::resolve_global_status_fallback(
             || Ok(None),
             hash,
             Duration::from_millis(0),
@@ -19605,14 +20694,14 @@ mod tx_hash_tests {
                 kind: "Rejected".to_owned(),
                 block_height: None,
             },
-            "auto".to_owned(),
+            "global".to_owned(),
             "state".to_owned(),
         );
         let status = super::tx_confirmation_status_from_pipeline_response(&payload);
         assert_eq!(status, Some(super::TxConfirmationStatus::Rejected(None)));
     }
     #[test]
-    fn tx_confirmation_status_from_pipeline_response_accepts_terminal_kinds() {
+    fn tx_confirmation_status_from_pipeline_response_maps_committed_and_applied_kinds() {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
         let committed_payload = PipelineTransactionStatusResponse::new(
             "deadbeef".to_owned(),
@@ -19620,7 +20709,7 @@ mod tx_hash_tests {
                 kind: "Committed".to_owned(),
                 block_height: None,
             },
-            "auto".to_owned(),
+            "global".to_owned(),
             "state".to_owned(),
         );
         let applied_payload = PipelineTransactionStatusResponse::new(
@@ -19629,7 +20718,7 @@ mod tx_hash_tests {
                 kind: "Applied".to_owned(),
                 block_height: None,
             },
-            "auto".to_owned(),
+            "global".to_owned(),
             "state".to_owned(),
         );
         assert_eq!(
@@ -19650,7 +20739,7 @@ mod tx_hash_tests {
                 kind: "Queued".to_owned(),
                 block_height: None,
             },
-            "auto".to_owned(),
+            "global".to_owned(),
             "queue".to_owned(),
         );
         let approved_payload = PipelineTransactionStatusResponse::new(
@@ -19659,7 +20748,7 @@ mod tx_hash_tests {
                 kind: "Approved".to_owned(),
                 block_height: Some(7),
             },
-            "auto".to_owned(),
+            "global".to_owned(),
             "state".to_owned(),
         );
         assert_eq!(
@@ -19671,27 +20760,6 @@ mod tx_hash_tests {
             Some(super::TxConfirmationStatus::Approved(
                 std::num::NonZeroU64::new(7)
             ))
-        );
-    }
-    #[test]
-    fn tx_confirmation_status_from_committed_result_maps_outcomes() {
-        use crate::data_model::{
-            ValidationFail,
-            transaction::{TransactionResult, error::TransactionRejectionReason},
-            trigger::DataTriggerSequence,
-        };
-        let ok_result = TransactionResult::new(Ok(DataTriggerSequence::default()));
-        assert_eq!(
-            super::tx_confirmation_status_from_committed_result(&ok_result),
-            super::TxConfirmationStatus::Applied
-        );
-        let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-            "nope".to_string(),
-        ));
-        let err_result = TransactionResult::new(Err(reason.clone()));
-        assert_eq!(
-            super::tx_confirmation_status_from_committed_result(&err_result),
-            super::TxConfirmationStatus::Rejected(Some(reason))
         );
     }
     #[test]
@@ -19722,94 +20790,10 @@ mod tx_hash_tests {
             "missing timeout context: {messages:?}"
         );
     }
-    #[test]
-    fn committed_transaction_matches_signed_hash_for_external_entrypoint() {
-        use crate::{
-            crypto::MerkleProof,
-            data_model::{
-                prelude::{AccountId, InstructionBox, TransactionBuilder},
-                query::CommittedTransaction,
-                transaction::{ExecutionStep, TransactionEntrypoint, TransactionResult},
-                trigger::DataTriggerSequence,
-            },
-        };
-        use iroha_primitives::const_vec::ConstVec;
-        let network_id = super::test_network_id();
-        let public_key: crate::crypto::PublicKey =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-                .parse()
-                .unwrap();
-        let authority = AccountId::new(public_key);
-        let private_key: crate::crypto::PrivateKey =
-            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
-                .parse()
-                .unwrap();
-        let tx = TransactionBuilder::new(
-            network_id,
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .try_sign(&private_key)
-        .expect("external entrypoint fixture transaction should sign");
-        let entry = TransactionEntrypoint::External(tx.clone());
-        let entry_hash = entry.hash();
-        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
-        let committed = CommittedTransaction {
-            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([1_u8; Hash::LENGTH])),
-            entrypoint_hash: entry_hash,
-            entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
-            entrypoint: entry,
-            result_hash: result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
-            result,
-            merge_inclusion: None,
-        };
-        assert!(super::Client::committed_transaction_matches_hash(
-            &committed,
-            tx.hash(),
-            entry_hash
-        ));
-        let other_hash: HashOf<SignedTransaction> =
-            HashOf::from_untyped_unchecked(Hash::prehashed([9_u8; Hash::LENGTH]));
-        assert!(super::Client::committed_transaction_matches_hash(
-            &committed, other_hash, entry_hash
-        ));
-        let time_entry = crate::data_model::trigger::TimeTriggerEntrypoint {
-            id: "trigger".parse().unwrap(),
-            instructions: ExecutionStep(ConstVec::<InstructionBox>::from(vec![])),
-            authority,
-        };
-        let time_entry_hash = time_entry.hash_as_entrypoint();
-        let time_result = TransactionResult::new(Ok(DataTriggerSequence::default()));
-        let time_committed = CommittedTransaction {
-            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([2_u8; Hash::LENGTH])),
-            entrypoint_hash: time_entry_hash,
-            entrypoint_proof: MerkleProof::from_audit_path(0, Vec::new()),
-            entrypoint: TransactionEntrypoint::Time(time_entry),
-            result_hash: time_result.hash(),
-            result_proof: MerkleProof::from_audit_path(0, Vec::new()),
-            result: time_result,
-            merge_inclusion: None,
-        };
-        assert!(super::Client::committed_transaction_matches_hash(
-            &time_committed,
-            tx.hash(),
-            time_entry_hash
-        ));
-        let mismatched_entry_hash: HashOf<TransactionEntrypoint> =
-            HashOf::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
-        assert!(!super::Client::committed_transaction_matches_hash(
-            &time_committed,
-            tx.hash(),
-            mismatched_entry_hash
-        ));
-    }
 }
 #[cfg(test)]
 mod tx_confirmation_stream_tests {
-    use super::{
-        listen_for_tx_confirmation_stream, listen_for_tx_confirmation_stream_with_status_check,
-    };
+    use super::listen_for_tx_confirmation_stream_with_status_check;
     use crate::{
         crypto::{Hash, HashOf},
         data_model::{
@@ -19894,9 +20878,16 @@ mod tx_confirmation_stream_tests {
             tokio::time::sleep(Duration::from_millis(5)).await;
             let _ = tx.send(Ok(queued_event));
         });
-        let err = listen_for_tx_confirmation_stream(&mut events, hash, Duration::from_millis(1))
-            .await
-            .expect_err("queued timeout should error");
+        let err = listen_for_tx_confirmation_stream_with_status_check(
+            &mut events,
+            hash,
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+            None,
+            || Ok(Some(super::TxConfirmationStatus::Queued)),
+        )
+        .await
+        .expect_err("queued timeout should error");
         assert!(err.to_string().contains("transaction queued for too long"));
     }
     #[tokio::test]
@@ -20006,23 +20997,25 @@ mod tx_confirmation_stream_tests {
         assert_eq!(result, hash);
     }
     #[tokio::test]
-    async fn committed_block_event_confirms_without_polling() {
+    async fn transaction_confirmation_rejects_disabled_authoritative_polling() {
         let hash: HashOf<SignedTransaction> =
             HashOf::from_untyped_unchecked(Hash::prehashed([15_u8; Hash::LENGTH]));
-        let height = std::num::NonZeroU64::new(16).expect("nonzero height");
-        let events = vec![
-            Ok::<_, eyre::Report>(transaction_event(hash, None, TransactionStatus::Queued)),
-            Ok(transaction_event(
-                hash,
-                Some(height),
-                TransactionStatus::Approved,
-            )),
-            Ok(block_event(height, BlockStatus::Committed)),
-        ];
-        let mut stream = stream::iter(events);
-        let result =
-            listen_for_tx_confirmation_stream(&mut stream, hash, Duration::from_secs(1)).await;
-        assert_eq!(result.unwrap(), hash);
+        let mut stream = stream::empty::<Result<EventBox, eyre::Report>>();
+        let error = listen_for_tx_confirmation_stream_with_status_check(
+            &mut stream,
+            hash,
+            Duration::from_secs(1),
+            Duration::ZERO,
+            None,
+            || Ok(Some(super::TxConfirmationStatus::Applied)),
+        )
+        .await
+        .expect_err("event-only transaction confirmation must be unavailable");
+        assert!(
+            error
+                .to_string()
+                .contains("requires authoritative global status polling")
+        );
     }
     #[tokio::test]
     async fn polling_block_event_waits_for_final_status() {
@@ -20853,7 +21846,10 @@ mod tests {
         fs,
         io::{Read, Write},
         net::TcpListener,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::{Duration, Instant},
     };
     use tempfile::tempdir;
@@ -21528,6 +22524,179 @@ mod tests {
         receipt.plan_hash = receipt.body.canonical_hash();
         receipt.signature = Signature::try_new(signer.private_key(), receipt.plan_hash.as_ref())
             .expect("re-sign onboarding receipt fixture");
+    }
+    fn prepared_binding_fixture(kind: &str) -> TairaPublicResetMutationBindingV1 {
+        TairaPublicResetMutationBindingV1 {
+            schema: TairaPublicResetMutationBindingV1::SCHEMA.to_owned(),
+            authorization_sha256: "11".repeat(32),
+            authorization_nonce: "reset_nonce_00000000000000000000".to_owned(),
+            kind: kind.to_owned(),
+            phase: format!("prepare_{kind}"),
+            idempotency_key: "22".repeat(32),
+            execution_expires_at_unix_ms: u64::MAX,
+        }
+    }
+    fn onboarding_current_state_fixture(
+        client: &Client,
+        account_id: &AccountId,
+        alias: &AccountAliasName,
+        account_exists: bool,
+        alias_target: Option<&AccountId>,
+        observed_block_height: u64,
+        block_seed: u8,
+    ) -> AccountOnboardingCurrentStateResponseV1 {
+        AccountOnboardingCurrentStateResponseV1 {
+            version: AccountOnboardingCurrentStateResponseV1::VERSION,
+            network_id: client.network_id,
+            account_id: account_id.to_string(),
+            alias: alias.to_string(),
+            account_exists,
+            alias_target_account_id: alias_target.map(ToString::to_string),
+            observed_block_height,
+            observed_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [block_seed; Hash::LENGTH],
+            )),
+        }
+    }
+    fn onboarding_current_state_http_response(
+        response: &AccountOnboardingCurrentStateResponseV1,
+    ) -> HttpResponse<Vec<u8>> {
+        json_response(
+            StatusCode::OK,
+            &norito::json::to_json(response).expect("encode onboarding current-state fixture"),
+        )
+    }
+    fn prepared_signature_fixture_vector(name: &str) -> (NetworkId, norito::json::Value) {
+        let fixture: norito::json::Value = norito::json::from_slice(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/prepared_transactions/prepared_transaction_signature_v1.json"
+        )))
+        .expect("decode shared prepared-transaction fixture");
+        let vector = fixture["vectors"]
+            .as_array()
+            .expect("prepared fixture vectors")
+            .iter()
+            .find(|vector| vector["name"].as_str() == Some(name))
+            .unwrap_or_else(|| panic!("missing prepared fixture vector `{name}`"));
+        let network_id = norito::json::from_value(vector["network_id"].clone())
+            .expect("decode prepared fixture network identity");
+        (network_id, vector["response"].clone())
+    }
+    fn onboarding_prepared_signature_fixture(
+        client: &mut Client,
+    ) -> AccountOnboardingPreparedTransactionV1 {
+        let (network_id, response) = prepared_signature_fixture_vector("onboarding_prepared");
+        client.network_id = network_id;
+        norito::json::from_value(response).expect("decode onboarding prepared fixture")
+    }
+    fn onboarding_proof_required_signature_fixture(
+        client: &mut Client,
+    ) -> AccountOnboardingProofRequiredPrepareResponseV1 {
+        let (network_id, response) = prepared_signature_fixture_vector("onboarding_proof_required");
+        client.network_id = network_id;
+        norito::json::from_value(response).expect("decode onboarding proof-required fixture")
+    }
+    fn faucet_prepared_signature_fixture(
+        client: &mut Client,
+    ) -> AccountFaucetPreparedTransactionV1 {
+        let (network_id, response) = prepared_signature_fixture_vector("faucet_prepared");
+        client.network_id = network_id;
+        norito::json::from_value(response).expect("decode faucet prepared fixture")
+    }
+    fn rebuild_prepared_transaction_for_binding(
+        transaction_hash_hex: &str,
+        signed_transaction_wire_hex: &str,
+        signed_transaction_wire_sha256: &str,
+        fee_payment: &FeePaymentIntent,
+        binding: &TairaPublicResetMutationBindingV1,
+        operation: &str,
+        semantic_hash_hex: &str,
+        signer: &KeyPair,
+    ) -> SignedTransaction {
+        let original = decode_canonical_prepared_transaction(
+            transaction_hash_hex,
+            signed_transaction_wire_hex,
+            signed_transaction_wire_sha256,
+        )
+        .expect("decode original prepared fixture transaction");
+        let Executable::Instructions(instructions) = original.instructions() else {
+            panic!("prepared fixture transaction must contain direct instructions");
+        };
+        TransactionBuilder::new(
+            *original
+                .network_id()
+                .expect("prepared fixture transaction network"),
+            original.authority().clone(),
+            fee_payment.clone(),
+        )
+        .with_metadata(
+            expected_prepared_transaction_metadata(binding, operation, semantic_hash_hex)
+                .expect("prepared fixture metadata"),
+        )
+        .with_instructions(instructions.as_ref().to_vec())
+        .sign(signer.private_key())
+    }
+    fn replace_onboarding_prepared_binding(
+        prepared: &mut AccountOnboardingPreparedTransactionV1,
+        binding: TairaPublicResetMutationBindingV1,
+    ) {
+        let signer = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
+            .expect("derive onboarding prepared fixture signer");
+        let transaction = rebuild_prepared_transaction_for_binding(
+            &prepared.transaction_hash_hex,
+            &prepared.signed_transaction_wire_hex,
+            &prepared.signed_transaction_wire_sha256,
+            &prepared.fee_payment,
+            &binding,
+            AccountOnboardingPreparedTransactionV1::OPERATION,
+            &prepared.semantic_hash_hex,
+            &signer,
+        );
+        let wire = transaction
+            .encode_wire_v1()
+            .expect("encode rebound onboarding transaction");
+        prepared.binding = binding;
+        prepared.transaction_hash_hex = hex::encode(transaction.hash().as_ref());
+        prepared.signed_transaction_wire_sha256 = hex::encode(Sha256::digest(&wire));
+        prepared.signed_transaction_wire_hex = hex::encode(wire);
+        let transcript = AccountOnboardingPreparedSignaturePayloadV1::from(&*prepared)
+            .signature_transcript()
+            .expect("encode rebound onboarding transcript");
+        let digest =
+            iroha_torii_shared::prepared_transaction::prepared_signature_digest_v1(&transcript);
+        prepared.server_signature = Signature::try_new(signer.private_key(), digest.as_ref())
+            .expect("sign rebound onboarding envelope");
+    }
+    fn replace_faucet_prepared_binding(
+        prepared: &mut AccountFaucetPreparedTransactionV1,
+        binding: TairaPublicResetMutationBindingV1,
+    ) {
+        let signer = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
+            .expect("derive faucet prepared fixture signer");
+        let transaction = rebuild_prepared_transaction_for_binding(
+            &prepared.transaction_hash_hex,
+            &prepared.signed_transaction_wire_hex,
+            &prepared.signed_transaction_wire_sha256,
+            &prepared.fee_payment,
+            &binding,
+            AccountFaucetPreparedTransactionV1::OPERATION,
+            &prepared.semantic_hash_hex,
+            &signer,
+        );
+        let wire = transaction
+            .encode_wire_v1()
+            .expect("encode rebound faucet transaction");
+        prepared.binding = binding;
+        prepared.transaction_hash_hex = hex::encode(transaction.hash().as_ref());
+        prepared.signed_transaction_wire_sha256 = hex::encode(Sha256::digest(&wire));
+        prepared.signed_transaction_wire_hex = hex::encode(wire);
+        let transcript = AccountFaucetPreparedSignaturePayloadV1::from(&*prepared)
+            .signature_transcript()
+            .expect("encode rebound faucet transcript");
+        let digest =
+            iroha_torii_shared::prepared_transaction::prepared_signature_digest_v1(&transcript);
+        prepared.server_signature = Signature::try_new(signer.private_key(), digest.as_ref())
+            .expect("sign rebound faucet envelope");
     }
     fn alias_renewal_request_fixture(client: &Client) -> AliasLeaseRenewPlanRequestV1 {
         let alias = ResolvedAccountAliasV1::new(
@@ -22408,6 +23577,63 @@ mod tests {
         assert!(snapshot.body.is_empty());
     }
     #[test]
+    fn sponsored_onboarding_v1_json_requires_every_request_and_receipt_slot() {
+        let client = client_with_base_url(base_url());
+        let (request, receipt) = account_onboarding_plan_fixture(&client);
+
+        let request_json =
+            norito::json::to_value(&request).expect("encode exact V1 onboarding request");
+        assert_eq!(
+            norito::json::from_value::<AccountOnboardingPlanRequestV1>(request_json.clone())
+                .expect("round-trip exact V1 onboarding request"),
+            request
+        );
+        let mut missing_permissions = request_json;
+        assert!(
+            missing_permissions
+                .as_object_mut()
+                .expect("onboarding request object")
+                .remove("permissions")
+                .is_some()
+        );
+        assert!(
+            norito::json::from_value::<AccountOnboardingPlanRequestV1>(missing_permissions)
+                .is_err(),
+            "V1 request must not default an omitted permissions vector"
+        );
+
+        let receipt_json =
+            norito::json::to_value(&receipt).expect("encode exact V1 onboarding receipt");
+        assert_eq!(
+            norito::json::from_value::<AccountOnboardingPlanReceiptV1>(receipt_json.clone())
+                .expect("round-trip exact V1 onboarding receipt"),
+            receipt
+        );
+        for path in [
+            &["body", "request", "permissions"][..],
+            &["body", "owner_auto_renew_instruction"][..],
+            &["body", "acquisition", "pricing_class_hint"][..],
+            &["body", "resource", "quote"][..],
+            &["body", "resource", "instruction_index"][..],
+        ] {
+            let mut missing = receipt_json.clone();
+            let mut object = missing.as_object_mut().expect("onboarding receipt object");
+            for segment in &path[..path.len() - 1] {
+                object = object
+                    .get_mut(*segment)
+                    .and_then(norito::json::Value::as_object_mut)
+                    .expect("nested onboarding receipt object");
+            }
+            let field = path[path.len() - 1];
+            assert!(object.remove(field).is_some(), "fixture contains {field}");
+            assert!(
+                norito::json::from_value::<AccountOnboardingPlanReceiptV1>(missing).is_err(),
+                "V1 receipt must reject omitted field path {}",
+                path.join(".")
+            );
+        }
+    }
+    #[test]
     fn sponsored_onboarding_plan_is_token_header_only_and_verified() {
         let client = client_with_base_url(base_url());
         let (request, receipt) = account_onboarding_plan_fixture(&client);
@@ -22433,123 +23659,421 @@ mod tests {
         assert_eq!(decoded, request);
     }
     #[test]
-    fn sponsored_onboarding_apply_forwards_exact_receipt_without_secret_body_fields() {
+    fn sponsored_onboarding_prepare_forwards_exact_receipt_and_binding_without_token_body() {
         let client = client_with_base_url(base_url());
-        let (_, receipt) = account_onboarding_plan_fixture(&client);
+        let (request, receipt) = account_onboarding_plan_fixture(&client);
+        let binding = prepared_binding_fixture("onboarding");
         let token = "A".repeat(32);
-        let expected = AccountOnboardingResponseV1 {
-            account_id: receipt.body.request.account_id.clone(),
-            alias: receipt.body.request.alias.clone(),
-            tx_hash_hex: Some("ab".repeat(32)),
-            status: AccountOnboardingStatusV1::Queued,
-            disposition: AliasPlanDispositionV1::Create,
-        };
-        let response_body = norito::json::to_json(&AccountOnboardingResponseWireV1 {
-            account_id: expected.account_id.clone(),
-            alias: expected.alias.clone(),
-            tx_hash_hex: expected.tx_hash_hex.clone(),
-            status: "Queued".to_owned(),
-            disposition: expected.disposition,
-        })
-        .expect("encode onboarding result");
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::ACCEPTED, &response_body);
-        let actual = with_mock_http(respond_with(&store, response), || {
+        let response = json_response(StatusCode::OK, "{}");
+        with_mock_http(respond_with(&store, response), || {
             client
-                .apply_account_onboarding(&receipt, &token)
-                .expect("apply sponsored onboarding receipt")
+                .post_account_onboarding_prepare(&request, &receipt, &binding, &token)
+                .expect("prepare sponsored onboarding receipt")
         });
-        assert_eq!(actual, expected);
         let snapshots = store.lock().expect("snapshot store");
         let snapshot = snapshots.first().expect("snapshot");
         assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/accounts/onboard");
+        assert_eq!(snapshot.url.path(), "/v1/accounts/onboard/prepare");
         let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
         assert_eq!(headers.get("x-iroha-onboarding-token"), Some(&token));
         assert!(!String::from_utf8_lossy(&snapshot.body).contains(&token));
-        let decoded: AccountOnboardingApplyRequestV1 =
-            norito::json::from_slice(&snapshot.body).expect("typed apply request");
+        let decoded: AccountOnboardingPrepareRequestV1 =
+            norito::json::from_slice(&snapshot.body).expect("typed prepare request");
+        assert_eq!(decoded.schema, AccountOnboardingPrepareRequestV1::SCHEMA);
+        assert_eq!(decoded.binding, binding);
         assert_eq!(decoded.receipt, receipt);
     }
     #[test]
-    fn sponsored_onboarding_disposition_transitions_are_monotonic() {
-        use AliasPlanDispositionV1::{Conflict, Create, NoOp, Repair};
-        for live in [Create, Repair, NoOp] {
-            assert!(onboarding_disposition_transition_allowed(Create, live));
-        }
-        assert!(onboarding_disposition_transition_allowed(Repair, Repair));
-        assert!(onboarding_disposition_transition_allowed(Repair, NoOp));
-        assert!(onboarding_disposition_transition_allowed(NoOp, NoOp));
-        for (planned, live) in [
-            (NoOp, Repair),
-            (NoOp, Create),
-            (Repair, Create),
-            (Conflict, NoOp),
-            (Create, Conflict),
-        ] {
-            assert!(!onboarding_disposition_transition_allowed(planned, live));
+    fn sponsored_onboarding_requires_the_callers_exact_original_request_before_dispatch() {
+        let client = client_with_base_url(base_url());
+        let (request, receipt) = account_onboarding_plan_fixture(&client);
+        let mut substituted_request = request.clone();
+        substituted_request.permissions.clear();
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let error = with_mock_http(respond_with(&store, response), || {
+            client
+                .post_account_onboarding_prepare(
+                    &substituted_request,
+                    &receipt,
+                    &prepared_binding_fixture("onboarding"),
+                    &"R".repeat(32),
+                )
+                .expect_err("a substituted original request must fail before prepare dispatch")
+        });
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the exact normalized request"),
+            "unexpected error: {error:#}"
+        );
+        assert!(
+            store.lock().expect("snapshot store").is_empty(),
+            "request substitution must not dispatch HTTP"
+        );
+    }
+    #[test]
+    fn prepared_onboarding_verifiers_and_submit_require_the_callers_original_intent() {
+        let mut client = client_with_base_url(base_url());
+        let prepared = onboarding_prepared_signature_fixture(&mut client);
+        let receipt = prepared.receipt.clone();
+        let request = receipt.body.request.clone();
+        client
+            .verify_account_onboarding_prepared_transaction(
+                &request,
+                &prepared,
+                &receipt,
+                &prepared.binding,
+            )
+            .expect("verify the exact prepared fixture");
+
+        let proof_required = onboarding_proof_required_signature_fixture(&mut client);
+        client
+            .verify_account_onboarding_proof_required_result(
+                &request,
+                &proof_required,
+                &receipt,
+                &proof_required.binding,
+            )
+            .expect("verify the exact proof-required fixture");
+
+        let mut substituted_request = request;
+        substituted_request
+            .permissions
+            .push("CanSetKeyValueInAccount".to_owned());
+        assert!(
+            client
+                .verify_account_onboarding_prepared_transaction(
+                    &substituted_request,
+                    &prepared,
+                    &receipt,
+                    &prepared.binding,
+                )
+                .expect_err("prepared verification must reject a substituted request")
+                .to_string()
+                .contains("does not match the exact normalized request")
+        );
+        assert!(
+            client
+                .verify_account_onboarding_proof_required_result(
+                    &substituted_request,
+                    &proof_required,
+                    &receipt,
+                    &proof_required.binding,
+                )
+                .expect_err("proof-required verification must reject a substituted request")
+                .to_string()
+                .contains("does not match the exact normalized request")
+        );
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, "{}");
+        with_mock_http(respond_with(&store, response), || {
+            let _ = client
+                .post_prepared_account_onboarding(&substituted_request, &prepared, &"S".repeat(32))
+                .expect_err("submit must reject a substituted original request");
+        });
+        assert!(
+            store.lock().expect("snapshot store").is_empty(),
+            "request substitution must not dispatch submit HTTP"
+        );
+    }
+    #[test]
+    fn atomic_onboarding_state_uses_one_exact_post_and_returns_its_anchor() {
+        let client = client_with_base_url(base_url());
+        let account_id = parse_canonical_i105_account_id(TEST_WORKER_I105, "fixture account")
+            .expect("canonical fixture account");
+        let alias = "merchant@banka.paynet"
+            .parse::<AccountAliasName>()
+            .expect("canonical alias");
+        let response = onboarding_current_state_fixture(
+            &client,
+            &account_id,
+            &alias,
+            true,
+            Some(&account_id),
+            41,
+            0x41,
+        );
+        let block_hash = response.observed_block_hash;
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let outcome = with_mock_http(
+            respond_with(
+                &snapshots,
+                onboarding_current_state_http_response(&response),
+            ),
+            || client.prove_account_onboarding_current_state(&account_id, &alias),
+        )
+        .expect("exact atomic onboarding state");
+        assert_eq!(
+            outcome,
+            AccountOnboardingCurrentStateV1::Applied {
+                block_height: NonZeroU64::new(41).expect("nonzero fixture height"),
+                block_hash,
+            }
+        );
+
+        let snapshots = snapshots.lock().expect("snapshot store");
+        assert_eq!(snapshots.len(), 1, "proof must be one atomic request");
+        let snapshot = &snapshots[0];
+        assert_eq!(snapshot.url.path(), "/v1/accounts/onboarding/current-state");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        let decoded: AccountOnboardingCurrentStateRequestV1 =
+            norito::json::from_slice(&snapshot.body).expect("decode exact atomic request");
+        assert_eq!(
+            decoded,
+            AccountOnboardingCurrentStateRequestV1::new(&account_id, &alias)
+        );
+    }
+    #[test]
+    fn atomic_onboarding_state_classifies_absent_and_conflicting_aliases() {
+        let client = client_with_base_url(base_url());
+        let account_id = parse_canonical_i105_account_id(TEST_WORKER_I105, "fixture account")
+            .expect("canonical fixture account");
+        let conflicting_account =
+            parse_canonical_i105_account_id(TEST_AUDITOR_I105, "conflicting fixture account")
+                .expect("canonical conflicting account");
+        let alias = "merchant@banka.paynet"
+            .parse::<AccountAliasName>()
+            .expect("canonical alias");
+        for (target, conflict) in [(None, false), (Some(&conflicting_account), true)] {
+            let response = onboarding_current_state_fixture(
+                &client,
+                &account_id,
+                &alias,
+                true,
+                target,
+                77,
+                0x77,
+            );
+            let block_hash = response.observed_block_hash;
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let outcome = with_mock_http(
+                respond_with(
+                    &snapshots,
+                    onboarding_current_state_http_response(&response),
+                ),
+                || client.prove_account_onboarding_current_state(&account_id, &alias),
+            )
+            .expect("alias state is a typed atomic result");
+            let expected = if conflict {
+                AccountOnboardingCurrentStateV1::AliasConflict {
+                    block_height: NonZeroU64::new(77).expect("nonzero fixture height"),
+                    block_hash,
+                }
+            } else {
+                AccountOnboardingCurrentStateV1::AliasAbsent {
+                    block_height: NonZeroU64::new(77).expect("nonzero fixture height"),
+                    block_hash,
+                }
+            };
+            assert_eq!(outcome, expected);
+            assert_eq!(snapshots.lock().expect("snapshot store").len(), 1);
         }
     }
     #[test]
-    fn sponsored_onboarding_apply_rejects_inconsistent_status_hash_or_disposition() {
+    fn atomic_onboarding_state_rejects_substitutions_zero_height_and_absent_account() {
         let client = client_with_base_url(base_url());
-        let (_, receipt) = account_onboarding_plan_fixture(&client);
-        let token = "R".repeat(32);
-        let apply = |http_status, status: &str, disposition, tx_hash_hex: Option<String>| {
-            let body = norito::json::to_json(&AccountOnboardingResponseWireV1 {
-                account_id: receipt.body.request.account_id.clone(),
-                alias: receipt.body.request.alias.clone(),
-                tx_hash_hex,
-                status: status.to_owned(),
-                disposition,
-            })
-            .expect("encode onboarding response");
-            let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let account_id = parse_canonical_i105_account_id(TEST_WORKER_I105, "fixture account")
+            .expect("canonical fixture account");
+        let alias = "merchant@banka.paynet"
+            .parse::<AccountAliasName>()
+            .expect("canonical alias");
+        let exact = onboarding_current_state_fixture(
+            &client,
+            &account_id,
+            &alias,
+            true,
+            Some(&account_id),
+            81,
+            0x81,
+        );
+        let mut wrong_version = exact.clone();
+        wrong_version.version += 1;
+        let mut wrong_network = exact.clone();
+        wrong_network.network_id = foreign_alias_plan_network_id();
+        let mut wrong_account = exact.clone();
+        wrong_account.account_id = TEST_AUDITOR_I105.to_owned();
+        let mut wrong_alias = exact.clone();
+        wrong_alias.alias = "other@banka.paynet".to_owned();
+        let mut zero_height = exact.clone();
+        zero_height.observed_block_height = 0;
+        let mut absent_account = exact;
+        absent_account.account_exists = false;
+        absent_account.alias_target_account_id = None;
+
+        for (label, response) in [
+            ("version substitution", wrong_version),
+            ("network substitution", wrong_network),
+            ("account substitution", wrong_account),
+            ("alias substitution", wrong_alias),
+            ("zero height", zero_height),
+            ("absent expected account", absent_account),
+        ] {
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
             with_mock_http(
-                respond_with(&store, json_response(http_status, &body)),
-                || client.apply_account_onboarding(&receipt, &token),
+                respond_with(
+                    &snapshots,
+                    onboarding_current_state_http_response(&response),
+                ),
+                || client.prove_account_onboarding_current_state(&account_id, &alias),
             )
-        };
-        let ancillary_repair = apply(
-            StatusCode::ACCEPTED,
-            "Repaired",
-            AliasPlanDispositionV1::NoOp,
-            Some("cd".repeat(32)),
-        )
-        .expect("create plan may become an ancillary-only repair");
-        assert_eq!(ancillary_repair.status, AccountOnboardingStatusV1::Repaired);
-        let error = apply(
-            StatusCode::ACCEPTED,
-            "Queued",
-            AliasPlanDispositionV1::Repair,
-            Some("ab".repeat(32)),
-        )
-        .expect_err("Queued must report create");
-        assert!(error.to_string().contains("queued account onboarding"));
-        let error = apply(
-            StatusCode::ACCEPTED,
-            "Repaired",
-            AliasPlanDispositionV1::Conflict,
-            Some("ab".repeat(32)),
-        )
-        .expect_err("conflict must never be accepted");
-        assert!(error.to_string().contains("allowed transition"));
-        let error = apply(
-            StatusCode::ACCEPTED,
-            "Queued",
-            AliasPlanDispositionV1::Create,
-            Some("AB".repeat(32)),
-        )
-        .expect_err("non-canonical transaction hashes must fail");
-        assert!(error.to_string().contains("tx_hash_hex"));
-        let error = apply(
-            StatusCode::OK,
-            "Unchanged",
-            AliasPlanDispositionV1::NoOp,
-            Some("ab".repeat(32)),
-        )
-        .expect_err("unchanged responses must omit a transaction hash");
-        assert!(error.to_string().contains("unchanged account onboarding"));
+            .expect_err(label);
+            assert_eq!(
+                snapshots.lock().expect("snapshot store").len(),
+                1,
+                "{label}"
+            );
+        }
+    }
+    #[test]
+    fn atomic_onboarding_state_rejects_noncanonical_and_open_responses() {
+        let client = client_with_base_url(base_url());
+        let account_id = parse_canonical_i105_account_id(TEST_WORKER_I105, "fixture account")
+            .expect("canonical fixture account");
+        let alias = "merchant@banka.paynet"
+            .parse::<AccountAliasName>()
+            .expect("canonical alias");
+        let exact = onboarding_current_state_fixture(
+            &client,
+            &account_id,
+            &alias,
+            true,
+            Some(&account_id),
+            88,
+            0x88,
+        );
+        let mut noncanonical_target = exact.clone();
+        noncanonical_target.alias_target_account_id = Some(format!(" {TEST_WORKER_I105} "));
+        let mut open_response = norito::json::to_value(&exact).expect("encode response value");
+        open_response
+            .as_object_mut()
+            .expect("response object")
+            .insert(
+                "legacy_account_state".to_owned(),
+                JsonValue::from("applied"),
+            );
+        let canonical_body = norito::json::to_json(&exact).expect("encode canonical response");
+        let canonical_hash = exact.observed_block_hash.to_string();
+        let lowercase_hash = canonical_hash.to_ascii_lowercase();
+        assert_ne!(canonical_hash, lowercase_hash);
+        let noncanonical_hash_body = canonical_body.replace(&canonical_hash, &lowercase_hash);
+
+        for (label, response) in [
+            (
+                "noncanonical alias target",
+                onboarding_current_state_http_response(&noncanonical_target),
+            ),
+            (
+                "unknown compatibility field",
+                json_response(
+                    StatusCode::OK,
+                    &norito::json::to_json(&open_response).expect("encode open response"),
+                ),
+            ),
+            (
+                "noncanonical block hash",
+                json_response(StatusCode::OK, &noncanonical_hash_body),
+            ),
+            (
+                "non-final HTTP status",
+                json_response(StatusCode::ACCEPTED, &canonical_body),
+            ),
+        ] {
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            with_mock_http(respond_with(&snapshots, response), || {
+                client.prove_account_onboarding_current_state(&account_id, &alias)
+            })
+            .expect_err(label);
+            assert_eq!(
+                snapshots.lock().expect("snapshot store").len(),
+                1,
+                "{label}"
+            );
+        }
+    }
+    #[test]
+    fn expired_prepared_bindings_verify_durably_but_never_dispatch_submit_http() {
+        let mut client = client_with_base_url(base_url());
+        let mut onboarding = onboarding_prepared_signature_fixture(&mut client);
+        let mut expired_onboarding_binding = onboarding.binding.clone();
+        expired_onboarding_binding.execution_expires_at_unix_ms = 1;
+        replace_onboarding_prepared_binding(&mut onboarding, expired_onboarding_binding.clone());
+        let request = onboarding.receipt.body.request.clone();
+        client
+            .verify_account_onboarding_prepared_transaction(
+                &request,
+                &onboarding,
+                &onboarding.receipt,
+                &expired_onboarding_binding,
+            )
+            .expect("durable onboarding verification remains expiry tolerant");
+
+        let onboarding_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, "{}");
+        let error = with_mock_http(respond_with(&onboarding_store, response), || {
+            client
+                .post_prepared_account_onboarding(&request, &onboarding, &"E".repeat(32))
+                .expect_err("expired onboarding submit must fail")
+        });
+        assert!(error.to_string().contains("expired"));
+        assert!(
+            onboarding_store
+                .lock()
+                .expect("onboarding snapshot store")
+                .is_empty(),
+            "expired onboarding submit must not dispatch HTTP"
+        );
+
+        let mut faucet = faucet_prepared_signature_fixture(&mut client);
+        let mut expired_faucet_binding = faucet.binding.clone();
+        expired_faucet_binding.execution_expires_at_unix_ms = 1;
+        replace_faucet_prepared_binding(&mut faucet, expired_faucet_binding.clone());
+        client
+            .verify_account_faucet_prepared_transaction(
+                &faucet,
+                &faucet.claim,
+                &expired_faucet_binding,
+            )
+            .expect("durable faucet verification remains expiry tolerant");
+
+        let faucet_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::ACCEPTED, "{}");
+        let error = with_mock_http(respond_with(&faucet_store, response), || {
+            client
+                .post_prepared_account_faucet(&faucet)
+                .expect_err("expired faucet submit must fail")
+        });
+        assert!(error.to_string().contains("expired"));
+        assert!(
+            faucet_store
+                .lock()
+                .expect("faucet snapshot store")
+                .is_empty(),
+            "expired faucet submit must not dispatch HTTP"
+        );
+    }
+    #[test]
+    fn prepared_submit_response_is_exactly_bound_and_closed() {
+        let binding = prepared_binding_fixture("faucet");
+        let hash = "ab".repeat(32);
+        let body = norito::json::to_json(&PreparedTransactionSubmitResponseWireV1 {
+            schema: "iroha.taira.prepared-transaction-submit.v1".to_owned(),
+            binding: binding.clone(),
+            operation: "faucet".to_owned(),
+            transaction_hash_hex: hash.clone(),
+            outcome: "Pending".to_owned(),
+        })
+        .expect("encode submit response");
+        let response = json_response(StatusCode::ACCEPTED, &body);
+        let parsed = parse_prepared_submit_response(&response, &binding, "faucet", &hash)
+            .expect("parse exact response");
+        assert_eq!(parsed.outcome, PreparedTransactionOutcomeV1::Pending);
+        assert!(
+            parse_prepared_submit_response(&response, &binding, "faucet", &"cd".repeat(32))
+                .is_err()
+        );
     }
     #[test]
     fn sponsored_onboarding_rejects_same_label_foreign_genesis_receipt() {
@@ -22611,7 +24135,12 @@ mod tests {
         receipt.body.request.alias = "substituted@paynet".to_owned();
         assert!(
             client
-                .post_account_onboarding_apply(&receipt, &"T".repeat(32))
+                .post_account_onboarding_prepare(
+                    &request,
+                    &receipt,
+                    &prepared_binding_fixture("onboarding"),
+                    &"T".repeat(32),
+                )
                 .expect_err("tampered receipt rejected")
                 .to_string()
                 .contains("hash or authority signature")
@@ -24588,22 +26117,25 @@ mod tests {
     fn get_uaid_portfolio_parses_payload() {
         let client = client_with_base_url(base_url());
         let uaid_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let account_id = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
+        let asset_definition_id = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let asset_id = format!("{asset_definition_id}#{account_id}#dataspace:7");
         let payload = format!(
             r#"{{
   "uaid":"uaid:{uaid_hex}",
-  "totals":{{"accounts":2,"positions":3}},
+  "totals":{{"accounts":1,"positions":1}},
   "dataspaces":[
     {{
       "dataspace_id":7,
       "dataspace_alias":"retail",
       "accounts":[
         {{
-          "account_id":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+          "account_id":"{account_id}",
           "label":"primary",
           "assets":[
             {{
-              "asset_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "asset_definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+              "asset_id":"{asset_id}",
+              "asset_definition_id":"{asset_definition_id}",
               "quantity":"500"
             }}
           ]
@@ -24613,27 +26145,23 @@ mod tests {
   ]
 }}"#
         );
-        let uaid_upper = uaid_hex.to_uppercase();
         let (result, snapshot) = capture_request(json_response(StatusCode::OK, &payload), || {
-            client.get_uaid_portfolio(&format!("UAID:{uaid_upper}"))
+            client.get_uaid_portfolio(&format!("uaid:{uaid_hex}"))
         });
         let result = result.expect("portfolio call succeeds");
         assert_eq!(result.uaid, format!("uaid:{uaid_hex}"));
-        assert_eq!(result.totals.accounts, 2);
-        assert_eq!(result.totals.positions, 3);
+        assert_eq!(result.totals.accounts, 1);
+        assert_eq!(result.totals.positions, 1);
         assert_eq!(result.dataspaces.len(), 1);
         let dataspace = &result.dataspaces[0];
         assert_eq!(dataspace.dataspace_id, 7);
         assert_eq!(dataspace.dataspace_alias.as_deref(), Some("retail"));
         assert_eq!(dataspace.accounts.len(), 1);
         assert_eq!(dataspace.accounts[0].assets.len(), 1);
-        assert_eq!(
-            dataspace.accounts[0].assets[0].asset_id,
-            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
-        );
+        assert_eq!(dataspace.accounts[0].assets[0].asset_id, asset_id);
         assert_eq!(
             dataspace.accounts[0].assets[0].asset_definition_id,
-            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            asset_definition_id
         );
         assert_eq!(dataspace.accounts[0].assets[0].quantity, "500");
         assert_eq!(snapshot.method, HttpMethod::GET);
@@ -24689,6 +26217,7 @@ mod tests {
     fn get_uaid_bindings_parses_payload() {
         let client = client_with_base_url(base_url());
         let uaid_hex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab";
+        let account_id = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
         let payload = format!(
             r#"{{
   "uaid":"uaid:{uaid_hex}",
@@ -24696,15 +26225,12 @@ mod tests {
     {{
       "dataspace_id":0,
       "dataspace_alias":"universal",
-      "accounts":["sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"]
+      "accounts":["{account_id}"]
     }},
     {{
       "dataspace_id":11,
       "dataspace_alias":"cbdc",
-      "accounts":[
-        "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
-        "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
-      ]
+      "accounts":["{account_id}"]
     }}
   ]
 }}"#
@@ -24714,7 +26240,7 @@ mod tests {
         });
         let result = result.expect("bindings call succeeds");
         assert_eq!(result.dataspaces.len(), 2);
-        assert_eq!(result.dataspaces[1].accounts.len(), 2);
+        assert_eq!(result.dataspaces[1].accounts.len(), 1);
         assert_eq!(
             snapshot.url.path(),
             format!("/v1/space-directory/uaids/uaid:{uaid_hex}")
@@ -24732,6 +26258,8 @@ mod tests {
             r#"{{
   "uaid":"uaid:{uaid}",
   "total":1,
+  "has_more":false,
+  "count_mode":"exact",
   "manifests":[
     {{
       "dataspace_id":11,
@@ -24753,12 +26281,15 @@ mod tests {
             status: Some(UaidManifestStatusFilter::Inactive),
             limit: Some(5),
             offset: Some(2),
+            count_mode: Some(UaidManifestCountMode::Exact),
         };
         let (result, snapshot) = capture_request(json_response(StatusCode::OK, &payload), || {
             client.get_uaid_manifests(&format!("uaid:{uaid_hex}"), Some(query))
         });
         let result = result.expect("manifests call succeeds");
-        assert_eq!(result.total, Some(1));
+        assert_eq!(result.total, 1);
+        assert!(!result.has_more);
+        assert_eq!(result.count_mode, UaidManifestCountMode::Exact);
         assert_eq!(result.manifests.len(), 1);
         let record = &result.manifests[0];
         assert_eq!(record.status, UaidManifestStatus::Active);
@@ -24771,8 +26302,114 @@ mod tests {
         );
         assert_eq!(
             snapshot.url.query(),
-            Some("dataspace=11&status=inactive&limit=5&offset=2")
+            Some("dataspace=11&status=inactive&limit=5&offset=2&count_mode=exact")
         );
+    }
+    #[test]
+    fn uaid_portfolio_response_rejects_noncanonical_or_inconsistent_payloads() {
+        let expected = "uaid:1111111111111111111111111111111111111111111111111111111111111111";
+        let mismatched = "uaid:3333333333333333333333333333333333333333333333333333333333333333";
+        let invalid_payloads = [
+            format!(r#"{{"uaid":"{expected}","dataspaces":[]}}"#),
+            format!(
+                r#"{{"uaid":"{expected}","totals":{{"accounts":"0","positions":0}},"dataspaces":[]}}"#
+            ),
+            format!(
+                r#"{{"uaid":"{expected}","totals":{{"accounts":0,"positions":0}},"dataspaces":null}}"#
+            ),
+            format!(
+                r#"{{"uaid":"{mismatched}","totals":{{"accounts":0,"positions":0}},"dataspaces":[]}}"#
+            ),
+            format!(
+                r#"{{"uaid":"{expected}","totals":{{"accounts":1,"positions":0}},"dataspaces":[]}}"#
+            ),
+            format!(
+                r#"{{"uaid":"{expected}","totals":{{"accounts":0,"positions":0}},"dataspaces":[],"legacy":true}}"#
+            ),
+        ];
+        for payload in invalid_payloads {
+            let value: JsonValue =
+                norito::json::from_str(&payload).expect("test payload must be valid JSON");
+            assert!(
+                UaidPortfolioResponse::from_value(value, expected).is_err(),
+                "noncanonical portfolio payload must fail: {payload}"
+            );
+        }
+    }
+    #[test]
+    fn uaid_bindings_response_rejects_noncanonical_accounts_and_legacy_shapes() {
+        let expected = "uaid:1111111111111111111111111111111111111111111111111111111111111111";
+        let account = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
+        let other_account = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
+        let invalid_payloads = [
+            format!(r#"{{"uaid":"{expected}","dataspaces":[{{"dataspace_id":7,"accounts":[]}}]}}"#),
+            format!(
+                r#"{{"uaid":"{expected}","dataspaces":[{{"dataspace_id":7,"dataspace_alias":null,"accounts":null}}]}}"#
+            ),
+            format!(
+                r#"{{"uaid":"{expected}","dataspaces":[{{"dataspace_id":7,"dataspace_alias":null,"accounts":[" {account}"]}}]}}"#
+            ),
+            format!(
+                r#"{{"uaid":"{expected}","dataspaces":[{{"dataspace_id":7,"dataspace_alias":null,"accounts":["{account}","{other_account}"]}}]}}"#
+            ),
+            format!(
+                r#"{{"uaid":"{expected}","dataspaces":[{{"dataspace_id":7,"dataspace_alias":null,"accounts":["{account}"]}},{{"dataspace_id":8,"dataspace_alias":null,"accounts":["{other_account}"]}}]}}"#
+            ),
+        ];
+        for payload in invalid_payloads {
+            let value: JsonValue =
+                norito::json::from_str(&payload).expect("test payload must be valid JSON");
+            assert!(
+                UaidBindingsResponse::from_value(value, expected).is_err(),
+                "noncanonical bindings payload must fail: {payload}"
+            );
+        }
+    }
+    #[test]
+    fn uaid_manifests_response_rejects_noncanonical_page_and_record_metadata() {
+        let expected = "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11";
+        let manifest_hash = "b1".repeat(32);
+        let manifest_json = include_str!(
+            "../../../fixtures/space_directory/capability/cbdc_wholesale.manifest.json"
+        );
+        let valid = format!(
+            r#"{{
+  "uaid":"{expected}",
+  "total":1,
+  "has_more":false,
+  "count_mode":"exact",
+  "manifests":[{{
+    "dataspace_id":11,
+    "dataspace_alias":"cbdc",
+    "manifest_hash":"{manifest_hash}",
+    "status":"Active",
+    "lifecycle":{{"activated_epoch":4097,"expired_epoch":null,"revocation":null}},
+    "accounts":["sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"],
+    "manifest":{manifest}
+  }}]
+}}"#,
+            manifest = manifest_json.trim(),
+        );
+        let invalid_payloads = [
+            valid.replace("  \"has_more\":false,\n", ""),
+            valid.replace("\"total\":1", "\"total\":\"1\""),
+            valid.replace("\"total\":1", "\"total\":0"),
+            valid.replace(&manifest_hash, &manifest_hash.to_uppercase()),
+            valid.replace("\"status\":\"Active\"", "\"status\":\"Pending\""),
+            valid.replace(
+                "\"activated_epoch\":4097,\"expired_epoch\":null",
+                "\"activated_epoch\":4097,\"expired_epoch\":\"4098\"",
+            ),
+            valid.replacen("\"dataspace_id\":11", "\"dataspace_id\":12", 1),
+        ];
+        for payload in invalid_payloads {
+            let value: JsonValue =
+                norito::json::from_str(&payload).expect("test payload must be valid JSON");
+            assert!(
+                UaidManifestsResponse::from_value(value, expected).is_err(),
+                "noncanonical manifests payload must fail"
+            );
+        }
     }
     #[test]
     fn get_public_lane_validators_omits_query_params() {
@@ -26670,10 +28307,6 @@ mod tests {
                 epoch_seed: [0; 32],
                 prf_height: 12,
                 prf_view: 5,
-                vrf_penalty_epoch: 1,
-                vrf_committed_no_reveal_total: 0,
-                vrf_no_participation_total: 0,
-                vrf_late_reveals_total: 0,
             },
         );
         let error = request_sumeragi_diagnostics(

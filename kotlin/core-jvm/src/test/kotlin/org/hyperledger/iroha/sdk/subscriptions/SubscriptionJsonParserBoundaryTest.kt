@@ -107,4 +107,37 @@ class SubscriptionJsonParserBoundaryTest {
             )
         }
     }
+
+    @Test
+    fun transactionHashResponsesRequireIrohaHashOfMarker() {
+        val canonical = "ab".repeat(32)
+        assertEquals(
+            canonical,
+            SubscriptionJsonParser.parsePlanCreateResponse(
+                """{"ok":true,"plan_id":"plan-1","tx_hash_hex":"$canonical"}""".toByteArray(),
+            ).txHashHex,
+        )
+        assertEquals(
+            canonical,
+            SubscriptionJsonParser.parseSubscriptionCreateResponse(
+                """{"ok":true,"subscription_id":"sub-1","billing_trigger_id":"bill-1","usage_trigger_id":null,"first_charge_ms":1,"tx_hash_hex":"$canonical"}""".toByteArray(),
+            ).txHashHex,
+        )
+        assertEquals(
+            canonical,
+            SubscriptionJsonParser.parseActionResponse(
+                """{"ok":true,"subscription_id":"sub-1","tx_hash_hex":"$canonical"}""".toByteArray(),
+            ).txHashHex,
+        )
+        assertFailsWith<IllegalStateException> {
+            SubscriptionJsonParser.parsePlanCreateResponse(
+                """{"ok":true,"plan_id":"plan-1","tx_hash_hex":"${"aa".repeat(32)}"}""".toByteArray(),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            SubscriptionJsonParser.parseActionResponse(
+                """{"ok":true,"subscription_id":"sub-1","tx_hash_hex":"${"aa".repeat(32)}"}""".toByteArray(),
+            )
+        }
+    }
 }

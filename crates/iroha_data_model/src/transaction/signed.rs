@@ -244,6 +244,7 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     pub struct MultisigSignature {
         /// Signer public key.
         pub signer: iroha_crypto::PublicKey,
@@ -265,6 +266,7 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     pub struct MultisigSignatures {
         /// Signature entries provided by multisig members.
         pub signatures: Vec<MultisigSignature>,
@@ -355,6 +357,7 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     #[display("{}", self.hash())]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct SignedTransaction {

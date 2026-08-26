@@ -14,7 +14,14 @@ class CreateKaigiInstruction internal constructor(
     @JvmField val scheduledStartMs: Long?,
     @JvmField val billingAccount: String?,
     @JvmField internal val privacyMode: KaigiInstructionUtils.PrivacyMode,
+    @JvmField internal val roomPolicy: KaigiInstructionUtils.RoomPolicy,
     @JvmField internal val relayManifest: KaigiInstructionUtils.RelayManifest?,
+    @JvmField val commitment: String?,
+    @JvmField val commitmentAliasTag: String?,
+    @JvmField val nullifierDigest: String?,
+    @JvmField val nullifierIssuedAtMs: Long?,
+    @JvmField val rosterRoot: String?,
+    @JvmField val proofBase64: String?,
     private val _arguments: Map<String, String>,
 ) : InstructionTemplate {
 
@@ -35,6 +42,18 @@ class CreateKaigiInstruction internal constructor(
         if (scheduledStartMs != null) {
             require(scheduledStartMs >= 0) { "scheduledStartMs must be non-negative" }
         }
+        require(commitmentAliasTag == null) {
+            "commitment aliasTag is off-chain only and must be omitted"
+        }
+        require(nullifierIssuedAtMs == null || nullifierIssuedAtMs == 0L) {
+            "nullifier issuedAtMs is off-chain only and must be zero when provided"
+        }
+        if (proofBase64 != null) {
+            KaigiInstructionUtils.requireBase64(proofBase64, "proof")
+        }
+        if (relayManifest != null) {
+            KaigiInstructionUtils.validateRelayManifest(relayManifest)
+        }
     }
 
     override fun equals(other: Any?): Boolean {
@@ -52,7 +71,15 @@ class CreateKaigiInstruction internal constructor(
             && billingAccount == other.billingAccount
             && privacyMode.mode == other.privacyMode.mode
             && privacyMode.state == other.privacyMode.state
+            && roomPolicy.policy == other.roomPolicy.policy
+            && roomPolicy.state == other.roomPolicy.state
             && relayManifestEquals(relayManifest, other.relayManifest)
+            && commitment == other.commitment
+            && commitmentAliasTag == other.commitmentAliasTag
+            && nullifierDigest == other.nullifierDigest
+            && nullifierIssuedAtMs == other.nullifierIssuedAtMs
+            && rosterRoot == other.rosterRoot
+            && proofBase64 == other.proofBase64
     }
 
     override fun hashCode(): Int {
@@ -68,7 +95,15 @@ class CreateKaigiInstruction internal constructor(
         result = 31 * result + (billingAccount?.hashCode() ?: 0)
         result = 31 * result + privacyMode.mode.hashCode()
         result = 31 * result + (privacyMode.state?.hashCode() ?: 0)
+        result = 31 * result + roomPolicy.policy.hashCode()
+        result = 31 * result + (roomPolicy.state?.hashCode() ?: 0)
         result = 31 * result + relayManifestHash(relayManifest)
+        result = 31 * result + (commitment?.hashCode() ?: 0)
+        result = 31 * result + (commitmentAliasTag?.hashCode() ?: 0)
+        result = 31 * result + (nullifierDigest?.hashCode() ?: 0)
+        result = 31 * result + (nullifierIssuedAtMs?.hashCode() ?: 0)
+        result = 31 * result + (rosterRoot?.hashCode() ?: 0)
+        result = 31 * result + (proofBase64?.hashCode() ?: 0)
         return result
     }
 
@@ -91,7 +126,20 @@ class CreateKaigiInstruction internal constructor(
             )
             val billingAccount = arguments["billing_account"]
             val privacyMode = KaigiInstructionUtils.parsePrivacyMode(arguments, "privacy")
+            val roomPolicy = KaigiInstructionUtils.parseRoomPolicy(arguments, "room_policy")
             val relayManifest = KaigiInstructionUtils.parseRelayManifest(arguments, "relay_manifest")
+            val commitment = arguments["commitment.commitment"]
+            require(arguments["commitment.alias_tag"] == null) {
+                "commitment aliasTag is off-chain only and must be omitted"
+            }
+            val nullifier = arguments["nullifier.digest"]
+            val parsedNullifierIssuedAt = KaigiInstructionUtils.parseOptionalUnsignedLong(
+                arguments["nullifier.issued_at_ms"], "nullifier.issued_at_ms",
+            )
+            require(parsedNullifierIssuedAt == null || parsedNullifierIssuedAt == 0L) {
+                "nullifier issuedAtMs is off-chain only and must be zero when provided"
+            }
+            val nullifierIssuedAt = parsedNullifierIssuedAt.takeIf { nullifier != null }
 
             return CreateKaigiInstruction(
                 callId = callId,
@@ -104,7 +152,14 @@ class CreateKaigiInstruction internal constructor(
                 scheduledStartMs = scheduled,
                 billingAccount = billingAccount,
                 privacyMode = privacyMode,
+                roomPolicy = roomPolicy,
                 relayManifest = relayManifest,
+                commitment = commitment,
+                commitmentAliasTag = null,
+                nullifierDigest = nullifier,
+                nullifierIssuedAtMs = nullifierIssuedAt,
+                rosterRoot = arguments["roster_root"],
+                proofBase64 = arguments["proof"],
                 _arguments = LinkedHashMap(arguments),
             )
         }
@@ -121,7 +176,14 @@ class CreateKaigiInstruction internal constructor(
             scheduledStartMs: Long? = null,
             billingAccount: String? = null,
             privacyMode: KaigiInstructionUtils.PrivacyMode = KaigiInstructionUtils.PrivacyMode("Transparent", null),
+            roomPolicy: KaigiInstructionUtils.RoomPolicy = KaigiInstructionUtils.RoomPolicy("Authenticated", null),
             relayManifest: KaigiInstructionUtils.RelayManifest? = null,
+            commitment: String? = null,
+            commitmentAliasTag: String? = null,
+            nullifierDigest: String? = null,
+            nullifierIssuedAtMs: Long? = null,
+            rosterRoot: String? = null,
+            proofBase64: String? = null,
         ): CreateKaigiInstruction = CreateKaigiInstruction(
             callId = callId,
             host = host,
@@ -133,11 +195,19 @@ class CreateKaigiInstruction internal constructor(
             scheduledStartMs = scheduledStartMs,
             billingAccount = billingAccount,
             privacyMode = privacyMode,
+            roomPolicy = roomPolicy,
             relayManifest = relayManifest,
+            commitment = commitment,
+            commitmentAliasTag = commitmentAliasTag,
+            nullifierDigest = nullifierDigest,
+            nullifierIssuedAtMs = nullifierIssuedAtMs,
+            rosterRoot = rosterRoot,
+            proofBase64 = proofBase64,
             _arguments = buildCanonicalArguments(
                 callId, host, title, description, maxParticipants,
                 gasRatePerMinute, metadata, scheduledStartMs, billingAccount,
-                privacyMode, relayManifest,
+                privacyMode, roomPolicy, relayManifest, commitment,
+                nullifierDigest, nullifierIssuedAtMs, rosterRoot, proofBase64,
             ),
         )
 
@@ -152,7 +222,13 @@ class CreateKaigiInstruction internal constructor(
             scheduledStartMs: Long?,
             billingAccount: String?,
             privacyMode: KaigiInstructionUtils.PrivacyMode,
+            roomPolicy: KaigiInstructionUtils.RoomPolicy,
             relayManifest: KaigiInstructionUtils.RelayManifest?,
+            commitment: String?,
+            nullifierDigest: String?,
+            nullifierIssuedAtMs: Long?,
+            rosterRoot: String?,
+            proofBase64: String?,
         ): Map<String, String> {
             val args = LinkedHashMap<String, String>()
             args["action"] = CREATE_KAIGI_ACTION
@@ -168,7 +244,19 @@ class CreateKaigiInstruction internal constructor(
             }
             if (billingAccount != null) args["billing_account"] = billingAccount
             KaigiInstructionUtils.appendPrivacyMode(privacyMode, args, "privacy")
+            KaigiInstructionUtils.appendRoomPolicy(roomPolicy, args, "room_policy")
             KaigiInstructionUtils.appendRelayManifest(relayManifest, args, "relay_manifest")
+            if (commitment != null) {
+                args["commitment.commitment"] = commitment
+            }
+            if (nullifierDigest != null) {
+                args["nullifier.digest"] = nullifierDigest
+                if (nullifierIssuedAtMs != null) {
+                    args["nullifier.issued_at_ms"] = java.lang.Long.toUnsignedString(nullifierIssuedAtMs)
+                }
+            }
+            if (rosterRoot != null) args["roster_root"] = rosterRoot
+            if (proofBase64 != null) args["proof"] = proofBase64
             return args
         }
 

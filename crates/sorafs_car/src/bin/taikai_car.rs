@@ -12,7 +12,7 @@ use iroha_data_model::{
 use norito::json::{self, Map, Value};
 use sorafs_car::taikai::{
     BundleRequest, BundleSummary, RehydrateRequest, bundle_segment, load_extra_metadata,
-    rehydrate_from_car,
+    rehydrate_from_car, validate_distinct_artifact_paths, validate_track_metadata,
 };
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -186,6 +186,8 @@ struct BundleMetadata {
 #[derive(Debug)]
 struct BundleInputs {
     input: InputSource,
+    summary_in: Option<PathBuf>,
+    metadata_json: Option<PathBuf>,
     car_out: PathBuf,
     envelope_out: PathBuf,
     indexes_out: Option<PathBuf>,
@@ -220,6 +222,7 @@ fn main() -> Result<()> {
 }
 fn run(args: Args) -> Result<()> {
     let inputs = resolve_inputs(args)?;
+    validate_cli_artifact_paths(&inputs)?;
     let metadata = &inputs.metadata;
     let summary = match &inputs.input {
         InputSource::Payload(payload) => bundle_segment(&BundleRequest {
@@ -293,7 +296,53 @@ fn run(args: Args) -> Result<()> {
     }
     Ok(())
 }
+fn validate_cli_artifact_paths(inputs: &BundleInputs) -> Result<()> {
+    let mut outputs = vec![
+        ("CAR output", inputs.car_out.as_path()),
+        ("envelope output", inputs.envelope_out.as_path()),
+    ];
+    if let Some(path) = inputs.indexes_out.as_deref() {
+        outputs.push(("index output", path));
+    }
+    if let Some(path) = inputs.ingest_metadata_out.as_deref() {
+        outputs.push(("ingest metadata output", path));
+    }
+    if let Some(path) = inputs.summary_out.as_deref() {
+        validate_output_writable(path)?;
+        outputs.push(("bundle summary output", path));
+    }
+    validate_distinct_artifact_paths(&outputs)?;
+
+    let (primary_label, primary_path, allow_car_output_alias) = match &inputs.input {
+        InputSource::Payload(path) => ("payload input", path.as_path(), false),
+        InputSource::Car(path) => ("CAR input", path.as_path(), true),
+    };
+    for (index, (output_label, output_path)) in outputs.iter().enumerate() {
+        if !(allow_car_output_alias && index == 0) {
+            validate_distinct_artifact_paths(&[
+                (primary_label, primary_path),
+                (*output_label, *output_path),
+            ])?;
+        }
+    }
+    for (input_label, input_path) in [
+        ("summary input", inputs.summary_in.as_deref()),
+        ("extra metadata input", inputs.metadata_json.as_deref()),
+    ] {
+        if let Some(input_path) = input_path {
+            for (output_label, output_path) in &outputs {
+                validate_distinct_artifact_paths(&[
+                    (input_label, input_path),
+                    (*output_label, *output_path),
+                ])?;
+            }
+        }
+    }
+    Ok(())
+}
 fn resolve_inputs(args: Args) -> Result<BundleInputs> {
+    let summary_in = args.summary_in.clone();
+    let metadata_json = args.metadata_json.clone();
     let summary_entry = args
         .summary_entry
         .as_deref()
@@ -376,6 +425,7 @@ fn resolve_inputs(args: Args) -> Result<BundleInputs> {
         resolution.as_deref(),
         audio_layout.as_deref(),
     )?;
+    let (codec_label, resolution, audio_layout) = canonical_track_labels(&track_metadata);
     let segment_sequence = resolve_required_u64(
         "segment-sequence",
         args.segment_sequence,
@@ -415,21 +465,23 @@ fn resolve_inputs(args: Args) -> Result<BundleInputs> {
             .as_ref()
             .and_then(|seed| seed.live_edge_drift_ms),
     )?;
-    let ingest_node_id = resolve_optional_owned(
+    let ingest_node_id = normalize_ingest_node_id(resolve_optional_owned(
         args.ingest_node_id,
         summary_seed
             .as_ref()
             .and_then(|seed| seed.ingest_node_id.clone()),
-    );
+    ));
     let event_name = parse_name(&event_id_literal, "event-id")?;
     let stream_name = parse_name(&stream_id_literal, "stream-id")?;
     let rendition_name = parse_name(&rendition_id_literal, "rendition-id")?;
-    let extra_metadata = match args.metadata_json {
-        Some(path) => Some(load_extra_metadata(&path)?),
+    let extra_metadata = match args.metadata_json.as_deref() {
+        Some(path) => Some(load_extra_metadata(path)?),
         None => None,
     };
     Ok(BundleInputs {
         input,
+        summary_in,
+        metadata_json,
         car_out: args.car_out,
         envelope_out: args.envelope_out,
         indexes_out: args.indexes_out,
@@ -768,14 +820,14 @@ fn build_track_metadata(
 ) -> Result<TaikaiTrackMetadata> {
     let codec =
         TaikaiCodec::from_str(codec).map_err(|err| eyre!("invalid codec `{}`: {err}", codec))?;
-    match track_kind {
+    let track = match track_kind {
         CliTrackKind::Video => {
             let resolution = resolution.ok_or_else(|| {
                 eyre!("resolution is required for video tracks (pass --resolution or include it in the summary)")
             })?;
             let parsed = TaikaiResolution::from_str(resolution)
                 .map_err(|err| eyre!("invalid resolution `{resolution}`: {err}"))?;
-            Ok(TaikaiTrackMetadata::video(codec, bitrate_kbps, parsed))
+            TaikaiTrackMetadata::video(codec, bitrate_kbps, parsed)
         }
         CliTrackKind::Audio => {
             let layout = audio_layout.ok_or_else(|| {
@@ -785,10 +837,39 @@ fn build_track_metadata(
             })?;
             let parsed = TaikaiAudioLayout::from_str(layout)
                 .map_err(|err| eyre!("invalid audio layout `{layout}`: {err}"))?;
-            Ok(TaikaiTrackMetadata::audio(codec, bitrate_kbps, parsed))
+            TaikaiTrackMetadata::audio(codec, bitrate_kbps, parsed)
         }
-        CliTrackKind::Data => Ok(TaikaiTrackMetadata::data(codec, bitrate_kbps)),
-    }
+        CliTrackKind::Data => TaikaiTrackMetadata::data(codec, bitrate_kbps),
+    };
+    validate_track_metadata(&track)?;
+    Ok(track)
+}
+fn canonical_track_labels(track: &TaikaiTrackMetadata) -> (String, Option<String>, Option<String>) {
+    let codec = match &track.codec {
+        TaikaiCodec::AvcHigh => "avc-high".to_owned(),
+        TaikaiCodec::HevcMain10 => "hevc-main10".to_owned(),
+        TaikaiCodec::Av1Main => "av1-main".to_owned(),
+        TaikaiCodec::AacLc => "aac-lc".to_owned(),
+        TaikaiCodec::Opus => "opus".to_owned(),
+        TaikaiCodec::Custom(profile) => format!("custom:{profile}"),
+    };
+    let resolution = track
+        .resolution
+        .map(|resolution| format!("{}x{}", resolution.width, resolution.height));
+    let audio_layout = track.audio_layout.map(|layout| match layout {
+        TaikaiAudioLayout::Mono => "mono".to_owned(),
+        TaikaiAudioLayout::Stereo => "stereo".to_owned(),
+        TaikaiAudioLayout::FiveOne => "5.1".to_owned(),
+        TaikaiAudioLayout::SevenOne => "7.1".to_owned(),
+        TaikaiAudioLayout::Custom(channels) => format!("custom:{channels}"),
+    });
+    (codec, resolution, audio_layout)
+}
+fn normalize_ingest_node_id(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    })
 }
 fn parse_name(value: &str, field: &str) -> Result<Name> {
     Name::from_str(value).map_err(|err| eyre!("invalid {field} `{value}`: {err}"))
@@ -1029,9 +1110,9 @@ fn write_output_bytes(path: &Path, label: &str, bytes: &[u8]) -> Result<()> {
         .wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
 }
 fn open_output_file(path: &Path, label: &str) -> Result<fs::File> {
-    validate_output_path(path)?;
+    validate_output_writable(path)?;
     ensure_parent_dir(path)?;
-    validate_output_path(path)?;
+    validate_output_writable(path)?;
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     set_no_follow_flag(&mut options);
@@ -1065,8 +1146,8 @@ fn validate_output_path(path: &Path) -> Result<()> {
             if metadata.file_type().is_symlink() {
                 return Err(eyre!("output `{}` must not be a symlink", path.display()));
             }
-            if metadata.is_dir() {
-                return Err(eyre!("output `{}` must not be a directory", path.display()));
+            if !metadata.is_file() {
+                return Err(eyre!("output `{}` must be a regular file", path.display()));
             }
         }
         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
@@ -1107,6 +1188,29 @@ fn validate_output_path(path: &Path) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+fn validate_output_writable(path: &Path) -> Result<()> {
+    validate_output_path(path)?;
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(eyre!(
+                "failed to inspect output `{}`: {err}",
+                path.display()
+            ));
+        }
+    };
+    if metadata.permissions().readonly() {
+        return Err(eyre!("output `{}` must be writable", path.display()));
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true);
+    set_no_follow_flag(&mut options);
+    options
+        .open(path)
+        .wrap_err_with(|| format!("output `{}` must be writable", path.display()))?;
     Ok(())
 }
 #[cfg(unix)]
@@ -1292,6 +1396,54 @@ mod tests {
         );
     }
     #[test]
+    fn track_metadata_rejects_codec_kind_mismatches() {
+        let video_error = build_track_metadata(
+            CliTrackKind::Video,
+            "aac-lc",
+            8_000,
+            Some("1920x1080"),
+            None,
+        )
+        .expect_err("AAC must not be sealed as a video codec");
+        assert!(
+            video_error
+                .to_string()
+                .contains("not valid for a video track"),
+            "unexpected video error: {video_error}"
+        );
+
+        let audio_error =
+            build_track_metadata(CliTrackKind::Audio, "av1-main", 192, None, Some("stereo"))
+                .expect_err("AV1 must not be sealed as an audio codec");
+        assert!(
+            audio_error
+                .to_string()
+                .contains("not valid for an audio track"),
+            "unexpected audio error: {audio_error}"
+        );
+    }
+    #[test]
+    fn track_labels_and_ingest_node_id_are_canonicalized() {
+        let track = build_track_metadata(
+            CliTrackKind::Video,
+            "  AV1-MAIN  ",
+            8_000,
+            Some(" 1920 X 1080 "),
+            Some("stereo"),
+        )
+        .expect("video metadata");
+
+        assert_eq!(
+            canonical_track_labels(&track),
+            ("av1-main".to_owned(), Some("1920x1080".to_owned()), None)
+        );
+        assert_eq!(
+            normalize_ingest_node_id(Some("  node-a  ".to_owned())).as_deref(),
+            Some("node-a")
+        );
+        assert_eq!(normalize_ingest_node_id(Some("   ".to_owned())), None);
+    }
+    #[test]
     fn write_summary_json_creates_parent_and_writes_document() {
         let (_temp, temp_path) = canonical_tempdir();
         let summary_path = temp_path.join("nested").join("summary.json");
@@ -1320,6 +1472,42 @@ mod tests {
             "unexpected error: {message}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn write_summary_json_rejects_socket_output() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let summary_path = temp_path.join("summary.sock");
+        let _listener =
+            std::os::unix::net::UnixListener::bind(&summary_path).expect("bind Unix socket");
+
+        let err = write_summary_json(&summary_path, &Value::Object(Map::new()))
+            .expect_err("reject socket output");
+
+        assert!(
+            err.to_string().contains("must be a regular file"),
+            "unexpected error: {err}"
+        );
+    }
+    #[test]
+    fn write_summary_json_rejects_readonly_output_without_truncating() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let summary_path = temp_path.join("summary.json");
+        fs::write(&summary_path, b"preserve").expect("write summary");
+        let mut permissions = fs::metadata(&summary_path)
+            .expect("summary metadata")
+            .permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&summary_path, permissions).expect("make summary read-only");
+
+        let err = write_summary_json(&summary_path, &Value::Object(Map::new()))
+            .expect_err("reject read-only summary output");
+
+        assert!(
+            err.to_string().contains("must be writable"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(fs::read(&summary_path).expect("read summary"), b"preserve");
     }
     #[cfg(unix)]
     #[test]

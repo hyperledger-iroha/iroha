@@ -67,7 +67,6 @@ const FIELD_ELEMENT_BYTES: usize = 32;
 /// Dynamic factors (per-byte) applied to encoded payloads where sensible.
 const PER_BYTE_JSON: u64 = 1; // charge per JSON byte
 const PER_BYTE_GENERIC: u64 = 0; // currently unused; reserved for future
-const PER_KAIGI_PROOF_BYTE: u64 = 5;
 const PER_BYTE_SEALED_COMMITMENT: u64 = 1;
 static ZK_GAS_BASE_VERIFY: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_BASE_VERIFY);
 static ZK_GAS_PER_PUBLIC_INPUT: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_PUBLIC_INPUT);
@@ -188,6 +187,19 @@ fn gas_for_proof_attachment(
     gas = gas.saturating_add(zk_gas_per_nullifier().saturating_mul(nullifiers_u64));
     gas = gas.saturating_add(zk_gas_per_commitment().saturating_mul(commitments_u64));
     gas
+}
+fn gas_for_kaigi_proof_verification(
+    proof: &[u8],
+    public_inputs: u64,
+    nullifiers: u64,
+    commitments: u64,
+) -> u64 {
+    let proof_bytes = u64::try_from(proof.len()).unwrap_or(u64::MAX);
+    zk_gas_base_verify()
+        .saturating_add(zk_gas_per_public_input().saturating_mul(public_inputs))
+        .saturating_add(zk_gas_per_proof_byte().saturating_mul(proof_bytes))
+        .saturating_add(zk_gas_per_nullifier().saturating_mul(nullifiers))
+        .saturating_add(zk_gas_per_commitment().saturating_mul(commitments))
 }
 fn gas_for_recursive_kagemusha_topup_v4(topup: &dm_isi::offline::TopUpKagemushaRecursiveV4) -> u64 {
     gas_for_proof_attachment(&topup.request.shield_evidence.proof, 0, 1)
@@ -326,17 +338,27 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
         let sz = u64::try_from(record.payload_bytes.len()).unwrap_or(u64::MAX);
         return BASE_CUSTOM + sz;
     }
-    if any.downcast_ref::<dm_isi::kaigi::CreateKaigi>().is_some() {
-        return BASE_KAIGI_CREATE;
+    if let Some(create) = any.downcast_ref::<dm_isi::kaigi::CreateKaigi>() {
+        let proof_gas = create
+            .proof
+            .as_deref()
+            .map_or(0, |proof| gas_for_kaigi_proof_verification(proof, 6, 1, 1));
+        return BASE_KAIGI_CREATE.saturating_add(proof_gas);
     }
+    // Private roster transitions remain fail-closed in production and do not dispatch a verifier;
+    // retain their calibrated payload bases while sourcing the byte price from governance.
     if let Some(join) = any.downcast_ref::<dm_isi::kaigi::JoinKaigi>() {
         let is_privacy = join.commitment.is_some()
             || join.nullifier.is_some()
             || join.roster_root.is_some()
             || join.proof.is_some();
         if is_privacy {
-            let proof_bytes = join.proof.as_ref().map_or(0, |p| p.len() as u64);
-            return BASE_KAIGI_JOIN_ZK + PER_KAIGI_PROOF_BYTE.saturating_mul(proof_bytes);
+            let proof_bytes = join
+                .proof
+                .as_ref()
+                .map_or(0, |proof| u64::try_from(proof.len()).unwrap_or(u64::MAX));
+            return BASE_KAIGI_JOIN_ZK
+                .saturating_add(zk_gas_per_proof_byte().saturating_mul(proof_bytes));
         }
         return BASE_KAIGI_JOIN;
     }
@@ -346,19 +368,30 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
             || leave.roster_root.is_some()
             || leave.proof.is_some();
         if is_privacy {
-            let proof_bytes = leave.proof.as_ref().map_or(0, |p| p.len() as u64);
-            return BASE_KAIGI_LEAVE_ZK + PER_KAIGI_PROOF_BYTE.saturating_mul(proof_bytes);
+            let proof_bytes = leave
+                .proof
+                .as_ref()
+                .map_or(0, |proof| u64::try_from(proof.len()).unwrap_or(u64::MAX));
+            return BASE_KAIGI_LEAVE_ZK
+                .saturating_add(zk_gas_per_proof_byte().saturating_mul(proof_bytes));
         }
         return BASE_KAIGI_LEAVE;
     }
-    if any.downcast_ref::<dm_isi::kaigi::EndKaigi>().is_some() {
-        return BASE_KAIGI_END;
+    if let Some(end) = any.downcast_ref::<dm_isi::kaigi::EndKaigi>() {
+        let proof_gas = end
+            .proof
+            .as_deref()
+            .map_or(0, |proof| gas_for_kaigi_proof_verification(proof, 6, 1, 0));
+        return BASE_KAIGI_END.saturating_add(proof_gas);
     }
     if let Some(usage) = any.downcast_ref::<dm_isi::kaigi::RecordKaigiUsage>() {
         let is_privacy = usage.usage_commitment.is_some() || usage.proof.is_some();
         if is_privacy {
-            let proof_bytes = usage.proof.as_ref().map_or(0, |p| p.len() as u64);
-            return BASE_KAIGI_USAGE_ZK + PER_KAIGI_PROOF_BYTE.saturating_mul(proof_bytes);
+            let proof_gas = usage
+                .proof
+                .as_deref()
+                .map_or(0, |proof| gas_for_kaigi_proof_verification(proof, 1, 0, 1));
+            return BASE_KAIGI_USAGE_ZK.saturating_add(proof_gas);
         }
         return BASE_KAIGI_USAGE;
     }
@@ -390,12 +423,32 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
 }
 /// Compute gas for a sequence of instructions.
 pub fn meter_instructions(is: &[InstructionBox]) -> u64 {
-    is.iter().map(meter_instruction).sum()
+    is.iter().fold(0_u64, |total, instruction| {
+        total.saturating_add(meter_instruction(instruction))
+    })
 }
 /// Return the portion of the gas schedule attributed to confidential ISIs.
 #[must_use]
 pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
     let any = instr.as_any();
+    if let Some(create) = any.downcast_ref::<dm_isi::kaigi::CreateKaigi>() {
+        return create
+            .proof
+            .as_deref()
+            .map_or(0, |proof| gas_for_kaigi_proof_verification(proof, 6, 1, 1));
+    }
+    if let Some(end) = any.downcast_ref::<dm_isi::kaigi::EndKaigi>() {
+        return end
+            .proof
+            .as_deref()
+            .map_or(0, |proof| gas_for_kaigi_proof_verification(proof, 6, 1, 0));
+    }
+    if let Some(usage) = any.downcast_ref::<dm_isi::kaigi::RecordKaigiUsage>() {
+        return usage
+            .proof
+            .as_deref()
+            .map_or(0, |proof| gas_for_kaigi_proof_verification(proof, 1, 0, 1));
+    }
     if let Some(verify) = any.downcast_ref::<dm_isi::zk::VerifyProof>() {
         return gas_for_proof_attachment(&verify.attachment, 0, 0);
     }
@@ -412,6 +465,14 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
         return gas_for_proof_attachment(&finalize.tally_proof, 0, 0);
     }
     0
+}
+/// Return the saturating confidential-gas total for an instruction sequence.
+pub(crate) fn sum_confidential_gas_costs<'a>(
+    instructions: impl IntoIterator<Item = &'a InstructionBox>,
+) -> u64 {
+    instructions.into_iter().fold(0_u64, |total, instruction| {
+        total.saturating_add(confidential_gas_cost(instruction))
+    })
 }
 #[cfg(test)]
 mod tests {
@@ -486,6 +547,44 @@ mod tests {
         ];
         let sum_inline = v.iter().map(meter_instruction).sum::<u64>();
         assert_eq!(sum_inline, meter_instructions(&v));
+    }
+    #[test]
+    fn batch_meter_saturates_governed_kaigi_proof_costs() {
+        let _gas_lock = super::lock_confidential_gas_for_tests();
+        use iroha_data_model::{
+            isi::kaigi::CreateKaigi,
+            kaigi::{KaigiId, NewKaigi},
+        };
+        let original = super::confidential_gas_schedule_for_tests();
+        super::configure_confidential_gas(super::ConfidentialGasSchedule {
+            base_verify: u64::MAX,
+            per_public_input: 0,
+            per_proof_byte: 0,
+            per_nullifier: 0,
+            per_commitment: 0,
+        });
+        let call_id = KaigiId::new(
+            DomainId::try_new("kaigi-gas", "universal").expect("valid domain id"),
+            "saturated-batch".parse().expect("valid call name"),
+        );
+        let make_instruction = || {
+            InstructionBox::from(CreateKaigi {
+                call: NewKaigi::with_defaults(call_id.clone(), sample_account()),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: Some(Vec::new()),
+            })
+        };
+        let instructions = [make_instruction(), make_instruction()];
+        assert_eq!(meter_instruction(&instructions[0]), u64::MAX);
+        assert_eq!(meter_instructions(&instructions), u64::MAX);
+        assert_eq!(
+            super::sum_confidential_gas_costs(instructions.iter()),
+            u64::MAX,
+            "queued confidential-gas accounting must saturate too"
+        );
+        super::configure_confidential_gas(original);
     }
     #[test]
     fn transfer_batch_gas_matches_entry_sum() {
@@ -611,6 +710,146 @@ mod tests {
             + schedule.per_proof_byte.saturating_mul(proof_bytes);
         assert_eq!(gas, expected);
         assert_eq!(confidential_gas_cost(&instruction), expected);
+    }
+    #[test]
+    fn kaigi_proof_gas_uses_every_governed_schedule_dimension() {
+        let _gas_lock = super::lock_confidential_gas_for_tests();
+        use iroha_data_model::{
+            isi::kaigi::{CreateKaigi, EndKaigi, JoinKaigi, LeaveKaigi, RecordKaigiUsage},
+            kaigi::{KaigiId, KaigiPrivacyMode, NewKaigi},
+        };
+
+        let schedule = super::ConfidentialGasSchedule {
+            base_verify: 1_337,
+            per_public_input: 41,
+            per_proof_byte: 17,
+            per_nullifier: 43,
+            per_commitment: 47,
+        };
+        super::configure_confidential_gas(schedule);
+
+        let call_id = KaigiId::new(
+            DomainId::try_new("kaigi-gas", "universal").expect("valid domain id"),
+            "private-call".parse().expect("valid call name"),
+        );
+        let mut call = NewKaigi::with_defaults(call_id.clone(), sample_account());
+        call.privacy_mode = KaigiPrivacyMode::ZkRosterV1;
+        let proof = vec![0xA5; 8];
+        let proof_len = u64::try_from(proof.len()).expect("fixture proof length fits u64");
+        let expected_create_proof_gas = schedule
+            .base_verify
+            .saturating_add(schedule.per_public_input.saturating_mul(6))
+            .saturating_add(schedule.per_nullifier)
+            .saturating_add(schedule.per_commitment)
+            .saturating_add(schedule.per_proof_byte.saturating_mul(proof_len));
+        let expected_end_proof_gas = schedule
+            .base_verify
+            .saturating_add(schedule.per_public_input.saturating_mul(6))
+            .saturating_add(schedule.per_nullifier)
+            .saturating_add(schedule.per_proof_byte.saturating_mul(proof_len));
+        let expected_usage_proof_gas = schedule
+            .base_verify
+            .saturating_add(schedule.per_public_input)
+            .saturating_add(schedule.per_commitment)
+            .saturating_add(schedule.per_proof_byte.saturating_mul(proof_len));
+
+        let create: InstructionBox = CreateKaigi {
+            call: call.clone(),
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: Some(proof.clone()),
+        }
+        .into();
+        assert_eq!(
+            meter_instruction(&create),
+            BASE_KAIGI_CREATE.saturating_add(expected_create_proof_gas)
+        );
+        assert_eq!(confidential_gas_cost(&create), expected_create_proof_gas);
+
+        let longer_create: InstructionBox = CreateKaigi {
+            call: call.clone(),
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: Some(vec![0xA5; proof.len() + 1]),
+        }
+        .into();
+        assert_eq!(
+            meter_instruction(&longer_create) - meter_instruction(&create),
+            schedule.per_proof_byte
+        );
+
+        let participant = sample_account();
+        let join: InstructionBox = JoinKaigi {
+            call_id: call_id.clone(),
+            participant: participant.clone(),
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: Some(proof.clone()),
+        }
+        .into();
+        assert_eq!(
+            meter_instruction(&join),
+            BASE_KAIGI_JOIN_ZK.saturating_add(schedule.per_proof_byte.saturating_mul(proof_len))
+        );
+
+        let leave: InstructionBox = LeaveKaigi {
+            call_id: call_id.clone(),
+            participant,
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: Some(proof.clone()),
+        }
+        .into();
+        assert_eq!(
+            meter_instruction(&leave),
+            BASE_KAIGI_LEAVE_ZK.saturating_add(schedule.per_proof_byte.saturating_mul(proof_len))
+        );
+
+        let end: InstructionBox = EndKaigi {
+            call_id: call_id.clone(),
+            ended_at_ms: None,
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: Some(proof.clone()),
+        }
+        .into();
+        assert_eq!(
+            meter_instruction(&end),
+            BASE_KAIGI_END.saturating_add(expected_end_proof_gas)
+        );
+        assert_eq!(confidential_gas_cost(&end), expected_end_proof_gas);
+
+        let usage: InstructionBox = RecordKaigiUsage {
+            call_id,
+            duration_ms: 1,
+            billed_gas: 1,
+            usage_commitment: None,
+            proof: Some(proof),
+        }
+        .into();
+        assert_eq!(
+            meter_instruction(&usage),
+            BASE_KAIGI_USAGE_ZK.saturating_add(expected_usage_proof_gas)
+        );
+        assert_eq!(confidential_gas_cost(&usage), expected_usage_proof_gas);
+
+        let proofless_create: InstructionBox = CreateKaigi {
+            call,
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        }
+        .into();
+        assert_eq!(meter_instruction(&proofless_create), BASE_KAIGI_CREATE);
+        assert_eq!(confidential_gas_cost(&proofless_create), 0);
+
+        super::configure_confidential_gas(super::ConfidentialGasSchedule::default());
     }
     #[test]
     fn proof_public_input_gas_rejects_alternate_norito_layout() {

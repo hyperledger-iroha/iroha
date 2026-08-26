@@ -21,7 +21,7 @@ form the first-release Iroha 3 data model, as implemented in the
 
 ## Names and Identifiers
 
-- `Name`: Valid textual identifier. Disallows whitespace and reserved characters `@`, `#`, `$` (used in composite IDs). Constructible via `FromStr` with validation. Names are normalized to Unicode NFC on parse (canonically equivalent spellings are treated as identical and stored composed). The special name `genesis` is reserved (checked case-insensitively).
+- `Name`: Valid textual identifier. Disallows whitespace and reserved characters `@`, `#`, `$` (used in composite IDs). Constructible via `FromStr` with validation. Names must arrive in their exact Unicode NFC spelling; alternate canonically equivalent spellings are rejected rather than rewritten. The special name `genesis` is reserved (checked case-insensitively).
 - `IdBox`: A sum-type envelope for any supported ID (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Useful for generic flows and Norito encoding as a single type.
 - `ChainId`: Opaque chain identifier used for replay protection in transactions.
 

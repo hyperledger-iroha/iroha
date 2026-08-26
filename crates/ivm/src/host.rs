@@ -1090,9 +1090,6 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_ZK_ROOTS_GET
             | syscalls::SYSCALL_ZK_VOTE_GET_TALLY
             | syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE
-            | syscalls::SYSCALL_SORACLOUD_READ_SECRET
-            | syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL
-            | syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH
             | syscalls::SYSCALL_SORACLOUD_READ_CONFIG
             | syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE
             | syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION

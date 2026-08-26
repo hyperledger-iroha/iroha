@@ -22,7 +22,6 @@ from iroha_python.crypto import NetworkId
 
 def _account(seed: int) -> str:
     return AccountAddress.from_account(
-        domain="space-directory",
         public_key=bytes([seed]) * 32,
     ).to_i105(0x02F1)
 
@@ -61,6 +60,22 @@ AUTHORITY_HEADER = AccountAddress.parse_encoded(
 ).canonical_hex()
 
 
+def _manifest() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "uaid": "uaid:" + "11" * 32,
+        "dataspace": 7,
+        "issued_ms": 1_700_000_000_000,
+        "activation_epoch": 9,
+        "entries": [
+            {
+                "scope": {"dataspace": 7},
+                "effect": {"Allow": {"window": "PerSlot"}},
+            }
+        ],
+    }
+
+
 def _client(
     session: _Session,
     *,
@@ -95,12 +110,7 @@ def test_publish_is_signed_once_over_exact_path_and_body() -> None:
     result = client.publish_space_directory_manifest(
         {
             "authority": AUTHORITY,
-            "manifest": {
-                "version": "1",
-                "uaid": "uaid:" + "11" * 32,
-                "dataspace": 7,
-                "entries": [{"effect": {"allow": True}}],
-            },
+            "manifest": _manifest(),
         }
     )
 
@@ -172,12 +182,7 @@ def test_authority_substitution_and_inline_secret_are_rejected_before_dispatch()
     substituted = _client(session, account_id=_account(0x12))
     request = {
         "authority": AUTHORITY,
-        "manifest": {
-            "version": "1",
-            "uaid": "uaid:" + "11" * 32,
-            "dataspace": 7,
-            "entries": [{"effect": {"allow": True}}],
-        },
+        "manifest": _manifest(),
     }
 
     with pytest.raises(ValueError, match="must equal the exact payload authority"):
@@ -187,4 +192,40 @@ def test_authority_substitution_and_inline_secret_are_rejected_before_dispatch()
             {**request, "private_key": "retired-inline-secret"}
         )
 
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda manifest: manifest.__setitem__("version", "1"),
+        lambda manifest: manifest.pop("issued_ms"),
+        lambda manifest: manifest.__setitem__("expiry_epoch", None),
+        lambda manifest: manifest.__setitem__("accounts", []),
+        lambda manifest: manifest["entries"][0].__setitem__(
+            "effect", {"allow": True}
+        ),
+    ],
+    ids=[
+        "string-version",
+        "missing-issued-ms",
+        "null-expiry",
+        "retired-accounts-field",
+        "retired-effect-shape",
+    ],
+)
+def test_publish_rejects_noncanonical_manifest_before_signing_or_dispatch(
+    mutation: Any,
+) -> None:
+    session = _Session()
+    captured: list[bytes] = []
+    manifest = _manifest()
+    mutation(manifest)
+
+    with pytest.raises((TypeError, ValueError)):
+        _client(session, captured=captured).publish_space_directory_manifest(
+            {"authority": AUTHORITY, "manifest": manifest}
+        )
+
+    assert captured == []
     assert session.calls == []

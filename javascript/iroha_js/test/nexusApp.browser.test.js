@@ -546,13 +546,50 @@ test("browser Nexus raw status reads allow only explicit diagnostic scopes", asy
       /unsupported field scope/u,
     );
   }
+  for (const field of [
+    "allowShortHash",
+    "endpoints",
+    "successStatuses",
+    "failureStatuses",
+    "terminalStatuses",
+  ]) {
+    await assert.rejects(
+      client.toriiClient.getTransactionStatus(HASH_HEX, { [field]: [] }),
+      new RegExp(`unsupported field ${field}`, "u"),
+    );
+  }
   assert.equal(urls.length, 3);
+
+  for (const status of [202, 204]) {
+    const retired = new NexusAppClient({
+      toriiBaseUrl: "https://torii.example",
+      async fetchImpl() {
+        return mockResponse(status);
+      },
+    });
+    await assert.rejects(
+      retired.toriiClient.getTransactionStatus(HASH_HEX),
+      new RegExp(`transaction status returned HTTP ${status}`, "u"),
+    );
+  }
+
+  const empty = new NexusAppClient({
+    toriiBaseUrl: "https://torii.example",
+    async fetchImpl() {
+      return mockResponse(200);
+    },
+  });
+  await assert.rejects(
+    empty.toriiClient.getTransactionStatus(HASH_HEX),
+    /must be an object/u,
+  );
 });
 
-test("browser Nexus Torii polling retries cached Applied until state finality", async () => {
+test("browser Nexus Torii polling keeps queue and cache Applied pending", async () => {
   const responses = [
     pipelineStatus("Queued"),
     pipelineStatus("Committed", { resolvedFrom: "cache" }),
+    pipelineStatus("Applied", { blockHeight: 3, resolvedFrom: "queue" }),
     pipelineStatus("Applied", { blockHeight: 3, resolvedFrom: "cache" }),
     authoritativeAppliedStatus(HASH_HEX, 3),
   ];
@@ -571,8 +608,7 @@ test("browser Nexus Torii polling retries cached Applied until state finality", 
   const observed = [];
   const result = await client.toriiClient.waitForTransactionStatus(HASH_HEX, {
     intervalMs: 0,
-    maxAttempts: 4,
-    failureStatuses: ["Committed"],
+    maxAttempts: 5,
     onStatus(status, _payload, attempt) {
       observed.push([status, attempt]);
     },
@@ -584,8 +620,9 @@ test("browser Nexus Torii polling retries cached Applied until state finality", 
     ["Committed", 2],
     ["Applied", 3],
     ["Applied", 4],
+    ["Applied", 5],
   ]);
-  assert.equal(urls.length, 4);
+  assert.equal(urls.length, 5);
   for (const url of urls) {
     assert.equal(
       url,
@@ -594,16 +631,15 @@ test("browser Nexus Torii polling retries cached Applied until state finality", 
   }
 });
 
-test("browser Nexus Torii polling retries cached failures until state resolution", async () => {
-  const responses = [
-    pipelineStatus("Rejected", { resolvedFrom: "cache" }),
-    pipelineStatus("Rejected", { resolvedFrom: "state" }),
-  ];
+test("browser Nexus Torii polling treats Rejected as a fixed failure", async () => {
   const observed = [];
   const client = new NexusAppClient({
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
-      return mockResponse(200, JSON.stringify(responses.shift()));
+      return mockResponse(
+        200,
+        JSON.stringify(pipelineStatus("Rejected", { resolvedFrom: "cache" })),
+      );
     },
   });
 
@@ -611,14 +647,13 @@ test("browser Nexus Torii polling retries cached failures until state resolution
     client.toriiClient.waitForTransactionStatus(HASH_HEX, {
       intervalMs: 0,
       maxAttempts: 2,
-      failureStatuses: ["Committed"],
       onStatus(status, _payload, attempt) {
         observed.push([status, attempt]);
       },
     }),
     /failure status Rejected/u,
   );
-  assert.deepEqual(observed, [["Rejected", 1], ["Rejected", 2]]);
+  assert.deepEqual(observed, [["Rejected", 1]]);
 });
 
 test("browser Nexus Torii polling fails closed on malformed finality envelopes", async () => {
@@ -642,9 +677,10 @@ test("browser Nexus Torii polling fails closed on malformed finality envelopes",
     [
       pipelineStatus("Applied", {
         blockHeight: 1,
-        resolvedFrom: "queue",
+        scope: "auto",
+        resolvedFrom: "state",
       }),
-      /cache- or state-resolved/u,
+      /scope is unsupported/u,
     ],
     [
       pipelineStatus("Applied", {
@@ -670,7 +706,7 @@ test("browser Nexus Torii polling fails closed on malformed finality envelopes",
   }
 });
 
-test("browser Nexus Torii polling fails closed on rejection and success override", async () => {
+test("browser Nexus Torii polling uses fixed failure and finality policy", async () => {
   const client = new NexusAppClient({
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
@@ -687,105 +723,41 @@ test("browser Nexus Torii polling fails closed on rejection and success override
     }),
     /failure status Rejected/u,
   );
-  await assert.rejects(
-    client.toriiClient.waitForTransactionStatus(HASH_HEX, {
-      intervalMs: 0,
-      maxAttempts: 1,
-      successStatuses: ["Done"],
-    }),
-    /unsupported field.*successStatuses/u,
-  );
-  await assert.rejects(
-    client.toriiClient.waitForTransactionStatus(HASH_HEX, {
-      failureStatuses: ["Applied"],
-    }),
-    /Applied cannot be configured as failure/u,
-  );
-});
-
-test("browser Nexus counts duplicate raw statuses before any fetch", async () => {
-  let fetchCalls = 0;
-  const client = new NexusAppClient({
-    toriiBaseUrl: "https://torii.example",
-    async fetchImpl() {
-      fetchCalls += 1;
-      return mockResponse(
-        200,
-        JSON.stringify(pipelineStatus("Committed", { resolvedFrom: "cache" })),
-      );
-    },
-  });
-  for (const options of [
-    { failureStatuses: new Array(33).fill("Rejected") },
-  ]) {
+  for (const field of ["successStatuses", "failureStatuses", "terminalStatuses"]) {
     await assert.rejects(
-      client.toriiClient.waitForTransactionStatus(HASH_HEX, options),
-      /must not contain more than 32 statuses/u,
+      client.toriiClient.waitForTransactionStatus(HASH_HEX, {
+        [field]: ["Committed"],
+      }),
+      new RegExp(`unsupported field.*${field}`, "u"),
     );
-    assert.equal(fetchCalls, 0, "invalid raw status iterables must not fetch");
   }
 });
 
-test("browser Nexus closes an infinite duplicate status iterator", async () => {
-  let yielded = 0;
-  let cleanedUp = 0;
+test("browser Nexus rejects removed selectors without reading them or fetching", async () => {
+  let selectorReads = 0;
   let fetchCalls = 0;
-  function* duplicateStatuses() {
-    try {
-      while (true) {
-        yielded += 1;
-        yield "Rejected";
-      }
-    } finally {
-      cleanedUp += 1;
-    }
-  }
+  const options = {};
+  Object.defineProperty(options, "failureStatuses", {
+    enumerable: true,
+    get() {
+      selectorReads += 1;
+      return ["Rejected"];
+    },
+  });
   const client = new NexusAppClient({
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       fetchCalls += 1;
-      return mockResponse(
-        200,
-        JSON.stringify(pipelineStatus("Committed", { resolvedFrom: "cache" })),
-      );
-    },
-  });
-
-  await assert.rejects(
-    client.toriiClient.waitForTransactionStatus(HASH_HEX, {
-      failureStatuses: duplicateStatuses(),
-    }),
-    /must not contain more than 32 statuses/u,
-  );
-  assert.equal(yielded, 33);
-  assert.equal(cleanedUp, 1);
-  assert.equal(fetchCalls, 0);
-});
-
-test("browser Nexus acquires a custom status iterator exactly once", async () => {
-  let iteratorReads = 0;
-  const failureStatuses = {};
-  Object.defineProperty(failureStatuses, Symbol.iterator, {
-    get() {
-      iteratorReads += 1;
-      if (iteratorReads > 1) return undefined;
-      return function* statuses() {
-        yield "Rejected";
-      };
-    },
-  });
-  const client = new NexusAppClient({
-    toriiBaseUrl: "https://torii.example",
-    async fetchImpl() {
       return mockResponse(200, JSON.stringify(authoritativeAppliedStatus()));
     },
   });
 
-  const result = await client.toriiClient.waitForTransactionStatus(HASH_HEX, {
-    failureStatuses,
-  });
-  assert.deepEqual(result, authoritativeAppliedStatus());
-  assert.equal(iteratorReads, 1);
+  await assert.rejects(
+    client.toriiClient.waitForTransactionStatus(HASH_HEX, options),
+    /unsupported field failureStatuses/u,
+  );
+  assert.equal(selectorReads, 0);
+  assert.equal(fetchCalls, 0);
 });
 
 test("browser Nexus polling uses intrinsic AbortSignal state and listeners", async () => {
@@ -968,7 +940,10 @@ test("browser Nexus hard-bounds stalled bodies, cancellation, and callbacks", as
       ),
     ]);
     assert.ok(outcome.error instanceof Error, `${scenario} must reject`);
-    assert.match(outcome.error.message, /did not settle within 5ms/u);
+    assert.match(
+      outcome.error.message,
+      /state-resolved Applied finality within 5ms/u,
+    );
     assert.equal(stalledOperations, 1, scenario);
   }
 

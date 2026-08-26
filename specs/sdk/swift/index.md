@@ -137,15 +137,15 @@ is reused by Rust, Python, JavaScript, and Swift; CI enforces parity via
 - A `404` from `/v1/pipeline/transactions/status` means Torii has no cached status yet
   (for example after a restart); the Swift SDK treats this as "pending" and keeps polling.
 - `pollPipelineStatus` monitors a hash that may have been submitted by another SDK or CLI.
-- `PipelineStatusPollOptions` configures polling interval, timeout, max attempts, and the
-  typed `PipelineTransactionState` sets used to classify success/failure. Defaults treat
-  Approved/Committed/Applied as success and Rejected/Expired as failure.
+- `PipelineStatusPollOptions` configures only polling interval, timeout, and max attempts.
+  Only global, state-resolved `Applied` with a positive height succeeds; state-resolved
+  `Rejected`/`Expired` fail, and every queue/cache hint remains pending.
 - `PipelineSubmitOptions` controls only the optional idempotency key for a single transaction
   submission attempt. The SDK rejects redirects and never retries signed bodies after
   transport failures or HTTP errors; reconcile ambiguous outcomes through the transaction
   hash/status route.
-- `pipelineEndpointMode` toggles between the modern `/v1/pipeline/*` endpoints and the
-  Torii nodes that have not adopted the pipeline routes yet.
+- Pipeline submission and status always use the first-release `/v1/pipeline/*` routes;
+  there is no endpoint or finality-policy selector.
 - Completion-based APIs return a `Task<Void, Never>` so callers can cancel outstanding
   polls from UI layers.
 - The `NoritoDemoXcode` sample ships with the pipeline helpers enabled out of the box; it
@@ -699,21 +699,20 @@ UI, use the canonical format described in [`specs/sns/address_display_guidelines
 
 ```swift
 let address = try AccountAddress.fromAccount(
-    domain: "default",
     publicKey: Data(repeating: 0, count: 32)
 )
-let formats = address.displayFormats(networkPrefix: 753)
+let formats = try address.displayFormats(networkPrefix: 753)
 
 print("i105", formats.i105)
 ```
 
-Account address domain labels are canonicalized to lowercase ASCII and must not contain whitespace
-or reserved characters (`@`, `#`, `$`). Use canonical ASCII/punycode labels when working with IDNs.
-Account addresses also validate public key lengths for known algorithms (ed25519 requires 32 bytes;
-secp256k1 requires 33 bytes when enabled), and reject empty keys.
+Account addresses are domainless and accept no domain label or selector. Domain routing and account
+aliases are explicit, separate records. Account addresses validate public key lengths for known
+algorithms (ed25519 requires 32 bytes; secp256k1 requires 33 bytes when enabled), and reject empty
+keys.
 
-Show i105 as the copy/share target (and QR payload), and highlight when the implicit `default` domain is in use. This keeps
-Swift parity with the Android/JS samples and prevents IME corruption of half-width kana.
+Show i105 as the copy/share target and QR payload. This keeps Swift parity with the Android/JS
+samples and prevents IME corruption of half-width kana.
 
 To embed the share-ready SVG exposed by ADDR-6b, call
 `ToriiClient.getExplorerAccountQr(accountId:)` and reuse the inline payload:

@@ -54,6 +54,8 @@ use thiserror::Error;
 pub const SORA_CONTAINER_MANIFEST_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraInrouManifestV1`].
 pub const SORA_INROU_MANIFEST_VERSION_V1: u16 = 1;
+/// Maximum number of portable path components in any first-release Inrou path.
+pub const SORA_INROU_PORTABLE_PATH_MAX_COMPONENTS_V1: usize = 64;
 /// Schema version for [`SoraServiceManifestV1`].
 pub const SORA_SERVICE_MANIFEST_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHttpServiceEconomicsV1`].
@@ -226,10 +228,6 @@ pub const SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraUploadedModelWrappedKeyV1`].
 pub const SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1: u16 = 1;
 const SORA_UPLOADED_MODEL_X25519_PUBLIC_KEY_BYTES: usize = 32;
-/// Schema version for [`SoraPrivateModelArtifactRefV1`].
-pub const SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1: u16 = 1;
-/// Schema version for [`SoraPrivateUploadedModelExecutionReceiptV1`].
-pub const SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHfSourceRecordV1`].
 pub const SORA_HF_SOURCE_RECORD_VERSION_V1: u16 = 1;
 /// Maximum byte length of one canonical, fully-qualified Hugging Face repository identifier.
@@ -320,12 +318,126 @@ pub fn derive_hf_source_id_v1(
         })?;
     Ok(Hash::new(payload))
 }
+/// Derive the canonical shared-lease pool identifier for one source and lease class.
+///
+/// The fixed domain tag prevents this identifier from aliasing any other protocol hash that
+/// happens to encode the same source, storage class, and term tuple.
+///
+/// # Errors
+/// Returns [`SoracloudManifestError`] if the canonical Norito preimage cannot be encoded.
+pub fn derive_hf_shared_lease_pool_id_v1(
+    source_id: Hash,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+) -> Result<Hash, SoracloudManifestError> {
+    let payload = norito::to_bytes(&(
+        "soracloud:hf-shared-lease-pool-id:v1",
+        source_id,
+        storage_class,
+        lease_term_ms,
+    ))
+    .map_err(|error| {
+        invalid_field(
+            "sora hf shared lease pool identity",
+            "pool_id",
+            format!("failed to encode the canonical pool preimage: {error}"),
+        )
+    })?;
+    Ok(Hash::new(payload))
+}
 /// Schema version for [`SoraModelHostCapabilityRecordV1`].
 pub const SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraInrouHostCapabilityRecordV1`].
 pub const SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
 /// Exact hosted-replica capacity of one qualified Inrou V1 host advert.
 pub const SORA_INROU_HOSTED_REPLICA_CAPACITY_V1: u16 = 1;
+/// One canonical framed instruction returned by a Soracloud mutation-draft endpoint.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct SoracloudTxInstruction {
+    /// Stable instruction wire identifier used to select the concrete decoder.
+    pub wire_id: String,
+    /// Lowercase hexadecimal canonical Norito instruction frame.
+    pub payload_hex: String,
+}
+impl SoracloudTxInstruction {
+    /// Validate the first-release instruction representation.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the wire identifier is not an exact nonblank
+    /// string or the payload is not nonempty, even-length, lowercase hexadecimal data.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_nonblank_field(
+            "soracloud transaction instruction",
+            "wire_id",
+            &self.wire_id,
+        )?;
+        if self.wire_id.trim() != self.wire_id {
+            return Err(invalid_field(
+                "soracloud transaction instruction",
+                "wire_id",
+                "must not contain leading or trailing whitespace",
+            ));
+        }
+        if self.payload_hex.is_empty()
+            || !self.payload_hex.len().is_multiple_of(2)
+            || !self
+                .payload_hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(invalid_field(
+                "soracloud transaction instruction",
+                "payload_hex",
+                "must be nonempty, even-length lowercase hexadecimal data",
+            ));
+        }
+        Ok(())
+    }
+}
+/// Exact first-release response returned by every Soracloud mutation-draft endpoint.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct SoracloudMutationDraftResponse {
+    /// Success marker. V1 admits only `true`; failures use a non-success HTTP response.
+    pub ok: bool,
+    /// Canonical account authority that must sign and submit the transaction.
+    pub authority: AccountId,
+    /// Canonical public key that authorized this exact draft.
+    pub signed_by: PublicKey,
+    /// Nonempty ordered canonical instruction frames to place in the transaction.
+    pub tx_instructions: Vec<SoracloudTxInstruction>,
+}
+impl SoracloudMutationDraftResponse {
+    /// Validate exact first-release mutation-draft semantics.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] for a false success marker, an empty instruction list,
+    /// or an invalid instruction frame. Identity fields are typed and therefore decode only from
+    /// their canonical first-release representations.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if !self.ok {
+            return Err(invalid_field(
+                "soracloud mutation draft response",
+                "ok",
+                "must be true; failures are represented by non-success HTTP responses",
+            ));
+        }
+        if self.tx_instructions.is_empty() {
+            return Err(invalid_field(
+                "soracloud mutation draft response",
+                "tx_instructions",
+                "must contain at least one canonical instruction",
+            ));
+        }
+        for instruction in &self.tx_instructions {
+            instruction.validate()?;
+        }
+        Ok(())
+    }
+}
 /// Fixed signature-domain tag for Soracloud runtime provenance preimages.
 pub const SORACLOUD_RUNTIME_PROVENANCE_DOMAIN_V1: &[u8] =
     b"iroha:soracloud:runtime-provenance:v1\x00";
@@ -395,6 +507,7 @@ include!("soracloud/host_protocol.rs");
 include!("soracloud/prelude.rs");
 #[cfg(test)]
 mod tests {
+    include!("soracloud/tests/mutation_draft.rs");
     include!("soracloud/tests/fixtures_and_manifests.rs");
     include!("soracloud/tests/proof_schemas.rs");
     include!("soracloud/tests/proof_validation.rs");

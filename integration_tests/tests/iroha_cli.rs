@@ -53,6 +53,29 @@ const SORACLOUD_TEST_SUBPROCESS_TIMEOUT_HEADROOM: Duration = Duration::from_secs
 const SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT: Duration = Duration::from_secs(60);
 const SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 const SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES: usize = 4_096;
+fn canonical_quantity_literal_from_nanos(nanos: u128) -> String {
+    const NANOS_PER_UNIT: u128 = 1_000_000_000;
+    let whole = nanos / NANOS_PER_UNIT;
+    let fractional = nanos % NANOS_PER_UNIT;
+    if fractional == 0 {
+        return whole.to_string();
+    }
+    let mut fractional = format!("{fractional:09}");
+    while fractional.ends_with('0') {
+        fractional.pop();
+    }
+    format!("{whole}.{fractional}")
+}
+#[test]
+fn nanos_to_quantity_fixture_spelling_is_canonical() {
+    assert_eq!(canonical_quantity_literal_from_nanos(0), "0");
+    assert_eq!(canonical_quantity_literal_from_nanos(10_000), "0.00001");
+    assert_eq!(canonical_quantity_literal_from_nanos(1_000_000_000), "1");
+    assert_eq!(
+        canonical_quantity_literal_from_nanos(1_234_567_890),
+        "1.23456789"
+    );
+}
 fn program() -> PathBuf {
     iroha_program().unwrap()
 }
@@ -587,7 +610,6 @@ fn namespaced_soracloud_command_args(args: &[&str]) -> Vec<String> {
         "model-weight-promote" => Some(("model", "weight-promote")),
         "model-weight-rollback" => Some(("model", "weight-rollback")),
         "model-weight-status" => Some(("model", "weight-status")),
-        "model-upload-encryption-recipient" => Some(("model", "upload-encryption-recipient")),
         "model-upload-register" => Some(("model", "upload-register")),
         "model-upload-status" => Some(("model", "upload-status")),
         "model-host-advertise" => Some(("model", "host-advertise")),
@@ -609,7 +631,6 @@ fn namespaced_soracloud_command_args(args: &[&str]) -> Vec<String> {
         "agent-message-ack" => Some(("agent", "message-ack")),
         "agent-mailbox-status" => Some(("agent", "mailbox-status")),
         "agent-artifact-allow" => Some(("agent", "artifact-allow")),
-        "agent-autonomy-run" => Some(("agent", "autonomy-run")),
         "agent-autonomy-status" => Some(("agent", "autonomy-status")),
         _ => None,
     };
@@ -1926,7 +1947,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
     let service_name_renew = "hf_lease_renew";
     let apartment_name = "ops_agent";
     let lease_term_ms = "60000".to_string();
-    let base_fee_nanos = "10000".to_string();
+    let base_fee = canonical_quantity_literal_from_nanos(10_000);
     let lease_asset_definition = lease_asset_definition.to_string();
     let torii_url = network.client().torii_url.to_string();
     let account_id = network.client().account.to_string();
@@ -1945,8 +1966,8 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
             lease_term_ms.as_str(),
             "--lease-asset-definition",
             lease_asset_definition.as_str(),
-            "--base-fee-nanos",
-            base_fee_nanos.as_str(),
+            "--base-fee",
+            base_fee.as_str(),
             "--torii-url",
             torii_url.as_str(),
         ],
@@ -1991,10 +2012,8 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         .and_then(Value::as_object)
         .expect("hf-deploy member object");
     assert_eq!(
-        deploy_member
-            .get("last_charge_nanos")
-            .and_then(Value::as_u64),
-        Some(10_000)
+        deploy_member.get("last_charge").and_then(Value::as_str),
+        Some(base_fee.as_str())
     );
     let service_status = run_soracloud_command(
         dir.path(),
@@ -2057,8 +2076,8 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
             lease_term_ms.as_str(),
             "--lease-asset-definition",
             lease_asset_definition.as_str(),
-            "--base-fee-nanos",
-            base_fee_nanos.as_str(),
+            "--base-fee",
+            base_fee.as_str(),
             "--torii-url",
             torii_url.as_str(),
         ],
@@ -2077,10 +2096,8 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         .and_then(Value::as_object)
         .expect("hf rebind member object");
     assert_eq!(
-        rebind_member
-            .get("last_charge_nanos")
-            .and_then(Value::as_u64),
-        Some(0)
+        rebind_member.get("last_charge").and_then(Value::as_str),
+        Some("0")
     );
     let rebind_services = rebind_member
         .get("service_bindings")
@@ -2193,8 +2210,8 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
             lease_term_ms.as_str(),
             "--lease-asset-definition",
             lease_asset_definition.as_str(),
-            "--base-fee-nanos",
-            base_fee_nanos.as_str(),
+            "--base-fee",
+            base_fee.as_str(),
             "--torii-url",
             torii_url.as_str(),
         ],
@@ -2219,10 +2236,8 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         Some("Active")
     );
     assert_eq!(
-        renew_member
-            .get("last_charge_nanos")
-            .and_then(Value::as_u64),
-        Some(10_000)
+        renew_member.get("last_charge").and_then(Value::as_str),
+        Some(base_fee.as_str())
     );
     let status_after_renew = run_soracloud_command(
         dir.path(),
@@ -2316,8 +2331,8 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     let renewed_model_name = "tiny-random-gpt2-renewed";
     let lease_term_ms_value = 30_000_u64;
     let lease_term_ms = lease_term_ms_value.to_string();
-    let base_fee_nanos = "10000".to_string();
-    let renewed_fee_nanos = "12000".to_string();
+    let base_fee = canonical_quantity_literal_from_nanos(10_000);
+    let renewed_fee = canonical_quantity_literal_from_nanos(12_000);
     let lease_asset_definition = lease_asset_definition.to_string();
     let torii_url = network.client().torii_url.to_string();
     let account_id = network.client().account.to_string();
@@ -2334,8 +2349,8 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
             lease_term_ms.as_str(),
             "--lease-asset-definition",
             lease_asset_definition.as_str(),
-            "--base-fee-nanos",
-            base_fee_nanos.as_str(),
+            "--base-fee",
+            base_fee.as_str(),
             "--torii-url",
             torii_url.as_str(),
         ],
@@ -2364,8 +2379,8 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
             lease_term_ms.as_str(),
             "--lease-asset-definition",
             lease_asset_definition.as_str(),
-            "--base-fee-nanos",
-            renewed_fee_nanos.as_str(),
+            "--base-fee",
+            renewed_fee.as_str(),
             "--torii-url",
             torii_url.as_str(),
         ],
@@ -2404,18 +2419,16 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         Some(queued_service_name)
     );
     assert_eq!(
-        queued_next_window
-            .get("base_fee_nanos")
-            .and_then(Value::as_u64),
-        Some(12_000)
+        queued_next_window.get("base_fee").and_then(Value::as_str),
+        Some(renewed_fee.as_str())
     );
     assert_eq!(
         renew_payload
             .get("member")
             .and_then(Value::as_object)
-            .and_then(|member| member.get("last_charge_nanos"))
-            .and_then(Value::as_u64),
-        Some(12_000)
+            .and_then(|member| member.get("last_charge"))
+            .and_then(Value::as_str),
+        Some(renewed_fee.as_str())
     );
     let current_window_expires_at_ms = renew_pool
         .get("window_expires_at_ms")
@@ -2472,8 +2485,8 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
             lease_term_ms.as_str(),
             "--lease-asset-definition",
             lease_asset_definition.as_str(),
-            "--base-fee-nanos",
-            renewed_fee_nanos.as_str(),
+            "--base-fee",
+            renewed_fee.as_str(),
             "--torii-url",
             torii_url.as_str(),
         ],
@@ -2491,9 +2504,9 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         promote_payload
             .get("member")
             .and_then(Value::as_object)
-            .and_then(|member| member.get("last_charge_nanos"))
-            .and_then(Value::as_u64),
-        Some(0)
+            .and_then(|member| member.get("last_charge"))
+            .and_then(Value::as_str),
+        Some("0")
     );
     let status = run_soracloud_command(
         dir.path(),
@@ -2538,8 +2551,8 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         "queued next window should be cleared after promotion: {status_pool:?}"
     );
     assert_eq!(
-        status_pool.get("base_fee_nanos").and_then(Value::as_u64),
-        Some(12_000)
+        status_pool.get("base_fee").and_then(Value::as_str),
+        Some(renewed_fee.as_str())
     );
     let status_member = status_payload
         .get("member")
@@ -2648,8 +2661,8 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
     let torii_url = network.client().torii_url.to_string();
     let lease_term_ms = 60_000_u64;
     let lease_term_ms_literal = lease_term_ms.to_string();
-    let base_fee_nanos = 10_000_u128;
-    let base_fee_nanos_literal = base_fee_nanos.to_string();
+    let base_fee_subunits = 10_000_u128;
+    let base_fee = canonical_quantity_literal_from_nanos(base_fee_subunits);
     let lease_asset_definition = lease_asset_definition.to_string();
     let alice_account_id = network.client().account.to_string();
     let bob_account_id = BOB_ID.to_string();
@@ -2667,8 +2680,8 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
             lease_term_ms_literal.as_str(),
             "--lease-asset-definition",
             lease_asset_definition.as_str(),
-            "--base-fee-nanos",
-            base_fee_nanos_literal.as_str(),
+            "--base-fee",
+            base_fee.as_str(),
             "--torii-url",
             torii_url.as_str(),
         ],
@@ -2687,9 +2700,9 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         alice_deploy_payload
             .get("member")
             .and_then(Value::as_object)
-            .and_then(|member| member.get("last_charge_nanos"))
-            .and_then(Value::as_u64),
-        Some(10_000)
+            .and_then(|member| member.get("last_charge"))
+            .and_then(Value::as_str),
+        Some(base_fee.as_str())
     );
     let bob_deploy = run_soracloud_command(
         dir.path(),
@@ -2704,8 +2717,8 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
             lease_term_ms_literal.as_str(),
             "--lease-asset-definition",
             lease_asset_definition.as_str(),
-            "--base-fee-nanos",
-            base_fee_nanos_literal.as_str(),
+            "--base-fee",
+            base_fee.as_str(),
             "--torii-url",
             torii_url.as_str(),
         ],
@@ -2782,15 +2795,15 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
                 .expect("bob occurred_at_ms"),
         );
     let bob_expected_charge =
-        (base_fee_nanos * u128::from(bob_remaining_ms) / u128::from(lease_term_ms)) / 2;
+        (base_fee_subunits * u128::from(bob_remaining_ms) / u128::from(lease_term_ms)) / 2;
+    let bob_expected_charge_quantity = canonical_quantity_literal_from_nanos(bob_expected_charge);
     assert_eq!(
         bob_deploy_payload
             .get("member")
             .and_then(Value::as_object)
-            .and_then(|member| member.get("last_charge_nanos"))
-            .and_then(Value::as_u64)
-            .map(u128::from),
-        Some(bob_expected_charge)
+            .and_then(|member| member.get("last_charge"))
+            .and_then(Value::as_str),
+        Some(bob_expected_charge_quantity.as_str())
     );
     let carpenter_deploy = run_soracloud_command(
         dir.path(),
@@ -2805,8 +2818,8 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
             lease_term_ms_literal.as_str(),
             "--lease-asset-definition",
             lease_asset_definition.as_str(),
-            "--base-fee-nanos",
-            base_fee_nanos_literal.as_str(),
+            "--base-fee",
+            base_fee.as_str(),
             "--torii-url",
             torii_url.as_str(),
         ],
@@ -2888,15 +2901,16 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
                 .expect("carpenter occurred_at_ms"),
         );
     let carpenter_expected_charge =
-        (base_fee_nanos * u128::from(carpenter_remaining_ms) / u128::from(lease_term_ms)) / 3;
+        (base_fee_subunits * u128::from(carpenter_remaining_ms) / u128::from(lease_term_ms)) / 3;
+    let carpenter_expected_charge_quantity =
+        canonical_quantity_literal_from_nanos(carpenter_expected_charge);
     assert_eq!(
         carpenter_deploy_payload
             .get("member")
             .and_then(Value::as_object)
-            .and_then(|member| member.get("last_charge_nanos"))
-            .and_then(Value::as_u64)
-            .map(u128::from),
-        Some(carpenter_expected_charge)
+            .and_then(|member| member.get("last_charge"))
+            .and_then(Value::as_str),
+        Some(carpenter_expected_charge_quantity.as_str())
     );
     let alice_status_payload = wait_for_soracloud_hf_status_payload(
         dir.path(),
@@ -2916,8 +2930,8 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
                 && payload
                     .get("member")
                     .and_then(Value::as_object)
-                    .and_then(|member| member.get("total_refunded_nanos"))
-                    .and_then(Value::as_u64)
+                    .and_then(|member| member.get("total_refunded"))
+                    .and_then(Value::as_str)
                     .is_some()
         },
     )
@@ -2944,8 +2958,8 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
                 && payload
                     .get("member")
                     .and_then(Value::as_object)
-                    .and_then(|member| member.get("total_refunded_nanos"))
-                    .and_then(Value::as_u64)
+                    .and_then(|member| member.get("total_refunded"))
+                    .and_then(Value::as_str)
                     .is_some()
         },
     )
@@ -2985,6 +2999,9 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
             carpenter_base_refund + carpenter_remainder,
         )
     };
+    let alice_expected_refund_quantity =
+        canonical_quantity_literal_from_nanos(bob_expected_charge + alice_carpenter_refund);
+    let bob_expected_refund_quantity = canonical_quantity_literal_from_nanos(bob_carpenter_refund);
     assert_eq!(
         alice_status_payload
             .get("pool")
@@ -3010,46 +3027,30 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         Some(3)
     );
     assert_eq!(
-        alice_member
-            .get("total_paid_nanos")
-            .and_then(Value::as_u64)
-            .map(u128::from),
-        Some(base_fee_nanos)
+        alice_member.get("total_paid").and_then(Value::as_str),
+        Some(base_fee.as_str())
     );
     assert_eq!(
-        alice_member
-            .get("total_refunded_nanos")
-            .and_then(Value::as_u64)
-            .map(u128::from),
-        Some(bob_expected_charge + alice_carpenter_refund)
+        alice_member.get("total_refunded").and_then(Value::as_str),
+        Some(alice_expected_refund_quantity.as_str())
     );
     assert_eq!(
-        bob_member
-            .get("total_paid_nanos")
-            .and_then(Value::as_u64)
-            .map(u128::from),
-        Some(bob_expected_charge)
+        bob_member.get("total_paid").and_then(Value::as_str),
+        Some(bob_expected_charge_quantity.as_str())
     );
     assert_eq!(
-        bob_member
-            .get("total_refunded_nanos")
-            .and_then(Value::as_u64)
-            .map(u128::from),
-        Some(bob_carpenter_refund)
+        bob_member.get("total_refunded").and_then(Value::as_str),
+        Some(bob_expected_refund_quantity.as_str())
+    );
+    assert_eq!(
+        carpenter_member.get("total_paid").and_then(Value::as_str),
+        Some(carpenter_expected_charge_quantity.as_str())
     );
     assert_eq!(
         carpenter_member
-            .get("total_paid_nanos")
-            .and_then(Value::as_u64)
-            .map(u128::from),
-        Some(carpenter_expected_charge)
-    );
-    assert_eq!(
-        carpenter_member
-            .get("total_refunded_nanos")
-            .and_then(Value::as_u64)
-            .map(u128::from),
-        Some(0)
+            .get("total_refunded")
+            .and_then(Value::as_str),
+        Some("0")
     );
     Ok(())
 }
@@ -3298,7 +3299,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
     Ok(())
 }
 #[tokio::test]
-async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyre::Result<()> {
+async fn soracloud_agent_autonomy_controls_use_live_torii_control_plane() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
@@ -3309,7 +3310,7 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
-        stringify!(soracloud_agent_autonomy_runtime_uses_live_torii_control_plane),
+        stringify!(soracloud_agent_autonomy_controls_use_live_torii_control_plane),
     )
     .await?
     else {
@@ -3381,34 +3382,6 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
             .and_then(Value::as_u64),
         Some(500)
     );
-    let run = run_bounded_soracloud_success!(
-        cli,
-        SoracloudSuccessCase::new("autonomy run");
-        "agent", "autonomy-run",
-        "--apartment-name", "ops_agent",
-        "--artifact-hash", "hash:ABCD0123#01",
-        "--provenance-hash", "hash:PROV0001#01",
-        "--budget-units", "120",
-        "--run-label", "nightly-train-step-1",
-        "--torii-url", network.client().torii_url.to_string(),
-    );
-    let run_payload: Value = json::from_slice(&run.stdout).expect("agent run JSON payload");
-    assert_eq!(
-        run_payload.get("run_count").and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        run_payload
-            .get("budget_remaining_units")
-            .and_then(Value::as_u64),
-        Some(380)
-    );
-    assert!(
-        run_payload
-            .get("run_id")
-            .and_then(Value::as_str)
-            .is_some_and(|run_id| !run_id.is_empty())
-    );
     let status = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("autonomy status");
@@ -3426,13 +3399,13 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
     );
     assert_eq!(
         status_payload.get("run_count").and_then(Value::as_u64),
-        Some(1)
+        Some(0)
     );
     assert_eq!(
         status_payload
             .get("budget_remaining_units")
             .and_then(Value::as_u64),
-        Some(380)
+        Some(500)
     );
     let revoke = run_bounded_soracloud_success!(
         cli,
@@ -3450,27 +3423,6 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
             .get("revoked_policy_capability_count")
             .and_then(Value::as_u64),
         Some(1)
-    );
-    let revoked_run = run_bounded_soracloud_command!(
-        cli;
-        "agent", "autonomy-run",
-        "--apartment-name", "ops_agent",
-        "--artifact-hash", "hash:ABCD0123#01",
-        "--provenance-hash", "hash:PROV0001#01",
-        "--budget-units", "1",
-        "--run-label", "revoked",
-        "--torii-url", network.client().torii_url.to_string(),
-    );
-    assert!(
-        !revoked_run.status.success(),
-        "autonomy run with revoked capability should fail, stdout: {}, stderr: {}",
-        String::from_utf8_lossy(&revoked_run.stdout),
-        String::from_utf8_lossy(&revoked_run.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&revoked_run.stderr).contains("agent.autonomy.run"),
-        "unexpected revoked-capability error: {}",
-        String::from_utf8_lossy(&revoked_run.stderr)
     );
     Ok(())
 }
@@ -3553,8 +3505,9 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         cli;
         "agent", "wallet-spend",
         "--apartment-name", "ops_agent",
+        "--request-id", "expired-wallet-request-1",
         "--asset-definition", "61CtjvNd9T3THAR65GsMVHr82Bjc",
-        "--amount-nanos", "1000",
+        "--amount", "0.000001",
         "--torii-url", network.client().torii_url.to_string(),
     );
     assert!(
@@ -3616,22 +3569,25 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         apartment.get("restart_count").and_then(Value::as_u64),
         Some(1)
     );
+    let request_id = "integration-wallet-request-1";
     let wallet_request = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("wallet spend");
         "agent", "wallet-spend",
         "--apartment-name", "ops_agent",
+        "--request-id", request_id,
         "--asset-definition", "61CtjvNd9T3THAR65GsMVHr82Bjc",
-        "--amount-nanos", "1000000",
+        "--amount", "0.001",
         "--torii-url", network.client().torii_url.to_string(),
     );
     let wallet_request_payload: Value =
         json::from_slice(&wallet_request.stdout).expect("wallet request JSON payload");
-    let request_id = wallet_request_payload
-        .get("request_id")
-        .and_then(Value::as_str)
-        .expect("wallet request id present")
-        .to_owned();
+    assert_eq!(
+        wallet_request_payload
+            .get("request_id")
+            .and_then(Value::as_str),
+        Some(request_id)
+    );
     assert_eq!(
         wallet_request_payload
             .get("pending_request_count")
@@ -3770,11 +3726,12 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
     let mut sender: AgentApartmentManifestV1 = norito::json::from_slice(&std::fs::read(
         soracloud_fixture("fixtures/soracloud/agent_apartment_manifest_v1.json"),
     )?)?;
-    for capability in ["agent.mailbox.send", "agent.autonomy.run"] {
-        let parsed = capability.parse().expect("valid capability");
-        if !sender.policy_capabilities.contains(&parsed) {
-            sender.policy_capabilities.push(parsed);
-        }
+    let mailbox_send_capability = "agent.mailbox.send".parse().expect("valid capability");
+    if !sender
+        .policy_capabilities
+        .contains(&mailbox_send_capability)
+    {
+        sender.policy_capabilities.push(mailbox_send_capability);
     }
     sender
         .validate()
@@ -3832,61 +3789,25 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         "--provenance-hash", "hash:PROV0001#01",
         "--torii-url", &restart_torii_url,
     );
-    let run_before_restart = run_bounded_soracloud_success!(
-        cli,
-        SoracloudSuccessCase::new("autonomy run before restart");
-        "agent", "autonomy-run",
-        "--apartment-name", "ops_agent",
-        "--artifact-hash", "hash:ABCD0123#01",
-        "--provenance-hash", "hash:PROV0001#01",
-        "--budget-units", "120",
-        "--run-label", "before-restart",
-        "--torii-url", &restart_torii_url,
-    );
-    let run_before_restart_payload: Value =
-        json::from_slice(&run_before_restart.stdout).expect("autonomy run JSON payload");
-    assert_eq!(
-        run_before_restart_payload
-            .get("budget_remaining_units")
-            .and_then(Value::as_u64),
-        Some(380)
-    );
-    assert_eq!(
-        run_before_restart_payload
-            .get("checkpoint_count")
-            .and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        run_before_restart_payload
-            .get("persistent_state_key_count")
-            .and_then(Value::as_u64),
-        Some(1)
-    );
-    let persistent_bytes_after_first_run = run_before_restart_payload
-        .get("persistent_state_total_bytes")
-        .and_then(Value::as_u64)
-        .expect("persistent_state_total_bytes after first run");
-    assert!(
-        persistent_bytes_after_first_run > 0,
-        "first autonomy run should create a persisted checkpoint"
-    );
+    let request_id = "restart-wallet-request-1";
     let wallet_request = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("wallet request");
         "agent", "wallet-spend",
         "--apartment-name", "ops_agent",
+        "--request-id", request_id,
         "--asset-definition", "61CtjvNd9T3THAR65GsMVHr82Bjc",
-        "--amount-nanos", "1000000",
+        "--amount", "0.001",
         "--torii-url", &restart_torii_url,
     );
     let wallet_request_payload: Value =
         json::from_slice(&wallet_request.stdout).expect("wallet request JSON payload");
-    let request_id = wallet_request_payload
-        .get("request_id")
-        .and_then(Value::as_str)
-        .expect("wallet request id present")
-        .to_owned();
+    assert_eq!(
+        wallet_request_payload
+            .get("request_id")
+            .and_then(Value::as_str),
+        Some(request_id)
+    );
     assert_eq!(
         wallet_request_payload
             .get("pending_request_count")
@@ -3955,7 +3876,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
     );
     assert_eq!(
         apartment.get("autonomy_run_count").and_then(Value::as_u64),
-        Some(1)
+        Some(0)
     );
     assert_eq!(
         apartment.get("process_generation").and_then(Value::as_u64),
@@ -3963,19 +3884,19 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
     );
     assert_eq!(
         apartment.get("checkpoint_count").and_then(Value::as_u64),
-        Some(1)
+        Some(0)
     );
     assert_eq!(
         apartment
             .get("persistent_state_key_count")
             .and_then(Value::as_u64),
-        Some(1)
+        Some(0)
     );
-    assert!(
+    assert_eq!(
         apartment
             .get("persistent_state_total_bytes")
-            .and_then(Value::as_u64)
-            .is_some_and(|bytes| bytes >= persistent_bytes_after_first_run)
+            .and_then(Value::as_u64),
+        Some(0)
     );
     assert!(
         apartment
@@ -4018,13 +3939,13 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         autonomy_status_after_restart_payload
             .get("run_count")
             .and_then(Value::as_u64),
-        Some(1)
+        Some(0)
     );
     assert_eq!(
         autonomy_status_after_restart_payload
             .get("budget_remaining_units")
             .and_then(Value::as_u64),
-        Some(380)
+        Some(500)
     );
     assert_eq!(
         autonomy_status_after_restart_payload
@@ -4036,19 +3957,19 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         autonomy_status_after_restart_payload
             .get("checkpoint_count")
             .and_then(Value::as_u64),
-        Some(1)
+        Some(0)
     );
     assert_eq!(
         autonomy_status_after_restart_payload
             .get("persistent_state_key_count")
             .and_then(Value::as_u64),
-        Some(1)
+        Some(0)
     );
-    assert!(
+    assert_eq!(
         autonomy_status_after_restart_payload
             .get("persistent_state_total_bytes")
-            .and_then(Value::as_u64)
-            .is_some_and(|bytes| bytes >= persistent_bytes_after_first_run)
+            .and_then(Value::as_u64),
+        Some(0)
     );
     let mailbox_status_after_restart = run_bounded_soracloud_success!(
         cli,
@@ -4106,55 +4027,6 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
             .and_then(Value::as_u64),
         Some(0)
     );
-    let run_after_restart = run_bounded_soracloud_success!(
-        cli,
-        SoracloudSuccessCase::new("autonomy run after restart");
-        "agent", "autonomy-run",
-        "--apartment-name", "ops_agent",
-        "--artifact-hash", "hash:ABCD0123#01",
-        "--provenance-hash", "hash:PROV0001#01",
-        "--budget-units", "50",
-        "--run-label", "after-restart",
-        "--torii-url", &restart_torii_url,
-    );
-    let run_after_restart_payload: Value =
-        json::from_slice(&run_after_restart.stdout).expect("autonomy run after restart payload");
-    assert_eq!(
-        run_after_restart_payload
-            .get("run_count")
-            .and_then(Value::as_u64),
-        Some(2)
-    );
-    assert_eq!(
-        run_after_restart_payload
-            .get("budget_remaining_units")
-            .and_then(Value::as_u64),
-        Some(330)
-    );
-    assert_eq!(
-        run_after_restart_payload
-            .get("checkpoint_count")
-            .and_then(Value::as_u64),
-        Some(2)
-    );
-    assert_eq!(
-        run_after_restart_payload
-            .get("persistent_state_key_count")
-            .and_then(Value::as_u64),
-        Some(2)
-    );
-    assert_eq!(
-        run_after_restart_payload
-            .get("process_generation")
-            .and_then(Value::as_u64),
-        Some(process_generation_after_manual_restart)
-    );
-    assert!(
-        run_after_restart_payload
-            .get("persistent_state_total_bytes")
-            .and_then(Value::as_u64)
-            .is_some_and(|bytes| bytes > persistent_bytes_after_first_run)
-    );
     let mailbox_status_empty = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("mailbox status final check");
@@ -4173,7 +4045,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
     Ok(())
 }
 #[tokio::test]
-async fn soracloud_agent_autonomy_commands_require_torii_url() -> eyre::Result<()> {
+async fn soracloud_agent_autonomy_control_commands_require_torii_url() -> eyre::Result<()> {
     let config = local_program_config();
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -4222,25 +4094,6 @@ async fn soracloud_agent_autonomy_commands_require_torii_url() -> eyre::Result<(
     )
     .await?;
     assert_requires_torii_url(&allow);
-    let run = run_soracloud_command(
-        dir.path(),
-        &config,
-        &[
-            "agent-autonomy-run",
-            "--apartment-name",
-            "ops_agent",
-            "--artifact-hash",
-            "hash:ABCD0123#01",
-            "--provenance-hash",
-            "hash:PROV0001#01",
-            "--budget-units",
-            "120",
-            "--run-label",
-            "nightly-train-step-1",
-        ],
-    )
-    .await?;
-    assert_requires_torii_url(&run);
     let status = run_soracloud_command(
         dir.path(),
         &config,
@@ -4335,10 +4188,12 @@ async fn soracloud_agent_wallet_and_mailbox_commands_require_torii_url() -> eyre
             "agent-wallet-spend",
             "--apartment-name",
             "ops_agent",
+            "--request-id",
+            "requires-url-wallet-request-1",
             "--asset-definition",
             "61CtjvNd9T3THAR65GsMVHr82Bjc",
-            "--amount-nanos",
-            "1000000",
+            "--amount",
+            "0.001",
         ],
     )
     .await?;
@@ -4461,10 +4316,12 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
             "agent-wallet-spend",
             "--apartment-name",
             "ops_agent",
+            "--request-id",
+            "nested-requires-url-wallet-request-1",
             "--asset-definition",
             "61CtjvNd9T3THAR65GsMVHr82Bjc",
-            "--amount-nanos",
-            "1000",
+            "--amount",
+            "0.000001",
         ],
     )
     .await?;
@@ -4501,7 +4358,7 @@ async fn soracloud_hf_shared_lease_commands_require_torii_url() -> eyre::Result<
     )
     .await?;
     let lease_term_ms = "60000".to_string();
-    let base_fee_nanos = "10000".to_string();
+    let base_fee = canonical_quantity_literal_from_nanos(10_000);
     let lease_asset_definition = soracloud_hf_lease_asset_definition().to_string();
     let deploy = run_soracloud_command(
         dir.path(),
@@ -4516,12 +4373,40 @@ async fn soracloud_hf_shared_lease_commands_require_torii_url() -> eyre::Result<
             lease_term_ms.as_str(),
             "--lease-asset-definition",
             lease_asset_definition.as_str(),
-            "--base-fee-nanos",
-            base_fee_nanos.as_str(),
+            "--base-fee",
+            base_fee.as_str(),
         ],
     )
     .await?;
     assert_requires_torii_url(&deploy);
+    let retired_base_fee_flag = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-deploy",
+            "--repo-id",
+            "openai/gpt-oss",
+            "--service-name",
+            "hf_lease_a",
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+            "--lease-asset-definition",
+            lease_asset_definition.as_str(),
+            "--base-fee-nanos",
+            "10000",
+        ],
+    )
+    .await?;
+    assert!(
+        !retired_base_fee_flag.status.success(),
+        "retired --base-fee-nanos flag must be rejected"
+    );
+    let retired_base_fee_stderr = String::from_utf8_lossy(&retired_base_fee_flag.stderr);
+    assert!(
+        retired_base_fee_stderr.contains("--base-fee-nanos")
+            && retired_base_fee_stderr.contains("unexpected argument"),
+        "unexpected retired flag stderr: {retired_base_fee_stderr}"
+    );
     let status = run_soracloud_command(
         dir.path(),
         &config,
@@ -4563,8 +4448,8 @@ async fn soracloud_hf_shared_lease_commands_require_torii_url() -> eyre::Result<
             lease_term_ms.as_str(),
             "--lease-asset-definition",
             lease_asset_definition.as_str(),
-            "--base-fee-nanos",
-            base_fee_nanos.as_str(),
+            "--base-fee",
+            base_fee.as_str(),
         ],
     )
     .await?;

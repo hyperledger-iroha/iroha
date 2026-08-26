@@ -1309,7 +1309,7 @@ async fn execute_torii_read_via_nexus_for_supported_routes(
     execute_torii_proxy_request_with_fallback(
         app,
         nexus_route,
-        ToriiProxyRequestKindV4::ReadFanout(request),
+        ToriiProxyRequestKindV1::ReadFanout(request),
     )
     .await
 }

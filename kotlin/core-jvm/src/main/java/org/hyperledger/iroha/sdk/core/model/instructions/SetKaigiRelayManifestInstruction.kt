@@ -52,7 +52,7 @@ class SetKaigiRelayManifestInstruction internal constructor(
         fun addRelayManifestHop(relayId: String, hpkePublicKeyBase64: String, weight: Int) = apply {
             require(relayId.isNotBlank()) { "relayId must not be blank" }
             val normalizedKey = KaigiInstructionUtils.requireBase64(hpkePublicKeyBase64, "hpkePublicKey")
-            require(weight in 0..0xFF) { "relay hop weight must fit in an unsigned byte" }
+            require(weight in 1..0xFF) { "relay hop weight must be between 1 and 255" }
             relayManifestHops.add(
                 KaigiInstructionUtils.RelayManifestHop(relayId, normalizedKey, weight),
             )
@@ -86,7 +86,9 @@ class SetKaigiRelayManifestInstruction internal constructor(
             val copy = relayManifestHops.map {
                 KaigiInstructionUtils.RelayManifestHop(it.relayId, it.hpkePublicKey, it.weight)
             }
-            return KaigiInstructionUtils.RelayManifest(relayManifestExpiry, copy.toList())
+            return KaigiInstructionUtils.validateRelayManifest(
+                KaigiInstructionUtils.RelayManifest(relayManifestExpiry, copy.toList()),
+            )
         }
 
         private fun canonicalArguments(

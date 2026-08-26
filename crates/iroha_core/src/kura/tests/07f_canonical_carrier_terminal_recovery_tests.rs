@@ -76,19 +76,19 @@ fn install_live_lifecycle_cursor_for_terminal_test(
             ..ProductionInFlightFirstReleaseSessionProjection::default()
         },
         history: ProductionInFlightFirstReleaseHistoryProjection {
-            ever_queue_plan_v4: true,
-            ever_reservation_v5: true,
+            ever_queue_plan_v1: true,
+            ever_reservation_v1: true,
             ..ProductionInFlightFirstReleaseHistoryProjection::default()
         },
         decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
         release: ProductionInFlightFirstReleaseReleaseProjection::default(),
     };
     assert!(production_in_flight_first_release_state_kernel(state));
-    let unsigned = AutonomousLifecycleCursorUnsignedV2::new(
+    let unsigned = AutonomousLifecycleCursorUnsignedV1::new(
         1,
         None,
         binding.clone(),
-        AutonomousLifecycleCursorPhaseV2::live(generation.generation(), state)
+        AutonomousLifecycleCursorPhaseV1::live(generation.generation(), state)
             .expect("construct terminal-outcome Live phase"),
         local_peer,
     )
@@ -124,7 +124,7 @@ fn release_terminal_projection_for_test(
     kura: &Kura,
     payload: &LaneExecutablePayloadV1,
     retirement: &AutonomousLaneSlotRetirementV1,
-    barrier: &LaneQueueReservationReleaseBarrierV3,
+    barrier: &LaneQueueReservationReleaseBarrierV1,
 ) -> ProductionInFlightFirstReleaseStateProjection {
     let authorization =
         AutonomousLaneReleaseProjectionContext::from_payload(kura, payload, retirement)
@@ -181,8 +181,8 @@ fn canonical_terminal_payload_for_test(
             &local_peer,
         )
         .expect("derive canonical terminal reservation identities");
-    let reservation = LaneQueueReservationKeyV2 {
-        version: LaneQueueReservationKeyV2::VERSION,
+    let reservation = LaneQueueReservationKeyV1 {
+        version: LaneQueueReservationKeyV1::VERSION,
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
             b"kura:canonical-terminal:queue-plan:v1\0",
@@ -406,8 +406,8 @@ fn canonical_terminal_projection_for_test(
             ..ProductionInFlightFirstReleaseSessionProjection::default()
         },
         history: ProductionInFlightFirstReleaseHistoryProjection {
-            ever_queue_plan_v4: true,
-            ever_reservation_v5: true,
+            ever_queue_plan_v1: true,
+            ever_reservation_v1: true,
             ever_execution_input_durable: 1,
             ever_ready_authorized: 1,
             ready_signed: 1,

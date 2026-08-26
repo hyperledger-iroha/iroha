@@ -210,10 +210,10 @@ unsafe fn parse_connect_approval_inputs(
     })
     .map_err(|_| ERR_CONNECT_APPROVAL)?;
     let parsed_account = AccountId::parse_encoded(account_id).map_err(|_| ERR_CONNECT_APPROVAL)?;
-    if parsed_account.canonical() != account_id {
+    if parsed_account.to_string() != account_id {
         return Err(ERR_CONNECT_APPROVAL);
     }
-    let account = parsed_account.into_account_id();
+    let account = parsed_account;
     let account_signatory = account
         .try_signatory()
         .filter(|key| key.try_algorithm().ok() == Some(Algorithm::Ed25519))

@@ -823,30 +823,33 @@ fn validate_fx_settlement_preconditions(
     }
     ensure_account_exists(stx, &destination_escrow)?;
     ensure_account_exists(stx, &instruction.recipient)?;
-    let matched_domains = stx
-        .world
-        .bound_account_aliases(&instruction.recipient)
-        .into_iter()
-        .filter(|alias| {
-            crate::sns::resolve_active_account_alias(
-                &stx.world,
-                &stx.nexus.dataspace_catalog,
-                alias,
-                stx.block_unix_timestamp_ms(),
-            )
-            .as_ref()
-                == Some(&instruction.recipient)
-        })
-        .filter(|alias| alias.dataspace == policy.destination_dataspace)
-        .map(|alias| alias.domain_id(&stx.nexus.dataspace_catalog))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| {
-            invalid_fx_parameter(format!("invalid FX recipient alias domain binding: {err}"))
-        })?
-        .into_iter()
-        .flatten()
-        .filter(|domain| policy.allowed_destination_alias_domains.contains(domain))
-        .collect::<BTreeSet<_>>();
+    let mut matched_domains = BTreeSet::new();
+    for alias in stx.world.bound_account_aliases(&instruction.recipient) {
+        let resolved = crate::sns::resolve_active_account_alias(
+            &stx.world,
+            &stx.nexus.dataspace_catalog,
+            &alias,
+            stx.block_unix_timestamp_ms(),
+        )
+        .map_err(|error| {
+            invalid_fx_parameter(format!("invalid FX recipient SNS alias state: {error}"))
+        })?;
+        if resolved.as_ref() != Some(&instruction.recipient)
+            || alias.dataspace != policy.destination_dataspace
+        {
+            continue;
+        }
+        let domain = alias
+            .domain_id(&stx.nexus.dataspace_catalog)
+            .map_err(|err| {
+                invalid_fx_parameter(format!("invalid FX recipient alias domain binding: {err}"))
+            })?;
+        if let Some(domain) = domain
+            && policy.allowed_destination_alias_domains.contains(&domain)
+        {
+            matched_domains.insert(domain);
+        }
+    }
     match matched_domains.len() {
         1 => {}
         0 => {

@@ -39,7 +39,6 @@
           }
         ]
       },
-      "allow_wallet_signing": true,
       "allow_state_writes": true,
       "allow_model_inference": true,
       "allow_model_training": false
@@ -48,7 +47,7 @@
       "cpu_millis": 750,
       "memory_bytes": 536870912,
       "ephemeral_storage_bytes": 2147483648,
-      "max_open_files": 512,
+      "max_open_files_per_process": 512,
       "max_tasks": 64
     },
     "lifecycle": {
@@ -66,7 +65,7 @@
       "value": null
     },
     "container": {
-      "manifest_hash": "hash:1D4E71777486DBA39E6DF42EFD3460A09F0055C94D9680AF08647E69B9DE07FD#492B",
+      "manifest_hash": "hash:A9179ED4274BCFC37045757762CEBFB373ED5988C8B8BCABB4E5B88E8DF842F3#047C",
       "expected_schema_version": 1
     },
     "replicas": 3,
@@ -84,7 +83,7 @@
       }
     },
     "rollout": {
-      "canary_percent": 20,
+      "canary_percent": 0,
       "max_unavailable_replicas": 1,
       "health_window_secs": 45,
       "automatic_rollback_failures": 3
@@ -94,9 +93,9 @@
       "quota_class": "taira-open",
       "deployment_deposit": "1",
       "prepaid_runtime_balance": "50",
-      "lease_duration_sequences": 86400,
-      "runtime_price_per_sequence": "0.00025",
-      "storage_price_per_gib_sequence": "0.000025",
+      "lease_duration_blocks": 86400,
+      "runtime_price_per_block": "0.00025",
+      "storage_price_per_gib_block": "0.000025",
       "egress_price_per_mib": "0.000005"
     },
     "state_bindings": [
@@ -189,19 +188,19 @@
         }
       },
       {
-        "handler_name": "private_update",
+        "handler_name": "ciphertext_update",
         "class": {
-          "class": "PrivateUpdate",
+          "class": "Update",
           "value": null
         },
-        "entrypoint": "apply_private_update",
-        "route_path": "/private/update",
+        "entrypoint": "apply_ciphertext_update",
+        "route_path": "/ciphertext/update",
         "certified_response": {
           "certified_response": "None",
           "value": null
         },
         "mailbox": {
-          "queue_name": "private_updates",
+          "queue_name": "ciphertext_updates",
           "max_pending_messages": 256,
           "max_message_bytes": 131072,
           "retention_blocks": 2880
@@ -234,7 +233,7 @@
         },
         "artifact_hash": "hash:1112131415161718191A1B1C1D1E1F202122232425262728292A2B2C2D2E2F31#011A",
         "artifact_path": "/checkpoints/portal.chk",
-        "handler_name": "private_update"
+        "handler_name": "ciphertext_update"
       }
     ]
   }

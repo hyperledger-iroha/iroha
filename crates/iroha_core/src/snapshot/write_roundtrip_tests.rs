@@ -57,7 +57,7 @@ async fn generated_snapshot_passes_restart_validation_before_publication() {
         .expect("writer-generated snapshot must survive restart initialization exactly");
 }
 #[tokio::test]
-async fn canonicalized_account_metadata_survives_the_snapshot_restart_boundary() {
+async fn canonical_account_metadata_survives_the_snapshot_restart_boundary() {
     let state = state_factory();
     let owner = state
         .world
@@ -68,8 +68,7 @@ async fn canonicalized_account_metadata_survives_the_snapshot_restart_boundary()
         .map(|(account_id, _)| account_id.clone())
         .expect("snapshot fixture account");
     let key = "snapshot_probe".parse().expect("metadata key");
-    let value = Json::from_raw_json("1 ".to_owned())
-        .expect("valid alternate JSON spelling must canonicalize at construction");
+    let value = Json::from_raw_json("1".to_owned()).expect("canonical JSON spelling");
     assert_eq!(value.get(), "1");
     let mut accounts = state.world.accounts.block();
     accounts

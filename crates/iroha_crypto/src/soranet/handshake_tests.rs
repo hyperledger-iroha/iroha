@@ -4,12 +4,35 @@ mod tests {
     use core::ops::Range;
     use rand::{SeedableRng, rngs::StdRng};
     use rand_core::{CryptoRng, RngCore, TryCryptoRng, TryRngCore};
-    fn checked_random_keypair() -> KeyPair {
-        KeyPair::try_random().expect("generate checked SoraNet handshake fixture keypair")
+    const TEST_RELAY_AUTHENTICATED_BINDING: [u8; TRANSCRIPT_BINDING_LEN] =
+        [0xB7; TRANSCRIPT_BINDING_LEN];
+    fn checked_random_keypair() -> RelayAuthenticationSignerV1 {
+        RelayAuthenticationSignerV1::try_new(
+            Arc::new(
+                KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+                    .expect("generate checked Ed25519 relay identity"),
+            ),
+            Arc::new(
+                KeyPair::try_random_with_algorithm(Algorithm::MlDsa)
+                    .expect("generate checked ML-DSA-65 relay identity"),
+            ),
+            TEST_RELAY_AUTHENTICATED_BINDING,
+        )
+        .expect("construct checked relay authentication signer")
     }
-    fn checked_seeded_keypair(seed: u8) -> KeyPair {
-        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-            .expect("derive checked SoraNet handshake fixture keypair")
+    fn checked_seeded_keypair(seed: u8) -> RelayAuthenticationSignerV1 {
+        RelayAuthenticationSignerV1::try_new(
+            Arc::new(
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    .expect("derive checked Ed25519 relay identity"),
+            ),
+            Arc::new(
+                KeyPair::try_from_seed(vec![seed ^ 0xA5; 32], Algorithm::MlDsa)
+                    .expect("derive checked ML-DSA-65 relay identity"),
+            ),
+            TEST_RELAY_AUTHENTICATED_BINDING,
+        )
+        .expect("construct checked relay authentication signer")
     }
     #[test]
     fn bounded_fixture_reader_enforces_the_requested_limit() {
@@ -71,13 +94,12 @@ mod tests {
             HarnessError::Io(ref error) if error.kind() == io::ErrorKind::InvalidData
         ));
     }
-    fn assert_relay_authentication_roundtrip(algorithm: Algorithm, seed: u8) {
-        let relay_keys = KeyPair::try_from_seed(vec![seed; 32], algorithm)
-            .expect("derive checked relay identity keypair");
-        let wrong_relay_keys = KeyPair::try_from_seed(vec![seed.wrapping_add(1); 32], algorithm)
-            .expect("derive checked mismatched relay identity keypair");
-        let client_hello = b"algorithm-agile-client-hello";
-        let relay_body = b"algorithm-agile-relay-body";
+    #[test]
+    fn relay_authentication_roundtrip_rejects_key_binding_and_signature_tamper() {
+        let relay_keys = checked_seeded_keypair(0x61);
+        let wrong_relay_keys = checked_seeded_keypair(0x62);
+        let client_hello = b"dual-auth-client-hello";
+        let relay_body = b"dual-auth-relay-body";
         let transcript_hash = [0xA5; 32];
         let mut frame = Vec::new();
         append_relay_authentication(
@@ -92,25 +114,27 @@ mod tests {
         )
         .expect("append authenticated relay identity");
         let mut cursor = MessageCursor::new(&frame);
-        let (relay_identity, signature) =
-            read_relay_authentication(&mut cursor).expect("parse authenticated relay identity");
+        let signatures =
+            read_relay_authentication(&mut cursor).expect("parse dual relay authentication");
         assert!(cursor.remaining_slice().is_empty());
-        assert_eq!(relay_identity, relay_identity_bytes(&relay_keys).unwrap());
-        assert_eq!(signature.len(), algorithm.signature_payload_len());
-        let (_, public_key_payload) = relay_keys
-            .public_key()
-            .try_to_bytes()
-            .expect("relay public key payload");
-        assert_eq!(relay_identity.len(), public_key_payload.len() + 1);
-        assert_eq!(relay_identity.first().copied(), Some(algorithm as u8));
+        assert_eq!(frame[0], RELAY_AUTH_SCHEME_ED25519_MLDSA65_V1);
+        assert_eq!(signatures.ed25519.len(), ED25519_SIGNATURE_LEN);
+        assert_eq!(
+            signatures.mldsa65.len(),
+            MlDsaSuite::MlDsa65.signature_len()
+        );
+        assert_eq!(
+            frame.len(),
+            1 + ED25519_SIGNATURE_LEN + MlDsaSuite::MlDsa65.signature_len()
+        );
+        let verifier = relay_keys.verifier();
         verify_relay_authentication(
             HandshakeSuite::Nk2Hybrid,
             client_hello,
             relay_body,
             &transcript_hash,
-            &relay_identity,
-            &signature,
-            relay_keys.public_key(),
+            &signatures,
+            &verifier,
             b"iroha-p2p/1",
             "iroha-quic",
         )
@@ -120,9 +144,8 @@ mod tests {
             client_hello,
             relay_body,
             &transcript_hash,
-            &relay_identity,
-            &signature,
-            wrong_relay_keys.public_key(),
+            &signatures,
+            &wrong_relay_keys.verifier(),
             b"iroha-p2p/1",
             "iroha-quic",
         )
@@ -130,18 +153,42 @@ mod tests {
         assert!(
             mismatch
                 .to_string()
-                .contains("authenticated directory identity")
+                .contains("signature verification failed")
         );
-        let mut tampered_signature = signature;
-        tampered_signature[0] ^= 0x80;
+        let wrong_binding = RelayAuthenticationVerifierV1::try_new(
+            verifier.ed25519_public_key().clone(),
+            verifier.mldsa65_public_key().clone(),
+            [0xB8; TRANSCRIPT_BINDING_LEN],
+        )
+        .expect("nonzero mismatched relay binding verifier");
+        let mismatch = verify_relay_authentication(
+            HandshakeSuite::Nk2Hybrid,
+            client_hello,
+            relay_body,
+            &transcript_hash,
+            &signatures,
+            &wrong_binding,
+            b"iroha-p2p/1",
+            "iroha-quic",
+        )
+        .expect_err("mismatched authenticated binding digest must fail");
+        assert!(
+            mismatch
+                .to_string()
+                .contains("signature verification failed")
+        );
+        let mut tampered_ed25519 = RelayAuthenticationSignaturesV1 {
+            ed25519: signatures.ed25519,
+            mldsa65: signatures.mldsa65.clone(),
+        };
+        tampered_ed25519.ed25519[0] ^= 0x80;
         let tampered = verify_relay_authentication(
             HandshakeSuite::Nk2Hybrid,
             client_hello,
             relay_body,
             &transcript_hash,
-            &relay_identity,
-            &tampered_signature,
-            relay_keys.public_key(),
+            &tampered_ed25519,
+            &verifier,
             b"iroha-p2p/1",
             "iroha-quic",
         )
@@ -149,66 +196,106 @@ mod tests {
         assert!(
             tampered
                 .to_string()
-                .contains("signature verification failed")
+                .contains("Ed25519 signature verification failed")
+        );
+        let mut tampered_mldsa65 = signatures;
+        tampered_mldsa65.mldsa65[0] ^= 0x80;
+        let tampered = verify_relay_authentication(
+            HandshakeSuite::Nk2Hybrid,
+            client_hello,
+            relay_body,
+            &transcript_hash,
+            &tampered_mldsa65,
+            &verifier,
+            b"iroha-p2p/1",
+            "iroha-quic",
+        )
+        .expect_err("tampered ML-DSA-65 relay signature must fail");
+        assert!(
+            tampered
+                .to_string()
+                .contains("ML-DSA-65 signature verification failed")
         );
     }
     #[test]
-    fn relay_authentication_ed25519_roundtrip_rejects_mismatch_and_tamper() {
-        assert_relay_authentication_roundtrip(Algorithm::Ed25519, 0x61);
-    }
-    #[test]
-    fn relay_identity_uses_canonical_tagged_ed25519_encoding() {
-        let relay_keys = checked_seeded_keypair(0x62);
-        let encoded = relay_identity_bytes(&relay_keys).expect("encode relay identity");
-        let (_, payload) = relay_keys
-            .public_key()
-            .try_to_bytes()
-            .expect("relay public key payload");
-
-        assert_eq!(encoded.len(), 33);
-        assert_eq!(encoded[0], Algorithm::Ed25519 as u8);
-        assert_eq!(&encoded[1..], payload);
-        assert_eq!(
-            parse_relay_identity(&encoded).expect("parse canonical tagged identity"),
-            relay_keys.public_key().clone()
-        );
-    }
-    #[test]
-    fn relay_identity_rejects_retired_untagged_ed25519_encoding() {
-        let relay_keys = checked_seeded_keypair(0x63);
-        let (_, payload) = relay_keys
-            .public_key()
-            .try_to_bytes()
-            .expect("relay public key payload");
-        let error = parse_relay_identity(payload)
-            .expect_err("retired untagged Ed25519 identity must fail closed");
-
+    fn relay_authentication_parser_rejects_unknown_truncated_and_zero_tails() {
+        let canonical_len = 1 + ED25519_SIGNATURE_LEN + MlDsaSuite::MlDsa65.signature_len();
+        let mut unknown = vec![0xA5; canonical_len];
+        unknown[0] = RELAY_AUTH_SCHEME_ED25519_MLDSA65_V1.wrapping_add(1);
+        let error = read_relay_authentication(&mut MessageCursor::new(&unknown))
+            .err()
+            .expect("unknown relay authentication scheme must fail");
         assert!(
             error
                 .to_string()
-                .contains("retired untagged Ed25519 encoding")
+                .contains("unsupported relay authentication scheme")
         );
-    }
-    #[test]
-    fn relay_identity_rejects_unknown_algorithm_tag() {
-        let error = parse_relay_identity(&[0xFF; 33])
-            .expect_err("unknown relay identity algorithm must fail closed");
+
+        let truncated = vec![RELAY_AUTH_SCHEME_ED25519_MLDSA65_V1; canonical_len - 1];
+        let error = read_relay_authentication(&mut MessageCursor::new(&truncated))
+            .err()
+            .expect("truncated dual signature tail must fail");
+        assert!(error.to_string().contains("handshake message truncated"));
+
+        let zero_ed25519 = vec![0; canonical_len];
+        let mut zero_ed25519 = zero_ed25519;
+        zero_ed25519[0] = RELAY_AUTH_SCHEME_ED25519_MLDSA65_V1;
+        let error = read_relay_authentication(&mut MessageCursor::new(&zero_ed25519))
+            .err()
+            .expect("all-zero Ed25519 signature must fail");
         assert!(
             error
                 .to_string()
-                .contains("unknown relay identity algorithm tag 0xff")
+                .contains("Ed25519 signature must not be all zero")
         );
+
+        let mut zero_mldsa65 = vec![0; canonical_len];
+        zero_mldsa65[0] = RELAY_AUTH_SCHEME_ED25519_MLDSA65_V1;
+        zero_mldsa65[1..1 + ED25519_SIGNATURE_LEN].fill(0xA5);
+        let error = read_relay_authentication(&mut MessageCursor::new(&zero_mldsa65))
+            .err()
+            .expect("all-zero ML-DSA-65 signature must fail");
+        assert!(error.to_string().contains("ML-DSA-65 signature"));
     }
-    #[cfg(feature = "bls")]
     #[test]
-    fn relay_authentication_bls_normal_roundtrip_rejects_mismatch_and_tamper() {
-        assert_relay_authentication_roundtrip(Algorithm::BlsNormal, 0x71);
+    fn relay_authentication_constructors_reject_zero_binding_and_wrong_algorithms() {
+        let ed25519 = Arc::new(
+            KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519)
+                .expect("Ed25519 relay identity"),
+        );
+        let mldsa65 = Arc::new(
+            KeyPair::try_from_seed(vec![0x72; 32], Algorithm::MlDsa)
+                .expect("ML-DSA-65 relay identity"),
+        );
+        let error = RelayAuthenticationSignerV1::try_new(
+            Arc::clone(&ed25519),
+            Arc::clone(&mldsa65),
+            [0; TRANSCRIPT_BINDING_LEN],
+        )
+        .expect_err("zero authenticated binding must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("binding digest must not be all zero")
+        );
+        let error = RelayAuthenticationSignerV1::try_new(
+            Arc::clone(&mldsa65),
+            ed25519,
+            TEST_RELAY_AUTHENTICATED_BINDING,
+        )
+        .expect_err("swapped relay identity algorithms must fail");
+        assert!(error.to_string().contains("must use"));
     }
     fn authenticated_exchange(
         client_rng_seed: u64,
         relay_rng_seed: u64,
         relay_identity_seed: u8,
-    ) -> (RuntimeParams<'static>, ClientState, Vec<u8>, KeyPair) {
+    ) -> (
+        RuntimeParams<'static>,
+        ClientState,
+        Vec<u8>,
+        RelayAuthenticationSignerV1,
+    ) {
         let params = RuntimeParams::soranet_defaults();
         let mut rng_client = StdRng::seed_from_u64(client_rng_seed);
         let mut rng_relay = StdRng::seed_from_u64(relay_rng_seed);
@@ -870,6 +957,10 @@ mod tests {
                 panic!("generated interop value should be a JSON object");
             };
             generated_map.insert("language".to_string(), Value::from("rust"));
+            let generated: Value = norito::json::from_str(
+                &norito::json::to_string(&generated).expect("generated interop JSON renders"),
+            )
+            .expect("generated interop JSON reparses");
             assert_eq!(
                 generated, expected,
                 "generated Rust interop vector drifted from checked-in fixture {}",
@@ -976,6 +1067,79 @@ mod tests {
             !session.handshake.steps.is_empty(),
             "handshake steps should not be empty"
         );
+    }
+    #[test]
+    fn simulated_relay_responses_use_runtime_wire_encoding_and_authentication() {
+        for spec in super::INTEROP_SPECS {
+            let ctx = super::prepare_capability_context(spec).expect("capability context");
+            let inputs = super::decode_handshake_inputs(spec).expect("decoded inputs");
+            let params = super::build_simulation_params(spec, &ctx, &inputs);
+            let transcript =
+                super::compute_transcript_hash(&params, spec.suite).expect("transcript hash");
+            let material = super::derive_handshake_material(
+                &params,
+                &inputs.client_static,
+                &inputs.relay_static,
+            )
+            .expect("handshake material");
+            let session = super::build_session_artifacts(
+                spec,
+                &params,
+                &transcript,
+                &material,
+                &ctx.warnings,
+            )
+            .expect("session artifacts");
+            let [client_step, relay_step] = session.handshake.steps.as_slice() else {
+                panic!("{} must contain exactly two handshake steps", spec.id);
+            };
+            let client_frame = hex::decode(&client_step.message_hex).expect("client frame hex");
+            let relay_frame = hex::decode(&relay_step.message_hex).expect("relay frame hex");
+            let kem_suite = kem_profile(spec.kem_id).expect("KEM profile").suite();
+            let relay_verifier = simulation_relay_authentication_signer(&material)
+                .expect("simulation relay identity")
+                .verifier();
+            match spec.suite {
+                HandshakeSuite::Nk2Hybrid => {
+                    let parsed = parse_hybrid_relay_response(
+                        &relay_frame,
+                        params.descriptor_commit,
+                        kem_suite,
+                    )
+                    .expect("parse simulated NK2 response");
+                    verify_relay_authentication(
+                        spec.suite,
+                        &client_frame,
+                        &parsed.signed_relay_body,
+                        &parsed.transcript_hash,
+                        &parsed.relay_authentication,
+                        &relay_verifier,
+                        SORANET_QUIC_ALPN,
+                        DEFAULT_TLS_SERVER_NAME,
+                    )
+                    .expect("verify simulated NK2 authentication");
+                }
+                HandshakeSuite::Nk3PqForwardSecure => {
+                    let parsed = parse_pqfs_relay_response(
+                        &relay_frame,
+                        params.descriptor_commit,
+                        kem_suite,
+                    )
+                    .expect("parse simulated NK3 response");
+                    verify_relay_authentication(
+                        spec.suite,
+                        &client_frame,
+                        &parsed.signed_relay_body,
+                        &parsed.transcript_hash,
+                        &parsed.relay_authentication,
+                        &relay_verifier,
+                        SORANET_QUIC_ALPN,
+                        DEFAULT_TLS_SERVER_NAME,
+                    )
+                    .expect("verify simulated NK3 authentication");
+                }
+            }
+        }
     }
     struct Nk3Fixture {
         client_state: ClientState,
@@ -1103,10 +1267,31 @@ mod tests {
         assert!(!debug.contains("202, 254, 186, 190"));
     }
     #[test]
+    fn transcript_inputs_debug_redacts_nonces_and_resume_binding() {
+        let client_nonce = [0xA1; TRANSCRIPT_BINDING_LEN];
+        let relay_nonce = [0xB2; TRANSCRIPT_BINDING_LEN];
+        let resume_hash = [0xC3; TRANSCRIPT_BINDING_LEN];
+        let inputs = TranscriptInputs {
+            descriptor_commit: &DEFAULT_DESCRIPTOR_COMMIT,
+            client_nonce: &client_nonce,
+            relay_nonce: &relay_nonce,
+            capability_bytes: &DEFAULT_CLIENT_CAPABILITIES,
+            kem_id: 1,
+            sig_id: 1,
+            handshake_suite: HandshakeSuite::Nk2Hybrid,
+            resume_hash: Some(&resume_hash),
+        };
+
+        let debug = format!("{inputs:?}");
+        assert!(debug.contains("resume_hash_present: true"));
+        assert!(!debug.contains(&hex::encode(client_nonce)));
+        assert!(!debug.contains(&hex::encode(relay_nonce)));
+        assert!(!debug.contains(&hex::encode(resume_hash)));
+    }
+    #[test]
     fn deterministic_simulation_intermediates_are_explicitly_zeroizable() {
         let simulated_kem = || SimulatedKemArtifacts {
             client_public: vec![1; 2],
-            relay_public: vec![2; 2],
             ciphertext: vec![3; 2],
             confirmation: vec![4; 2],
             shared_secret: vec![5; 2],
@@ -1116,7 +1301,6 @@ mod tests {
         assert!(
             [
                 &kem.client_public,
-                &kem.relay_public,
                 &kem.ciphertext,
                 &kem.confirmation,
                 &kem.shared_secret,
@@ -1282,12 +1466,6 @@ mod tests {
         *offset += len;
         start..*offset
     }
-    fn len_prefixed_header_range(frame: &[u8], offset: &mut usize) -> Range<usize> {
-        let start = *offset;
-        let len = u16::from_be_bytes([frame[*offset], frame[*offset + 1]]) as usize;
-        *offset += 2 + len;
-        start..start + 2
-    }
     fn skip_len_prefixed_payload(frame: &[u8], offset: &mut usize) {
         let _ = len_prefixed_payload_range(frame, offset);
     }
@@ -1339,6 +1517,13 @@ mod tests {
         assert_eq!(range.len(), NOISE_SECRET_LEN);
         frame[range].copy_from_slice(&replacement);
     }
+    fn x25519_high_bit_alias(public_key: &[u8]) -> [u8; NOISE_SECRET_LEN] {
+        let mut alias: [u8; NOISE_SECRET_LEN] = public_key
+            .try_into()
+            .expect("X25519 public key has the fixed wire width");
+        alias[NOISE_SECRET_LEN - 1] ^= 0x80;
+        alias
+    }
     fn shorten_len_prefixed_payload_by_one(frame: &mut Vec<u8>, payload: Range<usize>) {
         assert!(payload.len() > 1);
         let header_start = payload.start - 2;
@@ -1347,16 +1532,8 @@ mod tests {
         frame.remove(payload.end - 1);
         frame.push(0);
     }
-    fn overwrite_len_prefix(frame: &mut [u8], range: Range<usize>, replacement_len: usize) {
-        assert_eq!(range.len(), 2);
-        let replacement_len =
-            u16::try_from(replacement_len).expect("test signature length must fit u16");
-        frame[range].copy_from_slice(&replacement_len.to_be_bytes());
-    }
-    fn relay_authentication_len_ranges(frame: &[u8]) -> (Range<usize>, Range<usize>) {
+    fn relay_authentication_ranges(frame: &[u8]) -> (usize, Range<usize>, Range<usize>) {
         let mut offset = 1;
-        skip_len_prefixed_payload(frame, &mut offset);
-        skip_len_prefixed_payload(frame, &mut offset);
         skip_len_prefixed_payload(frame, &mut offset);
         skip_len_prefixed_payload(frame, &mut offset);
         skip_len_prefixed_payload(frame, &mut offset);
@@ -1364,6 +1541,7 @@ mod tests {
         skip_len_prefixed_payload(frame, &mut offset);
         match frame[0] {
             HYBRID_RELAY_RESPONSE_TYPE => {
+                skip_len_prefixed_payload(frame, &mut offset);
                 skip_len_prefixed_payload(frame, &mut offset);
                 skip_len_prefixed_payload(frame, &mut offset);
             }
@@ -1378,9 +1556,11 @@ mod tests {
             }
             other => panic!("unexpected relay response type {other:#04x}"),
         }
-        let identity = len_prefixed_header_range(frame, &mut offset);
-        let signature = len_prefixed_header_range(frame, &mut offset);
-        (identity, signature)
+        let scheme = offset;
+        let ed25519 = scheme + 1..scheme + 1 + ED25519_SIGNATURE_LEN;
+        let mldsa65 = ed25519.end..ed25519.end + MlDsaSuite::MlDsa65.signature_len();
+        assert!(mldsa65.end <= frame.len());
+        (scheme, ed25519, mldsa65)
     }
     #[test]
     fn ensure_nk3_negotiation_accepts_forward_secure_suite() {
@@ -1400,7 +1580,7 @@ mod tests {
         .expect("nk3 negotiation succeeds");
     }
     #[test]
-    fn parse_client_hello_nk2_rejects_low_order_ephemeral_key() {
+    fn parse_client_hello_nk2_rejects_low_order_or_reused_noise_keys() {
         let defaults = RuntimeParams::soranet_defaults();
         let client_caps = capabilities_with_suites(
             defaults.client_capabilities,
@@ -1425,6 +1605,24 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(7301);
         let (mut client_hello, _state) =
             build_client_hello(&params, &mut rng).expect("build nk2 client hello");
+        let mut reused = client_hello.clone();
+        let ephemeral = reused[client_hello_ephemeral_range(&reused)].to_vec();
+        let static_range = client_hello_static_range(&reused);
+        reused[static_range].copy_from_slice(&ephemeral);
+        let err = parse_client_hello(&reused, params.resume_hash)
+            .err()
+            .expect("reused client Noise key must be rejected");
+        assert!(err.to_string().contains("must be distinct"));
+
+        let mut aliased = client_hello.clone();
+        let ephemeral = x25519_high_bit_alias(&aliased[client_hello_ephemeral_range(&aliased)]);
+        let static_range = client_hello_static_range(&aliased);
+        aliased[static_range].copy_from_slice(&ephemeral);
+        let err = parse_client_hello(&aliased, params.resume_hash)
+            .err()
+            .expect("aliased client Noise key must be rejected");
+        assert!(err.to_string().contains("must be distinct"));
+
         let range = client_hello_ephemeral_range(&client_hello);
         overwrite_noise_key(&mut client_hello, range, [0u8; NOISE_SECRET_LEN]);
         let err = parse_client_hello(&client_hello, params.resume_hash)
@@ -1436,7 +1634,7 @@ mod tests {
         );
     }
     #[test]
-    fn parse_client_hello_nk3_rejects_low_order_static_key() {
+    fn parse_client_hello_nk3_rejects_low_order_or_reused_noise_keys() {
         let defaults = RuntimeParams::soranet_defaults();
         let client_caps = capabilities_with_suites(
             defaults.client_capabilities,
@@ -1467,6 +1665,24 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(7302);
         let (mut client_hello, _state) =
             build_client_hello(&params, &mut rng).expect("build nk3 client hello");
+        let mut reused = client_hello.clone();
+        let ephemeral = reused[client_hello_ephemeral_range(&reused)].to_vec();
+        let static_range = client_hello_static_range(&reused);
+        reused[static_range].copy_from_slice(&ephemeral);
+        let err = parse_client_hello(&reused, params.resume_hash)
+            .err()
+            .expect("reused client Noise key must be rejected");
+        assert!(err.to_string().contains("must be distinct"));
+
+        let mut aliased = client_hello.clone();
+        let ephemeral = x25519_high_bit_alias(&aliased[client_hello_ephemeral_range(&aliased)]);
+        let static_range = client_hello_static_range(&aliased);
+        aliased[static_range].copy_from_slice(&ephemeral);
+        let err = parse_client_hello(&aliased, params.resume_hash)
+            .err()
+            .expect("aliased client Noise key must be rejected");
+        assert!(err.to_string().contains("must be distinct"));
+
         let range = client_hello_static_range(&client_hello);
         overwrite_noise_key(&mut client_hello, range, [0u8; NOISE_SECRET_LEN]);
         let err = parse_client_hello(&client_hello, params.resume_hash)
@@ -1478,7 +1694,7 @@ mod tests {
         );
     }
     #[test]
-    fn parse_hybrid_relay_response_rejects_low_order_ephemeral_key() {
+    fn parse_hybrid_relay_response_rejects_low_order_or_reused_noise_keys() {
         let defaults = RuntimeParams::soranet_defaults();
         let client_caps = capabilities_with_suites(
             defaults.client_capabilities,
@@ -1508,9 +1724,27 @@ mod tests {
         let (mut relay_response, _relay_session) =
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("build nk2 relay response");
+        let mut reused = relay_response.clone();
+        let ephemeral = reused[relay_response_ephemeral_range(&reused)].to_vec();
+        let static_range = relay_response_static_range(&reused);
+        reused[static_range].copy_from_slice(&ephemeral);
+        let profile = kem_profile(params.kem_id).expect("kem profile");
+        let err = parse_hybrid_relay_response(&reused, params.descriptor_commit, profile.suite())
+            .err()
+            .expect("reused relay Noise key must be rejected");
+        assert!(err.to_string().contains("must be distinct"));
+
+        let mut aliased = relay_response.clone();
+        let ephemeral = x25519_high_bit_alias(&aliased[relay_response_ephemeral_range(&aliased)]);
+        let static_range = relay_response_static_range(&aliased);
+        aliased[static_range].copy_from_slice(&ephemeral);
+        let err = parse_hybrid_relay_response(&aliased, params.descriptor_commit, profile.suite())
+            .err()
+            .expect("aliased relay Noise key must be rejected");
+        assert!(err.to_string().contains("must be distinct"));
+
         let range = relay_response_ephemeral_range(&relay_response);
         overwrite_noise_key(&mut relay_response, range, [0u8; NOISE_SECRET_LEN]);
-        let profile = kem_profile(params.kem_id).expect("kem profile");
         let err =
             parse_hybrid_relay_response(&relay_response, params.descriptor_commit, profile.suite())
                 .err()
@@ -1521,7 +1755,7 @@ mod tests {
         );
     }
     #[test]
-    fn parse_pqfs_relay_response_rejects_low_order_static_key() {
+    fn parse_pqfs_relay_response_rejects_low_order_or_reused_noise_keys() {
         let defaults = RuntimeParams::soranet_defaults();
         let client_caps = capabilities_with_suites(
             defaults.client_capabilities,
@@ -1557,9 +1791,27 @@ mod tests {
         let (mut relay_response, _relay_session) =
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("build nk3 relay response");
+        let mut reused = relay_response.clone();
+        let ephemeral = reused[relay_response_ephemeral_range(&reused)].to_vec();
+        let static_range = relay_response_static_range(&reused);
+        reused[static_range].copy_from_slice(&ephemeral);
+        let profile = kem_profile(params.kem_id).expect("kem profile");
+        let err = parse_pqfs_relay_response(&reused, params.descriptor_commit, profile.suite())
+            .err()
+            .expect("reused relay Noise key must be rejected");
+        assert!(err.to_string().contains("must be distinct"));
+
+        let mut aliased = relay_response.clone();
+        let ephemeral = x25519_high_bit_alias(&aliased[relay_response_ephemeral_range(&aliased)]);
+        let static_range = relay_response_static_range(&aliased);
+        aliased[static_range].copy_from_slice(&ephemeral);
+        let err = parse_pqfs_relay_response(&aliased, params.descriptor_commit, profile.suite())
+            .err()
+            .expect("aliased relay Noise key must be rejected");
+        assert!(err.to_string().contains("must be distinct"));
+
         let range = relay_response_static_range(&relay_response);
         overwrite_noise_key(&mut relay_response, range, [0u8; NOISE_SECRET_LEN]);
-        let profile = kem_profile(params.kem_id).expect("kem profile");
         let err =
             parse_pqfs_relay_response(&relay_response, params.descriptor_commit, profile.suite())
                 .err()
@@ -1568,6 +1820,66 @@ mod tests {
             err.to_string()
                 .contains("relay static key must not be low-order")
         );
+    }
+    #[test]
+    fn relay_response_parsers_reject_legacy_relay_kem_public_slot() {
+        let noise = fixture_noise_state();
+        for suite in [
+            MlKemSuite::MlKem512,
+            MlKemSuite::MlKem768,
+            MlKemSuite::MlKem1024,
+        ] {
+            let legacy_relay_public = vec![0xA5; suite.public_key_len()];
+            let ciphertext = vec![0x5A; suite.ciphertext_len()];
+            let confirmation = vec![0xC3; suite.shared_secret_len()];
+            for response_type in [HYBRID_RELAY_RESPONSE_TYPE, PQFS_RELAY_RESPONSE_TYPE] {
+                let mut legacy_response = vec![response_type];
+                append_len_prefixed(&mut legacy_response, &noise.nonce).expect("relay nonce");
+                append_len_prefixed(&mut legacy_response, &noise.ephemeral_public)
+                    .expect("relay ephemeral public");
+                append_len_prefixed(&mut legacy_response, &noise.static_public)
+                    .expect("relay static public");
+                append_len_prefixed(&mut legacy_response, &[]).expect("relay capabilities");
+                append_len_prefixed(&mut legacy_response, &[]).expect("descriptor commitment");
+                append_len_prefixed(&mut legacy_response, &legacy_relay_public)
+                    .expect("obsolete primary relay KEM public key");
+                append_len_prefixed(&mut legacy_response, &ciphertext).expect("primary ciphertext");
+                if response_type == PQFS_RELAY_RESPONSE_TYPE {
+                    append_len_prefixed(&mut legacy_response, &legacy_relay_public)
+                        .expect("obsolete forward relay KEM public key");
+                    append_len_prefixed(&mut legacy_response, &ciphertext)
+                        .expect("forward ciphertext");
+                    append_len_prefixed(&mut legacy_response, &confirmation)
+                        .expect("primary confirmation");
+                }
+                append_len_prefixed(&mut legacy_response, &confirmation)
+                    .expect("relay confirmation");
+                append_len_prefixed(&mut legacy_response, &[0xD4; TRANSCRIPT_BINDING_LEN])
+                    .expect("transcript hash");
+                if response_type == PQFS_RELAY_RESPONSE_TYPE {
+                    append_len_prefixed(&mut legacy_response, &[0xE5; TRANSCRIPT_BINDING_LEN])
+                        .expect("forward commitment");
+                    append_len_prefixed(&mut legacy_response, &confirmation).expect("dual mix");
+                }
+                pad_to_noise_block(&mut legacy_response);
+
+                let error = match response_type {
+                    HYBRID_RELAY_RESPONSE_TYPE => {
+                        parse_hybrid_relay_response(&legacy_response, &[], suite).map(|_| ())
+                    }
+                    PQFS_RELAY_RESPONSE_TYPE => {
+                        parse_pqfs_relay_response(&legacy_response, &[], suite).map(|_| ())
+                    }
+                    _ => unreachable!("test enumerates the two relay response types"),
+                }
+                .expect_err("the pre-release relay-public-key slot must be rejected");
+                assert!(
+                    matches!(&error, HarnessError::Kem(_))
+                        || error.to_string().contains("confirmation"),
+                    "unexpected {suite:?} error for response type {response_type:#04x}: {error}"
+                );
+            }
+        }
     }
     #[test]
     fn verify_capabilities_alignment_rejects_unadvertised_selected_ids() {
@@ -1732,7 +2044,7 @@ mod tests {
         }
     }
     #[test]
-    fn parse_relay_response_rejects_short_ed25519_signature() {
+    fn parse_relay_response_rejects_unknown_authentication_scheme() {
         let params = RuntimeParams::soranet_defaults();
         let mut rng_client = StdRng::seed_from_u64(7312);
         let mut rng_relay = StdRng::seed_from_u64(7313);
@@ -1742,12 +2054,8 @@ mod tests {
         let (mut relay_response, _relay_session) =
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("relay response");
-        let (_identity_range, ed25519_range) = relay_authentication_len_ranges(&relay_response);
-        overwrite_len_prefix(
-            &mut relay_response,
-            ed25519_range,
-            ED25519_SIGNATURE_LEN - 1,
-        );
+        let (scheme, _, _) = relay_authentication_ranges(&relay_response);
+        relay_response[scheme] = RELAY_AUTH_SCHEME_ED25519_MLDSA65_V1.wrapping_add(1);
         let profile = kem_profile(params.kem_id).expect("kem profile");
         let err = match relay_response.first().copied() {
             Some(HYBRID_RELAY_RESPONSE_TYPE) => parse_hybrid_relay_response(
@@ -1764,9 +2072,10 @@ mod tests {
             .map(|_| ()),
             other => panic!("unexpected relay response type {other:?}"),
         }
-        .expect_err("malformed Ed25519 signature length must be rejected");
+        .expect_err("unknown relay authentication scheme must be rejected");
         assert!(
-            err.to_string().contains("ed25519 signature"),
+            err.to_string()
+                .contains("unsupported relay authentication scheme"),
             "unexpected error: {err}"
         );
     }
@@ -1781,10 +2090,8 @@ mod tests {
         let (mut relay_response, _relay_session) =
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("relay response");
-        let (_identity_header, ed25519_header) = relay_authentication_len_ranges(&relay_response);
-        let mut offset = ed25519_header.start;
-        let payload = len_prefixed_payload_range(&relay_response, &mut offset);
-        relay_response[payload].fill(0);
+        let (_, ed25519, _) = relay_authentication_ranges(&relay_response);
+        relay_response[ed25519].fill(0);
         let profile = kem_profile(params.kem_id).expect("kem profile");
         let err = match relay_response.first().copied() {
             Some(HYBRID_RELAY_RESPONSE_TYPE) => parse_hybrid_relay_response(
@@ -1803,7 +2110,7 @@ mod tests {
         }
         .expect_err("all-zero Ed25519 signature material must be rejected");
         assert!(
-            err.to_string().contains("ed25519 signature") && err.to_string().contains("all zero"),
+            err.to_string().contains("Ed25519 signature") && err.to_string().contains("all zero"),
             "unexpected error: {err}"
         );
     }
@@ -1848,7 +2155,7 @@ mod tests {
         let err = match client_handle_relay_hello(
             client_state,
             &relay_response,
-            relay_keys.public_key(),
+            &relay_keys.verifier(),
             &params,
         ) {
             Ok(_) => panic!("relay response missing selected KEM id must fail"),
@@ -1867,13 +2174,13 @@ mod tests {
         let err = client_handle_relay_hello(
             client_state,
             &relay_hello,
-            wrong_relay_keys.public_key(),
+            &wrong_relay_keys.verifier(),
             &params,
         )
         .err()
         .expect("an identity absent from the authenticated directory must fail");
         assert!(
-            matches!(err, HarnessError::Validation(ref message) if message.contains("authenticated directory identity")),
+            matches!(err, HarnessError::Validation(ref message) if message.contains("signature verification failed")),
             "unexpected error: {err:?}"
         );
     }
@@ -1881,16 +2188,14 @@ mod tests {
     fn client_handle_relay_hello_rejects_forged_nonzero_signature() {
         let (params, client_state, mut relay_hello, relay_keys) =
             authenticated_exchange(8_004, 8_005, 0x43);
-        let (_identity_header, signature_header) = relay_authentication_len_ranges(&relay_hello);
-        let mut offset = signature_header.start;
-        let signature_payload = len_prefixed_payload_range(&relay_hello, &mut offset);
+        let (_, signature_payload, _) = relay_authentication_ranges(&relay_hello);
         relay_hello[signature_payload.start] ^= 0x80;
         assert!(
             relay_hello[signature_payload].iter().any(|byte| *byte != 0),
             "fixture must remain a nonzero forged signature"
         );
         let err =
-            client_handle_relay_hello(client_state, &relay_hello, relay_keys.public_key(), &params)
+            client_handle_relay_hello(client_state, &relay_hello, &relay_keys.verifier(), &params)
                 .err()
                 .expect("a nonzero forged signature must fail");
         assert!(
@@ -1912,7 +2217,7 @@ mod tests {
         let err = client_handle_relay_hello(
             client_state,
             &relay_hello,
-            relay_keys.public_key(),
+            &relay_keys.verifier(),
             &mismatched_params,
         )
         .err()
@@ -1936,7 +2241,7 @@ mod tests {
         let err = client_handle_relay_hello(
             client_state,
             &substituted_relay_hello,
-            relay_keys.public_key(),
+            &relay_keys.verifier(),
             &params,
         )
         .err()
@@ -2037,19 +2342,71 @@ mod tests {
         assert_eq!(recomputed_dual_mix, relay_response.dual_mix);
     }
     #[test]
+    fn hybrid_relay_response_serializes_ciphertext_without_relay_kem_public() {
+        let params = RuntimeParams::soranet_defaults();
+        let noise = fixture_noise_state();
+        let primary = fixture_kem_artifacts(&[0x06, 0x07, 0x08, 0x09], &[0x0A, 0x0B, 0x0C, 0x0D]);
+        let client_init: &[u8] = b"unit-client-init";
+        let confirmation = [0x31, 0x32, 0x33, 0x34];
+        let transcript = [0x40; TRANSCRIPT_BINDING_LEN];
+        let relay_keys = checked_random_keypair();
+        let response = build_hybrid_relay_response(
+            client_init,
+            &params,
+            &noise,
+            &primary,
+            &confirmation,
+            &transcript,
+            &relay_keys,
+        )
+        .expect("build hybrid relay response");
+        assert_eq!(response.len() % NOISE_PADDING_BLOCK, 0);
+
+        let mut cursor = MessageCursor::new(&response);
+        assert_eq!(
+            cursor.read_u8().expect("response type"),
+            HYBRID_RELAY_RESPONSE_TYPE
+        );
+        let expected_segments: [(&str, &[u8]); 8] = [
+            ("nonce segment", noise.nonce.as_ref()),
+            ("ephemeral public", noise.ephemeral_public.as_ref()),
+            ("static public", noise.static_public.as_ref()),
+            ("relay capabilities", params.relay_capabilities),
+            ("descriptor commit", params.descriptor_commit),
+            ("primary ciphertext", primary.ciphertext.as_slice()),
+            ("confirmation", confirmation.as_slice()),
+            ("transcript hash", transcript.as_ref()),
+        ];
+        for (label, expected) in expected_segments {
+            assert_eq!(
+                cursor.read_len_prefixed().expect(label),
+                expected,
+                "{label} mismatch"
+            );
+        }
+        let body_len = response.len() - cursor.remaining_slice().len();
+        let relay_body = &response[..body_len];
+        let relay_authentication =
+            read_relay_authentication(&mut cursor).expect("relay authentication");
+        verify_relay_authentication(
+            HandshakeSuite::Nk2Hybrid,
+            client_init,
+            relay_body,
+            &transcript,
+            &relay_authentication,
+            &relay_keys.verifier(),
+            params.transport_alpn,
+            params.tls_server_name,
+        )
+        .expect("relay response signature verifies");
+        assert!(cursor.remaining_slice().iter().all(|&byte| byte == 0));
+    }
+    #[test]
     fn pqfs_relay_response_serializes_inputs_and_signatures() {
         let params = RuntimeParams::soranet_defaults();
         let noise = fixture_noise_state();
-        let primary = fixture_kem_artifacts(
-            &[0x01, 0x02, 0x03],
-            &[0x06, 0x07, 0x08, 0x09],
-            &[0x0A, 0x0B, 0x0C, 0x0D],
-        );
-        let forward = fixture_kem_artifacts(
-            &[0x21, 0x22, 0x23],
-            &[0x26, 0x27, 0x28, 0x29],
-            &[0x2A, 0x2B, 0x2C, 0x2D],
-        );
+        let primary = fixture_kem_artifacts(&[0x06, 0x07, 0x08, 0x09], &[0x0A, 0x0B, 0x0C, 0x0D]);
+        let forward = fixture_kem_artifacts(&[0x26, 0x27, 0x28, 0x29], &[0x2A, 0x2B, 0x2C, 0x2D]);
         let client_commit: &[u8] = b"unit-client-commit";
         let (primary_confirmation, forward_confirmation) =
             (vec![0x31, 0x32, 0x33, 0x34], vec![0x35, 0x36, 0x37, 0x38]);
@@ -2070,7 +2427,7 @@ mod tests {
             transcript: &transcript,
             forward_commitment: forward_commitment.as_slice(),
             dual_mix: dual_mix.as_slice(),
-            relay_identity_key: &relay_keys,
+            relay_authentication: &relay_keys,
         };
         let response = build_pqfs_relay_response(&inputs).expect("build pqfs relay response");
         assert_eq!(response.len() % NOISE_PADDING_BLOCK, 0);
@@ -2079,15 +2436,13 @@ mod tests {
             cursor.read_u8().expect("response type"),
             PQFS_RELAY_RESPONSE_TYPE
         );
-        let expected_segments: [(&str, &[u8]); 14] = [
+        let expected_segments: [(&str, &[u8]); 12] = [
             ("nonce segment", noise.nonce.as_ref()),
             ("ephemeral public", noise.ephemeral_public.as_ref()),
             ("static public", noise.static_public.as_ref()),
             ("relay capabilities", params.relay_capabilities),
             ("descriptor commit", params.descriptor_commit),
-            ("primary relay public", primary.relay_public.as_slice()),
             ("primary ciphertext", primary.ciphertext.as_slice()),
-            ("forward relay public", forward.relay_public.as_slice()),
             ("forward ciphertext", forward.ciphertext.as_slice()),
             ("primary confirmation", primary_confirmation.as_slice()),
             ("forward confirmation", forward_confirmation.as_slice()),
@@ -2104,17 +2459,15 @@ mod tests {
         }
         let body_len = response.len() - cursor.remaining_slice().len();
         let relay_body = &response[..body_len];
-        let relay_identity = cursor.read_len_prefixed().expect("relay identity");
-        assert_eq!(relay_identity, relay_identity_bytes(&relay_keys).unwrap());
-        let relay_signature = cursor.read_len_prefixed().expect("relay signature");
+        let relay_authentication =
+            read_relay_authentication(&mut cursor).expect("relay authentication");
         verify_relay_authentication(
             HandshakeSuite::Nk3PqForwardSecure,
             client_commit,
             relay_body,
             &transcript,
-            relay_identity,
-            relay_signature,
-            relay_keys.public_key(),
+            &relay_authentication,
+            &relay_keys.verifier(),
             params.transport_alpn,
             params.tls_server_name,
         )
@@ -2141,6 +2494,33 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].capability_type, 0x0101);
         assert!(warnings[0].message.contains("0x0101"));
+    }
+    #[test]
+    fn diff_capabilities_ignores_peer_required_policy_bit() {
+        for (ty, client_value, relay_value) in [
+            (CAPABILITY_PQKEM, vec![0x01, 0x01], vec![0x01, 0x00]),
+            (CAPABILITY_PQSIG, vec![0x01, 0x01], vec![0x01, 0x00]),
+            (
+                CAPABILITY_CONSTANT_RATE,
+                vec![0x01, 0x01, 0x00, 0x04],
+                vec![0x01, 0x00, 0x00, 0x04],
+            ),
+        ] {
+            let client = [CapabilityTlv {
+                ty,
+                value: client_value,
+                required: true,
+            }];
+            let relay = [CapabilityTlv {
+                ty,
+                value: relay_value,
+                required: false,
+            }];
+            assert!(
+                diff_capabilities(&client, &relay).is_empty(),
+                "peer support must not depend on whether the peer also requires {ty:#06x}"
+            );
+        }
     }
     #[test]
     fn encode_capabilities_sets_required_flag_in_flags_byte() {
@@ -2486,7 +2866,7 @@ mod tests {
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("relay hello");
         let client_secrets =
-            client_handle_relay_hello(client_state, &relay_hello, relay_keys.public_key(), &params)
+            client_handle_relay_hello(client_state, &relay_hello, &relay_keys.verifier(), &params)
                 .expect("client session");
         assert_eq!(
             client_secrets.handshake_suite,
@@ -2645,7 +3025,7 @@ mod tests {
             Some(HYBRID_RELAY_RESPONSE_TYPE)
         );
         let client_secrets =
-            client_handle_relay_hello(client_state, &relay_hello, relay_keys.public_key(), &params)
+            client_handle_relay_hello(client_state, &relay_hello, &relay_keys.verifier(), &params)
                 .expect("nk2 client handle");
         assert_eq!(client_secrets.handshake_suite, HandshakeSuite::Nk2Hybrid);
         assert_eq!(relay_secrets.handshake_suite, HandshakeSuite::Nk2Hybrid);
@@ -2876,7 +3256,7 @@ mod tests {
         parse_pqfs_relay_response(&relay_hello, params.descriptor_commit, profile.suite())
             .expect("parse nk3 response");
         let client_secrets =
-            client_handle_relay_hello(client_state, &relay_hello, relay_keys.public_key(), &params)
+            client_handle_relay_hello(client_state, &relay_hello, &relay_keys.verifier(), &params)
                 .expect("nk3 client handle");
         assert_eq!(
             client_secrets.handshake_suite,
@@ -3015,7 +3395,7 @@ mod tests {
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("relay hello");
         let client_secrets =
-            client_handle_relay_hello(client_state, &relay_hello, relay_keys.public_key(), &params)
+            client_handle_relay_hello(client_state, &relay_hello, &relay_keys.verifier(), &params)
                 .expect("client session");
         assert_eq!(
             client_secrets.handshake_suite,
@@ -3383,7 +3763,7 @@ mod tests {
         match client_handle_relay_hello(
             client_state,
             &relay_hello,
-            relay_keys.public_key(),
+            &relay_keys.verifier(),
             &defaults,
         ) {
             Err(HarnessError::Validation(message)) => {

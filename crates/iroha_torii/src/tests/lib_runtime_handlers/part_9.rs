@@ -1041,13 +1041,18 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
                 supported_guest_isas: std::collections::BTreeSet::from([
                     iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
                 ]),
+                trusted_guest_artifact:
+                    iroha_data_model::soracloud::SoraPublishedInrouGuestImageArtifactV1 {
+                        manifest_digest_hex: "31".repeat(32),
+                        content_cid:
+                            "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
+                                .to_owned(),
+                    },
                 max_hosted_replica_capacity:
                     iroha_data_model::soracloud::SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
                 max_cpu_millis: 2_000,
                 max_memory_bytes: 2 * 1024 * 1024 * 1024,
                 max_storage_bytes: 16 * 1024 * 1024 * 1024,
-                geography_tags: Default::default(),
-                observed_latency_ms: None,
                 advertised_at_ms: 1,
                 heartbeat_expires_at_ms: u64::MAX,
             },
@@ -1064,13 +1069,18 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
                 supported_guest_isas: std::collections::BTreeSet::from([
                     iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
                 ]),
+                trusted_guest_artifact:
+                    iroha_data_model::soracloud::SoraPublishedInrouGuestImageArtifactV1 {
+                        manifest_digest_hex: "31".repeat(32),
+                        content_cid:
+                            "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
+                                .to_owned(),
+                    },
                 max_hosted_replica_capacity:
                     iroha_data_model::soracloud::SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
                 max_cpu_millis: 1_000,
                 max_memory_bytes: 1024 * 1024 * 1024,
                 max_storage_bytes: 8 * 1024 * 1024 * 1024,
-                geography_tags: Default::default(),
-                observed_latency_ms: None,
                 advertised_at_ms: 1,
                 heartbeat_expires_at_ms: u64::MAX,
             },
@@ -1089,19 +1099,23 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
                 placements: vec![
                     iroha_data_model::soracloud::SoraInrouReplicaPlacementV1 {
                         replica_slot: 1,
+                        economic_clock: iroha_data_model::soracloud::SoraServiceLeaseClockV1::CanonicalBlockHeight,
+                        lease_started_height: 1,
+                        placement_incarnation: iroha_crypto::Hash::new(b"placement-1"),
+                        host_availability: iroha_data_model::soracloud::SoraInrouReplicaHostAvailabilityV1::Available,
                         validator_account_id: ALICE_ID.clone(),
                         peer_id: alice_peer_id,
                         selected_guest_isa: iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
-                        selected_geography_tag: None,
-                        selection_latency_ms: None,
                     },
                     iroha_data_model::soracloud::SoraInrouReplicaPlacementV1 {
                         replica_slot: 2,
+                        economic_clock: iroha_data_model::soracloud::SoraServiceLeaseClockV1::CanonicalBlockHeight,
+                        lease_started_height: 1,
+                        placement_incarnation: iroha_crypto::Hash::new(b"placement-2"),
+                        host_availability: iroha_data_model::soracloud::SoraInrouReplicaHostAvailabilityV1::Unavailable,
                         validator_account_id: validator_two,
                         peer_id: validator_two_peer_id,
                         selected_guest_isa: iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
-                        selected_geography_tag: None,
-                        selection_latency_ms: None,
                     },
                 ],
                 reconciled_at_ms: 1,
@@ -1120,13 +1134,19 @@ fn soracloud_hosted_http_topology_section_reports_authoritative_counts() {
         topology
             .get("placed_host_count")
             .and_then(norito::json::Value::as_u64),
-        Some(2)
+        Some(1)
     );
     assert_eq!(
         topology
             .get("hosted_replica_count")
             .and_then(norito::json::Value::as_u64),
-        Some(2)
+        Some(1)
+    );
+    assert_eq!(
+        topology
+            .get("unavailable_replica_count")
+            .and_then(norito::json::Value::as_u64),
+        Some(1)
     );
     assert!(topology.get("backend_mix").is_none());
 }

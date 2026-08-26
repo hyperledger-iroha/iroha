@@ -365,7 +365,7 @@ impl AutonomousLaneRetirementSnapshotEvidenceV1 {
 struct AutonomousLaneEntrypointClaimTransitionAuthorization {
     projection: ProductionInFlightFirstReleaseTransitionProjection,
     path: PathBuf,
-    replacement: AutonomousLaneEntrypointClaimV3,
+    replacement: AutonomousLaneEntrypointClaimV1,
 }
 /// Move-only authority for Queue's exact ordered `PrepareRelease` append.
 ///
@@ -378,14 +378,14 @@ struct AutonomousLaneEntrypointClaimTransitionAuthorization {
 #[must_use = "a Kura-authenticated release preparation must be consumed by Queue"]
 pub(crate) struct AutonomousLaneQueueReleasePreparationAuthorization {
     projection: ProductionInFlightFirstReleaseTransitionProjection,
-    barrier: LaneQueueReservationReleaseBarrierV3,
+    barrier: LaneQueueReservationReleaseBarrierV1,
     claims_fully_released: bool,
 }
 impl AutonomousLaneQueueReleasePreparationAuthorization {
     /// Consume this proof for the exact Queue barrier it authorizes.
     pub(crate) fn consume_for_queue(
         self,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
     ) -> Option<(ProductionInFlightFirstReleaseTransitionProjection, bool)> {
         (self.barrier == *barrier).then_some((self.projection, self.claims_fully_released))
     }
@@ -398,7 +398,7 @@ impl AutonomousLaneQueueReleasePreparationAuthorization {
 /// completion forget, keeping each authority adjacent to its physical sink.
 #[must_use = "a Kura-authenticated release finalization must be consumed by Queue"]
 pub(crate) struct AutonomousLaneQueueReleaseFinalizationAuthorization {
-    barrier: LaneQueueReservationReleaseBarrierV3,
+    barrier: LaneQueueReservationReleaseBarrierV1,
     complete_projection: ProductionInFlightFirstReleaseTransitionProjection,
     restore_projection: ProductionInFlightFirstReleaseTransitionProjection,
     forget_projection: ProductionInFlightFirstReleaseTransitionProjection,
@@ -407,7 +407,7 @@ impl AutonomousLaneQueueReleaseFinalizationAuthorization {
     /// Consume this proof for the exact Queue barrier it authorizes.
     pub(crate) fn consume_for_queue(
         self,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
     ) -> Option<[ProductionInFlightFirstReleaseTransitionProjection; 3]> {
         (self.barrier == *barrier).then_some([
             self.complete_projection,
@@ -425,7 +425,7 @@ enum AutonomousLaneQueueReleaseBarrierGate {
 impl AutonomousLaneQueueReleaseBarrierGate {
     fn consume_for_claim_transition(
         self,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
     ) -> std::result::Result<bool, &'static str> {
         match self {
             Self::Authorized(authorization) => authorization
@@ -440,7 +440,7 @@ impl AutonomousLaneEntrypointClaimTransitionAuthorization {
     fn consume_for_persistence(
         self,
         path: &Path,
-        replacement: &AutonomousLaneEntrypointClaimV3,
+        replacement: &AutonomousLaneEntrypointClaimV1,
     ) -> Option<ProductionInFlightFirstReleaseTransitionProjection> {
         (self.path.as_path() == path && self.replacement == *replacement).then_some(self.projection)
     }
@@ -678,8 +678,8 @@ impl AutonomousLaneReleaseProjectionContext {
                 producer_alive: true,
             },
             history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v4: true,
-                ever_reservation_v5: true,
+                ever_queue_plan_v1: true,
+                ever_reservation_v1: true,
                 pending_high_water: pending_prefix,
                 released_high_water: released_prefix,
                 ..ProductionInFlightFirstReleaseHistoryProjection::default()
@@ -740,7 +740,7 @@ impl AutonomousLaneReleaseProjectionContext {
     fn claim_transition_authorization(
         self,
         path: &Path,
-        replacement: &AutonomousLaneEntrypointClaimV3,
+        replacement: &AutonomousLaneEntrypointClaimV1,
         finalize_release: bool,
         prefix_before: u64,
     ) -> std::result::Result<AutonomousLaneEntrypointClaimTransitionAuthorization, String> {
@@ -754,7 +754,7 @@ impl AutonomousLaneReleaseProjectionContext {
             if prefix_before >= selected_count
                 || !matches!(
                     replacement.state,
-                    AutonomousLaneEntrypointClaimStateV3::Released(_)
+                    AutonomousLaneEntrypointClaimStateV1::Released(_)
                 )
             {
                 return Err("invalid autonomous Released prefix transition".to_owned());
@@ -782,7 +782,7 @@ impl AutonomousLaneReleaseProjectionContext {
             if prefix_before >= selected_count
                 || !matches!(
                     replacement.state,
-                    AutonomousLaneEntrypointClaimStateV3::ReleasePending(_)
+                    AutonomousLaneEntrypointClaimStateV1::ReleasePending(_)
                 )
             {
                 return Err("invalid autonomous ReleasePending prefix transition".to_owned());
@@ -829,7 +829,7 @@ impl AutonomousLaneReleaseProjectionContext {
     fn queue_preparation_authorization(
         self,
         retirement: &AutonomousLaneSlotRetirementV1,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
         claims_fully_released: bool,
     ) -> std::result::Result<AutonomousLaneQueueReleasePreparationAuthorization, String> {
         let expected_barrier = retirement.queue_release_barrier().map_err(|error| {
@@ -888,7 +888,7 @@ impl AutonomousLaneReleaseProjectionContext {
     fn queue_finalization_authorization(
         self,
         retirement: &AutonomousLaneSlotRetirementV1,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
     ) -> std::result::Result<AutonomousLaneQueueReleaseFinalizationAuthorization, String> {
         let expected_barrier = retirement.queue_release_barrier().map_err(|error| {
             format!("cannot derive autonomous Queue release barrier: {error:?}")
@@ -1092,8 +1092,8 @@ impl LaneReadyAuthorization {
                 producer_alive: true,
             },
             history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v4: true,
-                ever_reservation_v5: true,
+                ever_queue_plan_v1: true,
+                ever_reservation_v1: true,
                 ever_execution_input_durable: actor,
                 ever_ready_authorized: actor,
                 ..ProductionInFlightFirstReleaseHistoryProjection::default()
@@ -1246,8 +1246,8 @@ impl Kura {
                 producer_alive: true,
             },
             history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v4: true,
-                ever_reservation_v5: true,
+                ever_queue_plan_v1: true,
+                ever_reservation_v1: true,
                 ..ProductionInFlightFirstReleaseHistoryProjection::default()
             },
             decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
@@ -1385,8 +1385,8 @@ impl Kura {
                 producer_alive: true,
             },
             history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v4: true,
-                ever_reservation_v5: true,
+                ever_queue_plan_v1: true,
+                ever_reservation_v1: true,
                 ever_execution_input_durable: ready_signers,
                 ever_ready_authorized: ready_signers,
                 ready_signed: ready_signers,
@@ -1583,8 +1583,8 @@ impl Kura {
                 producer_alive: true,
             },
             history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v4: true,
-                ever_reservation_v5: true,
+                ever_queue_plan_v1: true,
+                ever_reservation_v1: true,
                 ever_execution_input_durable: ready_signers,
                 ever_ready_authorized: ready_signers,
                 ready_signed: ready_signers,
@@ -2297,8 +2297,8 @@ impl Kura {
                 producer_alive: true,
             },
             history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v4: true,
-                ever_reservation_v5: true,
+                ever_queue_plan_v1: true,
+                ever_reservation_v1: true,
                 ever_execution_input_durable: ready_signers,
                 ever_ready_authorized: ready_signers,
                 ready_signed: ready_signers,
@@ -3061,8 +3061,8 @@ impl Kura {
                 producer_alive: true,
             },
             history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v4: true,
-                ever_reservation_v5: true,
+                ever_queue_plan_v1: true,
+                ever_reservation_v1: true,
                 ever_execution_input_durable: actor,
                 ..ProductionInFlightFirstReleaseHistoryProjection::default()
             },

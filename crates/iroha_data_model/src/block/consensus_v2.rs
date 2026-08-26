@@ -2717,6 +2717,10 @@ pub enum SumeragiV2OutboundIntentStage {
     Sent,
 }
 /// Exact durable outbound intent visible to liveness diagnostics.
+///
+/// All three optional evidence slots are required on the JSON wire. Intent
+/// shape determines whether their explicit value is `null`; omission is not a
+/// first-release representation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -2727,16 +2731,13 @@ pub struct SumeragiV2OutboundIntentStatus {
     pub round: ConsensusRound,
     /// Immutable proposal-body origin for proposal-authenticating intents.
     /// Timeout votes and timeout certificates carry `None`.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub proposal_round: Option<ConsensusRound>,
     /// Proposal subject, when the intent authenticates one.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub subject: Option<BlockSubject>,
     /// Execution result, when the intent authenticates one.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub execution_commitment: Option<ExecutionCommitment>,
     /// Current durable-delivery stage.
     pub stage: SumeragiV2OutboundIntentStage,
@@ -2816,6 +2817,9 @@ pub enum SumeragiV2QueueKind {
     EffectDispatch,
 }
 /// Occupancy and fairness state for one bounded local queue.
+///
+/// `oldest_age_ms` is an explicit nullable JSON slot: an empty queue reports
+/// `null` and never omits the current field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -2827,8 +2831,7 @@ pub struct SumeragiV2QueueStatus {
     /// Maximum number of owned items.
     pub capacity: u32,
     /// Age of the oldest owned item, in local monotonic milliseconds.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub oldest_age_ms: Option<u64>,
     /// Saturating count of eligible dispatches skipped by the oldest item.
     pub service_debt: u64,
@@ -2975,6 +2978,8 @@ pub struct SumeragiV2IgnoreCount {
 /// A lagging node may report a later-view `CommitQC` intent or
 /// Commit-quorum/decision transition for this exact active height; all other
 /// diagnostics remain bounded by the status snapshot's current view.
+/// Nullable diagnostic slots are always present in JSON and use explicit
+/// `null` when no transition or blocker exists.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -2994,14 +2999,12 @@ pub struct SumeragiV2LivenessStatus {
     /// Bounded queue occupancy and service debt.
     pub queues: Vec<SumeragiV2QueueStatus>,
     /// Most recent tracked reducer transition.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_progress: Option<SumeragiV2ProgressTransitionStatus>,
     /// Local monotonic milliseconds without meaningful height progress.
     pub no_progress_age_ms: u64,
     /// Classified delay cause after the watchdog threshold is crossed.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub blocker: Option<SumeragiV2LivenessBlocker>,
     /// Per-height counters for every observed reducer ignore reason.
     pub ignore_counts: Vec<SumeragiV2IgnoreCount>,
@@ -3022,6 +3025,10 @@ pub struct SumeragiV2QcResponse {
     pub locked_prepare_qc: Option<QuorumCertificateRef>,
 }
 /// Compact Norito payload returned by the Sumeragi v2 status endpoint.
+///
+/// Every field belongs to the first-release JSON schema. Nullable consensus
+/// evidence is encoded as an explicit value or `null`; missing fields are
+/// rejected rather than interpreted as compatibility defaults.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -3047,34 +3054,28 @@ pub struct SumeragiV2Status {
     /// Expected leader index for the current view.
     pub leader: ValidatorIndex,
     /// Persisted `PrepareQC` lock, if any.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub locked_prepare_qc: Option<QuorumCertificateRef>,
     /// Highest verified `PrepareQC` known locally, if any.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub highest_prepare_qc: Option<QuorumCertificateRef>,
     /// Most recently installed timeout certificate, including its view.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_timeout_certificate: Option<TimeoutCertificateRef>,
     /// Local body availability/application state.
     pub body_state: SumeragiV2BodyState,
     /// WAL persistence operation blocking the reducer, if any.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub pending_persistence_id: Option<u64>,
     /// Last locally committed block height.
     pub last_committed_height: Height,
     /// Last locally committed block subject, absent before the first commit.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_committed_subject: Option<BlockSubject>,
     /// Frozen election context governing the active height.
     pub height_context: SumeragiV2HeightContextStatus,
     /// Latest authenticated durable `CommitQC` summary, when its frozen roster is available.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(required)]
     pub last_commit_qc: Option<SumeragiV2CommitQcStatus>,
     /// Authoritative progress and no-progress diagnostics for the active height.
     pub liveness: SumeragiV2LivenessStatus,

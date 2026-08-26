@@ -254,10 +254,8 @@ mod norito_rpc_fixture_tests {
                 Some(&network_id),
                 "{name}: network_id mismatch"
             );
-            let expected_authority = AccountId::parse_encoded(authority).map_or_else(
-                |err| panic!("{name}: authority parse failed: {err}"),
-                crate::account::ParsedAccountId::into_account_id,
-            );
+            let expected_authority = AccountId::parse_encoded(authority)
+                .unwrap_or_else(|err| panic!("{name}: authority parse failed: {err}"));
             assert_eq!(
                 signed_tx.authority().to_string(),
                 expected_authority.to_string(),

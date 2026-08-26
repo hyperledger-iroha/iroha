@@ -1,5 +1,20 @@
-const BASE58_PATTERN = /^[1-9A-HJ-NP-Za-km-z]+$/;
+import { parseHashLiteral } from "./instructionBuilderPrimitives.js";
+import { getCurveEntryByPublicKeyMulticodec } from "./curveRegistry.js";
+import {
+  canonicalizeMultihashHex,
+  ensureCanonicalAccountId,
+  normalizeAssetDefinitionId,
+} from "./normalizers.js";
+import {
+  KotodamaQuantity,
+  NumericV1,
+  NumericV1Error,
+} from "./numericV1.js";
+
 const HF_COMMIT_OID_PATTERN_V1 = /^[0-9a-f]{40}$/;
+const HF_REPO_ID_MAX_BYTES_V1 = 96;
+const HF_MODEL_NAME_MAX_BYTES_V1 = 128;
+const IROHA_NAME_MAX_BYTES_V1 = 255;
 const REJECTED_SIGNING_SECRET_FIELDS = [
   "privateKeyHex",
   "privateKey",
@@ -17,16 +32,113 @@ const HF_DEPLOY_PAYLOAD_FIELDS = new Set([
   "storage_class",
   "lease_term_ms",
   "lease_asset_definition_id",
-  "base_fee_nanos",
+  "base_fee",
 ]);
-const PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID =
-  "iroha_data_model::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt";
+const TX_INSTRUCTION_FIELDS = ["wire_id", "payload_hex"];
+const MUTATION_DRAFT_RESPONSE_FIELDS = [
+  "ok",
+  "authority",
+  "signed_by",
+  "tx_instructions",
+];
+const APP_INFRA_STATUS_RESPONSE_FIELDS = [
+  "schema_version",
+  "app_count",
+  "audit_event_count",
+  "apps",
+  "recent_audit_events",
+];
+const APP_INFRA_STATE_FIELDS = [
+  "schema_version",
+  "app_name",
+  "current_app_version",
+  "current_manifest_hash",
+  "revision_count",
+  "deployed_sequence",
+  "updated_sequence",
+  "manifest",
+];
+const APP_INFRA_AUDIT_EVENT_FIELDS = [
+  "schema_version",
+  "sequence",
+  "action",
+  "app_name",
+  "from_version",
+  "to_version",
+  "app_manifest_hash",
+  "service_count",
+  "signer",
+];
+const APP_INFRA_MANIFEST_FIELDS = [
+  "schema_version",
+  "app_name",
+  "app_version",
+  "public_url",
+  "static_site",
+  "services",
+];
+const APP_INFRA_STATIC_SITE_FIELDS = [
+  "schema_version",
+  "public_url",
+  "content_cid",
+  "manifest_digest_hex",
+  "mount_path",
+  "api_base_path",
+];
+const APP_INFRA_SERVICE_FIELDS = [
+  "schema_version",
+  "service_name",
+  "service_version",
+  "service_manifest_hash",
+  "container_manifest_hash",
+  "execution_plane",
+  "runtime",
+  "routes",
+  "lease_volumes",
+  "shard",
+];
+const APP_INFRA_ROUTE_FIELDS = [
+  "schema_version",
+  "public_host",
+  "path_prefix",
+  "internal_url",
+];
+const LOWERCASE_EVEN_HEX_PATTERN = /^(?:[0-9a-f]{2})+$/;
 export const SORACLOUD_APP_INFRA_DEPLOY_WIRE_ID =
   "iroha_data_model::isi::soracloud::DeploySoracloudAppInfra";
 export const SORACLOUD_APP_INFRA_UPGRADE_WIRE_ID =
   "iroha_data_model::isi::soracloud::UpgradeSoracloudAppInfra";
-const PRIVATE_UPLOADED_MODEL_COUNT_MODES = new Set(["bounded", "exact"]);
 const JSON_ACCEPT_HEADERS = Object.freeze({ Accept: "application/json" });
+const SORACLOUD_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Decode one Soracloud V1 response without accepting media-type or body aliases.
+ *
+ * @param {object} client Torii client transport.
+ * @param {Response} response Fetch response.
+ * @param {string} context Operation name for diagnostics.
+ * @param {AbortSignal | undefined} signal Optional request signal.
+ * @returns {Promise<unknown>}
+ */
+export async function decodeExactSoracloudJsonResponse(
+  client,
+  response,
+  context,
+  signal = undefined,
+) {
+  const contentType = client._getHeader(response, "content-type");
+  if (contentType !== "application/json") {
+    throw new TypeError(
+      `${context} response Content-Type must be exactly application/json`,
+    );
+  }
+  return client._maybeBoundedJson(
+    response,
+    SORACLOUD_JSON_RESPONSE_MAX_BYTES,
+    `${context} response`,
+    { signal },
+  );
+}
 
 function requireExactObject(input, label, allowedFields, requiredFields = allowedFields) {
   if (input == null || typeof input !== "object" || Array.isArray(input)) {
@@ -41,8 +153,12 @@ function requireExactObject(input, label, allowedFields, requiredFields = allowe
     if (!allowed.has(field)) {
       throw new TypeError(`${label}.${field} is not accepted`);
     }
-    if (!Object.getOwnPropertyDescriptor(input, field)?.enumerable) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, field);
+    if (!descriptor?.enumerable) {
       throw new TypeError(`${label}.${field} must be enumerable`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+      throw new TypeError(`${label}.${field} must be an enumerable data field`);
     }
   }
   if (Object.getOwnPropertySymbols(input).length > 0) {
@@ -72,18 +188,45 @@ function requireString(input, field) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new TypeError(`${field} must be a non-empty string`);
   }
-  return value.trim();
+  if (value.trim() !== value) {
+    throw new TypeError(`${field} must not contain surrounding whitespace`);
+  }
+  return value;
 }
 
-function optionalString(input, field) {
-  const value = input?.[field];
-  if (value == null) {
-    return undefined;
+function requireCanonicalStringValue(value, label) {
+  if (
+    typeof value !== "string" ||
+    value === "" ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new TypeError(`${label} must be a canonical non-empty string`);
   }
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new TypeError(`${field} must be a non-empty string when provided`);
+  return value;
+}
+
+function requireSafeNonNegativeIntegerValue(value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`${label} must be a safe non-negative integer`);
   }
-  return value.trim();
+  return value;
+}
+
+function requireCanonicalHashValue(value, label) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${label} must be a canonical Norito hash literal`);
+  }
+  let canonical;
+  try {
+    canonical = parseHashLiteral(value, label);
+  } catch {
+    throw new TypeError(`${label} must be a canonical Norito hash literal`);
+  }
+  if (canonical !== value) {
+    throw new TypeError(`${label} must be a canonical Norito hash literal`);
+  }
+  return value;
 }
 
 function nullableString(input, field, label = field) {
@@ -94,7 +237,64 @@ function nullableString(input, field, label = field) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new TypeError(`${label} must be a non-empty string or null`);
   }
-  return value.trim();
+  if (value.trim() !== value) {
+    throw new TypeError(`${label} must not contain surrounding whitespace`);
+  }
+  return value;
+}
+
+function utf8ByteLength(value) {
+  return new TextEncoder().encode(value).length;
+}
+
+function requireCanonicalHfRepoIdValue(value, label) {
+  requireCanonicalStringValue(value, label);
+  if (utf8ByteLength(value) > HF_REPO_ID_MAX_BYTES_V1 || value.includes("--") || value.includes("..")) {
+    throw new TypeError(`${label} must be one exact fully-qualified namespace/repository identifier`);
+  }
+  if (value.slice(-4).toLowerCase() === ".git") {
+    throw new TypeError(`${label} must be one exact fully-qualified namespace/repository identifier`);
+  }
+  const components = value.split("/");
+  if (
+    components.length !== 2 ||
+    components.some(
+      (component) =>
+        component === "" ||
+        component.startsWith(".") ||
+        component.startsWith("-") ||
+        component.endsWith(".") ||
+        component.endsWith("-") ||
+        !/^[A-Za-z0-9._-]+$/u.test(component),
+    )
+  ) {
+    throw new TypeError(`${label} must be one exact fully-qualified namespace/repository identifier`);
+  }
+  return value;
+}
+
+function requireCanonicalHfTokenValue(value, label) {
+  requireCanonicalStringValue(value, label);
+  if (
+    utf8ByteLength(value) > HF_MODEL_NAME_MAX_BYTES_V1 ||
+    /[\p{Cc}\p{White_Space}]/u.test(value)
+  ) {
+    throw new TypeError(`${label} must be an exact canonical HF token without whitespace`);
+  }
+  return value;
+}
+
+function requireCanonicalIrohaNameValue(value, label) {
+  requireCanonicalStringValue(value, label);
+  if (
+    utf8ByteLength(value) > IROHA_NAME_MAX_BYTES_V1 ||
+    value.normalize("NFC") !== value ||
+    /[\p{Cc}\p{White_Space}@#$]/u.test(value) ||
+    /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(value)
+  ) {
+    throw new TypeError(`${label} must use its exact canonical Iroha Name spelling`);
+  }
+  return value;
 }
 
 function requireHfCommitOid(input) {
@@ -118,8 +318,33 @@ function normalizeIntegerStringValue(value, field) {
   return BigInt(normalized).toString();
 }
 
-function normalizeIntegerString(input, field) {
-  return normalizeIntegerStringValue(input?.[field], field);
+function normalizeQuantity(input, field) {
+  const value = input[field];
+  try {
+    let normalized;
+    if (value instanceof KotodamaQuantity) {
+      normalized = NumericV1.encodeQuantityJson(value);
+    } else if (typeof value === "string") {
+      normalized = NumericV1.decodeQuantityJson(value).toString();
+    } else if (typeof value === "bigint") {
+      normalized = new KotodamaQuantity(value, 0).toString();
+    } else {
+      throw new TypeError(
+        `${field} must be a KotodamaQuantity, canonical Quantity string, or bigint`,
+      );
+    }
+    if (normalized === "0") {
+      throw new TypeError(`${field} must be greater than zero`);
+    }
+    return normalized;
+  } catch (error) {
+    if (error instanceof NumericV1Error) {
+      throw new TypeError(
+        `${field} must be a canonical positive Quantity (${error.code})`,
+      );
+    }
+    throw error;
+  }
 }
 
 function normalizeSafeIntegerValue(value, field) {
@@ -129,10 +354,6 @@ function normalizeSafeIntegerValue(value, field) {
     throw new TypeError(`${field} must fit in a safe JavaScript integer`);
   }
   return numeric;
-}
-
-function normalizeSafeInteger(input, field) {
-  return normalizeSafeIntegerValue(input?.[field], field);
 }
 
 function normalizeSafePositiveIntegerValue(value, field) {
@@ -145,6 +366,377 @@ function normalizeSafePositiveIntegerValue(value, field) {
 
 function normalizeSafePositiveInteger(input, field) {
   return normalizeSafePositiveIntegerValue(input?.[field], field);
+}
+
+function requireSchemaVersionOne(value, label) {
+  if (value !== 1) {
+    throw new TypeError(`${label} must be 1`);
+  }
+  return value;
+}
+
+function requireU32Value(value, label, { positive = false } = {}) {
+  const normalized = requireSafeNonNegativeIntegerValue(value, label);
+  if (normalized > 0xffff_ffff || (positive && normalized === 0)) {
+    throw new TypeError(
+      `${label} must be ${positive ? "a positive" : "an unsigned"} 32-bit integer`,
+    );
+  }
+  return normalized;
+}
+
+function requirePositiveSafeIntegerValue(value, label) {
+  const normalized = requireSafeNonNegativeIntegerValue(value, label);
+  if (normalized === 0) {
+    throw new TypeError(`${label} must be greater than zero`);
+  }
+  return normalized;
+}
+
+function requireNullableCanonicalStringValue(value, label) {
+  if (value === null) {
+    return null;
+  }
+  return requireCanonicalStringValue(value, label);
+}
+
+function requireHttpUrlValue(value, label) {
+  const normalized = requireCanonicalStringValue(value, label);
+  if (!normalized.startsWith("http://") && !normalized.startsWith("https://")) {
+    throw new TypeError(`${label} must start with http:// or https://`);
+  }
+  return normalized;
+}
+
+function requireAbsolutePathValue(value, label) {
+  const normalized = requireCanonicalStringValue(value, label);
+  if (!normalized.startsWith("/")) {
+    throw new TypeError(`${label} must start with /`);
+  }
+  return normalized;
+}
+
+function decodeCanonicalPublicKeyVarint(bytes, start, label) {
+  let value = 0n;
+  let shift = 0n;
+  for (let cursor = start; cursor < bytes.length && cursor - start < 10; cursor += 1) {
+    const byte = BigInt(bytes[cursor]);
+    value |= (byte & 0x7fn) << shift;
+    if ((byte & 0x80n) === 0n) {
+      if (cursor > start && byte === 0n) {
+        throw new TypeError(`${label} contains a non-canonical multihash varint`);
+      }
+      if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new TypeError(`${label} contains an oversized multihash varint`);
+      }
+      return { value: Number(value), nextIndex: cursor + 1 };
+    }
+    shift += 7n;
+  }
+  throw new TypeError(`${label} contains an invalid multihash varint`);
+}
+
+function requireCanonicalPublicKeyValue(value, label) {
+  const literal = requireCanonicalStringValue(value, label);
+  if (literal.includes(":")) {
+    throw new TypeError(`${label} must not include an algorithm prefix`);
+  }
+  let canonical;
+  try {
+    canonical = canonicalizeMultihashHex(literal, label);
+  } catch {
+    throw new TypeError(`${label} must be a canonical public-key multihash literal`);
+  }
+  const bytePairs = canonical.match(/../gu);
+  const bytes = Uint8Array.from(bytePairs ?? [], (pair) => Number.parseInt(pair, 16));
+  const multicodec = decodeCanonicalPublicKeyVarint(bytes, 0, label);
+  const length = decodeCanonicalPublicKeyVarint(bytes, multicodec.nextIndex, label);
+  const entry = getCurveEntryByPublicKeyMulticodec(multicodec.value);
+  if (
+    entry == null ||
+    length.value !== entry.publicKeyLength ||
+    bytes.length - length.nextIndex !== entry.publicKeyLength
+  ) {
+    throw new TypeError(`${label} must use a supported public-key multihash`);
+  }
+  const headerEnd = length.nextIndex * 2;
+  const expected = `${canonical.slice(0, headerEnd).toLowerCase()}${canonical.slice(headerEnd)}`;
+  if (literal !== expected) {
+    throw new TypeError(`${label} must use canonical public-key spelling`);
+  }
+  return literal;
+}
+
+function requireCanonicalAccountIdValue(value, label) {
+  const literal = requireCanonicalStringValue(value, label);
+  let canonical;
+  try {
+    canonical = ensureCanonicalAccountId(literal, label);
+  } catch {
+    throw new TypeError(`${label} must be a canonical I105 account id`);
+  }
+  if (canonical !== literal) {
+    throw new TypeError(`${label} must be a canonical I105 account id`);
+  }
+  return literal;
+}
+
+function requireTaggedUnitChoice(value, label, tagField, allowedTags) {
+  requireExactObject(value, label, [tagField, "value"]);
+  if (!allowedTags.has(value[tagField]) || value.value !== null) {
+    throw new TypeError(
+      `${label} must be one of ${[...allowedTags].join(", ")} with an explicit null value`,
+    );
+  }
+  return value[tagField];
+}
+
+function validateAppInfraRoute(route, label) {
+  requireExactObject(route, label, APP_INFRA_ROUTE_FIELDS);
+  requireSchemaVersionOne(route.schema_version, `${label}.schema_version`);
+  requireNullableCanonicalStringValue(route.public_host, `${label}.public_host`);
+  requireAbsolutePathValue(route.path_prefix, `${label}.path_prefix`);
+  requireNullableCanonicalStringValue(route.internal_url, `${label}.internal_url`);
+}
+
+function validateAppInfraStaticSite(site, label) {
+  requireExactObject(site, label, APP_INFRA_STATIC_SITE_FIELDS);
+  requireSchemaVersionOne(site.schema_version, `${label}.schema_version`);
+  requireHttpUrlValue(site.public_url, `${label}.public_url`);
+  requireNullableCanonicalStringValue(site.content_cid, `${label}.content_cid`);
+  requireNullableCanonicalStringValue(
+    site.manifest_digest_hex,
+    `${label}.manifest_digest_hex`,
+  );
+  requireAbsolutePathValue(site.mount_path, `${label}.mount_path`);
+  if (site.api_base_path !== null) {
+    requireAbsolutePathValue(site.api_base_path, `${label}.api_base_path`);
+  }
+}
+
+function validateAppInfraService(service, label) {
+  requireExactObject(service, label, APP_INFRA_SERVICE_FIELDS);
+  requireSchemaVersionOne(service.schema_version, `${label}.schema_version`);
+  requireCanonicalStringValue(service.service_name, `${label}.service_name`);
+  requireCanonicalStringValue(service.service_version, `${label}.service_version`);
+  requireCanonicalHashValue(service.service_manifest_hash, `${label}.service_manifest_hash`);
+  requireCanonicalHashValue(
+    service.container_manifest_hash,
+    `${label}.container_manifest_hash`,
+  );
+  requireTaggedUnitChoice(
+    service.execution_plane,
+    `${label}.execution_plane`,
+    "execution_plane",
+    new Set(["DeterministicService", "HttpService"]),
+  );
+  requireTaggedUnitChoice(
+    service.runtime,
+    `${label}.runtime`,
+    "runtime",
+    new Set(["Ivm", "Inrou"]),
+  );
+  if (!Array.isArray(service.routes)) {
+    throw new TypeError(`${label}.routes must be an array`);
+  }
+  const routeKeys = new Set();
+  service.routes.forEach((route, index) => {
+    const routeLabel = `${label}.routes[${index}]`;
+    validateAppInfraRoute(route, routeLabel);
+    const routeKey = `${route.public_host ?? ""}\u0000${route.path_prefix}`;
+    if (routeKeys.has(routeKey)) {
+      throw new TypeError(`${label}.routes must not contain duplicates`);
+    }
+    routeKeys.add(routeKey);
+  });
+  if (!Array.isArray(service.lease_volumes)) {
+    throw new TypeError(`${label}.lease_volumes must be an array`);
+  }
+  const leaseVolumes = service.lease_volumes.map((volume, index) =>
+    requireCanonicalStringValue(volume, `${label}.lease_volumes[${index}]`),
+  );
+  if (new Set(leaseVolumes).size !== leaseVolumes.length) {
+    throw new TypeError(`${label}.lease_volumes must not contain duplicates`);
+  }
+  requireNullableCanonicalStringValue(service.shard, `${label}.shard`);
+}
+
+function validateAppInfraManifest(manifest, label) {
+  requireExactObject(manifest, label, APP_INFRA_MANIFEST_FIELDS);
+  requireSchemaVersionOne(manifest.schema_version, `${label}.schema_version`);
+  requireCanonicalStringValue(manifest.app_name, `${label}.app_name`);
+  requireCanonicalStringValue(manifest.app_version, `${label}.app_version`);
+  requireHttpUrlValue(manifest.public_url, `${label}.public_url`);
+  if (manifest.static_site !== null) {
+    validateAppInfraStaticSite(manifest.static_site, `${label}.static_site`);
+  }
+  if (!Array.isArray(manifest.services) || manifest.services.length === 0) {
+    throw new TypeError(`${label}.services must contain at least one service`);
+  }
+  const serviceNames = new Set();
+  manifest.services.forEach((service, index) => {
+    validateAppInfraService(service, `${label}.services[${index}]`);
+    if (serviceNames.has(service.service_name)) {
+      throw new TypeError(`${label}.services must not contain duplicate service names`);
+    }
+    serviceNames.add(service.service_name);
+  });
+}
+
+function validateAppInfraState(state, label) {
+  requireExactObject(state, label, APP_INFRA_STATE_FIELDS);
+  requireSchemaVersionOne(state.schema_version, `${label}.schema_version`);
+  requireCanonicalStringValue(state.app_name, `${label}.app_name`);
+  requireCanonicalStringValue(
+    state.current_app_version,
+    `${label}.current_app_version`,
+  );
+  requireCanonicalHashValue(state.current_manifest_hash, `${label}.current_manifest_hash`);
+  requireU32Value(state.revision_count, `${label}.revision_count`, { positive: true });
+  const deployedSequence = requirePositiveSafeIntegerValue(
+    state.deployed_sequence,
+    `${label}.deployed_sequence`,
+  );
+  const updatedSequence = requirePositiveSafeIntegerValue(
+    state.updated_sequence,
+    `${label}.updated_sequence`,
+  );
+  if (updatedSequence < deployedSequence) {
+    throw new TypeError(`${label}.updated_sequence must not precede deployed_sequence`);
+  }
+  validateAppInfraManifest(state.manifest, `${label}.manifest`);
+  if (
+    state.app_name !== state.manifest.app_name ||
+    state.current_app_version !== state.manifest.app_version
+  ) {
+    throw new TypeError(`${label} identity must match its embedded manifest`);
+  }
+}
+
+function validateAppInfraAuditEvent(event, label) {
+  requireExactObject(event, label, APP_INFRA_AUDIT_EVENT_FIELDS);
+  requireSchemaVersionOne(event.schema_version, `${label}.schema_version`);
+  requirePositiveSafeIntegerValue(event.sequence, `${label}.sequence`);
+  const action = requireTaggedUnitChoice(
+    event.action,
+    `${label}.action`,
+    "action",
+    new Set(["Deploy", "Upgrade"]),
+  );
+  requireCanonicalStringValue(event.app_name, `${label}.app_name`);
+  requireNullableCanonicalStringValue(event.from_version, `${label}.from_version`);
+  requireCanonicalStringValue(event.to_version, `${label}.to_version`);
+  requireCanonicalHashValue(event.app_manifest_hash, `${label}.app_manifest_hash`);
+  requireU32Value(event.service_count, `${label}.service_count`, { positive: true });
+  requireCanonicalPublicKeyValue(event.signer, `${label}.signer`);
+  if (
+    (action === "Deploy" && event.from_version !== null) ||
+    (action === "Upgrade" && event.from_version === null)
+  ) {
+    throw new TypeError(`${label}.from_version must match the ${action} action`);
+  }
+}
+
+/**
+ * Validate the exact first-release response returned by a Soracloud mutation endpoint.
+ *
+ * @param {unknown} response
+ * @returns {Record<string, unknown>}
+ */
+export function normalizeSoracloudMutationDraftResponse(response) {
+  requireExactObject(response, "response", MUTATION_DRAFT_RESPONSE_FIELDS);
+  if (response.ok !== true) {
+    throw new TypeError("response.ok must be true");
+  }
+  requireCanonicalAccountIdValue(response.authority, "response.authority");
+  requireCanonicalPublicKeyValue(response.signed_by, "response.signed_by");
+  if (!Array.isArray(response.tx_instructions) || response.tx_instructions.length === 0) {
+    throw new TypeError("response.tx_instructions must contain at least one instruction");
+  }
+  response.tx_instructions.forEach((instruction, index) => {
+    const label = `response.tx_instructions[${index}]`;
+    requireExactObject(instruction, label, TX_INSTRUCTION_FIELDS);
+    requireCanonicalStringValue(instruction.wire_id, `${label}.wire_id`);
+    if (
+      typeof instruction.payload_hex !== "string" ||
+      !LOWERCASE_EVEN_HEX_PATTERN.test(instruction.payload_hex)
+    ) {
+      throw new TypeError(`${label}.payload_hex must be non-empty lowercase even-length hex`);
+    }
+  });
+  return response;
+}
+
+/**
+ * Validate an exact authoritative Soracloud app-infra V1 status response.
+ *
+ * @param {unknown} response
+ * @param {string | undefined} expectedAppName
+ * @returns {Record<string, unknown>}
+ */
+export function normalizeSoracloudAppInfraStatusResponse(
+  response,
+  expectedAppName = undefined,
+) {
+  requireExactObject(response, "response", APP_INFRA_STATUS_RESPONSE_FIELDS);
+  requireSchemaVersionOne(response.schema_version, "response.schema_version");
+  const appCount = requireU32Value(response.app_count, "response.app_count");
+  const auditEventCount = requireU32Value(
+    response.audit_event_count,
+    "response.audit_event_count",
+  );
+  if (!Array.isArray(response.apps) || response.apps.length !== appCount) {
+    throw new TypeError("response.apps length must equal response.app_count");
+  }
+  const appNames = new Set();
+  let previousAppName = null;
+  response.apps.forEach((state, index) => {
+    validateAppInfraState(state, `response.apps[${index}]`);
+    if (appNames.has(state.app_name)) {
+      throw new TypeError("response.apps must not contain duplicate app names");
+    }
+    if (previousAppName !== null && previousAppName.localeCompare(state.app_name) >= 0) {
+      throw new TypeError("response.apps must be sorted by app_name");
+    }
+    appNames.add(state.app_name);
+    previousAppName = state.app_name;
+  });
+  if (
+    !Array.isArray(response.recent_audit_events) ||
+    response.recent_audit_events.length > auditEventCount
+  ) {
+    throw new TypeError(
+      "response.recent_audit_events must be an array bounded by response.audit_event_count",
+    );
+  }
+  const sequences = new Set();
+  let previousSequence = Number.POSITIVE_INFINITY;
+  response.recent_audit_events.forEach((event, index) => {
+    validateAppInfraAuditEvent(event, `response.recent_audit_events[${index}]`);
+    if (sequences.has(event.sequence) || event.sequence >= previousSequence) {
+      throw new TypeError(
+        "response.recent_audit_events must have unique descending sequences",
+      );
+    }
+    sequences.add(event.sequence);
+    previousSequence = event.sequence;
+  });
+  if (expectedAppName !== undefined) {
+    const canonicalExpectedName = requireCanonicalStringValue(
+      expectedAppName,
+      "expectedAppName",
+    );
+    if (
+      response.apps.length !== 1 ||
+      response.apps[0].app_name !== canonicalExpectedName ||
+      response.recent_audit_events.some(
+        (event) => event.app_name !== canonicalExpectedName,
+      )
+    ) {
+      throw new TypeError("response must contain only the requested app identity");
+    }
+  }
+  return response;
 }
 
 /**
@@ -171,11 +763,17 @@ export async function requestSoracloudAppInfraStatus(
   }
 
   const params = {};
+  const exactNamedAppName = namedAppName === undefined
+    ? undefined
+    : requireCanonicalIrohaNameValue(namedAppName, "appName");
   const path = namedAppName === undefined
     ? "/v1/soracloud/apps/status"
-    : `/v1/soracloud/apps/${encodeURIComponent(requireString({ appName: namedAppName }, "appName"))}/status`;
+    : `/v1/soracloud/apps/${encodeURIComponent(exactNamedAppName)}/status`;
   if (namedAppName === undefined && options.appName != null) {
-    params.app_name = requireString(options, "appName");
+    params.app_name = requireCanonicalIrohaNameValue(
+      requireString(options, "appName"),
+      "appName",
+    );
   }
   if (options.auditLimit != null) {
     params.audit_limit = normalizeSafePositiveInteger(options, "auditLimit");
@@ -187,21 +785,16 @@ export async function requestSoracloudAppInfraStatus(
     canonicalAuth: options.canonicalAuth,
   });
   await client._expectStatus(response, [200]);
-  return client._maybeJson(response);
-}
-
-function normalizeSignedI32(value, field) {
-  if (!Number.isInteger(value) || value < -2147483648 || value > 2147483647) {
-    throw new TypeError(`${field} must be a signed 32-bit integer`);
-  }
-  return value;
-}
-
-function normalizeSignedI8(value, field) {
-  if (!Number.isInteger(value) || value < -128 || value > 127) {
-    throw new TypeError(`${field} must be a signed 8-bit integer`);
-  }
-  return value;
+  const payload = await decodeExactSoracloudJsonResponse(
+    client,
+    response,
+    context,
+    options.signal,
+  );
+  return normalizeSoracloudAppInfraStatusResponse(
+    payload,
+    namedAppName ?? options.appName,
+  );
 }
 
 function normalizeArray(input, field) {
@@ -210,17 +803,6 @@ function normalizeArray(input, field) {
     throw new TypeError(`${field} must be an array`);
   }
   return value;
-}
-
-function normalizeHashLike(input, field) {
-  return normalizeHashLikeValue(input?.[field], field);
-}
-
-function normalizeHashLikeValue(value, field) {
-  if (typeof value !== "string" || value.trim() === "") {
-    throw new TypeError(`${field} must be a non-empty string`);
-  }
-  return value.trim();
 }
 
 function normalizeStorageClass(value) {
@@ -232,112 +814,7 @@ function normalizeStorageClass(value) {
 
 function normalizeLeaseAssetDefinitionId(input) {
   const value = requireString(input, "leaseAssetDefinitionId");
-  if (!BASE58_PATTERN.test(value)) {
-    throw new Error("Asset Definition ID must be valid Base58");
-  }
-  return value;
-}
-
-function normalizePrivateArtifactRef(input, field, expectedRole) {
-  const artifact = input?.[field];
-  if (artifact == null || typeof artifact !== "object" || Array.isArray(artifact)) {
-    throw new TypeError(`${field} must be an object`);
-  }
-  rejectSoracloudSigningSecrets(artifact);
-  requireExactObject(artifact, field, [
-    "schemaVersion",
-    "sorafsManifestDigest",
-    "artifactHash",
-    "ciphertextBytes",
-    "artifactRole",
-  ]);
-  const role = artifact.artifactRole;
-  if (role !== expectedRole) {
-    throw new TypeError(`${field}.artifactRole must be ${expectedRole}`);
-  }
-  return {
-    schema_version: normalizeSafePositiveIntegerValue(
-      artifact.schemaVersion,
-      `${field}.schemaVersion`,
-    ),
-    sorafs_manifest_digest: normalizeHashLikeValue(
-      artifact.sorafsManifestDigest,
-      `${field}.sorafsManifestDigest`,
-    ),
-    artifact_hash: normalizeHashLikeValue(
-      artifact.artifactHash,
-      `${field}.artifactHash`,
-    ),
-    ciphertext_bytes: normalizeSafePositiveIntegerValue(
-      artifact.ciphertextBytes,
-      `${field}.ciphertextBytes`,
-    ),
-    artifact_role: role,
-  };
-}
-
-function normalizeQuantizedCpuModel(input) {
-  const model = input?.model;
-  if (model == null || typeof model !== "object" || Array.isArray(model)) {
-    throw new TypeError("model must be an object");
-  }
-  rejectSoracloudSigningSecrets(model);
-  requireExactObject(model, "model", [
-    "inputLen",
-    "outputLen",
-    "weightsI8",
-    "biasI32",
-    "outputShift",
-    "outputMin",
-    "outputMax",
-  ]);
-  const inputLen = normalizeSafePositiveIntegerValue(
-    model.inputLen,
-    "model.inputLen",
-  );
-  const outputLen = normalizeSafePositiveIntegerValue(
-    model.outputLen,
-    "model.outputLen",
-  );
-  const weights = normalizeArray({ value: model.weightsI8 }, "value").map(
-    (value, index) => normalizeSignedI8(value, `model.weightsI8[${index}]`),
-  );
-  const bias = normalizeArray({ value: model.biasI32 }, "value").map(
-    (value, index) => normalizeSignedI32(value, `model.biasI32[${index}]`),
-  );
-  if (weights.length !== inputLen * outputLen) {
-    throw new TypeError("model.weightsI8 length must equal inputLen * outputLen");
-  }
-  if (bias.length !== outputLen) {
-    throw new TypeError("model.biasI32 length must equal outputLen");
-  }
-  const outputShift = normalizeSafeIntegerValue(
-    model.outputShift,
-    "model.outputShift",
-  );
-  if (outputShift > 30) {
-    throw new TypeError("model.outputShift must be <= 30");
-  }
-  const outputMin = normalizeSignedI32(
-    model.outputMin,
-    "model.outputMin",
-  );
-  const outputMax = normalizeSignedI32(
-    model.outputMax,
-    "model.outputMax",
-  );
-  if (outputMin > outputMax) {
-    throw new TypeError("model.outputMin must be <= model.outputMax");
-  }
-  return {
-    input_len: inputLen,
-    output_len: outputLen,
-    weights_i8: weights,
-    bias_i32: bias,
-    output_shift: outputShift,
-    output_min: outputMin,
-    output_max: outputMax,
-  };
+  return normalizeAssetDefinitionId(value, "leaseAssetDefinitionId");
 }
 
 function canonicalSigningPayload(label, payload, schema = PROVENANCE_SCHEMA) {
@@ -409,8 +886,12 @@ function requireAllowedDraftPayloadFields(payload) {
     if (!HF_DEPLOY_PAYLOAD_FIELDS.has(field)) {
       throw new TypeError(`draft payload.${field} is not accepted`);
     }
-    if (!Object.getOwnPropertyDescriptor(payload, field)?.enumerable) {
+    const descriptor = Object.getOwnPropertyDescriptor(payload, field);
+    if (!descriptor?.enumerable) {
       throw new TypeError(`draft payload.${field} must be enumerable`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+      throw new TypeError(`draft payload.${field} must be an enumerable data field`);
     }
   }
   if (Object.getOwnPropertySymbols(payload).length > 0) {
@@ -428,21 +909,13 @@ function requireAllowedDraftPayloadFields(payload) {
 
 function requireAssembledDraftPayloadShape(payload) {
   requireAllowedDraftPayloadFields(payload);
-  for (const field of [
-    "repo_id",
-    "revision",
-    "model_name",
-    "service_name",
-    "lease_asset_definition_id",
-  ]) {
-    if (
-      !Object.hasOwn(payload, field) ||
-      typeof payload[field] !== "string" ||
-      payload[field].trim() === ""
-    ) {
-      throw new TypeError(`draft payload.${field} must be a non-empty string`);
-    }
-  }
+  requireCanonicalHfRepoIdValue(payload.repo_id, "draft payload.repo_id");
+  requireCanonicalHfTokenValue(payload.model_name, "draft payload.model_name");
+  requireCanonicalIrohaNameValue(payload.service_name, "draft payload.service_name");
+  requireCanonicalStringValue(
+    payload.lease_asset_definition_id,
+    "draft payload.lease_asset_definition_id",
+  );
   if (!HF_COMMIT_OID_PATTERN_V1.test(payload.revision)) {
     throw new TypeError(
       "draft payload.revision must be a full 40-character lowercase hexadecimal commit OID",
@@ -451,31 +924,45 @@ function requireAssembledDraftPayloadShape(payload) {
   if (!Object.hasOwn(payload, "apartment_name")) {
     throw new TypeError("draft payload.apartment_name is required");
   }
-  if (
-    payload.apartment_name !== null &&
-    (typeof payload.apartment_name !== "string" || payload.apartment_name.trim() === "")
-  ) {
-    throw new TypeError("draft payload.apartment_name must be a non-empty string or null");
+  if (payload.apartment_name !== null) {
+    requireCanonicalIrohaNameValue(
+      payload.apartment_name,
+      "draft payload.apartment_name",
+    );
   }
-  if (!BASE58_PATTERN.test(payload.lease_asset_definition_id)) {
-    throw new Error("draft payload.lease_asset_definition_id must be valid Base58");
-  }
+  normalizeAssetDefinitionId(
+    payload.lease_asset_definition_id,
+    "draft payload.lease_asset_definition_id",
+  );
   if (!["hot", "warm", "cold"].includes(payload.storage_class)) {
     throw new TypeError("draft payload.storage_class must be hot, warm, or cold");
   }
   if (
     !Number.isSafeInteger(payload.lease_term_ms) ||
-    payload.lease_term_ms < 0
+    payload.lease_term_ms <= 0
   ) {
-    throw new TypeError("draft payload.lease_term_ms must be a safe non-negative integer");
+    throw new TypeError("draft payload.lease_term_ms must be a safe positive integer");
   }
-  if (
-    !Object.hasOwn(payload, "base_fee_nanos") ||
-    typeof payload.base_fee_nanos !== "string" ||
-    !/^[0-9]+$/.test(payload.base_fee_nanos) ||
-    BigInt(payload.base_fee_nanos).toString() !== payload.base_fee_nanos
-  ) {
-    throw new TypeError("draft payload.base_fee_nanos must be a canonical non-negative integer string");
+  if (!Object.hasOwn(payload, "base_fee")) {
+    throw new TypeError("draft payload.base_fee is required");
+  }
+  try {
+    const baseFee =
+      typeof payload.base_fee === "string"
+        ? NumericV1.decodeQuantityJson(payload.base_fee)
+        : null;
+    if (
+      baseFee === null ||
+      baseFee.toString() !== payload.base_fee ||
+      baseFee.mantissa === 0n
+    ) {
+      throw new TypeError("draft payload.base_fee must be a canonical positive Quantity string");
+    }
+  } catch (error) {
+    if (error instanceof NumericV1Error) {
+      throw new TypeError("draft payload.base_fee must be a canonical positive Quantity string");
+    }
+    throw error;
   }
 }
 
@@ -497,7 +984,7 @@ function generatedApartmentSigningPayload(payload) {
 /**
  * Build an unsigned `/v1/soracloud/hf/deploy` draft.
  *
- * @param {{ repoId: string, revision: string, modelName: string, serviceName: string, apartmentName: string | null, storageClass: "hot" | "warm" | "cold", leaseTermMs: number | bigint | string, leaseAssetDefinitionId: string, baseFeeNanos: number | bigint | string }} input
+ * @param {{ repoId: string, revision: string, modelName: string, serviceName: string, apartmentName: string | null, storageClass: "hot" | "warm" | "cold", leaseTermMs: number | bigint | string, leaseAssetDefinitionId: string, baseFee: import("./numericV1.js").KotodamaQuantity | string | bigint }} input
  * @returns {{ payload: Record<string, unknown>, provenancePayloads: { deploy: Record<string, unknown>, generatedService: Record<string, unknown>, generatedApartment: Record<string, unknown> | null } }}
  */
 export function buildSoracloudHfDeployDraft(input = {}) {
@@ -511,19 +998,22 @@ export function buildSoracloudHfDeployDraft(input = {}) {
     "storageClass",
     "leaseTermMs",
     "leaseAssetDefinitionId",
-    "baseFeeNanos",
+    "baseFee",
   ]);
   const apartmentName = nullableString(input, "apartmentName");
+  if (apartmentName !== null) {
+    requireCanonicalIrohaNameValue(apartmentName, "apartmentName");
+  }
   const payload = {
-    repo_id: requireString(input, "repoId"),
+    repo_id: requireCanonicalHfRepoIdValue(input.repoId, "repoId"),
     revision: requireHfCommitOid(input),
-    model_name: requireString(input, "modelName"),
-    service_name: requireString(input, "serviceName"),
+    model_name: requireCanonicalHfTokenValue(input.modelName, "modelName"),
+    service_name: requireCanonicalIrohaNameValue(input.serviceName, "serviceName"),
     apartment_name: apartmentName,
     storage_class: normalizeStorageClass(input.storageClass),
-    lease_term_ms: normalizeSafeInteger(input, "leaseTermMs"),
+    lease_term_ms: normalizeSafePositiveInteger(input, "leaseTermMs"),
     lease_asset_definition_id: normalizeLeaseAssetDefinitionId(input),
-    base_fee_nanos: normalizeIntegerString(input, "baseFeeNanos"),
+    base_fee: normalizeQuantity(input, "baseFee"),
   };
 
   const provenancePayloads = {
@@ -664,6 +1154,7 @@ function normalizeServiceSpec(service, index) {
     "shards",
   ]);
   const serviceName = requireString(service, "name");
+  requireCanonicalIrohaNameValue(serviceName, `services[${index}].name`);
   const serviceVersion = requireString(service, "serviceVersion");
   const runtime = normalizeServiceRuntime(
     requireString(service, "runtime"),
@@ -684,10 +1175,16 @@ function normalizeServiceSpec(service, index) {
     schema_version: 1,
     service_name: serviceName,
     service_version: serviceVersion,
-    service_manifest_hash: requireString(service, "serviceManifestHash"),
-    container_manifest_hash: requireString(service, "containerManifestHash"),
-    execution_plane: executionPlane,
-    runtime,
+    service_manifest_hash: requireCanonicalHashValue(
+      service.serviceManifestHash,
+      `services[${index}].serviceManifestHash`,
+    ),
+    container_manifest_hash: requireCanonicalHashValue(
+      service.containerManifestHash,
+      `services[${index}].containerManifestHash`,
+    ),
+    execution_plane: { execution_plane: executionPlane, value: null },
+    runtime: { runtime, value: null },
     routes,
     lease_volumes: leaseVolumes,
     shard: null,
@@ -743,7 +1240,10 @@ export function buildSoracloudAppInfraDraft(input = {}) {
   }
   const payload = {
     schema_version: 1,
-    app_name: requireString(input, "appName"),
+    app_name: requireCanonicalIrohaNameValue(
+      requireString(input, "appName"),
+      "appName",
+    ),
     app_version: requireString(input, "appVersion"),
     public_url: requireString(input, "publicUrl"),
     static_site: normalizeAppStaticSite(input),
@@ -760,6 +1260,30 @@ export function buildSoracloudAppInfraDraft(input = {}) {
   };
 }
 
+function normalizeManifestProvenance(provenance, label) {
+  rejectSoracloudSigningSecrets(provenance);
+  if (
+    provenance == null ||
+    typeof provenance !== "object" ||
+    Array.isArray(provenance)
+  ) {
+    throw new TypeError(`${label} must include signer and signature`);
+  }
+  requireExactObject(provenance, label, ["signer", "signature"]);
+  if (
+    typeof provenance.signer !== "string" ||
+    provenance.signer.trim() === "" ||
+    typeof provenance.signature !== "string" ||
+    provenance.signature.trim() === ""
+  ) {
+    throw new TypeError(`${label} must include signer and signature`);
+  }
+  return {
+    signer: provenance.signer,
+    signature: provenance.signature,
+  };
+}
+
 function requireProvenance(provenances, field) {
   rejectSoracloudSigningSecrets(provenances);
   if (
@@ -770,26 +1294,7 @@ function requireProvenance(provenances, field) {
   ) {
     throw new TypeError(`${field} provenance must include signer and signature`);
   }
-  const provenance = provenances[field];
-  rejectSoracloudSigningSecrets(provenance);
-  if (
-    provenance == null ||
-    typeof provenance !== "object" ||
-    Array.isArray(provenance) ||
-    !Object.hasOwn(provenance, "signer") ||
-    !Object.hasOwn(provenance, "signature") ||
-    typeof provenance.signer !== "string" ||
-    provenance.signer.trim() === "" ||
-    typeof provenance.signature !== "string" ||
-    provenance.signature.trim() === ""
-  ) {
-    throw new TypeError(`${field} provenance must include signer and signature`);
-  }
-  requireExactObject(provenance, `${field} provenance`, ["signer", "signature"]);
-  return {
-    signer: provenance.signer,
-    signature: provenance.signature,
-  };
+  return normalizeManifestProvenance(provenances[field], `${field} provenance`);
 }
 
 function requireDraftSigningPayload(
@@ -809,29 +1314,23 @@ function requireDraftSigningPayload(
     throw new TypeError(`draft provenancePayloads.${field} is required`);
   }
   const signingPayload = draft.provenancePayloads[field];
-  if (
-    signingPayload == null ||
-    typeof signingPayload !== "object" ||
-    Array.isArray(signingPayload) ||
-    !Object.hasOwn(signingPayload, "schema") ||
-    !Object.hasOwn(signingPayload, "label") ||
-    !Object.hasOwn(signingPayload, "payload") ||
-    signingPayload.schema !== expectedSchema ||
-    signingPayload.label !== label ||
-    typeof signingPayload.payload !== "object" ||
-    signingPayload.payload == null ||
-    Array.isArray(signingPayload.payload)
-  ) {
+  if (signingPayload == null || typeof signingPayload !== "object" || Array.isArray(signingPayload)) {
     throw new TypeError(`draft provenancePayloads.${field} is required`);
   }
-  rejectSoracloudSigningSecrets(signingPayload);
-  for (const payloadField in signingPayload.payload) {
-    if (!Object.hasOwn(signingPayload.payload, payloadField)) {
-      throw new TypeError(
-        `draft provenancePayloads.${field} payload.${payloadField} must be an own property`,
-      );
-    }
+  requireExactObject(signingPayload, `draft provenancePayloads.${field}`, [
+    "schema",
+    "label",
+    "payload",
+  ]);
+  if (signingPayload.schema !== expectedSchema || signingPayload.label !== label) {
+    throw new TypeError(`draft provenancePayloads.${field} is required`);
   }
+  requireExactObject(
+    signingPayload.payload,
+    `draft provenancePayloads.${field} payload`,
+    Object.keys(expectedPayload),
+  );
+  rejectSoracloudSigningSecrets(signingPayload);
   rejectSoracloudSigningSecrets(signingPayload.payload);
   if (!deepEqualCanonical(signingPayload.payload, expectedPayload)) {
     throw new TypeError(`draft provenancePayloads.${field} payload must match draft payload`);
@@ -839,22 +1338,7 @@ function requireDraftSigningPayload(
 }
 
 function requireAppInfraDraftPayloadShape(payload) {
-  if (
-    payload == null ||
-    typeof payload !== "object" ||
-    Array.isArray(payload) ||
-    payload.schema_version !== 1 ||
-    typeof payload.app_name !== "string" ||
-    payload.app_name.trim() === "" ||
-    typeof payload.app_version !== "string" ||
-    payload.app_version.trim() === "" ||
-    typeof payload.public_url !== "string" ||
-    payload.public_url.trim() === "" ||
-    !Array.isArray(payload.services) ||
-    payload.services.length === 0
-  ) {
-    throw new TypeError("draft payload must be a canonical Soracloud app infra manifest");
-  }
+  validateAppInfraManifest(payload, "draft payload");
 }
 
 /**
@@ -868,15 +1352,12 @@ function requireAppInfraDraftPayloadShape(payload) {
 export function assembleSoracloudAppInfraRequest(draft, provenances = {}, options = undefined) {
   rejectSoracloudSigningSecrets(draft);
   rejectSoracloudSigningSecrets(options);
-  if (
-    draft == null ||
-    typeof draft !== "object" ||
-    Array.isArray(draft) ||
-    !Object.hasOwn(draft, "payload")
-  ) {
-    throw new TypeError("draft payload is required");
-  }
+  requireExactObject(draft, "draft", ["payload", "provenancePayloads"]);
   requireAppInfraDraftPayloadShape(draft.payload);
+  requireExactObject(draft.provenancePayloads, "draft provenancePayloads", [
+    "deploy",
+    "services",
+  ]);
   requireDraftSigningPayload(
     draft,
     "deploy",
@@ -884,6 +1365,27 @@ export function assembleSoracloudAppInfraRequest(draft, provenances = {}, option
     draft.payload,
     APP_INFRA_PROVENANCE_SCHEMA,
   );
+  if (
+    !Array.isArray(draft.provenancePayloads.services) ||
+    draft.provenancePayloads.services.length !== draft.payload.services.length
+  ) {
+    throw new TypeError(
+      "draft provenancePayloads.services must match every manifest service",
+    );
+  }
+  draft.payload.services.forEach((service, index) => {
+    const signingPayload = draft.provenancePayloads.services[index];
+    const signingDraft = {
+      provenancePayloads: { service: signingPayload },
+    };
+    requireDraftSigningPayload(
+      signingDraft,
+      "service",
+      "app_infra_service",
+      service,
+      APP_INFRA_PROVENANCE_SCHEMA,
+    );
+  });
   requireExactObject(provenances, "provenances", ["deploy"]);
   requireExactObject(options, "options", ["deployServices", "upgradeServices"]);
   const deployServices = options.deployServices;
@@ -900,21 +1402,23 @@ export function assembleSoracloudAppInfraRequest(draft, provenances = {}, option
 }
 
 export function deploySoracloudAppInfraInstruction(manifest, provenance) {
+  requireAppInfraDraftPayloadShape(manifest);
   return {
     wire_id: SORACLOUD_APP_INFRA_DEPLOY_WIRE_ID,
     payload: {
       manifest: cloneCanonical(manifest),
-      provenance: cloneCanonical(provenance),
+      provenance: normalizeManifestProvenance(provenance, "provenance"),
     },
   };
 }
 
 export function upgradeSoracloudAppInfraInstruction(manifest, provenance) {
+  requireAppInfraDraftPayloadShape(manifest);
   return {
     wire_id: SORACLOUD_APP_INFRA_UPGRADE_WIRE_ID,
     payload: {
       manifest: cloneCanonical(manifest),
-      provenance: cloneCanonical(provenance),
+      provenance: normalizeManifestProvenance(provenance, "provenance"),
     },
   };
 }
@@ -928,15 +1432,13 @@ export function upgradeSoracloudAppInfraInstruction(manifest, provenance) {
  */
 export function assembleSoracloudHfDeployRequest(draft, provenances = {}) {
   rejectSoracloudSigningSecrets(draft);
-  if (
-    draft == null ||
-    typeof draft !== "object" ||
-    Array.isArray(draft) ||
-    !Object.hasOwn(draft, "payload") ||
-    typeof draft.payload !== "object" ||
-    draft.payload == null ||
-    Array.isArray(draft.payload)
-  ) {
+  requireExactObject(draft, "draft", ["payload", "provenancePayloads"]);
+  requireExactObject(draft.provenancePayloads, "draft provenancePayloads", [
+    "deploy",
+    "generatedService",
+    "generatedApartment",
+  ]);
+  if (typeof draft.payload !== "object" || draft.payload == null || Array.isArray(draft.payload)) {
     throw new TypeError("draft payload is required");
   }
   requireAssembledDraftPayloadShape(draft.payload);
@@ -986,136 +1488,4 @@ export function assembleSoracloudHfDeployRequest(draft, provenances = {}) {
     }
   }
   return request;
-}
-
-/**
- * Build a deterministic private uploaded-model execution request.
- *
- * The helper only normalizes client-side request shape. It never accepts raw
- * signing secrets and does not submit the returned receipt instruction.
- *
- * @param {{ serviceName: string, weightVersion: string, modelId: string | null, modelName: string | null, bundleRoot: string | null, policyId: string, decryptionRequestId: string | null, model: { inputLen: number, outputLen: number, weightsI8: number[], biasI32: number[], outputShift: number, outputMin: number, outputMax: number }, plaintextInputI32: number[], inputArtifact: Record<string, unknown>, outputArtifact: Record<string, unknown>, emittedSequence: number | bigint | string }} input
- * @returns {Record<string, unknown>}
- */
-export function buildSoracloudPrivateUploadedModelExecuteRequest(input = {}) {
-  rejectSoracloudSigningSecrets(input);
-  requireExactObject(input, "input", [
-    "serviceName",
-    "weightVersion",
-    "modelId",
-    "modelName",
-    "bundleRoot",
-    "policyId",
-    "decryptionRequestId",
-    "model",
-    "plaintextInputI32",
-    "inputArtifact",
-    "outputArtifact",
-    "emittedSequence",
-  ]);
-  const modelId = nullableString(input, "modelId");
-  const modelName = nullableString(input, "modelName");
-  if ((modelId === null) === (modelName === null)) {
-    throw new TypeError("exactly one of modelId or modelName must be provided");
-  }
-  const bundleRoot = nullableString(input, "bundleRoot");
-  const decryptionRequestId = nullableString(input, "decryptionRequestId");
-  const plaintextInput = normalizeArray(input, "plaintextInputI32").map((value, index) =>
-    normalizeSignedI32(value, `plaintextInputI32[${index}]`),
-  );
-  const request = {
-    service_name: requireString(input, "serviceName"),
-    weight_version: requireString(input, "weightVersion"),
-    model_id: modelId,
-    model_name: modelName,
-    bundle_root: bundleRoot,
-    policy_id: requireString(input, "policyId"),
-    decryption_request_id: decryptionRequestId,
-    model: normalizeQuantizedCpuModel(input),
-    plaintext_input_i32: plaintextInput,
-    input_artifact: normalizePrivateArtifactRef(input, "inputArtifact", "input"),
-    output_artifact: normalizePrivateArtifactRef(input, "outputArtifact", "output"),
-    emitted_sequence: normalizeSafePositiveInteger(input, "emittedSequence"),
-  };
-  return request;
-}
-
-/**
- * Build query parameters for committed private uploaded-model execution receipts.
- *
- * @param {{ receiptId?: string, serviceName?: string, modelId?: string, weightVersion?: string, limit?: number | bigint | string, countMode?: "bounded" | "exact" }} input
- * @returns {Record<string, string>}
- */
-export function buildSoracloudPrivateUploadedModelReceiptQuery(input = {}) {
-  rejectSoracloudSigningSecrets(input);
-  requireExactObject(
-    input,
-    "input",
-    ["receiptId", "serviceName", "modelId", "weightVersion", "limit", "countMode"],
-    [],
-  );
-  const query = {};
-  const receiptId = optionalString(input, "receiptId");
-  if (receiptId !== undefined) {
-    query.receipt_id = receiptId;
-  }
-  const serviceName = optionalString(input, "serviceName");
-  if (serviceName !== undefined) {
-    query.service_name = serviceName;
-  }
-  const modelId = optionalString(input, "modelId");
-  if (modelId !== undefined) {
-    query.model_id = modelId;
-  }
-  const weightVersion = optionalString(input, "weightVersion");
-  if (weightVersion !== undefined) {
-    query.weight_version = weightVersion;
-  }
-  if (input.limit !== undefined && input.limit !== null) {
-    query.limit = String(normalizeSafePositiveInteger(input, "limit"));
-  }
-  const countMode = optionalString(input, "countMode");
-  if (countMode !== undefined) {
-    if (!PRIVATE_UPLOADED_MODEL_COUNT_MODES.has(countMode)) {
-      throw new TypeError("countMode must be bounded or exact");
-    }
-    query.count_mode = countMode;
-  }
-  return query;
-}
-
-/**
- * Validate and extract the receipt-recording instruction from a private execute response.
- *
- * @param {Record<string, unknown>} response
- * @returns {{ wire_id: string, payload_hex: string }}
- */
-export function privateUploadedModelReceiptInstruction(response) {
-  if (response == null || typeof response !== "object" || Array.isArray(response)) {
-    throw new TypeError("response must be an object");
-  }
-  const instructions = response.tx_instructions;
-  if (!Array.isArray(instructions) || instructions.length !== 1) {
-    throw new TypeError("response.tx_instructions must contain exactly one instruction");
-  }
-  const instruction = instructions[0];
-  if (instruction == null || typeof instruction !== "object" || Array.isArray(instruction)) {
-    throw new TypeError("response.tx_instructions[0] must be an object");
-  }
-  if (instruction.wire_id !== PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID) {
-    throw new TypeError(
-      `response.tx_instructions[0].wire_id must be ${PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID}`,
-    );
-  }
-  if (
-    typeof instruction.payload_hex !== "string" ||
-    instruction.payload_hex.length === 0 ||
-    !/^[0-9a-fA-F]+$/.test(instruction.payload_hex)
-  ) {
-    throw new TypeError("response.tx_instructions[0].payload_hex must be non-empty hex");
-  }
-  return {
-    wire_id: instruction.wire_id,
-    payload_hex: instruction.payload_hex,
-  };
 }

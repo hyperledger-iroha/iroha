@@ -434,19 +434,20 @@ mod soranet_transport {
     use iroha_config::parameters::actual;
     use tempfile::tempdir;
     #[test]
-    fn configure_soranet_transport_creates_spool_directory() {
+    fn configure_soranet_transport_rejects_enabled_filesystem_publication_without_io() {
         let temp = tempdir().expect("create temp dir");
         let spool_dir = temp.path().join("spool");
         let mut soranet = actual::StreamingSoranet::from_defaults();
         soranet.enabled = true;
         soranet.provision_spool_dir = spool_dir.clone();
         let mut handle = iroha_core::streaming::StreamingHandle::new();
-        super::super::configure_soranet_transport(&mut handle, &soranet)
-            .expect("soranet transport configuration should succeed");
+        let error = super::super::configure_soranet_transport(&mut handle, &soranet)
+            .expect_err("enabled filesystem publication must fail at startup");
         assert!(
-            spool_dir.is_dir(),
-            "expected configure_soranet_transport to create the spool directory"
+            format!("{error:?}").contains("durable revocation tombstones"),
+            "unexpected startup error: {error:?}"
         );
+        assert!(!spool_dir.exists(), "hard cut must precede spool creation");
     }
     #[test]
     fn configure_soranet_transport_noop_when_disabled() {

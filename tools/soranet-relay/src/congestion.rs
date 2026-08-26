@@ -8,10 +8,14 @@ use crate::config::{CONGESTION_MAX_ACTIVE_CIRCUITS_V1, CongestionConfig};
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use thiserror::Error;
+use tracing::warn;
 #[derive(Debug)]
 /// Per-remote circuit accounting state.
 struct ClientState {
@@ -28,6 +32,7 @@ struct CongestionInner {
     limits: CongestionConfig,
     cooldown: Duration,
     state: Mutex<CongestionState>,
+    unavailable: AtomicBool,
 }
 impl CongestionInner {
     fn new(mut config: CongestionConfig) -> Self {
@@ -46,6 +51,12 @@ impl CongestionInner {
             limits: config,
             cooldown,
             state: Mutex::new(CongestionState::default()),
+            unavailable: AtomicBool::new(false),
+        }
+    }
+    fn mark_unavailable(&self) {
+        if !self.unavailable.swap(true, Ordering::AcqRel) {
+            warn!("congestion state poisoned; rejecting future circuit reservations");
         }
     }
     fn reserve(
@@ -53,7 +64,13 @@ impl CongestionInner {
         remote: SocketAddr,
         now: Instant,
     ) -> Result<Reservation, CongestionError> {
-        let mut guard = self.state.lock().expect("congestion state poisoned");
+        if self.unavailable.load(Ordering::Acquire) {
+            return Err(CongestionError::StateUnavailable);
+        }
+        let mut guard = self.state.lock().map_err(|_| {
+            self.mark_unavailable();
+            CongestionError::StateUnavailable
+        })?;
         if guard.active_circuits >= self.limits.max_active_circuits {
             return Err(CongestionError::GlobalCircuitCapacity {
                 limit: self.limits.max_active_circuits,
@@ -111,7 +128,16 @@ impl CongestionInner {
         })
     }
     fn release(self: &Arc<Self>, remote: SocketAddr) {
-        let mut guard = self.state.lock().expect("congestion state poisoned");
+        let mut guard = match self.state.lock() {
+            Ok(guard) => guard,
+            Err(error) => {
+                // Reservations and leases release from Drop. Recover the guard
+                // for best-effort accounting only after permanently disabling
+                // future admission, so cleanup can never double-panic.
+                self.mark_unavailable();
+                error.into_inner()
+            }
+        };
         let (released, remove) = if let Some(entry) = guard.clients.get_mut(&remote) {
             let released = entry.active > 0;
             if entry.active > 0 {
@@ -210,6 +236,9 @@ impl Drop for CongestionLease {
 /// Errors returned when a handshake is throttled by congestion control.
 #[derive(Debug, Error)]
 pub enum CongestionError {
+    /// Congestion accounting state is unavailable and admission cannot proceed safely.
+    #[error("congestion state is unavailable")]
+    StateUnavailable,
     /// The relay reached its global active-circuit memory corridor.
     #[error("maximum simultaneous relay circuits exceeded (limit: {limit})")]
     GlobalCircuitCapacity { limit: usize },
@@ -287,5 +316,38 @@ mod tests {
         let state = controller.inner.state.lock().expect("congestion state");
         assert_eq!(state.active_circuits, 1);
         assert_eq!(state.clients.len(), 1);
+    }
+    #[test]
+    fn poisoned_state_rejects_future_reservations_and_drop_does_not_panic() {
+        let controller = controller(3);
+        let now = Instant::now();
+        let first = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 10_005);
+        let reservation = controller.reserve(first, now).expect("initial reservation");
+        let poison_target = controller.clone();
+        let poisoned = std::thread::spawn(move || {
+            let _guard = poison_target
+                .inner
+                .state
+                .lock()
+                .expect("congestion state lock");
+            panic!("poison congestion state");
+        })
+        .join();
+        assert!(poisoned.is_err(), "poisoning worker must panic");
+
+        let second = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 10_006);
+        assert!(matches!(
+            controller.reserve(second, now),
+            Err(CongestionError::StateUnavailable)
+        ));
+        drop(reservation);
+        controller.inner.state.clear_poison();
+        assert!(matches!(
+            controller.reserve(second, now),
+            Err(CongestionError::StateUnavailable)
+        ));
+        let state = controller.inner.state.lock().expect("cleared state lock");
+        assert_eq!(state.active_circuits, 0);
+        assert!(state.clients.is_empty());
     }
 }

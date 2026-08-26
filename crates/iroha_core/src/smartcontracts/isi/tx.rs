@@ -28,11 +28,9 @@ fn entrypoint_hash_from_value(value: &Value) -> Option<HashOf<TransactionEntrypo
     norito::json::from_value(value.clone()).ok()
 }
 fn account_id_from_value(value: &Value) -> Option<AccountId> {
-    norito::json::from_value(value.clone()).ok().or_else(|| {
-        AccountId::parse_encoded(value.as_str()?)
-            .ok()
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-    })
+    norito::json::from_value(value.clone())
+        .ok()
+        .or_else(|| AccountId::parse_encoded(value.as_str()?).ok())
 }
 fn timestamp_ms_from_value(value: &Value) -> Option<u64> {
     norito::json::from_value(value.clone()).ok()
@@ -1318,8 +1316,8 @@ pub(crate) mod tests {
                 let index_bytes = u64::try_from(index)
                     .expect("merge-query reservation index fits u64")
                     .to_le_bytes();
-                crate::queue::LaneQueueReservationKeyV2 {
-                    version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+                crate::queue::LaneQueueReservationKeyV1 {
+                    version: crate::queue::LaneQueueReservationKeyV1::VERSION,
                     entrypoint_hash: entrypoint.hash(),
                     queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
                         b"merge-query-queue-plan-admission".as_slice(),

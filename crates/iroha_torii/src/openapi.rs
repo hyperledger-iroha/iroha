@@ -1,9 +1,10 @@
 //! Static authority for Torii's OpenAPI description.
 //!
 //! The package-local document is an exact mirror of the canonical release
-//! artifact. Torii parses it once with Norito JSON, then removes only operations
-//! disabled by the compiled route catalog. This keeps every feature profile
-//! aligned with the mounted router without compiling a second schema builder.
+//! artifact. Torii parses it once with Norito JSON, removes operations disabled
+//! by the compiled route catalog, and drops schemas for hard-retired surfaces.
+//! This keeps every feature profile aligned with the mounted router without
+//! compiling a second schema builder.
 use iroha_torii_shared::route_catalog::{
     CATALOGED_ROUTES, CatalogProjection, EnabledFeatures, HttpMethod as CatalogHttpMethod,
     RouteCatalog,
@@ -17,24 +18,17 @@ const CANONICAL_OPENAPI_JSON: &str = include_str!("../assets/openapi/torii.json"
 static COMPILED_OPENAPI_SPEC: LazyLock<Value> = LazyLock::new(|| {
     let mut document: Value = norito::json::from_str(CANONICAL_OPENAPI_JSON)
         .expect("package-local Torii OpenAPI authority must be valid Norito JSON");
-    let paths = document
-        .as_object_mut()
-        .and_then(|document| document.get_mut("paths"))
-        .and_then(Value::as_object_mut)
-        .expect("package-local Torii OpenAPI authority must contain a paths object");
-    retain_catalog_openapi_operations(paths, crate::router::builder::compiled_route_features());
+    {
+        let paths = document
+            .as_object_mut()
+            .and_then(|document| document.get_mut("paths"))
+            .and_then(Value::as_object_mut)
+            .expect("package-local Torii OpenAPI authority must contain a paths object");
+        retain_catalog_openapi_operations(paths, crate::router::builder::compiled_route_features());
+    }
+    remove_retired_uploaded_private_model_schemas(&mut document);
     document
 });
-#[cfg(not(all(
-    feature = "app_api",
-    feature = "telemetry",
-    feature = "profiling",
-    feature = "schema",
-    feature = "p2p_ws",
-    feature = "connect",
-    feature = "zk-verify-batch",
-    feature = "push"
-)))]
 static COMPILED_OPENAPI_JSON: LazyLock<String> = LazyLock::new(|| {
     norito::json::to_string_pretty(compiled_spec())
         .expect("compiled Torii OpenAPI authority must serialize as Norito JSON")
@@ -74,47 +68,42 @@ fn retain_catalog_openapi_operations(paths: &mut Map, enabled_features: EnabledF
         })
     });
 }
+fn remove_retired_uploaded_private_model_schemas(document: &mut Value) {
+    let schemas = document
+        .as_object_mut()
+        .and_then(|document| document.get_mut("components"))
+        .and_then(Value::as_object_mut)
+        .and_then(|components| components.get_mut("schemas"))
+        .and_then(Value::as_object_mut)
+        .expect("package-local Torii OpenAPI authority must contain component schemas");
+    for schema in [
+        "UploadedModelEncryptionRecipientResponse",
+        "PrivateUploadedModelExecuteRequest",
+        "PrivateUploadedModelExecuteResponse",
+        "PrivateUploadedModelQuantizedCpuModelDto",
+        "PrivateUploadedModelReceiptListResponse",
+        "SoraPrivateModelArtifactRefV1",
+        "SoraPrivateUploadedModelExecutionReceiptV1",
+        "OfflineReadiness",
+        "OfflineReadinessBlocker",
+        "OfflineActiveTransferVerifier",
+        "OfflineActiveTopUpShieldVerifier",
+        "OfflineAuthenticatedArtifactSet",
+    ] {
+        schemas.remove(schema);
+    }
+}
 /// Borrow the feature-pruned OpenAPI document cached for this binary.
 #[must_use]
 pub(crate) fn compiled_spec() -> &'static Value {
     LazyLock::force(&COMPILED_OPENAPI_SPEC)
 }
-/// Borrow the exact JSON response cached for this binary.
-///
-/// The complete release profile serves the checked-in authority bytes directly.
-/// Reduced profiles serialize their catalog-pruned document exactly once.
-#[cfg(all(
-    feature = "app_api",
-    feature = "telemetry",
-    feature = "profiling",
-    feature = "schema",
-    feature = "p2p_ws",
-    feature = "connect",
-    feature = "zk-verify-batch",
-    feature = "push"
-))]
-#[must_use]
-pub(crate) fn compiled_spec_json() -> &'static str {
-    let _ = compiled_spec();
-    CANONICAL_OPENAPI_JSON
-}
-/// Borrow the exact JSON response cached for this binary.
-#[cfg(not(all(
-    feature = "app_api",
-    feature = "telemetry",
-    feature = "profiling",
-    feature = "schema",
-    feature = "p2p_ws",
-    feature = "connect",
-    feature = "zk-verify-batch",
-    feature = "push"
-)))]
+/// Borrow the catalog-pruned JSON response cached for this binary.
 #[must_use]
 pub(crate) fn compiled_spec_json() -> &'static str {
     LazyLock::force(&COMPILED_OPENAPI_JSON).as_str()
 }
-/// Return the feature-pruned OpenAPI document for compatibility with callers
-/// that need an owned Norito JSON value.
+/// Return an owned copy of the feature-pruned OpenAPI document.
 #[must_use]
 pub fn generate_spec() -> Value {
     compiled_spec().clone()
@@ -164,7 +153,7 @@ mod tests {
         "offline_asset_scale_invalid",
         "offline_asset_scale_mismatch",
         "offline_authorization_invalid",
-        "offline_wrong_chain",
+        "offline_wrong_network",
     ];
     const OFFLINE_TOP_UP_BAD_REQUEST_REJECT_CODES: &[&str] = &[
         "offline_top_up_invalid",
@@ -510,6 +499,10 @@ mod tests {
                     path,
                     uri::QUERY
                         | "/v1/accounts/query"
+                        | "/v1/accounts/faucet/prepare"
+                        | "/v1/accounts/onboard/plan"
+                        | "/v1/accounts/onboard/prepare"
+                        | "/v1/accounts/onboarding/current-state"
                         | "/v1/aliases/by-account"
                         | "/v1/aliases/setup/plan"
                         | "/v1/aliases/lease/renew/plan"
@@ -881,157 +874,370 @@ mod tests {
         );
     }
     #[test]
-    fn private_uploaded_model_v1_openapi_is_closed_and_exact() {
+    fn account_onboarding_current_state_openapi_is_one_closed_v1_observation() {
+        const PATH: &str = "/v1/accounts/onboarding/current-state";
+        const REQUEST: &str = "AccountOnboardingCurrentStateRequest";
+        const RESPONSE: &str = "AccountOnboardingCurrentStateResponse";
+
         let document = canonical_document();
         let schemas = component_schemas(&document);
-        let execute = openapi_operation(
-            &document,
-            "/v1/soracloud/model/upload/private/execute",
-            "post",
-        );
-        assert_eq!(
-            operation_request_schema_ref(execute, "private uploaded-model execute"),
-            "#/components/schemas/PrivateUploadedModelExecuteRequest"
-        );
-        assert_eq!(
-            operation_response_schema_ref(execute, "200", "private uploaded-model execute",),
-            "#/components/schemas/PrivateUploadedModelExecuteResponse"
-        );
+        assert_strict_object_schema(schemas, REQUEST, &["version", "account_id", "alias"], &[]);
         assert_strict_object_schema(
             schemas,
-            "PrivateUploadedModelExecuteRequest",
+            RESPONSE,
             &[
-                "model_id",
-                "model_name",
-                "bundle_root",
-                "service_name",
-                "weight_version",
-                "policy_id",
-                "model",
-                "plaintext_input_i32",
-                "input_artifact",
-                "output_artifact",
-                "emitted_sequence",
-                "decryption_request_id",
+                "version",
+                "network_id",
+                "account_id",
+                "alias",
+                "account_exists",
+                "alias_target_account_id",
+                "observed_block_height",
+                "observed_block_hash",
             ],
             &[],
         );
-        assert_strict_object_schema(
-            schemas,
-            "PrivateUploadedModelExecuteResponse",
-            &["schema_version", "status", "receipt", "tx_instructions"],
-            &[],
+        for owner in [REQUEST, RESPONSE] {
+            let version = component_properties(schemas, owner)
+                .get("version")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{owner}.version schema"));
+            assert_eq!(version.get("type").and_then(Value::as_str), Some("integer"));
+            assert_eq!(version.get("const").and_then(Value::as_u64), Some(1));
+        }
+        assert_eq!(
+            property_ref(schemas, RESPONSE, "network_id"),
+            "#/components/schemas/NetworkId"
         );
         assert_eq!(
-            property_ref(schemas, "PrivateUploadedModelExecuteResponse", "status"),
-            "#/components/schemas/UploadedModelStatusResponse"
+            property_ref(schemas, RESPONSE, "observed_block_hash"),
+            "#/components/schemas/Hash"
+        );
+        let height = component_properties(schemas, RESPONSE)
+            .get("observed_block_height")
+            .and_then(Value::as_object)
+            .expect("atomic onboarding observed height schema");
+        assert_eq!(height.get("type").and_then(Value::as_str), Some("integer"));
+        assert_eq!(height.get("format").and_then(Value::as_str), Some("uint64"));
+        assert_eq!(height.get("minimum").and_then(Value::as_u64), Some(1));
+        let alias_target = component_properties(schemas, RESPONSE)
+            .get("alias_target_account_id")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("oneOf"))
+            .and_then(Value::as_array)
+            .expect("atomic onboarding alias target nullable union");
+        assert_eq!(alias_target.len(), 2);
+        assert_eq!(
+            alias_target[0].get("type").and_then(Value::as_str),
+            Some("string")
         );
         assert_eq!(
-            property_ref(schemas, "PrivateUploadedModelExecuteResponse", "receipt"),
-            "#/components/schemas/SoraPrivateUploadedModelExecutionReceiptV1"
+            alias_target[1].get("type").and_then(Value::as_str),
+            Some("null")
         );
-        assert_strict_object_schema(
-            schemas,
-            "UploadedModelStatusResponse",
-            &["schema_version", "bundle", "artifact"],
-            &[],
-        );
-        assert_strict_object_schema(
-            schemas,
-            "SoraPrivateUploadedModelExecutionReceiptV1",
-            &[
-                "schema_version",
-                "receipt_id",
-                "service_name",
-                "model_id",
-                "weight_version",
-                "runtime_version",
-                "model_manifest_digest",
-                "model_bundle_root",
-                "policy_id",
-                "input_artifact",
-                "output_artifact",
-                "input_commitment",
-                "output_commitment",
-                "request_commitment",
-                "result_commitment",
-                "emitted_sequence",
-            ],
-            &[],
-        );
-        assert_strict_object_schema(
-            schemas,
-            "PrivateUploadedModelReceiptListResponse",
-            &[
-                "schema_version",
-                "receipts",
-                "returned_items",
-                "remaining_items",
-                "has_more",
-                "count_mode",
-                "total",
-                "continue_cursor",
-            ],
-            &[],
-        );
-        assert_strict_object_schema(
-            schemas,
-            "PrivateUploadedModelQuantizedCpuModelDto",
-            &[
-                "input_len",
-                "output_len",
-                "weights_i8",
-                "bias_i32",
-                "output_shift",
-                "output_min",
-                "output_max",
-            ],
-            &[],
-        );
-        assert_eq!(
-            component_properties(schemas, "PrivateUploadedModelQuantizedCpuModelDto")["input_len"]
-                .get("minimum")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            component_properties(schemas, "PrivateUploadedModelQuantizedCpuModelDto")["output_len"]
-                .get("minimum")
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            component_properties(schemas, "PrivateUploadedModelQuantizedCpuModelDto")
-                ["output_shift"]
-                .get("maximum")
-                .and_then(Value::as_u64),
-            Some(30)
-        );
-        let artifact_roles =
-            component_properties(schemas, "SoraPrivateModelArtifactRefV1")["artifact_role"]
-                .get("enum")
-                .and_then(Value::as_array)
-                .expect("private model artifact roles")
-                .iter()
-                .map(|role| role.as_str().expect("private model artifact role"))
-                .collect::<BTreeSet<_>>();
-        assert_eq!(artifact_roles, BTreeSet::from(["input", "output"]));
 
-        let parameters =
-            document["paths"]["/v1/soracloud/model/upload/private/receipts"]["get"]["parameters"]
-                .as_array()
-                .expect("private uploaded-model receipt query parameters");
-        let count_mode = parameters
+        let operation = openapi_operation(&document, PATH, "post");
+        assert_eq!(
+            operation_request_schema_ref(operation, PATH),
+            "#/components/schemas/AccountOnboardingCurrentStateRequest"
+        );
+        assert_eq!(
+            operation_response_schema_ref(operation, "200", PATH),
+            "#/components/schemas/AccountOnboardingCurrentStateResponse"
+        );
+        assert_eq!(
+            operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
+            Some("read")
+        );
+        let parameters = operation
+            .get("parameters")
+            .and_then(Value::as_array)
+            .expect("atomic onboarding auth headers");
+        assert_eq!(parameters.len(), 5);
+        let parameter_names = parameters
             .iter()
-            .find(|parameter| parameter["name"].as_str() == Some("count_mode"))
-            .expect("private uploaded-model receipt count_mode parameter");
-        let variants = count_mode["schema"]["enum"]
-            .as_array()
-            .expect("private uploaded-model receipt count_mode variants")
-            .iter()
-            .map(|variant| variant.as_str().expect("count_mode string variant"))
+            .map(|parameter| {
+                let parameter = parameter.as_object().expect("auth header parameter");
+                assert_eq!(parameter.get("in").and_then(Value::as_str), Some("header"));
+                assert_eq!(parameter.get("required"), Some(&Value::Bool(false)));
+                parameter
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .expect("auth header name")
+            })
             .collect::<BTreeSet<_>>();
-        assert_eq!(variants, BTreeSet::from(["bounded", "exact"]));
+        assert_eq!(
+            parameter_names,
+            BTreeSet::from([
+                "X-Iroha-Account",
+                "X-Iroha-Nonce",
+                "X-Iroha-Signature",
+                "X-Iroha-Timestamp-Ms",
+                "X-Iroha-Witness",
+            ])
+        );
+        let responses = operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("atomic onboarding responses");
+        assert_eq!(
+            responses
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "200", "400", "401", "403", "408", "409", "413", "415", "429", "500", "502", "503",
+            ])
+        );
+        assert_eq!(
+            documented_reject_codes(responses, "401"),
+            vec!["alias_auth_required", "alias_auth_invalid"]
+        );
+        assert_eq!(
+            documented_reject_codes(responses, "409"),
+            vec!["alias.catalog.mapping_conflict", "route_conflict"]
+        );
+        let challenges = responses
+            .get("401")
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("headers"))
+            .and_then(Value::as_object)
+            .and_then(|headers| headers.get("WWW-Authenticate"))
+            .and_then(Value::as_object)
+            .and_then(|header| header.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("enum"))
+            .and_then(Value::as_array)
+            .expect("atomic onboarding authentication challenges")
+            .iter()
+            .map(|challenge| challenge.as_str().expect("authentication challenge"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            challenges,
+            vec!["IrohaApiToken realm=\"torii\"", "Signature"]
+        );
+    }
+    #[test]
+    fn connect_status_openapi_separates_session_and_operator_aggregate() {
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+        assert_strict_object_schema(
+            schemas,
+            "ConnectSessionStatus",
+            &[
+                "sid",
+                "app_attached",
+                "wallet_attached",
+                "approved",
+                "buffered_frames",
+                "buffered_bytes",
+                "last_seq_app_to_wallet",
+                "last_seq_wallet_to_app",
+                "origin",
+            ],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "ConnectPolicyStatus",
+            &[
+                "ws_max_sessions",
+                "ws_per_ip_max_sessions",
+                "ws_rate_per_ip_per_min",
+                "session_ttl_ms",
+                "frame_max_bytes",
+                "session_buffer_max_bytes",
+                "relay_enabled",
+                "relay_strategy",
+                "relay_effective_strategy",
+                "relay_p2p_attached",
+                "p2p_ttl_hops",
+                "heartbeat_interval_ms",
+                "heartbeat_miss_tolerance",
+                "heartbeat_min_interval_ms",
+            ],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "ConnectStatus",
+            &[
+                "enabled",
+                "sessions_total",
+                "sessions_active",
+                "per_ip_sessions",
+                "buffered_sessions",
+                "total_buffer_bytes",
+                "dedupe_size",
+                "policy",
+                "frames_in_total",
+                "frames_out_total",
+                "ciphertext_total",
+                "dedupe_drops_total",
+                "buffer_drops_total",
+                "plaintext_control_drops_total",
+                "monotonic_drops_total",
+                "sequence_violation_closes_total",
+                "role_direction_mismatch_total",
+                "ping_miss_total",
+                "p2p_rebroadcasts_total",
+                "p2p_rebroadcast_skipped_total",
+                "p2p_auth_failures_total",
+                "p2p_ttl_drops_total",
+                "p2p_unknown_session_drops_total",
+                "p2p_session_claims_in_total",
+                "p2p_session_claims_installed_total",
+                "p2p_session_claim_conflicts_total",
+                "p2p_role_consumed_total",
+                "p2p_session_terminated_total",
+            ],
+            &[],
+        );
+        assert_eq!(
+            property_ref(schemas, "ConnectStatus", "policy"),
+            "#/components/schemas/ConnectPolicyStatus"
+        );
+
+        let session = openapi_operation(&document, "/v1/connect/status", "get");
+        assert_eq!(
+            operation_response_schema_ref(session, "200", "Connect session status"),
+            "#/components/schemas/ConnectSessionStatus"
+        );
+        let session_parameters = session
+            .get("parameters")
+            .and_then(Value::as_array)
+            .expect("Connect session status parameters");
+        assert_eq!(session_parameters.len(), 2);
+        for parameter in session_parameters {
+            let parameter = parameter
+                .as_object()
+                .expect("Connect session status parameter");
+            assert_eq!(parameter.get("required"), Some(&Value::Bool(true)));
+        }
+        assert_eq!(
+            session_parameters
+                .iter()
+                .map(|parameter| parameter["name"].as_str().expect("parameter name"))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["Authorization", "sid"])
+        );
+
+        let aggregate = openapi_operation(&document, "/v1/connect/status/aggregate", "get");
+        assert_eq!(
+            operation_response_schema_ref(aggregate, "200", "Connect aggregate status"),
+            "#/components/schemas/ConnectStatus"
+        );
+        assert_eq!(
+            aggregate.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
+            Some("operator")
+        );
+        let operator_headers = aggregate
+            .get("parameters")
+            .and_then(Value::as_array)
+            .expect("Connect aggregate operator headers");
+        assert_eq!(operator_headers.len(), 4);
+        for parameter in operator_headers {
+            let parameter = parameter
+                .as_object()
+                .expect("Connect aggregate operator header");
+            assert_eq!(parameter.get("in").and_then(Value::as_str), Some("header"));
+            assert_eq!(parameter.get("required"), Some(&Value::Bool(true)));
+        }
+        assert_eq!(
+            operator_headers
+                .iter()
+                .map(|parameter| parameter["name"].as_str().expect("operator header name"))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "X-Iroha-Operator-Nonce",
+                "X-Iroha-Operator-Public-Key",
+                "X-Iroha-Operator-Signature",
+                "X-Iroha-Operator-Timestamp-Ms",
+            ])
+        );
+    }
+    #[test]
+    fn retired_apartment_execution_history_is_absent() {
+        let document = canonical_document();
+        let schemas = component_schemas(&document);
+        for retired in [
+            "AgentRuntimeExecutionSummary",
+            "AgentRuntimeWorkflowStepSummary",
+        ] {
+            assert!(
+                !schemas.contains_key(retired),
+                "retired schema {retired} must not remain in the first-release authority"
+            );
+        }
+        let apartment_status = schemas
+            .get("AgentApartmentStatusEntry")
+            .and_then(Value::as_object)
+            .expect("AgentApartmentStatusEntry schema");
+        let properties = apartment_status
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("AgentApartmentStatusEntry properties");
+        assert!(!properties.contains_key("runtime_recent_runs"));
+        assert!(
+            apartment_status
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("AgentApartmentStatusEntry required fields")
+                .iter()
+                .all(|field| field.as_str() != Some("runtime_recent_runs"))
+        );
+    }
+    #[test]
+    fn uploaded_private_model_runtime_openapi_surface_is_absent() {
+        let document = generate_spec();
+        let paths = document["paths"].as_object().expect("OpenAPI paths object");
+        for retired_path in [
+            "/v1/soracloud/model/upload/encryption-recipient",
+            "/v1/soracloud/model/upload/private/execute",
+            "/v1/soracloud/model/upload/private/receipts",
+        ] {
+            assert!(
+                !paths.contains_key(retired_path),
+                "retired uploaded private-model path `{retired_path}` must not be advertised"
+            );
+        }
+
+        for retained_path in [
+            "/v1/soracloud/model/upload/register",
+            "/v1/soracloud/model/upload/status",
+        ] {
+            assert!(
+                paths.contains_key(retained_path),
+                "registry-only uploaded-model path `{retained_path}` must remain advertised"
+            );
+        }
+
+        let schemas = component_schemas(&document);
+        for retired_schema in [
+            "UploadedModelEncryptionRecipientResponse",
+            "PrivateUploadedModelExecuteRequest",
+            "PrivateUploadedModelExecuteResponse",
+            "PrivateUploadedModelQuantizedCpuModelDto",
+            "PrivateUploadedModelReceiptListResponse",
+            "SoraPrivateModelArtifactRefV1",
+            "SoraPrivateUploadedModelExecutionReceiptV1",
+        ] {
+            assert!(
+                !schemas.contains_key(retired_schema),
+                "retired uploaded private-model schema `{retired_schema}` must not be registered"
+            );
+        }
+        for retained_schema in [
+            "SoraUploadedModelBundleV1",
+            "SoraUploadedModelEncryptionRecipientV1",
+            "SoraUploadedModelWrappedKeyV1",
+            "UploadedModelStatusResponse",
+        ] {
+            assert!(
+                schemas.contains_key(retained_schema),
+                "registry-only uploaded-model schema `{retained_schema}` must remain registered"
+            );
+        }
     }
     #[test]
     #[expect(
@@ -1121,7 +1327,7 @@ mod tests {
             }
         }
 
-        let document = canonical_document();
+        let document = generate_spec();
         let schemas = component_schemas(&document);
         let routes = CATALOGED_ROUTES
             .iter()
@@ -1129,7 +1335,7 @@ mod tests {
                 route.surface() == ApiSurface::Public && route.path().starts_with("/v1/soracloud/")
             })
             .collect::<Vec<_>>();
-        assert_eq!(routes.len(), 60, "canonical Soracloud release inventory");
+        assert_eq!(routes.len(), 55, "canonical Soracloud release inventory");
 
         let expected = routes
             .iter()
@@ -1159,7 +1365,7 @@ mod tests {
                     })
             })
             .collect::<BTreeSet<_>>();
-        assert_eq!(actual.len(), 60, "canonical Soracloud OpenAPI inventory");
+        assert_eq!(actual.len(), 55, "canonical Soracloud OpenAPI inventory");
         assert_eq!(
             actual, expected,
             "Soracloud OpenAPI/catalog method-path equality"
@@ -1366,28 +1572,10 @@ mod tests {
                 "SoracloudMutationDraftResponse",
             ),
             (
-                "/v1/soracloud/model/upload/encryption-recipient",
-                "get",
-                None,
-                "UploadedModelEncryptionRecipientResponse",
-            ),
-            (
                 "/v1/soracloud/model/upload/status",
                 "get",
                 None,
                 "UploadedModelStatusResponse",
-            ),
-            (
-                "/v1/soracloud/model/upload/private/execute",
-                "post",
-                Some("PrivateUploadedModelExecuteRequest"),
-                "PrivateUploadedModelExecuteResponse",
-            ),
-            (
-                "/v1/soracloud/model/upload/private/receipts",
-                "get",
-                None,
-                "PrivateUploadedModelReceiptListResponse",
             ),
             (
                 "/v1/soracloud/hf/deploy",
@@ -1504,25 +1692,13 @@ mod tests {
                 "SoracloudMutationDraftResponse",
             ),
             (
-                "/v1/soracloud/agent/autonomy/run",
-                "post",
-                Some("SignedAgentAutonomyRunRequest"),
-                "SoracloudMutationDraftResponse",
-            ),
-            (
-                "/v1/soracloud/agent/autonomy/run/finalize",
-                "post",
-                Some("AgentAutonomyFinalizeRequest"),
-                "SoracloudMutationDraftResponse",
-            ),
-            (
                 "/v1/soracloud/agent/autonomy/status",
                 "get",
                 None,
                 "AgentAutonomyStatusResponse",
             ),
         ];
-        assert_eq!(exact_contracts.len(), 60);
+        assert_eq!(exact_contracts.len(), 55);
         assert_eq!(
             exact_contracts
                 .iter()
@@ -1630,13 +1806,11 @@ mod tests {
         assert_eq!(
             dynamic_json_parents,
             BTreeSet::from([
-                "AgentRuntimeExecutionSummary".to_owned(),
-                "AgentRuntimeWorkflowStepSummary".to_owned(),
                 "ServiceConfigSetRequest".to_owned(),
                 "ServiceConfigStatusEntry".to_owned(),
                 "SignedBundleRequest".to_owned(),
             ]),
-            "only explicitly dynamic configuration/runtime JSON fields may use JsonValue"
+            "only explicitly dynamic configuration JSON fields may use JsonValue"
         );
         assert!(reachable.contains("JsonValue"));
 
@@ -1714,11 +1888,10 @@ mod tests {
         feature = "telemetry",
         feature = "profiling",
         feature = "schema",
-        feature = "p2p_ws",
         feature = "zk-verify-batch"
     ))]
     #[test]
-    fn release_openapi_authorities_match_served_bytes_byte_for_byte() {
+    fn checked_openapi_assets_match_and_compiled_projection_matches_served_bytes() {
         let generated = norito::json::to_string_pretty(&generate_spec())
             .expect("serialize compiled release Torii OpenAPI");
         let latest = include_str!("../../../artifacts/openapi/torii.json");
@@ -1734,11 +1907,6 @@ mod tests {
             latest.as_bytes(),
             package.as_bytes(),
             "release/package authority drift"
-        );
-        assert_eq!(
-            package.as_bytes(),
-            generated.as_bytes(),
-            "package/compiled document drift"
         );
         assert_eq!(
             generated.as_bytes(),
@@ -2596,15 +2764,14 @@ mod tests {
             feature = "telemetry",
             feature = "profiling",
             feature = "schema",
-            feature = "p2p_ws",
             feature = "connect",
             feature = "zk-verify-batch",
             feature = "push"
         ))]
         assert_eq!(
             expected.len(),
-            497,
-            "the supported full Torii documentation profile must remain exactly 497 cataloged operations"
+            552,
+            "the supported full Torii documentation profile must remain exactly 552 cataloged operations"
         );
         let spec = generate_spec();
         let paths = spec
@@ -3358,7 +3525,12 @@ mod tests {
         for path in openapi_contract_strings(
             "openapi.generated_spec_includes_documented_paths.path_present.21",
         ) {
-            assert!(paths.contains_key(path));
+            let expected = path != "/v1/soranet/privacy/event" || cfg!(feature = "telemetry");
+            assert_eq!(
+                paths.contains_key(path),
+                expected,
+                "feature-pruned path contract drift for {path}"
+            );
         }
         for path in
             openapi_contract_strings("openapi.generated_spec_includes_documented_paths.strings.9")

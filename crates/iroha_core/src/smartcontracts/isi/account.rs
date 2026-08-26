@@ -110,7 +110,8 @@ pub mod isi {
             &state_transaction.nexus.dataspace_catalog,
             &alias,
             state_transaction.block_unix_timestamp_ms(),
-        );
+        )
+        .map_err(|error| invalid_account_recovery(error.to_string()))?;
         if resolved.as_ref() != Some(account_id) {
             return Err(invalid_account_recovery(format!(
                 "account `{account_id}` does not have a strictly active alias binding"
@@ -133,6 +134,7 @@ pub mod isi {
             alias,
             state_transaction.block_unix_timestamp_ms(),
         )
+        .map_err(|error| invalid_account_recovery(error.to_string()))?
         .ok_or_else(|| {
             invalid_account_recovery(format!(
                 "account alias `{alias:?}` does not resolve to a strictly active account"
@@ -157,6 +159,7 @@ pub mod isi {
             &request.active_account_id_at_proposal,
             state_transaction.block_unix_timestamp_ms(),
         )
+        .map_err(|error| invalid_account_recovery(error.to_string()))?
         .as_ref()
             != Some(current_account)
         {
@@ -1103,22 +1106,26 @@ pub mod query {
             alias,
             latest_ledger_time_ms(state_ro),
         )
+        .map_err(|error| Error::Conversion(error.to_string()))?
         .ok_or(Error::NotFound)
     }
     fn recovery_request_matches_current_lineage(
         state_ro: &impl StateReadOnly,
         request: &AccountRecoveryRequest,
         current_account: &AccountId,
-    ) -> bool {
-        crate::sns::resolve_active_account_id_rekey_lineage_for_alias(
-            state_ro.world(),
-            &state_ro.nexus().dataspace_catalog,
-            &request.alias,
-            &request.active_account_id_at_proposal,
-            latest_ledger_time_ms(state_ro),
+    ) -> Result<bool, Error> {
+        Ok(
+            crate::sns::resolve_active_account_id_rekey_lineage_for_alias(
+                state_ro.world(),
+                &state_ro.nexus().dataspace_catalog,
+                &request.alias,
+                &request.active_account_id_at_proposal,
+                latest_ledger_time_ms(state_ro),
+            )
+            .map_err(|error| Error::Conversion(error.to_string()))?
+            .as_ref()
+                == Some(current_account),
         )
-        .as_ref()
-            == Some(current_account)
     }
     #[cfg(test)]
     fn seed_domain_name_lease(
@@ -1293,7 +1300,6 @@ pub mod query {
         match value {
             Value::String(raw) => AccountId::parse_encoded(raw)
                 .ok()
-                .map(|parsed| parsed.into_account_id())
                 .or_else(|| raw.parse::<PublicKey>().ok().map(AccountId::new)),
             _ => None,
         }
@@ -1854,6 +1860,7 @@ pub mod query {
                 self.alias(),
                 now_ms,
             )
+            .map_err(|error| Error::Conversion(error.to_string()))?
             .ok_or(Error::NotFound)?;
             let (account_id, account_value) = world
                 .accounts()
@@ -1933,6 +1940,7 @@ pub mod query {
                     &label,
                     now_ms,
                 )
+                .map_err(|error| Error::Conversion(error.to_string()))?
                 .as_ref()
                     != Some(account_id)
                 {
@@ -2008,7 +2016,7 @@ pub mod query {
                 .account_recovery_requests()
                 .get(self.alias())
                 .ok_or(Error::NotFound)?;
-            if !recovery_request_matches_current_lineage(state_ro, request, &current_account) {
+            if !recovery_request_matches_current_lineage(state_ro, request, &current_account)? {
                 return Err(Error::NotFound);
             }
             crate::smartcontracts::isi::query::own_singular_query_value(request)
@@ -2470,9 +2478,10 @@ pub mod query {
             );
             ensure_recovery_request_targets_current_lineage(&stx, &request, &active)
                 .expect("explicit retired account-id rekey must preserve recovery continuity");
-            assert!(recovery_request_matches_current_lineage(
-                &stx, &request, &active
-            ));
+            assert!(
+                recovery_request_matches_current_lineage(&stx, &request, &active)
+                    .expect("valid recovery lineage state")
+            );
             stx.world.account_rekey_records.insert(
                 alias.clone(),
                 AccountRekeyRecord::new(alias.clone(), retired.clone())
@@ -2483,9 +2492,10 @@ pub mod query {
                 ensure_recovery_request_targets_current_lineage(&stx, &request, &active).is_err(),
                 "ordinary alias reassignment must not preserve a prior owner's recovery request"
             );
-            assert!(!recovery_request_matches_current_lineage(
-                &stx, &request, &active
-            ));
+            assert!(
+                !recovery_request_matches_current_lineage(&stx, &request, &active)
+                    .expect("valid reassigned lineage state")
+            );
             let mut legacy = canonical;
             legacy.transition_provenance.clear();
             stx.world
@@ -2503,7 +2513,8 @@ pub mod query {
                 60,
             );
             assert!(
-                recovery_request_matches_current_lineage(&stx, &current_request, &active),
+                recovery_request_matches_current_lineage(&stx, &current_request, &active)
+                    .expect("valid current lineage state"),
                 "the exact currently active account remains its own recovery lineage"
             );
         }

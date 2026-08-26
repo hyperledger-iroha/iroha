@@ -136,44 +136,6 @@ public final class JsonParserStringTypeTests {
                         "\"output_hash_matches\":null", "\"output_hash_matches\":0"))));
   }
 
-  @Test
-  public void soracloudParserRejectsNonStringRequiredAndOptionalFields() {
-    final SoracloudPrivateUploadedModelReceiptListResponse canonical =
-        SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-            bytes(soracloudReceiptListJson("\"exact\"", "\"next\"")));
-    assertEquals("exact", canonical.countMode());
-    assertEquals("next", canonical.continueCursor());
-
-    assertRejects(
-        "soracloud private receipt list.count_mode",
-        () ->
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                bytes(soracloudReceiptListJson("7", "null"))));
-    assertRejects(
-        "soracloud private receipt list.continue_cursor",
-        () ->
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                bytes(soracloudReceiptListJson("\"exact\"", "7"))));
-  }
-
-  @Test
-  public void soracloudParserRejectsMissingOrMalformedHasMore() {
-    final String canonical = soracloudReceiptListJson("\"exact\"", "null");
-    assertFalse(
-        SoracloudPrivateUploadedModelJsonParser.parseReceiptList(bytes(canonical)).hasMore());
-
-    assertRejects(
-        "soracloud private receipt list.has_more",
-        () ->
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                bytes(canonical.replace("\"has_more\":false", "\"has_more\":0"))));
-    assertRejects(
-        "soracloud private receipt list.has_more",
-        () ->
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                bytes(canonical.replace("\"has_more\":false,", ""))));
-  }
-
   private static String identifierPolicyJson() {
     return "{"
         + "\"total\":1,"
@@ -220,22 +182,6 @@ public final class JsonParserStringTypeTests {
         + "\","
         + "\"error\":"
         + error
-        + "}";
-  }
-
-  private static String soracloudReceiptListJson(
-      final String countMode, final String continueCursor) {
-    return "{"
-        + "\"schema_version\":1,"
-        + "\"receipts\":[],"
-        + "\"returned_items\":0,"
-        + "\"remaining_items\":0,"
-        + "\"has_more\":false,"
-        + "\"count_mode\":"
-        + countMode
-        + ","
-        + "\"continue_cursor\":"
-        + continueCursor
         + "}";
   }
 

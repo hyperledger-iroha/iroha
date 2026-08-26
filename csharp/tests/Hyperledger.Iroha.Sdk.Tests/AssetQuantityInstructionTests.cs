@@ -127,7 +127,6 @@ public sealed class AssetQuantityInstructionTests
     [MemberData(nameof(InvalidQuantitySpellings))]
     public void ToriiAssetRwaAndUaidReadbacksRejectInvalidQuantityText(string quantity)
     {
-        Assert.Throws<ArgumentException>(() => new ToriiAccountFaucetResponse { Amount = quantity });
         Assert.Throws<ArgumentException>(() => new ToriiAssetBalance { Quantity = quantity });
         Assert.Throws<ArgumentException>(() => new ToriiExplorerAsset { Value = quantity });
         Assert.Throws<ArgumentException>(() => new ToriiExplorerRwaParent { Quantity = quantity });

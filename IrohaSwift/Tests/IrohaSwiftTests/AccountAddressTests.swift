@@ -15,20 +15,8 @@ private struct FixtureCaseSets: Decodable {
 private struct PositiveCase: Decodable {
     let caseId: String
     let category: String
-    let input: PositiveInput
     let encodings: Encodings
     let controller: Controller?
-}
-
-private struct PositiveInput: Decodable {
-    let rawDomain: String?
-    let normalizedDomain: String?
-    let seedByte: UInt8?
-    let registryId: UInt32?
-    let equivalentDomain: String?
-    let memberKeysHex: [String]?
-    let memberWeights: [UInt16]?
-    let threshold: UInt16?
 }
 
 private struct Encodings: Decodable {
@@ -218,6 +206,16 @@ final class AccountAddressTests: XCTestCase {
         }
     }
 
+    func testCanonicalBytesRejectRetiredDomainSelectorPrefix() throws {
+        let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0x01, count: 32))
+        let canonical = try address.canonicalBytes()
+        var selectorPrefixed = Data([canonical[0], 0x01])
+        selectorPrefixed.append(contentsOf: (1...12).map(UInt8.init))
+        selectorPrefixed.append(canonical.dropFirst())
+
+        XCTAssertThrowsError(try AccountAddress.fromCanonicalBytes(selectorPrefixed))
+    }
+
     func testParseEncodedRejectsFullwidthSentinelI105() throws {
         let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0x31, count: 32))
         let canonical = try address.toI105(networkPrefix: 753)
@@ -232,13 +230,6 @@ final class AccountAddressTests: XCTestCase {
         XCTAssertThrowsError(try AccountAddress.parseEncoded(noncanonical, expectedPrefix: 753)) { error in
             XCTAssertEqual(error as? AccountAddressError, .unsupportedAddressFormat)
         }
-    }
-
-    func testAccountAddressCanonicalizesDomainCase() throws {
-        let key = Data(repeating: 0x11, count: 32)
-        let lower = try AccountAddress.fromAccount(publicKey: key)
-        let upper = try AccountAddress.fromAccount(publicKey: key)
-        XCTAssertEqual(try lower.canonicalBytes(), try upper.canonicalBytes())
     }
 
     func testAccountAddressConstructorIsDomainless() throws {
@@ -521,10 +512,6 @@ final class AccountAddressTests: XCTestCase {
         )
         let fixture = try loadAddressFixture()
         let defaultPrefix = fixture.defaultNetworkPrefix
-        try requireNativeTestCapability(
-            try bridgeSupportsSelectorFreeFixtureVectors(fixture),
-            "NoritoBridge account-address codec does not support selector-free canonical payloads yet"
-        )
         try NoritoNativeBridge.shared.withChainDiscriminant(defaultPrefix) {
             for vector in fixture.cases.positive {
                 let parseResult = try XCTUnwrap(
@@ -554,26 +541,6 @@ final class AccountAddressTests: XCTestCase {
                     continue
                 }
                 verify(error: error, matches: vector.expectedError, caseId: vector.caseId)
-            }
-        }
-    }
-
-    private func bridgeSupportsSelectorFreeFixtureVectors(_ fixture: Fixture) throws -> Bool {
-        guard let sample = fixture.cases.positive.first else { return false }
-        do {
-            guard try NoritoNativeBridge.shared.parseAccountAddress(
-                literal: sample.encodings.i105.string,
-                expectedPrefix: sample.encodings.i105.prefix
-            ) != nil else {
-                return false
-            }
-            return true
-        } catch let error as AccountAddressError {
-            switch error {
-            case .unknownCurve, .unknownControllerTag, .unknownDomainTag, .unexpectedTrailingBytes:
-                return false
-            default:
-                throw error
             }
         }
     }
@@ -679,8 +646,6 @@ final class AccountAddressTests: XCTestCase {
             } else {
                 XCTFail("\(caseId): expected invalid I105 symbol, got \(addressError)")
             }
-        case "InvalidHexAddress":
-            XCTAssertEqual(addressError, .invalidHexAddress, "\(caseId): expected invalid hex")
         case "UnexpectedTrailingBytes":
             XCTAssertEqual(addressError, .unexpectedTrailingBytes, "\(caseId): expected unexpected trailing bytes")
         case "InvalidMultisigPolicy":
@@ -724,26 +689,16 @@ private extension AccountAddressError {
             return "InvalidNormVersion"
         case .invalidI105Prefix:
             return "InvalidI105Prefix"
-        case .hashFailure:
-            return "HashFailure"
         case .invalidI105Encoding:
             return "InvalidI105Encoding"
         case .invalidLength:
             return "InvalidLength"
         case .checksumMismatch:
             return "ChecksumMismatch"
-        case .invalidHexAddress:
-            return "InvalidHexAddress"
-        case .domainMismatch:
-            return "DomainMismatch"
-        case .invalidDomainLabel:
-            return "InvalidDomainLabel"
         case .unexpectedNetworkPrefix:
             return "UnexpectedNetworkPrefix"
         case .unknownAddressClass:
             return "UnknownAddressClass"
-        case .unknownDomainTag:
-            return "UnknownDomainTag"
         case .unexpectedExtensionFlag:
             return "UnexpectedExtensionFlag"
         case .unknownControllerTag:

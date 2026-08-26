@@ -31,7 +31,7 @@ object ContractJsonParser {
             ),
             contractAddress = optionalString(root["contract_address"], "contract call response.contract_address"),
             txHashHex = if (root.containsKey("tx_hash_hex") && root["tx_hash_hex"] != null)
-                HttpClientTransport.normalizeHex32(requiredString(root["tx_hash_hex"], "contract call response.tx_hash_hex"), "txHashHex")
+                transactionHash(root["tx_hash_hex"], "contract call response.tx_hash_hex")
             else null,
             pipelineStatus = optionalObject(root["pipeline_status"], "contract call response.pipeline_status"),
             entrypoint = optionalString(root["entrypoint"], "contract call response.entrypoint"),
@@ -39,7 +39,7 @@ object ContractJsonParser {
                 root["transaction_ttl_ms"],
                 "contract call response.transaction_ttl_ms",
             ),
-            entrypointHashHex = optionalHash(root["entrypoint_hash_hex"], "contract call response.entrypoint_hash_hex"),
+            entrypointHashHex = optionalTransactionHash(root["entrypoint_hash_hex"], "contract call response.entrypoint_hash_hex"),
             transactionPayloadB64 = optionalBase64(root["transaction_payload_b64"], "contract call response.transaction_payload_b64"),
             signingMessageB64 = optionalBase64(root["signing_message_b64"], "contract call response.signing_message_b64"),
             operationReceipt = parseOperationReceipt(
@@ -80,9 +80,9 @@ object ContractJsonParser {
             contractAddress = optionalString(receipt["contract_address"], "$path.contract_address"),
             codeHashHex = optionalHash(receipt["code_hash_hex"], "$path.code_hash_hex"),
             abiHashHex = optionalHash(receipt["abi_hash_hex"], "$path.abi_hash_hex"),
-            txHashHex = optionalHash(receipt["tx_hash_hex"], "$path.tx_hash_hex"),
+            txHashHex = optionalTransactionHash(receipt["tx_hash_hex"], "$path.tx_hash_hex"),
             entrypoint = optionalString(receipt["entrypoint"], "$path.entrypoint"),
-            entrypointHashHex = optionalHash(receipt["entrypoint_hash_hex"], "$path.entrypoint_hash_hex"),
+            entrypointHashHex = optionalTransactionHash(receipt["entrypoint_hash_hex"], "$path.entrypoint_hash_hex"),
             gasLimit = gasLimit,
             gasUsed = asOptionalNonNegativeLong(receipt["gas_used"], "$path.gas_used"),
             feePayment = receipt["fee_payment"]?.let { FeePaymentJson.parse(it, "$path.fee_payment") },
@@ -107,10 +107,10 @@ object ContractJsonParser {
                 HttpClientTransport.normalizeHex32(requiredString(root["instructions_hash"], "multisig response.instructions_hash"), "instructionsHash")
             else null,
             txHashHex = if (root.containsKey("tx_hash_hex") && root["tx_hash_hex"] != null)
-                HttpClientTransport.normalizeHex32(requiredString(root["tx_hash_hex"], "multisig response.tx_hash_hex"), "txHashHex")
+                transactionHash(root["tx_hash_hex"], "multisig response.tx_hash_hex")
             else null,
             executedTxHashHex = if (root.containsKey("executed_tx_hash_hex") && root["executed_tx_hash_hex"] != null)
-                HttpClientTransport.normalizeHex32(requiredString(root["executed_tx_hash_hex"], "multisig response.executed_tx_hash_hex"), "executedTxHashHex")
+                transactionHash(root["executed_tx_hash_hex"], "multisig response.executed_tx_hash_hex")
             else null,
             creationTimeMs = asOptionalNonNegativeLong(root["creation_time_ms"], "multisig response.creation_time_ms"),
             transactionPayloadB64 = optionalBase64(root["transaction_payload_b64"], "multisig response.transaction_payload_b64"),
@@ -184,6 +184,18 @@ object ContractJsonParser {
         if (value == null) return null
         return HttpClientTransport.normalizeHex32(requiredString(value, path), path)
     }
+
+    private fun transactionHash(value: Any?, path: String): String {
+        check(value is String) { "$path must be a string" }
+        val literal = value
+        check(literal.matches(Regex("[0-9a-f]{63}[13579bdf]"))) {
+            "$path must match [0-9a-f]{63}[13579bdf] with the Iroha HashOf marker"
+        }
+        return literal
+    }
+
+    private fun optionalTransactionHash(value: Any?, path: String): String? =
+        if (value == null) null else transactionHash(value, path)
 
     private fun optionalObject(value: Any?, path: String): Map<String, Any?>? {
         if (value == null) return null

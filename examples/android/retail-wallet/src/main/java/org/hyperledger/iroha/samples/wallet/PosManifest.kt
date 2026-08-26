@@ -253,7 +253,8 @@ object PosManifestLoader {
     }
 
     private fun decodeOperatorPublicKey(operatorId: String): ByteArray {
-        val address = operatorId.substringBefore("@")
+        val address = operatorId.trim()
+        require(!address.contains("@")) { "domain-qualified operator account is not canonical" }
         if (address.lowercase(Locale.US).startsWith("ed01")) {
             val raw = decodeHex(address)
             require(raw.size > 3 && raw[0] == 0xED.toByte() && raw[1] == 0x01.toByte()) {
@@ -281,15 +282,6 @@ object PosManifestLoader {
         val classBits = (header shr 3) and 0x03
         require(extensionFlag == 0) { "address extension flag set" }
         require(classBits == 0 || classBits == 1) { "unknown address class" }
-        cursor += when (val domainTag = canonical[cursor++].toInt() and 0xFF) {
-            0x00 -> 0
-            0x01 -> 12
-            0x02 -> 4
-            else -> throw IllegalArgumentException("unknown domain tag: $domainTag")
-        }
-        if (cursor >= canonical.size) {
-            throw IllegalArgumentException("invalid canonical address length")
-        }
         val controllerTag = canonical[cursor++].toInt() and 0xFF
         require(controllerTag == 0x00) { "unsupported controller tag $controllerTag" }
         if (cursor + 2 > canonical.size) {

@@ -4356,10 +4356,9 @@ fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
     // block application. Kura replay verifies block-applied WSV data only.
     world.remove("vrf_epochs");
 }
-/// Canonical hash for the legacy checkpoint surface used before Space Directory manifests
-/// were included in durable snapshots.
+/// Test-only hash for the retired checkpoint surface that omitted Space Directory manifests.
 #[cfg(test)]
-pub(crate) fn legacy_state_snapshot_hash_without_space_directory_manifests(
+pub(crate) fn retired_state_snapshot_hash_without_space_directory_manifests(
     state: &State,
 ) -> iroha_crypto::Hash {
     iroha_crypto::Hash::new(canonical_state_snapshot_bytes_with_options(state, false))

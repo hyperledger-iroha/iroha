@@ -1097,7 +1097,6 @@ mod tests {
         };
         let creator =
             AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
-                .map(|parsed| parsed.into_account_id())
                 .expect("valid account id");
         let bundle = ContentBundleRecord {
             bundle_id: Hash::new(b"bundle"),

@@ -55,7 +55,7 @@ debt, the last tracked reducer transition, and any classified delay.
 pressure, governance readiness, and Native AMX participant-application
 records. Diagnostics are operational evidence and are not consensus authority.
 
-Use `get_status_snapshot()` for `/v1/status`. That route remains a distinct
+Use `get_status_snapshot()` for `/status`. That route remains a distinct
 operational-health surface; its queue and historical lane telemetry must not be
 treated as consensus-authoritative state.
 

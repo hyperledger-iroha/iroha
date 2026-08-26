@@ -227,7 +227,6 @@ impl AssetId {
         }
         let definition = AssetDefinitionId::parse_address_literal(definition_literal)?;
         let account = AccountId::parse_encoded(account_literal)
-            .map(ParsedAccountId::into_account_id)
             .map_err(|_| ParseError::new("Asset ID account is invalid"))?;
         let scope = match scope_literal {
             None => AssetBalanceScope::Global,

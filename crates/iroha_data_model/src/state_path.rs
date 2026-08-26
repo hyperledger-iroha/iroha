@@ -61,8 +61,12 @@ impl StatePath {
     fn parse(candidate: &str) -> Result<Self, ParseError> {
         Self::validate_str(candidate)?;
         let normalized = Name::normalize(candidate)?;
-        Self::validate_str(normalized.as_ref())?;
-        Ok(Self(ConstString::from(normalized.as_ref())))
+        if normalized.as_ref() != candidate {
+            return Err(ParseError::new(
+                "StatePath must already use the exact NFC spelling",
+            ));
+        }
+        Ok(Self(ConstString::from(candidate)))
     }
     fn decode_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
         let (len, header_len) = norito::core::inspect_len_from_slice(bytes)?;
@@ -196,10 +200,13 @@ mod tests {
         assert!(StatePath::from_str(&format!("{unicode_boundary}é")).is_err());
     }
     #[test]
-    fn normalizes_nfc_and_preserves_lexical_order() {
-        let decomposed = StatePath::from_str("root/e\u{301}").expect("valid decomposed path");
+    fn rejects_alternate_nfc_spelling_and_preserves_lexical_order() {
+        assert!(
+            StatePath::from_str("root/e\u{301}").is_err(),
+            "decomposed state path must not be rewritten",
+        );
         let composed = StatePath::from_str("root/é").expect("valid composed path");
-        assert_eq!(decomposed, composed);
+        assert_eq!(composed.as_ref(), "root/é");
         let mut paths = [
             StatePath::from_str("root/10").unwrap(),
             StatePath::from_str("root/02").unwrap(),
@@ -263,6 +270,7 @@ mod tests {
         for invalid in [
             "root/\0suffix".to_owned(),
             "root/\u{202E}suffix".to_owned(),
+            "root/e\u{301}".to_owned(),
             "x".repeat(MAX_STATE_PATH_BYTES + 1),
         ] {
             let forged = StatePath(ConstString::from(invalid.as_str()));
@@ -296,6 +304,7 @@ mod tests {
         for invalid in [
             "\"root/\\u0000suffix\"".to_owned(),
             "\"root/\\u202Esuffix\"".to_owned(),
+            "\"root/e\\u0301\"".to_owned(),
             format!("\"{}\"", "x".repeat(MAX_STATE_PATH_BYTES + 1)),
         ] {
             assert!(norito::json::from_str::<StatePath>(&invalid).is_err());
@@ -303,18 +312,21 @@ mod tests {
     }
     #[cfg(feature = "json")]
     #[test]
-    fn storage_json_canonicalizes_keys_and_rejects_normalization_duplicates() {
+    fn storage_json_requires_exact_nfc_keys() {
         type StateStorage = mv::storage::Storage<StatePath, Vec<u8>>;
         let decomposed = r#"{"revert":{},"blocks":{"root/e\u0301":[1]}}"#;
-        let storage =
-            norito::json::from_str::<StateStorage>(decomposed).expect("decode canonicalizable key");
+        assert!(
+            norito::json::from_str::<StateStorage>(decomposed).is_err(),
+            "storage key decoder must not rewrite decomposed text",
+        );
+        let exact = r#"{"revert":{},"blocks":{"root/é":[1]}}"#;
+        let storage = norito::json::from_str::<StateStorage>(exact).expect("decode exact NFC key");
         let canonical = norito::json::to_json(&storage).expect("encode canonical storage");
         assert!(canonical.contains("\"root/é\""));
-        assert!(!canonical.contains("\\u0301"));
         let duplicate = r#"{"revert":{},"blocks":{"root/e\u0301":[1],"root/é":[2]}}"#;
         assert!(
             norito::json::from_str::<StateStorage>(duplicate).is_err(),
-            "distinct JSON spellings of the same canonical StatePath must fail closed"
+            "alternate StatePath spelling must fail closed"
         );
     }
 }

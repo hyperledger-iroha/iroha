@@ -77,6 +77,7 @@ from .sorafs_replication import (
     decode_replication_order_instruction,
 )
 from .client import (
+    AccountOnboardingCurrentStateV1,
     AppApiTransactionDraft,
     ContractCallIntent,
     LocalSigningContext,
@@ -447,6 +448,7 @@ from .dataspaces import (
 _BASE_EXPORTS = [
     "AccountAddress",
     "AccountAddressError",
+    "AccountOnboardingCurrentStateV1",
     "ToriiClient",
     "SorafsOrderbookSubmissionAmbiguousError",
     "SorafsOrderbookSubmissionIdentity",
@@ -935,6 +937,8 @@ _CRYPTO_EXPORTS: List[str] = [
     "canonical_genesis_header_hash_v1",
     "canonical_signed_transaction_hash_v1",
     "signed_transaction_envelope_from_versioned_v1",
+    "verify_prepared_transaction_context_v1",
+    "verify_account_onboarding_receipt_v1",
     "privacy_vega_device_authentication_digest_v1",
     "inspect_signed_privacy_zk_ace_transfer_action_v1",
     "inspect_signed_privacy_bootle_lantern_presentation_action_v1",
@@ -1135,6 +1139,8 @@ try:
         canonical_genesis_header_hash_v1,
         canonical_signed_transaction_hash_v1,
         signed_transaction_envelope_from_versioned_v1,
+        verify_prepared_transaction_context_v1,
+        verify_account_onboarding_receipt_v1,
         privacy_vega_device_authentication_digest_v1,
         inspect_signed_privacy_zk_ace_transfer_action_v1,
         inspect_signed_privacy_bootle_lantern_presentation_action_v1,

@@ -52,7 +52,6 @@
 //! - `schema` (off by default): Data Model Schema endpoint
 //! - `app_api` (on by default): app-facing JSON endpoints (filters, webhooks)
 //! - `transparent_api` (on by default): forwards data-model transparent API
-//! - `p2p_ws` (off by default): exposes a `/p2p` WebSocket for P2P fallback
 //! - `connect` (on by default): WalletConnect-style WS and minimal in-node relay
 //! - `app_api_https` (off by default): enables HTTPS webhook delivery using reqwest + rustls native roots
 //! - `app_api_wss` (off by default): enables WebSocket/WebSocket Secure webhook delivery
@@ -194,7 +193,7 @@ use blake3::hash as blake3_hash;
 use dashmap::{DashMap, mapref::entry::Entry as DashEntry};
 use error_stack::{Report, ResultExt};
 use futures::FutureExt as _;
-#[cfg(any(feature = "p2p_ws", feature = "connect", feature = "app_api"))]
+#[cfg(any(feature = "connect", feature = "app_api"))]
 use futures_util::StreamExt;
 #[cfg(feature = "app_api")]
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
@@ -223,11 +222,8 @@ use iroha_core::{
     query::store::LiveQueryStoreHandle,
     queue::{self, Queue, RoutingDecision, RoutingPlan},
     soracloud_runtime::{
-        SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
-        SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1, SharedSoracloudRuntime,
-        SoracloudHostedHttpReplicaRuntimeStateV1, SoracloudHostedHttpRuntimeStateV1,
-        SoracloudLocalReadProxyOutcomeV1, SoracloudLocalReadProxyRequestV1,
-        SoracloudLocalReadProxyResponseV1, SoracloudLocalReadRequest,
+        SharedSoracloudRuntime, SoracloudHostedHttpReplicaRuntimeStateV1,
+        SoracloudHostedHttpRuntimeStateV1, SoracloudLocalReadRequest,
         SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
         SoracloudRuntimeReplicaPlan,
     },
@@ -243,24 +239,24 @@ use iroha_core::{
         OrdinaryKagemushaLifecycleAdmissionBindingV1,
         OrdinaryKagemushaLifecycleAdmissionCertificateStrengthV1,
         OrdinaryKagemushaLifecycleAdmissionCertificateV1,
-        QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2, QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
-        QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, QueuePlanAdmissionAttestationV2,
-        QueuePlanAdmissionBindingV2, QueuePlanAdmissionCertificateStrengthV2,
-        QueuePlanAdmissionCertificateV2, QueuePlanAdmissionPublicationV1,
+        QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1, QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
+        QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, QueuePlanAdmissionAttestationV1,
+        QueuePlanAdmissionBindingV1, QueuePlanAdmissionCertificateStrengthV1,
+        QueuePlanAdmissionCertificateV1, QueuePlanAdmissionPublicationV1,
         TORII_PROXY_NETWORK_MESSAGE_OVERHEAD_BYTES_V1, TORII_PROXY_REQUEST_FRAME_OVERHEAD_BYTES_V1,
         TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1, TORII_PROXY_REQUEST_RELAY_OVERHEAD_BYTES_V1,
-        TORII_PROXY_REQUEST_VERSION_V6, TORII_PROXY_RESPONSE_VERSION_V1, ToriiFanoutRouteScopeV1,
-        ToriiHostedHttpProxyRequestV1, ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4,
-        ToriiProxyRequestV6, ToriiProxyResponseFormatV1, ToriiProxyResponseV1,
-        ToriiProxyTransactionAdmissionV2, ToriiReadEndpointV1, ToriiReadFanoutMergeV1,
+        TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_VERSION_V1, ToriiFanoutRouteScopeV1,
+        ToriiHostedHttpProxyRequestV1, ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1,
+        ToriiProxyRequestV1, ToriiProxyResponseFormatV1, ToriiProxyResponseV1,
+        ToriiProxyTransactionAdmissionV1, ToriiReadEndpointV1, ToriiReadFanoutMergeV1,
         ToriiReadFanoutProxyRequestV1, ToriiReadProxyRequestV1, ToriiRouteHintV1,
         ToriiRoutingPlanHintV1,
         ordinary_kagemusha_lifecycle_admission_attestation_signing_bytes_v1,
-        ordinary_kagemusha_lifecycle_request_id, queue_plan_admission_attestation_signing_bytes_v2,
+        ordinary_kagemusha_lifecycle_request_id, queue_plan_admission_attestation_signing_bytes_v1,
         queue_plan_admission_network_id_digest,
         validate_ordinary_kagemusha_lifecycle_admission_certificate_v1,
         validate_ordinary_kagemusha_lifecycle_entrypoint,
-        validate_queue_plan_admission_certificate_for_network_digest_v2,
+        validate_queue_plan_admission_certificate_for_network_digest_v1,
     },
     tx::external_entrypoint_hash_from_signed_hash as entrypoint_hash,
     tx::{
@@ -268,7 +264,7 @@ use iroha_core::{
         SignatureVerificationFail,
     },
 };
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 use iroha_crypto::Signature;
 use iroha_crypto::{
     ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, SignatureOf,
@@ -897,6 +893,8 @@ pub use utils::{
 };
 #[cfg(feature = "app_api")]
 mod account_literal;
+#[cfg(feature = "app_api")]
+mod account_onboarding_state;
 mod app_auth;
 include!("runtime_governance_auth.rs");
 include!("zk_compute_auth.rs");
@@ -971,8 +969,6 @@ pub use limits::RateLimiter as BenchRateLimiter;
 pub use routing::event_to_json_value;
 #[cfg(feature = "zk-proof-tags")]
 pub use routing::handle_get_proof_tags;
-#[cfg(feature = "p2p_ws")]
-pub use routing::handle_p2p_ws;
 #[cfg(feature = "app_api")]
 pub use routing::{
     AppApiTransactionDraftDto, AssetTransferIntentDto, AssetTransferReceiptDto,
@@ -1081,7 +1077,7 @@ fn alias_service_from_iso_config(
             }
         };
         let account_id: AccountId = match AccountId::parse_encoded(&alias_cfg.account_id) {
-            Ok(parsed) => parsed.into_account_id(),
+            Ok(account_id) => account_id,
             Err(err) => {
                 iroha_logger::warn!(
                     iban = %alias_cfg.iban,
@@ -1420,15 +1416,14 @@ fn parse_exact_account_id_literal(input: &str) -> Result<(AccountId, String), Er
             ),
         )));
     }
-    let (account_id, canonical, _) = AccountId::parse_encoded(input)
-        .map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "invalid account_id: {err}"
-                )),
-            ))
-        })?
-        .into_parts();
+    let account_id = AccountId::parse_encoded(input).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "invalid account_id: {err}"
+            )),
+        ))
+    })?;
+    let canonical = account_id.to_string();
     if input != canonical {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
@@ -1620,6 +1615,7 @@ fn resolve_alias_label_on_chain(
         alias_label,
         now_ms,
     )
+    .map_err(live_dataspace_resolution_error)?
     .map(|account_id| (canonical, account_id, "active_sns")))
 }
 fn resolve_alias_on_route(
@@ -1661,7 +1657,9 @@ fn resolve_alias_index_on_chain(
             catalog,
             label,
             now_ms,
-        ) else {
+        )
+        .map_err(live_dataspace_resolution_error)?
+        else {
             continue;
         };
         if &active_account_id != indexed_account_id {
@@ -1706,7 +1704,9 @@ fn resolve_alias_index_on_route(
             catalog,
             label,
             now_ms,
-        ) else {
+        )
+        .map_err(live_dataspace_resolution_error)?
+        else {
             continue;
         };
         if &active_account_id != indexed_account_id {
@@ -1846,28 +1846,27 @@ fn lookup_aliases_by_account_on_chain(
     };
     let now_ms = routing::asset_alias_observation_time_ms(&app.state);
     let catalog = &state_view.nexus().dataspace_catalog;
-    let items = items
-        .into_iter()
-        .filter(|item| {
-            parse_exact_account_alias_label_with_live_state(app, &item.alias).is_ok_and(|alias| {
-                iroha_core::sns::resolve_active_account_alias(
-                    state_view.world(),
-                    catalog,
-                    &alias.label,
-                    now_ms,
-                )
-                .as_ref()
-                    == Some(&account_id)
-            })
-        })
-        .map(|item| routing::AliasLookupByAccountItemDto {
+    let mut exact_items = Vec::with_capacity(items.len());
+    for item in items {
+        let alias = parse_exact_account_alias_label_with_live_state(app, &item.alias)?;
+        let resolved = iroha_core::sns::resolve_active_account_alias(
+            state_view.world(),
+            catalog,
+            &alias.label,
+            now_ms,
+        )
+        .map_err(live_dataspace_resolution_error)?;
+        if resolved.as_ref() != Some(&account_id) {
+            continue;
+        }
+        exact_items.push(routing::AliasLookupByAccountItemDto {
             alias: item.alias,
             dataspace: item.dataspace,
             domain: item.domain,
             is_primary: item.is_primary,
-        })
-        .collect();
-    Ok(Some((canonical_account_id, items)))
+        });
+    }
+    Ok(Some((canonical_account_id, exact_items)))
 }
 fn lookup_aliases_by_account_on_route(
     app: &SharedAppState,
@@ -2336,7 +2335,6 @@ struct AppState {
     soracloud_mutation_inflight: Arc<tokio::sync::Semaphore>,
     soracloud_public_max_response_bytes: usize,
     soracloud_mutation_max_body_bytes: usize,
-    soracloud_upload_max_body_bytes: usize,
     content_request_limiter: limits::RateLimiter,
     content_egress_limiter: limits::RateLimiter,
     proof_limits: routing::ProofApiLimits,
@@ -2409,9 +2407,9 @@ struct AppState {
     da_ingest_compute_inflight: Arc<tokio::sync::Semaphore>,
     da_spooler: Option<Arc<da::DaSpooler>>,
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
-    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+    #[cfg(any(feature = "app_api", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
-    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+    #[cfg(any(feature = "app_api", feature = "connect"))]
     local_peer_id: Option<PeerId>,
     #[cfg(feature = "connect")]
     connect_bus: connect::Bus,
@@ -2514,18 +2512,14 @@ struct AppState {
     vpn_state_lock: Arc<std::sync::Mutex<vpn::VpnRuntimeState>>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     soracloud_hf_config: iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
-    #[cfg(feature = "app_api")]
-    soracloud_proxy_pending: Arc<tokio::sync::Mutex<BTreeMap<Hash, PendingSoracloudProxyRequest>>>,
-    #[cfg(feature = "app_api")]
-    soracloud_proxy_sequence: std::sync::atomic::AtomicU64,
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(feature = "connect")]
     torii_proxy_pending:
         Arc<tokio::sync::Mutex<BTreeMap<(Hash, PeerId), Vec<PendingToriiProxyRequest>>>>,
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(feature = "connect")]
     torii_proxy_completed: Arc<tokio::sync::Mutex<CompletedToriiProxyRequests>>,
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(feature = "connect")]
     torii_proxy_session_id: Hash,
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(feature = "connect")]
     torii_proxy_sequence: std::sync::atomic::AtomicU64,
 }
 pub(crate) type SharedAppState = std::sync::Arc<AppState>;
@@ -2535,33 +2529,27 @@ struct DaRuntimeServices {
     receipt_log: Arc<da::DaReceiptLog>,
     spooler: Option<Arc<da::DaSpooler>>,
 }
-#[cfg(feature = "app_api")]
-struct PendingSoracloudProxyRequest {
-    sender: tokio::sync::oneshot::Sender<SoracloudLocalReadProxyOutcomeV1>,
-    expected_peer_id: iroha_data_model::peer::PeerId,
-    request: SoracloudLocalReadRequest,
-}
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 struct PendingToriiProxyRequest {
     waiter_token: Arc<()>,
     sender: tokio::sync::oneshot::Sender<ToriiProxyHttpResponseV1>,
     max_body_bytes: usize,
     strict_queue_plan_synced: bool,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 struct CompletedToriiProxyRequest {
     completed_at: Instant,
     late_response_logged: bool,
     generation: u64,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[derive(Default)]
 struct CompletedToriiProxyRequests {
     entries: BTreeMap<Hash, CompletedToriiProxyRequest>,
     insertion_order: VecDeque<(u64, Hash)>,
     next_generation: u64,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 impl CompletedToriiProxyRequests {
     fn next_generation(&mut self) -> u64 {
         self.next_generation = self.next_generation.wrapping_add(1);
@@ -2649,9 +2637,9 @@ const PIPELINE_STATUS_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const PIPELINE_STATUS_CACHE_PRUNE_INTERVAL_SECS: u64 = 30;
 const PIPELINE_STATUS_CACHE_INDEX_REBUILD_SLOP: usize = 1_024;
 const PIPELINE_STATUS_CACHE_INDEX_REBUILD_MULTIPLIER: usize = 4;
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 const TORII_PROXY_COMPLETED_TTL: Duration = Duration::from_secs(30);
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 const TORII_PROXY_COMPLETED_CAP: usize = 16_384;
 include!("pipeline_status_helpers.rs");
 #[derive(Clone, Debug)]
@@ -3244,8 +3232,7 @@ impl ConnScheme {
             .get::<MatchedRouteMetadata>()
             .is_some_and(|route| {
                 let route_id = route.stable_route_id();
-                route_id == route_catalog::streaming::P2P.stable_route_id()
-                    || route_id == route_catalog::streaming::SUBSCRIPTION_WS.stable_route_id()
+                route_id == route_catalog::streaming::SUBSCRIPTION_WS.stable_route_id()
                     || route_id == route_catalog::streaming::BLOCKS_WS.stable_route_id()
                     || route_id == route_catalog::connect::WEBSOCKET.stable_route_id()
             });
@@ -3381,6 +3368,19 @@ fn hold_preauth_guard_in_response_body(
     // actual HTTP body instead of merely to handler execution.
     let guarded_body = body.map_frame(move |frame| {
         let _guard = &guard;
+        frame
+    });
+    axum::response::Response::from_parts(parts, Body::new(guarded_body))
+}
+#[cfg(feature = "app_api")]
+fn hold_soracloud_public_permit_in_response_body(
+    response: axum::response::Response,
+    permit: tokio::sync::OwnedSemaphorePermit,
+) -> axum::response::Response {
+    use http_body_util::BodyExt as _;
+    let (parts, body) = response.into_parts();
+    let guarded_body = body.map_frame(move |frame| {
+        let _permit = &permit;
         frame
     });
     axum::response::Response::from_parts(parts, Body::new(guarded_body))
@@ -4063,6 +4063,10 @@ mod preauth_connection_lifetime_tests {
                 post(onboarding_auth_boundary_handler),
             )
             .route(
+                route_catalog::application_api::ACCOUNTS_ONBOARD_PREPARE_POST.path(),
+                post(onboarding_auth_boundary_handler),
+            )
+            .route(
                 route_catalog::application_api::ACCOUNTS_ONBOARD_POST.path(),
                 post(onboarding_auth_boundary_handler),
             )
@@ -4122,6 +4126,7 @@ mod preauth_connection_lifetime_tests {
         let router = onboarding_auth_boundary_router(app_with_onboarding_auth(true));
         for descriptor in [
             route_catalog::application_api::ACCOUNTS_ONBOARD_PLAN_POST,
+            route_catalog::application_api::ACCOUNTS_ONBOARD_PREPARE_POST,
             route_catalog::application_api::ACCOUNTS_ONBOARD_POST,
         ] {
             let missing_global = router
@@ -4374,6 +4379,41 @@ mod preauth_connection_lifetime_tests {
             .await
             .expect("response after stream drop");
         assert_eq!(admitted_again.status(), StatusCode::OK);
+    }
+    #[tokio::test]
+    async fn soracloud_streaming_body_holds_route_capacity_until_drop() {
+        let gate = Arc::new(Semaphore::new(1));
+        let permit = gate
+            .clone()
+            .try_acquire_owned()
+            .expect("first public runtime request acquires capacity");
+        let stream = futures::stream::once(async {
+            Ok::<Bytes, Infallible>(Bytes::from_static(b"partial hosted response"))
+        })
+        .chain(futures::stream::pending());
+        let response = Response::builder()
+            .body(Body::from_stream(stream))
+            .expect("streaming response");
+        let guarded = hold_soracloud_public_permit_in_response_body(response, permit);
+        let mut body = guarded.into_body();
+        let frame = body
+            .frame()
+            .await
+            .expect("first hosted frame")
+            .expect("valid hosted frame");
+        assert_eq!(
+            frame.into_data().expect("hosted data frame"),
+            Bytes::from_static(b"partial hosted response")
+        );
+        assert!(
+            gate.clone().try_acquire_owned().is_err(),
+            "a second hosted request must remain rejected while the first body is live"
+        );
+        drop(body);
+        drop(
+            gate.try_acquire_owned()
+                .expect("dropping the hosted body releases route capacity"),
+        );
     }
     #[tokio::test]
     async fn websocket_handoff_holds_ws_capacity_for_task_lifetime() {
@@ -5043,6 +5083,9 @@ async fn enforce_onboarding_api_token(
             stable_route_id
                 == route_catalog::application_api::ACCOUNTS_ONBOARD_PLAN_POST.stable_route_id()
                 || stable_route_id
+                    == route_catalog::application_api::ACCOUNTS_ONBOARD_PREPARE_POST
+                        .stable_route_id()
+                || stable_route_id
                     == route_catalog::application_api::ACCOUNTS_ONBOARD_POST.stable_route_id()
                 || stable_route_id
                     == route_catalog::application_api::ACCOUNTS_ONBOARDING_READINESS_GET
@@ -5496,7 +5539,7 @@ async fn enforce_soracloud_signed_mutation_request(
     ] {
         parts.headers.remove(header);
     }
-    let body_limit = soracloud_signed_mutation_body_limit(&app, &path);
+    let body_limit = soracloud_signed_mutation_body_limit(&app);
     let body = match axum::body::to_bytes(body, body_limit).await {
         Ok(body) => body,
         Err(error) => {
@@ -5569,12 +5612,8 @@ async fn enforce_soracloud_signed_mutation_request(
 #[path = "tests/soracloud_signed_mutation_middleware.rs"]
 mod soracloud_signed_mutation_middleware_tests;
 #[cfg(feature = "app_api")]
-fn soracloud_signed_mutation_body_limit(app: &AppState, path: &str) -> usize {
-    if path.starts_with("/v1/soracloud/model/upload/") {
-        app.soracloud_upload_max_body_bytes.max(1)
-    } else {
-        app.soracloud_mutation_max_body_bytes.max(1)
-    }
+fn soracloud_signed_mutation_body_limit(app: &AppState) -> usize {
+    app.soracloud_mutation_max_body_bytes.max(1)
 }
 #[cfg(feature = "app_api")]
 fn soracloud_body_limit_response(
@@ -9597,6 +9636,8 @@ impl VerifiedSourceCompileAdmission {
 struct CanonicalAccountBodyAuthState {
     app: SharedAppState,
     max_body_bytes: usize,
+    missing_auth_code: &'static str,
+    missing_auth_message: &'static str,
 }
 #[cfg(feature = "app_api")]
 fn admitted_app_routed_read_body_for_auth(parts: &axum::http::request::Parts) -> Option<Bytes> {
@@ -9657,8 +9698,8 @@ async fn enforce_canonical_account_body_authentication(
         Ok(Some(verified)) => verified,
         Ok(None) => {
             return Error::AppUnauthorized {
-                code: "canonical_authentication_required",
-                message: "canonical account request authentication is required".to_owned(),
+                code: state.missing_auth_code,
+                message: state.missing_auth_message.to_owned(),
             }
             .into_response();
         }
@@ -11501,6 +11542,32 @@ async fn handler_accounts_onboard_plan(
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_accounts_onboard_prepare(
+    State(app): State<SharedAppState>,
+    axum::extract::Extension(authenticated_domain): axum::extract::Extension<
+        AuthenticatedOnboardingDomain,
+    >,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: crate::JsonOnly<crate::routing::AccountOnboardingPrepareRequestDto>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            routing::ENDPOINT_ACCOUNTS_ONBOARD_PREPARE.trim_start_matches('/'),
+            enforce,
+        )
+        .await?;
+    }
+    routing::handle_v1_accounts_onboard_prepare(app.clone(), authenticated_domain.0, request).await
+}
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_accounts_onboard(
     State(app): State<SharedAppState>,
     axum::extract::Extension(authenticated_domain): axum::extract::Extension<
@@ -11508,7 +11575,7 @@ async fn handler_accounts_onboard(
     >,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: crate::JsonOnly<crate::routing::AccountOnboardingApplyRequestDto>,
+    request: crate::JsonOnly<crate::routing::AccountOnboardingPreparedTransactionDto>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
@@ -11523,7 +11590,7 @@ async fn handler_accounts_onboard(
         )
         .await?;
     }
-    routing::handle_v1_accounts_onboard_apply(
+    routing::handle_v1_accounts_onboard_submit_prepared(
         app.clone(),
         authenticated_domain.0,
         request,
@@ -11567,16 +11634,45 @@ async fn handler_accounts_faucet_puzzle(
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_accounts_faucet_prepare(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: crate::utils::extractors::JsonOnly<crate::routing::AccountFaucetPrepareRequestDto>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            routing::ENDPOINT_ACCOUNTS_FAUCET_PREPARE.trim_start_matches('/'),
+            enforce,
+        )
+        .await?;
+    }
+    routing::handle_v1_accounts_faucet_prepare(app.clone(), request).await
+}
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_accounts_faucet(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: crate::utils::extractors::NoritoJson<crate::routing::AccountFaucetRequestDto>,
+    request: crate::utils::extractors::JsonOnly<
+        crate::routing::AccountFaucetPreparedTransactionDto,
+    >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
-        return routing::handle_v1_accounts_faucet(app.clone(), request, app.telemetry.clone())
-            .await;
+        return routing::handle_v1_accounts_faucet_submit_prepared(
+            app.clone(),
+            request,
+            app.telemetry.clone(),
+        )
+        .await;
     }
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -11588,7 +11684,8 @@ async fn handler_accounts_faucet(
         enforce,
     )
     .await?;
-    routing::handle_v1_accounts_faucet(app.clone(), request, app.telemetry.clone()).await
+    routing::handle_v1_accounts_faucet_submit_prepared(app.clone(), request, app.telemetry.clone())
+        .await
 }
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
@@ -14917,7 +15014,7 @@ async fn handler_runtime_abi_hash(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 // -------------- Core info (AppState-based) --------------
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn torii_proxy_authenticated_peer_is_trusted(app: &AppState, peer_id: &PeerId) -> bool {
     app.local_peer_id.as_ref() == Some(peer_id)
         || app
@@ -14940,14 +15037,14 @@ fn torii_proxy_authenticated_peer_is_trusted(app: &AppState, peer_id: &PeerId) -
             .iter()
             .any(|validator| validator == peer_id)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn handler_internal_torii_proxy_request(
     State(app): State<SharedAppState>,
     authenticated_operator: Option<
         axum::Extension<operator_signatures::AuthenticatedOperatorPublicKey>,
     >,
     proxy_memory: Option<axum::Extension<ToriiProxyMemoryReservation>>,
-    Norito(request): Norito<ToriiProxyRequestV6>,
+    Norito(request): Norito<ToriiProxyRequestV1>,
 ) -> Response {
     let Some(axum::Extension(authenticated_operator)) = authenticated_operator else {
         return torii_proxy_error_response(
@@ -17614,14 +17711,14 @@ async fn handler_status_tail(
     let offline = status_offline_snapshot(&app);
     // Allowlist bypass
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
-        let authoritative_block_height =
-            u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+        let authoritative_block_height = u64::try_from(app.state.committed_height())
+            .expect("committed height must fit the canonical u64 wire field");
         return routing::handle_status(
             &app.telemetry,
             accept.map(|e| e.0),
             Some(&tail),
             nexus_routing_policy,
-            Some(authoritative_block_height),
+            authoritative_block_height,
             offline,
         )
         .await;
@@ -17642,14 +17739,14 @@ async fn handler_status_tail(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    let authoritative_block_height =
-        u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+    let authoritative_block_height = u64::try_from(app.state.committed_height())
+        .expect("committed height must fit the canonical u64 wire field");
     routing::handle_status(
         &app.telemetry,
         accept.map(|e| e.0),
         Some(&tail),
         nexus_routing_policy,
-        Some(authoritative_block_height),
+        authoritative_block_height,
         offline,
     )
     .await
@@ -17665,14 +17762,14 @@ async fn handler_status_root(
     let nexus_routing_policy = nexus.routing_policy.clone();
     let offline = status_offline_snapshot(&app);
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
-        let authoritative_block_height =
-            u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+        let authoritative_block_height = u64::try_from(app.state.committed_height())
+            .expect("committed height must fit the canonical u64 wire field");
         return routing::handle_status(
             &app.telemetry,
             accept.map(|e| e.0),
             None,
             nexus_routing_policy,
-            Some(authoritative_block_height),
+            authoritative_block_height,
             offline,
         )
         .await;
@@ -17691,14 +17788,14 @@ async fn handler_status_root(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    let authoritative_block_height =
-        u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+    let authoritative_block_height = u64::try_from(app.state.committed_height())
+        .expect("committed height must fit the canonical u64 wire field");
     routing::handle_status(
         &app.telemetry,
         accept.map(|e| e.0),
         None,
         nexus_routing_policy,
-        Some(authoritative_block_height),
+        authoritative_block_height,
         offline,
     )
     .await
@@ -17881,12 +17978,17 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
     }
     let mut hosting_peers = std::collections::BTreeSet::new();
     let mut hosted_replica_count = 0_u64;
+    let mut unavailable_replica_count = 0_u64;
     for ((_service_name, _service_version), record) in
         world.soracloud_inrou_service_placements().iter()
     {
         for placement in &record.placements {
-            hosted_replica_count = hosted_replica_count.saturating_add(1);
-            hosting_peers.insert(placement.peer_id.clone());
+            if placement.host_availability.is_available() {
+                hosted_replica_count = hosted_replica_count.saturating_add(1);
+                hosting_peers.insert(placement.peer_id.clone());
+            } else {
+                unavailable_replica_count = unavailable_replica_count.saturating_add(1);
+            }
         }
     }
     json_object(vec![
@@ -17896,6 +17998,7 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
             u64::try_from(hosting_peers.len()).unwrap_or(u64::MAX),
         ),
         json_entry("hosted_replica_count", hosted_replica_count),
+        json_entry("unavailable_replica_count", unavailable_replica_count),
     ])
 }
 #[cfg(feature = "telemetry")]
@@ -18051,694 +18154,62 @@ fn authoritative_pending_public_mailbox_messages(
     .unwrap_or(u32::MAX)
 }
 #[cfg(feature = "app_api")]
-fn resolve_soracloud_local_read_proxy_target(
-    app: &SharedAppState,
-    request: &SoracloudLocalReadRequest,
-) -> Result<Option<iroha_data_model::peer::PeerId>, SoracloudRuntimeExecutionError> {
-    if request.handler_name != "infer" {
-        return Ok(None);
-    }
-    let Some(runtime) = app.soracloud_runtime.as_ref() else {
-        return Ok(None);
-    };
-    let Some(local_peer_id) = runtime.local_peer_id() else {
-        return Ok(None);
-    };
-    let local_peer_id: iroha_data_model::peer::PeerId = local_peer_id.parse().map_err(|error| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Internal,
-            format!("invalid local Soracloud peer id `{local_peer_id}`: {error}"),
-        )
-    })?;
-    let state_view = app.state.view();
-    let Some(bundle) = state_view.world().soracloud_service_revisions().get(&(
-        request.service_name.clone(),
-        request.service_version.clone(),
-    )) else {
-        return Ok(None);
-    };
-    let Some(binding) =
-        iroha_core::soracloud_runtime::soracloud_hf_generated_source_binding(bundle)
-    else {
-        return Ok(None);
-    };
-    let primary_assignment = iroha_core::soracloud_runtime::resolve_generated_hf_primary_assignment(
-        state_view.world(),
-        request.service_name.as_str(),
-        &binding.source_id,
-    )
-    .map_err(|message| {
-        SoracloudRuntimeExecutionError::new(SoracloudRuntimeExecutionErrorKind::Internal, message)
-    })?
-    .ok_or_else(|| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "generated HF service `{}` has no warm authoritative primary host for source `{}`",
-                request.service_name, binding.source_id
-            ),
-        )
-    })?;
-    let primary_peer_id: iroha_data_model::peer::PeerId =
-        primary_assignment.peer_id.parse().map_err(|error| {
-            SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Internal,
-                format!(
-                    "generated HF service `{}` has an invalid primary peer id `{}`: {error}",
-                    request.service_name, primary_assignment.peer_id
-                ),
-            )
-        })?;
-    if primary_peer_id == local_peer_id {
-        return Ok(None);
-    }
-    Ok(Some(primary_peer_id))
-}
+const SORACLOUD_LOCAL_READ_BLOCKING_MAX_IN_FLIGHT_V1: usize = 8;
 #[cfg(feature = "app_api")]
-fn report_soracloud_local_read_proxy_failure(
-    app: &SharedAppState,
-    request: &SoracloudLocalReadRequest,
-    target_peer_id: &iroha_data_model::peer::PeerId,
-    error: &SoracloudRuntimeExecutionError,
-) {
-    if error.kind == SoracloudRuntimeExecutionErrorKind::InvalidRequest {
-        return;
-    }
-    if let Some(runtime) = app.soracloud_runtime.as_ref() {
-        runtime.report_generated_hf_proxy_failure(request, &target_peer_id.to_string(), error);
-    }
-}
+const SORACLOUD_LOCAL_READ_EXECUTION_TIMEOUT_V1: Duration = Duration::from_secs(10);
 #[cfg(feature = "app_api")]
-fn report_soracloud_local_read_local_proxy_failure(
-    app: &SharedAppState,
-    request: &SoracloudLocalReadRequest,
-    error: &SoracloudRuntimeExecutionError,
-) {
-    if let Some(runtime) = app.soracloud_runtime.as_ref() {
-        runtime.report_generated_hf_local_proxy_failure(request, error);
-    }
-}
-#[cfg(feature = "app_api")]
-fn maybe_request_soracloud_generated_hf_reconcile(
-    app: &SharedAppState,
-    request: &SoracloudLocalReadRequest,
-    error: &SoracloudRuntimeExecutionError,
-) {
-    if error.kind != SoracloudRuntimeExecutionErrorKind::Unavailable
-        || request.handler_name != "infer"
-    {
-        return;
-    }
-    if let Some(runtime) = app.soracloud_runtime.as_ref() {
-        runtime.request_generated_hf_reconcile(request, error);
-    }
-}
-#[cfg(feature = "app_api")]
-fn handle_soracloud_generated_hf_proxy_validation_failure(
-    app: &SharedAppState,
-    request: &SoracloudLocalReadRequest,
-    target_peer_id: &iroha_data_model::peer::PeerId,
-    error: &SoracloudRuntimeExecutionError,
-) {
-    report_soracloud_local_read_proxy_failure(app, request, target_peer_id, error);
-    maybe_request_soracloud_generated_hf_reconcile(app, request, error);
-}
-#[cfg(feature = "app_api")]
-fn handle_soracloud_generated_hf_proxy_execution_failure(
-    app: &SharedAppState,
-    request: &SoracloudLocalReadRequest,
-    target_peer_id: &iroha_data_model::peer::PeerId,
-    error: &SoracloudRuntimeExecutionError,
-) {
-    report_soracloud_local_read_proxy_failure(app, request, target_peer_id, error);
-    maybe_request_soracloud_generated_hf_reconcile(app, request, error);
-}
-#[cfg(feature = "app_api")]
-fn handle_soracloud_generated_hf_local_proxy_execution_failure(
-    app: &SharedAppState,
-    request: &SoracloudLocalReadRequest,
-    error: &SoracloudRuntimeExecutionError,
-) {
-    report_soracloud_local_read_local_proxy_failure(app, request, error);
-    maybe_request_soracloud_generated_hf_reconcile(app, request, error);
-}
-#[cfg(feature = "app_api")]
-fn request_soracloud_generated_hf_proxy_responder_reconcile(
-    app: &SharedAppState,
-    request: &SoracloudLocalReadRequest,
-    responder_peer_id: &iroha_data_model::peer::PeerId,
-    expected_peer_id: &iroha_data_model::peer::PeerId,
-) {
-    if let Some(runtime) = app.soracloud_runtime.as_ref() {
-        runtime.request_generated_hf_proxy_responder_reconcile(
-            request,
-            &responder_peer_id.to_string(),
-            &expected_peer_id.to_string(),
-        );
-    }
-}
-#[cfg(feature = "app_api")]
-fn handle_incoming_soracloud_generated_hf_proxy_authority_failure(
-    app: &SharedAppState,
-    request: &SoracloudLocalReadRequest,
-    error: &SoracloudRuntimeExecutionError,
-) {
-    maybe_request_soracloud_generated_hf_reconcile(app, request, error);
-}
-#[cfg(feature = "app_api")]
-fn resolve_incoming_soracloud_proxy_forward_target(
-    app: &SharedAppState,
-    request: &SoracloudLocalReadRequest,
-    error: &SoracloudRuntimeExecutionError,
-) -> Option<iroha_data_model::peer::PeerId> {
-    if error.kind != SoracloudRuntimeExecutionErrorKind::Unavailable {
-        return None;
-    }
-    if !local_soracloud_proxy_receiver_is_assigned_host(app, request).ok()? {
-        return None;
-    }
-    resolve_soracloud_local_read_proxy_target(app, request)
-        .ok()
-        .flatten()
-}
-#[cfg(feature = "app_api")]
-fn local_soracloud_proxy_receiver_is_assigned_host(
-    app: &SharedAppState,
-    request: &SoracloudLocalReadRequest,
-) -> Result<bool, SoracloudRuntimeExecutionError> {
-    if request.handler_name != "infer" {
-        return Ok(false);
-    }
-    let Some(runtime) = app.soracloud_runtime.as_ref() else {
-        return Ok(false);
-    };
-    let Some(local_peer_id) = runtime.local_peer_id() else {
-        return Ok(false);
-    };
-    let local_peer_id: iroha_data_model::peer::PeerId = local_peer_id.parse().map_err(|error| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Internal,
-            format!("invalid local Soracloud peer id `{local_peer_id}`: {error}"),
-        )
-    })?;
-    let state_view = app.state.view();
-    let Some(bundle) = state_view.world().soracloud_service_revisions().get(&(
-        request.service_name.clone(),
-        request.service_version.clone(),
-    )) else {
-        return Ok(false);
-    };
-    let Some(binding) =
-        iroha_core::soracloud_runtime::soracloud_hf_generated_source_binding(bundle)
-    else {
-        return Ok(false);
-    };
-    let Some(placement) = iroha_core::soracloud_runtime::resolve_generated_hf_active_placement(
-        state_view.world(),
-        request.service_name.as_str(),
-        &binding.source_id,
-    )
-    .map_err(|message| {
-        SoracloudRuntimeExecutionError::new(SoracloudRuntimeExecutionErrorKind::Internal, message)
-    })?
-    else {
-        return Ok(false);
-    };
-    Ok(placement.assigned_hosts.iter().any(|assignment| {
-        assignment.peer_id == local_peer_id.to_string()
-            && assignment.status
-                != iroha_data_model::soracloud::SoraHfPlacementHostStatusV1::Retired
+fn soracloud_local_read_blocking_admission_v1() -> Arc<tokio::sync::Semaphore> {
+    static ADMISSION: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    Arc::clone(ADMISSION.get_or_init(|| {
+        Arc::new(tokio::sync::Semaphore::new(
+            SORACLOUD_LOCAL_READ_BLOCKING_MAX_IN_FLIGHT_V1,
+        ))
     }))
 }
 #[cfg(feature = "app_api")]
-fn validate_generated_hf_proxy_response_authority(
-    app: &SharedAppState,
-    request: &SoracloudLocalReadRequest,
-    target_peer_id: &iroha_data_model::peer::PeerId,
-    response: &iroha_core::soracloud_runtime::SoracloudLocalReadResponse,
-) -> Result<(), SoracloudRuntimeExecutionError> {
-    if request.handler_name != "infer" {
-        return Ok(());
-    }
-    let state_view = app.state.view();
-    let Some(bundle) = state_view.world().soracloud_service_revisions().get(&(
-        request.service_name.clone(),
-        request.service_version.clone(),
-    )) else {
-        return Ok(());
-    };
-    let Some(binding) =
-        iroha_core::soracloud_runtime::soracloud_hf_generated_source_binding(bundle)
-    else {
-        return Ok(());
-    };
-    let Some(receipt) = response.runtime_receipt.as_ref() else {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "proxied generated HF response from primary peer `{target_peer_id}` omitted runtime receipt attribution"
-            ),
-        ));
-    };
-    receipt.validate().map_err(|error| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "proxied generated HF response from primary peer `{target_peer_id}` returned an invalid runtime receipt: {error}"
-            ),
-        )
-    })?;
-    if receipt.service_name.as_ref() != request.service_name
-        || receipt.service_version != request.service_version
-        || receipt.handler_name.as_ref() != request.handler_name
-        || receipt.handler_class != request.handler_class.handler_class()
-        || receipt.request_commitment != request.request_commitment
-    {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "proxied generated HF response from primary peer `{target_peer_id}` returned a runtime receipt that does not match the request envelope"
-            ),
-        ));
-    }
-    if receipt.result_commitment != response.result_commitment
-        || receipt.certified_by != response.certified_by
-    {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "proxied generated HF response from primary peer `{target_peer_id}` returned a runtime receipt that does not match the response commitments"
-            ),
-        ));
-    }
-    let placement = iroha_core::soracloud_runtime::resolve_generated_hf_active_placement(
-        state_view.world(),
-        request.service_name.as_str(),
-        &binding.source_id,
-    )
-    .map_err(|message| {
-        SoracloudRuntimeExecutionError::new(SoracloudRuntimeExecutionErrorKind::Internal, message)
-    })?
-    .ok_or_else(|| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "generated HF service `{}` has no active placement for source `{}` while validating proxy response",
-                request.service_name, binding.source_id
-            ),
-        )
-    })?;
-    let primary_assignment = placement
-        .assigned_hosts
-        .iter()
-        .find(|assignment| {
-            assignment.role
-                == iroha_data_model::soracloud::SoraHfPlacementHostRoleV1::Primary
-                && assignment.status
-                    == iroha_data_model::soracloud::SoraHfPlacementHostStatusV1::Warm
-        })
-        .ok_or_else(|| {
-            SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                format!(
-                    "generated HF service `{}` has no warm authoritative primary host while validating proxy response",
-                    request.service_name
-                ),
-            )
-        })?;
-    if receipt.placement_id != Some(placement.placement_id)
-        || receipt.selected_validator_account_id.as_ref()
-            != Some(&primary_assignment.validator_account_id)
-        || receipt.selected_peer_id.as_deref() != Some(primary_assignment.peer_id.as_str())
-    {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "proxied generated HF response from primary peer `{target_peer_id}` returned receipt attribution that does not match authoritative placement `{}`",
-                placement.placement_id
-            ),
-        ));
-    }
-    Ok(())
-}
-#[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
-async fn execute_soracloud_local_read_via_proxy(
-    app: &SharedAppState,
-    target_peer_id: iroha_data_model::peer::PeerId,
+async fn execute_soracloud_local_read_off_reactor(
+    runtime: SharedSoracloudRuntime,
     request: SoracloudLocalReadRequest,
 ) -> Result<iroha_core::soracloud_runtime::SoracloudLocalReadResponse, SoracloudRuntimeExecutionError>
 {
-    let report_request = request.clone();
-    let Some(runtime) = app.soracloud_runtime.as_ref() else {
-        let error = SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            "Soracloud runtime is unavailable on this ingress node",
-        );
-        handle_soracloud_generated_hf_local_proxy_execution_failure(app, &report_request, &error);
-        return Err(error);
-    };
-    let Some(network) = app.p2p.as_ref() else {
-        let error = SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            "Soracloud proxy routing requires an attached P2P network",
-        );
-        handle_soracloud_generated_hf_local_proxy_execution_failure(app, &report_request, &error);
-        return Err(error);
-    };
-    let request_id = Hash::new(
-        norito::to_bytes(&(
-            "soracloud:local-read-proxy",
-            app.soracloud_proxy_sequence
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            request.request_commitment,
-            target_peer_id.clone(),
-        ))
-        .expect("Soracloud proxy request id encoding should be infallible"),
-    );
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.soracloud_proxy_pending.lock().await.insert(
-        request_id,
-        PendingSoracloudProxyRequest {
-            sender: tx,
-            expected_peer_id: target_peer_id.clone(),
-            request: report_request.clone(),
-        },
-    );
-    network.post(iroha_p2p::Post {
-        peer_id: target_peer_id.clone(),
-        priority: iroha_p2p::Priority::High,
-        data: iroha_core::NetworkMessage::SoracloudLocalReadProxyRequest(Box::new(
-            SoracloudLocalReadProxyRequestV1 {
-                schema_version: SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
-                request_id,
-                request,
-            },
-        )),
-    });
-    match tokio::time::timeout(runtime.local_read_proxy_timeout(), rx).await {
-        Ok(Ok(SoracloudLocalReadProxyOutcomeV1::Ok(response))) => {
-            match validate_generated_hf_proxy_response_authority(
-                app,
-                &report_request,
-                &target_peer_id,
-                &response,
-            ) {
-                Ok(()) => Ok(response),
-                Err(error) => {
-                    handle_soracloud_generated_hf_proxy_validation_failure(
-                        app,
-                        &report_request,
-                        &target_peer_id,
-                        &error,
-                    );
-                    Err(error)
-                }
-            }
-        }
-        Ok(Ok(SoracloudLocalReadProxyOutcomeV1::Err(error))) => {
-            handle_soracloud_generated_hf_proxy_execution_failure(
-                app,
-                &report_request,
-                &target_peer_id,
-                &error,
-            );
-            Err(error)
-        }
-        Ok(Err(_)) => {
-            let error = SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                format!(
-                    "Soracloud proxy request `{request_id}` to primary peer `{target_peer_id}` closed before returning a response"
-                ),
-            );
-            handle_soracloud_generated_hf_proxy_execution_failure(
-                app,
-                &report_request,
-                &target_peer_id,
-                &error,
-            );
-            Err(error)
-        }
-        Err(_) => {
-            app.soracloud_proxy_pending.lock().await.remove(&request_id);
-            let error = SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                format!(
-                    "Soracloud proxy request `{request_id}` to primary peer `{target_peer_id}` timed out"
-                ),
-            );
-            handle_soracloud_generated_hf_proxy_execution_failure(
-                app,
-                &report_request,
-                &target_peer_id,
-                &error,
-            );
-            Err(error)
-        }
-    }
+    execute_soracloud_local_read_off_reactor_with_admission(
+        soracloud_local_read_blocking_admission_v1(),
+        runtime,
+        request,
+    )
+    .await
 }
-#[cfg(all(feature = "app_api", not(any(feature = "p2p_ws", feature = "connect"))))]
-async fn execute_soracloud_local_read_via_proxy(
-    _app: &SharedAppState,
-    target_peer_id: iroha_data_model::peer::PeerId,
-    _request: SoracloudLocalReadRequest,
+#[cfg(feature = "app_api")]
+async fn execute_soracloud_local_read_off_reactor_with_admission(
+    admission: Arc<tokio::sync::Semaphore>,
+    runtime: SharedSoracloudRuntime,
+    request: SoracloudLocalReadRequest,
 ) -> Result<iroha_core::soracloud_runtime::SoracloudLocalReadResponse, SoracloudRuntimeExecutionError>
 {
-    Err(SoracloudRuntimeExecutionError::new(
-        SoracloudRuntimeExecutionErrorKind::Unavailable,
-        format!("Soracloud proxy routing to primary peer `{target_peer_id}` requires P2P support"),
-    ))
-}
-#[cfg(feature = "app_api")]
-fn validate_incoming_soracloud_proxy_request_authority(
-    app: &SharedAppState,
-    request: &SoracloudLocalReadRequest,
-) -> Result<(), SoracloudRuntimeExecutionError> {
-    let expected_request_commitment = soracloud_local_read_request_commitment(request);
-    if request.request_commitment != expected_request_commitment {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            format!(
-                "Soracloud proxy request commitment `{}` does not match the canonical generated-HF request envelope `{expected_request_commitment}`",
-                request.request_commitment
-            ),
-        ));
-    }
-    if request.handler_name != "infer"
-        || request.handler_class != iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query
-    {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            "Soracloud proxy execution only supports generated HF `infer` query handlers",
-        ));
-    }
-    let Some(runtime) = app.soracloud_runtime.as_ref() else {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            "Soracloud runtime is unavailable on the authoritative primary host",
-        ));
-    };
-    let Some(local_peer_id) = runtime.local_peer_id() else {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            "Soracloud runtime does not advertise a local peer id for proxy execution",
-        ));
-    };
-    let local_peer_id: iroha_data_model::peer::PeerId = local_peer_id.parse().map_err(|error| {
+    let permit = admission.try_acquire_owned().map_err(|_| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!("invalid local Soracloud peer id `{local_peer_id}`: {error}"),
+            "Soracloud local-read blocking capacity is saturated; retry later",
         )
     })?;
-    let state_view = app.state.view();
-    let Some(bundle) = state_view.world().soracloud_service_revisions().get(&(
-        request.service_name.clone(),
-        request.service_version.clone(),
-    )) else {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            format!(
-                "missing admitted Soracloud revision `{}` for service `{}`",
-                request.service_version, request.service_name
-            ),
-        ));
-    };
-    let Some(binding) =
-        iroha_core::soracloud_runtime::soracloud_hf_generated_source_binding(bundle)
-    else {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            format!(
-                "Soracloud proxy execution only supports generated HF services; `{}` is not generated-HF bound",
-                request.service_name
-            ),
-        ));
-    };
-    let primary_assignment = iroha_core::soracloud_runtime::resolve_generated_hf_primary_assignment(
-        state_view.world(),
-        request.service_name.as_str(),
-        &binding.source_id,
-    )
-    .map_err(|message| {
-        SoracloudRuntimeExecutionError::new(SoracloudRuntimeExecutionErrorKind::Unavailable, message)
-    })?
-    .ok_or_else(|| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "generated HF service `{}` has no warm authoritative primary host for proxy execution",
-                request.service_name
-            ),
-        )
-    })?;
-    let primary_peer_id: iroha_data_model::peer::PeerId =
-        primary_assignment.peer_id.parse().map_err(|error| {
-            SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                format!(
-                    "generated HF service `{}` has an invalid authoritative primary peer id `{}`: {error}",
-                    request.service_name, primary_assignment.peer_id
-                ),
-            )
-        })?;
-    if primary_peer_id != local_peer_id {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "local peer `{local_peer_id}` is not the authoritative warm primary `{primary_peer_id}` for generated HF service `{}`",
-                request.service_name
-            ),
-        ));
-    }
-    Ok(())
-}
-#[cfg(feature = "app_api")]
-async fn process_incoming_soracloud_proxy_request(
-    app: SharedAppState,
-    network: iroha_core::IrohaNetwork,
-    peer: iroha_data_model::peer::Peer,
-    proxy_request: SoracloudLocalReadProxyRequestV1,
-) {
-    let outcome = if proxy_request.schema_version != SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1 {
-        SoracloudLocalReadProxyOutcomeV1::Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-            format!(
-                "unsupported Soracloud local-read proxy request schema_version `{}`",
-                proxy_request.schema_version
-            ),
-        ))
-    } else {
-        match validate_incoming_soracloud_proxy_request_authority(&app, &proxy_request.request) {
-            Ok(()) => match app.soracloud_runtime.as_ref() {
-                Some(runtime) => match runtime.execute_local_read(proxy_request.request) {
-                    Ok(response) => SoracloudLocalReadProxyOutcomeV1::Ok(response),
-                    Err(error) => SoracloudLocalReadProxyOutcomeV1::Err(error),
-                },
-                None => SoracloudLocalReadProxyOutcomeV1::Err(SoracloudRuntimeExecutionError::new(
-                    SoracloudRuntimeExecutionErrorKind::Unavailable,
-                    "Soracloud runtime is unavailable on the authoritative primary host",
-                )),
-            },
-            Err(error) => {
-                if let Some(primary_peer_id) = resolve_incoming_soracloud_proxy_forward_target(
-                    &app,
-                    &proxy_request.request,
-                    &error,
-                ) {
-                    match execute_soracloud_local_read_via_proxy(
-                        &app,
-                        primary_peer_id.clone(),
-                        proxy_request.request.clone(),
-                    )
-                    .await
-                    {
-                        Ok(response) => SoracloudLocalReadProxyOutcomeV1::Ok(response),
-                        // `execute_soracloud_local_read_via_proxy()` already reports
-                        // generated-HF proxy validation and execution failures against the
-                        // authoritative primary before returning the error here.
-                        Err(forward_error) => SoracloudLocalReadProxyOutcomeV1::Err(forward_error),
-                    }
-                } else {
-                    handle_incoming_soracloud_generated_hf_proxy_authority_failure(
-                        &app,
-                        &proxy_request.request,
-                        &error,
-                    );
-                    SoracloudLocalReadProxyOutcomeV1::Err(error)
-                }
-            }
-        }
-    };
-    network.post(iroha_p2p::Post {
-        peer_id: peer.id().clone(),
-        priority: iroha_p2p::Priority::High,
-        data: iroha_core::NetworkMessage::SoracloudLocalReadProxyResponse(Box::new(
-            SoracloudLocalReadProxyResponseV1 {
-                schema_version: SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1,
-                request_id: proxy_request.request_id,
-                outcome,
-            },
-        )),
+    let worker = tokio::task::spawn_blocking(move || {
+        let result = runtime.execute_local_read(request);
+        // `spawn_blocking` cannot be preempted. The physical worker owns the
+        // permit so cancellation or timeout cannot admit replacement work
+        // until the provider/runtime call has actually stopped.
+        (result, permit)
     });
-}
-#[cfg(feature = "app_api")]
-async fn process_incoming_soracloud_proxy_response(
-    app: &SharedAppState,
-    responder_peer_id: iroha_data_model::peer::PeerId,
-    proxy_response: SoracloudLocalReadProxyResponseV1,
-) {
-    let mut pending_requests = app.soracloud_proxy_pending.lock().await;
-    let Some((expected_peer_id, request)) = pending_requests
-        .get(&proxy_response.request_id)
-        .map(|pending| (pending.expected_peer_id.clone(), pending.request.clone()))
-    else {
-        iroha_logger::warn!(
-            peer_id = %responder_peer_id,
-            request_id = %proxy_response.request_id,
-            "ignoring Soracloud local-read proxy response without a pending request"
-        );
-        return;
-    };
-    if expected_peer_id != responder_peer_id {
-        drop(pending_requests);
-        iroha_logger::warn!(
-            peer_id = %responder_peer_id,
-            expected_peer_id = %expected_peer_id,
-            request_id = %proxy_response.request_id,
-            "ignoring Soracloud local-read proxy response from an unexpected peer"
-        );
-        request_soracloud_generated_hf_proxy_responder_reconcile(
-            app,
-            &request,
-            &responder_peer_id,
-            &expected_peer_id,
-        );
-        return;
+    match tokio::time::timeout(SORACLOUD_LOCAL_READ_EXECUTION_TIMEOUT_V1, worker).await {
+        Ok(Ok((result, _permit))) => result,
+        Ok(Err(_)) => Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            "Soracloud local-read blocking worker terminated unexpectedly",
+        )),
+        Err(_) => Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "Soracloud local-read execution deadline expired",
+        )),
     }
-    let Some(pending) = pending_requests.remove(&proxy_response.request_id) else {
-        iroha_logger::warn!(
-            peer_id = %responder_peer_id,
-            request_id = %proxy_response.request_id,
-            "ignoring Soracloud local-read proxy response whose pending request disappeared"
-        );
-        return;
-    };
-    drop(pending_requests);
-    if proxy_response.schema_version != SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1 {
-        let _ = pending
-            .sender
-            .send(SoracloudLocalReadProxyOutcomeV1::Err(
-                SoracloudRuntimeExecutionError::new(
-                    SoracloudRuntimeExecutionErrorKind::Unavailable,
-                    format!(
-                        "Soracloud proxy response for request `{}` from peer `{}` used unsupported schema_version `{}`",
-                        proxy_response.request_id, responder_peer_id, proxy_response.schema_version
-                    ),
-                ),
-            ));
-        return;
-    }
-    let _ = pending.sender.send(proxy_response.outcome);
 }
 fn insert_routing_headers(
     response: &mut Response,
@@ -18764,7 +18235,7 @@ fn insert_routing_headers(
         HeaderValue::from_static(routed_by),
     );
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn insert_route_transport_header(response: &mut Response, transport: &'static str) {
     response.headers_mut().insert(
         HeaderName::from_static("x-iroha-route-transport"),
@@ -18867,16 +18338,16 @@ fn transaction_submission_response(
     insert_routing_headers(&mut response, routing_decision, routed_by);
     response
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn queue_plan_synced_admission_response(
     app: &AppState,
     routing_decision: RoutingDecision,
-    expected_binding: QueuePlanAdmissionBindingV2,
-    durable_admission: queue::QueuePlanDurableAdmissionV2,
+    expected_binding: QueuePlanAdmissionBindingV1,
+    durable_admission: queue::QueuePlanDurableAdmissionV1,
 ) -> Response {
     let receipt_signer = PeerId::new(app.torii_proxy_bridge_signer.public_key().clone());
     let durable_binding =
-        match QueuePlanAdmissionBindingV2::try_from_durable_admission(&durable_admission) {
+        match QueuePlanAdmissionBindingV1::try_from_durable_admission(&durable_admission) {
             Ok(binding) => binding,
             Err(error) => {
                 return torii_proxy_error_response(
@@ -18912,7 +18383,7 @@ fn queue_plan_synced_admission_response(
             ),
         );
     };
-    let signing_bytes = match queue_plan_admission_attestation_signing_bytes_v2(
+    let signing_bytes = match queue_plan_admission_attestation_signing_bytes_v1(
         expected_binding.canonical_hash(),
         validator_index,
     ) {
@@ -18928,11 +18399,11 @@ fn queue_plan_synced_admission_response(
     let response = match app.local_peer_id.as_ref() {
         Some(local_peer_id) if *local_peer_id == receipt_signer => {
             Signature::try_new(app.torii_proxy_bridge_signer.private_key(), &signing_bytes)
-                .map(|signature| QueuePlanAdmissionCertificateV2 {
-                    version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+                .map(|signature| QueuePlanAdmissionCertificateV1 {
+                    version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
                     binding: expected_binding.clone(),
-                    attestations: vec![QueuePlanAdmissionAttestationV2 {
-                        version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+                    attestations: vec![QueuePlanAdmissionAttestationV1 {
+                        version: QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
                         validator_index,
                         signature,
                     }],
@@ -18974,13 +18445,13 @@ fn queue_plan_synced_admission_response(
     insert_routing_headers(&mut response, routing_decision, "proxy");
     response
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn ordinary_kagemusha_lifecycle_admission_response(
     app: &AppState,
     transaction: &TransactionEntrypoint,
     routing_decision: RoutingDecision,
     expected_binding: OrdinaryKagemushaLifecycleAdmissionBindingV1,
-    durable_admission: queue::QueuePlanDurableAdmissionV2,
+    durable_admission: queue::QueuePlanDurableAdmissionV1,
 ) -> Response {
     if let Err(error) = expected_binding.validate_durable_admission(
         app.state.network_id_ref(),
@@ -19332,41 +18803,41 @@ fn torii_canonical_auth_required_response(
 fn torii_alias_permission_denied_response(message: impl Into<String>) -> Response {
     torii_proxy_error_response(StatusCode::FORBIDDEN, "permission_denied", message)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 const TORII_PROXY_DEFAULT_MAX_HOPS: u8 = 3;
 /// The public outer route timer is 65 seconds. Keep one second for Torii to
 /// serialize and return the final response, so authenticated proxy execution
 /// can never outlive the sender's route owner.
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 const TORII_PROXY_EXECUTION_BUDGET: Duration = Duration::from_secs(64);
 /// Reject deadlines whose wall-clock horizon could not have been produced by
 /// a compliant sender. Internal HTTP proxy requests use the operator-signature
 /// clock contract, so the wire protocol admits exactly that canonical default
 /// skew without allowing a wider local execution lifetime.
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 const TORII_PROXY_DEADLINE_CLOCK_SKEW_ALLOWANCE: Duration = Duration::from_secs(
     iroha_config::parameters::defaults::torii::operator_signatures::MAX_CLOCK_SKEW_SECS,
 );
 /// Hard absolute-horizon bound, including the audited first-release clock-skew
 /// allowance. Runtime work is independently capped by
 /// [`TORII_PROXY_EXECUTION_BUDGET`].
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 const TORII_PROXY_MAX_DEADLINE_HORIZON: Duration = Duration::from_secs(
     TORII_PROXY_EXECUTION_BUDGET.as_secs() + TORII_PROXY_DEADLINE_CLOCK_SKEW_ALLOWANCE.as_secs(),
 );
 /// Time left inside the authenticated deadline for bounded response encoding
 /// and P2P actor handoff after receiver execution stops.
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 const TORII_PROXY_RESPONSE_EGRESS_RESERVE: Duration = Duration::from_secs(1);
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 const TORII_INTERNAL_PROXY_HTTP_PATH: &str = "/v1/internal/torii/proxy";
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AuthoritativeLanePeerStatus {
     peer_id: PeerId,
     torii_url: Option<String>,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[derive(Debug)]
 struct AuthoritativeLanePeers {
     #[cfg(test)]
@@ -19375,7 +18846,7 @@ struct AuthoritativeLanePeers {
     online: Vec<PeerId>,
     offline: Vec<AuthoritativeLanePeerStatus>,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn authoritative_lane_peer_statuses_with_manifest_urls(
     authoritative_peer_ids: Vec<PeerId>,
     manifest_torii_urls: BTreeMap<PeerId, String>,
@@ -19388,7 +18859,7 @@ fn authoritative_lane_peer_statuses_with_manifest_urls(
         })
         .collect()
 }
-#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "connect"))]
 fn lane_authority_route(
     routing_decision: RoutingDecision,
 ) -> iroha_core::state::LaneAuthorityRoute {
@@ -19397,7 +18868,7 @@ fn lane_authority_route(
         routing_decision.dataspace_id,
     )
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn authoritative_lane_peer_statuses(
     app: &AppState,
     routing_decision: RoutingDecision,
@@ -19435,7 +18906,7 @@ fn authoritative_lane_peer_statuses(
         .collect();
     authoritative_lane_peer_statuses_with_manifest_urls(authoritative_peer_ids, manifest_torii_urls)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn authoritative_lane_peer_statuses_at_height(
     app: &AppState,
     routing_decision: RoutingDecision,
@@ -19469,7 +18940,7 @@ fn authoritative_lane_peer_statuses_at_height(
         .collect();
     authoritative_lane_peer_statuses_with_manifest_urls(authoritative_peer_ids, manifest_torii_urls)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn authoritative_lane_peers(
     app: &AppState,
     routing_decision: RoutingDecision,
@@ -19477,7 +18948,7 @@ fn authoritative_lane_peers(
     let statuses = authoritative_lane_peer_statuses(app, routing_decision);
     partition_authoritative_lane_peer_statuses(&app.online_peers, statuses)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn partition_authoritative_lane_peer_statuses(
     online_peers_provider: &OnlinePeersProvider,
     statuses: Vec<AuthoritativeLanePeerStatus>,
@@ -19507,14 +18978,14 @@ fn partition_authoritative_lane_peer_statuses(
         offline,
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ToriiProxyUnavailableReason {
     MissingAuthoritativeBinding,
     AuthoritativePeersOffline,
     LoopPreventionExhausted,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 impl ToriiProxyUnavailableReason {
     fn as_label(self) -> &'static str {
         match self {
@@ -19554,14 +19025,14 @@ impl ToriiProxyUnavailableReason {
         }
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ToriiProxyCandidate {
     Local(PeerId),
     P2p(PeerId),
     HttpBridge { peer_id: PeerId, torii_url: String },
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 impl ToriiProxyCandidate {
     fn peer_id(&self) -> &PeerId {
         match self {
@@ -19576,7 +19047,7 @@ impl ToriiProxyCandidate {
         }
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[derive(Debug)]
 struct ToriiProxyCandidatePeers {
     peers: Vec<ToriiProxyCandidate>,
@@ -19587,7 +19058,7 @@ struct ToriiProxyCandidatePeers {
     loop_prevention_drops: usize,
     unavailable_reason: Option<ToriiProxyUnavailableReason>,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn insert_route_unavailable_diagnostics(
     response: &mut Response,
     routing_decision: RoutingDecision,
@@ -19617,7 +19088,7 @@ fn insert_route_unavailable_diagnostics(
         loop_prevention_drops,
     );
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn torii_route_unavailable_response(
     routing_decision: RoutingDecision,
     reason: ToriiProxyUnavailableReason,
@@ -19641,7 +19112,7 @@ fn torii_route_unavailable_response(
     );
     response
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn effective_proxy_routing_decision(
     request_kind: &'static str,
     resolved_route: RoutingDecision,
@@ -19659,19 +19130,19 @@ fn effective_proxy_routing_decision(
     }
     resolved_route
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProxyRoutingPlanMismatch {
     ingress_digest: Hash,
     receiver_digest: Hash,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn validate_proxy_routing_plan_hint(
     expected_plan: ToriiRoutingPlanHintV1,
 ) -> Result<RoutingPlan, iroha_core::torii_proxy::ToriiRoutingPlanHintError> {
     expected_plan.try_into_routing_plan()
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn validate_proxy_routing_plan(
     request_kind: &'static str,
     resolved_plan: RoutingPlan,
@@ -19697,7 +19168,7 @@ fn validate_proxy_routing_plan(
     }
     Ok(resolved_plan)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn effective_proxy_signed_query_routing_decision(
     resolved_route: RoutingDecision,
     ingress_hint: RoutingDecision,
@@ -19713,13 +19184,13 @@ fn effective_proxy_signed_query_routing_decision(
     }
     resolved_route
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[derive(Debug)]
 struct HostedHttpProxyCandidatePeers {
     peers: Vec<PeerId>,
     loop_prevention_drops: usize,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn hosted_http_proxy_candidate_peer_ids(
     app: &AppState,
     local_peer_id: &PeerId,
@@ -19751,7 +19222,7 @@ fn hosted_http_proxy_candidate_peer_ids(
         loop_prevention_drops,
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn torii_proxy_candidate_peer_ids(
     app: &AppState,
     local_peer_id: &PeerId,
@@ -19822,13 +19293,13 @@ fn torii_proxy_candidate_peer_ids(
         unavailable_reason,
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn queue_plan_synced_bound_authorities(
-    request: &ToriiProxyRequestV6,
+    request: &ToriiProxyRequestV1,
 ) -> Result<Option<(&[PeerId], u64)>, &'static str> {
     match &request.request {
-        ToriiProxyRequestKindV4::SubmitTransaction {
-            admission: ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+        ToriiProxyRequestKindV1::SubmitTransaction {
+            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
             admission_binding: Some(binding),
             ..
         } => {
@@ -19842,12 +19313,12 @@ fn queue_plan_synced_bound_authorities(
                 binding.admission_context.proposal_height,
             )))
         }
-        ToriiProxyRequestKindV4::SubmitTransaction {
-            admission: ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+        ToriiProxyRequestKindV1::SubmitTransaction {
+            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
             ..
         } => Err("QueuePlanSynced request is missing its exact admission binding"),
-        ToriiProxyRequestKindV4::SubmitTransaction {
-            admission: ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(binding),
+        ToriiProxyRequestKindV1::SubmitTransaction {
+            admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(binding),
             admission_binding: None,
             ..
         } => {
@@ -19861,14 +19332,14 @@ fn queue_plan_synced_bound_authorities(
                 binding.admission_context.proposal_height,
             )))
         }
-        ToriiProxyRequestKindV4::SubmitTransaction {
-            admission: ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(_),
+        ToriiProxyRequestKindV1::SubmitTransaction {
+            admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(_),
             ..
         } => Err("ordinary lifecycle request must not carry a QueuePlan admission binding"),
         _ => Ok(None),
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn queue_plan_synced_proxy_candidate_peer_ids(
     app: &AppState,
     local_peer_id: &PeerId,
@@ -19940,14 +19411,14 @@ fn queue_plan_synced_proxy_candidate_peer_ids(
         unavailable_reason,
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn torii_proxy_candidate_peer_ids_for_request(
     app: &AppState,
     local_peer_id: &PeerId,
     routing_decision: RoutingDecision,
     immediate_sender_peer_id: Option<&PeerId>,
     visited_peer_ids: &[PeerId],
-    request: &ToriiProxyRequestV6,
+    request: &ToriiProxyRequestV1,
     include_local_queue_plan_authority: bool,
 ) -> Result<ToriiProxyCandidatePeers, &'static str> {
     if let Some((authoritative_peer_ids, proposal_height)) =
@@ -19972,7 +19443,7 @@ fn torii_proxy_candidate_peer_ids_for_request(
         visited_peer_ids,
     ))
 }
-#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "connect"))]
 fn is_local_authoritative_for_peers(app: &AppState, authoritative_peers: &[PeerId]) -> bool {
     let Some(local_peer_id) = app.local_peer_id.as_ref() else {
         return false;
@@ -19981,7 +19452,7 @@ fn is_local_authoritative_for_peers(app: &AppState, authoritative_peers: &[PeerI
         .iter()
         .any(|peer_id| peer_id == local_peer_id)
 }
-#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "connect"))]
 fn is_local_authoritative_for_route(app: &AppState, routing_decision: RoutingDecision) -> bool {
     let Ok(committee) = app
         .state
@@ -19991,11 +19462,11 @@ fn is_local_authoritative_for_route(app: &AppState, routing_decision: RoutingDec
     };
     is_local_authoritative_for_peers(app, committee.validators())
 }
-#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "connect"))]
 fn should_execute_route_locally(app: &AppState, routing_decision: RoutingDecision) -> bool {
     is_local_authoritative_for_route(app, routing_decision)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn should_execute_route_locally_cached(
     app: &AppState,
     routing_decision: RoutingDecision,
@@ -20011,10 +19482,10 @@ fn should_execute_route_locally_cached(
     cache.push((routing_decision, result));
     result
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn should_execute_incoming_torii_proxy_request_locally(
     app: &AppState,
-    request_kind: &ToriiProxyRequestKindV4,
+    request_kind: &ToriiProxyRequestKindV1,
     routing_decision: RoutingDecision,
 ) -> bool {
     match request_kind {
@@ -20022,18 +19493,18 @@ fn should_execute_incoming_torii_proxy_request_locally(
         // authoritative-peer selection on every receiver can create multi-hop proxy cascades when
         // lane-roster views are briefly inconsistent, which turns healthy reads into 60s+ timeouts
         // and late responses.
-        ToriiProxyRequestKindV4::SignedQueryRouteScan { .. }
-        | ToriiProxyRequestKindV4::SignedQueryFanout { .. }
-        | ToriiProxyRequestKindV4::Read(_)
-        | ToriiProxyRequestKindV4::ReadFanout(_) => true,
-        ToriiProxyRequestKindV4::SubmitTransaction { .. }
-        | ToriiProxyRequestKindV4::SignedQuery { .. }
-        | ToriiProxyRequestKindV4::HostedHttp(_) => {
+        ToriiProxyRequestKindV1::SignedQueryRouteScan { .. }
+        | ToriiProxyRequestKindV1::SignedQueryFanout { .. }
+        | ToriiProxyRequestKindV1::Read(_)
+        | ToriiProxyRequestKindV1::ReadFanout(_) => true,
+        ToriiProxyRequestKindV1::SubmitTransaction { .. }
+        | ToriiProxyRequestKindV1::SignedQuery { .. }
+        | ToriiProxyRequestKindV1::HostedHttp(_) => {
             should_execute_route_locally(app, routing_decision)
         }
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn validate_incoming_read_proxy_route(
     app: &AppState,
     routing_decision: RoutingDecision,
@@ -20720,15 +20191,20 @@ fn parse_internal_fanout_account_id(
     account_id: &str,
     context: &'static str,
 ) -> Result<AccountId, Response> {
-    AccountId::parse_encoded(account_id.trim())
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|error| {
-            torii_proxy_error_response(
-                StatusCode::BAD_REQUEST,
-                "invalid_proxy_request",
-                format!("invalid {context} account id `{account_id}`: {error}"),
-            )
-        })
+    if account_id.trim() != account_id {
+        return Err(torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_proxy_request",
+            format!("invalid {context} account id: surrounding whitespace is not allowed"),
+        ));
+    }
+    AccountId::parse_encoded(account_id).map_err(|error| {
+        torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_proxy_request",
+            format!("invalid {context} account id `{account_id}`: {error}"),
+        )
+    })
 }
 #[cfg(feature = "app_api")]
 fn torii_fanout_scope_routes(
@@ -20789,14 +20265,14 @@ fn torii_all_dataspace_routes(app: &AppState) -> Vec<RoutingDecision> {
         .map(|(dataspace_id, lane_id)| RoutingDecision::new(lane_id, dataspace_id))
         .collect()
 }
-#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "connect"))]
 fn torii_proxy_response_format(format: ResponseFormat) -> ToriiProxyResponseFormatV1 {
     match format {
         ResponseFormat::Norito => ToriiProxyResponseFormatV1::Norito,
         ResponseFormat::Json => ToriiProxyResponseFormatV1::Json,
     }
 }
-#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "connect"))]
 fn response_format_from_torii_proxy(format: ToriiProxyResponseFormatV1) -> ResponseFormat {
     match format {
         ToriiProxyResponseFormatV1::Norito => ResponseFormat::Norito,
@@ -20811,35 +20287,35 @@ fn current_torii_queue_pressure(app: &AppState) -> queue::QueuePressureSnapshot 
 fn current_torii_backpressure(app: &AppState) -> queue::BackpressureState {
     current_torii_queue_pressure(app).into_backpressure()
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn new_torii_proxy_session_id() -> Hash {
     let mut nonce = [0_u8; Hash::LENGTH];
     rand::rand_core::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut nonce)
         .unwrap_or_else(|error| panic!("Torii proxy process-session OS RNG failed: {error}"));
     Hash::new(nonce)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-type OwnedToriiProxyRequestIdPreimage = (&'static str, Hash, PeerId, u64, ToriiProxyRequestKindV4);
+#[cfg(feature = "connect")]
+type OwnedToriiProxyRequestIdPreimage = (&'static str, Hash, PeerId, u64, ToriiProxyRequestKindV1);
 /// Borrowed wire-equivalent of [`OwnedToriiProxyRequestIdPreimage`].
 ///
 /// Each tuple field keeps the historical length prefix, but the potentially
 /// large request arm is streamed directly instead of being cloned merely to
 /// derive its request id.
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[repr(C)]
 struct BorrowedToriiProxyRequestIdPreimage<'a> {
     process_session_id: &'a Hash,
     local_peer_id: &'a PeerId,
     sequence: u64,
-    request: &'a ToriiProxyRequestKindV4,
+    request: &'a ToriiProxyRequestKindV1,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 impl norito::core::NoritoSerialize for BorrowedToriiProxyRequestIdPreimage<'_> {
     fn schema_hash() -> [u8; 16] {
         <OwnedToriiProxyRequestIdPreimage as norito::core::NoritoSerialize>::schema_hash()
     }
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        const DOMAIN: &str = "torii:proxy:v5";
+        const DOMAIN: &str = "torii:proxy:v1";
         let mut scratch = norito::core::SmallBuf::<384>::new();
         norito::core::write_len_prefixed_exact(writer, &DOMAIN, &mut scratch)?;
         norito::core::write_len_prefixed_exact(writer, self.process_session_id, &mut scratch)?;
@@ -20859,7 +20335,7 @@ impl norito::core::NoritoSerialize for BorrowedToriiProxyRequestIdPreimage<'_> {
             let bytes = value.encoded_len_exact()?;
             norito::core::len_prefix_len(bytes).checked_add(bytes)
         }
-        const DOMAIN: &str = "torii:proxy:v5";
+        const DOMAIN: &str = "torii:proxy:v1";
         [
             field(&DOMAIN)?,
             field(self.process_session_id)?,
@@ -20871,12 +20347,12 @@ impl norito::core::NoritoSerialize for BorrowedToriiProxyRequestIdPreimage<'_> {
         .try_fold(0_usize, usize::checked_add)
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn torii_proxy_request_id_for_session_sequence(
     process_session_id: &Hash,
     local_peer_id: &PeerId,
     sequence: u64,
-    request: &ToriiProxyRequestKindV4,
+    request: &ToriiProxyRequestKindV1,
 ) -> Hash {
     let preimage = BorrowedToriiProxyRequestIdPreimage {
         process_session_id,
@@ -20893,11 +20369,11 @@ fn torii_proxy_request_id_for_session_sequence(
         norito::to_bytes(&preimage).expect("Torii proxy request id encoding should be infallible"),
     )
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn next_torii_proxy_request_id(
     app: &AppState,
     local_peer_id: &PeerId,
-    request: &ToriiProxyRequestKindV4,
+    request: &ToriiProxyRequestKindV1,
 ) -> Result<Hash, &'static str> {
     let sequence = app
         .torii_proxy_sequence
@@ -20914,23 +20390,23 @@ fn next_torii_proxy_request_id(
         request,
     ))
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn queue_plan_synced_proxy_request_id(
     app: &AppState,
-    request: &ToriiProxyRequestKindV4,
+    request: &ToriiProxyRequestKindV1,
 ) -> Option<Hash> {
     match request {
-        ToriiProxyRequestKindV4::SubmitTransaction {
+        ToriiProxyRequestKindV1::SubmitTransaction {
             transaction,
-            admission: ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
             ..
         } => Some(queue_plan_synced_proxy_request_id_for_entrypoint(
             app,
             transaction.hash(),
         )),
-        ToriiProxyRequestKindV4::SubmitTransaction {
+        ToriiProxyRequestKindV1::SubmitTransaction {
             transaction,
-            admission: ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(_),
+            admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(_),
             ..
         } => Some(ordinary_kagemusha_lifecycle_request_id(
             app.state.network_id_ref(),
@@ -20939,7 +20415,7 @@ fn queue_plan_synced_proxy_request_id(
         _ => None,
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn queue_plan_synced_proxy_request_id_for_entrypoint(
     app: &AppState,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -20949,7 +20425,7 @@ fn queue_plan_synced_proxy_request_id_for_entrypoint(
         entrypoint_hash,
     )
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn torii_proxy_hedge_delay(app: &AppState) -> Duration {
     app.state
         .sumeragi_block_cadence()
@@ -20957,7 +20433,7 @@ fn torii_proxy_hedge_delay(app: &AppState) -> Duration {
         .unwrap_or(Duration::ZERO)
         .clamp(Duration::from_millis(50), Duration::from_millis(250))
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn torii_proxy_candidate_launch_delay(
     queue_plan_synced: bool,
     hedge_delay: Duration,
@@ -20968,13 +20444,13 @@ fn torii_proxy_candidate_launch_delay(
     }
     hedge_delay.saturating_mul(u32::try_from(candidate_index).unwrap_or(u32::MAX))
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn prune_completed_torii_proxy_requests(app: &SharedAppState) {
     let now = Instant::now();
     let mut completed = app.torii_proxy_completed.lock().await;
     completed.prune(now);
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn register_torii_proxy_pending_waiter(
     app: &SharedAppState,
     pending_key: (Hash, PeerId),
@@ -20996,7 +20472,7 @@ async fn register_torii_proxy_pending_waiter(
         });
     waiter_token
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn remove_torii_proxy_pending_waiter(
     app: &SharedAppState,
     pending_key: &(Hash, PeerId),
@@ -21011,7 +20487,7 @@ async fn remove_torii_proxy_pending_waiter(
         pending.remove(pending_key);
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn mark_torii_proxy_request_completed(app: &SharedAppState, request_id: Hash) {
     // A deterministic semantic request id can have multiple independent local callers. Their
     // response waiters are removed by their own response or attempt cleanup, never by another
@@ -21019,11 +20495,11 @@ async fn mark_torii_proxy_request_completed(app: &SharedAppState, request_id: Ha
     let mut completed = app.torii_proxy_completed.lock().await;
     completed.record(request_id, Instant::now());
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn new_torii_proxy_request(
     app: &AppState,
-    request: ToriiProxyRequestKindV4,
-) -> Result<ToriiProxyRequestV6, Response> {
+    request: ToriiProxyRequestKindV1,
+) -> Result<ToriiProxyRequestV1, Response> {
     let Some(local_peer_id) = app.local_peer_id.as_ref() else {
         return Err(torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -21037,8 +20513,8 @@ fn new_torii_proxy_request(
             torii_proxy_error_response(StatusCode::SERVICE_UNAVAILABLE, "route_unavailable", error)
         })?,
     };
-    if let ToriiProxyRequestKindV4::SubmitTransaction {
-        admission: ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+    if let ToriiProxyRequestKindV1::SubmitTransaction {
+        admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
         admission_binding: Some(binding),
         ..
     } = &request
@@ -21050,8 +20526,8 @@ fn new_torii_proxy_request(
             "QueuePlanSynced binding request ID differs from its deterministic proxy identity",
         ));
     }
-    if let ToriiProxyRequestKindV4::SubmitTransaction {
-        admission: ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(binding),
+    if let ToriiProxyRequestKindV1::SubmitTransaction {
+        admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(binding),
         admission_binding: None,
         ..
     } = &request
@@ -21078,8 +20554,8 @@ fn new_torii_proxy_request(
                 "Torii proxy absolute deadline overflowed",
             )
         })?;
-    Ok(ToriiProxyRequestV6 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+    Ok(ToriiProxyRequestV1 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V1,
         request_id,
         deadline_unix_ms,
         hop_count: 1,
@@ -21088,7 +20564,7 @@ fn new_torii_proxy_request(
         request,
     })
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn torii_proxy_now_unix_ms() -> Result<u64, &'static str> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -21096,7 +20572,7 @@ fn torii_proxy_now_unix_ms() -> Result<u64, &'static str> {
         .as_millis();
     u64::try_from(millis).map_err(|_| "system clock milliseconds exceed the proxy wire field")
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn torii_proxy_remaining_budget(
     deadline_unix_ms: u64,
     now_unix_ms: u64,
@@ -21113,7 +20589,7 @@ fn torii_proxy_remaining_budget(
     }
     Ok(remaining)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn validate_torii_proxy_deadline(deadline_unix_ms: u64) -> Result<Duration, &'static str> {
     torii_proxy_remaining_budget(deadline_unix_ms, torii_proxy_now_unix_ms()?)
 }
@@ -21124,11 +20600,11 @@ fn torii_proxy_test_deadline_unix_ms() -> u64 {
         .checked_add(60_000)
         .expect("test Torii proxy deadline must fit u64")
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn forwarded_torii_proxy_request_owned(
-    mut request: ToriiProxyRequestV6,
+    mut request: ToriiProxyRequestV1,
     local_peer_id: &PeerId,
-) -> ToriiProxyRequestV6 {
+) -> ToriiProxyRequestV1 {
     if !request
         .visited_peer_ids
         .iter()
@@ -21136,15 +20612,15 @@ fn forwarded_torii_proxy_request_owned(
     {
         request.visited_peer_ids.push(local_peer_id.clone());
     }
-    request.schema_version = TORII_PROXY_REQUEST_VERSION_V6;
+    request.schema_version = TORII_PROXY_REQUEST_VERSION_V1;
     request.hop_count = request.hop_count.saturating_add(1);
     request
 }
 #[cfg(test)]
 fn forwarded_torii_proxy_request(
-    request: &ToriiProxyRequestV6,
+    request: &ToriiProxyRequestV1,
     local_peer_id: &PeerId,
-) -> ToriiProxyRequestV6 {
+) -> ToriiProxyRequestV1 {
     forwarded_torii_proxy_request_owned(request.clone(), local_peer_id)
 }
 fn insert_routed_by_header(response: &mut Response, routed_by: &'static str) {
@@ -21292,15 +20768,6 @@ fn canonical_iterable_query_parts(
     query: &iroha_data_model::query::QueryWithParams,
 ) -> (iroha_data_model::query::QueryItemKind, &[u8], &[u8], &[u8]) {
     query.parts()
-}
-/// Canonical iterable envelopes no longer retain a runtime boxed query.
-///
-/// Callers that specifically require the allocation-free legacy typed carrier
-/// use this helper to fail closed before decoding opaque components.
-fn legacy_iterable_query_box(
-    _query: &iroha_data_model::query::QueryWithParams,
-) -> Option<&iroha_data_model::query::QueryBox<iroha_data_model::query::QueryOutputBatchBox>> {
-    None
 }
 fn is_trigger_inventory_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
     use iroha_data_model::query::{
@@ -22075,7 +21542,7 @@ fn unsupported_canonical_iterable_fanout_response() -> Response {
     torii_proxy_error_response(
         StatusCode::CONFLICT,
         "query_unsupported",
-        "bounded iterable fanout supports only boxed, unfiltered, unsorted identity FindRoleIds and FindActiveTriggerIds queries; route output must keep that exact batch variant",
+        "cross-dataspace iterable fanout is unavailable for canonical opaque query envelopes",
     )
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22123,51 +21590,9 @@ fn bounded_fanout_query_kind(
     }
 }
 fn bounded_canonical_iterable_fanout_variant(
-    request: &iroha_data_model::query::QueryRequestWithAuthority,
+    _request: &iroha_data_model::query::QueryRequestWithAuthority,
 ) -> Result<BoundedCanonicalFanoutVariant, Response> {
-    use iroha_data_model::{
-        query::{QueryRequest, iter_query_inner},
-        role::RoleId,
-        trigger::TriggerId,
-    };
-    let QueryRequest::Start(query) = &request.request else {
-        return Err(unsupported_canonical_iterable_fanout_response());
-    };
-    // Canonical envelopes carry nested opaque query/predicate/selector frames.
-    // Do not decode any merely to decide admission. Fanout remains fail-closed
-    // unless a legacy typed carrier is available for allocation-free shape
-    // inspection.
-    let Some(query_box) = legacy_iterable_query_box(query) else {
-        return Err(unsupported_canonical_iterable_fanout_response());
-    };
-    let identity_shape = |predicate_is_pass: bool, selector_is_identity: bool| {
-        predicate_is_pass
-            && selector_is_identity
-            && query.params.sorting.sort_by_metadata_key().is_none()
-            && query.params.sorting.order().is_none()
-    };
-    let role_ids = iter_query_inner::<RoleId>(query_box).is_some_and(|erased| {
-        bounded_unit_query_payload_matches(erased.payload())
-            && identity_shape(
-                erased.predicate().is_pass(),
-                erased.selector().iter().next().is_none(),
-            )
-    });
-    if role_ids {
-        return Ok(BoundedCanonicalFanoutVariant::RoleId);
-    }
-    let trigger_ids = iter_query_inner::<TriggerId>(query_box).is_some_and(|erased| {
-        bounded_unit_query_payload_matches(erased.payload())
-            && identity_shape(
-                erased.predicate().is_pass(),
-                erased.selector().iter().next().is_none(),
-            )
-    });
-    if trigger_ids {
-        Ok(BoundedCanonicalFanoutVariant::TriggerId)
-    } else {
-        Err(unsupported_canonical_iterable_fanout_response())
-    }
+    Err(unsupported_canonical_iterable_fanout_response())
 }
 fn push_bounded_canonical_fanout_batch(
     accumulator: &mut iroha_core::smartcontracts::isi::query::CanonicalQueryOutputAccumulator,
@@ -22669,7 +22094,7 @@ include!("torii_app_routed_read_execute.rs");
 #[cfg(test)]
 include!("tests/ordinary_query_memory.rs");
 include!("torii_proxy_signed_query_validation.rs");
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_incoming_torii_signed_query_route_scan(
     app: &SharedAppState,
     query_bytes: Vec<u8>,
@@ -22801,7 +22226,7 @@ async fn execute_incoming_torii_signed_query_route_scan(
     insert_routing_headers(&mut response, routing_decision, "proxy");
     hold_query_fanout_memory_in_response_body(response, permit)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_signed_query_route_scan_via_proxy(
     app: &SharedAppState,
     query_bytes: Arc<[u8]>,
@@ -22812,7 +22237,7 @@ async fn execute_torii_signed_query_route_scan_via_proxy(
     let response = execute_torii_proxy_request_with_fallback_admitted(
         app,
         routing_decision,
-        ToriiProxyRequestKindV4::SignedQueryRouteScan {
+        ToriiProxyRequestKindV1::SignedQueryRouteScan {
             // Routes execute sequentially. The envelope charges this boundary
             // copy together with the retry template, one attempt, and every
             // simultaneously live derived-codec wrapper spill; none of those
@@ -22848,7 +22273,7 @@ async fn execute_torii_signed_query_route_scan_via_proxy(
             )
         })
 }
-#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "connect"))]
 async fn execute_torii_verified_query_locally(
     app: &SharedAppState,
     request: iroha_data_model::query::QueryRequestWithAuthority,
@@ -22857,7 +22282,7 @@ async fn execute_torii_verified_query_locally(
         .await
         .map_err(IntoResponse::into_response)
 }
-#[cfg(all(feature = "app_api", not(any(feature = "p2p_ws", feature = "connect"))))]
+#[cfg(all(feature = "app_api", not(feature = "connect")))]
 fn torii_proxy_transport_disabled_response(routing_decision: RoutingDecision) -> Response {
     torii_proxy_error_response(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -22869,7 +22294,7 @@ fn torii_proxy_transport_disabled_response(routing_decision: RoutingDecision) ->
         ),
     )
 }
-#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "connect"))]
 async fn execute_torii_verified_query_route_scan_locally(
     app: &SharedAppState,
     request: iroha_data_model::query::QueryRequestWithAuthority,
@@ -22913,7 +22338,7 @@ async fn execute_torii_verified_query_route_scan_locally(
     .await
     .map_err(IntoResponse::into_response)
 }
-#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "connect"))]
 async fn execute_torii_signed_query_route_scan_for_route(
     app: &SharedAppState,
     query_bytes: Arc<[u8]>,
@@ -22933,7 +22358,7 @@ async fn execute_torii_signed_query_route_scan_for_route(
         .await
     } else {
         debug_assert!(verified_request.is_none());
-        #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+        #[cfg(feature = "connect")]
         {
             execute_torii_signed_query_route_scan_via_proxy(
                 app,
@@ -22944,14 +22369,14 @@ async fn execute_torii_signed_query_route_scan_for_route(
             )
             .await
         }
-        #[cfg(not(any(feature = "p2p_ws", feature = "connect")))]
+        #[cfg(not(feature = "connect"))]
         {
             let _ = (query_bytes, verified_request, proxy_memory);
             Err(torii_proxy_transport_disabled_response(routing_decision))
         }
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_singular_query_via_fanout_for_routes_admitted(
     app: &SharedAppState,
     query_bytes: Arc<[u8]>,
@@ -23044,7 +22469,7 @@ async fn execute_torii_singular_query_via_fanout_for_routes_admitted(
     insert_torii_fanout_headers(&mut response, diagnostics);
     response
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_query_via_fanout_for_routes_admitted(
     app: &SharedAppState,
     query_bytes: Arc<[u8]>,
@@ -23229,7 +22654,7 @@ async fn execute_torii_query_via_fanout_for_routes_admitted(
     insert_torii_fanout_headers(&mut response, diagnostics);
     response
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn torii_signed_query_fanout_routes(
     app: &AppState,
     request: &iroha_data_model::query::QueryRequestWithAuthority,
@@ -23250,7 +22675,7 @@ fn torii_signed_query_fanout_routes(
         }
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_signed_query_fanout_proxy_request(
     app: &SharedAppState,
     query_bytes: Vec<u8>,
@@ -23328,7 +22753,7 @@ async fn execute_torii_signed_query_fanout_proxy_request(
     .await;
     hold_query_fanout_memory_in_response_body(response, permit)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_query_via_nexus_fanout(
     app: &SharedAppState,
     query_bytes: Vec<u8>,
@@ -23363,7 +22788,7 @@ async fn execute_torii_query_via_nexus_fanout(
         execute_torii_proxy_request_with_fallback(
             app,
             nexus_route,
-            ToriiProxyRequestKindV4::SignedQueryFanout {
+            ToriiProxyRequestKindV1::SignedQueryFanout {
                 query_bytes,
                 response_format,
             },
@@ -23614,15 +23039,15 @@ fn torii_empty_list_response(routed_by: &'static str) -> Response {
 // Textual inclusion keeps routed-read test names and paths unchanged.
 include!("tests/lib_routed_reads.rs");
 include!("torii_proxy_response_bounds.rs");
-#[cfg(all(test, any(feature = "p2p_ws", feature = "connect")))]
+#[cfg(all(test, feature = "connect"))]
 include!("tests/torii_proxy_allocation_bounds.rs");
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 struct AdmittedToriiProxySnapshot {
     snapshot: ToriiProxyHttpResponseV1,
     fanout_reservation: Option<QueryFanoutMemoryReservation>,
     ordinary_query_memory: Option<OrdinaryQueryResponseMemory>,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn bounded_torii_proxy_snapshot_diagnostic_body(
     diagnostic: &str,
     max_body_bytes: usize,
@@ -23638,7 +23063,7 @@ fn bounded_torii_proxy_snapshot_diagnostic_body(
     }
     body
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn response_to_admitted_torii_proxy_snapshot(
     mut response: Response,
     max_body_bytes: usize,
@@ -23686,7 +23111,7 @@ async fn response_to_admitted_torii_proxy_snapshot(
         ordinary_query_memory,
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn response_to_torii_proxy_snapshot(
     response: Response,
     max_body_bytes: usize,
@@ -23695,7 +23120,7 @@ async fn response_to_torii_proxy_snapshot(
         .await
         .snapshot
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn torii_proxy_snapshot_to_response(snapshot: ToriiProxyHttpResponseV1) -> Response {
     let status = StatusCode::from_u16(snapshot.status_code).unwrap_or(StatusCode::BAD_GATEWAY);
     let mut response = Response::builder()
@@ -23718,7 +23143,7 @@ fn torii_proxy_snapshot_to_response(snapshot: ToriiProxyHttpResponseV1) -> Respo
     }
     response
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn admitted_torii_proxy_snapshot_to_response(admitted: AdmittedToriiProxySnapshot) -> Response {
     let mut response = torii_proxy_snapshot_to_response(admitted.snapshot);
     if let Some(reservation) = admitted.fanout_reservation {
@@ -23757,14 +23182,14 @@ fn torii_proxy_headers_to_header_map(
     }
     header_map
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn should_retry_torii_proxy_status(status: StatusCode) -> bool {
     matches!(
         status,
         StatusCode::SERVICE_UNAVAILABLE | StatusCode::BAD_GATEWAY | StatusCode::GATEWAY_TIMEOUT
     )
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ToriiProxyAttemptError {
     /// The request failed before any bytes could have reached the authority.
@@ -23772,7 +23197,7 @@ enum ToriiProxyAttemptError {
     /// Dispatch began, but no complete authenticated response was recovered.
     DispatchedWithoutResponse(String),
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 impl ToriiProxyAttemptError {
     fn before_dispatch(reason: impl Into<String>) -> Self {
         Self::DefinitelyNotDispatched(reason.into())
@@ -23784,7 +23209,7 @@ impl ToriiProxyAttemptError {
         matches!(self, Self::DispatchedWithoutResponse(_))
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 impl std::fmt::Display for ToriiProxyAttemptError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -23797,36 +23222,36 @@ impl std::fmt::Display for ToriiProxyAttemptError {
         }
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-const QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2: usize =
+#[cfg(feature = "connect")]
+const QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1: usize =
     iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-const QUEUE_PLAN_SYNCED_MAX_HEADERS_V2: usize = 16;
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-const QUEUE_PLAN_SYNCED_MAX_HEADER_BYTES_V2: usize = 4 * 1024;
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-const QUEUE_PLAN_SYNCED_MAX_HEADER_NAME_BYTES_V2: usize = 128;
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-const QUEUE_PLAN_SYNCED_MAX_HEADER_VALUE_BYTES_V2: usize = 512;
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-const QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V2: norito::DecodeLimits =
+#[cfg(feature = "connect")]
+const QUEUE_PLAN_SYNCED_MAX_HEADERS_V1: usize = 16;
+#[cfg(feature = "connect")]
+const QUEUE_PLAN_SYNCED_MAX_HEADER_BYTES_V1: usize = 4 * 1024;
+#[cfg(feature = "connect")]
+const QUEUE_PLAN_SYNCED_MAX_HEADER_NAME_BYTES_V1: usize = 128;
+#[cfg(feature = "connect")]
+const QUEUE_PLAN_SYNCED_MAX_HEADER_VALUE_BYTES_V1: usize = 512;
+#[cfg(feature = "connect")]
+const QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V1: norito::DecodeLimits =
     norito::DecodeLimits::new(
         iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1,
-        QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2,
-        QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2,
+        QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1,
+        QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1,
         iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSIONS_BYTES,
         64,
     );
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(clippy::struct_field_names)]
 struct QueuePlanSyncedAcceptanceExpectation {
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     signed_transaction_hash: Option<HashOf<SignedTransaction>>,
-    admission_binding: QueuePlanAdmissionBindingV2,
+    admission_binding: QueuePlanAdmissionBindingV1,
     durability_threshold: usize,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct OrdinaryKagemushaLifecycleAcceptanceExpectation {
     transaction: TransactionEntrypoint,
@@ -23835,14 +23260,14 @@ struct OrdinaryKagemushaLifecycleAcceptanceExpectation {
     admission_binding: OrdinaryKagemushaLifecycleAdmissionBindingV1,
     durability_threshold: usize,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn queue_plan_synced_acceptance_expectation(
-    request: &ToriiProxyRequestV6,
+    request: &ToriiProxyRequestV1,
 ) -> Result<Option<QueuePlanSyncedAcceptanceExpectation>, String> {
-    let ToriiProxyRequestKindV4::SubmitTransaction {
+    let ToriiProxyRequestKindV1::SubmitTransaction {
         transaction,
         expected_plan,
-        admission: ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+        admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
         admission_binding,
     } = &request.request
     else {
@@ -23881,15 +23306,15 @@ fn queue_plan_synced_acceptance_expectation(
         durability_threshold,
     }))
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn ordinary_kagemusha_lifecycle_acceptance_expectation(
-    request: &ToriiProxyRequestV6,
+    request: &ToriiProxyRequestV1,
 ) -> Result<Option<OrdinaryKagemushaLifecycleAcceptanceExpectation>, String> {
-    let ToriiProxyRequestKindV4::SubmitTransaction {
+    let ToriiProxyRequestKindV1::SubmitTransaction {
         transaction,
         expected_plan,
         admission:
-            ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(admission_binding),
+            ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(admission_binding),
         admission_binding: queue_plan_binding,
     } = &request.request
     else {
@@ -23932,25 +23357,25 @@ fn ordinary_kagemusha_lifecycle_acceptance_expectation(
         durability_threshold: usize::from(coordinator.durability_threshold),
     }))
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn queue_plan_synced_entrypoint_hash(
-    request: &ToriiProxyRequestKindV4,
+    request: &ToriiProxyRequestKindV1,
 ) -> Option<HashOf<TransactionEntrypoint>> {
     match request {
-        ToriiProxyRequestKindV4::SubmitTransaction {
+        ToriiProxyRequestKindV1::SubmitTransaction {
             transaction,
-            admission: ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
             ..
         }
-        | ToriiProxyRequestKindV4::SubmitTransaction {
+        | ToriiProxyRequestKindV1::SubmitTransaction {
             transaction,
-            admission: ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(_),
+            admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(_),
             ..
         } => Some(transaction.hash()),
         _ => None,
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn queue_plan_outcome_unknown_response(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     reason: impl Into<String>,
@@ -23965,15 +23390,15 @@ fn queue_plan_outcome_unknown_response(
     }
     .into_response()
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 const QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE: &str = "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN";
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 const QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE: &str = "queue_plan_journal_outcome_unknown";
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn is_queue_plan_outcome_unknown_response(response: &Response) -> bool {
     torii_response_has_reject_code(response, QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn validate_queue_plan_synced_response_header(
     snapshot: &ToriiProxyHttpResponseV1,
     header_name: &'static str,
@@ -24002,17 +23427,17 @@ fn validate_queue_plan_synced_response_header(
         )),
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn validate_queue_plan_synced_snapshot_bounds(
     snapshot: &ToriiProxyHttpResponseV1,
 ) -> Result<(), String> {
-    if snapshot.headers.len() > QUEUE_PLAN_SYNCED_MAX_HEADERS_V2 {
+    if snapshot.headers.len() > QUEUE_PLAN_SYNCED_MAX_HEADERS_V1 {
         return Err("QueuePlanSynced response contains too many headers".to_owned());
     }
     let mut total_header_bytes = 0_usize;
     for header in &snapshot.headers {
-        if header.name.len() > QUEUE_PLAN_SYNCED_MAX_HEADER_NAME_BYTES_V2
-            || header.value.len() > QUEUE_PLAN_SYNCED_MAX_HEADER_VALUE_BYTES_V2
+        if header.name.len() > QUEUE_PLAN_SYNCED_MAX_HEADER_NAME_BYTES_V1
+            || header.value.len() > QUEUE_PLAN_SYNCED_MAX_HEADER_VALUE_BYTES_V1
         {
             return Err("QueuePlanSynced response header exceeds its field limit".to_owned());
         }
@@ -24021,11 +23446,11 @@ fn validate_queue_plan_synced_snapshot_bounds(
             .and_then(|bytes| bytes.checked_add(header.value.len()))
             .ok_or_else(|| "QueuePlanSynced response header size overflow".to_owned())?;
     }
-    if total_header_bytes > QUEUE_PLAN_SYNCED_MAX_HEADER_BYTES_V2 {
+    if total_header_bytes > QUEUE_PLAN_SYNCED_MAX_HEADER_BYTES_V1 {
         return Err("QueuePlanSynced response headers exceed their aggregate limit".to_owned());
     }
-    if snapshot.body.len() > QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2 {
-        return Err("QueuePlanSynced response body exceeds its V2 limit".to_owned());
+    if snapshot.body.len() > QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1 {
+        return Err("QueuePlanSynced response body exceeds its V1 limit".to_owned());
     }
     let content_encodings = snapshot
         .headers
@@ -24065,7 +23490,7 @@ fn validate_queue_plan_synced_snapshot_bounds(
     }
     Ok(())
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn canonical_queue_plan_synced_certificate_headers(
     expected: &QueuePlanSyncedAcceptanceExpectation,
 ) -> Vec<iroha_core::torii_proxy::ToriiProxyHeaderV1> {
@@ -24087,7 +23512,7 @@ fn canonical_queue_plan_synced_certificate_headers(
     }
     headers
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn canonical_ordinary_kagemusha_lifecycle_certificate_headers(
     expected: &OrdinaryKagemushaLifecycleAcceptanceExpectation,
 ) -> Vec<iroha_core::torii_proxy::ToriiProxyHeaderV1> {
@@ -24106,16 +23531,16 @@ fn canonical_ordinary_kagemusha_lifecycle_certificate_headers(
         },
     ]
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn decode_queue_plan_synced_certificate(
     bytes: &[u8],
-) -> Result<QueuePlanAdmissionCertificateV2, String> {
-    if bytes.is_empty() || bytes.len() > QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2 {
+) -> Result<QueuePlanAdmissionCertificateV1, String> {
+    if bytes.is_empty() || bytes.len() > QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1 {
         return Err("QueuePlanSynced certificate body is empty or oversized".to_owned());
     }
-    let certificate = norito::decode_from_bytes_with_limits::<QueuePlanAdmissionCertificateV2>(
+    let certificate = norito::decode_from_bytes_with_limits::<QueuePlanAdmissionCertificateV1>(
         bytes,
-        QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V2,
+        QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V1,
     )
     .map_err(|error| format!("body is not a bounded QueuePlanSynced certificate: {error}"))?;
     let canonical = norito::to_bytes(&certificate)
@@ -24125,16 +23550,16 @@ fn decode_queue_plan_synced_certificate(
     }
     Ok(certificate)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn decode_ordinary_kagemusha_lifecycle_certificate(
     bytes: &[u8],
 ) -> Result<OrdinaryKagemushaLifecycleAdmissionCertificateV1, String> {
-    if bytes.is_empty() || bytes.len() > QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2 {
+    if bytes.is_empty() || bytes.len() > QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1 {
         return Err("ordinary lifecycle certificate body is empty or oversized".to_owned());
     }
     let certificate = norito::decode_from_bytes_with_limits::<
         OrdinaryKagemushaLifecycleAdmissionCertificateV1,
-    >(bytes, QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V2)
+    >(bytes, QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V1)
     .map_err(|error| format!("body is not a bounded ordinary lifecycle certificate: {error}"))?;
     let canonical = norito::to_bytes(&certificate)
         .map_err(|error| format!("ordinary lifecycle certificate cannot be encoded: {error}"))?;
@@ -24143,11 +23568,11 @@ fn decode_ordinary_kagemusha_lifecycle_certificate(
     }
     Ok(certificate)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn validate_queue_plan_synced_acceptance(
     snapshot: &ToriiProxyHttpResponseV1,
     expected: &QueuePlanSyncedAcceptanceExpectation,
-) -> Result<Vec<QueuePlanAdmissionAttestationV2>, String> {
+) -> Result<Vec<QueuePlanAdmissionAttestationV1>, String> {
     validate_queue_plan_synced_snapshot_bounds(snapshot)?;
     if snapshot.status_code != StatusCode::ACCEPTED.as_u16() {
         return Err("status is not 202 Accepted".to_owned());
@@ -24185,14 +23610,14 @@ fn validate_queue_plan_synced_acceptance(
             "QueuePlanSynced certificate binding differs from the exact proxy request".to_owned(),
         );
     }
-    let validated = validate_queue_plan_admission_certificate_for_network_digest_v2(
+    let validated = validate_queue_plan_admission_certificate_for_network_digest_v1(
         expected.admission_binding.network_id_digest,
         certificate,
-        QueuePlanAdmissionCertificateStrengthV2::Partial,
+        QueuePlanAdmissionCertificateStrengthV1::Partial,
     )?;
     Ok(validated.certificate.attestations)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn validate_ordinary_kagemusha_lifecycle_acceptance(
     snapshot: &ToriiProxyHttpResponseV1,
     expected: &OrdinaryKagemushaLifecycleAcceptanceExpectation,
@@ -24248,10 +23673,10 @@ fn validate_ordinary_kagemusha_lifecycle_acceptance(
     )?;
     Ok(validated.certificate.attestations)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn merge_queue_plan_synced_attestations(
-    durable_attestations: &mut BTreeMap<u16, QueuePlanAdmissionAttestationV2>,
-    attestations: Vec<QueuePlanAdmissionAttestationV2>,
+    durable_attestations: &mut BTreeMap<u16, QueuePlanAdmissionAttestationV1>,
+    attestations: Vec<QueuePlanAdmissionAttestationV1>,
 ) -> Result<(), u16> {
     for attestation in attestations {
         let validator_index = attestation.validator_index;
@@ -24265,7 +23690,7 @@ fn merge_queue_plan_synced_attestations(
     }
     Ok(())
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn merge_ordinary_kagemusha_lifecycle_attestations(
     durable_attestations: &mut BTreeMap<u16, OrdinaryKagemushaLifecycleAdmissionAttestationV1>,
     attestations: Vec<OrdinaryKagemushaLifecycleAdmissionAttestationV1>,
@@ -24282,7 +23707,7 @@ fn merge_ordinary_kagemusha_lifecycle_attestations(
     }
     Ok(())
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn queue_plan_synced_snapshot_to_response(
     snapshot: ToriiProxyHttpResponseV1,
     expected: &QueuePlanSyncedAcceptanceExpectation,
@@ -24314,7 +23739,7 @@ fn queue_plan_synced_snapshot_to_response(
         .and_then(|()| {
             norito::decode_from_bytes_with_limits::<ErrorEnvelope>(
                 &snapshot.body,
-                QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V2,
+                QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V1,
             )
             .ok()
         });
@@ -24395,7 +23820,7 @@ fn queue_plan_synced_snapshot_to_response(
         "authenticated authority reported an indeterminate durable-admission outcome",
     )
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn retain_strongest_retryable_response(slot: &mut Option<Response>, candidate: Response) {
     let candidate_is_unknown = is_queue_plan_outcome_unknown_response(&candidate);
     let current_is_unknown = slot
@@ -24405,7 +23830,7 @@ fn retain_strongest_retryable_response(slot: &mut Option<Response>, candidate: R
         *slot = Some(candidate);
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn retain_strongest_queue_plan_synced_failure(
     slot: &mut Option<(u8, usize, Response)>,
     candidate_index: usize,
@@ -24434,51 +23859,51 @@ fn retain_strongest_queue_plan_synced_failure(
         *slot = Some((priority, candidate_index, candidate));
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-fn torii_proxy_request_kind_name(request: &ToriiProxyRequestKindV4) -> &'static str {
+#[cfg(feature = "connect")]
+fn torii_proxy_request_kind_name(request: &ToriiProxyRequestKindV1) -> &'static str {
     match request {
-        ToriiProxyRequestKindV4::SubmitTransaction { .. } => "submit_transaction",
-        ToriiProxyRequestKindV4::SignedQuery { .. } => "signed_query",
-        ToriiProxyRequestKindV4::SignedQueryRouteScan { .. } => "signed_query_route_scan",
-        ToriiProxyRequestKindV4::SignedQueryFanout { .. } => "signed_query_fanout",
-        ToriiProxyRequestKindV4::Read(_) => "read",
-        ToriiProxyRequestKindV4::ReadFanout(_) => "read_fanout",
-        ToriiProxyRequestKindV4::HostedHttp(_) => "hosted_http",
+        ToriiProxyRequestKindV1::SubmitTransaction { .. } => "submit_transaction",
+        ToriiProxyRequestKindV1::SignedQuery { .. } => "signed_query",
+        ToriiProxyRequestKindV1::SignedQueryRouteScan { .. } => "signed_query_route_scan",
+        ToriiProxyRequestKindV1::SignedQueryFanout { .. } => "signed_query_fanout",
+        ToriiProxyRequestKindV1::Read(_) => "read",
+        ToriiProxyRequestKindV1::ReadFanout(_) => "read_fanout",
+        ToriiProxyRequestKindV1::HostedHttp(_) => "hosted_http",
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-fn torii_proxy_request_carries_one_shot_signed_query(request: &ToriiProxyRequestKindV4) -> bool {
+#[cfg(feature = "connect")]
+fn torii_proxy_request_carries_one_shot_signed_query(request: &ToriiProxyRequestKindV1) -> bool {
     matches!(
         request,
-        ToriiProxyRequestKindV4::SignedQuery { .. }
-            | ToriiProxyRequestKindV4::SignedQueryRouteScan { .. }
-            | ToriiProxyRequestKindV4::SignedQueryFanout { .. }
+        ToriiProxyRequestKindV1::SignedQuery { .. }
+            | ToriiProxyRequestKindV1::SignedQueryRouteScan { .. }
+            | ToriiProxyRequestKindV1::SignedQueryFanout { .. }
     )
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-fn torii_proxy_attempt_timeout(request: &ToriiProxyRequestKindV4) -> Duration {
+#[cfg(feature = "connect")]
+fn torii_proxy_attempt_timeout(request: &ToriiProxyRequestKindV1) -> Duration {
     match request {
-        ToriiProxyRequestKindV4::SubmitTransaction {
-            admission: ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+        ToriiProxyRequestKindV1::SubmitTransaction {
+            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
             ..
         }
-        | ToriiProxyRequestKindV4::SubmitTransaction {
-            admission: ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(_),
+        | ToriiProxyRequestKindV1::SubmitTransaction {
+            admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(_),
             ..
         } => DEFAULT_ROUTE_TIMEOUT,
-        ToriiProxyRequestKindV4::SignedQuery { .. }
-        | ToriiProxyRequestKindV4::SignedQueryRouteScan { .. }
-        | ToriiProxyRequestKindV4::Read(_)
-        | ToriiProxyRequestKindV4::HostedHttp(_) => DEFAULT_ROUTE_TIMEOUT,
-        ToriiProxyRequestKindV4::SignedQueryFanout { .. }
-        | ToriiProxyRequestKindV4::ReadFanout(_) => DEFAULT_ROUTE_TIMEOUT + Duration::from_secs(5),
+        ToriiProxyRequestKindV1::SignedQuery { .. }
+        | ToriiProxyRequestKindV1::SignedQueryRouteScan { .. }
+        | ToriiProxyRequestKindV1::Read(_)
+        | ToriiProxyRequestKindV1::HostedHttp(_) => DEFAULT_ROUTE_TIMEOUT,
+        ToriiProxyRequestKindV1::SignedQueryFanout { .. }
+        | ToriiProxyRequestKindV1::ReadFanout(_) => DEFAULT_ROUTE_TIMEOUT + Duration::from_secs(5),
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn torii_proxy_p2p_response_body_limit(
     app: &AppState,
     network: &iroha_core::IrohaNetwork,
-    request: &ToriiProxyRequestKindV4,
+    request: &ToriiProxyRequestKindV1,
 ) -> usize {
     // Control's configured plaintext cap is authoritative. Keep generated
     // responses below that exact source boundary; larger application envelopes
@@ -24493,7 +23918,7 @@ fn torii_proxy_p2p_response_body_limit(
         .max(1);
     application_limit.min(transport_limit).max(1)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn post_torii_proxy_control_until_deadline(
     network: &iroha_core::IrohaNetwork,
     mut post: iroha_p2p::Post<iroha_core::NetworkMessage>,
@@ -24526,7 +23951,7 @@ async fn post_torii_proxy_control_until_deadline(
         }
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn torii_proxy_bridge_request_url(torii_url: &str) -> Result<reqwest::Url, String> {
     let base = reqwest::Url::parse(torii_url)
         .map_err(|error| format!("invalid authoritative Torii URL `{torii_url}`: {error}"))?;
@@ -24537,7 +23962,7 @@ fn torii_proxy_bridge_request_url(torii_url: &str) -> Result<reqwest::Url, Strin
             )
         })
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn reqwest_response_to_torii_proxy_snapshot(
     mut response: reqwest::Response,
     max_body_bytes: usize,
@@ -24575,14 +24000,14 @@ async fn reqwest_response_to_torii_proxy_snapshot(
             );
         }
         let mut total_header_bytes = 0_usize;
-        if response.headers().len() > QUEUE_PLAN_SYNCED_MAX_HEADERS_V2 {
+        if response.headers().len() > QUEUE_PLAN_SYNCED_MAX_HEADERS_V1 {
             return Err(
                 "QueuePlanSynced HTTP bridge response contains too many headers".to_owned(),
             );
         }
         for (name, value) in response.headers() {
-            if name.as_str().len() > QUEUE_PLAN_SYNCED_MAX_HEADER_NAME_BYTES_V2
-                || value.as_bytes().len() > QUEUE_PLAN_SYNCED_MAX_HEADER_VALUE_BYTES_V2
+            if name.as_str().len() > QUEUE_PLAN_SYNCED_MAX_HEADER_NAME_BYTES_V1
+                || value.as_bytes().len() > QUEUE_PLAN_SYNCED_MAX_HEADER_VALUE_BYTES_V1
             {
                 return Err(
                     "QueuePlanSynced HTTP bridge response header exceeds its field limit"
@@ -24596,7 +24021,7 @@ async fn reqwest_response_to_torii_proxy_snapshot(
                     "QueuePlanSynced HTTP bridge response header size overflow".to_owned()
                 })?;
         }
-        if total_header_bytes > QUEUE_PLAN_SYNCED_MAX_HEADER_BYTES_V2 {
+        if total_header_bytes > QUEUE_PLAN_SYNCED_MAX_HEADER_BYTES_V1 {
             return Err(
                 "QueuePlanSynced HTTP bridge response headers exceed their aggregate limit"
                     .to_owned(),
@@ -24617,11 +24042,11 @@ async fn reqwest_response_to_torii_proxy_snapshot(
         body,
     })
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_proxy_request_via_peer(
     app: &SharedAppState,
     target_peer_id: PeerId,
-    request: Arc<ToriiProxyRequestV6>,
+    request: Arc<ToriiProxyRequestV1>,
 ) -> Result<ToriiProxyHttpResponseV1, ToriiProxyAttemptError> {
     let Some(network) = app.p2p.as_ref() else {
         return Err(ToriiProxyAttemptError::before_dispatch(
@@ -24739,12 +24164,12 @@ async fn execute_torii_proxy_request_via_peer(
         }
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_proxy_request_via_http_bridge(
     app: &SharedAppState,
     target_peer_id: PeerId,
     torii_url: String,
-    request: ToriiProxyRequestV6,
+    request: ToriiProxyRequestV1,
 ) -> Result<ToriiProxyHttpResponseV1, ToriiProxyAttemptError> {
     let request = SharedToriiProxyAttemptRequest::new(
         request,
@@ -24755,7 +24180,7 @@ async fn execute_torii_proxy_request_via_http_bridge(
     execute_torii_proxy_request_via_http_bridge_shared(app, target_peer_id, torii_url, request)
         .await
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_proxy_request_via_http_bridge_shared(
     app: &SharedAppState,
     target_peer_id: PeerId,
@@ -24875,19 +24300,19 @@ async fn execute_torii_proxy_request_via_http_bridge_shared(
     })?
     .map_err(ToriiProxyAttemptError::after_dispatch)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_proxy_request_locally(
     app: &SharedAppState,
     local_peer_id: PeerId,
-    request: ToriiProxyRequestV6,
+    request: ToriiProxyRequestV1,
 ) -> Result<AdmittedToriiProxySnapshot, ToriiProxyAttemptError> {
     execute_torii_proxy_request_locally_with_proxy_memory(app, local_peer_id, request, None).await
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_proxy_request_locally_with_proxy_memory(
     app: &SharedAppState,
     local_peer_id: PeerId,
-    request: ToriiProxyRequestV6,
+    request: ToriiProxyRequestV1,
     proxy_memory: Option<ToriiProxyMemoryReservation>,
 ) -> Result<AdmittedToriiProxySnapshot, ToriiProxyAttemptError> {
     let max_body_bytes = torii_proxy_response_body_limit(app.as_ref(), &request.request);
@@ -24914,17 +24339,17 @@ async fn execute_torii_proxy_request_locally_with_proxy_memory(
     }
     Ok(snapshot)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_proxy_request_with_fallback(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
-    request: ToriiProxyRequestKindV4,
+    request: ToriiProxyRequestKindV1,
 ) -> Response {
     execute_torii_proxy_request_with_fallback_admitted(app, routing_decision, request, None).await
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn take_local_torii_proxy_fast_path(
-    request: &ToriiProxyRequestV6,
+    request: &ToriiProxyRequestV1,
     candidate_peers: &mut Vec<ToriiProxyCandidate>,
 ) -> Option<PeerId> {
     let local_index = candidate_peers
@@ -24947,11 +24372,11 @@ fn take_local_torii_proxy_fast_path(
     };
     Some(local_peer_id)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_proxy_request_with_fallback_admitted(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
-    request: ToriiProxyRequestKindV4,
+    request: ToriiProxyRequestKindV1,
     pre_admitted_proxy_memory: Option<ToriiProxyMemoryReservation>,
 ) -> Response {
     let request = match new_torii_proxy_request(app.as_ref(), request) {
@@ -25077,11 +24502,11 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
     .await;
     hold_torii_proxy_memory_in_response_body(response, proxy_memory)
 }
-#[cfg(all(feature = "app_api", not(any(feature = "p2p_ws", feature = "connect"))))]
+#[cfg(all(feature = "app_api", not(feature = "connect")))]
 async fn execute_torii_proxy_request_with_fallback(
     _app: &SharedAppState,
     routing_decision: RoutingDecision,
-    _request: ToriiProxyRequestKindV4,
+    _request: ToriiProxyRequestKindV1,
 ) -> Response {
     torii_proxy_error_response(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -25093,12 +24518,12 @@ async fn execute_torii_proxy_request_with_fallback(
         ),
     )
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn forward_incoming_torii_proxy_request(
     app: &SharedAppState,
     immediate_sender_peer_id: &PeerId,
     routing_decision: RoutingDecision,
-    request: ToriiProxyRequestV6,
+    request: ToriiProxyRequestV1,
 ) -> Response {
     if request.hop_count >= request.max_hops {
         iroha_logger::warn!(
@@ -25225,15 +24650,15 @@ async fn forward_incoming_torii_proxy_request(
     )
     .await
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[derive(Clone)]
 struct SharedToriiProxyAttemptRequest {
-    inner: Arc<ToriiProxyRequestV6>,
+    inner: Arc<ToriiProxyRequestV1>,
     encoded: Bytes,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 impl SharedToriiProxyAttemptRequest {
-    fn new(request: ToriiProxyRequestV6, max_encoded_bytes: usize) -> Result<Self, String> {
+    fn new(request: ToriiProxyRequestV1, max_encoded_bytes: usize) -> Result<Self, String> {
         validate_torii_proxy_deadline(request.deadline_unix_ms).map_err(str::to_owned)?;
         let encoded = norito::core::to_bytes_bounded(&request, max_encoded_bytes)
             .map(Bytes::from)
@@ -25243,22 +24668,22 @@ impl SharedToriiProxyAttemptRequest {
             encoded,
         })
     }
-    fn into_arc(self) -> Arc<ToriiProxyRequestV6> {
+    fn into_arc(self) -> Arc<ToriiProxyRequestV1> {
         self.inner
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 impl core::ops::Deref for SharedToriiProxyAttemptRequest {
-    type Target = ToriiProxyRequestV6;
+    type Target = ToriiProxyRequestV1;
     fn deref(&self) -> &Self::Target {
         self.inner.as_ref()
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_proxy_request_across_candidates<F, Fut, C, CFut>(
     candidate_peers: Vec<ToriiProxyCandidate>,
     routing_decision: RoutingDecision,
-    request: ToriiProxyRequestV6,
+    request: ToriiProxyRequestV1,
     max_encoded_request_bytes: usize,
     hedge_delay: Duration,
     mut execute: F,
@@ -25430,7 +24855,7 @@ where
             )
         });
     }
-    let mut durable_attestations = BTreeMap::<u16, QueuePlanAdmissionAttestationV2>::new();
+    let mut durable_attestations = BTreeMap::<u16, QueuePlanAdmissionAttestationV1>::new();
     let mut ordinary_lifecycle_attestations =
         BTreeMap::<u16, OrdinaryKagemushaLifecycleAdmissionAttestationV1>::new();
     let mut last_retryable: Option<Response> = None;
@@ -25469,8 +24894,8 @@ where
                                 return response;
                             }
                             if durable_attestations.len() >= expected.durability_threshold {
-                                let certificate = QueuePlanAdmissionCertificateV2 {
-                                    version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+                                let certificate = QueuePlanAdmissionCertificateV1 {
+                                    version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
                                     binding: expected.admission_binding.clone(),
                                     attestations: durable_attestations
                                         .values()
@@ -25480,7 +24905,7 @@ where
                                 };
                                 let body = match norito::core::to_bytes_bounded(
                                     &certificate,
-                                    QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2,
+                                    QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1,
                                 ) {
                                     Ok(body) => body,
                                     Err(norito::core::BoundedEncodeError::FrameTooLarge {
@@ -25611,7 +25036,7 @@ where
                                 };
                                 let body = match norito::core::to_bytes_bounded(
                                     &certificate,
-                                    QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2,
+                                    QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1,
                                 ) {
                                     Ok(body) => body,
                                     Err(error) => {
@@ -25748,7 +25173,7 @@ where
             )
         })
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn queue_plan_admission_registry_conflict_response(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     reason: impl Into<String>,
@@ -25765,11 +25190,11 @@ fn queue_plan_admission_registry_conflict_response(
     insert_transaction_submission_identity_headers(&mut response, &entrypoint_hash, None);
     response
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn queue_plan_admission_publication_targets(
     local_peer_id: &PeerId,
     online_peer_ids: &BTreeSet<PeerId>,
-    binding: &QueuePlanAdmissionBindingV2,
+    binding: &QueuePlanAdmissionBindingV1,
 ) -> Result<Vec<PeerId>, String> {
     let coordinator = binding
         .admission_context
@@ -25783,11 +25208,11 @@ fn queue_plan_admission_publication_targets(
         .cloned()
         .collect())
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn queue_plan_admission_publication_targets_from_snapshot(
     local_peer_id: &PeerId,
     online_peers: &HashSet<Peer>,
-    binding: &QueuePlanAdmissionBindingV2,
+    binding: &QueuePlanAdmissionBindingV1,
 ) -> Result<Vec<PeerId>, String> {
     let coordinator = binding
         .admission_context
@@ -25803,11 +25228,11 @@ fn queue_plan_admission_publication_targets_from_snapshot(
         .cloned()
         .collect())
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn disseminate_queue_plan_admission_publication(
     app: &SharedAppState,
     certificate: &[u8],
-    binding: &QueuePlanAdmissionBindingV2,
+    binding: &QueuePlanAdmissionBindingV1,
 ) -> Result<usize, String> {
     let network = app
         .p2p
@@ -25834,11 +25259,11 @@ fn disseminate_queue_plan_admission_publication(
     }
     Ok(targets.len())
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn validate_queue_plan_admission_publication(
     app: &SharedAppState,
     publication: &QueuePlanAdmissionPublicationV1,
-) -> Result<QueuePlanAdmissionBindingV2, String> {
+) -> Result<QueuePlanAdmissionBindingV1, String> {
     if publication.schema_version != QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1 {
         return Err(format!(
             "unsupported QueuePlan admission publication schema_version `{}`",
@@ -25846,10 +25271,10 @@ fn validate_queue_plan_admission_publication(
         ));
     }
     let certificate = decode_queue_plan_synced_certificate(&publication.certificate)?;
-    let validated = validate_queue_plan_admission_certificate_for_network_digest_v2(
+    let validated = validate_queue_plan_admission_certificate_for_network_digest_v1(
         queue_plan_admission_network_id_digest(app.state.network_id_ref()),
         certificate,
-        QueuePlanAdmissionCertificateStrengthV2::Quorum,
+        QueuePlanAdmissionCertificateStrengthV1::Quorum,
     )?;
     let binding = validated.certificate.binding;
     let coordinator = binding
@@ -25900,7 +25325,7 @@ fn validate_queue_plan_admission_publication(
     }
     Ok(binding)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QueuePlanAdmissionPublicationIngestOutcome {
     AlreadyCommitted,
@@ -25909,7 +25334,7 @@ enum QueuePlanAdmissionPublicationIngestOutcome {
         sumeragi_notified: bool,
     },
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn ingest_queue_plan_admission_publication(
     app: &SharedAppState,
     publication: &QueuePlanAdmissionPublicationV1,
@@ -25949,17 +25374,17 @@ fn ingest_queue_plan_admission_publication(
         sumeragi_notified,
     })
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn persist_queue_plan_admission_certificate(
     app: &SharedAppState,
     response: Response,
-    expected_binding: &QueuePlanAdmissionBindingV2,
+    expected_binding: &QueuePlanAdmissionBindingV1,
 ) -> Response {
     if response.status() != StatusCode::ACCEPTED {
         return response;
     }
     let snapshot =
-        response_to_torii_proxy_snapshot(response, QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2)
+        response_to_torii_proxy_snapshot(response, QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1)
             .await;
     let certificate = match decode_queue_plan_synced_certificate(&snapshot.body) {
         Ok(certificate) if certificate.binding == *expected_binding => certificate,
@@ -25976,10 +25401,10 @@ async fn persist_queue_plan_admission_certificate(
             );
         }
     };
-    if let Err(error) = validate_queue_plan_admission_certificate_for_network_digest_v2(
+    if let Err(error) = validate_queue_plan_admission_certificate_for_network_digest_v1(
         expected_binding.network_id_digest,
         certificate,
-        QueuePlanAdmissionCertificateStrengthV2::Quorum,
+        QueuePlanAdmissionCertificateStrengthV1::Quorum,
     ) {
         return queue_plan_outcome_unknown_response(
             expected_binding.entrypoint_hash.clone(),
@@ -26060,7 +25485,7 @@ async fn persist_queue_plan_admission_certificate(
     }
     torii_proxy_snapshot_to_response(snapshot)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn validate_ordinary_kagemusha_lifecycle_admission_quorum_response(
     response: Response,
     network_id: &NetworkId,
@@ -26071,7 +25496,7 @@ async fn validate_ordinary_kagemusha_lifecycle_admission_quorum_response(
         return response;
     }
     let snapshot =
-        response_to_torii_proxy_snapshot(response, QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2)
+        response_to_torii_proxy_snapshot(response, QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1)
             .await;
     let certificate = match decode_ordinary_kagemusha_lifecycle_certificate(&snapshot.body) {
         Ok(certificate) if certificate.binding == *expected_binding => certificate,
@@ -26102,7 +25527,7 @@ async fn validate_ordinary_kagemusha_lifecycle_admission_quorum_response(
     torii_proxy_snapshot_to_response(snapshot)
 }
 
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn normalize_ordinary_kagemusha_lifecycle_submission_response(
     app: &AppState,
     proxy_response: Response,
@@ -26141,7 +25566,7 @@ fn normalize_ordinary_kagemusha_lifecycle_submission_response(
     }
     response
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn normalize_proxied_transaction_submission_response(
     app: &AppState,
     proxy_response: Response,
@@ -26196,12 +25621,12 @@ fn normalize_proxied_transaction_submission_response(
     }
     response
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_transaction_via_proxy(
     app: &SharedAppState,
     transaction: TransactionEntrypoint,
     routing_plan: RoutingPlan,
-    durable_retry_claim: Option<queue::QueuePlanDurableAdmissionV2>,
+    durable_retry_claim: Option<queue::QueuePlanDurableAdmissionV1>,
     minimal_response: bool,
     format: ResponseFormat,
 ) -> Response {
@@ -26252,7 +25677,7 @@ async fn execute_torii_transaction_via_proxy(
     let request_id =
         queue_plan_synced_proxy_request_id_for_entrypoint(app.as_ref(), entrypoint_hash.clone());
     let binding = if let Some(claim) = durable_retry_claim {
-        let binding = match QueuePlanAdmissionBindingV2::try_from_durable_admission(&claim) {
+        let binding = match QueuePlanAdmissionBindingV1::try_from_durable_admission(&claim) {
             Ok(binding) => binding,
             Err(error) => {
                 return torii_proxy_error_response(
@@ -26289,7 +25714,7 @@ async fn execute_torii_transaction_via_proxy(
             }
         };
         let enqueue_timestamp_ms = app.queue.queue_plan_admission_timestamp_ms();
-        match QueuePlanAdmissionBindingV2::new(
+        match QueuePlanAdmissionBindingV1::new(
             app.state.network_id_ref(),
             &transaction,
             &routing_plan,
@@ -26355,10 +25780,10 @@ async fn execute_torii_transaction_via_proxy(
     let mut response = execute_torii_proxy_request_with_fallback(
         app,
         routing_decision,
-        ToriiProxyRequestKindV4::SubmitTransaction {
+        ToriiProxyRequestKindV1::SubmitTransaction {
             transaction,
             expected_plan: ToriiRoutingPlanHintV1::from(routing_plan),
-            admission: ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
             admission_binding: Some(binding),
         },
     )
@@ -26375,7 +25800,7 @@ async fn execute_torii_transaction_via_proxy(
         format,
     )
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_ordinary_kagemusha_lifecycle_via_proxy(
     app: &SharedAppState,
     transaction: TransactionEntrypoint,
@@ -26441,10 +25866,10 @@ async fn execute_torii_ordinary_kagemusha_lifecycle_via_proxy(
     let response = execute_torii_proxy_request_with_fallback(
         app,
         routing_decision,
-        ToriiProxyRequestKindV4::SubmitTransaction {
+        ToriiProxyRequestKindV1::SubmitTransaction {
             transaction: transaction.clone(),
             expected_plan: ToriiRoutingPlanHintV1::from(routing_plan),
-            admission: ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(binding),
+            admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(binding),
             admission_binding: None,
         },
     )
@@ -26465,7 +25890,7 @@ async fn execute_torii_ordinary_kagemusha_lifecycle_via_proxy(
         format,
     )
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_torii_query_via_proxy(
     app: &SharedAppState,
     query_bytes: Vec<u8>,
@@ -26475,7 +25900,7 @@ async fn execute_torii_query_via_proxy(
     execute_torii_proxy_request_with_fallback(
         app,
         routing_decision,
-        ToriiProxyRequestKindV4::SignedQuery {
+        ToriiProxyRequestKindV1::SignedQuery {
             query_bytes,
             expected_route: ToriiRouteHintV1::from(routing_decision),
             response_format: torii_proxy_response_format(format),
@@ -26517,6 +25942,7 @@ fn torii_read_http_method(endpoint: ToriiReadEndpointV1) -> reqwest::Method {
         | ToriiReadEndpointV1::AliasLookupByAccount
         | ToriiReadEndpointV1::ContractAliasResolve
         | ToriiReadEndpointV1::ContractDeploymentState
+        | ToriiReadEndpointV1::AccountOnboardingCurrentState
         | ToriiReadEndpointV1::ContractViewPost
         | ToriiReadEndpointV1::ContractViewBatchPost => reqwest::Method::POST,
         _ => reqwest::Method::GET,
@@ -26655,6 +26081,9 @@ fn torii_external_read_path(request: &ToriiReadProxyRequestV1) -> Result<String,
         ToriiReadEndpointV1::AliasLookupByAccount => "/v1/aliases/by-account".to_owned(),
         ToriiReadEndpointV1::ContractAliasResolve => "/v1/contracts/aliases/resolve".to_owned(),
         ToriiReadEndpointV1::ContractDeploymentState => "/v1/contracts/deployment-state".to_owned(),
+        ToriiReadEndpointV1::AccountOnboardingCurrentState => {
+            routing::ENDPOINT_ACCOUNTS_ONBOARDING_CURRENT_STATE.to_owned()
+        }
         ToriiReadEndpointV1::ContractStateGet => "/v1/contracts/state".to_owned(),
         ToriiReadEndpointV1::ContractViewPost => "/v1/contracts/view".to_owned(),
         ToriiReadEndpointV1::ContractViewBatchPost => "/v1/contracts/view/batch".to_owned(),
@@ -27727,6 +27156,27 @@ async fn execute_torii_read_request_locally(
                 routed_by,
             )
         }
+        ToriiReadEndpointV1::AccountOnboardingCurrentState => {
+            let request = match decode_torii_proxy_json_body::<
+                iroha_torii_shared::AccountOnboardingCurrentStateRequestV1,
+            >(
+                request_decode_plan,
+                &request.body,
+                "account onboarding current-state body",
+            ) {
+                Ok(request) => request,
+                Err(response) => return response,
+            };
+            finish_torii_read_result(
+                account_onboarding_state::execute_account_onboarding_current_state_local_read(
+                    app,
+                    &request,
+                    Some(routing_decision),
+                ),
+                routing_decision,
+                routed_by,
+            )
+        }
         ToriiReadEndpointV1::ContractStateGet => {
             let query = match decode_torii_proxy_query::<routing::ContractStateQuery>(
                 request_decode_plan,
@@ -27811,23 +27261,23 @@ async fn execute_torii_read_via_proxy(
     request: ToriiReadProxyRequestV1,
     proxy_memory: Option<ToriiProxyMemoryReservation>,
 ) -> Response {
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(feature = "connect")]
     {
         execute_torii_proxy_request_with_fallback_admitted(
             app,
             routing_decision,
-            ToriiProxyRequestKindV4::Read(request),
+            ToriiProxyRequestKindV1::Read(request),
             proxy_memory,
         )
         .await
     }
-    #[cfg(not(any(feature = "p2p_ws", feature = "connect")))]
+    #[cfg(not(feature = "connect"))]
     {
         let _ = proxy_memory;
         execute_torii_proxy_request_with_fallback(
             app,
             routing_decision,
-            ToriiProxyRequestKindV4::Read(request),
+            ToriiProxyRequestKindV1::Read(request),
         )
         .await
     }
@@ -27846,6 +27296,7 @@ async fn execute_torii_read_for_route(
             | ToriiReadEndpointV1::AliasLookupByAccount
             | ToriiReadEndpointV1::ContractAliasResolve
             | ToriiReadEndpointV1::ContractDeploymentState
+            | ToriiReadEndpointV1::AccountOnboardingCurrentState
             | ToriiReadEndpointV1::InternalAccountGet
             | ToriiReadEndpointV1::InternalAccountTransactionGet
             | ToriiReadEndpointV1::InternalAccountAssetGet
@@ -27975,6 +27426,7 @@ async fn execute_torii_single_route_read_with_format(
             | ToriiReadEndpointV1::AliasResolveIndex
             | ToriiReadEndpointV1::ContractAliasResolve
             | ToriiReadEndpointV1::ContractDeploymentState
+            | ToriiReadEndpointV1::AccountOnboardingCurrentState
     );
     let request_bytes = match torii_routed_read_request_bytes(
         &path_args,
@@ -28021,6 +27473,7 @@ async fn sanitize_exact_alias_route_response(
                 | ToriiReadEndpointV1::AliasResolveIndex
                 | ToriiReadEndpointV1::ContractAliasResolve
                 | ToriiReadEndpointV1::ContractDeploymentState
+                | ToriiReadEndpointV1::AccountOnboardingCurrentState
         )
     {
         return response;
@@ -28215,6 +27668,15 @@ async fn sanitize_exact_alias_route_response(
             deployment_state::sanitize_routed_contract_deployment_state(route, request_body, &body)
                 .map_err(norito::json::Error::Message)
         }
+        ToriiReadEndpointV1::AccountOnboardingCurrentState => {
+            account_onboarding_state::sanitize_routed_account_onboarding_current_state(
+                app,
+                route,
+                request_body,
+                &body,
+            )
+            .map_err(norito::json::Error::Message)
+        }
         _ => unreachable!("non-sanitized endpoints returned before body collection"),
     };
     let sanitized = match sanitized {
@@ -28232,12 +27694,12 @@ async fn sanitize_exact_alias_route_response(
     );
     Response::from_parts(parts, Body::from(sanitized))
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn forward_incoming_torii_proxy_request_from_sender(
     app: &SharedAppState,
     immediate_sender_peer_id: Option<&PeerId>,
     routing_decision: RoutingDecision,
-    request: ToriiProxyRequestV6,
+    request: ToriiProxyRequestV1,
 ) -> Response {
     let Some(sender_peer_id) = immediate_sender_peer_id else {
         return torii_proxy_error_response(
@@ -28248,7 +27710,7 @@ async fn forward_incoming_torii_proxy_request_from_sender(
     };
     forward_incoming_torii_proxy_request(app, sender_peer_id, routing_decision, request).await
 }
-#[cfg(all(not(feature = "app_api"), any(feature = "p2p_ws", feature = "connect")))]
+#[cfg(all(not(feature = "app_api"), feature = "connect"))]
 fn app_api_required_torii_proxy_response(action: &'static str) -> Response {
     torii_proxy_error_response(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -28256,7 +27718,7 @@ fn app_api_required_torii_proxy_response(action: &'static str) -> Response {
         format!("{action} requires the `app_api` feature"),
     )
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 struct ToriiProxyRequestHead {
     schema_version: u16,
     request_id: Hash,
@@ -28265,10 +27727,10 @@ struct ToriiProxyRequestHead {
     max_hops: u8,
     visited_peer_ids: Vec<PeerId>,
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 impl ToriiProxyRequestHead {
-    fn split(request: ToriiProxyRequestV6) -> (Self, ToriiProxyRequestKindV4) {
-        let ToriiProxyRequestV6 {
+    fn split(request: ToriiProxyRequestV1) -> (Self, ToriiProxyRequestKindV1) {
+        let ToriiProxyRequestV1 {
             schema_version,
             request_id,
             deadline_unix_ms,
@@ -28289,8 +27751,8 @@ impl ToriiProxyRequestHead {
             request,
         )
     }
-    fn with_request(self, request: ToriiProxyRequestKindV4) -> ToriiProxyRequestV6 {
-        ToriiProxyRequestV6 {
+    fn with_request(self, request: ToriiProxyRequestKindV1) -> ToriiProxyRequestV1 {
+        ToriiProxyRequestV1 {
             schema_version: self.schema_version,
             request_id: self.request_id,
             deadline_unix_ms: self.deadline_unix_ms,
@@ -28301,10 +27763,10 @@ impl ToriiProxyRequestHead {
         }
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_incoming_torii_proxy_request(
     app: &SharedAppState,
-    proxy_request: ToriiProxyRequestV6,
+    proxy_request: ToriiProxyRequestV1,
     immediate_sender_peer_id: Option<PeerId>,
 ) -> Response {
     execute_incoming_torii_proxy_request_with_proxy_memory(
@@ -28315,10 +27777,10 @@ async fn execute_incoming_torii_proxy_request(
     )
     .await
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_incoming_torii_proxy_request_with_proxy_memory(
     app: &SharedAppState,
-    proxy_request: ToriiProxyRequestV6,
+    proxy_request: ToriiProxyRequestV1,
     immediate_sender_peer_id: Option<PeerId>,
     proxy_memory: Option<ToriiProxyMemoryReservation>,
 ) -> Response {
@@ -28331,15 +27793,15 @@ async fn execute_incoming_torii_proxy_request_with_proxy_memory(
     )
     .await
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_incoming_torii_proxy_request_with_admission(
     app: &SharedAppState,
-    proxy_request: ToriiProxyRequestV6,
+    proxy_request: ToriiProxyRequestV1,
     immediate_sender_peer_id: Option<PeerId>,
     pre_admitted_fanout: Option<QueryFanoutMemoryReservation>,
     proxy_memory: Option<ToriiProxyMemoryReservation>,
 ) -> Response {
-    if proxy_request.schema_version != TORII_PROXY_REQUEST_VERSION_V6 {
+    if proxy_request.schema_version != TORII_PROXY_REQUEST_VERSION_V1 {
         return torii_proxy_error_response(
             StatusCode::BAD_REQUEST,
             "invalid_proxy_request",
@@ -28390,15 +27852,15 @@ async fn execute_incoming_torii_proxy_request_with_admission(
         ),
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn execute_incoming_torii_proxy_request_with_admission_inner(
     app: &SharedAppState,
-    proxy_request: ToriiProxyRequestV6,
+    proxy_request: ToriiProxyRequestV1,
     immediate_sender_peer_id: Option<PeerId>,
     pre_admitted_fanout: Option<QueryFanoutMemoryReservation>,
     proxy_memory: Option<ToriiProxyMemoryReservation>,
 ) -> Response {
-    if proxy_request.schema_version != TORII_PROXY_REQUEST_VERSION_V6 {
+    if proxy_request.schema_version != TORII_PROXY_REQUEST_VERSION_V1 {
         return torii_proxy_error_response(
             StatusCode::BAD_REQUEST,
             "invalid_proxy_request",
@@ -28469,9 +27931,9 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
     // below so ingress never duplicates that vector merely to select a route.
     if matches!(
         &proxy_request.request,
-        ToriiProxyRequestKindV4::SignedQueryRouteScan { .. }
+        ToriiProxyRequestKindV1::SignedQueryRouteScan { .. }
     ) {
-        let ToriiProxyRequestKindV4::SignedQueryRouteScan {
+        let ToriiProxyRequestKindV1::SignedQueryRouteScan {
             query_bytes,
             expected_route,
             response_format,
@@ -28490,7 +27952,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
     }
     if matches!(
         &proxy_request.request,
-        ToriiProxyRequestKindV4::SignedQueryFanout { .. }
+        ToriiProxyRequestKindV1::SignedQueryFanout { .. }
     ) {
         let nexus_route = match torii_nexus_route(app.as_ref()) {
             Ok(route) => route,
@@ -28509,7 +27971,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
             )
             .await;
         }
-        let ToriiProxyRequestKindV4::SignedQueryFanout {
+        let ToriiProxyRequestKindV1::SignedQueryFanout {
             query_bytes,
             response_format,
         } = proxy_request.request
@@ -28531,10 +27993,10 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
     // versus forwarded execution.
     let (request_head, request_kind) = ToriiProxyRequestHead::split(proxy_request);
     match request_kind {
-        ToriiProxyRequestKindV4::SubmitTransaction {
+        ToriiProxyRequestKindV1::SubmitTransaction {
             transaction,
             expected_plan,
-            admission: ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
             admission_binding,
         } => {
             if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
@@ -28695,11 +28157,11 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                             };
                             if !execute_locally {
                                 let request = request_head.with_request(
-                                    ToriiProxyRequestKindV4::SubmitTransaction {
+                                    ToriiProxyRequestKindV1::SubmitTransaction {
                                         transaction: accepted_tx.into_entrypoint(),
                                         expected_plan: routing_plan.clone().into(),
                                         admission:
-                                            ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+                                            ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
                                         admission_binding: expected_admission_binding,
                                     },
                                 );
@@ -28743,7 +28205,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                                         let expected_binding = expected_admission_binding
                                             .expect("strict admission retained its binding");
                                         let durable_binding =
-                                            QueuePlanAdmissionBindingV2::try_from_durable_admission(
+                                            QueuePlanAdmissionBindingV1::try_from_durable_admission(
                                                 &durable_claim,
                                             );
                                         if durable_binding.as_ref() != Ok(&expected_binding) {
@@ -28777,11 +28239,11 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                 Err(error) => error.into_response(),
             }
         }
-        ToriiProxyRequestKindV4::SubmitTransaction {
+        ToriiProxyRequestKindV1::SubmitTransaction {
             transaction,
             expected_plan,
             admission:
-                ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(admission_binding),
+                ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(admission_binding),
             admission_binding: queue_plan_binding,
         } => {
             if queue_plan_binding.is_some() {
@@ -28900,10 +28362,10 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                                 });
                             if !execute_locally {
                                 let request = request_head.with_request(
-                                    ToriiProxyRequestKindV4::SubmitTransaction {
+                                    ToriiProxyRequestKindV1::SubmitTransaction {
                                         transaction: accepted_tx.into_entrypoint(),
                                         expected_plan: routing_plan.clone().into(),
-                                        admission: ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(
+                                        admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(
                                             admission_binding,
                                         ),
                                         admission_binding: None,
@@ -28950,7 +28412,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                 Err(error) => error.into_response(),
             }
         }
-        ToriiProxyRequestKindV4::SignedQuery {
+        ToriiProxyRequestKindV1::SignedQuery {
             query_bytes,
             expected_route,
             response_format,
@@ -28977,7 +28439,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                         );
                         if !should_execute_route_locally(app, routing_decision) {
                             let request =
-                                request_head.with_request(ToriiProxyRequestKindV4::SignedQuery {
+                                request_head.with_request(ToriiProxyRequestKindV1::SignedQuery {
                                     query_bytes,
                                     expected_route,
                                     response_format,
@@ -29028,12 +28490,12 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
             }
             Err(response) => response,
         },
-        ToriiProxyRequestKindV4::SignedQueryRouteScan { .. }
-        | ToriiProxyRequestKindV4::SignedQueryFanout { .. } => {
+        ToriiProxyRequestKindV1::SignedQueryRouteScan { .. }
+        | ToriiProxyRequestKindV1::SignedQueryFanout { .. } => {
             unreachable!("signed fanout variants dispatch before proxy context cloning")
         }
         #[cfg(feature = "app_api")]
-        ToriiProxyRequestKindV4::Read(read_request) => {
+        ToriiProxyRequestKindV1::Read(read_request) => {
             let routing_decision: RoutingDecision = read_request.expected_route.into();
             let routing_decision =
                 match validate_incoming_read_proxy_route(app, routing_decision, "read") {
@@ -29044,7 +28506,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                 .await
         }
         #[cfg(feature = "app_api")]
-        ToriiProxyRequestKindV4::ReadFanout(read_request) => {
+        ToriiProxyRequestKindV1::ReadFanout(read_request) => {
             match torii_nexus_route(app.as_ref()) {
                 Ok(nexus_route) => {
                     let _ = nexus_route;
@@ -29054,7 +28516,7 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
             }
         }
         #[cfg(feature = "app_api")]
-        ToriiProxyRequestKindV4::HostedHttp(hosted_request) => {
+        ToriiProxyRequestKindV1::HostedHttp(hosted_request) => {
             let uri = match hosted_request.query_string.as_deref() {
                 Some(query) => format!("{}?{query}", hosted_request.request_path),
                 None => hosted_request.request_path.clone(),
@@ -29130,20 +28592,20 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
             }
         }
         #[cfg(not(feature = "app_api"))]
-        ToriiProxyRequestKindV4::Read(_) => {
+        ToriiProxyRequestKindV1::Read(_) => {
             app_api_required_torii_proxy_response("Torii read proxying")
         }
         #[cfg(not(feature = "app_api"))]
-        ToriiProxyRequestKindV4::ReadFanout(_) => {
+        ToriiProxyRequestKindV1::ReadFanout(_) => {
             app_api_required_torii_proxy_response("Torii read fanout proxying")
         }
         #[cfg(not(feature = "app_api"))]
-        ToriiProxyRequestKindV4::HostedHttp(_) => {
+        ToriiProxyRequestKindV1::HostedHttp(_) => {
             app_api_required_torii_proxy_response("Torii hosted HTTP proxying")
         }
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn reject_incoming_torii_proxy_request_capacity(
     network: &iroha_core::IrohaNetwork,
     peer: &Peer,
@@ -29209,12 +28671,12 @@ fn reject_incoming_torii_proxy_request_capacity(
         );
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn process_incoming_torii_proxy_request(
     app: SharedAppState,
     network: iroha_core::IrohaNetwork,
     peer: Peer,
-    proxy_request: Arc<ToriiProxyRequestV6>,
+    proxy_request: Arc<ToriiProxyRequestV1>,
     proxy_memory: ToriiProxyMemoryReservation,
 ) {
     let request_id = proxy_request.request_id.clone();
@@ -29317,7 +28779,7 @@ async fn process_incoming_torii_proxy_request(
         );
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn process_incoming_torii_proxy_response(
     app: &SharedAppState,
     responder_peer_id: PeerId,
@@ -29405,7 +28867,7 @@ async fn process_incoming_torii_proxy_response(
         let _ = pending.sender.send(response);
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn process_incoming_queue_plan_admission_publication(
     app: &SharedAppState,
     sender_peer_id: &PeerId,
@@ -29447,7 +28909,7 @@ fn process_incoming_queue_plan_admission_publication(
         }
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 async fn handle_torii_proxy_network_message(
     app: SharedAppState,
     network: iroha_core::IrohaNetwork,
@@ -29488,18 +28950,10 @@ async fn handle_torii_proxy_network_message(
                 publication.as_ref(),
             );
         }
-        #[cfg(feature = "app_api")]
-        iroha_core::NetworkMessage::SoracloudLocalReadProxyRequest(request) => {
-            process_incoming_soracloud_proxy_request(app, network, peer, *request).await;
-        }
-        #[cfg(feature = "app_api")]
-        iroha_core::NetworkMessage::SoracloudLocalReadProxyResponse(response) => {
-            process_incoming_soracloud_proxy_response(&app, peer.id().clone(), *response).await;
-        }
         _ => {}
     }
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn attach_torii_proxy_network(app: SharedAppState, network: iroha_core::IrohaNetwork) {
     tokio::spawn(async move {
         use iroha_p2p::network::{
@@ -29727,21 +29181,20 @@ fn hosted_http_request_hash(
     *blake3_hash(&payload).as_bytes()
 }
 #[cfg(feature = "app_api")]
-fn hosted_http_rollout_bucket(
-    service_name: &str,
-    remote_ip: Option<IpAddr>,
-    method: &axum::http::Method,
-    uri: &axum::http::Uri,
-) -> u8 {
-    let digest = hosted_http_request_hash(
-        "soracloud:hosted-http-rollout:v1",
-        service_name,
-        None,
-        remote_ip,
-        method,
-        uri,
-    );
-    (u16::from_le_bytes([digest[0], digest[1]]) % 100) as u8
+fn hosted_http_placement_has_active_peer_binding(
+    world: &impl WorldReadOnly,
+    placement: &iroha_data_model::soracloud::SoraInrouReplicaPlacementV1,
+) -> bool {
+    world
+        .public_lane_validators()
+        .iter()
+        .any(|((lane_id, validator_account_id), record)| {
+            lane_id == &record.lane_id
+                && validator_account_id == &record.validator
+                && validator_account_id == &placement.validator_account_id
+                && record.status == iroha_data_model::nexus::PublicLaneValidatorStatus::Active
+                && record.peer_id.to_string() == placement.peer_id
+        })
 }
 #[cfg(feature = "app_api")]
 fn select_authoritative_hosted_http_replica(
@@ -29756,6 +29209,12 @@ fn select_authoritative_hosted_http_replica(
     iroha_data_model::soracloud::SoraInrouReplicaPlacementV1,
     iroha_data_model::soracloud::SoraInrouReplicaRuntimeStateV1,
 )> {
+    let service_name_id = Name::from_str(service_name).ok()?;
+    let lease_started_height = world
+        .soracloud_service_deployments()
+        .get(&service_name_id)
+        .and_then(|deployment| deployment.service_lease.as_ref())?
+        .lease_started_height;
     let healthy_replicas = placements
         .iter()
         .filter_map(|placement| {
@@ -29764,7 +29223,11 @@ fn select_authoritative_hosted_http_replica(
                 service_version.to_owned(),
                 placement.replica_slot.to_string(),
             ))?;
-            (runtime_state.validator_account_id == placement.validator_account_id
+            (placement.host_availability.is_available()
+                && placement.lease_started_height == lease_started_height
+                && hosted_http_placement_has_active_peer_binding(world, placement)
+                && runtime_state.placement_incarnation == placement.placement_incarnation
+                && runtime_state.validator_account_id == placement.validator_account_id
                 && runtime_state.peer_id == placement.peer_id
                 && runtime_state.selected_guest_isa == placement.selected_guest_isa
                 && runtime_state.health_status
@@ -29790,11 +29253,10 @@ fn select_authoritative_hosted_http_replica(
     healthy_replicas.into_iter().nth(index)
 }
 #[cfg(feature = "app_api")]
-fn authoritative_weighted_hosted_http_versions(
+fn authoritative_hosted_http_version(
     app: &SharedAppState,
     service_name: &str,
-) -> Result<Vec<(String, u8)>, SoracloudRuntimeExecutionError> {
-    let current_sequence = soracloud::authoritative_soracloud_sequence(app);
+) -> Result<String, SoracloudRuntimeExecutionError> {
     let deployment_name: Name = service_name.parse().map_err(|error| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
@@ -29804,6 +29266,12 @@ fn authoritative_weighted_hosted_http_versions(
         )
     })?;
     let state_view = app.state.view();
+    let current_height = u64::try_from(state_view.height()).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!("canonical block height does not fit the hosted-service lease clock: {error}"),
+        )
+    })?;
     let world = state_view.world();
     let Some(deployment) = world.soracloud_service_deployments().get(&deployment_name) else {
         return Err(SoracloudRuntimeExecutionError::new(
@@ -29812,7 +29280,7 @@ fn authoritative_weighted_hosted_http_versions(
         ));
     };
     let lease_status = deployment
-        .hosted_service_lease_status_at(current_sequence)
+        .hosted_service_lease_status_at(current_height)
         .map_err(|error| {
             SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Internal,
@@ -29835,65 +29303,15 @@ fn authoritative_weighted_hosted_http_versions(
             ),
         ));
     }
-    let Some(rollout) = deployment.active_rollout.as_ref() else {
-        return Ok(vec![(deployment.current_service_version.clone(), 100)]);
-    };
-    let invalid_rollout = |reason: String| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Internal,
+    if deployment.active_rollout.is_some() {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
-                "invalid authoritative hosted Soracloud rollout for service `{service_name}`: {reason}"
+                "hosted Soracloud service `{service_name}` has an unsupported active canary; first-release Inrou routing requires one active revision"
             ),
-        )
-    };
-    if rollout.stage != iroha_data_model::soracloud::SoraRolloutStageV1::Canary {
-        return Err(invalid_rollout(format!(
-            "active rollout stage must be Canary, got {:?}",
-            rollout.stage
-        )));
-    }
-    if rollout.candidate_version != deployment.current_service_version {
-        return Err(invalid_rollout(format!(
-            "candidate revision `{}` must equal current revision `{}`",
-            rollout.candidate_version, deployment.current_service_version
-        )));
-    }
-    let candidate_weight = rollout.traffic_percent;
-    if !(1..=99).contains(&candidate_weight) {
-        return Err(invalid_rollout(format!(
-            "candidate traffic percent must be within 1..=99, got {candidate_weight}"
-        )));
-    }
-    let baseline_version = rollout
-        .baseline_version
-        .as_deref()
-        .filter(|version| !version.trim().is_empty())
-        .ok_or_else(|| {
-            invalid_rollout("baseline revision must be present and nonempty".to_owned())
-        })?;
-    if baseline_version == rollout.candidate_version {
-        return Err(invalid_rollout(
-            "baseline and candidate revisions must be distinct".to_owned(),
         ));
     }
-    rollout
-        .validate()
-        .map_err(|error| invalid_rollout(error.to_string()))?;
-    let baseline_weight = 100 - candidate_weight;
-    let versions = vec![
-        (rollout.candidate_version.clone(), candidate_weight),
-        (baseline_version.to_owned(), baseline_weight),
-    ];
-    let total_weight = versions
-        .iter()
-        .map(|(_, weight)| u16::from(*weight))
-        .sum::<u16>();
-    if total_weight != 100 {
-        return Err(invalid_rollout(format!(
-            "configured revision weights must total 100, got {total_weight}"
-        )));
-    }
-    Ok(versions)
+    Ok(deployment.current_service_version.clone())
 }
 #[cfg(feature = "app_api")]
 #[derive(Clone, Debug)]
@@ -29935,7 +29353,7 @@ fn resolve_local_hosted_http_replica_listener(
     app: &SharedAppState,
     service_name: &str,
     service_version: &str,
-    replica_slot: u16,
+    placement: &iroha_data_model::soracloud::SoraInrouReplicaPlacementV1,
 ) -> Result<Option<String>, SoracloudRuntimeExecutionError> {
     let Some(runtime) = app.soracloud_runtime.as_ref() else {
         return Ok(None);
@@ -29950,7 +29368,13 @@ fn resolve_local_hosted_http_replica_listener(
             plan.local_replicas
                 .iter()
                 .find(|replica| {
-                    replica.replica_slot == replica_slot
+                    replica.replica_slot == placement.replica_slot
+                        && replica.host_availability.is_available()
+                        && replica.placement_incarnation
+                            == placement.placement_incarnation.to_string()
+                        && replica.validator_account_id
+                            == placement.validator_account_id.to_string()
+                        && replica.peer_id == placement.peer_id
                         && replica.health_status
                             == iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy
                 })
@@ -29966,23 +29390,7 @@ fn resolve_hosted_http_runtime_target(
     uri: &axum::http::Uri,
 ) -> Result<ResolvedHostedHttpTarget, SoracloudRuntimeExecutionError> {
     let service_name = route_match.service_name.clone();
-    let weighted_versions = authoritative_weighted_hosted_http_versions(app, &service_name)?;
-    let bucket = hosted_http_rollout_bucket(&service_name, remote_ip, method, uri);
-    let mut cumulative_weight = 0_u16;
-    let selected_version = weighted_versions
-        .iter()
-        .find_map(|(service_version, weight)| {
-            cumulative_weight += u16::from(*weight);
-            (u16::from(bucket) < cumulative_weight).then(|| service_version.clone())
-        })
-        .ok_or_else(|| {
-            SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Internal,
-                format!(
-                    "configured hosted Soracloud rollout weights for service `{service_name}` do not select bucket {bucket}"
-                ),
-            )
-        })?;
+    let selected_version = authoritative_hosted_http_version(app, &service_name)?;
     let state_view = app.state.view();
     let world = state_view.world();
     let placement_record = world
@@ -30040,7 +29448,7 @@ fn resolve_hosted_http_runtime_target(
                 app,
                 &selected_route.service_name,
                 &selected_route.service_version,
-                placement.replica_slot,
+                &placement,
             )
         })
         .transpose()?
@@ -30059,11 +29467,8 @@ fn resolve_exact_hosted_http_runtime_target(
     service_version: &str,
     replica_slot: u16,
 ) -> Result<ResolvedHostedHttpTarget, SoracloudRuntimeExecutionError> {
-    let active_versions = authoritative_weighted_hosted_http_versions(app, service_name)?;
-    if !active_versions
-        .iter()
-        .any(|(version, weight)| *weight > 0 && version == service_version)
-    {
+    let active_version = authoritative_hosted_http_version(app, service_name)?;
+    if active_version != service_version {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
@@ -30094,6 +29499,7 @@ fn resolve_exact_hosted_http_runtime_target(
         .placements
         .iter()
         .find(|placement| placement.replica_slot == replica_slot)
+        .cloned()
     else {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -30103,6 +29509,36 @@ fn resolve_exact_hosted_http_runtime_target(
             ),
         ));
     };
+    if !placement.host_availability.is_available() {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "hosted Soracloud replica {} for service `{service_name}` revision `{service_version}` has an unavailable assigned host",
+                replica_slot
+            ),
+        ));
+    }
+    let placement_is_current_lease = Name::from_str(service_name)
+        .ok()
+        .and_then(|service_name| {
+            world
+                .soracloud_service_deployments()
+                .get(&service_name)
+                .and_then(|deployment| deployment.service_lease.as_ref())
+                .map(|lease| lease.lease_started_height == placement.lease_started_height)
+        })
+        .unwrap_or(false);
+    if !placement_is_current_lease
+        || !hosted_http_placement_has_active_peer_binding(world, &placement)
+    {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "hosted Soracloud replica {} for service `{service_name}` revision `{service_version}` lacks a current lease and active exact validator-peer binding",
+                replica_slot
+            ),
+        ));
+    }
     if placement.peer_id != local_peer_id.to_string() {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -30118,7 +29554,8 @@ fn resolve_exact_hosted_http_runtime_target(
         replica_slot.to_string(),
     ));
     if !runtime_state.is_some_and(|runtime_state| {
-        runtime_state.validator_account_id == placement.validator_account_id
+        runtime_state.placement_incarnation == placement.placement_incarnation
+            && runtime_state.validator_account_id == placement.validator_account_id
             && runtime_state.peer_id == placement.peer_id
             && runtime_state.selected_guest_isa == placement.selected_guest_isa
             && runtime_state.health_status
@@ -30133,12 +29570,8 @@ fn resolve_exact_hosted_http_runtime_target(
         ));
     }
     drop(state_view);
-    let local_listen_base_url = resolve_local_hosted_http_replica_listener(
-        app,
-        service_name,
-        service_version,
-        replica_slot,
-    )?;
+    let local_listen_base_url =
+        resolve_local_hosted_http_replica_listener(app, service_name, service_version, &placement)?;
     Ok(ResolvedHostedHttpTarget {
         route_match: soracloud::HostedHttpRouteMatch {
             service_name: service_name.to_owned(),
@@ -30217,7 +29650,7 @@ async fn proxy_soracloud_public_hosted_http_locally(
                 ),
             )
         })?;
-    tokio::spawn(async move {
+    let connection_task = tokio::spawn(async move {
         let _ = connection.await;
     });
     let mut path_and_query = upstream_url.path().to_owned();
@@ -30283,11 +29716,25 @@ async fn proxy_soracloud_public_hosted_http_locally(
         }
         builder = builder.header(name, value);
     }
-    Ok(builder
+    let response = builder
         .body(response_body)
-        .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response()))
+        .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response());
+    use http_body_util::BodyExt as _;
+    let (parts, body) = response.into_parts();
+    struct AbortConnectionOnDrop(tokio::task::JoinHandle<()>);
+    impl Drop for AbortConnectionOnDrop {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let connection_guard = AbortConnectionOnDrop(connection_task);
+    let guarded_body = body.map_frame(move |frame| {
+        let _connection_guard = &connection_guard;
+        frame
+    });
+    Ok(Response::from_parts(parts, Body::new(guarded_body)))
 }
-#[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+#[cfg(all(feature = "app_api", feature = "connect"))]
 async fn execute_hosted_http_proxy_request_with_fallback(
     app: &SharedAppState,
     target: &ResolvedHostedHttpTarget,
@@ -30307,7 +29754,7 @@ async fn execute_hosted_http_proxy_request_with_fallback(
         Ok(reservation) => reservation,
         Err(response) => return Some(response),
     };
-    let request_kind = ToriiProxyRequestKindV4::HostedHttp(ToriiHostedHttpProxyRequestV1 {
+    let request_kind = ToriiProxyRequestKindV1::HostedHttp(ToriiHostedHttpProxyRequestV1 {
         service_name: target.route_match.service_name.clone(),
         service_version: target.route_match.service_version.clone(),
         replica_slot: target.replica_slot,
@@ -30429,7 +29876,7 @@ async fn execute_hosted_http_proxy_request_with_fallback(
         proxy_memory,
     ))
 }
-#[cfg(not(any(feature = "p2p_ws", feature = "connect")))]
+#[cfg(not(feature = "connect"))]
 async fn execute_hosted_http_proxy_request_with_fallback(
     _app: &SharedAppState,
     _target: &ResolvedHostedHttpTarget,
@@ -30632,7 +30079,7 @@ async fn execute_soracloud_public_runtime_request(
             .body(Body::from("Soracloud public runtime rate limit exceeded"))
             .unwrap_or_else(|_| StatusCode::TOO_MANY_REQUESTS.into_response());
     }
-    let _public_runtime_permit = match app.soracloud_public_inflight.clone().try_acquire_owned() {
+    let public_runtime_permit = match app.soracloud_public_inflight.clone().try_acquire_owned() {
         Ok(permit) => permit,
         Err(_) => {
             return Response::builder()
@@ -30652,7 +30099,7 @@ async fn execute_soracloud_public_runtime_request(
     };
     let route_match = match route_match {
         soracloud::PublicRouteMatch::HostedHttp(route_match) => {
-            return proxy_soracloud_public_hosted_http(
+            let response = proxy_soracloud_public_hosted_http(
                 State(app),
                 method,
                 uri,
@@ -30662,6 +30109,7 @@ async fn execute_soracloud_public_runtime_request(
                 Some(remote_ip),
             )
             .await;
+            return hold_soracloud_public_permit_in_response_body(response, public_runtime_permit);
         }
         soracloud::PublicRouteMatch::LocalRead(route_match) => route_match,
         soracloud::PublicRouteMatch::OrderedMailbox(route_match) => {
@@ -30769,25 +30217,14 @@ async fn execute_soracloud_public_runtime_request(
         request_commitment: Hash::new(b""),
     };
     request.request_commitment = soracloud_local_read_request_commitment(&request);
-    let proxy_target = match resolve_soracloud_local_read_proxy_target(&app, &request) {
-        Ok(target) => target,
-        Err(error) => {
-            maybe_request_soracloud_generated_hf_reconcile(&app, &request, &error);
-            return soracloud_local_read_error_response(error);
+    let execution = match app.soracloud_runtime.as_ref() {
+        Some(runtime) => {
+            execute_soracloud_local_read_off_reactor(Arc::clone(runtime), request).await
         }
-    };
-    let execution = if let Some(primary_peer_id) = proxy_target {
-        execute_soracloud_local_read_via_proxy(&app, primary_peer_id, request).await
-    } else {
-        app.soracloud_runtime
-            .as_ref()
-            .ok_or_else(|| {
-                SoracloudRuntimeExecutionError::new(
-                    SoracloudRuntimeExecutionErrorKind::Unavailable,
-                    "Soracloud runtime is unavailable on this ingress node",
-                )
-            })
-            .and_then(|runtime| runtime.execute_local_read(request))
+        None => Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "Soracloud runtime is unavailable on this ingress node",
+        )),
     };
     match execution {
         Ok(response) => soracloud_local_read_response(response),
@@ -30988,6 +30425,7 @@ async fn handler_kaigi_call_signals(
         )
         .await?;
     }
+    let _query_permit = acquire_query_admission(app.as_ref(), true).await?;
     let call_id = parse_kaigi_call_id(&call_raw)?;
     routing::handle_v1_kaigi_call_signals(app.state.clone(), call_id, AxQuery(params)).await
 }
@@ -32150,27 +31588,6 @@ async fn handler_blocks_stream_ws(
     }))
     .await)
 }
-#[cfg(feature = "p2p_ws")]
-async fn handler_p2p_ws(
-    State(app): State<SharedAppState>,
-    preauth_guard: Option<Extension<PreAuthGuardHandoff>>,
-    ws: WebSocketUpgrade,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> AxResponse {
-    let preauth_guard = take_preauth_upgrade_guard(preauth_guard);
-    let chunk_bytes = iroha_p2p::transport::ws::WEBSOCKET_CHUNK_BYTES;
-    let ws = ws
-        .read_buffer_size(chunk_bytes)
-        .write_buffer_size(chunk_bytes)
-        .max_write_buffer_size(chunk_bytes * 4)
-        .max_message_size(chunk_bytes)
-        .max_frame_size(chunk_bytes);
-    core::future::ready(ws.on_upgrade(move |ws| async move {
-        let _preauth_guard = preauth_guard;
-        routing::handle_p2p_ws(ws, app.p2p.clone(), remote).await
-    }))
-    .await
-}
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_params(
     State(app): State<SharedAppState>,
@@ -33087,7 +32504,7 @@ async fn handler_sumeragi_vrf_penalties(
             &app.telemetry,
         ));
     }
-    routing::handle_v1_sumeragi_vrf_penalties(AxPath(epoch))
+    routing::handle_v1_sumeragi_vrf_penalties(State(app.state.clone()), AxPath(epoch))
         .await
         .map(axum::response::IntoResponse::into_response)
 }
@@ -36706,7 +36123,7 @@ async fn handler_post_kagemusha_lifecycle_transaction(
         .queue
         .route_plan_with_state(&accepted_tx, app.state.as_ref())
         .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(feature = "connect")]
     {
         return Ok(execute_torii_ordinary_kagemusha_lifecycle_via_proxy(
             &app,
@@ -36716,7 +36133,7 @@ async fn handler_post_kagemusha_lifecycle_transaction(
         )
         .await);
     }
-    #[cfg(not(any(feature = "p2p_ws", feature = "connect")))]
+    #[cfg(not(feature = "connect"))]
     {
         let _ = routing_plan;
         Err(Error::AppServiceUnavailable {
@@ -36876,7 +36293,7 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
             .route_plan_with_state(&accepted_tx, app.state.as_ref())
             .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?
     };
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(feature = "connect")]
     {
         return Ok(execute_torii_transaction_via_proxy(
             &app,
@@ -36888,7 +36305,7 @@ async fn submit_signed_transaction_for_ingress_queue_plan_certified(
         )
         .await);
     }
-    #[cfg(not(any(feature = "p2p_ws", feature = "connect")))]
+    #[cfg(not(feature = "connect"))]
     {
         let _ = (routing_plan, durable_retry_claim);
         return Err(Error::AppServiceUnavailable {
@@ -36954,7 +36371,7 @@ async fn handler_post_transaction_entrypoint(
             .route_plan_with_state(&accepted_tx, app.state.as_ref())
             .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?
     };
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(feature = "connect")]
     {
         return Ok(execute_torii_transaction_via_proxy(
             &app,
@@ -36966,7 +36383,7 @@ async fn handler_post_transaction_entrypoint(
         )
         .await);
     }
-    #[cfg(not(any(feature = "p2p_ws", feature = "connect")))]
+    #[cfg(not(feature = "connect"))]
     {
         let _ = (routing_plan, durable_retry_claim);
         Err::<Response, Error>(Error::AppServiceUnavailable {
@@ -37715,13 +37132,13 @@ async fn handler_signed_query_admitted(
             Ok(routes) => routes,
             Err(response) => return Ok(response),
         };
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(feature = "connect")]
     if authorized_routes.len() > 1
         && let Err(response) = ensure_bounded_fanout_query(&verified_query)
     {
         return Ok(response);
     }
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(feature = "connect")]
     let should_nexus_fanout = matches!(
         &query_scope,
         SignedQueryScope::CrossDataspaceFanout
@@ -37729,7 +37146,7 @@ async fn handler_signed_query_admitted(
             | SignedQueryScope::TargetAlias(_)
             | SignedQueryScope::TargetDomain(_)
     ) && authorized_routes.len() > 1;
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(feature = "connect")]
     if should_nexus_fanout {
         // Promotion is fail-fast while ingress is held: completed fanout
         // bodies never queue on the fanout lane and starve ordinary ingress.
@@ -37761,7 +37178,7 @@ async fn handler_signed_query_admitted(
         .await);
     }
     let routing_decision = authorized_routes.first().copied();
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(feature = "connect")]
     if let Some(routing_decision) = routing_decision
         && !should_execute_route_locally(app.as_ref(), routing_decision)
     {
@@ -39910,15 +39327,20 @@ fn recipient_route_for_account(
         .unwrap_or_default();
     let mut eligible = BTreeMap::<AccountAlias, (DomainId, String, String)>::new();
     for alias in aliases {
-        if iroha_core::sns::resolve_active_account_alias(
+        let resolved = iroha_core::sns::resolve_active_account_alias(
             world,
             &nexus.dataspace_catalog,
             &alias,
             now_ms,
         )
-        .as_ref()
-            != Some(account_id)
-        {
+        .map_err(|error| {
+            torii_proxy_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "recipient_route_state_invalid",
+                error.to_string(),
+            )
+        })?;
+        if resolved.as_ref() != Some(account_id) {
             continue;
         }
         // This request-bound corridor endpoint is intentionally narrower than the
@@ -40062,7 +39484,7 @@ async fn handler_retail_recipient_route(
         ));
     }
     let account_id = match AccountId::parse_encoded(&requested_account_id) {
-        Ok(parsed) => parsed.into_account_id(),
+        Ok(account_id) => account_id,
         Err(err) => {
             return Ok(torii_proxy_error_response(
                 StatusCode::BAD_REQUEST,
@@ -40551,15 +39973,13 @@ async fn handler_retail_recipient_lookup(
         ));
     }
     let requested_account_id_literal = request.account_id.trim().to_owned();
-    let (account_id, _, _) = AccountId::parse_encoded(request.account_id.trim())
-        .map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "invalid account_id: {err}"
-                )),
-            ))
-        })?
-        .into_parts();
+    let account_id = AccountId::parse_encoded(request.account_id.trim()).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "invalid account_id: {err}"
+            )),
+        ))
+    })?;
     if account_id.to_string() != requested_account_id_literal {
         return Ok(torii_proxy_error_response(
             StatusCode::BAD_REQUEST,
@@ -41018,13 +40438,12 @@ async fn handler_identifier_resolve(
     NoritoJson(request): NoritoJson<routing::IdentifierResolveRequestDto>,
 ) -> Result<AxResponse, Error> {
     check_access(&app, &headers, Some(remote.ip()), "v1/identifiers/resolve").await?;
-    let policy_id =
-        iroha_data_model::identifier::IdentifierPolicyId::from_str(request.policy_id.trim())
-            .map_err(|err| {
-                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-                ))
-            })?;
+    let policy_id = iroha_data_model::identifier::IdentifierPolicyId::from_str(&request.policy_id)
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
     let world = app.state.world_view();
     let Some(policy) = world.identifier_policies().get(&policy_id).cloned() else {
         return Ok(StatusCode::NOT_FOUND.into_response());
@@ -41088,13 +40507,12 @@ async fn handler_identifier_claim_receipt(
         &account_literal,
         "/v1/accounts/{account_id}/identifiers/claim-receipt",
     )?;
-    let policy_id =
-        iroha_data_model::identifier::IdentifierPolicyId::from_str(request.policy_id.trim())
-            .map_err(|err| {
-                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
-                ))
-            })?;
+    let policy_id = iroha_data_model::identifier::IdentifierPolicyId::from_str(&request.policy_id)
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
     let world = app.state.world_view();
     let Some(policy) = world.identifier_policies().get(&policy_id).cloned() else {
         return Ok(StatusCode::NOT_FOUND.into_response());
@@ -41429,9 +40847,7 @@ fn tx_history_viewer_from_headers(
                 "missing dataspace_id claim",
             )
         })?;
-    let canonical_account_id = AccountId::parse_encoded(subject.trim())
-        .ok()
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id);
+    let canonical_account_id = AccountId::parse_encoded(subject.trim()).ok();
     let alias_candidates = if canonical_account_id.is_some() {
         Vec::new()
     } else {
@@ -41840,13 +41256,19 @@ fn validate_account_onboarding_readiness(
     let account_alias_policy =
         iroha_core::sns::policy_by_id(&world, iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID);
     match account_alias_policy.as_ref() {
-        None => blocked(
+        Err(error) => blocked(
+            "alias.onboarding.policy_invalid",
+            Some(error.to_string()),
+            "torii.account_onboarding",
+            "replace the malformed account-alias SNS policy through an explicit ledger transition",
+        ),
+        Ok(None) => blocked(
             "alias.onboarding.policy_missing",
             Some(iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID.to_string()),
             "torii.account_onboarding",
             "install the account-alias SNS policy in genesis or committed world state",
         ),
-        Some(policy) => {
+        Ok(Some(policy)) => {
             if !matches!(policy.status, iroha_data_model::sns::SuffixStatus::Active) {
                 blocked(
                     "alias.onboarding.policy_inactive",
@@ -43757,9 +43179,9 @@ pub struct Torii {
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
     peer_geo: telemetry::peers::GeoLookupConfig,
     sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
-    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+    #[cfg(any(feature = "app_api", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
-    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+    #[cfg(any(feature = "app_api", feature = "connect"))]
     local_peer_id: Option<PeerId>,
     // Query and transaction rate limits (operator-local)
     #[allow(dead_code)]
@@ -43793,7 +43215,6 @@ pub struct Torii {
     soracloud_mutation_burst_per_account_origin: Option<std::num::NonZeroU32>,
     soracloud_mutation_max_inflight: usize,
     soracloud_mutation_max_body_bytes: usize,
-    soracloud_upload_max_body_bytes: usize,
     rate_limiter: limits::RateLimiter,
     query_preauth_rate_limiter: limits::RateLimiter,
     query_authority_rate_limiter: limits::RateLimiter,
@@ -45438,6 +44859,14 @@ macro_rules! catalog_route_policy {
     (canonical_account_get($handler:path, $state:ident, $auth_limit:expr)) => {
         catalog_get($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
+    (contract_account_get($handler:path, $state:ident, $auth_limit:expr)) => {
+        catalog_get($handler).authenticated_canonical_account_body_with_missing_auth(
+            $state.clone(),
+            $auth_limit,
+            "contract_code_auth_required",
+            "signed account headers are required to read governed contract metadata",
+        )
+    };
     (canonical_account_post($handler:path, $state:ident, $auth_limit:expr)) => {
         catalog_post($handler).authenticated_canonical_account_body($state.clone(), $auth_limit)
     };
@@ -46038,7 +45467,7 @@ impl Torii {
             CONFIGURATION_GET => operator_get(handler_get_configuration, app_state);
             CONFIGURATION_POST => operator_post(handler_post_configuration, app_state);
         );
-        #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+        #[cfg(feature = "connect")]
         builder.route(
             &route_catalog::core::INTERNAL_PROXY,
             catalog_post(handler_internal_torii_proxy_request)
@@ -46507,21 +45936,10 @@ impl Torii {
                 .authenticated_canonical_account_body(app_state, 0),
         );
     }
-    /// P2P fallback, event SSE, subscription WS, and block stream WS
+    /// Event SSE, subscription WS, and block stream WS.
     #[allow(clippy::unused_self)]
     fn add_network_stream_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
-        #[cfg(feature = "p2p_ws")]
-        mount_catalog_route_rows!(
-            builder, streaming;
-            P2P => protocol_handshake_get(handler_p2p_ws);
-        );
-        #[cfg(not(feature = "p2p_ws"))]
-        builder.route(
-            &route_catalog::streaming::P2P,
-            catalog_get(|| async move { (axum::http::StatusCode::NOT_FOUND, "p2p_ws disabled") })
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
         #[cfg(feature = "app_api")]
         {
             let app = builder.state().clone();
@@ -46767,9 +46185,12 @@ impl Torii {
         mount_catalog_route_rows!(
             builder, application_api;
             ACCOUNTS_ONBOARD_PLAN_POST => onboarding_post(handler_accounts_onboard_plan);
+            ACCOUNTS_ONBOARD_PREPARE_POST => onboarding_post(handler_accounts_onboard_prepare);
             ACCOUNTS_ONBOARD_POST => onboarding_post(handler_accounts_onboard);
             ACCOUNTS_ONBOARDING_READINESS_GET => onboarding_get(handler_accounts_onboarding_readiness);
+            ACCOUNTS_ONBOARDING_CURRENT_STATE_POST => limited_public_post(account_onboarding_state::handler_account_onboarding_current_state, EXACT_ALIAS_READ_MAX_BODY_BYTES);
             ACCOUNTS_FAUCET_PUZZLE_GET => public_get(handler_accounts_faucet_puzzle);
+            ACCOUNTS_FAUCET_PREPARE_POST => protocol_handshake_post(handler_accounts_faucet_prepare);
             ACCOUNTS_FAUCET_POST => protocol_handshake_post(handler_accounts_faucet);
             ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET => public_get(handler_account_aliases);
             ACCOUNTS_BY_UAID_PORTFOLIO_GET => public_get(handler_accounts_portfolio);
@@ -46908,21 +46329,9 @@ impl Torii {
             SORACLOUD_MODEL_UPLOAD_REGISTER_POST,
             handle_uploaded_model_register
         );
-        mount_catalog_route_rows!(
-            builder, application_api;
-            SORACLOUD_MODEL_UPLOAD_ENCRYPTION_RECIPIENT_GET => public_get(soracloud::handle_uploaded_model_encryption_recipient);
-        );
         mount_soracloud_read!(
             SORACLOUD_MODEL_UPLOAD_STATUS_GET,
             soracloud::handle_uploaded_model_status
-        );
-        mount_soracloud_command!(
-            SORACLOUD_MODEL_UPLOAD_PRIVATE_EXECUTE_POST,
-            handle_uploaded_model_private_execute
-        );
-        mount_soracloud_read!(
-            SORACLOUD_MODEL_UPLOAD_PRIVATE_RECEIPTS_GET,
-            soracloud::handle_uploaded_model_private_receipts
         );
         mount_soracloud_command!(SORACLOUD_HF_DEPLOY_POST, handle_hf_deploy);
         mount_soracloud_read!(SORACLOUD_HF_STATUS_GET, soracloud::handle_hf_status);
@@ -46966,11 +46375,6 @@ impl Torii {
         mount_soracloud_command!(
             SORACLOUD_AGENT_AUTONOMY_ALLOW_POST,
             handle_agent_autonomy_allow
-        );
-        mount_soracloud_command!(SORACLOUD_AGENT_AUTONOMY_RUN_POST, handle_agent_autonomy_run);
-        mount_soracloud_command!(
-            SORACLOUD_AGENT_AUTONOMY_RUN_FINALIZE_POST,
-            handle_agent_autonomy_run_finalize
         );
         mount_soracloud_read!(
             SORACLOUD_AGENT_AUTONOMY_STATUS_GET,
@@ -47089,6 +46493,9 @@ impl Torii {
         mount_catalog_route_rows!(
             builder, application_api;
             TELEMETRY_LIVE_GET => public_get(handler_telemetry_live);
+        );
+        mount_catalog_route_rows!(
+            builder, application_api;
             EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET => public_get(handler_explorer_account_detail);
             EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_QR_GET => public_get(handler_explorer_account_qr);
             EXPLORER_DOMAINS_BY_DOMAIN_ID_GET => public_get(handler_explorer_domain_detail);
@@ -47103,7 +46510,7 @@ impl Torii {
             EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_GET => public_get(handler_explorer_instruction_detail);
             EXPLORER_INSTRUCTIONS_BY_HASH_BY_INDEX_CONTRACT_VIEW_GET => public_get(handler_explorer_instruction_contract_view);
             KAIGI_CALLS_BY_CALL_ID_GET => public_get(handler_kaigi_call);
-            KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET => public_get(handler_kaigi_call_signals);
+            KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET => canonical_account_get(handler_kaigi_call_signals, app_state, 0);
             KAIGI_CALLS_BY_CALL_ID_EVENTS_GET => protocol_handshake_get(handler_kaigi_call_events_sse);
             KAIGI_RELAYS_GET => operator_get(handler_kaigi_relays, app_state);
             KAIGI_RELAYS_BY_RELAY_ID_GET => operator_get(handler_kaigi_relay_detail, app_state);
@@ -47406,7 +46813,7 @@ impl Torii {
                 GOV_PROTECTED_GET => canonical_account_get(handler_gov_protected_get, app_state, 0);
                 GOV_STREAM => protocol_handshake_get(handler_gov_stream);
                 GOV_UNLOCK_STATS => canonical_account_get(handler_gov_unlock_stats, app_state, 0);
-                GOV_CONTRACT_GET => canonical_account_get(handler_gov_contract_get, app_state, 0);
+                GOV_CONTRACT_GET => contract_account_get(handler_gov_contract_get, app_state, 0);
                 GOV_ENACT => canonical_account_post(handler_gov_enact, app_state, runtime_governance_body_limit);
                 GOV_COUNCIL_CURRENT => canonical_account_get(handler_gov_council_current, app_state, 0);
                 GOV_CITIZENS_COUNT => canonical_account_get(handler_gov_citizen_count, app_state, 0);
@@ -48839,9 +48246,9 @@ impl Torii {
                 .max_batch_transactions
                 .get(),
             ws_message_timeout: config.ws_message_timeout,
-            #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+            #[cfg(any(feature = "app_api", feature = "connect"))]
             p2p: None,
-            #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+            #[cfg(any(feature = "app_api", feature = "connect"))]
             local_peer_id: None,
             query_rate_per_authority_per_sec: config.query_rate_per_authority_per_sec,
             query_burst_per_authority: config.query_burst_per_authority,
@@ -48873,10 +48280,6 @@ impl Torii {
             soracloud_mutation_max_inflight: config.soracloud_mutation_max_inflight.get(),
             soracloud_mutation_max_body_bytes: usize::try_from(
                 config.soracloud_mutation_max_body_bytes.get(),
-            )
-            .unwrap_or(usize::MAX),
-            soracloud_upload_max_body_bytes: usize::try_from(
-                config.soracloud_upload_max_body_bytes.get(),
             )
             .unwrap_or(usize::MAX),
             rate_limiter: rl,
@@ -49037,8 +48440,8 @@ impl Torii {
             soracloud_hf_config,
         }
     }
-    /// Wire a P2P handle for WebSocket fallback (feature `p2p_ws`).
-    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+    /// Wire a P2P handle for authenticated network services.
+    #[cfg(any(feature = "app_api", feature = "connect"))]
     pub fn with_p2p(mut self, p2p: iroha_core::IrohaNetwork) -> Self {
         self.p2p = Some(p2p);
         #[cfg(feature = "connect")]
@@ -49050,19 +48453,19 @@ impl Torii {
         }
         self
     }
-    /// No-op when both `p2p_ws` and `connect` features are disabled.
-    #[cfg(not(any(feature = "app_api", feature = "p2p_ws", feature = "connect")))]
+    /// No-op when application and Connect P2P services are disabled.
+    #[cfg(not(any(feature = "app_api", feature = "connect")))]
     pub fn with_p2p(self, _p2p: iroha_core::IrohaNetwork) -> Self {
         self
     }
     /// Advertise the local peer id so Torii can decide when ingress requests must be proxied.
-    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+    #[cfg(any(feature = "app_api", feature = "connect"))]
     pub fn with_local_peer_id(mut self, peer_id: PeerId) -> Self {
         self.local_peer_id = Some(peer_id);
         self
     }
     /// No-op when P2P support is disabled.
-    #[cfg(not(any(feature = "app_api", feature = "p2p_ws", feature = "connect")))]
+    #[cfg(not(any(feature = "app_api", feature = "connect")))]
     pub fn with_local_peer_id(self, _peer_id: PeerId) -> Self {
         self
     }
@@ -49375,7 +48778,6 @@ impl Torii {
             soracloud_mutation_inflight,
             soracloud_public_max_response_bytes: self.soracloud_public_max_response_bytes,
             soracloud_mutation_max_body_bytes: self.soracloud_mutation_max_body_bytes,
-            soracloud_upload_max_body_bytes: self.soracloud_upload_max_body_bytes,
             content_request_limiter: self.content_request_limiter.clone(),
             content_egress_limiter: self.content_egress_limiter.clone(),
             proof_limits: self.proof_limits,
@@ -49451,9 +48853,9 @@ impl Torii {
             da_ingest_compute_inflight,
             da_spooler: da_runtime.spooler,
             sumeragi: self.sumeragi.clone(),
-            #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+            #[cfg(any(feature = "app_api", feature = "connect"))]
             p2p: self.p2p.clone(),
-            #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+            #[cfg(any(feature = "app_api", feature = "connect"))]
             local_peer_id: self.local_peer_id.clone(),
             #[cfg(feature = "connect")]
             connect_bus: self.connect_bus.clone(),
@@ -49565,19 +48967,15 @@ impl Torii {
             vpn_state_lock: Arc::new(std::sync::Mutex::new(vpn::VpnRuntimeState::default())),
             soracloud_runtime: self.soracloud_runtime.clone(),
             soracloud_hf_config: self.soracloud_hf_config.clone(),
-            #[cfg(feature = "app_api")]
-            soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-            #[cfg(feature = "app_api")]
-            soracloud_proxy_sequence: std::sync::atomic::AtomicU64::new(1),
-            #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+            #[cfg(feature = "connect")]
             torii_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-            #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+            #[cfg(feature = "connect")]
             torii_proxy_completed: Arc::new(tokio::sync::Mutex::new(
                 CompletedToriiProxyRequests::default(),
             )),
-            #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+            #[cfg(feature = "connect")]
             torii_proxy_session_id: new_torii_proxy_session_id(),
-            #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+            #[cfg(feature = "connect")]
             torii_proxy_sequence: std::sync::atomic::AtomicU64::new(1),
         });
         #[cfg(feature = "app_api")]
@@ -49590,7 +48988,7 @@ impl Torii {
         let _ = current_torii_queue_pressure(app_state.as_ref());
         // Touch certain fields to avoid dead-code warnings under feature combinations
         let _ = (&app_state.kiso, &app_state.online_peers);
-        #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+        #[cfg(any(feature = "app_api", feature = "connect"))]
         let _ = &app_state.p2p;
         let _ = (
             &app_state.mcp,
@@ -49638,7 +49036,7 @@ impl Torii {
                 )
             });
         }
-        #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+        #[cfg(feature = "connect")]
         if let Some(network) = app_state.p2p.clone() {
             attach_torii_proxy_network(app_state.clone(), network);
         }
@@ -49680,7 +49078,7 @@ impl Torii {
         self.add_proof_routes(&mut builder);
         self.add_musubi_routes(&mut builder);
         self.add_mcp_routes(&mut builder);
-        // Streams and P2P websocket fallback
+        // Application event and block streams.
         self.add_network_stream_routes(&mut builder);
         // Policy and pipeline helpers
         self.add_policy_and_pipeline_routes(&mut builder);

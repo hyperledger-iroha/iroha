@@ -106,7 +106,7 @@ exact KMS lineage without revealing secrets.
   --effective-segment <seq> --kms-profile <profile>` which:
   1. Requests a fresh GCK wrap key from the configured KMS profile.
   2. Emits a Norito `CekRotationReceiptV1` containing the old/new key labels,
-     HKDF salt, and operator signature.
+     a non-zero HKDF salt, and operator signature.
   3. Stores the receipt under
      `artifacts/taikai/cek_rotations/<event>/<stream>/<timestamp>.to`.
 - CI hook: `ci/check_taikai_keys.sh` (future) asserts receipts exist for every
@@ -143,6 +143,25 @@ consistency or zone publication.
 | `valid_from`, `valid_until` | Unix timestamps describing the coverage window. |
 | `signer` | Governance key identifier. |
 
+The GAR and CEK receipt fields are the raw BLAKE3-256 digest of the exact file
+bytes. The distribution bundle uses the canonical `iroha.taikai.bundle.v1`
+stream instead so directory structure is committed without ambiguous record
+boundaries. All three commitments must be non-zero:
+
+1. Feed the ASCII domain `iroha.taikai.bundle.v1` into BLAKE3.
+2. Visit entries depth-first, sorting UTF-8 child names lexically within each
+   directory, using `/` between relative path components and `.` for the root
+   directory.
+3. For every entry, feed its one-byte kind (`D` or `F`), the little-endian
+   `u64` byte length of its canonical path, and the path bytes.
+4. For a file, additionally feed its little-endian `u64` byte length followed
+   by the exact file bytes. Reject special files, non-UTF-8 paths, or files that
+   change length while being read.
+
+A single archive is encoded as one `F` record whose canonical path is its base
+name. Both `iroha app taikai rpt-attest` and `cargo xtask taikai-rpt-verify`
+implement this same framing.
+
 ### Workflow
 
 1. Operators run `iroha app taikai rpt-attest --event <event> --stream <stream> \
@@ -157,6 +176,13 @@ consistency or zone publication.
 4. Torii stores the latest valid RPT digest under `/v1/config/taikai.rpt.digest`
    so relays and gateways can assert that the operational surface matches the
    attested policy.
+
+The RPT producer and verifier decode CEK receipts only from canonical framed
+Norito, require the v1 receipt invariants, and require the receipt event/stream
+scope to match the RPT. RPT outputs must be distinct from their JSON companion
+and from every attested input; in particular, an RPT cannot be written inside
+the distribution bundle whose digest it embeds. Verifier report files likewise
+must not alias, overwrite, or be nested within any input they verify.
 
 ### CLI integration
 

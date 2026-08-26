@@ -16,6 +16,7 @@ pub mod incentives;
 pub mod metrics;
 pub mod popctl;
 pub mod privacy;
+#[cfg(feature = "runtime")]
 pub mod runtime;
 pub mod scheduler;
 pub mod token_tool;

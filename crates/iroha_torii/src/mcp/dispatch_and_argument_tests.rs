@@ -354,11 +354,20 @@ fn tool_registry_skips_ws_and_sse_routes() {
     assert!(tools.iter().any(|tool| tool.name == "iroha.accounts.get"));
     assert!(tools.iter().any(|tool| tool.name == "iroha.accounts.qr"));
     assert!(tools.iter().any(|tool| tool.name == "iroha.accounts.query"));
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.accounts.onboard")
-    );
+    for name in [
+        "iroha.accounts.onboard.prepare",
+        "iroha.accounts.onboard.submit",
+        "iroha.accounts.faucet.prepare",
+        "iroha.accounts.faucet.submit",
+    ] {
+        assert!(tools.iter().any(|tool| tool.name == name));
+    }
+    assert!(tools.iter().all(|tool| {
+        !matches!(
+            tool.name.as_str(),
+            "iroha.accounts.onboard" | "iroha.accounts.faucet"
+        )
+    }));
     assert!(
         tools
             .iter()
@@ -2626,7 +2635,7 @@ fn extract_transaction_hash_from_submit_result_accepts_json_receipt_payload() {
         "status": 202,
         "body": {
             "payload": {
-                "entrypoint_hash": (canonical_hash.clone())
+                "signed_transaction_hash": (canonical_hash.clone())
             },
             "signature": "ignored"
         }
@@ -2635,26 +2644,33 @@ fn extract_transaction_hash_from_submit_result_accepts_json_receipt_payload() {
     assert_eq!(hash, canonical_hash);
 }
 #[test]
-fn extract_transaction_hash_from_submit_result_normalizes_json_receipt_literal_hash() {
+fn extract_transaction_hash_from_submit_result_rejects_noncanonical_json_receipt_hashes() {
     let hash_body = "AB".repeat(iroha_crypto::Hash::LENGTH);
     let hash_literal = norito::literal::format("hash", &hash_body);
-    let submit_result = norito::json!({
+    for noncanonical in [hash_literal, hash_body] {
+        let submit_result = norito::json!({
+            "status": 202,
+            "body": {
+                "payload": {
+                    "signed_transaction_hash": noncanonical
+                },
+                "signature": "ignored"
+            }
+        });
+        extract_transaction_hash_from_submit_result(&submit_result)
+            .expect_err("receipt hashes must already use canonical lowercase Iroha text");
+    }
+
+    let entrypoint_only = norito::json!({
         "status": 202,
         "body": {
             "payload": {
-                "entrypoint_hash": hash_literal
-            },
-            "signature": "ignored"
+                "entrypoint_hash": format!("{}1", "0".repeat(63))
+            }
         }
     });
-    let hash = extract_transaction_hash_from_submit_result(&submit_result).expect("hash");
-    assert_eq!(hash, hash_body.to_ascii_lowercase());
-}
-#[test]
-fn normalize_submission_receipt_hash_preserves_canonical_bare_hash() {
-    let canonical_hash = format!("{}1", "0".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES - 1));
-    let hash = normalize_submission_receipt_hash(&canonical_hash).expect("hash");
-    assert_eq!(hash, canonical_hash);
+    extract_transaction_hash_from_submit_result(&entrypoint_only)
+        .expect_err("entrypoint hashes cannot be reinterpreted as signed transaction hashes");
 }
 #[test]
 fn canonical_transaction_hash_rejects_unbounded_or_noncanonical_inputs() {
@@ -2675,8 +2691,7 @@ fn transaction_status_query_borrows_canonical_hash() {
     let canonical_hash = format!("{}1", "0".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES - 1));
     let arguments = norito::json!({
         "query": {
-            "hash": (canonical_hash.clone()),
-            "scope": "local"
+            "hash": (canonical_hash.clone())
         }
     });
     let route = append_transaction_status_query(
@@ -2687,8 +2702,21 @@ fn transaction_status_query_borrows_canonical_hash() {
     .expect("status route");
     assert_eq!(
         route,
-        format!("/v1/pipeline/transactions/status?hash={canonical_hash}&scope=local")
+        format!("/v1/pipeline/transactions/status?hash={canonical_hash}&scope=global")
     );
+
+    let with_scope_override = norito::json!({
+        "query": {
+            "hash": (canonical_hash.clone()),
+            "scope": "local"
+        }
+    });
+    append_transaction_status_query(
+        "/v1/pipeline/transactions/status".to_owned(),
+        with_scope_override.as_object().expect("arguments"),
+        &canonical_hash,
+    )
+    .expect_err("callers cannot override the fixed global status scope");
 }
 #[test]
 fn dispatch_source_keeps_source_sized_request_clones_closed() {
@@ -2715,67 +2743,134 @@ fn dispatch_source_keeps_source_sized_request_clones_closed() {
     }
 }
 #[test]
-fn extract_pipeline_status_kind_reads_top_level_status() {
-    let status_result = norito::json!({
+fn exact_global_pipeline_status_binds_hash_scope_and_shape() {
+    let canonical_hash = format!("{}1", "0".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES - 1));
+    let canonical = norito::json!({
         "status": 200,
         "body": {
-            "hash": "deadbeef",
+            "hash": (canonical_hash.clone()),
             "status": {
-                "kind": "Committed"
-            }
+                "kind": "Applied",
+                "block_height": 7
+            },
+            "scope": "global",
+            "resolved_from": "state"
         }
     });
-    assert_eq!(
-        extract_pipeline_status_kind(&status_result),
-        Some("Committed")
+    let decoded = decode_exact_global_pipeline_status(&canonical, &canonical_hash)
+        .expect("exact global status");
+    assert!(fixed_pipeline_status_is_applied(&decoded).expect("fixed outcome"));
+
+    for (pointer, replacement) in [
+        ("/body/hash", Value::from(format!("{}1", "a".repeat(63)))),
+        ("/body/scope", Value::from("local")),
+        ("/body/resolved_from", Value::from("legacy")),
+    ] {
+        let mut invalid = canonical.clone();
+        *invalid.pointer_mut(pointer).expect("fixture pointer") = replacement;
+        decode_exact_global_pipeline_status(&invalid, &canonical_hash)
+            .expect_err("mismatched global status evidence must fail closed");
+    }
+    let mut unknown = canonical.clone();
+    unknown
+        .pointer_mut("/body")
+        .and_then(Value::as_object_mut)
+        .expect("body object")
+        .insert("legacy".to_owned(), Value::Null);
+    decode_exact_global_pipeline_status(&unknown, &canonical_hash)
+        .expect_err("unknown response fields must fail closed");
+}
+#[test]
+fn fixed_pipeline_finality_accepts_only_state_resolved_outcomes() {
+    let response = |kind: &str, resolved_from: &str| PipelineTransactionStatusResponse {
+        hash: format!("{}1", "0".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES - 1)),
+        status: iroha_torii_shared::PipelineTransactionStatus {
+            kind: kind.to_owned(),
+            block_height: Some(7),
+        },
+        scope: "global".to_owned(),
+        resolved_from: resolved_from.to_owned(),
+    };
+    assert!(fixed_pipeline_status_is_applied(&response("Applied", "state")).expect("applied"));
+    assert!(
+        !fixed_pipeline_status_is_applied(&response("Applied", "cache"))
+            .expect("cached Applied remains pending")
     );
+    for failure in ["Rejected", "Expired"] {
+        fixed_pipeline_status_is_applied(&response(failure, "state"))
+            .expect_err("fixed failure outcomes must never be configurable successes");
+        for source in ["cache", "queue"] {
+            assert!(
+                !fixed_pipeline_status_is_applied(&response(failure, source))
+                    .expect("non-state failure hints remain pending")
+            );
+        }
+    }
+    fixed_pipeline_status_is_applied(&response("applied", "state"))
+        .expect_err("status spelling is exact and case-sensitive");
 }
 #[test]
-fn resolve_submit_wait_terminal_statuses_accepts_custom_values() {
-    let args = norito::json!({
-        "terminal_statuses": ["Applied", "Rejected"]
+fn applied_wait_status_poll_accepts_only_exact_200_or_404() {
+    let canonical_hash = format!("{}1", "0".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES - 1));
+    assert!(
+        exact_pipeline_status_poll_has_body(200, &canonical_hash).expect("HTTP 200 has a body")
+    );
+    assert!(
+        !exact_pipeline_status_poll_has_body(404, &canonical_hash)
+            .expect("HTTP 404 is the only pending response")
+    );
+    for status_code in [0, 201, 202, 204, 429, 500, 503] {
+        let error = exact_pipeline_status_poll_has_body(status_code, &canonical_hash)
+            .expect_err("every other HTTP response must fail closed");
+        assert!(error.contains("expected exact HTTP 200"));
+    }
+}
+#[test]
+fn applied_wait_result_has_one_exact_v1_key_set() {
+    let canonical_hash = format!("{}1", "0".repeat(CANONICAL_TRANSACTION_HASH_HEX_BYTES - 1));
+    let final_result = norito::json!({
+        "status": 200,
+        "body": {
+            "hash": (canonical_hash.clone()),
+            "status": { "kind": "Applied", "block_height": 7 },
+            "scope": "global",
+            "resolved_from": "state"
+        }
     });
-    let statuses =
-        resolve_submit_wait_terminal_statuses(args.as_object().expect("object")).expect("ok");
-    assert_eq!(statuses, vec!["Applied", "Rejected"]);
-}
-#[test]
-fn resolve_submit_wait_terminal_statuses_defaults_to_applied_only() {
-    let args = norito::json!({});
-    let statuses =
-        resolve_submit_wait_terminal_statuses(args.as_object().expect("object")).expect("ok");
-    assert_eq!(statuses, vec!["Applied"]);
-}
-#[test]
-fn resolve_submit_wait_terminal_statuses_rejects_unsupported_values() {
-    let args = norito::json!({
-        "terminal_statuses": ["Unknown"]
-    });
-    let err = resolve_submit_wait_terminal_statuses(args.as_object().expect("object"))
-        .expect_err("unsupported terminal status should fail");
-    assert!(err.contains("unsupported terminal status"));
-}
-#[test]
-fn unrequested_terminal_failure_errors_only_when_not_configured() {
-    let default_terminal = vec!["Applied".to_owned()];
-    assert!(should_error_on_unrequested_terminal_failure(
-        "Rejected",
-        &default_terminal
-    ));
-    assert!(should_error_on_unrequested_terminal_failure(
-        "Expired",
-        &default_terminal
-    ));
-    let rejected_terminal = vec!["Rejected".to_owned()];
-    assert!(!should_error_on_unrequested_terminal_failure(
-        "Rejected",
-        &rejected_terminal
-    ));
-    let expired_terminal = vec!["Expired".to_owned()];
-    assert!(!should_error_on_unrequested_terminal_failure(
-        "Expired",
-        &expired_terminal
-    ));
+    let result = build_transaction_applied_wait_result(
+        &canonical_hash,
+        3,
+        25,
+        Some(norito::json!({ "status": 202 })),
+        final_result.clone(),
+    )
+    .expect("exact Applied wait result");
+    let object = result.as_object().expect("result object");
+    assert_eq!(object.len(), 7);
+    for key in [
+        "status",
+        "hash",
+        "terminal_kind",
+        "attempts",
+        "elapsed_ms",
+        "submit",
+        "final",
+    ] {
+        assert!(object.contains_key(key), "missing exact key `{key}`");
+    }
+    assert_eq!(
+        object.get("terminal_kind").and_then(Value::as_str),
+        Some("Applied")
+    );
+    assert!(!object.contains_key("tx_hash"));
+    assert!(!object.contains_key("final_status"));
+
+    let without_submit =
+        build_transaction_applied_wait_result(&canonical_hash, 1, 0, None, final_result)
+            .expect("exact read-only Applied wait result");
+    let object = without_submit.as_object().expect("result object");
+    assert_eq!(object.len(), 6);
+    assert!(!object.contains_key("submit"));
 }
 #[test]
 fn extract_code_hash_argument_requires_canonical_path_field() {

@@ -23,12 +23,14 @@ cargo run -p soranet-handshake-harness -- fixtures --verify --out tests/interop/
   timestamp ordering, epoch continuity, salt length, and reporting whether a signature is present.
 - `fixtures` — generate or verify the canonical capability, telemetry, and salt fixtures.
 - `simulate` — compute transcript hash, capability warnings, and a fully
-  simulated Noise XX message flow (including deterministic ML-KEM material,
-  Ed25519/Dilithium signatures, 1024-byte padding, and a telemetry record).
+  simulated Noise XX message flow (including deterministic client ML-KEM
+  public shares, ciphertext-only relay KEM fields, Ed25519/ML-DSA-65
+  authentication, 1024-byte padding, and a telemetry record).
   Use `--json-out` to persist the report, `--frames-out <dir>` to dump the raw
   binary frames, and `--telemetry-out` to dump the telemetry payload JSON.
-- `cargo fuzz run handshake_state_machine` — exercises the relay-side parser with
-  random client payloads to harden the Noise XX state machine against malformed input.
+- `cargo fuzz run handshake_state_machine` — exercises both the client-hello and
+  relay-response parsers with adversarial payloads to harden the Noise XX state
+  machine against malformed input.
 
 Example:
 

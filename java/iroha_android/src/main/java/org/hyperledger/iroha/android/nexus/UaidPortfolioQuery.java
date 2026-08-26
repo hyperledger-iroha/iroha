@@ -6,51 +6,36 @@ import java.util.Map;
 
 /** Query parameters for `/v1/accounts/{uaid}/portfolio`. */
 public final class UaidPortfolioQuery {
-  private final String asset;
-  private final String scope;
+  private final String assetId;
 
   private UaidPortfolioQuery(final Builder builder) {
-    this.asset = builder.asset;
-    this.scope = builder.scope;
+    this.assetId = builder.assetId;
   }
 
   public static Builder builder() {
     return new Builder();
   }
 
-  public String asset() {
-    return asset;
-  }
-
-  public String scope() {
-    return scope;
+  public String assetId() {
+    return assetId;
   }
 
   public Map<String, String> toQueryParameters() {
     final Map<String, String> params = new LinkedHashMap<>();
-    if (asset != null) {
-      params.put("asset", asset);
-    }
-    if (scope != null) {
-      params.put("scope", scope);
+    if (assetId != null) {
+      params.put("asset_id", assetId);
     }
     return Collections.unmodifiableMap(params);
   }
 
   /** Builder for {@link UaidPortfolioQuery}. */
   public static final class Builder {
-    private String asset;
-    private String scope;
+    private String assetId;
 
     private Builder() {}
 
-    public Builder setAsset(final String asset) {
-      this.asset = normalizeNonEmpty(asset, "asset");
-      return this;
-    }
-
-    public Builder setScope(final String scope) {
-      this.scope = normalizeNonEmpty(scope, "scope");
+    public Builder setAssetId(final String assetId) {
+      this.assetId = requireExactNonEmpty(assetId, "assetId");
       return this;
     }
 
@@ -58,7 +43,7 @@ public final class UaidPortfolioQuery {
       return new UaidPortfolioQuery(this);
     }
 
-    private static String normalizeNonEmpty(final String raw, final String field) {
+    private static String requireExactNonEmpty(final String raw, final String field) {
       if (raw == null) {
         throw new NullPointerException(field);
       }
@@ -68,9 +53,6 @@ public final class UaidPortfolioQuery {
       }
       if (!trimmed.equals(raw)) {
         throw new IllegalArgumentException(field + " must not contain surrounding whitespace");
-      }
-      if (trimmed.indexOf(':') >= 0) {
-        throw new IllegalArgumentException(field + " must use a canonical asset selector");
       }
       return raw;
     }

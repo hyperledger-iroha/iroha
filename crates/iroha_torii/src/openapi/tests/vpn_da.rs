@@ -1,7 +1,7 @@
 const OPENAPI_STATIC_CONTRACT_ASSET_VERSION: &str = "IROHA_STATIC_CONTRACT_ROWS_V1";
-const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 116_607;
+const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 116_863;
 const OPENAPI_STATIC_CONTRACT_ASSET_SHA256: &str =
-    "05069a6278ba5fba3a64c41d09b59e55fa4e75d7cabde26055cce9065abdc474";
+    "f4c4c0b28d222579a9c5fdc55ccbd50ded72e2fda50dbc3334d1a4e388c30b0e";
 const OPENAPI_STATIC_CONTRACT_ASSET: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/src/openapi/tests/openapi_static_contracts_v1.txt"
@@ -277,6 +277,39 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
             Some(pattern),
             "{schema_name}.{field} must continue accepting mixed-case prefixed input"
         );
+    }
+    let profile_mldsa = schemas
+        .get("VpnProfileResponse")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("properties"))
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get("relay_mldsa65_public_key_hex"))
+        .and_then(Value::as_object)
+        .expect("VPN profile ML-DSA-65 trust schema");
+    assert_eq!(
+        profile_mldsa.get("pattern").and_then(Value::as_str),
+        Some("^(?:|[0-9a-f]{3904})$")
+    );
+    assert_eq!(
+        profile_mldsa.get("maxLength").and_then(Value::as_u64),
+        Some(3904)
+    );
+    for schema_name in ["VpnQuoteResponse", "VpnSessionResponse"] {
+        let mldsa = schemas
+            .get(schema_name)
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("relay_mldsa65_public_key_hex"))
+            .and_then(Value::as_object)
+            .expect("VPN ML-DSA-65 trust schema");
+        assert_eq!(
+            mldsa.get("pattern").and_then(Value::as_str),
+            Some("^[0-9a-f]{3904}$"),
+            "{schema_name} must advertise canonical ML-DSA-65 public-key hex"
+        );
+        assert_eq!(mldsa.get("minLength").and_then(Value::as_u64), Some(3904));
+        assert_eq!(mldsa.get("maxLength").and_then(Value::as_u64), Some(3904));
     }
     let helper_ticket = schemas
         .get("VpnSessionResponse")

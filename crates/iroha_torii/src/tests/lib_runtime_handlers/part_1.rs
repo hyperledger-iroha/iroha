@@ -1836,10 +1836,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
             defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES.get(),
         )
         .unwrap_or(usize::MAX),
-        soracloud_upload_max_body_bytes: usize::try_from(
-            defaults::torii::SORACLOUD_UPLOAD_MAX_BODY_BYTES.get(),
-        )
-        .unwrap_or(usize::MAX),
         content_request_limiter: limits::RateLimiter::new(None, None),
         content_egress_limiter: limits::RateLimiter::new_u64(None, None),
         proof_limits: routing::ProofApiLimits::default(),
@@ -2024,24 +2020,20 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         vpn_receipts: Arc::new(DashMap::new()),
         vpn_state_lock: Arc::new(std::sync::Mutex::new(vpn::VpnRuntimeState::default())),
         soracloud_runtime: None,
-        #[cfg(feature = "app_api")]
-        soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-        #[cfg(feature = "app_api")]
-        soracloud_proxy_sequence: std::sync::atomic::AtomicU64::new(1),
-        #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+        #[cfg(feature = "connect")]
         torii_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-        #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+        #[cfg(feature = "connect")]
         torii_proxy_completed: Arc::new(tokio::sync::Mutex::new(
             CompletedToriiProxyRequests::default(),
         )),
-        #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+        #[cfg(feature = "connect")]
         torii_proxy_session_id: new_torii_proxy_session_id(),
-        #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+        #[cfg(feature = "connect")]
         torii_proxy_sequence: std::sync::atomic::AtomicU64::new(1),
         sumeragi: None,
-        #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+        #[cfg(any(feature = "app_api", feature = "connect"))]
         p2p: None,
-        #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+        #[cfg(any(feature = "app_api", feature = "connect"))]
         local_peer_id: None,
         #[cfg(feature = "connect")]
         connect_bus: crate::connect::Bus::from_config(
@@ -2311,19 +2303,19 @@ fn signed_log_transaction_for_test(
 fn versioned_query_for_test(query: SignedQuery) -> JsonOrNoritoVersioned<SignedQuery> {
     JsonOrNoritoVersioned(query)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn signed_query_proxy_request_for_test(
     request_id: Hash,
     route: RoutingDecision,
-) -> ToriiProxyRequestV6 {
-    ToriiProxyRequestV6 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+) -> ToriiProxyRequestV1 {
+    ToriiProxyRequestV1 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V1,
         request_id,
         deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
         visited_peer_ids: Vec::new(),
-        request: ToriiProxyRequestKindV4::SignedQueryRouteScan {
+        request: ToriiProxyRequestKindV1::SignedQueryRouteScan {
             query_bytes: Vec::new(),
             expected_route: ToriiRouteHintV1::from(route),
             response_format: ToriiProxyResponseFormatV1::Norito,

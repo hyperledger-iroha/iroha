@@ -2711,7 +2711,7 @@ fn sign_governance_log_node_mldsa(
     node.publisher_signature = GovernanceLogSignatureV1 {
         algorithm: GovernanceSignatureAlgorithm::Dilithium3,
         public_key: key_pair.public_key().to_vec(),
-        signature: signature.as_bytes().to_vec(),
+        signature: signature.into_bytes(),
     };
     Ok(())
 }
@@ -2759,7 +2759,7 @@ fn sign_potr_receipt_fixture_v1(
     receipt.provider_signature = Some(PotrSignatureV1 {
         algorithm: PotrSignatureAlgorithm::MlDsa65,
         public_key: provider_public_key,
-        signature: provider_signature.as_bytes().to_vec(),
+        signature: provider_signature.into_bytes(),
     });
     receipt.validate()?;
     Ok(receipt)

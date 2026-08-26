@@ -1,10 +1,10 @@
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 const TORII_PROXY_MAX_HEADERS_V1: usize = 128;
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 const TORII_PROXY_MAX_HEADER_BYTES_V1: usize = 64 * 1024;
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 const TORII_PROXY_MAX_HEADER_NAME_BYTES_V1: usize = 256;
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 const TORII_PROXY_MAX_HEADER_VALUE_BYTES_V1: usize = 16 * 1024;
 /// Maximum retryable diagnostic body retained while the next authority runs.
 const TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1: usize = 64 * 1024;
@@ -14,7 +14,7 @@ const TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1: usize = 64 * 1024;
 /// allocation beside the next transport chunk and accumulated response would multiply the one-slot
 /// proxy envelope. Ordinary diagnostics are preserved byte-for-byte; an oversized retryable
 /// diagnostic is replaced by fixed local text while retaining its status code.
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn bound_retained_retryable_torii_proxy_snapshot(
     snapshot: ToriiProxyHttpResponseV1,
 ) -> ToriiProxyHttpResponseV1 {
@@ -33,7 +33,7 @@ fn bound_retained_retryable_torii_proxy_snapshot(
         body,
     }
 }
-#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "connect"))]
 #[derive(Debug)]
 enum BoundedReqwestBodyError {
     Limit(String),
@@ -46,7 +46,7 @@ impl BoundedReqwestBodyError {
         matches!(self, Self::Limit(_))
     }
 }
-#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "connect"))]
 impl core::fmt::Display for BoundedReqwestBodyError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -56,7 +56,7 @@ impl core::fmt::Display for BoundedReqwestBodyError {
         }
     }
 }
-#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "connect"))]
 fn validate_reqwest_response_content_length(
     declared: Option<u64>,
     max_body_bytes: usize,
@@ -70,7 +70,7 @@ fn validate_reqwest_response_content_length(
     }
     Ok(())
 }
-#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "connect"))]
 fn extend_bounded_reqwest_body(
     body: &mut Vec<u8>,
     chunk: &[u8],
@@ -97,7 +97,7 @@ fn extend_bounded_reqwest_body(
 ///
 /// The declared length is only a fail-fast check; the streaming counter is the
 /// authority because transfer/content decoding may expand the body.
-#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+#[cfg(any(feature = "app_api", feature = "connect"))]
 async fn read_reqwest_response_body_bounded(
     response: &mut reqwest::Response,
     max_body_bytes: usize,
@@ -138,7 +138,7 @@ fn public_dataspace_upstream_response_body_limit(
     }
     .max(1)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn bounded_torii_proxy_headers(
     headers: &HeaderMap,
 ) -> Result<Vec<iroha_core::torii_proxy::ToriiProxyHeaderV1>, String> {
@@ -172,7 +172,7 @@ fn bounded_torii_proxy_headers(
     }
     Ok(bounded)
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 fn validate_torii_proxy_snapshot_bounds(
     snapshot: &ToriiProxyHttpResponseV1,
     max_body_bytes: usize,
@@ -202,34 +202,34 @@ fn validate_torii_proxy_snapshot_bounds(
     }
     Ok(())
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-fn torii_proxy_response_body_limit(app: &AppState, request: &ToriiProxyRequestKindV4) -> usize {
+#[cfg(feature = "connect")]
+fn torii_proxy_response_body_limit(app: &AppState, request: &ToriiProxyRequestKindV1) -> usize {
     match request {
-        ToriiProxyRequestKindV4::HostedHttp(_) => app
+        ToriiProxyRequestKindV1::HostedHttp(_) => app
             .soracloud_public_max_response_bytes
             .min(app.torii_proxy_max_response_bytes)
             .max(1),
-        ToriiProxyRequestKindV4::SubmitTransaction {
-            admission: ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
+        ToriiProxyRequestKindV1::SubmitTransaction {
+            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
             ..
         }
-        | ToriiProxyRequestKindV4::SubmitTransaction {
-            admission: ToriiProxyTransactionAdmissionV2::OrdinaryKagemushaLifecycleDurable(_),
+        | ToriiProxyRequestKindV1::SubmitTransaction {
+            admission: ToriiProxyTransactionAdmissionV1::OrdinaryKagemushaLifecycleDurable(_),
             ..
-        } => QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2.max(1),
-        ToriiProxyRequestKindV4::SignedQuery { .. }
-        | ToriiProxyRequestKindV4::SignedQueryRouteScan { .. } => {
+        } => QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1.max(1),
+        ToriiProxyRequestKindV1::SignedQuery { .. }
+        | ToriiProxyRequestKindV1::SignedQueryRouteScan { .. } => {
             QueryFanoutMemoryEnvelope::for_body_admission(app.query_fanout_working_set_bytes)
                 .map_or(1, |envelope| envelope.route_body_bytes.max(1))
         }
-        ToriiProxyRequestKindV4::SignedQueryFanout { .. } => {
+        ToriiProxyRequestKindV1::SignedQueryFanout { .. } => {
             QueryFanoutMemoryEnvelope::for_body_admission(app.query_fanout_working_set_bytes)
                 .map_or(1, |envelope| envelope.final_body_bytes.max(1))
         }
         _ => app.torii_proxy_max_response_bytes.max(1),
     }
 }
-#[cfg(all(test, any(feature = "p2p_ws", feature = "connect")))]
+#[cfg(all(test, feature = "connect"))]
 mod retained_retryable_snapshot_tests {
     use super::*;
     #[test]

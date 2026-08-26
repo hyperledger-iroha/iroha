@@ -1,7 +1,6 @@
 // Pointer-ABI boundary tests for CoreHost decoding and instruction construction.
 #[test]
 fn get_public_input_rejects_registry_type_mismatch() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let name: Name = "pub_key".parse().unwrap();
     let payload = b"hello".to_vec();
@@ -32,7 +31,6 @@ fn get_public_input_rejects_registry_type_mismatch() {
 }
 #[test]
 fn set_account_detail_rejects_tlv_with_bad_hash() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let key: Name = "cursor".parse().unwrap();
     let account_tlv = make_tlv(PointerType::AccountId as u16, &norito_blob(&authority));
@@ -82,7 +80,6 @@ fn set_account_detail_rejects_tlv_with_bad_hash() {
 }
 #[test]
 fn decode_tlv_typed_respects_pointer_policy_guard() {
-    crate::test_alias::ensure();
     // Install a non-v1 ABI annotation so pointer validation fails closed.
     let _guard = ivm::pointer_abi::PointerPolicyGuard::install(ivm::SyscallPolicy::AbiV1, 9);
     let mut vm = ivm::IVM::new(1_000_000);
@@ -107,7 +104,6 @@ fn decode_tlv_typed_respects_pointer_policy_guard() {
 }
 #[test]
 fn decode_tlv_blob_accepts_code_region_literal() {
-    crate::test_alias::ensure();
     let payload = b"risk".to_vec();
     let tlv = make_tlv(PointerType::Blob as u16, &payload);
     let literal_data_offset = 16 + core::mem::size_of::<u64>();

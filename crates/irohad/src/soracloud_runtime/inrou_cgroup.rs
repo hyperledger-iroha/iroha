@@ -1,16 +1,24 @@
 //! Fail-closed cgroup-v2 confinement for Linux Inrou PortableVM workers.
 //!
 //! Every PortableVM worker requires a root-custodied cgroup-v2 hierarchy,
-//! projects every service resource limit into finite controller values, and
-//! keeps the namespace launcher behind a named-pipe barrier until the
-//! supervisor has placed and attested it.
+//! projects the guest CPU and memory contract plus bounded QEMU overhead into
+//! finite controller values, applies fixed host-safety process and I/O ceilings,
+//! and keeps the namespace launcher behind an anonymous acknowledged pipe barrier until the
+//! supervisor has placed and attested it. Guest task, descriptor, and ephemeral
+//! storage limits are enforced by the generated guest systemd service.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ffi::{OsStr, OsString},
     fs,
     io::{self, Read as _, Write as _},
-    os::unix::fs::{FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
+    mem::MaybeUninit,
+    os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd, RawFd},
+    os::unix::ffi::OsStrExt as _,
+    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
+    os::unix::process::CommandExt as _,
     path::{Path, PathBuf},
+    process::Command,
     time::Duration,
 };
 
@@ -27,47 +35,21 @@ const INROU_CGROUP_CONTROL_MAX_BYTES: u64 = 1024 * 1024;
 const INROU_CGROUP_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const INROU_CGROUP_BARRIER_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 const INROU_CGROUP_CPU_PERIOD_MICROS: u64 = 100_000;
-const INROU_CGROUP_QEMU_CPU_OVERHEAD_MILLIS: u64 = 250;
-const INROU_CGROUP_QEMU_MEMORY_OVERHEAD_BYTES: u64 = 256 * 1024 * 1024;
-const INROU_CGROUP_QEMU_PID_OVERHEAD: u64 = 32;
-const INROU_CGROUP_IO_PROJECTION_WINDOW_SECS: u64 = 60;
-const INROU_CGROUP_QEMU_IO_OVERHEAD_BYTES_PER_SEC: u64 = 16 * 1024 * 1024;
-const INROU_CGROUP_QEMU_IOPS_OVERHEAD: u64 = 128;
-const INROU_CGROUP_BARRIER_FILE: &str = ".inrou-cgroup-launch-v1";
+// This bounds only host-side bubblewrap/QEMU processes and threads. The guest
+// workload's task contract is independently enforced by `TasksMax=`.
+const INROU_CGROUP_QEMU_PIDS_MAX: u64 = 64;
+// Guest ephemeral storage is a capacity contract, not a throughput signal.
+// Use explicit host-safety ceilings for QEMU block-device traffic instead.
+const INROU_CGROUP_QEMU_IO_BYTES_PER_SEC_MAX: u64 = 64 * 1024 * 1024;
+const INROU_CGROUP_QEMU_IOPS_MAX: u64 = 1_024;
 const INROU_CGROUP_BARRIER_TOKEN: &[u8] = b"inrou-cgroup-go-v1\n";
-
-/// Root shell gate placed before the fixed bubblewrap namespace launcher.
-///
-/// The supervisor is the only writer of the root-custodied FIFO. It releases
-/// this gate only after writing the launcher's pid to `cgroup.procs` and
-/// validating `/proc/<pid>/cgroup`. The child independently checks the unified
-/// hierarchy path and closes every descriptor above stderr before it can exec
-/// bubblewrap. QMP occupies stdin/stdout and the bounded runtime log occupies
-/// stderr, so no other supervisor descriptor crosses the namespace boundary.
-pub(super) const INROU_CGROUP_BARRIER_SCRIPT: &str = r#"inrou_barrier_path=$1
-inrou_expected_cgroup=$2
-shift 2
-IFS= read -r inrou_barrier_token < "${inrou_barrier_path}" || exit 126
-[ "${inrou_barrier_token}" = "inrou-cgroup-go-v1" ] || exit 126
-inrou_seen_cgroup=0
-while IFS=: read -r inrou_hierarchy inrou_controllers inrou_cgroup_path; do
-    [ "${inrou_seen_cgroup}" -eq 0 ] || exit 126
-    [ "${inrou_hierarchy}" = 0 ] || exit 126
-    [ -z "${inrou_controllers}" ] || exit 126
-    [ "${inrou_cgroup_path}" = "${inrou_expected_cgroup}" ] || exit 126
-    inrou_seen_cgroup=1
-done < /proc/self/cgroup
-[ "${inrou_seen_cgroup}" -eq 1 ] || exit 126
-for inrou_fd_path in /proc/self/fd/*; do
-    inrou_fd=${inrou_fd_path##*/}
-    case "${inrou_fd}" in
-        0|1|2) continue ;;
-        ''|*[!0-9]*) exit 125 ;;
-    esac
-    eval "exec ${inrou_fd}>&-" || exit 125
-done
-exec "$@"
-"#;
+const INROU_CGROUP_BARRIER_ACK: &[u8] = b"inrou-cgroup-ready-v1\n";
+/// Exact hidden argument selecting the child-only Inrou namespace launcher.
+pub(super) const INROU_INTERNAL_LAUNCHER_ARG_V1: &str = "--iroha-internal-inrou-launcher-v1";
+pub(super) const INROU_INTERNAL_LAUNCHER_MAX_ARGUMENTS: usize = 512;
+const INROU_INTERNAL_LAUNCHER_MAX_ARGUMENT_BYTES: usize = 16 * 1024;
+const INROU_INTERNAL_LAUNCHER_MAX_BINDINGS: usize = 64;
+const INROU_INTERNAL_BWRAP_PATH: &str = "/usr/bin/bwrap";
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct InrouCgroupWorkerKey<'a> {
@@ -127,11 +109,413 @@ pub(super) struct InrouWorkerCgroup {
 }
 
 pub(super) struct InrouLaunchBarrier {
-    path: PathBuf,
-    device: u64,
-    inode: u64,
-    child_gid: u32,
-    active: bool,
+    child_gate_reader: Option<fs::File>,
+    parent_gate_writer: Option<fs::File>,
+    parent_ack_reader: Option<fs::File>,
+    child_ack_writer: Option<fs::File>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct InrouInternalLauncherV1 {
+    gate_fd: RawFd,
+    acknowledgement_fd: RawFd,
+    expected_cgroup_path: String,
+    bindings: Vec<InrouInternalLauncherBindingV1>,
+    bubblewrap_arguments: Vec<OsString>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InrouInternalLauncherBindingV1 {
+    descriptor: RawFd,
+    destination: PathBuf,
+    writable: bool,
+}
+
+/// Run the post-exec Inrou cgroup gate and replace this helper with bubblewrap.
+///
+/// This process is a fresh `/proc/self/exe` invocation. Ordinary daemon
+/// initialization has not run, and the only non-CLOEXEC inputs are the exact
+/// gate, acknowledgement, and binding descriptors admitted by the parent.
+#[allow(unsafe_code)]
+pub(super) fn run_inrou_internal_launcher_v1(arguments: Vec<OsString>) -> eyre::Result<()> {
+    let request = parse_inrou_internal_launcher_v1(arguments)?;
+    let required_descriptors = std::iter::once(request.gate_fd)
+        .chain(std::iter::once(request.acknowledgement_fd))
+        .chain(request.bindings.iter().map(|binding| binding.descriptor))
+        .collect::<BTreeSet<_>>();
+    let open_descriptors = list_open_inrou_launcher_descriptors()?;
+    if !required_descriptors.is_subset(&open_descriptors) {
+        eyre::bail!("Inrou internal launcher request names a descriptor that is not open");
+    }
+    let mut gate = unsafe {
+        // SAFETY: parsing proved uniqueness and the immediately preceding
+        // single-threaded /proc enumeration proved this descriptor open above
+        // stdio. It is now owned by this post-exec helper process.
+        fs::File::from_raw_fd(request.gate_fd)
+    };
+    let mut acknowledgement = unsafe {
+        // SAFETY: as above; the acknowledgement descriptor is open and
+        // distinct from the gate and every retained binding descriptor.
+        fs::File::from_raw_fd(request.acknowledgement_fd)
+    };
+    let mut token = Vec::with_capacity(INROU_CGROUP_BARRIER_TOKEN.len() + 1);
+    gate.by_ref()
+        .take(u64::try_from(INROU_CGROUP_BARRIER_TOKEN.len() + 1).expect("small token bound"))
+        .read_to_end(&mut token)
+        .wrap_err("read the anonymous Inrou cgroup gate")?;
+    if token != INROU_CGROUP_BARRIER_TOKEN {
+        eyre::bail!("Inrou cgroup gate returned an invalid or non-exact token");
+    }
+    drop(gate);
+
+    let proc_cgroup = read_bounded_text(
+        Path::new("/proc/self/cgroup"),
+        INROU_CGROUP_PROC_MAX_BYTES,
+        "Inrou child cgroup",
+    )?;
+    validate_inrou_proc_cgroup(&proc_cgroup, &request.expected_cgroup_path)?;
+    acknowledgement
+        .write_all(INROU_CGROUP_BARRIER_ACK)
+        .wrap_err("acknowledge exact Inrou child cgroup placement")?;
+    drop(acknowledgement);
+
+    close_unrelated_inrou_launcher_descriptors(
+        &request
+            .bindings
+            .iter()
+            .map(|binding| binding.descriptor)
+            .collect::<Vec<_>>(),
+    )?;
+    validate_internal_bubblewrap_executable()?;
+    let mut command = Command::new(INROU_INTERNAL_BWRAP_PATH);
+    command
+        .args(&request.bubblewrap_arguments)
+        .env_clear()
+        .current_dir("/");
+    let error = command.exec();
+    Err(error).wrap_err("exec the fixed Inrou bubblewrap launcher")
+}
+
+fn parse_inrou_internal_launcher_v1(
+    arguments: Vec<OsString>,
+) -> eyre::Result<InrouInternalLauncherV1> {
+    if arguments.len() < 5 || arguments.len() > INROU_INTERNAL_LAUNCHER_MAX_ARGUMENTS {
+        eyre::bail!("Inrou internal launcher argument count is outside the V1 bound");
+    }
+    if arguments.iter().any(|argument| {
+        argument.as_bytes().is_empty()
+            || argument.as_bytes().len() > INROU_INTERNAL_LAUNCHER_MAX_ARGUMENT_BYTES
+    }) {
+        eyre::bail!("Inrou internal launcher argument length is outside the V1 bound");
+    }
+    let mut arguments = arguments.into_iter();
+    let gate_fd = parse_inrou_launcher_fd(
+        arguments.next().expect("minimum argument count"),
+        "gate descriptor",
+    )?;
+    let acknowledgement_fd = parse_inrou_launcher_fd(
+        arguments.next().expect("minimum argument count"),
+        "acknowledgement descriptor",
+    )?;
+    let expected_cgroup_path = arguments
+        .next()
+        .expect("minimum argument count")
+        .into_string()
+        .map_err(|_| eyre::eyre!("Inrou expected cgroup path is not UTF-8"))?;
+    validate_inrou_expected_cgroup_path(&expected_cgroup_path)?;
+    let binding_count = parse_inrou_launcher_count(
+        arguments.next().expect("minimum argument count"),
+        "binding count",
+    )?;
+    if binding_count > INROU_INTERNAL_LAUNCHER_MAX_BINDINGS {
+        eyre::bail!("Inrou internal launcher binding count exceeds the V1 bound");
+    }
+    let mut bindings = Vec::with_capacity(binding_count);
+    for _ in 0..binding_count {
+        let writable = match arguments
+            .next()
+            .ok_or_else(|| eyre::eyre!("Inrou internal launcher binding map is truncated"))?
+            .as_os_str()
+        {
+            value if value == OsStr::new("--bind-fd") => true,
+            value if value == OsStr::new("--ro-bind-fd") => false,
+            _ => eyre::bail!("Inrou internal launcher binding mode is not canonical"),
+        };
+        let descriptor = parse_inrou_launcher_fd(
+            arguments
+                .next()
+                .ok_or_else(|| eyre::eyre!("Inrou internal launcher binding list is truncated"))?,
+            "binding descriptor",
+        )?;
+        let destination = PathBuf::from(arguments.next().ok_or_else(|| {
+            eyre::eyre!("Inrou internal launcher binding destination is truncated")
+        })?);
+        validate_inrou_launcher_binding_destination(&destination)?;
+        bindings.push(InrouInternalLauncherBindingV1 {
+            descriptor,
+            destination,
+            writable,
+        });
+    }
+    let program = arguments
+        .next()
+        .ok_or_else(|| eyre::eyre!("Inrou internal launcher omitted bubblewrap"))?;
+    if program != OsStr::new(INROU_INTERNAL_BWRAP_PATH) {
+        eyre::bail!("Inrou internal launcher program is not the fixed bubblewrap path");
+    }
+    let bubblewrap_arguments = arguments.collect::<Vec<_>>();
+    if bubblewrap_arguments.is_empty() {
+        eyre::bail!("Inrou internal launcher omitted bubblewrap arguments");
+    }
+    let descriptors = std::iter::once(gate_fd)
+        .chain(std::iter::once(acknowledgement_fd))
+        .chain(bindings.iter().map(|binding| binding.descriptor))
+        .collect::<BTreeSet<_>>();
+    if descriptors.len() != bindings.len() + 2 {
+        eyre::bail!("Inrou internal launcher descriptors are not unique");
+    }
+    if bindings
+        .iter()
+        .map(|binding| &binding.destination)
+        .collect::<BTreeSet<_>>()
+        .len()
+        != bindings.len()
+    {
+        eyre::bail!("Inrou internal launcher binding destinations are not unique");
+    }
+    validate_bubblewrap_binding_map(&bubblewrap_arguments, &bindings)?;
+    Ok(InrouInternalLauncherV1 {
+        gate_fd,
+        acknowledgement_fd,
+        expected_cgroup_path,
+        bindings,
+        bubblewrap_arguments,
+    })
+}
+
+fn parse_inrou_launcher_fd(value: OsString, label: &str) -> eyre::Result<RawFd> {
+    let value = value
+        .into_string()
+        .map_err(|_| eyre::eyre!("Inrou {label} is not UTF-8"))?;
+    let parsed = value
+        .parse::<RawFd>()
+        .wrap_err_with(|| format!("parse Inrou {label}"))?;
+    if parsed <= 2 || parsed.to_string() != value {
+        eyre::bail!("Inrou {label} is not one canonical descriptor above stdio");
+    }
+    Ok(parsed)
+}
+
+fn parse_inrou_launcher_count(value: OsString, label: &str) -> eyre::Result<usize> {
+    let value = value
+        .into_string()
+        .map_err(|_| eyre::eyre!("Inrou {label} is not UTF-8"))?;
+    let parsed = value
+        .parse::<usize>()
+        .wrap_err_with(|| format!("parse Inrou {label}"))?;
+    if parsed.to_string() != value {
+        eyre::bail!("Inrou {label} is not canonical decimal");
+    }
+    Ok(parsed)
+}
+
+fn validate_inrou_expected_cgroup_path(value: &str) -> eyre::Result<()> {
+    let path = Path::new(value);
+    let worker_prefix = format!("/{INROU_CGROUP_SUBTREE_NAME}/{INROU_CGROUP_WORKER_PREFIX}");
+    let worker_digest = value.strip_prefix(&worker_prefix);
+    if value.len() > 4_096
+        || !value.starts_with('/')
+        || value.ends_with('/')
+        || value.contains("//")
+        || value.chars().any(char::is_whitespace)
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::Prefix(_)
+                    | std::path::Component::CurDir
+                    | std::path::Component::ParentDir
+            )
+        })
+        || !worker_digest.is_some_and(|digest| {
+            digest.len() == Hash::LENGTH * 2
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+    {
+        eyre::bail!("Inrou expected cgroup path is not canonical absolute V1 syntax");
+    }
+    Ok(())
+}
+
+fn validate_inrou_launcher_binding_destination(destination: &Path) -> eyre::Result<()> {
+    let Some(value) = destination.to_str() else {
+        eyre::bail!("Inrou internal launcher binding destination is not UTF-8");
+    };
+    if !destination.is_absolute()
+        || destination == Path::new("/")
+        || !value.starts_with("/inrou/")
+        || value.ends_with('/')
+        || value.contains("//")
+        || value.len() > 4_096
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-'))
+        || destination.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::Prefix(_)
+                    | std::path::Component::CurDir
+                    | std::path::Component::ParentDir
+            )
+        })
+    {
+        eyre::bail!("Inrou internal launcher binding destination is not canonical and absolute");
+    }
+    Ok(())
+}
+
+fn validate_bubblewrap_binding_map(
+    arguments: &[OsString],
+    expected: &[InrouInternalLauncherBindingV1],
+) -> eyre::Result<()> {
+    let separator = arguments
+        .iter()
+        .position(|argument| argument == "--")
+        .ok_or_else(|| eyre::eyre!("Inrou bubblewrap arguments omit the command separator"))?;
+    let namespace_arguments = &arguments[..separator];
+    for required in [
+        "--die-with-parent",
+        "--new-session",
+        "--as-pid-1",
+        "--unshare-pid",
+        "--unshare-net",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--unshare-cgroup",
+        "--clearenv",
+    ] {
+        if namespace_arguments
+            .iter()
+            .filter(|argument| argument.as_os_str() == OsStr::new(required))
+            .count()
+            != 1
+        {
+            eyre::bail!("Inrou bubblewrap arguments omit or duplicate `{required}`");
+        }
+    }
+    let mut actual = Vec::new();
+    let mut index = 0;
+    while index < namespace_arguments.len() {
+        let argument = &namespace_arguments[index];
+        if argument == "--bind-fd" || argument == "--ro-bind-fd" {
+            let descriptor = namespace_arguments
+                .get(index + 1)
+                .ok_or_else(|| eyre::eyre!("Inrou bubblewrap bind descriptor is truncated"))?
+                .clone();
+            let destination = namespace_arguments
+                .get(index + 2)
+                .ok_or_else(|| eyre::eyre!("Inrou bubblewrap bind destination is truncated"))?;
+            let destination = PathBuf::from(destination.as_os_str());
+            validate_inrou_launcher_binding_destination(&destination)?;
+            actual.push(InrouInternalLauncherBindingV1 {
+                descriptor: parse_inrou_launcher_fd(descriptor, "bubblewrap binding descriptor")?,
+                destination,
+                writable: argument == "--bind-fd",
+            });
+            index += 3;
+        } else {
+            index += 1;
+        }
+    }
+    if actual != expected {
+        eyre::bail!("Inrou bubblewrap arguments differ from the typed retained binding map");
+    }
+    Ok(())
+}
+
+#[allow(unsafe_code)]
+fn close_unrelated_inrou_launcher_descriptors(retained: &[RawFd]) -> eyre::Result<()> {
+    let open = list_open_inrou_launcher_descriptors()?;
+    if retained.iter().any(|descriptor| !open.contains(descriptor)) {
+        eyre::bail!("Inrou launcher retained binding descriptor is not open");
+    }
+    let retained = retained.iter().copied().collect::<BTreeSet<_>>();
+    for descriptor in open {
+        if descriptor <= 2 || retained.contains(&descriptor) {
+            continue;
+        }
+        drop(unsafe {
+            // SAFETY: this fresh, single-threaded helper owns every inherited
+            // descriptor. The /proc enumeration handle is already closed,
+            // stdio and the exact binding set are excluded, and entries are
+            // unique.
+            OwnedFd::from_raw_fd(descriptor)
+        });
+    }
+    Ok(())
+}
+
+fn list_open_inrou_launcher_descriptors() -> eyre::Result<BTreeSet<RawFd>> {
+    let directory = rustix::fs::open(
+        "/proc/self/fd",
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    let directory_fd = directory.as_raw_fd();
+    let mut buffer = [MaybeUninit::<u8>::uninit(); 4_096];
+    let mut directory_entries = rustix::fs::RawDir::new(&directory, &mut buffer);
+    let mut entries = Vec::new();
+    while let Some(entry) = directory_entries.next() {
+        let entry = entry?;
+        let name = entry.file_name().to_bytes();
+        if name != b"." && name != b".." {
+            entries.push(name.to_vec());
+        }
+    }
+    drop(directory_entries);
+    let mut open = BTreeSet::new();
+    for name in entries {
+        let name = std::str::from_utf8(&name)
+            .wrap_err("Inrou launcher observed a non-UTF8 descriptor name")?;
+        let descriptor = name
+            .parse::<RawFd>()
+            .wrap_err("parse Inrou launcher /proc/self/fd entry")?;
+        if descriptor.to_string() != name || !open.insert(descriptor) {
+            eyre::bail!("Inrou launcher observed a non-canonical descriptor entry");
+        }
+    }
+    if !open.remove(&directory_fd) {
+        eyre::bail!("Inrou launcher descriptor enumeration omitted its own directory handle");
+    }
+    drop(directory);
+    Ok(open)
+}
+
+fn validate_internal_bubblewrap_executable() -> eyre::Result<()> {
+    let path = Path::new(INROU_INTERNAL_BWRAP_PATH);
+    let metadata = fs::symlink_metadata(path)
+        .wrap_err("inspect the fixed internal Inrou bubblewrap launcher")?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.uid() != 0
+        || metadata.mode() & 0o111 == 0
+        || metadata.mode() & 0o022 != 0
+        || !path.ancestors().skip(1).all(|ancestor| {
+            fs::symlink_metadata(ancestor).ok().is_some_and(|metadata| {
+                !metadata.file_type().is_symlink()
+                    && metadata.is_dir()
+                    && metadata.uid() == 0
+                    && metadata.mode() & 0o022 == 0
+            })
+        })
+    {
+        eyre::bail!("fixed internal Inrou bubblewrap launcher custody drifted");
+    }
+    Ok(())
 }
 
 impl InrouCgroupAttestation {
@@ -362,116 +746,95 @@ impl Drop for InrouWorkerCgroup {
 }
 
 impl InrouLaunchBarrier {
-    pub(super) fn create(parent: &Path, child_gid: u32) -> eyre::Result<Self> {
-        validate_inrou_launch_barrier_parent(parent, child_gid)?;
-        let path = parent.join(INROU_CGROUP_BARRIER_FILE);
-        rustix::fs::mkfifoat(
-            rustix::fs::CWD,
-            &path,
-            rustix::fs::Mode::from_raw_mode(0o600),
-        )
-        .wrap_err_with(|| {
-            format!(
-                "create unique root-custodied Inrou launch barrier {}; a pre-existing barrier is a fail-closed stale-runtime condition",
-                path.display()
-            )
-        })?;
-        let mut options = fs::OpenOptions::new();
-        options.read(true).custom_flags(
-            (rustix::fs::OFlags::NONBLOCK
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::CLOEXEC)
-                .bits() as i32,
-        );
-        let reader = match options.open(&path) {
-            Ok(reader) => reader,
-            Err(error) => {
-                let _ = fs::remove_file(&path);
-                return Err(error).wrap_err_with(|| format!("open {}", path.display()));
-            }
-        };
-        rustix::fs::fchown(
-            &reader,
-            Some(rustix::fs::Uid::ROOT),
-            Some(rustix::fs::Gid::from_raw(child_gid)),
-        )?;
-        rustix::fs::fchmod(&reader, rustix::fs::Mode::from_raw_mode(0o640))?;
-        validate_inrou_launch_barrier(&path, &reader, child_gid)?;
-        let metadata = reader.metadata()?;
+    pub(super) fn create() -> eyre::Result<Self> {
+        let (gate_reader, gate_writer) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
+            .wrap_err("create anonymous Inrou cgroup gate pipe")?;
+        let (ack_reader, ack_writer) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)
+            .wrap_err("create anonymous Inrou cgroup acknowledgement pipe")?;
+        let ack_reader = fs::File::from(ack_reader);
+        let ack_flags = rustix::fs::fcntl_getfl(&ack_reader)?;
+        rustix::fs::fcntl_setfl(&ack_reader, ack_flags | rustix::fs::OFlags::NONBLOCK)?;
         Ok(Self {
-            path,
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            child_gid,
-            active: true,
+            child_gate_reader: Some(fs::File::from(gate_reader)),
+            parent_gate_writer: Some(fs::File::from(gate_writer)),
+            parent_ack_reader: Some(ack_reader),
+            child_ack_writer: Some(fs::File::from(ack_writer)),
         })
     }
 
-    pub(super) fn path(&self) -> &Path {
-        &self.path
+    pub(super) fn child_gate_reader(&self) -> eyre::Result<&fs::File> {
+        self.child_gate_reader
+            .as_ref()
+            .ok_or_else(|| eyre::eyre!("Inrou launch gate child descriptor was already retired"))
+    }
+
+    pub(super) fn child_ack_writer(&self) -> eyre::Result<&fs::File> {
+        self.child_ack_writer.as_ref().ok_or_else(|| {
+            eyre::eyre!("Inrou launch acknowledgement child descriptor was already retired")
+        })
+    }
+
+    pub(super) fn child_spawned(&mut self) {
+        drop(self.child_gate_reader.take());
+        drop(self.child_ack_writer.take());
     }
 
     pub(super) fn release(&mut self) -> eyre::Result<()> {
-        validate_named_inrou_launch_barrier(&self.path, self.device, self.inode, self.child_gid)?;
-        let mut options = fs::OpenOptions::new();
-        options.write(true).custom_flags(
-            (rustix::fs::OFlags::NONBLOCK
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::CLOEXEC)
-                .bits() as i32,
-        );
-        let deadline = std::time::Instant::now() + INROU_CGROUP_BARRIER_RELEASE_TIMEOUT;
-        let mut writer = loop {
-            match options.open(&self.path) {
-                Ok(writer) => break writer,
-                Err(error)
-                    if error.raw_os_error() == Some(rustix::io::Errno::NXIO.raw_os_error())
-                        && std::time::Instant::now() < deadline =>
-                {
-                    // O_NONBLOCK returns ENXIO until the gated child has
-                    // opened the FIFO for reading. Waiting for that reader is
-                    // the acknowledgement that unlinking cannot race ahead
-                    // of the child-side barrier check.
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-                Err(error) => {
-                    return Err(error).wrap_err_with(|| {
-                        format!(
-                            "open acknowledged Inrou launch barrier {} within {:?}",
-                            self.path.display(),
-                            INROU_CGROUP_BARRIER_RELEASE_TIMEOUT
-                        )
-                    });
-                }
-            }
-        };
-        let opened = writer.metadata()?;
-        if opened.dev() != self.device || opened.ino() != self.inode {
-            eyre::bail!("Inrou launch barrier changed before release");
+        if self.child_gate_reader.is_some() || self.child_ack_writer.is_some() {
+            eyre::bail!("Inrou launch barrier cannot release before the child spawn boundary");
         }
+        let mut writer = self
+            .parent_gate_writer
+            .take()
+            .ok_or_else(|| eyre::eyre!("Inrou launch barrier gate was already released"))?;
         writer
             .write_all(INROU_CGROUP_BARRIER_TOKEN)
             .wrap_err("release Inrou cgroup launch barrier")?;
         drop(writer);
-        fs::remove_file(&self.path)
-            .wrap_err_with(|| format!("unlink released Inrou barrier {}", self.path.display()))?;
-        self.active = false;
+        let reader = self
+            .parent_ack_reader
+            .as_mut()
+            .ok_or_else(|| eyre::eyre!("Inrou launch acknowledgement reader is unavailable"))?;
+        let deadline = std::time::Instant::now() + INROU_CGROUP_BARRIER_RELEASE_TIMEOUT;
+        let mut acknowledgement = Vec::with_capacity(INROU_CGROUP_BARRIER_ACK.len() + 1);
+        loop {
+            if acknowledgement.len() > INROU_CGROUP_BARRIER_ACK.len() {
+                eyre::bail!("Inrou launch child returned an overlong acknowledgement token");
+            }
+            let mut chunk = [0_u8; 64];
+            let maximum =
+                (INROU_CGROUP_BARRIER_ACK.len() + 1 - acknowledgement.len()).min(chunk.len());
+            match reader.read(&mut chunk[..maximum]) {
+                Ok(0) => break,
+                Ok(read) => acknowledgement.extend_from_slice(&chunk[..read]),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => eyre::bail!(
+                    "Inrou launch child did not acknowledge cgroup validation within {:?}",
+                    INROU_CGROUP_BARRIER_RELEASE_TIMEOUT
+                ),
+                Err(error) => return Err(error).wrap_err("read Inrou launch acknowledgement"),
+            }
+        }
+        if acknowledgement != INROU_CGROUP_BARRIER_ACK {
+            eyre::bail!("Inrou launch child returned an invalid cgroup acknowledgement token");
+        }
+        drop(self.parent_ack_reader.take());
         Ok(())
     }
 }
 
 impl Drop for InrouLaunchBarrier {
     fn drop(&mut self) {
-        if self.active
-            && let Err(error) = fs::remove_file(&self.path)
-            && error.kind() != io::ErrorKind::NotFound
-        {
-            iroha_logger::error!(
-                ?error,
-                barrier = %self.path.display(),
-                "failed to remove an unreleased Inrou launch barrier"
-            );
-        }
+        self.child_spawned();
+        drop(self.parent_gate_writer.take());
+        drop(self.parent_ack_reader.take());
     }
 }
 
@@ -558,48 +921,28 @@ fn enable_inrou_subtree_controllers(parent: &Path) -> eyre::Result<()> {
 fn project_inrou_cgroup_limits(
     resources: &SoraResourceLimitsV1,
 ) -> eyre::Result<InrouCgroupLimits> {
-    let guest_memory_bytes = resources
-        .memory_bytes
-        .get()
-        .div_ceil(1024 * 1024)
-        .max(128)
-        .checked_mul(1024 * 1024)
-        .ok_or_else(|| eyre::eyre!("Inrou guest-memory cgroup projection overflow"))?;
-    let memory_max_bytes = guest_memory_bytes
-        .checked_add(INROU_CGROUP_QEMU_MEMORY_OVERHEAD_BYTES)
+    resources
+        .validate_for_inrou()
+        .map_err(|error| eyre::eyre!("invalid Inrou resource contract: {error}"))?;
+    let memory_max_bytes = resources
+        .checked_inrou_host_memory_bytes()
         .ok_or_else(|| eyre::eyre!("Inrou memory cgroup projection overflow"))?;
-    let pids_max = u64::from(resources.max_tasks.get())
-        .checked_add(INROU_CGROUP_QEMU_PID_OVERHEAD)
-        .ok_or_else(|| eyre::eyre!("Inrou pids cgroup projection overflow"))?;
-    let cpu_millis = u64::from(resources.cpu_millis.get())
-        .checked_add(INROU_CGROUP_QEMU_CPU_OVERHEAD_MILLIS)
+    let cpu_millis = resources
+        .checked_inrou_host_cpu_millis()
         .ok_or_else(|| eyre::eyre!("Inrou CPU cgroup projection overflow"))?;
     let cpu_quota_micros = cpu_millis
         .checked_mul(INROU_CGROUP_CPU_PERIOD_MICROS)
         .ok_or_else(|| eyre::eyre!("Inrou CPU quota projection overflow"))?
         .div_ceil(1_000);
-    let service_io_bytes_per_sec = resources
-        .ephemeral_storage_bytes
-        .get()
-        .div_ceil(INROU_CGROUP_IO_PROJECTION_WINDOW_SECS);
-    let io_bytes_per_sec = service_io_bytes_per_sec
-        .checked_add(INROU_CGROUP_QEMU_IO_OVERHEAD_BYTES_PER_SEC)
-        .ok_or_else(|| eyre::eyre!("Inrou IO-bandwidth cgroup projection overflow"))?;
-    let service_iops = u64::from(resources.max_open_files.get())
-        .checked_add(u64::from(resources.max_tasks.get()))
-        .ok_or_else(|| eyre::eyre!("Inrou IOPS cgroup projection overflow"))?;
-    let io_iops = service_iops
-        .checked_add(INROU_CGROUP_QEMU_IOPS_OVERHEAD)
-        .ok_or_else(|| eyre::eyre!("Inrou IOPS-overhead cgroup projection overflow"))?;
     Ok(InrouCgroupLimits {
         memory_max_bytes,
-        pids_max,
+        pids_max: INROU_CGROUP_QEMU_PIDS_MAX,
         cpu_quota_micros,
         cpu_period_micros: INROU_CGROUP_CPU_PERIOD_MICROS,
-        io_read_bytes_per_sec: io_bytes_per_sec,
-        io_write_bytes_per_sec: io_bytes_per_sec,
-        io_read_iops: io_iops,
-        io_write_iops: io_iops,
+        io_read_bytes_per_sec: INROU_CGROUP_QEMU_IO_BYTES_PER_SEC_MAX,
+        io_write_bytes_per_sec: INROU_CGROUP_QEMU_IO_BYTES_PER_SEC_MAX,
+        io_read_iops: INROU_CGROUP_QEMU_IOPS_MAX,
+        io_write_iops: INROU_CGROUP_QEMU_IOPS_MAX,
     })
 }
 
@@ -744,48 +1087,6 @@ fn validate_root_custodied_directory(path: &Path, label: &str) -> eyre::Result<(
     Ok(())
 }
 
-fn validate_inrou_launch_barrier_parent(parent: &Path, child_gid: u32) -> eyre::Result<()> {
-    let named = fs::symlink_metadata(parent)
-        .wrap_err_with(|| format!("inspect Inrou launch-barrier parent {}", parent.display()))?;
-    if named.file_type().is_symlink()
-        || !named.is_dir()
-        || named.uid() != 0
-        || named.gid() != child_gid
-        || named.mode() & 0o7777 != 0o710
-    {
-        eyre::bail!(
-            "Inrou launch-barrier parent {} must retain exact root/dedicated-group 0710 custody",
-            parent.display()
-        );
-    }
-    Ok(())
-}
-
-fn validate_inrou_launch_barrier(
-    path: &Path,
-    reader: &fs::File,
-    child_gid: u32,
-) -> eyre::Result<()> {
-    let held = reader.metadata()?;
-    let named = fs::symlink_metadata(path)?;
-    if named.file_type().is_symlink()
-        || !named.file_type().is_fifo()
-        || !held.file_type().is_fifo()
-        || named.dev() != held.dev()
-        || named.ino() != held.ino()
-        || held.nlink() != 1
-        || held.uid() != 0
-        || held.gid() != child_gid
-        || held.mode() & 0o7777 != 0o640
-    {
-        eyre::bail!(
-            "Inrou launch barrier {} lost exact root/dedicated-group FIFO custody",
-            path.display()
-        );
-    }
-    Ok(())
-}
-
 fn require_inrou_cgroup_kill_control(path: &Path) -> eyre::Result<()> {
     let named = fs::symlink_metadata(path)
         .wrap_err_with(|| format!("inspect mandatory Inrou cgroup.kill {}", path.display()))?;
@@ -808,30 +1109,6 @@ fn require_inrou_cgroup_kill_control(path: &Path) -> eyre::Result<()> {
     let actual = opened.metadata()?;
     if actual.dev() != named.dev() || actual.ino() != named.ino() {
         eyre::bail!("mandatory Inrou cgroup.kill changed while it was opened");
-    }
-    Ok(())
-}
-
-fn validate_named_inrou_launch_barrier(
-    path: &Path,
-    expected_device: u64,
-    expected_inode: u64,
-    child_gid: u32,
-) -> eyre::Result<()> {
-    let named = fs::symlink_metadata(path)?;
-    if named.file_type().is_symlink()
-        || !named.file_type().is_fifo()
-        || named.dev() != expected_device
-        || named.ino() != expected_inode
-        || named.nlink() != 1
-        || named.uid() != 0
-        || named.gid() != child_gid
-        || named.mode() & 0o7777 != 0o640
-    {
-        eyre::bail!(
-            "Inrou launch barrier {} changed before child acknowledgement",
-            path.display()
-        );
     }
     Ok(())
 }
@@ -1005,10 +1282,9 @@ fn write_control_and_require_exact(path: &Path, value: &str, label: &str) -> eyr
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write as _;
+    use std::ffi::OsString;
+    use std::io::{Read as _, Write as _};
     use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
-    use std::os::unix::fs::OpenOptionsExt as _;
-    use std::process::{Command, Stdio};
 
     use super::*;
 
@@ -1017,7 +1293,7 @@ mod tests {
             cpu_millis: NonZeroU32::new(1_500).expect("nonzero"),
             memory_bytes: NonZeroU64::new(512 * 1024 * 1024).expect("nonzero"),
             ephemeral_storage_bytes: NonZeroU64::new(60 * 1024 * 1024).expect("nonzero"),
-            max_open_files: NonZeroU32::new(256).expect("nonzero"),
+            max_open_files_per_process: NonZeroU32::new(256).expect("nonzero"),
             max_tasks: NonZeroU16::new(16).expect("nonzero"),
         }
     }
@@ -1033,16 +1309,60 @@ mod tests {
     }
 
     #[test]
-    fn resource_projection_includes_only_explicit_bounded_qemu_overhead() -> eyre::Result<()> {
+    fn resource_projection_uses_guest_cpu_memory_and_fixed_host_safety_limits() -> eyre::Result<()>
+    {
         let projected = project_inrou_cgroup_limits(&resources())?;
         assert_eq!(projected.memory_max_bytes, 768 * 1024 * 1024);
-        assert_eq!(projected.pids_max, 48);
+        assert_eq!(projected.pids_max, INROU_CGROUP_QEMU_PIDS_MAX);
         assert_eq!(projected.cpu_quota_micros, 175_000);
         assert_eq!(projected.cpu_period_micros, 100_000);
-        assert_eq!(projected.io_read_bytes_per_sec, 17 * 1024 * 1024);
-        assert_eq!(projected.io_write_bytes_per_sec, 17 * 1024 * 1024);
-        assert_eq!(projected.io_read_iops, 400);
-        assert_eq!(projected.io_write_iops, 400);
+        assert_eq!(
+            projected.io_read_bytes_per_sec,
+            INROU_CGROUP_QEMU_IO_BYTES_PER_SEC_MAX
+        );
+        assert_eq!(
+            projected.io_write_bytes_per_sec,
+            INROU_CGROUP_QEMU_IO_BYTES_PER_SEC_MAX
+        );
+        assert_eq!(projected.io_read_iops, INROU_CGROUP_QEMU_IOPS_MAX);
+        assert_eq!(projected.io_write_iops, INROU_CGROUP_QEMU_IOPS_MAX);
+        Ok(())
+    }
+
+    #[test]
+    fn host_safety_projection_ignores_guest_fd_task_and_storage_limits() -> eyre::Result<()> {
+        let baseline = resources();
+        let mut unrelated_guest_limits = baseline;
+        unrelated_guest_limits.ephemeral_storage_bytes =
+            NonZeroU64::new(16 * 1024 * 1024 * 1024).expect("nonzero");
+        unrelated_guest_limits.max_open_files_per_process =
+            NonZeroU32::new(8_192).expect("nonzero");
+        unrelated_guest_limits.max_tasks = NonZeroU16::new(1_024).expect("nonzero");
+
+        assert_eq!(
+            project_inrou_cgroup_limits(&baseline)?,
+            project_inrou_cgroup_limits(&unrelated_guest_limits)?,
+            "guest FD, task, and storage contracts must not masquerade as host QEMU limits"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn resource_projection_accepts_v1_cpu_boundary_and_rejects_above_it() -> eyre::Result<()> {
+        let mut boundary = resources();
+        boundary.cpu_millis =
+            NonZeroU32::new(iroha_data_model::soracloud::SORA_INROU_MAX_CPU_MILLIS_V1)
+                .expect("nonzero V1 CPU ceiling");
+        let projected = project_inrou_cgroup_limits(&boundary)?;
+        assert_eq!(projected.pids_max, INROU_CGROUP_QEMU_PIDS_MAX);
+
+        boundary.cpu_millis = NonZeroU32::new(
+            iroha_data_model::soracloud::SORA_INROU_MAX_CPU_MILLIS_V1
+                + iroha_data_model::soracloud::SORA_INROU_CPU_MILLIS_ALIGNMENT_V1,
+        )
+        .expect("nonzero CPU above V1");
+        project_inrou_cgroup_limits(&boundary)
+            .expect_err("cgroup projection must reject resources above the qualified V1 ceiling");
         Ok(())
     }
 
@@ -1160,115 +1480,320 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn launch_barrier_script_checks_token_and_procfs_before_exec() {
-        assert!(INROU_CGROUP_BARRIER_SCRIPT.contains("inrou-cgroup-go-v1"));
-        assert!(INROU_CGROUP_BARRIER_SCRIPT.contains("/proc/self/cgroup"));
-        assert!(INROU_CGROUP_BARRIER_SCRIPT.contains("exec \"$@\""));
-        assert!(
-            INROU_CGROUP_BARRIER_SCRIPT.find("/proc/self/cgroup")
-                < INROU_CGROUP_BARRIER_SCRIPT.find("exec \"$@\"")
+    fn internal_launcher_arguments(binding_fds: &[RawFd]) -> Vec<OsString> {
+        let mut arguments = vec![
+            "17".into(),
+            "29".into(),
+            format!("/iroha-inrou-v1/worker-{}", "01".repeat(Hash::LENGTH)).into(),
+            binding_fds.len().to_string().into(),
+        ];
+        for (index, descriptor) in binding_fds.iter().enumerate() {
+            arguments.extend([
+                OsString::from("--ro-bind-fd"),
+                descriptor.to_string().into(),
+                format!("/inrou/input/binding-{index}").into(),
+            ]);
+        }
+        arguments.push(INROU_INTERNAL_BWRAP_PATH.into());
+        arguments.extend(
+            [
+                "--die-with-parent",
+                "--new-session",
+                "--as-pid-1",
+                "--unshare-pid",
+                "--unshare-net",
+                "--unshare-ipc",
+                "--unshare-uts",
+                "--unshare-cgroup",
+                "--clearenv",
+            ]
+            .into_iter()
+            .map(OsString::from),
         );
+        for (index, descriptor) in binding_fds.iter().enumerate() {
+            arguments.extend([
+                OsString::from("--ro-bind-fd"),
+                descriptor.to_string().into(),
+                format!("/inrou/input/binding-{index}").into(),
+            ]);
+        }
+        arguments.extend([OsString::from("--"), OsString::from("/inrou/bin/qemu")]);
+        arguments
     }
 
     #[test]
-    fn launch_barrier_blocks_exec_and_rejects_cgroup_drift() -> eyre::Result<()> {
-        use std::os::fd::AsRawFd as _;
+    fn internal_launcher_parser_accepts_dynamic_descriptors_and_zero_bindings() -> eyre::Result<()>
+    {
+        let parsed = parse_inrou_internal_launcher_v1(internal_launcher_arguments(&[41, 907]))?;
+        assert_eq!(parsed.gate_fd, 17);
+        assert_eq!(parsed.acknowledgement_fd, 29);
+        assert_eq!(
+            parsed
+                .bindings
+                .iter()
+                .map(|binding| binding.descriptor)
+                .collect::<Vec<_>>(),
+            [41, 907]
+        );
+        assert_eq!(
+            parsed.expected_cgroup_path,
+            format!("/iroha-inrou-v1/worker-{}", "01".repeat(Hash::LENGTH))
+        );
 
-        let proc_cgroup = fs::read_to_string("/proc/self/cgroup")?;
-        let mut records = proc_cgroup.lines();
-        let Some(record) = records.next() else {
-            // This test exercises the unified-hierarchy shell gate. Hosts
-            // still using cgroup-v1 are rejected by the dedicated parser test.
-            return Ok(());
-        };
-        if records.next().is_some() {
-            return Ok(());
-        }
-        let mut fields = record.split(':');
-        if fields.next() != Some("0") || fields.next() != Some("") {
-            return Ok(());
-        }
-        let Some(expected_path) = fields.next() else {
-            return Ok(());
-        };
-        if fields.next().is_some() {
-            return Ok(());
-        }
-        let temp_dir = tempfile::tempdir()?;
-        let marker = temp_dir.path().join("executed");
-        let inherited = fs::File::open("/dev/null")?;
-        let inherited_fd = inherited.as_raw_fd().to_string();
+        let parsed = parse_inrou_internal_launcher_v1(internal_launcher_arguments(&[]))?;
+        assert!(parsed.bindings.is_empty());
+        Ok(())
+    }
 
-        for (case, supplied_path, succeeds) in [
-            ("exact", expected_path.to_owned(), true),
-            ("drifted", format!("{expected_path}-wrong"), false),
-        ] {
-            let fifo = temp_dir.path().join(format!("{case}.fifo"));
-            rustix::fs::mkfifoat(
-                rustix::fs::CWD,
-                &fifo,
-                rustix::fs::Mode::from_raw_mode(0o600),
-            )?;
-            rustix::io::fcntl_setfd(&inherited, rustix::io::FdFlags::empty())?;
-            let child = Command::new("/bin/sh")
-                .arg("-c")
-                .arg(INROU_CGROUP_BARRIER_SCRIPT)
-                .arg("inrou-cgroup-barrier-test")
-                .arg(&fifo)
-                .arg(&supplied_path)
-                .arg("/bin/sh")
-                .arg("-c")
-                .arg("[ ! -e \"/proc/self/fd/$2\" ] || exit 124; printf executed > \"$1\"")
-                .arg("inrou-cgroup-payload")
-                .arg(&marker)
-                .arg(&inherited_fd)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn();
-            rustix::io::fcntl_setfd(&inherited, rustix::io::FdFlags::CLOEXEC)?;
-            let mut child = child?;
-            std::thread::sleep(Duration::from_millis(25));
-            assert!(
-                !marker.exists(),
-                "payload executed before the supervisor released its cgroup barrier"
-            );
-            let mut writer_options = fs::OpenOptions::new();
-            writer_options.write(true).custom_flags(
-                (rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOFOLLOW).bits() as i32,
-            );
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            let mut writer = loop {
-                match writer_options.open(&fifo) {
-                    Ok(writer) => break writer,
-                    Err(error)
-                        if error.raw_os_error() == Some(rustix::io::Errno::NXIO.raw_os_error()) =>
-                    {
-                        if let Some(status) = child.try_wait()? {
-                            eyre::bail!(
-                                "barrier child exited with {status} before opening its FIFO"
-                            );
-                        }
-                        if std::time::Instant::now() >= deadline {
-                            let _ = child.kill();
-                            let _ = child.wait();
-                            eyre::bail!("barrier child did not open its FIFO before the deadline");
-                        }
-                        std::thread::sleep(Duration::from_millis(1));
-                    }
-                    Err(error) => return Err(error.into()),
-                }
+    #[test]
+    fn internal_launcher_parser_enforces_exact_binding_and_argv_boundaries() -> eyre::Result<()> {
+        let maximum_binding_fds = (100..)
+            .take(INROU_INTERNAL_LAUNCHER_MAX_BINDINGS)
+            .collect::<Vec<RawFd>>();
+        let parsed =
+            parse_inrou_internal_launcher_v1(internal_launcher_arguments(&maximum_binding_fds))?;
+        assert_eq!(parsed.bindings.len(), INROU_INTERNAL_LAUNCHER_MAX_BINDINGS);
+
+        let overflow_binding_fds = (100..)
+            .take(INROU_INTERNAL_LAUNCHER_MAX_BINDINGS + 1)
+            .collect::<Vec<RawFd>>();
+        parse_inrou_internal_launcher_v1(internal_launcher_arguments(&overflow_binding_fds))
+            .expect_err("one binding above the V1 parser bound must fail closed");
+
+        let mut maximum_arguments = internal_launcher_arguments(&[]);
+        maximum_arguments.resize(
+            INROU_INTERNAL_LAUNCHER_MAX_ARGUMENTS,
+            OsString::from("qemu-padding-argument"),
+        );
+        parse_inrou_internal_launcher_v1(maximum_arguments.clone())?;
+        maximum_arguments.push("qemu-argument-overflow".into());
+        parse_inrou_internal_launcher_v1(maximum_arguments)
+            .expect_err("one argument above the V1 parser bound must fail closed");
+
+        let mut maximum_argument_bytes = internal_launcher_arguments(&[]);
+        maximum_argument_bytes.push(
+            "x".repeat(INROU_INTERNAL_LAUNCHER_MAX_ARGUMENT_BYTES)
+                .into(),
+        );
+        parse_inrou_internal_launcher_v1(maximum_argument_bytes.clone())?;
+        *maximum_argument_bytes
+            .last_mut()
+            .expect("padded launcher argument") = "x"
+            .repeat(INROU_INTERNAL_LAUNCHER_MAX_ARGUMENT_BYTES + 1)
+            .into();
+        parse_inrou_internal_launcher_v1(maximum_argument_bytes)
+            .expect_err("one byte above the V1 per-argument bound must fail closed");
+        Ok(())
+    }
+
+    #[test]
+    fn maximum_production_launcher_plan_stays_below_internal_parser_bounds() {
+        // The fixed count covers launcher framing, fixed bubblewrap/setpriv/QEMU
+        // arguments, the optional initrd, QMP, and the three non-lease drives.
+        // Each binding appears once in the typed map and once in bubblewrap;
+        // each lease also adds one QEMU drive/device pair.
+        const FIXED_ARGUMENTS_WITH_INITRD_AND_FIXED_DRIVES: usize = 99;
+        const ARGUMENTS_PER_BINDING: usize = 6;
+        const ARGUMENTS_PER_LEASE_DISK: usize = 4;
+        let maximum_bindings =
+            super::super::inrou_namespace::INROU_NAMESPACE_MAX_PRODUCTION_BINDINGS;
+        let maximum_lease_disks = super::super::inrou_namespace::INROU_NAMESPACE_MAX_LEASE_DISKS;
+        let maximum_arguments = FIXED_ARGUMENTS_WITH_INITRD_AND_FIXED_DRIVES
+            + maximum_bindings * ARGUMENTS_PER_BINDING
+            + maximum_lease_disks * ARGUMENTS_PER_LEASE_DISK;
+
+        assert_eq!(maximum_bindings, 39);
+        assert_eq!(maximum_arguments, 461);
+        assert!(maximum_bindings < INROU_INTERNAL_LAUNCHER_MAX_BINDINGS);
+        assert!(maximum_arguments < INROU_INTERNAL_LAUNCHER_MAX_ARGUMENTS);
+    }
+
+    #[test]
+    #[allow(unsafe_code)]
+    fn internal_launcher_closes_unrelated_inherited_descriptors_in_subprocess() -> eyre::Result<()>
+    {
+        use std::{
+            os::{fd::BorrowedFd, unix::process::CommandExt as _},
+            process::Stdio,
+        };
+
+        const CHILD_MODE: &str = "IROHA_INROU_DESCRIPTOR_CLOSURE_CHILD_V1";
+        const CHILD_SUCCESS_EXIT_CODE: i32 = 23;
+        if let Some(descriptors) = std::env::var_os(CHILD_MODE) {
+            let descriptors = descriptors
+                .to_str()
+                .ok_or_else(|| eyre::eyre!("descriptor test mode is not UTF-8"))?
+                .split(':')
+                .map(str::parse::<RawFd>)
+                .collect::<Result<Vec<_>, _>>()?;
+            let [retained, unrelated] = descriptors.as_slice() else {
+                eyre::bail!("descriptor test mode has the wrong arity");
             };
-            writer.write_all(INROU_CGROUP_BARRIER_TOKEN)?;
-            drop(writer);
-            let status = child.wait()?;
-            fs::remove_file(&fifo)?;
-            assert_eq!(status.success(), succeeds);
-            assert_eq!(marker.exists(), succeeds);
-            if marker.exists() {
-                fs::remove_file(&marker)?;
-            }
+            let inherited = list_open_inrou_launcher_descriptors()?;
+            eyre::ensure!(
+                inherited.contains(retained) && inherited.contains(unrelated),
+                "descriptor test inputs did not survive exec"
+            );
+            close_unrelated_inrou_launcher_descriptors(&[*retained])?;
+            let open = list_open_inrou_launcher_descriptors()?;
+            eyre::ensure!(
+                open.contains(retained),
+                "typed binding descriptor was closed"
+            );
+            eyre::ensure!(
+                !open.contains(unrelated),
+                "unrelated inherited descriptor survived closure"
+            );
+            std::process::exit(CHILD_SUCCESS_EXIT_CODE);
+        }
+
+        let retained = fs::File::open("/dev/null")?;
+        let unrelated = fs::File::open("/dev/null")?;
+        let retained_fd = retained.as_raw_fd();
+        let unrelated_fd = unrelated.as_raw_fd();
+        eyre::ensure!(retained_fd > 2 && unrelated_fd > 2 && retained_fd != unrelated_fd);
+        let mut command = Command::new(std::env::current_exe()?);
+        command
+            .arg("internal_launcher_closes_unrelated_inherited_descriptors_in_subprocess")
+            .arg("--test-threads=1")
+            .env(CHILD_MODE, format!("{retained_fd}:{unrelated_fd}"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // SAFETY: the closure performs only child-local F_SETFD syscalls over
+        // parent-validated live descriptor numbers and constructs no strings.
+        unsafe {
+            command.pre_exec(move || {
+                for descriptor in [retained_fd, unrelated_fd] {
+                    rustix::io::fcntl_setfd(
+                        BorrowedFd::borrow_raw(descriptor),
+                        rustix::io::FdFlags::empty(),
+                    )
+                    .map_err(io::Error::from)?;
+                }
+                Ok(())
+            });
+        }
+        let status = command.status()?;
+        assert_eq!(
+            status.code(),
+            Some(CHILD_SUCCESS_EXIT_CODE),
+            "descriptor-closure subprocess did not complete its proof"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn internal_launcher_parser_rejects_ambiguous_or_drifted_requests() {
+        let mut stdio = internal_launcher_arguments(&[41]);
+        stdio[0] = "2".into();
+        parse_inrou_internal_launcher_v1(stdio)
+            .expect_err("stdio descriptors must never be launcher inputs");
+
+        let mut duplicate = internal_launcher_arguments(&[17]);
+        duplicate[0] = "17".into();
+        parse_inrou_internal_launcher_v1(duplicate)
+            .expect_err("gate, acknowledgement, and binding descriptors must be unique");
+
+        let mut noncanonical = internal_launcher_arguments(&[41]);
+        noncanonical[0] = "017".into();
+        parse_inrou_internal_launcher_v1(noncanonical)
+            .expect_err("descriptor spellings must be canonical decimal");
+
+        let mut cgroup_drift = internal_launcher_arguments(&[41]);
+        cgroup_drift[2] = "/iroha-inrou-v1/../outside".into();
+        parse_inrou_internal_launcher_v1(cgroup_drift)
+            .expect_err("the expected cgroup path must be canonical");
+
+        let mut truncated = internal_launcher_arguments(&[41]);
+        truncated[3] = "2".into();
+        parse_inrou_internal_launcher_v1(truncated)
+            .expect_err("the binding count must exactly frame the binding list");
+
+        let mut alternate_program = internal_launcher_arguments(&[41]);
+        alternate_program[7] = "/bin/sh".into();
+        parse_inrou_internal_launcher_v1(alternate_program)
+            .expect_err("only the pinned bubblewrap path may be executed");
+
+        let mut mismatched_map = internal_launcher_arguments(&[41]);
+        let mapped = mismatched_map
+            .iter()
+            .position(|argument| argument == "41")
+            .expect("binding descriptor argument");
+        mismatched_map[mapped + 1..]
+            .iter_mut()
+            .find(|argument| argument.as_os_str() == OsStr::new("41"))
+            .map(|argument| *argument = "42".into())
+            .expect("bubblewrap binding descriptor");
+        parse_inrou_internal_launcher_v1(mismatched_map)
+            .expect_err("bubblewrap bindings must match the typed retained map");
+
+        let mut widened_mode = internal_launcher_arguments(&[41]);
+        let mut modes = widened_mode
+            .iter_mut()
+            .filter(|argument| argument.as_os_str() == OsStr::new("--ro-bind-fd"));
+        assert!(modes.next().is_some(), "typed binding mode");
+        *modes.next().expect("bubblewrap binding mode") = "--bind-fd".into();
+        assert!(modes.next().is_none(), "only two binding mode records");
+        parse_inrou_internal_launcher_v1(widened_mode)
+            .expect_err("bubblewrap cannot widen a typed read-only binding");
+
+        let mut changed_destination = internal_launcher_arguments(&[41]);
+        let mut destinations = changed_destination
+            .iter_mut()
+            .filter(|argument| argument.as_os_str() == OsStr::new("/inrou/input/binding-0"));
+        assert!(destinations.next().is_some(), "typed binding destination");
+        *destinations.next().expect("bubblewrap binding destination") = "/inrou/input/other".into();
+        assert!(
+            destinations.next().is_none(),
+            "only two binding destination records"
+        );
+        parse_inrou_internal_launcher_v1(changed_destination)
+            .expect_err("bubblewrap cannot retarget a typed binding");
+
+        let mut duplicate_namespace_flag = internal_launcher_arguments(&[]);
+        let separator = duplicate_namespace_flag
+            .iter()
+            .position(|argument| argument == "--")
+            .expect("bubblewrap command separator");
+        duplicate_namespace_flag.insert(separator, "--clearenv".into());
+        parse_inrou_internal_launcher_v1(duplicate_namespace_flag)
+            .expect_err("mandatory namespace flags must occur exactly once");
+    }
+
+    #[test]
+    fn launch_barrier_refuses_release_before_child_spawn() -> eyre::Result<()> {
+        let mut barrier = InrouLaunchBarrier::create()?;
+        barrier
+            .release()
+            .expect_err("a supervisor must retire its child pipe ends after spawn");
+        Ok(())
+    }
+
+    #[test]
+    fn anonymous_launch_barrier_requires_exact_gate_and_ack_tokens() -> eyre::Result<()> {
+        for (acknowledgement, succeeds) in [
+            (INROU_CGROUP_BARRIER_ACK.to_vec(), true),
+            (b"inrou-cgroup-denied-v1\n".to_vec(), false),
+            ([INROU_CGROUP_BARRIER_ACK, b"extra"].concat(), false),
+        ] {
+            let mut barrier = InrouLaunchBarrier::create()?;
+            let mut gate = barrier.child_gate_reader()?.try_clone()?;
+            let mut ack = barrier.child_ack_writer()?.try_clone()?;
+            barrier.child_spawned();
+            let child = std::thread::spawn(move || -> io::Result<()> {
+                let mut token = Vec::new();
+                gate.read_to_end(&mut token)?;
+                if token != INROU_CGROUP_BARRIER_TOKEN {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "non-exact test gate token",
+                    ));
+                }
+                ack.write_all(&acknowledgement)
+            });
+            assert_eq!(barrier.release().is_ok(), succeeds);
+            child.join().expect("barrier child thread must not panic")?;
         }
         Ok(())
     }

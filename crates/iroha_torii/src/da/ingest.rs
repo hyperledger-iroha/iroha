@@ -27,7 +27,9 @@ use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use eyre::{WrapErr, eyre};
 use flate2::read::{DeflateDecoder, GzDecoder};
 use iroha_config::parameters::actual::{DaReplicationPolicy, Nexus as ConfigNexus};
-use iroha_core::da::{LaneEpoch, ReplayFingerprint, ReplayInsertOutcome, ReplayKey};
+use iroha_core::da::{
+    LaneEpoch, ReplayCache, ReplayFingerprint, ReplayInsertOutcome, ReplayKey, ReplayReservation,
+};
 use iroha_crypto::{
     Hash, KeyPair, Signature,
     encryption::{ChaCha20Poly1305, SymmetricEncryptor},
@@ -79,6 +81,150 @@ const META_DA_REGISTRY_ALIAS: &str = "da.registry.alias";
 const META_DA_REGISTRY_OWNER: &str = "da.registry.owner";
 const BYTES_PER_GIB: u64 = 1024 * 1024 * 1024;
 const SECS_PER_MONTH: u64 = 30 * 24 * 60 * 60;
+struct FreshReplayReservation {
+    cache: Arc<ReplayCache>,
+    reservation: Option<ReplayReservation>,
+    committed: bool,
+}
+impl FreshReplayReservation {
+    fn new(cache: Arc<ReplayCache>, reservation: ReplayReservation) -> Self {
+        Self {
+            cache,
+            reservation: Some(reservation),
+            committed: false,
+        }
+    }
+    fn commit(&mut self) {
+        if let Some(reservation) = self.reservation.take() {
+            let _ = self.cache.commit_reservation(&reservation);
+        }
+        self.committed = true;
+    }
+    fn resolve_receipt_outcome(&mut self, outcome: &ReceiptInsertOutcome) {
+        if matches!(
+            outcome,
+            ReceiptInsertOutcome::Stored { .. } | ReceiptInsertOutcome::Duplicate { .. }
+        ) {
+            self.commit();
+        }
+    }
+}
+impl Drop for FreshReplayReservation {
+    fn drop(&mut self) {
+        if !self.committed
+            && let Some(reservation) = self.reservation.take()
+        {
+            let _ = self.cache.rollback_reservation(reservation);
+        }
+    }
+}
+#[cfg(test)]
+mod fresh_replay_reservation_tests {
+    use super::*;
+    use crate::da::DaSpooler;
+    use iroha_core::da::ReplayCacheConfig;
+
+    #[test]
+    fn reservation_rolls_back_uncommitted_entries_and_retains_committed_entries() {
+        let cache = Arc::new(ReplayCache::new(ReplayCacheConfig::new()));
+        let key = ReplayKey::new(
+            LaneEpoch::new(LaneId::SINGLE, 19),
+            7,
+            ReplayFingerprint::from_hash(blake3_hash(b"taikai-replay-reservation")),
+        );
+        let now = Instant::now();
+        let (first_outcome, first_reservation) = cache.reserve(key, now);
+        assert!(matches!(first_outcome, ReplayInsertOutcome::Fresh { .. }));
+        let first_reservation = first_reservation.expect("fresh outcome carries reservation");
+        {
+            let _reservation = FreshReplayReservation::new(Arc::clone(&cache), first_reservation);
+        }
+        let (second_outcome, second_reservation) = cache.reserve(key, now);
+        assert!(matches!(second_outcome, ReplayInsertOutcome::Fresh { .. }));
+        let second_reservation = second_reservation.expect("fresh outcome carries reservation");
+        {
+            let mut reservation =
+                FreshReplayReservation::new(Arc::clone(&cache), second_reservation);
+            reservation.commit();
+        }
+        assert!(matches!(
+            cache.insert(key, now),
+            ReplayInsertOutcome::Duplicate { .. }
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn queued_reservation_survives_submitter_cancellation() {
+        let cache = Arc::new(ReplayCache::new(ReplayCacheConfig::new()));
+        let key = ReplayKey::new(
+            LaneEpoch::new(LaneId::SINGLE, 20),
+            8,
+            ReplayFingerprint::from_hash(blake3_hash(b"taikai-cancelled-submitter")),
+        );
+        let now = Instant::now();
+        let (outcome, reservation) = cache.reserve(key, now);
+        assert!(matches!(outcome, ReplayInsertOutcome::Fresh { .. }));
+        let mut replay_reservation = FreshReplayReservation::new(
+            Arc::clone(&cache),
+            reservation.expect("fresh outcome carries reservation"),
+        );
+
+        let release = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let release_for_action = Arc::clone(&release);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+        let mut batch = DaSpoolBatch::new();
+        batch.push(DaSpoolAction::new("blocked_artifact", move || {
+            let _ = started_tx.send(());
+            let (lock, wake) = &*release_for_action;
+            let mut released = lock.lock().expect("release lock");
+            while !*released {
+                released = wake.wait(released).expect("release wait");
+            }
+            Ok(DaSpoolActionOutput::None)
+        }));
+        batch.push_commit(DaSpoolAction::new("receipt_log", move || {
+            let outcome = ReceiptInsertOutcome::Stored {
+                cursor_advanced: true,
+            };
+            replay_reservation.resolve_receipt_outcome(&outcome);
+            let _ = finished_tx.send(());
+            Ok(DaSpoolActionOutput::ReceiptOutcome(outcome))
+        }));
+        let spooler = DaSpooler::spawn(
+            std::num::NonZeroUsize::new(1).expect("non-zero queue"),
+            std::num::NonZeroUsize::new(1).expect("non-zero batch"),
+            MaybeTelemetry::disabled(),
+        );
+        let submitter = Arc::clone(&spooler);
+        let submit = tokio::spawn(async move { submitter.submit(batch).await });
+        started_rx.await.expect("worker started artifact action");
+
+        submit.abort();
+        assert!(
+            submit
+                .await
+                .expect_err("submitter must be cancelled")
+                .is_cancelled()
+        );
+        assert!(matches!(
+            cache.insert(key, now),
+            ReplayInsertOutcome::InFlight { .. }
+        ));
+
+        let (lock, wake) = &*release;
+        *lock.lock().expect("release lock") = true;
+        wake.notify_all();
+        tokio::time::timeout(Duration::from_secs(2), finished_rx)
+            .await
+            .expect("worker must finish after release")
+            .expect("commit action must signal completion");
+        assert!(matches!(
+            cache.insert(key, now),
+            ReplayInsertOutcome::Duplicate { .. }
+        ));
+    }
+}
 #[derive(Debug)]
 struct CanonicalPayload<'a> {
     bytes: Cow<'a, [u8]>,
@@ -308,10 +454,10 @@ pub async fn handler_post_da_ingest(
             format,
         );
     }
-    let outcome = app.da_replay_cache.insert(replay_key, Instant::now());
+    let (outcome, fresh_reservation) = app.da_replay_cache.reserve(replay_key, Instant::now());
     match outcome {
         ReplayInsertOutcome::Fresh { .. } | ReplayInsertOutcome::Duplicate { .. } => {
-            let duplicate = matches!(outcome, ReplayInsertOutcome::Duplicate { .. });
+            let duplicate = matches!(&outcome, ReplayInsertOutcome::Duplicate { .. });
             record_da_rent_quote_metrics(
                 &telemetry,
                 cluster_label,
@@ -330,6 +476,10 @@ pub async fn handler_post_da_ingest(
                     format,
                 );
             }
+            let replay_reservation = FreshReplayReservation::new(
+                Arc::clone(&app.da_replay_cache),
+                fresh_reservation.expect("fresh replay outcome carries a reservation"),
+            );
             let taikai_stream_label =
                 matches!(request.blob_class, BlobClass::TaikaiSegment).then(|| {
                     taikai::stream_label_from_metadata(&request.metadata)
@@ -540,19 +690,6 @@ pub async fn handler_post_da_ingest(
                     .map_err(|err| err.to_string())
                 }));
             }
-            {
-                let receipt_log = Arc::clone(&app.da_receipt_log);
-                let receipt = receipt.clone();
-                let sequence = request.sequence;
-                // The receipt log owns replay-cursor persistence after the
-                // receipt is durably written and accepted.
-                spool_batch.push(DaSpoolAction::new("receipt_log", move || {
-                    receipt_log
-                        .append(lane_epoch, sequence, receipt, fingerprint)
-                        .map(DaSpoolActionOutput::ReceiptOutcome)
-                        .map_err(|err| err.to_string())
-                }));
-            }
             let mut taikai_alias_rotation_event = None;
             if let Some(taikai) = taikai_artifacts {
                 {
@@ -708,6 +845,23 @@ pub async fn handler_post_da_ingest(
                 }
                 taikai::record_taikai_ingest_metrics(&telemetry, cluster_label, &taikai.telemetry);
             }
+            {
+                let receipt_log = Arc::clone(&app.da_receipt_log);
+                let receipt = receipt.clone();
+                let sequence = request.sequence;
+                let mut replay_reservation = replay_reservation;
+                // The durable receipt and replay cursor commit only after every
+                // artifact required by this ingest has been written successfully. Moving the
+                // reservation into the queued action keeps it live if the HTTP future is
+                // cancelled after the spool worker accepts the batch.
+                spool_batch.push_commit(DaSpoolAction::new("receipt_log", move || {
+                    let outcome = receipt_log
+                        .append(lane_epoch, sequence, receipt, fingerprint)
+                        .map_err(|err| err.to_string())?;
+                    replay_reservation.resolve_receipt_outcome(&outcome);
+                    Ok(DaSpoolActionOutput::ReceiptOutcome(outcome))
+                }));
+            }
             let spool_report = flush_da_spool_batch(app.as_ref(), spool_batch).await;
             log_da_spool_failures(&spool_report);
             let mut receipt_log_recorded = false;
@@ -765,8 +919,22 @@ pub async fn handler_post_da_ingest(
             "sequence already used for a different manifest",
             format,
         )),
+        ReplayInsertOutcome::InFlight { .. } => Ok(build_error_response(
+            StatusCode::CONFLICT,
+            "an identical DA ingest is still in flight; retry after it completes",
+            format,
+        )),
         ReplayInsertOutcome::LaneEpochCapacityExceeded { capacity } => {
             let message = format!("global DA replay lane/epoch capacity ({capacity}) is exhausted");
+            Ok(build_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &message,
+                format,
+            ))
+        }
+        ReplayInsertOutcome::ReservationCapacityExceeded { capacity } => {
+            let message =
+                format!("DA replay in-flight reservation capacity ({capacity}) is exhausted");
             Ok(build_error_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 &message,

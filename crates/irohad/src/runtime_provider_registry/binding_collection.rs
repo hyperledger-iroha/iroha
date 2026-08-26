@@ -18,7 +18,6 @@ pub(super) fn collect_configured_bindings(
     collect_reputation_billing_bindings(config, bindings)?;
     collect_provider_ingest_bindings(config, bindings)?;
     collect_soracloud_runtime_signer_binding(config, bindings)?;
-    collect_soracloud_hf_credential_provider_binding(config, bindings)?;
     collect_musubi_provider_attestation_bindings(config, bindings)
 }
 fn collect_musubi_provider_attestation_bindings(
@@ -102,24 +101,6 @@ fn collect_soracloud_runtime_signer_binding(
         None if config.soracloud_runtime.production_mode => {
             return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
         }
-        None => {}
-    }
-    Ok(())
-}
-fn collect_soracloud_hf_credential_provider_binding(
-    config: &Config,
-    bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
-) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
-    let slot = IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider;
-    match config
-        .soracloud_runtime
-        .hf
-        .inference_credential_provider
-        .as_ref()
-    {
-        Some(binding) => bindings.push(
-            IrohaRuntimeProviderBindingV1::try_new_soracloud_hf_credential_provider(binding)?,
-        ),
         None => {}
     }
     Ok(())

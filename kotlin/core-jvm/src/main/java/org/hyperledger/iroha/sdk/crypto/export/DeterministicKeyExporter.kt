@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.crypto.export
 
+import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.CharBuffer
 import java.nio.charset.CharacterCodingException
@@ -19,6 +20,8 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import org.bouncycastle.crypto.generators.Argon2BytesGenerator
 import org.bouncycastle.crypto.params.Argon2Parameters
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
+import org.bouncycastle.crypto.util.PrivateKeyFactory
 import org.hyperledger.iroha.sdk.crypto.MlDsaKeyMaterial
 import org.hyperledger.iroha.sdk.crypto.MlDsaPrivateKey
 import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKey
@@ -170,6 +173,7 @@ object DeterministicKeyExporter {
             return algorithm
         }
         if (isEd25519PrivateKey(privateKey) && isEd25519PublicKey(publicKey)) {
+            ensureEd25519KeyPair(privateKey, publicKey)
             return SigningAlgorithm.ED25519
         }
         throw KeyExportException("Deterministic export supports Ed25519, ML-DSA, and native-backed Iroha signing keys only")
@@ -235,6 +239,7 @@ object DeterministicKeyExporter {
                 val factory = KeyFactory.getInstance(KEY_ALGORITHM)
                 val privKey = factory.generatePrivate(PKCS8EncodedKeySpec(privateKeyBytes))
                 val pubKey = factory.generatePublic(X509EncodedKeySpec(publicKeyBytes))
+                ensureEd25519KeyPair(privKey, pubKey)
                 KeyPairData(privKey, pubKey, SigningAlgorithm.ED25519)
             }
             SigningAlgorithm.ML_DSA -> {
@@ -246,6 +251,47 @@ object DeterministicKeyExporter {
                 KeyPairData(pair.private, pair.public, algorithm)
             }
         }
+
+    private fun ensureEd25519KeyPair(privateKey: PrivateKey, publicKey: PublicKey) {
+        val privateBytes = privateKey.encoded
+            ?: throw KeyExportException("Ed25519 private key encoding is unavailable")
+        val publicBytes = publicKey.encoded
+            ?: throw KeyExportException("Ed25519 public key encoding is unavailable")
+        try {
+            val expected: ByteArray
+            val actual: ByteArray
+            try {
+                val privateParameters = PrivateKeyFactory.createKey(privateBytes)
+                if (privateParameters !is Ed25519PrivateKeyParameters) {
+                    throw KeyExportException("Ed25519 key encodings use an unexpected algorithm")
+                }
+                if (publicBytes.size != ED25519_SPKI_SIZE ||
+                    !publicBytes.copyOfRange(0, ED25519_SPKI_PREFIX.size)
+                        .contentEquals(ED25519_SPKI_PREFIX)
+                ) {
+                    throw KeyExportException("Ed25519 public key encoding is not canonical")
+                }
+                expected = privateParameters.generatePublicKey().encoded
+                actual = publicBytes.copyOfRange(ED25519_SPKI_PREFIX.size, publicBytes.size)
+            } catch (ex: KeyExportException) {
+                throw ex
+            } catch (ex: IOException) {
+                throw KeyExportException("Failed to validate Ed25519 key pair", ex)
+            } catch (ex: IllegalArgumentException) {
+                throw KeyExportException("Failed to validate Ed25519 key pair", ex)
+            }
+            try {
+                if (!MessageDigest.isEqual(expected, actual)) {
+                    throw KeyExportException("Ed25519 public key does not match private key")
+                }
+            } finally {
+                expected.fill(0)
+                actual.fill(0)
+            }
+        } finally {
+            privateBytes.fill(0)
+        }
+    }
 
     private fun readAlgorithmOid(
         encoded: ByteArray,

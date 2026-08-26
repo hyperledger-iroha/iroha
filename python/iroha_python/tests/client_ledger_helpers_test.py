@@ -5,6 +5,7 @@ import copy
 import hashlib
 import json
 from decimal import Decimal
+from pathlib import Path
 from typing import Callable
 from urllib.parse import quote, urlsplit
 
@@ -13,6 +14,7 @@ import requests
 
 import iroha_python.client as client_module
 import iroha_python.crypto as crypto_module
+from client_expensive_query_test_support import authenticated_query_client
 from iroha_python import (
     AccountAsset,
     AccountAssetsPage,
@@ -26,6 +28,7 @@ from iroha_python import (
     LocalSigningContext,
     NetworkId,
     RwaListItem,
+    ToriiCanonicalRequestAuth,
     ToriiClient,
     TransactionConfig,
     TransactionDraft,
@@ -39,7 +42,6 @@ from iroha_python._privacy_backends import (
     _verifier_backend_registry_tag_v1,
 )
 from iroha_python.client import ACCOUNT_ONBOARDING_TOKEN_HEADER, DATA_MODEL_VERSION
-from client_expensive_query_test_support import authenticated_query_client
 from iroha_python.repo import (
     RepoAgreementListPage,
     RepoAgreementRecord,
@@ -212,6 +214,10 @@ class OnboardingSession:
     def __init__(self, responses: list[requests.Response]):
         self.responses = responses
         self.calls: list[dict[str, object]] = []
+        self.adapter = requests.adapters.HTTPAdapter(max_retries=0)
+
+    def get_adapter(self, _url: str) -> requests.adapters.HTTPAdapter:
+        return self.adapter
 
     def request(self, method: str, url: str, **kwargs: object) -> requests.Response:
         self.calls.append(
@@ -249,53 +255,771 @@ def response(
 
 
 ONBOARDING_TOKEN = "0123456789abcdef0123456789ABCDEF"
-ONBOARDING_UAID = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+ONBOARDING_KEY_PAIR = Ed25519KeyPair.from_private_key(bytes(range(1, 33)))
+ONBOARDING_ACCOUNT_ID = client_module.AccountAddress.from_account(
+    public_key=ONBOARDING_KEY_PAIR.public_key,
+).to_i105(client_module.DEFAULT_I105_DISCRIMINANT)
 
 
-def test_onboard_account_sends_exact_route_token_and_current_json_contract() -> None:
-    session = OnboardingSession([response(202, {"status": "QUEUED"})])
+def onboarding_canonical_auth(
+    *,
+    network_id: NetworkId = NETWORK_ID,
+    signer: Callable[[bytes], bytes] | None = None,
+) -> ToriiCanonicalRequestAuth:
+    return ToriiCanonicalRequestAuth(
+        network_id=network_id.literal,
+        account_id=ONBOARDING_ACCOUNT_ID,
+        signer=signer or (lambda _message: b"\x55" * 64),
+    )
+
+
+def prepared_binding(kind: str) -> dict[str, object]:
+    return {
+        "schema": "iroha.taira.public-reset.mutation-binding.v1",
+        "authorization_sha256": "ab" * 32,
+        "authorization_nonce": "reset_nonce_00000000000000000000",
+        "kind": kind,
+        "phase": "pre_edge",
+        "idempotency_key": "cd" * 32,
+        "execution_expires_at_unix_ms": 4_000_000_000_000,
+    }
+
+
+def canonical_hash_literal(hex_value: str) -> str:
+    body = hex_value.upper()
+    checksum = client_module._crc16_ccitt_false(f"hash:{body}".encode("ascii"))
+    return f"hash:{body}#{checksum:04X}"
+
+
+def onboarding_request(*, permissions: list[str] | None = None) -> dict[str, object]:
+    return {
+        "version": 1,
+        "alias": "merchant@universal",
+        "account_id": ONBOARDING_ACCOUNT_ID,
+        "permissions": [] if permissions is None else permissions,
+    }
+
+
+def onboarding_receipt() -> dict[str, object]:
+    return {
+        "body": {
+            "version": 1,
+            "request": onboarding_request(),
+            "resource": {
+                "disposition": {"kind": "create", "value": None},
+            },
+        },
+        "plan_hash": canonical_hash_literal("11" * 32),
+        "signature": "02",
+    }
+
+
+def atomic_onboarding_state(
+    *,
+    account_id: str = ONBOARDING_ACCOUNT_ID,
+    alias: str = "merchant@universal",
+    network_id: str = NETWORK_ID.literal,
+    account_exists: bool = True,
+    alias_target_account_id: str | None = ONBOARDING_ACCOUNT_ID,
+    observed_block_height: int = 19,
+    observed_block_hash: str = canonical_hash_literal("ab" * 32),
+) -> dict[str, object]:
+    return {
+        "version": 1,
+        "network_id": network_id,
+        "account_id": account_id,
+        "alias": alias,
+        "account_exists": account_exists,
+        "alias_target_account_id": alias_target_account_id,
+        "observed_block_height": observed_block_height,
+        "observed_block_hash": observed_block_hash,
+    }
+
+
+def prepared_onboarding() -> dict[str, object]:
+    return {
+        "schema": "iroha.taira.prepared-transaction.v1",
+        "binding": prepared_binding("onboarding"),
+        "operation": "onboarding",
+        "receipt": onboarding_receipt(),
+        "semantic_hash_hex": "11" * 32,
+        "account_id": ONBOARDING_ACCOUNT_ID,
+        "alias": "merchant@universal",
+        "disposition": {"kind": "create", "value": None},
+        "transaction_hash_hex": "23" * 32,
+        "signed_transaction_wire_hex": "0102",
+        "signed_transaction_wire_sha256": "33" * 32,
+        "fee_payment": {"kind": "authority"},
+        "server_signature": "44" * 64,
+    }
+
+
+def prepared_faucet() -> dict[str, object]:
+    claim = {
+        "account_id": ONBOARDING_ACCOUNT_ID,
+        "pow_anchor_height": 7,
+        "pow_nonce_hex": "0000000000000000",
+    }
+    return {
+        "schema": "iroha.taira.prepared-transaction.v1",
+        "binding": prepared_binding("faucet"),
+        "operation": "faucet",
+        "claim": claim,
+        "semantic_hash_hex": "55" * 32,
+        "account_id": ONBOARDING_ACCOUNT_ID,
+        "asset_definition_id": "xor#sora",
+        "asset_id": f"xor#sora#{ONBOARDING_ACCOUNT_ID}",
+        "amount": "100",
+        "transaction_hash_hex": "67" * 32,
+        "signed_transaction_wire_hex": "0304",
+        "signed_transaction_wire_sha256": "77" * 32,
+        "fee_payment": {"kind": "authority"},
+        "server_signature": "88" * 64,
+    }
+
+
+def test_prepared_transaction_rejects_hash_without_iroha_marker() -> None:
+    prepared = prepared_onboarding()
+    prepared["transaction_hash_hex"] = "22" * 32
+
+    with pytest.raises(ValueError, match="lowercase marked 32-byte hash"):
+        client_module._copy_prepared_taira_transaction(
+            prepared,
+            expected_operation="onboarding",
+            context="prepared transaction",
+        )
+
+
+def test_prepared_transaction_signature_v1_shared_golden_is_exact() -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "prepared_transactions"
+        / "prepared_transaction_signature_v1.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    assert fixture["schema"] == "iroha.taira.prepared-transaction-signature-fixture.v1"
+    assert fixture["transcript_schema"] == client_module.TAIRA_PREPARED_SIGNATURE_TRANSCRIPT_SCHEMA
+    assert (
+        bytes.fromhex(fixture["signature_domain_hex"])
+        == client_module.TAIRA_PREPARED_SIGNATURE_DOMAIN
+    )
+    assert fixture["frame_length_encoding"] == "u64_be"
+    assert fixture["digest_algorithm"] == "iroha_blake2b_256"
+    assert [vector["name"] for vector in fixture["vectors"]] == [
+        "onboarding_prepared",
+        "onboarding_proof_required",
+        "faucet_prepared",
+    ]
+    for vector in fixture["vectors"]:
+        response_payload = vector["response"]
+        if vector["name"] == "onboarding_proof_required":
+            binding = response_payload["binding"]
+            transcript = client_module._prepared_binding_transcript(
+                response_payload["schema"], "onboarding", binding
+            )
+            for label in (
+                "outcome",
+                "proof_kind",
+                "semantic_hash_hex",
+                "account_id",
+                "alias",
+            ):
+                transcript.extend(
+                    client_module._prepared_signature_field(label, str(response_payload[label]))
+                )
+            transcript.extend(client_module._prepared_signature_field("disposition", "no_op"))
+            transcript_bytes = bytes(transcript)
+        else:
+            operation = "onboarding" if vector["name"] == "onboarding_prepared" else "faucet"
+            exact_payload = client_module._copy_prepared_taira_transaction(
+                response_payload,
+                expected_operation=operation,
+                context=f"shared golden {vector['name']}",
+            )
+            transcript_bytes = client_module._prepared_signature_transcript(
+                exact_payload, f"shared golden {vector['name']}"
+            )
+        assert transcript_bytes.hex() == vector["transcript_hex"]
+        digest = crypto_module.hash_blake2b_32(transcript_bytes)
+        assert digest.hex() == vector["digest_hex"]
+        public_key = bytes.fromhex(
+            crypto_module.AccountId(vector["signer_account_id"]).public_key_hex
+        )
+        signature = bytes.fromhex(vector["server_signature_hex"])
+        assert response_payload["server_signature"] == vector["server_signature_hex"].upper()
+        assert crypto_module.verify_ed25519(public_key, digest, signature)
+
+
+def test_prepared_transaction_v1_shared_golden_authenticates_inner_context() -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "prepared_transactions"
+        / "prepared_transaction_signature_v1.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    for vector in fixture["vectors"]:
+        if vector["name"] == "onboarding_proof_required":
+            continue
+        prepared = vector["response"]
+        network_id = NetworkId.parse(vector["network_id"])
+        operation_context = (
+            {
+                "receipt": prepared["receipt"],
+                "account_id": prepared["account_id"],
+                "alias": prepared["alias"],
+                "disposition": prepared["disposition"],
+            }
+            if vector["name"] == "onboarding_prepared"
+            else {
+                "claim": prepared["claim"],
+                "account_id": prepared["account_id"],
+                "asset_definition_id": prepared["asset_definition_id"],
+                "asset_id": prepared["asset_id"],
+                "amount": prepared["amount"],
+            }
+        )
+        envelope = crypto_module.verify_prepared_transaction_context_v1(
+            bytes.fromhex(prepared["signed_transaction_wire_hex"]),
+            network_id,
+            vector["signer_account_id"],
+            json.dumps(prepared["binding"], sort_keys=True, separators=(",", ":")),
+            prepared["operation"],
+            prepared["semantic_hash_hex"],
+            json.dumps(prepared["fee_payment"], sort_keys=True, separators=(",", ":")),
+            json.dumps(operation_context, sort_keys=True, separators=(",", ":")),
+        )
+        assert envelope.hash_hex() == prepared["transaction_hash_hex"]
+        substituted_context = copy.deepcopy(operation_context)
+        if vector["name"] == "onboarding_prepared":
+            substituted_context["disposition"] = {"kind": "conflict", "value": None}
+        else:
+            substituted_context["amount"] = "6"
+        with pytest.raises(ValueError, match="invalid prepared transaction context"):
+            crypto_module.verify_prepared_transaction_context_v1(
+                bytes.fromhex(prepared["signed_transaction_wire_hex"]),
+                network_id,
+                vector["signer_account_id"],
+                json.dumps(prepared["binding"], sort_keys=True, separators=(",", ":")),
+                prepared["operation"],
+                prepared["semantic_hash_hex"],
+                json.dumps(prepared["fee_payment"], sort_keys=True, separators=(",", ":")),
+                json.dumps(substituted_context, sort_keys=True, separators=(",", ":")),
+            )
+        if vector["name"] == "onboarding_prepared":
+            receipt = prepared["receipt"]
+            request = receipt["body"]["request"]
+            assert (
+                crypto_module.verify_account_onboarding_receipt_v1(
+                    json.dumps(receipt, sort_keys=True, separators=(",", ":")),
+                    network_id,
+                    vector["signer_account_id"],
+                    request["account_id"],
+                    request["alias"],
+                    json.dumps(request["permissions"], separators=(",", ":")),
+                )
+                == prepared["semantic_hash_hex"]
+            )
+            with pytest.raises(ValueError, match="invalid account onboarding receipt"):
+                crypto_module.verify_account_onboarding_receipt_v1(
+                    json.dumps(receipt, sort_keys=True, separators=(",", ":")),
+                    network_id,
+                    vector["signer_account_id"],
+                    request["account_id"],
+                    request["alias"],
+                    '["CanGrantAccountPermission"]',
+                )
+
+
+def test_account_onboarding_is_explicit_plan_prepare_submit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt = onboarding_receipt()
+    prepared = prepared_onboarding()
+    session = OnboardingSession(
+        [
+            response(200, receipt),
+            response(200, prepared),
+            response(
+                200,
+                {
+                    "schema": "iroha.taira.prepared-transaction-submit.v1",
+                    "binding": prepared["binding"],
+                    "operation": "onboarding",
+                    "transaction_hash_hex": prepared["transaction_hash_hex"],
+                    "outcome": "Pending",
+                },
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_receipt_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    monkeypatch.setattr(
+        client_module,
+        "_verify_prepared_transaction_authentication_v1",
+        lambda *_, **__: None,
+    )
     client = ToriiClient(
         "https://torii.example",
         session=session,
         api_token="global-api-token",
     )
 
-    result = client.onboard_account(
+    plan = client.plan_account_onboarding(
         onboarding_token=ONBOARDING_TOKEN,
         alias="merchant@universal",
-        uaid=ONBOARDING_UAID.upper(),
-        public_key_hex="AB" * 32,
-        identity_commitment_hex="CD" * 32,
+        account_id=ONBOARDING_ACCOUNT_ID,
+        expected_authority=ONBOARDING_ACCOUNT_ID,
+        network_id=NETWORK_ID,
         permissions=["CanFoo", "CanFoo", "CanBar"],
     )
+    prepare = client.prepare_account_onboarding(
+        onboarding_token=ONBOARDING_TOKEN,
+        binding=prepared_binding("onboarding"),
+        receipt=receipt,
+        expected_request=onboarding_request(),
+        expected_authority=ONBOARDING_ACCOUNT_ID,
+        network_id=NETWORK_ID,
+    )
+    submit = client.submit_prepared_account_onboarding(
+        onboarding_token=ONBOARDING_TOKEN,
+        prepared=prepared,
+        expected_request=onboarding_request(),
+        expected_authority=ONBOARDING_ACCOUNT_ID,
+        network_id=NETWORK_ID,
+    )
 
-    assert result.status_code == 202
-    assert len(session.calls) == 1
-    call = session.calls[0]
-    assert call["method"] == "POST"
-    assert call["path"] == "/v1/accounts/onboard"
-    assert call["allow_redirects"] is False
-    headers = call["headers"]
-    assert isinstance(headers, dict)
-    onboarding_headers = [
-        (name, value)
-        for name, value in headers.items()
-        if name.lower() == ACCOUNT_ONBOARDING_TOKEN_HEADER.lower()
+    assert [plan.status_code, prepare.status_code, submit.status_code] == [200, 200, 200]
+    assert [call["path"] for call in session.calls] == [
+        "/v1/accounts/onboard/plan",
+        "/v1/accounts/onboard/prepare",
+        "/v1/accounts/onboard",
     ]
-    assert onboarding_headers == [(ACCOUNT_ONBOARDING_TOKEN_HEADER, ONBOARDING_TOKEN)]
-    assert headers["X-API-Token"] == "global-api-token"
-    assert headers["Accept"] == "application/json"
-    assert headers["Content-Type"] == "application/json"
-    data = call["data"]
-    assert isinstance(data, bytes)
-    assert ONBOARDING_TOKEN.encode() not in data
-    assert json.loads(data) == {
+    assert json.loads(session.calls[0]["data"]) == {
+        "version": 1,
         "alias": "merchant@universal",
-        "uaid": ONBOARDING_UAID,
-        "public_key_hex": "ab" * 32,
-        "identity_commitment_hex": "cd" * 32,
-        "permissions": ["CanFoo", "CanBar"],
+        "account_id": ONBOARDING_ACCOUNT_ID,
+        "permissions": ["CanBar", "CanFoo"],
     }
+    assert json.loads(session.calls[1]["data"]) == {
+        "schema": "iroha.accounts.onboard.prepare.v1",
+        "binding": prepared_binding("onboarding"),
+        "receipt": receipt,
+    }
+    assert json.loads(session.calls[2]["data"]) == prepared
+    for call in session.calls:
+        assert call["method"] == "POST"
+        assert call["allow_redirects"] is False
+        headers = call["headers"]
+        assert isinstance(headers, dict)
+        assert headers[ACCOUNT_ONBOARDING_TOKEN_HEADER] == ONBOARDING_TOKEN
+        assert headers["X-API-Token"] == "global-api-token"
+        assert ONBOARDING_TOKEN.encode() not in call["data"]
+
+
+def test_onboarding_receipt_permissions_must_match_complete_original_request() -> None:
+    receipt = onboarding_receipt()
+    body = receipt["body"]
+    assert isinstance(body, dict)
+    body.update(
+        {
+            "authority": ONBOARDING_ACCOUNT_ID,
+            "network_id": NETWORK_ID.literal,
+            "anchor": {},
+            "acquisition": {},
+            "quote_guard": {},
+            "instructions": [],
+            "owner_auto_renew_instruction": None,
+            "valid_until_ms": 4_000_000_000_000,
+        }
+    )
+    request = body["request"]
+    assert isinstance(request, dict)
+    request["permissions"] = ["CanGrantAccountPermission"]
+
+    with pytest.raises(ValueError, match="complete request"):
+        client_module._copy_account_onboarding_receipt_v1(
+            receipt,
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+            expected_request=onboarding_request(),
+            context="permission substitution",
+        )
+
+
+def test_proof_required_onboarding_uses_one_exact_atomic_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proof_required = {
+        "account_id": ONBOARDING_ACCOUNT_ID,
+        "alias": "merchant@universal",
+    }
+    session = OnboardingSession([response(200, atomic_onboarding_state())])
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_receipt_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_proof_required_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    client = ToriiClient("https://torii.example", session=session)
+    durable_binding = prepared_binding("onboarding")
+    durable_binding["execution_expires_at_unix_ms"] = 1
+
+    result = client.prove_account_onboarding_current_state(
+        proof_required=proof_required,
+        binding=durable_binding,
+        receipt=onboarding_receipt(),
+        expected_request=onboarding_request(),
+        expected_authority=ONBOARDING_ACCOUNT_ID,
+        network_id=NETWORK_ID,
+        canonical_auth=onboarding_canonical_auth(),
+    )
+    assert result.kind == "Applied"
+    assert result.block_height == 19
+    assert result.block_hash == canonical_hash_literal("ab" * 32)
+    assert [(call["method"], call["path"]) for call in session.calls] == [
+        ("POST", "/v1/accounts/onboarding/current-state"),
+    ]
+    assert all(call["allow_redirects"] is False for call in session.calls)
+    assert session.calls[0]["headers"]["Content-Type"] == "application/json"
+    assert session.calls[0]["headers"]["Cache-Control"] == "no-cache"
+    assert session.calls[0]["headers"]["X-Iroha-Account"]
+    assert session.calls[0]["headers"]["X-Iroha-Signature"]
+    assert session.calls[0]["headers"]["X-Iroha-Timestamp-Ms"]
+    assert session.calls[0]["headers"]["X-Iroha-Nonce"]
+    assert json.loads(session.calls[0]["data"]) == {
+        "version": 1,
+        "account_id": ONBOARDING_ACCOUNT_ID,
+        "alias": "merchant@universal",
+    }
+
+
+def test_proof_required_onboarding_never_retries_atomic_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proof_required = {
+        "account_id": ONBOARDING_ACCOUNT_ID,
+        "alias": "merchant@universal",
+    }
+    session = OnboardingSession(
+        [
+            response(503, {"message": "retryable only for ordinary requests"}),
+            response(200, atomic_onboarding_state()),
+        ]
+    )
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_receipt_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_proof_required_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        max_retries=4,
+        backoff_factor=0,
+        retry_on_methods=["POST"],
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected status 503"):
+        client.prove_account_onboarding_current_state(
+            proof_required=proof_required,
+            binding=prepared_binding("onboarding"),
+            receipt=onboarding_receipt(),
+            expected_request=onboarding_request(),
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+            canonical_auth=onboarding_canonical_auth(),
+        )
+
+    assert [(call["method"], call["path"]) for call in session.calls] == [
+        ("POST", "/v1/accounts/onboarding/current-state"),
+    ]
+
+
+def test_proof_required_onboarding_rejects_adapter_retries_before_signing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proof_required = {
+        "account_id": ONBOARDING_ACCOUNT_ID,
+        "alias": "merchant@universal",
+    }
+    session = OnboardingSession([])
+    session.adapter = requests.adapters.HTTPAdapter(max_retries=1)
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_receipt_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_proof_required_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises(ValueError, match="transport retries to be disabled"):
+        client.prove_account_onboarding_current_state(
+            proof_required=proof_required,
+            binding=prepared_binding("onboarding"),
+            receipt=onboarding_receipt(),
+            expected_request=onboarding_request(),
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+            canonical_auth=onboarding_canonical_auth(),
+        )
+
+    assert session.calls == []
+
+
+def test_proof_required_onboarding_rejects_missing_or_foreign_canonical_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proof_required = {
+        "account_id": ONBOARDING_ACCOUNT_ID,
+        "alias": "merchant@universal",
+    }
+    session = OnboardingSession([])
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_receipt_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_proof_required_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    client = ToriiClient("https://torii.example", session=session)
+    common = {
+        "proof_required": proof_required,
+        "binding": prepared_binding("onboarding"),
+        "receipt": onboarding_receipt(),
+        "expected_request": onboarding_request(),
+        "expected_authority": ONBOARDING_ACCOUNT_ID,
+        "network_id": NETWORK_ID,
+    }
+
+    with pytest.raises(ValueError, match="canonical_auth is required"):
+        client.prove_account_onboarding_current_state(
+            **common,
+            canonical_auth=None,  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="must match network_id"):
+        client.prove_account_onboarding_current_state(
+            **common,
+            canonical_auth=onboarding_canonical_auth(
+                network_id=NetworkId.from_bytes(bytes([0xA7]) * 32)
+            ),
+        )
+
+    assert session.calls == []
+
+
+def test_proof_required_onboarding_classifies_absent_and_conflicting_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    substituted_key_pair = Ed25519KeyPair.from_private_key(bytes(range(33, 65)))
+    substituted_account = client_module.AccountAddress.from_account(
+        public_key=substituted_key_pair.public_key,
+    ).to_i105(client_module.DEFAULT_I105_DISCRIMINANT)
+    proof_required = {
+        "account_id": ONBOARDING_ACCOUNT_ID,
+        "alias": "merchant@universal",
+    }
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_receipt_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_proof_required_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+
+    for target, expected_kind in (
+        (None, "AliasAbsent"),
+        (substituted_account, "AliasConflict"),
+    ):
+        session = OnboardingSession(
+            [
+                response(
+                    200,
+                    atomic_onboarding_state(alias_target_account_id=target),
+                )
+            ]
+        )
+        client = ToriiClient("https://torii.example", session=session)
+        result = client.prove_account_onboarding_current_state(
+            proof_required=proof_required,
+            binding=prepared_binding("onboarding"),
+            receipt=onboarding_receipt(),
+            expected_request=onboarding_request(),
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+            canonical_auth=onboarding_canonical_auth(),
+        )
+        assert result.kind == expected_kind
+        assert len(session.calls) == 1
+
+
+def test_proof_required_onboarding_rejects_open_substituted_or_unanchored_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    substituted_key_pair = Ed25519KeyPair.from_private_key(bytes(range(33, 65)))
+    substituted_account = client_module.AccountAddress.from_account(
+        public_key=substituted_key_pair.public_key,
+    ).to_i105(client_module.DEFAULT_I105_DISCRIMINANT)
+    proof_required = {
+        "account_id": ONBOARDING_ACCOUNT_ID,
+        "alias": "merchant@universal",
+    }
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_receipt_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_proof_required_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    foreign_network_id = NetworkId.from_bytes(bytes([0xA7]) * 32).literal
+    exact = atomic_onboarding_state()
+    candidates: list[dict[str, object]] = []
+    for field, value in (
+        ("version", 2),
+        ("network_id", foreign_network_id),
+        ("account_id", substituted_account),
+        ("alias", "other@universal"),
+        ("account_exists", False),
+        ("observed_block_height", 0),
+        ("observed_block_hash", "not-a-typed-hash"),
+        (
+            "observed_block_hash",
+            canonical_hash_literal("ab" * 32).lower(),
+        ),
+        ("alias_target_account_id", f" {ONBOARDING_ACCOUNT_ID}"),
+    ):
+        candidate = copy.deepcopy(exact)
+        candidate[field] = value
+        candidates.append(candidate)
+    open_response = copy.deepcopy(exact)
+    open_response["legacy_account_state"] = "applied"
+    candidates.append(open_response)
+
+    for candidate in candidates:
+        session = OnboardingSession([response(200, candidate)])
+        client = ToriiClient("https://torii.example", session=session)
+        with pytest.raises((TypeError, ValueError)):
+            client.prove_account_onboarding_current_state(
+                proof_required=proof_required,
+                binding=prepared_binding("onboarding"),
+                receipt=onboarding_receipt(),
+                expected_request=onboarding_request(),
+                expected_authority=ONBOARDING_ACCOUNT_ID,
+                network_id=NETWORK_ID,
+                canonical_auth=onboarding_canonical_auth(),
+            )
+        assert [(call["method"], call["path"]) for call in session.calls] == [
+            ("POST", "/v1/accounts/onboarding/current-state"),
+        ]
+
+
+def test_proof_required_onboarding_rejects_response_over_four_kib_before_decoding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proof_required = {
+        "account_id": ONBOARDING_ACCOUNT_ID,
+        "alias": "merchant@universal",
+    }
+    oversized = atomic_onboarding_state()
+    oversized["padding"] = "x" * (4 * 1024)
+    session = OnboardingSession([response(200, oversized)])
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_receipt_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_proof_required_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises(ValueError, match="4096-byte limit"):
+        client.prove_account_onboarding_current_state(
+            proof_required=proof_required,
+            binding=prepared_binding("onboarding"),
+            receipt=onboarding_receipt(),
+            expected_request=onboarding_request(),
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+            canonical_auth=onboarding_canonical_auth(),
+        )
+
+    assert [(call["method"], call["path"]) for call in session.calls] == [
+        ("POST", "/v1/accounts/onboarding/current-state"),
+    ]
+
+
+def test_proof_required_onboarding_rejects_duplicate_response_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proof_required = {
+        "account_id": ONBOARDING_ACCOUNT_ID,
+        "alias": "merchant@universal",
+    }
+    exact_body = json.dumps(atomic_onboarding_state(), separators=(",", ":"))
+    duplicate_body = exact_body.replace(
+        '"version":1',
+        '"version":1,"version":1',
+        1,
+    )
+    duplicate_response = response(200)
+    duplicate_response._content = duplicate_body.encode("utf-8")
+    duplicate_response.headers["Content-Type"] = "application/json"
+    session = OnboardingSession([duplicate_response])
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_receipt_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    monkeypatch.setattr(
+        client_module,
+        "_copy_account_onboarding_proof_required_v1",
+        lambda value, **_: copy.deepcopy(value),
+    )
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises(ValueError, match="duplicate object key 'version'"):
+        client.prove_account_onboarding_current_state(
+            proof_required=proof_required,
+            binding=prepared_binding("onboarding"),
+            receipt=onboarding_receipt(),
+            expected_request=onboarding_request(),
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+            canonical_auth=onboarding_canonical_auth(),
+        )
+
+    assert [(call["method"], call["path"]) for call in session.calls] == [
+        ("POST", "/v1/accounts/onboarding/current-state"),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -309,18 +1033,20 @@ def test_onboard_account_sends_exact_route_token_and_current_json_contract() -> 
         "T" * 31 + "é",
     ],
 )
-def test_onboard_account_rejects_malformed_route_token_before_dispatch(
+def test_onboarding_prepare_rejects_malformed_route_token_before_dispatch(
     token: object,
 ) -> None:
     session = OnboardingSession([])
     client = ToriiClient("https://torii.example", session=session)
 
     with pytest.raises((TypeError, ValueError)) as error:
-        client.onboard_account(
+        client.prepare_account_onboarding(
             onboarding_token=token,  # type: ignore[arg-type]
-            alias="merchant@universal",
-            uaid=ONBOARDING_UAID,
-            public_key_hex="ab" * 32,
+            binding=prepared_binding("onboarding"),
+            receipt={"body": {}},
+            expected_request=onboarding_request(),
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
         )
 
     if token:
@@ -328,15 +1054,16 @@ def test_onboard_account_rejects_malformed_route_token_before_dispatch(
     assert session.calls == []
 
 
-def test_onboard_account_requires_explicit_token_and_rejects_global_default() -> None:
+def test_onboarding_requests_require_explicit_token_and_reject_global_default() -> None:
     session = OnboardingSession([])
     client = ToriiClient("https://torii.example", session=session)
 
     with pytest.raises(TypeError, match="onboarding_token"):
-        client.onboard_account(  # type: ignore[call-arg]
+        client.plan_account_onboarding(  # type: ignore[call-arg]
             alias="merchant@universal",
-            uaid=ONBOARDING_UAID,
-            public_key_hex="ab" * 32,
+            account_id=ONBOARDING_ACCOUNT_ID,
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
         )
     with pytest.raises(ValueError, match="pass onboarding_token explicitly"):
         ToriiClient(
@@ -347,28 +1074,320 @@ def test_onboard_account_requires_explicit_token_and_rejects_global_default() ->
     assert session.calls == []
 
 
-def test_onboard_account_does_not_follow_redirect_or_accept_retired_fields() -> None:
+@pytest.mark.parametrize(
+    "header_name",
+    [
+        "Authorization",
+        "Proxy-Authorization",
+        "Cookie",
+        "Cookie2",
+        "X-API-Token",
+        "X-API-Key",
+        "X-Auth-Token",
+        ACCOUNT_ONBOARDING_TOKEN_HEADER,
+        "X-Iroha-Account",
+        "X-Iroha-Signature",
+        "X-Iroha-Timestamp-Ms",
+        "X-Iroha-Nonce",
+        "X-Iroha-Witness",
+        "X-Iroha-Operator-Public-Key",
+        "X-Iroha-Operator-Signature",
+        "X-Iroha-Operator-Timestamp-Ms",
+        "X-Iroha-Operator-Nonce",
+    ],
+)
+def test_client_rejects_session_route_secret_headers_at_construction(
+    header_name: str,
+) -> None:
+    session = requests.Session()
+    session.headers[header_name.swapcase()] = "must-not-leak"
+
+    with pytest.raises(ValueError, match="session.headers") as error:
+        ToriiClient("https://torii.example", session=session)
+
+    assert "must-not-leak" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("header_name", "explicit_kwargs"),
+    [
+        ("Authorization", {"auth_token": "explicit-bearer"}),
+        ("X-API-Token", {"api_token": "explicit-api-token"}),
+        (
+            "X-Iroha-Signature",
+            {"canonical_request_auth": onboarding_canonical_auth()},
+        ),
+    ],
+)
+def test_client_rejects_session_route_secret_conflicts(
+    header_name: str,
+    explicit_kwargs: dict[str, object],
+) -> None:
+    session = requests.Session()
+    session.headers[header_name] = "must-not-conflict"
+
+    with pytest.raises(ValueError, match="session.headers") as error:
+        ToriiClient("https://torii.example", session=session, **explicit_kwargs)
+
+    assert "must-not-conflict" not in str(error.value)
+
+
+def test_client_rejects_session_auth_and_cookies_but_keeps_harmless_headers() -> None:
+    auth_session = requests.Session()
+    auth_session.auth = ("retired-user", "must-not-leak")
+    with pytest.raises(ValueError, match="session.auth") as auth_error:
+        ToriiClient("https://torii.example", session=auth_session)
+    assert "must-not-leak" not in str(auth_error.value)
+
+    cookie_session = requests.Session()
+    cookie_session.cookies.set("route_secret", "must-not-leak")
+    with pytest.raises(ValueError, match="session.cookies") as cookie_error:
+        ToriiClient("https://torii.example", session=cookie_session)
+    assert "must-not-leak" not in str(cookie_error.value)
+
+    harmless_session = requests.Session()
+    harmless_session.headers["X-Trace-Id"] = "trace-only"
+    client = ToriiClient("https://torii.example", session=harmless_session)
+    assert client._session.headers["X-Trace-Id"] == "trace-only"
+
+
+def test_prepared_account_mutations_require_explicit_trust_pins() -> None:
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises(TypeError, match="expected_authority"):
+        client.submit_prepared_account_faucet(prepared_faucet())  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="expected_authority"):
+        client.submit_prepared_account_onboarding(  # type: ignore[call-arg]
+            onboarding_token=ONBOARDING_TOKEN,
+            prepared=prepared_onboarding(),
+        )
+    with pytest.raises(TypeError, match="expected_authority"):
+        client.plan_account_onboarding(  # type: ignore[call-arg]
+            onboarding_token=ONBOARDING_TOKEN,
+            alias="merchant@universal",
+            account_id=ONBOARDING_ACCOUNT_ID,
+        )
+    assert session.calls == []
+
+
+def test_prepared_account_submissions_reject_expired_forward_binding() -> None:
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+    onboarding = prepared_onboarding()
+    onboarding_binding = onboarding["binding"]
+    assert isinstance(onboarding_binding, dict)
+    onboarding_binding["execution_expires_at_unix_ms"] = 1
+    faucet = prepared_faucet()
+    faucet_binding = faucet["binding"]
+    assert isinstance(faucet_binding, dict)
+    faucet_binding["execution_expires_at_unix_ms"] = 1
+
+    with pytest.raises(ValueError, match="expired"):
+        client.submit_prepared_account_onboarding(
+            onboarding_token=ONBOARDING_TOKEN,
+            prepared=onboarding,
+            expected_request=onboarding_request(),
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+        )
+    with pytest.raises(ValueError, match="expired"):
+        client.submit_prepared_account_faucet(
+            faucet,
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+        )
+    assert session.calls == []
+
+
+def test_onboarding_plan_does_not_follow_redirect_or_accept_retired_fields() -> None:
     session = OnboardingSession([response(307, text="redirect")])
     client = ToriiClient("https://torii.example", session=session)
 
-    result = client.onboard_account(
+    result = client.plan_account_onboarding(
         onboarding_token=ONBOARDING_TOKEN,
         alias="merchant@universal",
-        uaid=ONBOARDING_UAID,
-        public_key_hex="ab" * 32,
+        account_id=ONBOARDING_ACCOUNT_ID,
+        expected_authority=ONBOARDING_ACCOUNT_ID,
+        network_id=NETWORK_ID,
     )
 
     assert result.status_code == 307
     assert len(session.calls) == 1
     assert session.calls[0]["allow_redirects"] is False
-    with pytest.raises(TypeError, match="gas_asset_id"):
-        client.onboard_account(  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="uaid"):
+        client.plan_account_onboarding(  # type: ignore[call-arg]
             onboarding_token=ONBOARDING_TOKEN,
             alias="merchant@universal",
-            uaid=ONBOARDING_UAID,
-            public_key_hex="ab" * 32,
-            gas_asset_id="retired",
+            account_id=ONBOARDING_ACCOUNT_ID,
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+            uaid="retired",
         )
+
+
+def test_prepared_submit_rejects_legacy_or_aggregate_envelopes_before_dispatch() -> None:
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+
+    legacy = prepared_onboarding()
+    legacy["receipt_only"] = legacy.pop("signed_transaction_wire_hex")
+    with pytest.raises(TypeError, match="exactly the onboarding V1 fields"):
+        client.submit_prepared_account_onboarding(
+            onboarding_token=ONBOARDING_TOKEN,
+            prepared=legacy,
+            expected_request=onboarding_request(),
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+        )
+    aggregate = {"operations": [prepared_onboarding()]}
+    with pytest.raises(TypeError, match="exactly the onboarding V1 fields"):
+        client.submit_prepared_account_onboarding(
+            onboarding_token=ONBOARDING_TOKEN,
+            prepared=aggregate,
+            expected_request=onboarding_request(),
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+        )
+    assert session.calls == []
+
+
+def test_account_faucet_is_explicit_prepare_then_exact_submit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = prepared_faucet()
+    session = OnboardingSession(
+        [
+            response(200, prepared),
+            response(
+                200,
+                {
+                    "schema": "iroha.taira.prepared-transaction-submit.v1",
+                    "binding": prepared["binding"],
+                    "operation": "faucet",
+                    "transaction_hash_hex": prepared["transaction_hash_hex"],
+                    "outcome": "Pending",
+                },
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        client_module,
+        "_verify_prepared_transaction_authentication_v1",
+        lambda *_, **__: None,
+    )
+    client = ToriiClient("https://torii.example", session=session)
+
+    prepare = client.prepare_account_faucet(
+        ONBOARDING_ACCOUNT_ID,
+        binding=prepared_binding("faucet"),
+        expected_authority=ONBOARDING_ACCOUNT_ID,
+        network_id=NETWORK_ID,
+        pow_anchor_height=7,
+        pow_nonce_hex="0000000000000000",
+    )
+    submit = client.submit_prepared_account_faucet(
+        prepared,
+        expected_authority=ONBOARDING_ACCOUNT_ID,
+        network_id=NETWORK_ID,
+    )
+
+    assert [prepare.status_code, submit.status_code] == [200, 200]
+    assert [call["path"] for call in session.calls] == [
+        "/v1/accounts/faucet/prepare",
+        "/v1/accounts/faucet",
+    ]
+    assert json.loads(session.calls[0]["data"]) == {
+        "schema": "iroha.accounts.faucet.prepare.v1",
+        "binding": prepared_binding("faucet"),
+        "claim": prepared["claim"],
+    }
+    assert json.loads(session.calls[1]["data"]) == prepared
+    assert all(call["allow_redirects"] is False for call in session.calls)
+
+
+@pytest.mark.parametrize(
+    ("account_id", "anchor", "nonce"),
+    [
+        ("merchant@universal", 7, "00"),
+        (ONBOARDING_ACCOUNT_ID, True, "00"),
+        (ONBOARDING_ACCOUNT_ID, 0, "00"),
+        (ONBOARDING_ACCOUNT_ID, 1 << 64, "00"),
+        (ONBOARDING_ACCOUNT_ID, 7, ""),
+        (ONBOARDING_ACCOUNT_ID, 7, "0"),
+        (ONBOARDING_ACCOUNT_ID, 7, "AA"),
+        (ONBOARDING_ACCOUNT_ID, 7, "00" * 33),
+    ],
+)
+def test_faucet_prepare_rejects_noncanonical_claim_before_dispatch(
+    account_id: object,
+    anchor: object,
+    nonce: object,
+) -> None:
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises((TypeError, ValueError)):
+        client.prepare_account_faucet(
+            account_id,  # type: ignore[arg-type]
+            binding=prepared_binding("faucet"),
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+            pow_anchor_height=anchor,  # type: ignore[arg-type]
+            pow_nonce_hex=nonce,  # type: ignore[arg-type]
+        )
+
+    assert session.calls == []
+
+
+def test_faucet_submit_rejects_claim_body_and_wrong_binding_kind() -> None:
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises(TypeError, match="exactly the faucet V1 fields"):
+        client.submit_prepared_account_faucet(
+            {
+                "account_id": ONBOARDING_ACCOUNT_ID,
+                "pow_anchor_height": 7,
+                "pow_nonce_hex": "0000000000000000",
+            },
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+        )
+    wrong_kind = prepared_faucet()
+    wrong_kind["binding"] = prepared_binding("onboarding")
+    with pytest.raises(ValueError, match="kind must be 'faucet'"):
+        client.submit_prepared_account_faucet(
+            wrong_kind,
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+        )
+    assert session.calls == []
+
+
+def test_onboarding_plan_rejects_normalizing_alias_and_permission() -> None:
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises(ValueError, match="surrounding whitespace"):
+        client.plan_account_onboarding(
+            onboarding_token=ONBOARDING_TOKEN,
+            alias=" merchant@universal",
+            account_id=ONBOARDING_ACCOUNT_ID,
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+        )
+    with pytest.raises(ValueError, match="surrounding whitespace"):
+        client.plan_account_onboarding(
+            onboarding_token=ONBOARDING_TOKEN,
+            alias="merchant@universal",
+            account_id=ONBOARDING_ACCOUNT_ID,
+            expected_authority=ONBOARDING_ACCOUNT_ID,
+            network_id=NETWORK_ID,
+            permissions=["CanFoo "],
+        )
+
+    assert session.calls == []
 
 
 def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
@@ -394,10 +1413,7 @@ def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
         expected_tag = "halo2-ipa-pasta" if backend.startswith("halo2/") else "stark"
         assert _verifier_backend_registry_tag_v1(backend) == expected_tag
         assert _is_verifier_backend_registry_label_v1(backend)
-        assert (
-            _require_verifier_backend_registry_label_v1(backend, "backend")
-            == backend
-        )
+        assert _require_verifier_backend_registry_label_v1(backend, "backend") == backend
 
 
 def test_privacy_verifier_registry_rejects_aliases_retired_and_hostile_labels() -> None:
@@ -414,8 +1430,8 @@ def test_privacy_verifier_registry_rejects_aliases_retired_and_hostile_labels() 
         "halo2/ipa ",
         "\thalo2/ipa",
         "halo2/ipa\n",
-        "halo2\uFF0Fipa",
-        "halo2/\u200Bipa",
+        "halo2\uff0fipa",
+        "halo2/\u200bipa",
         "h\u0430lo2/ipa",
         "halo2/ipa\0",
         "HALO2/IPA",
@@ -617,9 +1633,8 @@ def expected_zk_verifying_key_instruction(
 
 
 def account_address(seed: int, discriminant: int = 0x02F1) -> str:
-    return Ed25519KeyPair.from_private_key(bytes([seed] * 32)).default_account_id(
-        "wonderland",
-        discriminant,
+    return Ed25519KeyPair.from_private_key(bytes([seed] * 32)).account_id(
+        discriminant=discriminant,
     )
 
 
@@ -704,7 +1719,7 @@ def test_submit_transaction_draft_result_wait_false_does_not_hide_rejection() ->
         )
 
 
-def test_account_exists_falls_back_to_listing_on_route_unavailable() -> None:
+def test_account_exists_rejects_route_unavailable_without_listing_fallback() -> None:
     session = FakeSession(
         [
             response(
@@ -712,25 +1727,14 @@ def test_account_exists_falls_back_to_listing_on_route_unavailable() -> None:
                 text="route unavailable",
                 headers={"x-iroha-reject-code": "route_unavailable"},
             ),
-            response(200, {"items": [{"id": "adult@is"}], "total": 1}),
         ]
     )
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
-    assert client.account_exists("adult@is")
-    assert session.calls == [
-        {
-            "method": "GET",
-            "path": "/v1/accounts/adult%40is",
-            "params": None,
-            "data": None,
-        },
-        {
-            "method": "GET",
-            "path": "/v1/accounts",
-            "params": {"limit": 200, "offset": 0},
-            "data": None,
-        },
+    with pytest.raises(RuntimeError, match="unexpected status 503"):
+        client.account_exists("adult@is")
+    assert [(call["method"], call["path"]) for call in session.calls] == [
+        ("GET", "/v1/accounts/adult%40is"),
     ]
 
 

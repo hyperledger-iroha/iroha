@@ -15,7 +15,6 @@ use color_eyre::{
 };
 use iroha::client::{
     Client, PreparedTransactionPayload, TransactionWaitOptions, TransactionWaitOutcome,
-    TransactionWaitTerminalStatus,
 };
 use iroha_config::kura::FsyncMode;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
@@ -1518,7 +1517,7 @@ fn is_shutdown_noise_status_read_failure(
 fn is_audit_confirmation_window_elapsed(error: &color_eyre::Report) -> bool {
     let message = ingress_error_message(error);
     message.contains("transaction did not reach")
-        && message.contains("applied, rejected, expired")
+        && message.contains("state-resolved applied")
         && message.contains("within")
 }
 fn ingress_error_message(error: &color_eyre::Report) -> String {
@@ -6568,13 +6567,13 @@ async fn submit_plan(
                     effective_submission_confirmation,
                     SubmissionConfirmationMode::BlockingApplied
                 ) {
-                    let _ = wait_for_transaction_terminal_status_with_failover(
+                    let _ = wait_for_transaction_applied_with_failover(
                         &ingress_pool_for_submit,
                         "confirm_transaction_plan",
                         submitted.endpoint_idx,
                         &signer_for_submit,
                         submitted.hash.clone(),
-                        terminal_confirmation_wait_options(),
+                        applied_confirmation_wait_options(),
                     )?;
                 }
                 Ok(submitted)
@@ -6743,13 +6742,13 @@ fn submit_repeatable_trigger_plan_on_endpoint(
         submission_confirmation,
         SubmissionConfirmationMode::BlockingApplied
     ) {
-        let _ = wait_for_transaction_terminal_status_with_failover(
+        let _ = wait_for_transaction_applied_with_failover(
             ingress_pool,
             "confirm_repeatable_trigger_plan",
             submission.endpoint_idx,
             signer,
             submission.hash.clone(),
-            terminal_confirmation_wait_options(),
+            applied_confirmation_wait_options(),
         )?;
     }
     Ok(submission)
@@ -6789,26 +6788,16 @@ async fn reconcile_repeatable_trigger_with_endpoint(
         }
     }
 }
-fn terminal_confirmation_wait_options() -> TransactionWaitOptions {
+fn applied_confirmation_wait_options() -> TransactionWaitOptions {
     TransactionWaitOptions {
         timeout: Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS),
         poll_interval: Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_POLL_INTERVAL_MS),
-        terminal_statuses: vec![
-            TransactionWaitTerminalStatus::Applied,
-            TransactionWaitTerminalStatus::Rejected,
-            TransactionWaitTerminalStatus::Expired,
-        ],
     }
 }
 fn confirmation_wait_options_with_timeout(timeout: Duration) -> TransactionWaitOptions {
     TransactionWaitOptions {
         timeout,
         poll_interval: Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_POLL_INTERVAL_MS),
-        terminal_statuses: vec![
-            TransactionWaitTerminalStatus::Applied,
-            TransactionWaitTerminalStatus::Rejected,
-            TransactionWaitTerminalStatus::Expired,
-        ],
     }
 }
 fn throughput_confirmation_wait_options() -> TransactionWaitOptions {
@@ -6848,7 +6837,7 @@ fn submission_deadline_budget(mode: SubmissionConfirmationMode) -> Duration {
             IZANAMI_THROUGHPUT_CONFIRMATION_POLL_INTERVAL_MS,
         ));
     if matches!(mode, SubmissionConfirmationMode::BlockingApplied) {
-        let wait_options = terminal_confirmation_wait_options();
+        let wait_options = applied_confirmation_wait_options();
         request_budget
             .saturating_add(wait_options.timeout)
             .saturating_add(wait_options.poll_interval)
@@ -6865,34 +6854,23 @@ fn submission_has_deadline_budget(
         .checked_duration_since(now)
         .is_some_and(|remaining| remaining > submission_deadline_budget(mode))
 }
-fn pipeline_status_kind_is_supported(kind: &str) -> bool {
-    matches!(
-        kind,
-        "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired"
-    )
-}
-fn pipeline_status_kind_is_wait_terminal(
-    kind: &str,
-    terminal_statuses: &[TransactionWaitTerminalStatus],
-) -> bool {
-    matches!(kind, "Applied" | "Rejected" | "Expired")
-        || terminal_statuses
-            .iter()
-            .any(|status| status.as_str().eq_ignore_ascii_case(kind))
-}
 fn elapsed_ms_u64(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
-fn transaction_wait_target_description(
-    terminal_statuses: &[TransactionWaitTerminalStatus],
-) -> String {
-    terminal_statuses
-        .iter()
-        .map(|status| status.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
+fn exact_transaction_wait_poll_interval(poll_interval: Duration) -> Result<Duration> {
+    if poll_interval == Duration::ZERO {
+        return Err(eyre!(
+            "transaction wait poll_interval must be greater than zero"
+        ));
+    }
+    Ok(poll_interval)
 }
-fn wait_for_transaction_terminal_status_with_failover(
+fn is_state_resolved_terminal_failure(kind: &str, scope: &str, resolved_from: &str) -> bool {
+    scope == "global"
+        && resolved_from == "state"
+        && matches!(kind, "Rejected" | "Expired")
+}
+fn wait_for_transaction_applied_with_failover(
     ingress_pool: &IngressEndpointPool,
     op_name: &'static str,
     preferred_endpoint_idx: usize,
@@ -6903,19 +6881,9 @@ fn wait_for_transaction_terminal_status_with_failover(
     let TransactionWaitOptions {
         timeout,
         poll_interval,
-        terminal_statuses,
     } = options;
-    let poll_interval = if poll_interval == Duration::ZERO {
-        Duration::from_millis(1)
-    } else {
-        poll_interval
-    };
-    let stop_statuses = if terminal_statuses.is_empty() {
-        TransactionWaitOptions::default().terminal_statuses
-    } else {
-        terminal_statuses
-    };
-    let target_description = transaction_wait_target_description(&stop_statuses);
+    let poll_interval = exact_transaction_wait_poll_interval(poll_interval)?;
+    let expected_hash = hash.to_string();
     let start = Instant::now();
     let mut preferred_endpoint_idx = Some(preferred_endpoint_idx);
     let mut attempts = 0_u64;
@@ -6943,16 +6911,34 @@ fn wait_for_transaction_terminal_status_with_failover(
                         ingress_pool.submit_request_timeout,
                     );
                     let Some(response) =
-                        client.get_transaction_status_response_auto(hash.clone())?
+                        client.get_transaction_status_response_global(hash.clone())?
                     else {
                         return Ok(None);
                     };
                     let kind = response.status.kind.as_str();
-                    if !pipeline_status_kind_is_supported(kind) {
-                        return Err(eyre!("unsupported pipeline status kind `{kind}`"));
+                    if response.hash != expected_hash || response.scope != "global" {
+                        return Err(eyre!(
+                            "global pipeline status response is not bound to transaction {expected_hash}"
+                        ));
                     }
-                    if pipeline_status_kind_is_wait_terminal(kind, &stop_statuses) {
-                        return Ok(Some(response));
+                    match kind {
+                        "Applied" if response.resolved_from == "state" => {
+                            return Ok(Some(response));
+                        }
+                        "Rejected" | "Expired"
+                            if is_state_resolved_terminal_failure(
+                                kind,
+                                &response.scope,
+                                &response.resolved_from,
+                            ) =>
+                        {
+                            return Ok(Some(response));
+                        }
+                        "Queued" | "Approved" | "Committed" | "Applied" | "Rejected"
+                        | "Expired" => {}
+                        _ => {
+                            return Err(eyre!("unsupported pipeline status kind `{kind}`"));
+                        }
                     }
                     observed_statuses.push(format!(
                         "endpoint={endpoint_idx},kind={},from={}",
@@ -6963,6 +6949,24 @@ fn wait_for_transaction_terminal_status_with_failover(
             ) {
             Ok(Some((endpoint_idx, response))) => {
                 let kind = response.status.kind.as_str();
+                if is_state_resolved_terminal_failure(
+                    kind,
+                    &response.scope,
+                    &response.resolved_from,
+                ) {
+                    return Err(eyre!(
+                        "transaction {} reached fixed terminal failure status `{kind}` (resolved_from={})",
+                        response.hash,
+                        response.resolved_from
+                    ));
+                }
+                if kind != "Applied" || response.resolved_from != "state" {
+                    return Err(eyre!(
+                        "transaction {} returned non-final global status `{kind}` from {}",
+                        response.hash,
+                        response.resolved_from
+                    ));
+                }
                 return Ok((
                     endpoint_idx,
                     TransactionWaitOutcome {
@@ -7006,7 +7010,7 @@ fn wait_for_transaction_terminal_status_with_failover(
                 )
             };
             let timeout_error = eyre!(
-                "transaction did not reach {target_description} within {} ms{observed}",
+                "transaction did not reach state-resolved Applied within {} ms{observed}",
                 timeout.as_millis()
             );
             return if let Some(err) = last_error {
@@ -7036,7 +7040,7 @@ async fn audit_submitted_transaction(
     let run_control = Arc::clone(run_control);
     let metrics = Arc::clone(metrics);
     let result = spawn_blocking(move || {
-        wait_for_transaction_terminal_status_with_failover(
+        wait_for_transaction_applied_with_failover(
             &ingress_pool,
             "audit_confirmation",
             endpoint_idx,
@@ -7047,22 +7051,26 @@ async fn audit_submitted_transaction(
     })
     .await;
     match result {
-        Ok(Ok((_resolved_endpoint_idx, outcome))) => match outcome.terminal_kind.as_str() {
-            "Applied" => metrics.record_confirmation_audit_applied(),
-            "Rejected" => metrics.record_confirmation_audit_rejected(),
-            "Expired" => metrics.record_confirmation_audit_expired(),
-            other => {
+        Ok(Ok((_resolved_endpoint_idx, outcome))) => {
+            if outcome.terminal_kind == "Applied"
+                && outcome.scope == "global"
+                && outcome.resolved_from == "state"
+            {
+                metrics.record_confirmation_audit_applied();
+            } else {
                 metrics.record_confirmation_audit_failed();
                 warn!(
                     target: "izanami::audit",
                     endpoint_idx,
                     hash = %log_hash,
                     plan = plan_label,
-                    terminal_kind = other,
-                    "sampled confirmation ended in an unsupported terminal state"
+                    terminal_kind = outcome.terminal_kind,
+                    scope = outcome.scope,
+                    resolved_from = outcome.resolved_from,
+                    "sampled confirmation violated fixed global Applied finality"
                 );
             }
-        },
+        }
         Ok(Err(err)) => {
             if is_shutdown_noise_status_read_failure("audit_confirmation", &err, &run_control) {
                 metrics.record_confirmation_audit_shutdown_noise();
@@ -10660,26 +10668,15 @@ mod tests {
         );
     }
     #[test]
-    fn terminal_confirmation_wait_options_require_applied_terminal_status() {
-        let options = terminal_confirmation_wait_options();
+    fn applied_confirmation_wait_options_use_fixed_finality_timing() {
+        let options = applied_confirmation_wait_options();
         assert_eq!(
             options.timeout,
             Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS)
         );
-        assert!(
-            options
-                .terminal_statuses
-                .contains(&TransactionWaitTerminalStatus::Applied)
-        );
-        assert!(
-            options
-                .terminal_statuses
-                .contains(&TransactionWaitTerminalStatus::Rejected)
-        );
-        assert!(
-            options
-                .terminal_statuses
-                .contains(&TransactionWaitTerminalStatus::Expired)
+        assert_eq!(
+            options.poll_interval,
+            Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_POLL_INTERVAL_MS)
         );
     }
     #[test]
@@ -10690,13 +10687,12 @@ mod tests {
             Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_TIMEOUT_MS)
         );
         assert!(
-            options.timeout > terminal_confirmation_wait_options().timeout,
+            options.timeout > applied_confirmation_wait_options().timeout,
             "sampled throughput audits should tolerate local quick-run NPoS tail latency"
         );
-        assert!(
-            options
-                .terminal_statuses
-                .contains(&TransactionWaitTerminalStatus::Applied)
+        assert_eq!(
+            options.poll_interval,
+            Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_POLL_INTERVAL_MS)
         );
     }
     fn chaos_config_for_audit_window(
@@ -10793,7 +10789,7 @@ mod tests {
         );
         assert!(
             options.timeout > throughput_confirmation_wait_options().timeout,
-            "NPoS restart recovery audits need a longer terminal-status window"
+            "NPoS restart recovery audits need a longer Applied-finality window"
         );
     }
     #[test]
@@ -10869,11 +10865,33 @@ mod tests {
     }
     #[test]
     fn audit_confirmation_window_elapsed_is_not_a_hard_failure_marker() {
-        let timeout =
-            eyre!("transaction did not reach Applied, Rejected, Expired within 150000 ms");
+        let timeout = eyre!("transaction did not reach state-resolved Applied within 150000 ms");
         let route_error = eyre!("route_unavailable: no reachable authoritative peers");
         assert!(is_audit_confirmation_window_elapsed(&timeout));
         assert!(!is_audit_confirmation_window_elapsed(&route_error));
+    }
+    #[test]
+    fn audit_confirmation_uses_exact_polling_and_state_finality() {
+        assert!(exact_transaction_wait_poll_interval(Duration::ZERO).is_err());
+        assert_eq!(
+            exact_transaction_wait_poll_interval(Duration::from_millis(1))
+                .expect("nonzero poll interval"),
+            Duration::from_millis(1)
+        );
+        for kind in ["Rejected", "Expired"] {
+            assert!(is_state_resolved_terminal_failure(
+                kind, "global", "state"
+            ));
+            for source in ["cache", "queue"] {
+                assert!(!is_state_resolved_terminal_failure(kind, "global", source));
+            }
+        }
+        assert!(!is_state_resolved_terminal_failure(
+            "Applied", "global", "state"
+        ));
+        assert!(!is_state_resolved_terminal_failure(
+            "Rejected", "local", "state"
+        ));
     }
     #[test]
     fn submission_deadline_budget_covers_ingress_retries() {
@@ -10889,10 +10907,10 @@ mod tests {
     fn blocking_submission_deadline_budget_covers_terminal_wait() {
         let accepted = submission_deadline_budget(SubmissionConfirmationMode::AcceptedByIngress);
         let blocking = submission_deadline_budget(SubmissionConfirmationMode::BlockingApplied);
-        let wait_options = terminal_confirmation_wait_options();
+        let wait_options = applied_confirmation_wait_options();
         assert!(
             blocking >= accepted.saturating_add(wait_options.timeout),
-            "blocking submissions need enough budget to finish terminal-status confirmation"
+            "blocking submissions need enough budget to finish Applied-finality confirmation"
         );
     }
     #[test]
@@ -10972,7 +10990,7 @@ mod tests {
             "status reads should be ignored during shutdown"
         );
         let timeout_err =
-            eyre!("transaction did not reach Applied, Rejected, Expired within 90000 ms");
+            eyre!("transaction did not reach state-resolved Applied within 90000 ms");
         assert!(
             is_shutdown_noise_status_read_failure("audit_confirmation", &timeout_err, &run_control),
             "status read timeouts should be ignored once shutdown has started"

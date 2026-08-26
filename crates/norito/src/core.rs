@@ -3173,19 +3173,14 @@ where
 {
     let (len, offset) = read_seq_len_slice(bytes)?;
     // `Vec<u8>` is encoded as `len(u64)` + raw bytes for efficiency.
-    if core::any::type_name::<T>() == "u8"
-        && let Some(end) = offset.checked_add(len)
-        && end == bytes.len()
-    {
+    if core::any::type_name::<T>() == "u8" {
+        let end = offset.checked_add(len).ok_or(Error::LengthMismatch)?;
         // SAFETY: we verified `T == u8` via `type_name`.
         let slice = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
         let mut raw = try_decode_vec_with_capacity::<u8>(len)?;
         raw.extend_from_slice(slice);
         let out = unsafe { std::mem::transmute::<Vec<u8>, Vec<T>>(raw) };
         return Ok((out, end));
-    }
-    if core::any::type_name::<T>() == "u8" {
-        return Err(Error::LengthMismatch);
     }
     if crate::debug_trace_enabled() {
         eprintln!(
@@ -3274,8 +3269,8 @@ impl<'a> DecodeFromSlice<'a> for &'a [u8] {
 impl<'a, T: DecodeFromSlice<'a> + 'static, const N: usize> DecodeFromSlice<'a> for [T; N] {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         if TypeId::of::<T>() == TypeId::of::<u8>() {
-            record_slice_access(bytes, bytes.len());
             if bytes.len() == N {
+                record_slice_access(bytes, N);
                 let mut buf = [0u8; N];
                 buf.copy_from_slice(bytes);
                 let mut arr = core::mem::MaybeUninit::<[T; N]>::uninit();
@@ -3302,9 +3297,7 @@ impl<'a, T: DecodeFromSlice<'a> + 'static, const N: usize> DecodeFromSlice<'a> f
                 let byte = *bytes.get(byte_pos).ok_or(Error::LengthMismatch)?;
                 *slot = byte;
             }
-            if offset != bytes.len() {
-                return Err(Error::LengthMismatch);
-            }
+            record_slice_access(bytes, offset);
             let mut arr = core::mem::MaybeUninit::<[T; N]>::uninit();
             unsafe {
                 core::ptr::copy_nonoverlapping(
@@ -3312,7 +3305,7 @@ impl<'a, T: DecodeFromSlice<'a> + 'static, const N: usize> DecodeFromSlice<'a> f
                     arr.as_mut_ptr() as *mut T,
                     N,
                 );
-                return Ok((arr.assume_init(), bytes.len()));
+                return Ok((arr.assume_init(), offset));
             }
         }
         let mut offset = 0usize;

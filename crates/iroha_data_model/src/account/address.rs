@@ -3,11 +3,6 @@ use super::{
     AccountController, AccountId, MultisigMember, MultisigPolicy, MultisigPolicyError,
     curve::{CurveId, CurveRegistryError},
 };
-use crate::{domain::DomainId, name};
-use blake2::{
-    Blake2sMac,
-    digest::{Mac, typenum::U32},
-};
 use core::{
     convert::{TryFrom, TryInto},
     fmt,
@@ -31,12 +26,6 @@ use std::{
 use thiserror::Error;
 #[cfg(feature = "json")]
 pub mod compliance_vectors;
-#[cfg(feature = "json")]
-pub mod vectors;
-/// Conventional client-display label retained for deterministic fixtures.
-///
-/// This value is never part of canonical account identity or World state.
-pub const DEFAULT_DOMAIN_NAME: &str = "default";
 /// Obtain the currently configured chain discriminant for i105 literal encoding,
 /// honoring any thread-local override.
 #[must_use]
@@ -50,7 +39,6 @@ pub fn chain_discriminant() -> u16 {
 pub fn set_chain_discriminant(discriminant: u16) -> u16 {
     CHAIN_DISCRIMINANT.swap(discriminant, Ordering::Relaxed)
 }
-const LOCAL_DOMAIN_KEY: &[u8] = b"SORA-LOCAL-K:v1";
 const HEADER_VERSION_V1: u8 = 0;
 const HEADER_NORM_VERSION_V1: u8 = 1;
 const I105_SENTINEL_SORA: &str = "sora";
@@ -92,33 +80,7 @@ impl Drop for ChainDiscriminantGuard {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountAddress {
     header: AddressHeader,
-    /// Domain selector metadata carried alongside the canonical controller payload.
-    /// Canonical wire bytes always decode into [`DomainSelector::Default`].
-    domain: DomainSelector,
     controller: ControllerPayload,
-}
-/// Legacy selector classification exposed for address diagnostics.
-///
-/// Canonical V1 account addresses are domainless and always use [`Self::Default`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AddressDomainKind {
-    /// Canonical domainless address payload.
-    Default,
-    /// Selector contains the 12-byte local digest derived from a domain label.
-    LocalDigest12,
-    /// Selector references a global registry record.
-    GlobalRegistry,
-}
-impl AddressDomainKind {
-    /// Stable textual label for logs, telemetry, and CLI output.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Default => "default",
-            Self::LocalDigest12 => "local12",
-            Self::GlobalRegistry => "global",
-        }
-    }
 }
 impl AccountAddress {
     /// Construct from an [`AccountId`] assuming a single-key controller.
@@ -132,13 +94,7 @@ impl AccountAddress {
     pub fn from_account_id(account: &AccountId) -> Result<Self, AccountAddressError> {
         let (class, controller) = ControllerPayload::from_account_controller(account.controller())?;
         let header = AddressHeader::new(HEADER_VERSION_V1, class, HEADER_NORM_VERSION_V1)?;
-        // Hard cut: payloads are globally scoped and no longer embed domain affinity.
-        let domain = DomainSelector::Default;
-        Ok(Self {
-            header,
-            domain,
-            controller,
-        })
+        Ok(Self { header, controller })
     }
     /// Encode the payload as a canonical I105 literal using the active chain discriminant.
     ///
@@ -160,28 +116,6 @@ impl AccountAddress {
         let canonical = self.canonical_bytes()?;
         encode_i105_literal(discriminant, &canonical)
     }
-    /// Classify the legacy in-memory domain marker.
-    ///
-    /// Canonical payloads do not encode domain selectors and always report
-    /// [`AddressDomainKind::Default`].
-    #[must_use]
-    pub const fn domain_kind(&self) -> AddressDomainKind {
-        match &self.domain {
-            DomainSelector::Default => AddressDomainKind::Default,
-            DomainSelector::Local12(_) => AddressDomainKind::LocalDigest12,
-            DomainSelector::Global { .. } => AddressDomainKind::GlobalRegistry,
-        }
-    }
-    /// Return the raw Local-12 digest from a legacy in-memory selector.
-    ///
-    /// Canonical payloads never include Local-12 data.
-    #[must_use]
-    pub fn local12_digest(&self) -> Option<[u8; 12]> {
-        match &self.domain {
-            DomainSelector::Local12(bytes) => Some(*bytes),
-            _ => None,
-        }
-    }
     /// Parse an address payload from its canonical byte representation.
     ///
     /// # Errors
@@ -198,11 +132,7 @@ impl AccountAddress {
         if controller_cursor != bytes.len() {
             return Err(AccountAddressError::UnexpectedTrailingBytes);
         }
-        Ok(Self {
-            header,
-            domain: DomainSelector::Default,
-            controller,
-        })
+        Ok(Self { header, controller })
     }
     /// Decode the canonical I105 representation.
     ///
@@ -235,10 +165,12 @@ impl AccountAddress {
     ///
     /// Returns [`AccountAddressError`] if the string is not a valid I105 literal.
     pub fn i105_discriminant(encoded: &str) -> Result<u16, AccountAddressError> {
-        let trimmed = encoded.trim();
-        let (discriminant, canonical) = decode_i105_literal(trimmed, None)?;
+        if encoded.is_empty() || encoded.trim() != encoded {
+            return Err(AccountAddressError::UnsupportedAddressFormat);
+        }
+        let (discriminant, canonical) = decode_i105_literal(encoded, None)?;
         let address = Self::from_canonical_bytes(&canonical)?;
-        address.ensure_canonical_i105_literal(trimmed, discriminant)?;
+        address.ensure_canonical_i105_literal(encoded, discriminant)?;
         Ok(discriminant)
     }
     fn ensure_canonical_i105_literal(
@@ -266,27 +198,25 @@ impl AccountAddress {
         input: &str,
         expected_discriminant: Option<u16>,
     ) -> Result<Self, AccountAddressError> {
-        let trimmed = input.trim();
-        if trimmed.is_empty() {
+        if input.trim().is_empty() {
             return Err(AccountAddressError::InvalidLength);
         }
-        if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
+        if input.trim() != input || input.starts_with("0x") || input.starts_with("0X") {
             return Err(AccountAddressError::UnsupportedAddressFormat);
         }
-        let address =
-            Self::from_i105_for_discriminant(trimmed, expected_discriminant).map_err(|err| {
-                match err {
-                    AccountAddressError::MissingI105Sentinel => {
-                        AccountAddressError::UnsupportedAddressFormat
-                    }
-                    other => other,
+        let address = Self::from_i105_for_discriminant(input, expected_discriminant).map_err(
+            |err| match err {
+                AccountAddressError::MissingI105Sentinel => {
+                    AccountAddressError::UnsupportedAddressFormat
                 }
-            })?;
+                other => other,
+            },
+        )?;
         let expected = match expected_discriminant {
             Some(discriminant) => discriminant,
-            None => Self::i105_discriminant(trimmed)?,
+            None => Self::i105_discriminant(input)?,
         };
-        address.ensure_canonical_i105_literal(trimmed, expected)?;
+        address.ensure_canonical_i105_literal(input, expected)?;
         Ok(address)
     }
     /// # Errors
@@ -368,19 +298,6 @@ impl AccountAddress {
     pub fn to_account_id(&self) -> Result<AccountId, AccountAddressError> {
         let controller = self.to_account_controller()?;
         Ok(AccountId { controller })
-    }
-    /// Check whether the address can be used with an explicit domain routing context.
-    ///
-    /// # Errors
-    ///
-    /// Canonical V1 addresses are universal and accept every valid [`DomainId`]. The
-    /// mismatch error is retained only for noncanonical in-memory test vectors.
-    pub fn ensure_domain_matches(&self, domain: &DomainId) -> Result<(), AccountAddressError> {
-        if self.domain.matches_domain(domain) {
-            Ok(())
-        } else {
-            Err(AccountAddressError::DomainMismatch)
-        }
     }
     pub(crate) fn to_account_controller(&self) -> Result<AccountController, AccountAddressError> {
         self.controller.to_account_controller()
@@ -637,51 +554,6 @@ enum AddressClass {
     SingleKey = 0,
     #[allow(dead_code)]
     MultiSig = 1,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DomainSelector {
-    Default,
-    Local12([u8; 12]),
-    #[allow(dead_code)]
-    Global {
-        registry_id: u32,
-    },
-}
-impl DomainSelector {
-    fn canonical_domain(domain: &DomainId) -> Result<String, AccountAddressError> {
-        name::canonicalize_domain_label(&domain.to_string())
-            .map_err(|err| AccountAddressError::InvalidDomainLabel(err.reason()))
-    }
-    #[cfg(test)]
-    fn is_default_domain(domain: &DomainId) -> Result<bool, AccountAddressError> {
-        let canonical_name = name::canonicalize_domain_label(domain.name().as_ref())
-            .map_err(|err| AccountAddressError::InvalidDomainLabel(err.reason()))?;
-        let canonical_dataspace = name::canonicalize_domain_label(domain.dataspace().as_ref())
-            .map_err(|err| AccountAddressError::InvalidDomainLabel(err.reason()))?;
-        Ok(canonical_name == DEFAULT_DOMAIN_NAME && canonical_dataspace == "universal")
-    }
-    #[cfg(test)]
-    fn from_domain(domain: &DomainId) -> Result<Self, AccountAddressError> {
-        let canonical = Self::canonical_domain(domain)?;
-        if Self::is_default_domain(domain)? {
-            Ok(Self::Default)
-        } else {
-            Ok(Self::Local12(compute_local_digest(&canonical)))
-        }
-    }
-    fn matches_domain(&self, domain: &DomainId) -> bool {
-        let Ok(canonical) = Self::canonical_domain(domain) else {
-            return false;
-        };
-        match self {
-            // The `Default` selector intentionally does not encode a concrete domain label.
-            // In multi-tenant deployments, callers may attach an explicit `@<domain>` suffix
-            // externally to disambiguate. Treat `Default` as matching any provided domain and
-            // let higher-level code (or on-chain existence checks) validate the final AccountId.
-            Self::Local12(expected) => compute_local_digest(&canonical) == *expected,
-            Self::Default | Self::Global { .. } => true,
-        }
-    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ControllerPayload {
@@ -1013,15 +885,6 @@ fn allocate_multisig_members(
         core::ptr::NonNull::new(allocation).ok_or(AccountAddressError::DecodeResourceLimit)?;
     Ok(unsafe { Vec::from_raw_parts(allocation.as_ptr().cast(), 0, member_count) })
 }
-fn compute_local_digest(label: &str) -> [u8; 12] {
-    let mut mac =
-        Blake2sMac::<U32>::new_from_slice(LOCAL_DOMAIN_KEY).expect("static key with valid length");
-    Mac::update(&mut mac, label.as_bytes());
-    let mac_bytes = mac.finalize().into_bytes();
-    let mut digest = [0u8; 12];
-    digest.copy_from_slice(&mac_bytes[..12]);
-    digest
-}
 fn i105_sentinel_for_discriminant(discriminant: u16) -> String {
     match discriminant {
         CHAIN_DISCRIMINANT_SORA => I105_SENTINEL_SORA.to_owned(),
@@ -1047,10 +910,6 @@ pub enum AccountAddressErrorCode {
     ChecksumMismatch,
     /// Canonical hexadecimal payload failed to decode.
     InvalidHexAddress,
-    /// Domain selector did not match expectation.
-    DomainMismatch,
-    /// Domain label failed normalisation.
-    InvalidDomainLabel,
     /// Chain discriminant prefix did not match expectation.
     UnexpectedNetworkPrefix,
     /// Unknown address class encountered.
@@ -1096,8 +955,6 @@ impl AccountAddressErrorCode {
             Self::InvalidLength => "ERR_INVALID_LENGTH",
             Self::ChecksumMismatch => "ERR_CHECKSUM_MISMATCH",
             Self::InvalidHexAddress => "ERR_INVALID_HEX_ADDRESS",
-            Self::DomainMismatch => "ERR_DOMAIN_MISMATCH",
-            Self::InvalidDomainLabel => "ERR_INVALID_DOMAIN_LABEL",
             Self::UnexpectedNetworkPrefix => "ERR_UNEXPECTED_NETWORK_PREFIX",
             Self::UnknownAddressClass => "ERR_UNKNOWN_ADDRESS_CLASS",
             Self::UnexpectedExtensionFlag => "ERR_UNEXPECTED_EXTENSION_FLAG",
@@ -1141,12 +998,6 @@ pub enum AccountAddressError {
     /// Canonical hexadecimal payload could not be decoded.
     #[error("invalid canonical hex account address")]
     InvalidHexAddress,
-    /// Domain selector does not match the expected domain.
-    #[error("account address domain does not match provided domain")]
-    DomainMismatch,
-    /// Domain label failed normalization.
-    #[error("domain label failed normalization: {0}")]
-    InvalidDomainLabel(&'static str),
     /// Chain discriminant prefix did not match expectations.
     #[error("unexpected i105 chain discriminant: expected {expected}, found {found}")]
     UnexpectedNetworkPrefix {
@@ -1223,8 +1074,6 @@ impl AccountAddressError {
             Self::InvalidLength => AccountAddressErrorCode::InvalidLength,
             Self::ChecksumMismatch => AccountAddressErrorCode::ChecksumMismatch,
             Self::InvalidHexAddress => AccountAddressErrorCode::InvalidHexAddress,
-            Self::DomainMismatch => AccountAddressErrorCode::DomainMismatch,
-            Self::InvalidDomainLabel(_) => AccountAddressErrorCode::InvalidDomainLabel,
             Self::UnexpectedNetworkPrefix { .. } => {
                 AccountAddressErrorCode::UnexpectedNetworkPrefix
             }
@@ -1738,7 +1587,6 @@ static I105_DIGIT_TABLE: LazyLock<Vec<(&'static str, u8)>> = LazyLock::new(|| {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::DomainId;
     use hex;
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
     use std::collections::BTreeSet;
@@ -1772,14 +1620,11 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-    fn domain(name: &str) -> DomainId {
-        DomainId::try_new(name, "universal").expect("valid domain id")
-    }
     fn account_address_for_seed(seed: u8) -> AccountAddress {
         let account = AccountId::new(ed25519_pk_with(seed));
         AccountAddress::from_account_id(&account).expect("account id encodes into an address")
     }
-    const LEGACY_IROHA_POEM_KANA_FULLWIDTH: [&str; 47] = [
+    const NONCANONICAL_IROHA_POEM_KANA_FULLWIDTH: [&str; 47] = [
         "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ", "ヨ",
         "タ", "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク", "ヤ", "マ",
         "ケ", "フ", "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ",
@@ -1800,11 +1645,11 @@ mod tests {
         }
         canonical.to_owned()
     }
-    fn legacy_fullwidth_payload_literal(canonical: &str) -> String {
+    fn fullwidth_payload_literal(canonical: &str) -> String {
         let mut literal = canonical.to_owned();
         for (halfwidth, fullwidth) in IROHA_POEM_KANA_HALFWIDTH
             .iter()
-            .zip(LEGACY_IROHA_POEM_KANA_FULLWIDTH.iter())
+            .zip(NONCANONICAL_IROHA_POEM_KANA_FULLWIDTH.iter())
         {
             literal = literal.replace(halfwidth, fullwidth);
         }
@@ -1992,14 +1837,14 @@ mod tests {
         );
     }
     #[test]
-    fn dotted_local8_payloads_are_rejected() {
+    fn truncated_selector_prefixed_payloads_are_rejected() {
         let mut canonical =
             hex::decode("0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c")
-                .expect("legacy local-12 fixture");
+                .expect("selector-prefixed fixture");
         let digest_start = 2; // header (0) + tag (1) + digest payload
         canonical.drain(digest_start + 8..digest_start + 12);
-        let err =
-            AccountAddress::from_canonical_bytes(&canonical).expect_err("legacy payload rejected");
+        let err = AccountAddress::from_canonical_bytes(&canonical)
+            .expect_err("selector-prefixed payload rejected");
         let literal = format!("0x{}", hex::encode(&canonical));
         let parse_err = AccountId::parse_encoded(&literal).expect_err("account parsing fails");
         assert_eq!(
@@ -2012,13 +1857,13 @@ mod tests {
         );
     }
     #[test]
-    fn dotted_local8_payloads_without_controller_tag_are_rejected() {
+    fn malformed_selector_prefixed_payloads_are_rejected() {
         let mut canonical =
             hex::decode("0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c")
-                .expect("legacy local-12 fixture");
+                .expect("selector-prefixed fixture");
         canonical.drain(10..15);
-        let err =
-            AccountAddress::from_canonical_bytes(&canonical).expect_err("legacy payload rejected");
+        let err = AccountAddress::from_canonical_bytes(&canonical)
+            .expect_err("selector-prefixed payload rejected");
         let literal = format!("0x{}", hex::encode(&canonical));
         let parse_err = AccountId::parse_encoded(&literal).expect_err("account parsing fails");
         assert_eq!(
@@ -2035,18 +1880,9 @@ mod tests {
         let canonical = hex::decode(
             "0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
         )
-        .expect("legacy local-12 fixture");
+        .expect("selector-prefixed fixture");
         AccountAddress::from_canonical_bytes(&canonical)
-            .expect_err("selector-prefixed legacy payload must be rejected");
-    }
-    #[test]
-    fn local12_digest_absent_for_canonical_address() {
-        let account = AccountId::new(ed25519_pk());
-        let address = AccountAddress::from_account_id(&account).expect("account encodes");
-        assert!(
-            address.local12_digest().is_none(),
-            "canonical domainless addresses must not report Local-12 digests"
-        );
+            .expect_err("selector-prefixed payload must be rejected");
     }
     #[test]
     fn iroha_poem_kana_matches_expected_order() {
@@ -2121,10 +1957,10 @@ mod tests {
         let canonical = address.canonical_bytes().expect("bytes");
         assert_eq!(canonical[0] >> 5, HEADER_VERSION_V1);
         assert_eq!(canonical[1], CONTROLLER_SINGLE_KEY_TAG);
-        let mut legacy = canonical.clone();
-        legacy.insert(1, 0x00);
-        AccountAddress::from_canonical_bytes(&legacy)
-            .expect_err("legacy selector-prefixed payloads are rejected");
+        let mut selector_prefixed = canonical.clone();
+        selector_prefixed.insert(1, 0x00);
+        AccountAddress::from_canonical_bytes(&selector_prefixed)
+            .expect_err("selector-prefixed payloads are rejected");
     }
 
     #[test]
@@ -2231,42 +2067,6 @@ mod tests {
             first_address.canonical_bytes().expect("first bytes"),
             second_address.canonical_bytes().expect("second bytes"),
             "only the universal account controller may influence canonical bytes"
-        );
-        assert!(second_address.local12_digest().is_none());
-    }
-    #[test]
-    fn canonical_address_reports_domainless_legacy_kind() {
-        let account = AccountId::new(ed25519_pk_with(7));
-        let address = AccountAddress::from_account_id(&account).expect("encode account");
-        assert_eq!(address.domain_kind(), AddressDomainKind::Default);
-    }
-    #[test]
-    fn domain_kind_reports_global_registry_variant() {
-        let mut address = account_address_for_seed(11);
-        address.domain = DomainSelector::Global { registry_id: 42 };
-        assert_eq!(address.domain_kind(), AddressDomainKind::GlobalRegistry);
-    }
-    #[test]
-    fn domain_selector_canonicalises_before_digest() {
-        let selectors = (
-            DomainSelector::from_domain(&domain("Treasury")).expect("upper-case normalizes"),
-            DomainSelector::from_domain(&domain("treasury")).expect("lower-case normalizes"),
-        );
-        match selectors {
-            (DomainSelector::Local12(a), DomainSelector::Local12(b)) => assert_eq!(a, b),
-            _ => panic!("expected Local12 selectors for non-default domains"),
-        }
-    }
-    #[test]
-    fn domain_selector_distinguishes_dataspaces() {
-        let universal = DomainSelector::from_domain(&domain("billing")).expect("selector");
-        let retail = DomainSelector::from_domain(
-            &DomainId::try_new("billing", "retail").expect("domain id"),
-        )
-        .expect("selector");
-        assert_ne!(
-            universal, retail,
-            "selectors must include the dataspace-qualified domain literal"
         );
     }
     #[test]
@@ -2520,20 +2320,20 @@ mod tests {
         );
     }
     #[test]
-    fn i105_rejects_legacy_fullwidth_iroha_kana_inputs() {
+    fn i105_rejects_fullwidth_iroha_kana_inputs() {
         let account = AccountId::new(ed25519_pk());
         let original = AccountAddress::from_account_id(&account).expect("encode");
         let canonical = original
             .to_i105_for_discriminant(CHAIN_DISCRIMINANT_SORA)
             .expect("i105 encode");
-        let fullwidth = legacy_fullwidth_payload_literal(&canonical);
+        let fullwidth = fullwidth_payload_literal(&canonical);
         assert_ne!(canonical, fullwidth);
         let err =
             AccountAddress::from_i105_for_discriminant(&fullwidth, Some(CHAIN_DISCRIMINANT_SORA))
-                .expect_err("legacy fullwidth kana must be rejected");
+                .expect_err("fullwidth kana must be rejected");
         assert!(matches!(err, AccountAddressError::InvalidI105Char(_)));
         let parse_err = AccountAddress::parse_encoded(&fullwidth, Some(CHAIN_DISCRIMINANT_SORA))
-            .expect_err("strict parse rejects legacy fullwidth kana");
+            .expect_err("strict parse rejects fullwidth kana");
         assert!(matches!(parse_err, AccountAddressError::InvalidI105Char(_)));
     }
     #[test]
@@ -2678,16 +2478,23 @@ mod tests {
         );
     }
     #[test]
-    fn parse_encoded_trims_i105_literal() {
+    fn parse_encoded_rejects_padded_i105_literal() {
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let literal = address.to_i105_for_discriminant(42).expect("i105");
         let padded = format!(" \n{literal}\t ");
-        let decoded = AccountAddress::parse_encoded(&padded, Some(42)).expect("parse padded i105");
-        assert_eq!(
-            decoded.canonical_bytes().unwrap(),
-            address.canonical_bytes().unwrap()
-        );
+        let error = AccountAddress::parse_encoded(&padded, Some(42))
+            .expect_err("padded i105 is not the canonical first-release literal");
+        assert!(matches!(
+            error,
+            AccountAddressError::UnsupportedAddressFormat
+        ));
+        let error = AccountAddress::i105_discriminant(&padded)
+            .expect_err("discriminant inspection must reject padded i105");
+        assert!(matches!(
+            error,
+            AccountAddressError::UnsupportedAddressFormat
+        ));
     }
     #[test]
     fn parse_encoded_rejects_whitespace_only_input() {
@@ -2815,7 +2622,6 @@ mod tests {
     }
     #[test]
     fn multisig_address_round_trip_preserves_policy() {
-        let domain = domain("wonderland");
         let members = vec![
             MultisigMember::new(ed25519_pk_with(1), 1).expect("member"),
             MultisigMember::new(ed25519_pk_with(2), 2).expect("member"),
@@ -2823,9 +2629,6 @@ mod tests {
         let policy = MultisigPolicy::new(2, members).expect("policy");
         let account = AccountId::new_multisig(policy.clone());
         let address = AccountAddress::from_account_id(&account).expect("encode");
-        address
-            .ensure_domain_matches(&domain)
-            .expect("domain digest must match");
         let controller = address.to_account_controller().expect("controller");
         assert_eq!(controller.multisig_policy().expect("multisig"), &policy);
         let canonical = address.canonical_bytes().expect("bytes");
@@ -2905,16 +2708,6 @@ mod tests {
             AccountAddressError::InvalidHexAddress,
             InvalidHexAddress,
             "ERR_INVALID_HEX_ADDRESS"
-        );
-        assert_code!(
-            AccountAddressError::DomainMismatch,
-            DomainMismatch,
-            "ERR_DOMAIN_MISMATCH"
-        );
-        assert_code!(
-            AccountAddressError::InvalidDomainLabel("bad"),
-            InvalidDomainLabel,
-            "ERR_INVALID_DOMAIN_LABEL"
         );
         assert_code!(
             AccountAddressError::UnexpectedNetworkPrefix {

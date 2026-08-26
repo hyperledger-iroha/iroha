@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare Debian genericcloud guest assets for the Inrou PortableVm smoke."""
+"""Prepare signed-and-pinned Debian guest assets for the Inrou PortableVm smoke."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import urllib.error
 import urllib.request
 import uuid
 from contextlib import contextmanager
@@ -254,16 +253,6 @@ def remove_cached_download(path: Path) -> None:
     path.unlink()
 
 
-def download_optional_signature(url: str, destination: Path) -> bool:
-    try:
-        download(url, destination)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return False
-        raise
-    return True
-
-
 def sha512(path: Path) -> str:
     digest = hashlib.sha512()
     with path.open("rb") as stream:
@@ -366,20 +355,6 @@ def verify_signed_sums(
         raise SystemExit(
             f"failed to verify Debian SHA512SUMS signature with {gpg_tool}: {detail}"
         ) from error
-
-
-def verify_debian_sums_signature_if_available(
-    base_url: str,
-    sums_path: Path,
-    signature_path: Path,
-    configured_keyring: Path | None,
-) -> bool:
-    if not download_optional_signature(f"{base_url}/SHA512SUMS.sign", signature_path):
-        return False
-    gpg_tool = find_gpg_tool()
-    debian_keyrings = resolve_debian_keyrings(configured_keyring)
-    verify_signed_sums(sums_path, signature_path, debian_keyrings, gpg_tool)
-    return True
 
 
 def extract_disk(archive: Path, disk: Path, force: bool) -> None:
@@ -512,22 +487,22 @@ def main() -> None:
 
     debugfs = find_tool("debugfs")
     tune2fs = find_tool("tune2fs")
+    gpg_tool = find_gpg_tool()
+    debian_keyrings = resolve_debian_keyrings(args.debian_keyring)
 
     if args.force:
         for cached_download in (archive, sums, sums_signature):
             remove_cached_download(cached_download)
 
     download(f"{base_url}/SHA512SUMS", sums)
-    sums_verified = verify_debian_sums_signature_if_available(
-        base_url, sums, sums_signature, args.debian_keyring
-    )
+    download(f"{base_url}/SHA512SUMS.sign", sums_signature)
+    verify_signed_sums(sums, sums_signature, debian_keyrings, gpg_tool)
     download(f"{base_url}/{archive_name}", archive)
+    verify_archive(archive, sums)
     verify_pinned_archive(archive)
-    if sums_verified:
-        verify_archive(archive, sums)
     # Never trust derived cache entries: rebuild them from the archive whose
-    # embedded digest was verified above (with signed sums checked additively
-    # whenever the pinned Debian build publishes them).
+    # digest was authenticated by Debian's signed sums and matched the repository
+    # pin above.
     extract_disk(archive, disk, True)
     offset, length = root_partition_range(disk)
     copy_range(disk, rootfs, offset, length, True)

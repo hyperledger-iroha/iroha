@@ -45,7 +45,7 @@ def offline_capability_payload(**overrides: Any) -> Dict[str, Any]:
 
 OFFLINE_OPERATION_BYTES = [0x11] * 32
 OFFLINE_OPERATION_ID = "11" * 32
-OFFLINE_TRANSACTION_HASH = "22" * 32
+OFFLINE_TRANSACTION_HASH = "23" * 32
 OFFLINE_STATUS_URI = f"/v1/offline/operations/{OFFLINE_OPERATION_ID}"
 OFFLINE_NETWORK_ID = _canonical_hash(0x91)
 OFFLINE_OTHER_NETWORK_ID = _canonical_hash(0x93)
@@ -129,7 +129,7 @@ def offline_top_up_anchor(**overrides: Any) -> Dict[str, Any]:
             "manifest_sha256": offline_fixed_bytes(0x81),
         },
         "finalized_height": 12,
-        "finalized_tx_hash": offline_fixed_bytes(0x22),
+        "finalized_tx_hash": offline_fixed_bytes(0x23),
         "anchor_digest": offline_fixed_bytes(0x71),
     }
     anchor.update(overrides)

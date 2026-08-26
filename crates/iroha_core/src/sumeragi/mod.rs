@@ -372,11 +372,6 @@ pub fn effective_consensus_mode_for_height_from_world(
 ) -> ConsensusMode {
     frozen_mode
 }
-/// Return the caller's genesis/height-context selected consensus mode.
-pub fn effective_consensus_mode(view: &StateView<'_>, frozen_mode: ConsensusMode) -> ConsensusMode {
-    let height = u64::try_from(view.height()).unwrap_or(0);
-    effective_consensus_mode_for_height(view, height, frozen_mode)
-}
 /// Snapshot of epoch boundaries derived from finalized VRF records.
 #[derive(Clone, Debug)]
 pub(crate) struct EpochScheduleSnapshot {
@@ -7023,7 +7018,7 @@ fn test_sumeragi_handle_with_source_geometry(
 include!("tests/queue_plan_admission_handoff.rs");
 /// Spawn configuration for the authoritative serialized Sumeragi v2 worker.
 pub struct SumeragiStartArgs {
-    /// Frozen-compatible v2 consensus configuration.
+    /// Canonical frozen Sumeragi-v2 consensus configuration.
     pub config: SumeragiConfig,
     /// Common configuration shared with other subsystems (keys, peers, chain id).
     pub common_config: CommonConfig,

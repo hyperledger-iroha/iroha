@@ -639,11 +639,7 @@ fn ensure_world_state_start_shape(
             "ordinary peer adapter requires bounded query counting".to_owned(),
         ));
     }
-    let peer_source = if let Some(query_box) = super::legacy_query_box(start) {
-        legacy_peer_source_shape(query_box)
-    } else {
-        canonical_peer_source_shape(start, query_limits)?
-    };
+    let peer_source = canonical_peer_source_shape(start, query_limits)?;
     if !peer_source {
         // TODO: Add query-specific borrowed adapters for the remaining 36
         // world producers. The three Kura producers additionally require an
@@ -662,21 +658,6 @@ fn ensure_world_state_start_shape(
         ));
     }
     ensure_iterable_params(&start.params, mode, query_limits, limits)
-}
-fn legacy_peer_source_shape(
-    query_box: &iroha_data_model::query::QueryBox<iroha_data_model::query::QueryOutputBatchBox>,
-) -> bool {
-    let Some(erased) =
-        iroha_data_model::query::iter_query_inner::<iroha_data_model::peer::PeerId>(query_box)
-    else {
-        return false;
-    };
-    super::decode_iter_query_payload_exact::<iroha_data_model::query::peer::prelude::FindPeers>(
-        erased.payload(),
-    )
-    .is_some()
-        && erased.predicate().is_pass()
-        && erased.selector().iter().next().is_none()
 }
 fn canonical_peer_source_shape(
     start: &iroha_data_model::query::QueryWithParams,
@@ -1386,16 +1367,23 @@ pub(super) fn preflight_server_singular_source_materialization(
                 sns_record_prefix_source_bytes(world, crate::sns::DATASPACE_ALIAS_SUFFIX_ID)?,
                 &mut remaining,
             )?;
-            if let Ok(alias) = crate::sns::resolve_active_dataspace_alias_by_id(
+            let alias = match crate::sns::resolve_active_dataspace_alias_by_id(
                 world,
                 catalog,
                 query.dataspace_id(),
                 now_ms,
-            ) && let Ok(selector) = crate::sns::selector_for_dataspace_alias(&alias)
-            {
+            ) {
+                Ok(alias) => Some(alias),
+                Err(crate::sns::SnsError::NotFound(_)) => None,
+                Err(error) => return Err(Error::Conversion(error.to_string())),
+            };
+            if let Some(alias) = alias {
+                let selector = crate::sns::selector_for_dataspace_alias(&alias)
+                    .map_err(|error| Error::Conversion(error.to_string()))?;
                 charge_fixed(sns_record_source_bytes(world, &selector)?, &mut remaining)?;
                 if let Some(owner) =
                     crate::sns::active_dataspace_owner_by_alias(world, &alias, now_ms)
+                        .map_err(|error| Error::Conversion(error.to_string()))?
                 {
                     charge(&owner, &mut remaining)?;
                 }

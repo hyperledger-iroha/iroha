@@ -20,12 +20,12 @@ All additions remain Norito-first, run under ABI version 1, and must execute det
 1. Admit/evict participants using zero-knowledge proofs so the ledger never exposes raw account IDs.
 2. Maintain strong accounting guarantees: every join, leave, and usage event must still reconcile deterministically.
 3. Provide optional relay manifests that describe onion routes for control/data channels and can be audited on-chain.
-4. Keep the fallback (fully transparent roster) operational for deployments that do not require privacy.
+4. Keep the fully transparent roster as an explicit supported room mode for deployments that do not require privacy.
 
 # Threat Model Summary
 
 - **Adversaries:** Network observers (ISPs), curious validators, malicious relay operators, and semi-honest hosts.
-- **Protected assets:** Participant identity, participation timing, per-segment usage/billing details, and network routing metadata.
+- **Protected assets:** Participant identity, private per-segment usage/billing details, and network routing metadata. Public roster-summary events intentionally reveal that a roster mutation occurred and publish aggregate counts, so they do not hide mutation timing.
 - **Assumptions:** Hosts still learn the true participant set off-chain; ledger peers verify proofs deterministically; overlay relays are untrusted but rate-limited; HPKE and SNARK primitives already exist in the codebase.
 
 # Data Model Changes
@@ -36,13 +36,13 @@ All types live in `iroha_data_model::kaigi`.
 /// Commitment to a participant identity (Poseidon hash of account + domain salt).
 pub struct KaigiParticipantCommitment {
     pub commitment: FixedBinary<32>,
-    pub alias_tag: Option<String>,
+    pub alias_tag: Option<String>, // reserved on-chain; must be None
 }
 
 /// Nullifier unique to each join action, prevents double-use of proofs.
 pub struct KaigiParticipantNullifier {
     pub digest: FixedBinary<32>,
-    pub issued_at_ms: u64,
+    pub issued_at_ms: u64, // reserved on-chain; must be zero
 }
 
 /// Relay path description used by clients to set up onion routing.
@@ -53,15 +53,16 @@ pub struct KaigiRelayManifest {
 
 pub struct KaigiRelayHop {
     pub relay_id: AccountId,
-    pub hpke_public_key: FixedBinary<32>,
+    /// Non-empty encoded HPKE public key bytes for the relay's negotiated suite.
+    pub hpke_public_key: Vec<u8>,
     pub weight: u8,
 }
 ```
 
 `KaigiRecord` gains the following fields:
 
-- `roster_commitments: Vec<KaigiParticipantCommitment>` – replaces the exposed `participants` list once the privacy mode is enabled. Classic deployments can keep both populated during migration.
-- `nullifier_log: Vec<KaigiParticipantNullifier>` – strictly append-only, capped by a rolling window to keep metadata bounded.
+- `roster_commitments: Vec<KaigiParticipantCommitment>` – carries private roster commitments; transparent rooms use the explicit `participants` list instead.
+- `nullifier_log: Vec<KaigiParticipantNullifier>` – strictly append-only; native metadata-size admission rejects a mutation before the stored record can exceed the configured bound. V1 does not evict nullifiers, because eviction would reopen proof replay.
 - `room_policy: KaigiRoomPolicy` – selects the viewer authentication stance for the session (`Public` rooms mirror read-only relays; `Authenticated` rooms require viewer tickets before an exit forwards packets).
 - `relay_manifest: Option<KaigiRelayManifest>` – structured manifest encoded with Norito so hops, HPKE keys, and weights stay canonical without JSON shims.
 - `privacy_mode: KaigiPrivacyMode` enum (see below).
@@ -86,12 +87,13 @@ pub enum KaigiPrivacyMode {
 For ad-hoc demos and interoperability tests the CLI now exposes
 `iroha kaigi quickstart`. It:
 
-- Reuses the CLI config (domain `wonderland` + account) unless overridden via `--domain`/`--host`.
+- Reuses the CLI config (domain `wonderland.universal` + account) unless overridden via `--domain`/`--host`.
 - Generates a timestamp-based call name when `--call-name` is omitted and submits `CreateKaigi` against the active Torii endpoint.
-- Optionally auto-joins the host (`--auto-join-host`) so viewers can connect immediately.
-- Emits a JSON summary containing Torii URL, call identifiers, privacy/room policy, a ready-to-copy join command, and the spool path testers should monitor (e.g., `storage/streaming/soranet_routes/exit-<relay-id>/kaigi-stream/*.norito`). Use `--summary-out path/to/file.json` to persist the blob.
+- Treats the host as an implicit member of the call; submitting a host
+  `JoinKaigi` is invalid.
+- Emits a JSON summary containing Torii URL, call identifiers, privacy/room policy, and a ready-to-copy join command. Use `--summary-out path/to/file.json` to persist the blob. V1 does not publish or advertise a token-bearing SoraNet exit spool.
 
-This helper does **not** replace the need for a running `iroha3d --sora` node: privacy routes, spool files, and relay manifests remain ledger-backed. It simply trims boilerplate when spinning up temporary rooms for external parties.
+This helper does **not** replace the need for a running `iroha3d --sora` node: privacy intent and relay manifests remain ledger-backed. It simply trims boilerplate when spinning up temporary rooms for external parties; filesystem exit publication remains disabled.
 
 ### One-command demo script
 
@@ -100,21 +102,63 @@ It performs the following for you:
 
 1. Signs the bundled `defaults/nexus/genesis.json` into `target/kaigi-demo/genesis.nrt`.
 2. Launches `iroha3d --sora` with the signed block (logs under `target/kaigi-demo/iroha3d.log`) and waits for Torii to expose `http://127.0.0.1:8080/status`.
-3. Runs `iroha kaigi quickstart --auto-join-host --summary-out target/kaigi-demo/kaigi_summary.json`.
-4. Prints the path to the JSON summary plus the spool directory (`storage/streaming/soranet_routes/exit-<relay-id>/kaigi-stream/`) so you can share it with external testers.
+3. Runs `iroha kaigi quickstart --summary-out target/kaigi-demo/kaigi_summary.json`.
+4. Prints the path to the JSON summary so you can share it with external testers. It does not create a SoraNet exit spool.
 
 Environment variables:
 
 - `TORII_URL` — override the Torii endpoint to poll (default `http://127.0.0.1:8080`).
 - `RUN_DIR` — override the working directory (default `target/kaigi-demo`).
 
-Stop the demo by pressing `Ctrl+C`; the trap in the script terminates `iroha3d` automatically. The spool files and summary remain on disk so you can hand off artifacts after the process exits.
+Stop the demo by pressing `Ctrl+C`; the trap in the script terminates `iroha3d` automatically. The summary remains on disk so you can hand off the non-secret demo metadata after the process exits.
+
+### Signal query admission
+
+`GET /v1/kaigi/calls/{call_id}/signals` treats transaction metadata as an
+application projection, not as authority. It admits only successful committed
+transactions carrying the canonical `iroha-demo-kaigi-chain-signal/v1` schema,
+and the signed transaction authority must share the active account-id rekey
+lineage of the host or a current transparent roster participant. Lineage and
+roster checks use one generation-consistent state snapshot at its authenticated
+committed ledger time; malformed or ambiguous live lineage fails closed.
+The projection rejects non-signal and wrong-call transactions before resolving
+their authorities, and caps the remaining distinct-authority lineage cache at
+the canonical per-query fetch budget so unrelated ledger history cannot grow
+request memory without bound.
+Only unique, live, explicitly proven account-ID rekey successors of the stored
+host or current transparent participants qualify; ordinary alias reassignment
+and revoked or expired lineage do not.
+Private calls remain host-only while private roster joins are disabled. Because
+projecting the signal history scans committed
+transactions, the route is classified as expensive compute and requires a
+canonical account-signed request; it remains available to ordinary on-ledger
+accounts rather than being operator-only. Every request retains general and
+heavy-query admission permits for the scan, including callers whose source
+network bypasses ordinary rate limiting. Pagination, ordering, and
+`after_timestamp_ms` use the canonical carrier block's creation time. The
+metadata creation timestamp may not exceed that carrier time, and the carrier
+must fall within the stored call lifecycle (inclusive of its creation and end
+timestamps), preventing participant-controlled metadata from poisoning cursors
+or surfacing signals outside the call's lifetime.
+Private responses omit the signed authority and remove the
+canonical host/participant identity fields from both the response projection
+and its returned metadata. Call reads also reject a stored record whose embedded
+identifier does not match the domain metadata key requested by the client.
 
 ## `CreateKaigi`
 
 - Validates `privacy_mode` against host permissions.
-- If a `relay_manifest` is supplied, enforce ≥3 hops, non-zero weights, HPKE key presence, and uniqueness so on-chain manifests remain auditable.
-- Validate `room_policy` input from SDKs/CLI (`public` vs `authenticated`) and propagate it to SoraNet provisioning so relay caches expose the correct GAR categories (`stream.kaigi.public` vs `stream.kaigi.authenticated`). Hosts wire this via `iroha kaigi create --room-policy …`, the JS SDK’s `roomPolicy` field, or by setting `room_policy` when Swift clients assemble the Norito payload prior to submission.
+- Under the fail-safe Initial executor, require the host to own the call's
+  domain or hold that domain's exact `CanModifyDomainMetadata` permission, so a
+  foreign account cannot squat the protected `kaigi__*` namespace. Installed
+  executors are responsible for applying an equivalent or stricter domain
+  policy before dispatch.
+- Reject an explicitly configured zero participant limit; an omitted limit remains unbounded.
+- Require the signed host to be a registered account. An explicit
+  `billing_account` must identify that same host; third-party billing remains
+  unavailable until a delegated billing authorization is defined.
+- If a `relay_manifest` is supplied, enforce ≥3 hops, non-zero weights, HPKE key presence, exact identifier uniqueness, typed account-rekey-lineage uniqueness, and an expiry strictly after the current block time. Every hop must also be allowed by any configured governance allowlist and have a stored descriptor with the exact relay identifier, a non-zero bandwidth class, and the same HPKE key; creation and later manifest replacement use the same admission checks. A retired and successor relay ID therefore cannot fill two route positions.
+- Validate `room_policy` input from SDKs/CLI (`public` vs `authenticated`) and retain it as on-chain SoraNet intent. Hosts wire this via `iroha kaigi create --room-policy …`, the JS SDK’s `roomPolicy` field, or by setting `room_policy` when Swift clients assemble the Norito payload prior to submission. V1 disables every token-bearing filesystem exit route until RouteOpen binds a viewer credential and authoritative segment proof and the producer provides durable revocation.
 - Starts with an empty participant-commitment log. If the host supplies the
   optional privacy proof at creation, stores the host commitment and records
   its nullifier immediately so it cannot authorize a later action again.
@@ -133,7 +177,7 @@ Parameters:
 
 Execution steps:
 
-1. If `record.privacy_mode == Transparent`, fallback to current behavior.
+1. If `record.privacy_mode == Transparent`, execute the transparent-room behavior.
 2. `ZkRosterV1` currently fails closed before proof dispatch. Its candidate
    Halo2 statement does not bind a public input derived from the signed
    participant, so a copied NIZK could be submitted by another signer.
@@ -142,7 +186,15 @@ Execution steps:
 
 ## `LeaveKaigi`
 
-Transparent mode matches current logic.
+Transparent mode permits the host or participant's unique successor from an
+explicitly typed SNS `AccountIdRekey` lineage to remove the historical roster
+entry. Live SNS resolution is preferred, while persisted canonical rekey edges
+retain continuity after the supporting lease expires, is revoked, or is later
+reassigned. The stored audit identity is not rewritten; leave removes that
+exact entry and its participant metadata. `AliasReassignment` edges never
+transfer authority, and branches, cycles, registered predecessors, or multiple
+registered successors fail closed. An aliasless controller rekey is rejected
+while active Kaigi or retained relay state needs that continuity.
 
 Private leave is intentionally unavailable on-chain in the first-release
 `ZkRosterV1` profile. A participant disconnects from the local session, or the
@@ -166,7 +218,9 @@ Hosts can still submit transparent totals; privacy mode only makes the commitmen
   signed participant is part of the circuit statement. Usage and host proof
   paths resolve their configured keys from configuration and look up the
   corresponding `VerifyingKeyRef` in WSV (ensuring the record is
-  `Active`, backend/circuit identifiers match, and commitments align), charges
+  `Active`, backend/circuit identifiers match, commitments align, and the
+  encoded proof fits the verifier record's `max_proof_bytes` cap before any
+  envelope decode or public-input extraction), charges
   byte accounting, and dispatches to the configured ZK backend.
 - The `kaigi_privacy_mocks` feature retains deterministic stubs for in-crate
   unit tests only. Any non-test library build with the feature is a compile-time
@@ -195,9 +249,16 @@ Hosts can still submit transparent totals; privacy mode only makes the commitmen
   candidate shape is insufficient for production because it omits the signed
   participant authority.
 - Host lifecycle authorization is not delegated to a transferable proof:
-  `EndKaigi` always requires the stored host account's transaction signature.
+  `EndKaigi` always requires the stored host account or its unique live,
+  explicitly proven account-ID rekey successor. The historical stored host ID
+  remains unchanged.
   If host privacy artifacts were supplied at creation, their nullifier is
   recorded immediately and cannot be reused by a later host action.
+- Ledger-visible privacy artifacts carry only cryptographic values: native
+  execution requires `KaigiParticipantCommitment.alias_tag = None` and
+  `KaigiParticipantNullifier.issued_at_ms = 0`. Clear labels and local timing
+  belong in encrypted host session state; nullifier replay protection depends
+  only on the digest.
 - Kaigi verifier-key carriers use strict ZK1 `IPAK`/`CID1`/`H2VK` metadata in
   that exact order, and outer envelopes use the exact owner-crate schema tag
   plus a nonzero hash of the complete registered key carrier. The public JS
@@ -211,9 +272,9 @@ Hosts can still submit transparent totals; privacy mode only makes the commitmen
 
 ## Relay Registration
 
-- Relays self-register as domain metadata entries `kaigi_relay::<relay_id>` including HPKE key material and bandwidth class.
+- Relays self-register as domain metadata entries `kaigi_relay__<account-digest>` including HPKE key material and bandwidth class. Native domain registration and generic metadata ISIs reject attempts to seed, overwrite, or remove these reserved entries; relay descriptors must use `RegisterKaigiRelay`. The signed relay account must be registered and have a live domain-qualified primary alias; that authenticated primary alias, not a global allowlist scan, selects the descriptor's governance domain. Aliasless or domainless-primary relays fail closed. While relay state exists, primary-alias changes may stay within that storage domain but cannot clear or move to another domain; account/domain removal likewise fails while protected Kaigi dependencies remain.
 - The `RegisterKaigiRelay` instruction persists the descriptor in domain metadata, emits a `KaigiRelayRegistered` summary (with HPKE fingerprint and bandwidth class), and can be re-invoked to rotate keys deterministically.
-- Governance curates allowlists through domain metadata (`kaigi_relay_allowlist`), and relay registration/manifest updates enforce membership before accepting new paths.
+- Governance can curate allowlists through domain metadata (`kaigi_relay_allowlist`); when an allowlist is configured, relay registration and manifest updates enforce membership before accepting new paths. Membership follows only a unique, explicitly typed account-ID rekey lineage, including retained canonical `AccountIdRekey` edges after lease expiry or reassignment, so a retired allowlist entry can authorize its valid successor without granting authority to an independent alias assignee. The relay itself still needs a live domain-qualified primary alias, and malformed allowlists in unrelated domains are never consulted.
 
 ## Manifest Creation
 
@@ -227,7 +288,7 @@ Hosts can still submit transparent totals; privacy mode only makes the commitmen
 
 ## Failover
 
-- Clients monitor relay health via the `ReportKaigiRelayHealth` instruction, which persists signed feedback in domain metadata (`kaigi_relay_feedback::<relay_id>`), broadcasts `KaigiRelayHealthUpdated`, and allows governance/hosts to reason about current availability. When a relay fails, the host issues an updated manifest and logs a `KaigiRelayManifestUpdated` event (see below).
+- Clients monitor relay health via the `ReportKaigiRelayHealth` instruction, which persists signed feedback in domain metadata (`kaigi_relay_feedback__<account-digest>`), broadcasts `KaigiRelayHealthUpdated`, and allows governance/hosts to reason about current availability. Stored feedback must embed the relay identifier selected by its metadata key. The global latest-observation singleton is strictly ordered by `reported_at_ms`: future timestamps beyond the current block time and older reports are rejected, every non-identical equal-timestamp report is rejected across calls, and an exact duplicate is an event-free idempotent no-op. Feedback is diagnostic and does not override relay governance or manifest admission; when a relay fails, the host issues an updated manifest and logs a `KaigiRelayManifestUpdated` event (see below).
 - Hosts apply manifest changes on-ledger through the `SetKaigiRelayManifest` instruction, which replaces the stored path or clears it entirely. Clearing emits a summary with `hop_count = 0` so operators can observe the transition back to direct routing.
 - Prometheus metrics (`kaigi_relay_registered_total`, `kaigi_relay_registration_bandwidth_class`, `kaigi_relay_manifest_updates_total`, `kaigi_relay_manifest_updates_by_domain_total`, `kaigi_relay_manifest_hop_count`, `kaigi_relay_health_reports_total`, `kaigi_relay_health_reports_by_domain_total`, `kaigi_relay_health_state`, `kaigi_relay_failover_total`, `kaigi_relay_failovers_by_domain_total`, `kaigi_relay_failover_hop_count`) now surface relay churn, health status, and failover cadence for operator dashboards. The domain-only counters back bounded diagnostic snapshots without collecting the dimensioned Prometheus label families.
 
@@ -257,10 +318,17 @@ contract admission in staging environments.
   - `BASE_KAIGI_JOIN_ZK`, `BASE_KAIGI_LEAVE_ZK`, and `BASE_KAIGI_USAGE_ZK`
     retain candidate roster calibration and the active usage calibration
     (≈1.6 ms for candidate roster proofs, ≈1.2 ms for usage on Apple M2 Ultra).
-    Surcharges continue to scale with proof byte size via
-    `PER_KAIGI_PROOF_BYTE`; disabled roster transitions do not dispatch a
-    verifier.
-- `RecordKaigiUsage` commits pay an extra fee based on commitment size and proof verification.
+    Disabled roster transitions do not dispatch a verifier and retain only a
+    governed per-proof-byte payload surcharge.
+- Successful host-create proofs charge the governed confidential-verification
+  base, proof bytes, six public inputs, one consumed nullifier, and one newly
+  stored commitment. Host-end proofs charge the same verifier/public-input and
+  nullifier costs but do not charge a new commitment because they reference the
+  stored host commitment. `RecordKaigiUsage` proofs charge the verifier base,
+  proof bytes, one public input, and one newly stored usage commitment.
+- Instruction-batch gas totals use saturating addition, matching every dynamic
+  proof component, so extreme governed schedules cannot wrap in release builds
+  or panic in debug builds.
 - Calibration harness will reuse the confidential asset infrastructure with fixed seeds.
 
 # Testing Strategy
@@ -277,7 +345,7 @@ contract admission in staging environments.
   sandbox), export `NORITO_SKIP_BINDINGS_SYNC=1` to bypass the Norito binding
   sync check enforced by `crates/norito/build.rs`.
 
-# Migration Plan
+# Release Plan
 
 1. ✅ Ship data model additions behind `KaigiPrivacyMode::Transparent` defaults.
 2. ✅ Make `kaigi_privacy_mocks` unit-test-only and fail closed in every runnable
@@ -287,7 +355,7 @@ contract admission in staging environments.
 4. ⬜ Version the roster statement with signed-participant public-input binding,
    regenerate the deterministic key/schema/SDK fixtures, and only then enable
    production private joins.
-5. ⬜ Deprecate the transparent `participants` vector once all consumers understand commitments.
+5. ⬜ Decide whether a future ABI should add a private-only roster representation; V1 keeps both room modes explicit.
 
 # Open Questions
 

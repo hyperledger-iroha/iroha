@@ -32,6 +32,7 @@ import org.junit.Test;
 
 public final class Java8CompatibilitySurfaceTests {
   private static final String VPN_RELAY_ID_HEX = TestEd25519Keys.publicKeyHex(0x22);
+  private static final String VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX = "ab".repeat(1_952);
 
   @Test
   public void clientResponseDropsWhitespaceRejectCode() {
@@ -249,14 +250,6 @@ public final class Java8CompatibilitySurfaceTests {
     } catch (final IllegalStateException expected) {
       assertTrue(expected.getMessage().contains("relay_endpoint"));
     }
-    try {
-      SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
-          bytes(soracloudExecuteResponseJsonWithBlankReceiptId()));
-      fail("Soracloud parser must reject blank required strings");
-    } catch (final IllegalStateException expected) {
-      assertTrue(expected.getMessage().contains("receipt_id"));
-    }
-
     final FakeHttpTransportExecutor executor = new FakeHttpTransportExecutor();
     final TransportRequest request =
         TransportRequest.builder()
@@ -393,6 +386,9 @@ public final class Java8CompatibilitySurfaceTests {
         + "\"relay_id_hex\":\""
         + VPN_RELAY_ID_HEX
         + "\","
+        + "\"relay_mldsa65_public_key_hex\":\""
+        + VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX
+        + "\","
         + "\"descriptor_commit_hex\":\""
         + "cd".repeat(32)
         + "\","
@@ -409,40 +405,4 @@ public final class Java8CompatibilitySurfaceTests {
         + "}";
   }
 
-  private static String soracloudExecuteResponseJsonWithBlankReceiptId() {
-    return "{"
-        + "\"schema_version\":1,"
-        + "\"status\":{\"status\":\"finalized\",\"service_name\":\"portal\"},"
-        + "\"receipt\":{"
-        + "\"schema_version\":1,"
-        + "\"receipt_id\":\"   \","
-        + "\"service_name\":\"portal\","
-        + "\"model_id\":\"upload-1\","
-        + "\"weight_version\":\"v1\","
-        + "\"runtime_version\":\"soracloud.private.quantized_cpu.v1\","
-        + "\"model_manifest_digest\":\"model-manifest\","
-        + "\"model_bundle_root\":\"bundle-root\","
-        + "\"policy_id\":\"policy-1\","
-        + "\"input_artifact\":{"
-        + "\"schema_version\":1,"
-        + "\"sorafs_manifest_digest\":\"input-manifest\","
-        + "\"artifact_hash\":\"input-artifact\","
-        + "\"ciphertext_bytes\":64,"
-        + "\"artifact_role\":\"input\""
-        + "},"
-        + "\"output_artifact\":{"
-        + "\"schema_version\":1,"
-        + "\"sorafs_manifest_digest\":\"output-manifest\","
-        + "\"artifact_hash\":\"output-artifact\","
-        + "\"ciphertext_bytes\":96,"
-        + "\"artifact_role\":\"output\""
-        + "},"
-        + "\"input_commitment\":\"input-commitment\","
-        + "\"output_commitment\":\"output-commitment\","
-        + "\"request_commitment\":\"request-commitment\","
-        + "\"result_commitment\":\"result-commitment\","
-        + "\"emitted_sequence\":17"
-        + "}"
-        + "}";
-  }
 }

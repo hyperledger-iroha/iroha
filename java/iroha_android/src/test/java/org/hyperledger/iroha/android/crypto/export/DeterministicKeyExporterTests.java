@@ -312,7 +312,6 @@ public final class DeterministicKeyExporterTests {
   private static int readU16(final byte[] raw, final int offset) {
     return ((raw[offset] & 0xFF) << 8) | (raw[offset + 1] & 0xFF);
   }
-
   private static void requireBouncyCastleProvider() {
     try {
       final Class<?> providerClass =

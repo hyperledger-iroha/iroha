@@ -3,7 +3,7 @@
                 kotoage fn run(int count) -> int authorize("Run") { return count; }
 
                 fn helper() {
-                    let _next = test::invoke_kotoage("run", Json::parse("{\"count\": 7}"));
+                    let _next = test::invoke_kotoage("run", Json::parse("{\"count\":7}"));
                 }
             }
             

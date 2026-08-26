@@ -6,11 +6,13 @@ use iroha_crypto::{
     Algorithm, KeyPair, PublicKey,
     soranet::{
         certificate::{
-            leaf_certificate_spki_sha256, validate_quic_multiaddr, validate_tls_server_name,
+            is_public_relay_ip, leaf_certificate_spki_sha256, validate_quic_multiaddr,
+            validate_tls_server_name,
         },
         handshake::{
-            DEFAULT_CLIENT_CAPABILITIES, DEFAULT_RELAY_CAPABILITIES, RuntimeParams,
-            SORANET_QUIC_ALPN, SessionSecrets, build_client_hello, client_handle_relay_hello,
+            DEFAULT_CLIENT_CAPABILITIES, DEFAULT_RELAY_CAPABILITIES, RelayAuthenticationVerifierV1,
+            RuntimeParams, SORANET_QUIC_ALPN, SessionSecrets, build_client_hello,
+            client_handle_relay_hello,
         },
         record::{RecordEndpoint, RecordLayer, RecordStreamContext, RecordStreamKind},
     },
@@ -19,7 +21,7 @@ use iroha_crypto::{
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt as _;
 use std::{
     env,
@@ -38,17 +40,18 @@ use std::{
 };
 #[cfg(target_os = "linux")]
 use std::{
-    ffi::CStr,
+    ffi::{CStr, CString},
     os::fd::{FromRawFd, OwnedFd, RawFd},
+    os::unix::ffi::OsStrExt as _,
     process::{Child, ExitStatus},
 };
 iroha_crypto::define_soranet_record_io_adapters!(soranet_record_io);
 use iroha_data_model::soranet::vpn::{
     VPN_CELL_LEN, VPN_DEFAULT_TUNNEL_MTU_BYTES, VPN_HELPER_TICKET_LEN,
-    VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1,
-    VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1, VpnPaddedCellV1, VpnUsageVoucherBodyV1,
-    VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1, derive_vpn_session_address_plan_v1,
-    vpn_helper_network_policy_hash_v1,
+    VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1, VPN_USAGE_VOUCHER_CONTROL_MAGIC, VpnCellClassV1,
+    VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1, VpnFlowLabelV1, VpnHelperTicketV1,
+    VpnPaddedCellV1, VpnUsageVoucherBodyV1, VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
+    derive_vpn_session_address_plan_v1, vpn_helper_network_policy_hash_v1,
 };
 use norito::{
     codec::{Decode, Encode},
@@ -81,21 +84,25 @@ use tokio::{
 };
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const RELAY_DNS_RESOLUTION_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_RELAY_DNS_ANSWERS_V1: usize = 32;
 const CONNECT_INPUT_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_POLL_INTERVAL: Duration = Duration::from_millis(100);
-// The public supervisor spans two 30-second worker barriers, one 60-second TUN barrier, and at
-// most 64 pushed plus 64 excluded routes whose individual system calls have ten-second limits.
-// Keep one finite outer deadline comfortably beyond every reachable V1 child phase.
-const CONNECT_READY_TIMEOUT: Duration = Duration::from_secs(45 * 60);
+// The public process has one finite bound for all worker barriers, privileged preparation, and
+// final readiness publication. Privileged preparation has its own shorter absolute bound below;
+// route count must never multiply that bound by starting a fresh timeout for each command.
+const CONNECT_READY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 const SYSTEM_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(target_os = "linux")]
 const SYSTEM_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
+#[cfg(target_os = "linux")]
 const MAX_SYSTEM_COMMAND_STDOUT_BYTES: usize = 256 * 1024;
+#[cfg(target_os = "linux")]
 const MAX_SYSTEM_COMMAND_STDERR_BYTES: usize = 64 * 1024;
 #[cfg(target_os = "linux")]
-const SYSTEM_COMMAND_CGROUP_PATH: &str =
-    "/sys/fs/cgroup/sora-vpn-controller.system-command-v1";
+const SYSTEM_COMMAND_CGROUP_PATH: &str = "/sys/fs/cgroup/sora-vpn-controller.system-command-v1";
 const CONTROLLER_KIND: &str = "linux-helperd";
 const PACKET_LEN_PREFIX_BYTES: usize = 2;
 const TUNNEL_LAUNCH_FRAME_MAGIC: &[u8; 8] = b"SVPNTUN1";
@@ -110,7 +117,6 @@ const NETWORK_WORKER_IPC_FD: i32 = 3;
 const STATE_FILE_FRAME_MAGIC: &[u8; 8] = b"SVPNST1\0";
 const STATE_FILE_NAME: &str = "state.norito";
 const CONTROLLER_LOCK_FILE_NAME: &str = "controller.lock";
-const RESOLV_CONF_BACKUP_FILE_NAME: &str = "resolv.conf.backup";
 const HELPER_TICKET_ISSUER_PUBLIC_KEY_PATH: &str =
     "/etc/sora-vpn-controller/helper-ticket-issuer-public-key.hex";
 #[cfg(target_os = "linux")]
@@ -128,7 +134,6 @@ const MAX_STATE_SEQUENCE_ELEMENTS_V1: usize = 4_096;
 const MAX_STATE_TOTAL_ELEMENTS_V1: usize = 8 * 1024 * 1024;
 const MAX_STATE_DECODE_ALLOCATION_BYTES_V1: usize = 16 * 1024 * 1024;
 const MAX_STATE_DECODE_DEPTH_V1: usize = 16;
-const MAX_RESOLV_CONF_BYTES_V1: usize = 1024 * 1024;
 const MAX_SESSION_ID_BYTES_V1: usize = 256;
 const MAX_RELAY_ENDPOINT_BYTES_V1: usize = 2_048;
 const MAX_TLS_SERVER_NAME_BYTES_V1: usize = 253;
@@ -140,12 +145,13 @@ const VPN_MAX_ROUTE_BYTES_V1: usize = 128;
 const VPN_MAX_DNS_ENTRIES_V1: usize = 8;
 const VPN_MAX_DNS_BYTES_V1: usize = 64;
 const DEFAULT_ROUTE_CMD: &str = "ip";
-const DEFAULT_ROUTE_SHOW_PREFIX: [&str; 2] = ["-o", "route"];
+const DEFAULT_ROUTE_SHOW_PREFIX: [&str; 3] = ["-N", "-o", "route"];
 const USAGE_VOUCHER_INTERVAL: Duration = Duration::from_secs(1);
 const USAGE_VOUCHER_BYTE_CREDIT_WINDOW: u64 = 256 * 1024;
 const USAGE_VOUCHER_BYTE_REFRESH_THRESHOLD: u64 = USAGE_VOUCHER_BYTE_CREDIT_WINDOW / 2;
 const USAGE_VOUCHER_ACTIVE_CREDIT_MS: u64 = 2_000;
 const NETWORK_WORKER_READY_TIMEOUT: Duration = Duration::from_secs(30);
+const PRIVILEGED_PREPARATION_TIMEOUT: Duration = Duration::from_secs(45);
 const NETWORK_WORKER_TUN_TIMEOUT: Duration = Duration::from_secs(60);
 const NETWORK_WORKER_STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const PROCESS_KILL_REAP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -273,6 +279,7 @@ struct ConnectPayload {
     relay_endpoint: String,
     helper_ticket_hex: String,
     relay_id_hex: String,
+    relay_mldsa65_public_key_hex: String,
     descriptor_commit_hex: String,
     tls_server_name: String,
     relay_tls_spki_sha256_hex: String,
@@ -430,13 +437,16 @@ const PLAN_RELAY_RANGE: std::ops::Range<usize> =
     PLAN_TICKET_RANGE.end..PLAN_TICKET_RANGE.end + MAX_RELAY_ENDPOINT_BYTES_V1;
 const PLAN_TLS_NAME_RANGE: std::ops::Range<usize> =
     PLAN_RELAY_RANGE.end..PLAN_RELAY_RANGE.end + MAX_TLS_SERVER_NAME_BYTES_V1;
+const PLAN_RELAY_MLDSA65_RANGE: std::ops::Range<usize> =
+    PLAN_TLS_NAME_RANGE.end..PLAN_TLS_NAME_RANGE.end + VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1;
 const PLAN_ROUTE_SLOT_BYTES: usize = 18;
-const PLAN_ROUTE_RANGE: std::ops::Range<usize> = 3_344..3_344 + 64 * PLAN_ROUTE_SLOT_BYTES;
+const PLAN_ROUTE_RANGE: std::ops::Range<usize> = 4_096..4_096 + 64 * PLAN_ROUTE_SLOT_BYTES;
 const PLAN_EXCLUDED_RANGE: std::ops::Range<usize> =
     PLAN_ROUTE_RANGE.end..PLAN_ROUTE_RANGE.end + 64 * PLAN_ROUTE_SLOT_BYTES;
 const PLAN_DNS_SLOT_BYTES: usize = 17;
 const PLAN_DNS_RANGE: std::ops::Range<usize> =
     PLAN_EXCLUDED_RANGE.end..PLAN_EXCLUDED_RANGE.end + 8 * PLAN_DNS_SLOT_BYTES;
+const _: () = assert!(PLAN_RELAY_MLDSA65_RANGE.end <= PLAN_ROUTE_RANGE.start);
 const _: () = assert!(PLAN_DNS_RANGE.end <= NETWORK_WORKER_PLAN_FRAME_BYTES);
 
 fn encode_plan_cidr(slot: &mut [u8], cidr: ParsedCidr) {
@@ -535,7 +545,7 @@ fn copy_plan_hash(bytes: &[u8], range: std::ops::Range<usize>) -> [u8; 32] {
 fn encode_authenticated_network_plan(
     authenticated: &AuthenticatedConnectPayload,
     token: [u8; 32],
-) -> Result<[u8; NETWORK_WORKER_PLAN_FRAME_BYTES], ControllerError> {
+) -> Result<WipeArray<NETWORK_WORKER_PLAN_FRAME_BYTES>, ControllerError> {
     let payload = &authenticated.payload;
     if payload.relay_endpoint.is_empty()
         || payload.relay_endpoint.len() > MAX_RELAY_ENDPOINT_BYTES_V1
@@ -549,7 +559,7 @@ fn encode_authenticated_network_plan(
             "authenticated payload does not fit the fixed V1 privileged plan".to_owned(),
         ));
     }
-    let mut frame = [0_u8; NETWORK_WORKER_PLAN_FRAME_BYTES];
+    let mut frame = WipeArray::zeroed();
     frame[..8].copy_from_slice(NETWORK_WORKER_PLAN_MAGIC);
     frame[8] = NETWORK_WORKER_PLAN_VERSION;
     frame[PLAN_TOKEN_RANGE].copy_from_slice(&token);
@@ -567,6 +577,11 @@ fn encode_authenticated_network_plan(
     frame[PLAN_SESSION_RANGE].copy_from_slice(&session_id);
     let relay_id = parse_canonical_nonzero_hex_32(payload.relay_id_hex.as_str(), "relayIdHex")?;
     frame[PLAN_RELAY_ID_RANGE].copy_from_slice(&relay_id);
+    let relay_mldsa65_public_key = parse_relay_mldsa65_public_key_hex(
+        payload.relay_mldsa65_public_key_hex.as_str(),
+        "relayMlDsa65PublicKeyHex",
+    )?;
+    frame[PLAN_RELAY_MLDSA65_RANGE].copy_from_slice(&relay_mldsa65_public_key);
     let descriptor = parse_canonical_nonzero_hex_32(
         payload.descriptor_commit_hex.as_str(),
         "descriptorCommitHex",
@@ -601,9 +616,9 @@ fn encode_authenticated_network_plan(
         .copy_from_slice(payload.relay_endpoint.as_bytes());
     frame[PLAN_TLS_NAME_RANGE.start..PLAN_TLS_NAME_RANGE.start + payload.tls_server_name.len()]
         .copy_from_slice(payload.tls_server_name.as_bytes());
-    let mut ticket_bytes = [0_u8; VPN_HELPER_TICKET_LEN];
-    hex::decode_to_slice(payload.helper_ticket_hex.as_str(), &mut ticket_bytes)?;
-    frame[PLAN_TICKET_RANGE].copy_from_slice(&ticket_bytes);
+    let mut ticket_bytes = WipeArray::<VPN_HELPER_TICKET_LEN>::zeroed();
+    hex::decode_to_slice(payload.helper_ticket_hex.as_str(), ticket_bytes.as_mut())?;
+    frame[PLAN_TICKET_RANGE].copy_from_slice(ticket_bytes.as_ref());
 
     for (index, route) in payload.route_pushes.iter().enumerate() {
         let parsed = parse_cidr(route)?;
@@ -682,7 +697,7 @@ fn decode_authenticated_network_plan(
         || frame[PLAN_TLS_NAME_RANGE.start + tls_name_length..PLAN_TLS_NAME_RANGE.end]
             .iter()
             .any(|byte| *byte != 0)
-        || frame[PLAN_TLS_NAME_RANGE.end..PLAN_ROUTE_RANGE.start]
+        || frame[PLAN_RELAY_MLDSA65_RANGE.end..PLAN_ROUTE_RANGE.start]
             .iter()
             .any(|byte| *byte != 0)
     {
@@ -769,6 +784,15 @@ fn decode_authenticated_network_plan(
         .try_into()
         .expect("fixed plan session width");
     let relay_id = copy_plan_hash(frame, PLAN_RELAY_ID_RANGE);
+    let relay_mldsa65_public_key: [u8; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1] = frame
+        [PLAN_RELAY_MLDSA65_RANGE]
+        .try_into()
+        .expect("fixed plan ML-DSA-65 public key width");
+    PublicKey::from_bytes(Algorithm::MlDsa, &relay_mldsa65_public_key).map_err(|error| {
+        ControllerError::State(format!(
+            "network-worker fixed plan has an invalid ML-DSA-65 relay identity: {error}"
+        ))
+    })?;
     let descriptor_commit = copy_plan_hash(frame, PLAN_DESCRIPTOR_RANGE);
     let relay_tls_spki_sha256 = copy_plan_hash(frame, PLAN_TLS_SPKI_RANGE);
     let relay_certificate_sha256 = copy_plan_hash(frame, PLAN_CERTIFICATE_RANGE);
@@ -787,9 +811,9 @@ fn decode_authenticated_network_plan(
             "network-worker fixed plan contains an all-zero trust digest".to_owned(),
         ));
     }
-    let mut ticket_bytes = [0_u8; VPN_HELPER_TICKET_LEN];
+    let mut ticket_bytes = WipeArray::<VPN_HELPER_TICKET_LEN>::zeroed();
     ticket_bytes.copy_from_slice(&frame[PLAN_TICKET_RANGE]);
-    let ticket = VpnHelperTicketV1::parse(&ticket_bytes, issuer_public_key, now_ms)
+    let ticket = VpnHelperTicketV1::parse(ticket_bytes.as_ref(), issuer_public_key, now_ms)
         .map_err(|error| ControllerError::InvalidPayload(format!("helper ticket: {error}")))?;
     if ticket.session_id != session_id || ticket.relay_id != relay_id {
         return Err(ControllerError::State(
@@ -812,6 +836,7 @@ fn decode_authenticated_network_plan(
     let computed_policy_hash = vpn_helper_network_policy_hash_v1(
         relay_endpoint.as_str(),
         &relay_id,
+        &relay_mldsa65_public_key,
         &descriptor_commit,
         tls_server_name.as_str(),
         &relay_tls_spki_sha256,
@@ -1057,17 +1082,67 @@ impl Drop for ConnectPayload {
     }
 }
 fn wipe_secret_string(secret: &mut String) {
-    // SAFETY: overwriting every byte with zero preserves UTF-8 validity and does not change the
-    // string length or capacity while the mutable byte view exists.
-    wipe_secret_bytes(unsafe { secret.as_mut_vec() });
-    secret.clear();
+    let mut bytes = core::mem::take(secret).into_bytes();
+    wipe_secret_vec(&mut bytes);
 }
 fn wipe_secret_bytes(secret: &mut [u8]) {
-    for byte in secret {
-        // SAFETY: `byte` is a valid unique pointer into the supplied mutable slice.
-        unsafe { std::ptr::write_volatile(byte, 0) };
+    secret.fill(0);
+    std::hint::black_box(secret);
+}
+fn wipe_secret_vec(secret: &mut Vec<u8>) {
+    let allocation_len = secret.capacity();
+    secret.resize(allocation_len, 0);
+    wipe_secret_bytes(secret);
+    secret.clear();
+    std::hint::black_box(secret);
+}
+struct WipeArray<const N: usize>([u8; N]);
+impl<const N: usize> WipeArray<N> {
+    const fn zeroed() -> Self {
+        Self([0; N])
     }
-    std::sync::atomic::compiler_fence(Ordering::SeqCst);
+
+    fn clear(&mut self) {
+        wipe_secret_bytes(&mut self.0);
+    }
+}
+#[cfg(test)]
+impl<const N: usize> Clone for WipeArray<N> {
+    fn clone(&self) -> Self {
+        Self(self.0)
+    }
+}
+impl<const N: usize> std::ops::Deref for WipeArray<N> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl<const N: usize> std::ops::DerefMut for WipeArray<N> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl<const N: usize> AsRef<[u8]> for WipeArray<N> {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+impl<const N: usize> AsMut<[u8]> for WipeArray<N> {
+    fn as_mut(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+}
+impl<const N: usize> std::fmt::Debug for WipeArray<N> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "WipeArray(<redacted {N}-byte buffer>)")
+    }
+}
+impl<const N: usize> Drop for WipeArray<N> {
+    fn drop(&mut self) {
+        self.clear();
+    }
 }
 struct WipeBytes(Vec<u8>);
 impl std::ops::Deref for WipeBytes {
@@ -1079,7 +1154,7 @@ impl std::ops::Deref for WipeBytes {
 }
 impl Drop for WipeBytes {
     fn drop(&mut self) {
-        wipe_secret_bytes(&mut self.0);
+        wipe_secret_vec(&mut self.0);
     }
 }
 struct SensitiveConnectJson(JsonValue);
@@ -1116,6 +1191,7 @@ enum NetworkJournalPhase {
     TunCreated,
     LinkConfigured,
     RoutesConfigured,
+    ConfiguringExcludedRoutes,
     ExcludedRoutesConfigured,
     DnsPlanned,
     Prepared,
@@ -1127,16 +1203,17 @@ enum NetworkJournalPhase {
 enum DnsBackendState {
     Resolved { interface_name: String },
     ResolvedReverted { interface_name: String },
-    ResolvConfPlanned,
-    ResolvConf,
-    ResolvConfRestored,
 }
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 #[norito(decode_from_slice)]
 struct ExcludedRouteSnapshot {
     cidr: String,
     family: IpFamily,
-    previous_route: Option<String>,
+    /// Exact `ip -o route` readback after this helper installed the exclusion.
+    ///
+    /// `None` means the mutation was not durably proven. Cleanup then succeeds only when the
+    /// exact prefix remains absent; every other value is retained for repair.
+    installed_route: Option<String>,
 }
 type RouteViaDev = (Option<String>, Option<String>);
 #[derive(Debug, Clone, Copy, Encode, Decode, PartialEq, Eq)]
@@ -1482,7 +1559,7 @@ impl NetworkIpcSocket {
 
     async fn send_plan(
         &self,
-        frame: &[u8; NETWORK_WORKER_PLAN_FRAME_BYTES],
+        frame: &WipeArray<NETWORK_WORKER_PLAN_FRAME_BYTES>,
     ) -> Result<(), ControllerError> {
         loop {
             let mut guard = self.fd.writable().await?;
@@ -1496,7 +1573,7 @@ impl NetworkIpcSocket {
     async fn receive_plan(
         &self,
         expected_peer: NetworkPeerCredentials,
-    ) -> Result<[u8; NETWORK_WORKER_PLAN_FRAME_BYTES], ControllerError> {
+    ) -> Result<WipeArray<NETWORK_WORKER_PLAN_FRAME_BYTES>, ControllerError> {
         loop {
             let mut guard = self.fd.readable().await?;
             match guard.try_io(|inner| {
@@ -1564,7 +1641,7 @@ const NETWORK_IPC_CONTROL_WORDS: usize = 16;
 #[cfg(target_os = "linux")]
 fn send_network_plan_once(
     fd: RawFd,
-    frame: &[u8; NETWORK_WORKER_PLAN_FRAME_BYTES],
+    frame: &WipeArray<NETWORK_WORKER_PLAN_FRAME_BYTES>,
 ) -> io::Result<()> {
     // SAFETY: `frame` is a live fixed-size byte array and `fd` is a connected Unix
     // sequenced-packet socket owned by the caller. No destination pointer is required.
@@ -1596,8 +1673,8 @@ fn send_network_plan_once(
 fn receive_network_plan_once(
     fd: RawFd,
     expected_peer: NetworkPeerCredentials,
-) -> io::Result<[u8; NETWORK_WORKER_PLAN_FRAME_BYTES]> {
-    let mut frame = [0_u8; NETWORK_WORKER_PLAN_FRAME_BYTES];
+) -> io::Result<WipeArray<NETWORK_WORKER_PLAN_FRAME_BYTES>> {
+    let mut frame = WipeArray::zeroed();
     let mut iov = nix::libc::iovec {
         iov_base: frame.as_mut_ptr().cast(),
         iov_len: frame.len(),
@@ -2006,16 +2083,25 @@ enum ControllerError {
     Handshake(String),
     #[error("state error: {0}")]
     State(String),
+    #[cfg(any(target_os = "linux", test))]
     #[error("privileged system-command custody is uncertain: {0}")]
     CommandCustody(String),
 }
 fn main() -> ExitCode {
     let result = match exact_hidden_command_from_argv() {
-        Some(Command::RunTunnel) => run_tunnel_entry(),
+        Some(Command::RunTunnel) => close_unintended_privileged_fds()
+            .map_err(ControllerError::from)
+            .and_then(|()| run_tunnel_entry()),
         Some(Command::RunNetworkWorker) => run_network_worker_entry(),
         Some(_) => unreachable!("only hidden commands bypass public dispatch"),
-        None => parse_fixed_cli_from_argv().and_then(run),
+        None => close_unintended_privileged_fds()
+            .map_err(ControllerError::from)
+            .and_then(|()| parse_fixed_cli_from_argv())
+            .and_then(run),
     };
+    print_exit_result(result)
+}
+fn print_exit_result(result: Result<(), ControllerError>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -2023,6 +2109,48 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+#[cfg(target_os = "linux")]
+fn mark_unintended_child_fds_close_on_exec() -> io::Result<()> {
+    const CLOSE_RANGE_UNSHARE: u32 = 1 << 1;
+    const CLOSE_RANGE_CLOEXEC: u32 = 1 << 2;
+    // SAFETY: `close_range` receives only integer bounds. `CLOEXEC` preserves Rust's internal
+    // exec-error pipe until exec while ensuring that no caller-controlled descriptor reaches the
+    // privileged child image. `UNSHARE` prevents a shared descriptor table from being modified.
+    if unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_close_range,
+            3_u32,
+            u32::MAX,
+            CLOSE_RANGE_UNSHARE | CLOSE_RANGE_CLOEXEC,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn close_unintended_privileged_fds() -> io::Result<()> {
+    const CLOSE_RANGE_UNSHARE: u32 = 1 << 1;
+    // SAFETY: no public or root-supervisor command accepts a non-stdio inherited descriptor.
+    // The network worker is dispatched separately because descriptor 3 is its authenticated IPC.
+    if unsafe {
+        nix::libc::syscall(
+            nix::libc::SYS_close_range,
+            3_u32,
+            u32::MAX,
+            CLOSE_RANGE_UNSHARE,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+#[cfg(not(target_os = "linux"))]
+fn close_unintended_privileged_fds() -> io::Result<()> {
+    Ok(())
 }
 fn exact_hidden_command_from_argv() -> Option<Command> {
     let mut arguments = env::args_os();
@@ -2289,6 +2417,10 @@ fn connect_payload_network_policy_hash(
     payload: &ConnectPayload,
 ) -> Result<[u8; 32], ControllerError> {
     let relay_id = parse_canonical_nonzero_hex_32(payload.relay_id_hex.as_str(), "relayIdHex")?;
+    let relay_mldsa65_public_key = parse_relay_mldsa65_public_key_hex(
+        payload.relay_mldsa65_public_key_hex.as_str(),
+        "relayMlDsa65PublicKeyHex",
+    )?;
     let descriptor_commit = parse_canonical_nonzero_hex_32(
         payload.descriptor_commit_hex.as_str(),
         "descriptorCommitHex",
@@ -2308,6 +2440,7 @@ fn connect_payload_network_policy_hash(
     Ok(vpn_helper_network_policy_hash_v1(
         payload.relay_endpoint.as_str(),
         &relay_id,
+        &relay_mldsa65_public_key,
         &descriptor_commit,
         payload.tls_server_name.as_str(),
         &relay_tls_spki_sha256,
@@ -2556,6 +2689,8 @@ fn quiesce_persisted_workers(mut state: State) -> Result<State, ControllerError>
     if let Some(identity) = state.worker_identity.as_ref() {
         terminate_and_wait_persisted_worker(identity, Duration::from_secs(2))?;
     }
+    #[cfg(target_os = "linux")]
+    quiesce_system_command_cgroup_until(Instant::now() + PROCESS_KILL_REAP_TIMEOUT)?;
     // The tunnel supervisor may have durably advanced its mutation journal or published the
     // isolated network-child identity while it was shutting down. Reload only after its pidfd is
     // readable, then stop the exact child before returning any state eligible for global cleanup.
@@ -2584,6 +2719,11 @@ fn connect_command(
         ..State::default()
     };
     let mut command = pinned_controller_command()?;
+    #[cfg(target_os = "linux")]
+    // SAFETY: the closure performs only one async-signal-safe syscall and does not allocate.
+    unsafe {
+        command.pre_exec(mark_unintended_child_fds_close_on_exec);
+    }
     let mut child = command
         .arg("run-tunnel")
         .env_clear()
@@ -2831,6 +2971,7 @@ fn spawn_network_worker(
     // socket endpoint remains owned by `worker_fd` in the parent until `spawn` returns.
     unsafe {
         command.pre_exec(move || {
+            mark_unintended_child_fds_close_on_exec()?;
             if nix::libc::prctl(nix::libc::PR_SET_PDEATHSIG, nix::libc::SIGKILL, 0, 0, 0) != 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -2976,11 +3117,13 @@ async fn await_authenticated_network_worker_plan(
     loop {
         tokio::select! {
             frame = ipc.receive_plan(expected_worker) => {
+                let frame = frame?;
+                let now_ms = unix_now_ms()?;
                 return decode_authenticated_network_plan(
-                    &frame?,
+                    frame.as_ref(),
                     token,
                     issuer_public_key,
-                    unix_now_ms()?,
+                    now_ms,
                 );
             }
             _ = signals.sigterm.recv() => {
@@ -3621,7 +3764,7 @@ async fn run_tunnel_command(
     // credentials, has completed DNS/QUIC/TLS/handshake/voucher setup and reported READY.
     let prepared_result =
         match ensure_authenticated_ticket_unexpired_at(payload.ticket_expires_at_ms) {
-            Ok(()) => prepare_tunnel(&payload, &mut state),
+            Ok(()) => prepare_tunnel(&payload, &mut state, &network_worker),
             Err(error) => Err(error),
         };
     let prepared = match prepared_result {
@@ -4179,6 +4322,9 @@ async fn connect_and_handshake(
                 payload.relay_endpoint
             ))
         })?;
+    // `relay_addr` is the exact numeric result of one bounded, public-only
+    // lookup. Pass it directly to Quinn so no later layer can re-resolve the
+    // signed DNS name or follow a rebinding answer.
     let bind_addr = match relay_addr {
         SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
         SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
@@ -4211,8 +4357,9 @@ async fn connect_and_handshake(
             ));
         }
     };
+    ensure_soranet_quic_alpn(&connection)?;
     let session = perform_helper_handshake(&connection, payload, helper_ticket).await?;
-    let record_layer = RecordLayer::new(&session.session_key, RecordEndpoint::Client)
+    let record_layer = RecordLayer::new(session.session_key, RecordEndpoint::Client)
         .map_err(|error| ControllerError::Handshake(error.to_string()))?;
     Ok((endpoint, connection, Arc::new(record_layer)))
 }
@@ -4220,23 +4367,81 @@ async fn resolve_multiaddr_socket_addr(
     relay: &ParsedMultiaddr,
 ) -> Result<SocketAddr, ControllerError> {
     match &relay.host {
-        ParsedMultiaddrHost::Ip(host) => Ok(SocketAddr::new(*host, relay.port)),
+        ParsedMultiaddrHost::Ip(host) => {
+            if !is_public_relay_ip(*host) {
+                return Err(ControllerError::InvalidMultiaddr(
+                    "relay IP is not globally routable".to_owned(),
+                ));
+            }
+            Ok(SocketAddr::new(*host, relay.port))
+        }
         ParsedMultiaddrHost::Dns {
             name,
             address_family,
-        } => lookup_host((name.as_str(), relay.port))
-            .await?
-            .find(|address| match *address_family {
-                DnsAddressFamily::Any => true,
-                DnsAddressFamily::V4 => address.is_ipv4(),
-                DnsAddressFamily::V6 => address.is_ipv6(),
-            })
-            .ok_or_else(|| {
-                ControllerError::InvalidMultiaddr(format!(
-                    "dns {name} did not resolve to the signed address family"
+        } => {
+            let mut answers = Vec::new();
+            let resolved = timeout(
+                RELAY_DNS_RESOLUTION_TIMEOUT,
+                lookup_host((name.as_str(), relay.port)),
+            )
+            .await
+            .map_err(|_| {
+                ControllerError::State(format!(
+                    "timed out resolving signed VPN relay DNS name {name}"
                 ))
-            }),
+            })??;
+            for answer in resolved {
+                if answers.len() == MAX_RELAY_DNS_ANSWERS_V1 {
+                    return Err(ControllerError::InvalidMultiaddr(format!(
+                        "dns {name} returned more than {MAX_RELAY_DNS_ANSWERS_V1} answers"
+                    )));
+                }
+                answers.push(answer);
+            }
+            select_resolved_relay_addr(name, *address_family, relay.port, answers)
+        }
     }
+}
+fn select_resolved_relay_addr(
+    name: &str,
+    address_family: DnsAddressFamily,
+    port: u16,
+    answers: impl IntoIterator<Item = SocketAddr>,
+) -> Result<SocketAddr, ControllerError> {
+    let mut answers = answers.into_iter().collect::<Vec<_>>();
+    if answers.is_empty() {
+        return Err(ControllerError::InvalidMultiaddr(format!(
+            "dns {name} returned no addresses"
+        )));
+    }
+    if answers.len() > MAX_RELAY_DNS_ANSWERS_V1 {
+        return Err(ControllerError::InvalidMultiaddr(format!(
+            "dns {name} returned more than {MAX_RELAY_DNS_ANSWERS_V1} answers"
+        )));
+    }
+    if answers
+        .iter()
+        .any(|answer| !is_public_relay_ip(answer.ip()))
+    {
+        return Err(ControllerError::InvalidMultiaddr(format!(
+            "dns {name} returned a private, local, reserved, or documentation address"
+        )));
+    }
+    answers.retain(|answer| match address_family {
+        DnsAddressFamily::Any => true,
+        DnsAddressFamily::V4 => answer.is_ipv4(),
+        DnsAddressFamily::V6 => answer.is_ipv6(),
+    });
+    answers.sort_unstable();
+    answers.dedup();
+    answers
+        .first()
+        .map(|answer| SocketAddr::new(answer.ip(), port))
+        .ok_or_else(|| {
+            ControllerError::InvalidMultiaddr(format!(
+                "dns {name} did not resolve to the signed address family"
+            ))
+        })
 }
 fn build_client_config(relay_tls_spki_sha256: [u8; 32]) -> Result<ClientConfig, ControllerError> {
     let tls_config = Arc::new(build_tls_client_config(relay_tls_spki_sha256));
@@ -4268,6 +4473,27 @@ fn build_tls_client_config(relay_tls_spki_sha256: [u8; 32]) -> rustls::ClientCon
     tls_config.alpn_protocols = vec![SORANET_QUIC_ALPN.to_vec()];
     tls_config
 }
+fn validate_soranet_quic_alpn(protocol: Option<&[u8]>) -> Result<(), ControllerError> {
+    if protocol != Some(SORANET_QUIC_ALPN) {
+        return Err(ControllerError::State(
+            "relay TLS did not negotiate the exact SoraNet QUIC ALPN".to_owned(),
+        ));
+    }
+    Ok(())
+}
+fn ensure_soranet_quic_alpn(connection: &Connection) -> Result<(), ControllerError> {
+    let handshake = connection.handshake_data().ok_or_else(|| {
+        ControllerError::State("relay QUIC connection has no TLS handshake data".to_owned())
+    })?;
+    let handshake = handshake
+        .downcast::<quinn::crypto::rustls::HandshakeData>()
+        .map_err(|_| {
+            ControllerError::State(
+                "relay QUIC connection returned an unexpected TLS handshake type".to_owned(),
+            )
+        })?;
+    validate_soranet_quic_alpn(handshake.protocol.as_deref())
+}
 async fn perform_helper_handshake(
     connection: &Connection,
     payload: &ConnectPayload,
@@ -4287,6 +4513,26 @@ async fn perform_helper_handshake(
     let relay_identity = PublicKey::from_bytes(Algorithm::Ed25519, &relay_id).map_err(|error| {
         ControllerError::InvalidPayload(format!("relayIdHex is not a valid Ed25519 key: {error}"))
     })?;
+    let relay_mldsa65_public_key = parse_relay_mldsa65_public_key_hex(
+        payload.relay_mldsa65_public_key_hex.as_str(),
+        "relayMlDsa65PublicKeyHex",
+    )?;
+    let relay_mldsa65_identity = PublicKey::from_bytes(Algorithm::MlDsa, &relay_mldsa65_public_key)
+        .map_err(|error| {
+            ControllerError::InvalidPayload(format!(
+                "relayMlDsa65PublicKeyHex is not a valid ML-DSA-65 key: {error}"
+            ))
+        })?;
+    let relay_certificate_sha256 = parse_canonical_nonzero_hex_32(
+        payload.relay_certificate_sha256_hex.as_str(),
+        "relayCertificateSha256Hex",
+    )?;
+    let relay_authentication = RelayAuthenticationVerifierV1::try_new(
+        relay_identity,
+        relay_mldsa65_identity,
+        relay_certificate_sha256,
+    )
+    .map_err(|error| ControllerError::Handshake(error.to_string()))?;
     let descriptor_commit = parse_canonical_nonzero_hex_32(
         payload.descriptor_commit_hex.as_str(),
         "descriptorCommitHex",
@@ -4307,8 +4553,9 @@ async fn perform_helper_handshake(
         .map_err(|error| ControllerError::Handshake(error.to_string()))?;
     write_handshake_frame(&mut send, &client_hello).await?;
     let relay_hello = read_handshake_frame(&mut recv).await?;
-    let session = client_handle_relay_hello(client_state, &relay_hello, &relay_identity, &params)
-        .map_err(|error| ControllerError::Handshake(error.to_string()))?;
+    let session =
+        client_handle_relay_hello(client_state, &relay_hello, &relay_authentication, &params)
+            .map_err(|error| ControllerError::Handshake(error.to_string()))?;
     send.finish()?;
     Ok(session)
 }
@@ -4323,6 +4570,10 @@ fn helper_ticket_handshake_binding(
         hasher.update(value);
     }
     let relay_id = parse_canonical_nonzero_hex_32(payload.relay_id_hex.as_str(), "relayIdHex")?;
+    let relay_mldsa65_public_key = parse_relay_mldsa65_public_key_hex(
+        payload.relay_mldsa65_public_key_hex.as_str(),
+        "relayMlDsa65PublicKeyHex",
+    )?;
     let descriptor_commit = parse_canonical_nonzero_hex_32(
         payload.descriptor_commit_hex.as_str(),
         "descriptorCommitHex",
@@ -4341,10 +4592,11 @@ fn helper_ticket_handshake_binding(
     )?;
     let mut hasher = Blake3Hasher::new();
     for value in [
-        b"iroha.soranet.vpn.helper-handshake-binding.v2".as_slice(),
+        b"iroha.soranet.vpn.helper-handshake-dual-auth.v1".as_slice(),
         helper_ticket,
         payload.relay_endpoint.as_bytes(),
         relay_id.as_slice(),
+        relay_mldsa65_public_key.as_slice(),
         descriptor_commit.as_slice(),
         relay_spki.as_slice(),
         relay_certificate.as_slice(),
@@ -4379,10 +4631,55 @@ async fn write_handshake_frame(
     Ok(())
 }
 #[cfg(any(target_os = "linux", test))]
+fn ensure_privileged_preparation_deadline_at(
+    deadline: Instant,
+    now: Instant,
+) -> Result<(), ControllerError> {
+    if now >= deadline {
+        return Err(ControllerError::State(
+            "privileged tunnel preparation exceeded its single absolute deadline".to_owned(),
+        ));
+    }
+    Ok(())
+}
+#[cfg(any(target_os = "linux", test))]
+fn privileged_command_deadlines(
+    preparation_deadline: Instant,
+) -> Result<(Instant, Instant), ControllerError> {
+    let execution_deadline = preparation_deadline
+        .checked_sub(PROCESS_KILL_REAP_TIMEOUT)
+        .ok_or_else(|| {
+            ControllerError::State(
+                "privileged preparation deadline cannot reserve command cleanup custody".to_owned(),
+            )
+        })?;
+    Ok((execution_deadline, preparation_deadline))
+}
+#[cfg(any(target_os = "linux", test))]
+fn privileged_preparation_deadline_at(
+    started: Instant,
+    ticket_remaining: Duration,
+) -> Result<Instant, ControllerError> {
+    let configured_deadline = started
+        .checked_add(PRIVILEGED_PREPARATION_TIMEOUT)
+        .ok_or_else(|| {
+            ControllerError::State(
+                "privileged preparation deadline exceeds the monotonic clock range".to_owned(),
+            )
+        })?;
+    let authorization_deadline = started.checked_add(ticket_remaining).ok_or_else(|| {
+        ControllerError::State(
+            "authenticated ticket deadline exceeds the monotonic clock range".to_owned(),
+        )
+    })?;
+    Ok(configured_deadline.min(authorization_deadline))
+}
+#[cfg(any(target_os = "linux", test))]
 trait NetworkPrepareOps {
     type Device;
     type ExcludedRouteMutation;
 
+    fn check_preparation(&mut self) -> Result<(), ControllerError>;
     fn persist(&mut self, state: &State) -> Result<(), ControllerError>;
     fn create_tun(&mut self, requested_name: &str) -> Result<Self::Device, ControllerError>;
     fn tun_name<'a>(&self, device: &'a Self::Device) -> &'a str;
@@ -4403,10 +4700,14 @@ trait NetworkPrepareOps {
     ) -> Result<(ExcludedRouteSnapshot, Self::ExcludedRouteMutation), ControllerError>;
     fn apply_excluded_route(
         &mut self,
+        snapshot: &ExcludedRouteSnapshot,
         mutation: Self::ExcludedRouteMutation,
-    ) -> Result<(), ControllerError>;
-    fn plan_dns(&mut self, interface_name: &str, dns_servers: &[String])
-    -> Option<DnsBackendState>;
+    ) -> Result<String, ControllerError>;
+    fn plan_dns(
+        &mut self,
+        interface_name: &str,
+        dns_servers: &[String],
+    ) -> Result<Option<DnsBackendState>, ControllerError>;
     fn apply_dns(
         &mut self,
         interface_name: &str,
@@ -4415,19 +4716,54 @@ trait NetworkPrepareOps {
     ) -> Result<DnsBackendState, ControllerError>;
 }
 #[cfg(target_os = "linux")]
-struct SystemNetworkPrepareOps;
+struct SystemNetworkPrepareOps<'a> {
+    network_worker: &'a NetworkWorkerProcess,
+    ticket_expires_at_ms: u64,
+    deadline: Instant,
+}
 #[cfg(target_os = "linux")]
-impl NetworkPrepareOps for SystemNetworkPrepareOps {
+impl SystemNetworkPrepareOps<'_> {
+    fn run_command<I, S>(&mut self, program: &str, args: I) -> Result<String, ControllerError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.check_preparation()?;
+        let output = run_command_until(program, args, self.deadline)?;
+        self.check_preparation()?;
+        Ok(output)
+    }
+}
+#[cfg(target_os = "linux")]
+impl NetworkPrepareOps for SystemNetworkPrepareOps<'_> {
     type Device = Arc<LinuxTunDevice>;
     type ExcludedRouteMutation = Vec<String>;
 
+    fn check_preparation(&mut self) -> Result<(), ControllerError> {
+        ensure_privileged_preparation_deadline_at(self.deadline, Instant::now())?;
+        ensure_authenticated_ticket_unexpired_at(self.ticket_expires_at_ms)?;
+        if pidfd_wait_readable(&self.network_worker.pidfd, Duration::ZERO)?
+            || !pidfd_send_signal(&self.network_worker.pidfd, 0)?
+        {
+            return Err(ControllerError::State(format!(
+                "unprivileged network worker {} exited during privileged tunnel preparation",
+                self.network_worker.identity.pid
+            )));
+        }
+        Ok(())
+    }
+
     fn persist(&mut self, state: &State) -> Result<(), ControllerError> {
-        persist_state(state)
+        self.check_preparation()?;
+        persist_state(state)?;
+        self.check_preparation()
     }
 
     fn create_tun(&mut self, requested_name: &str) -> Result<Self::Device, ControllerError> {
+        self.check_preparation()?;
         let device = Arc::new(LinuxTunDevice::create(requested_name)?);
         ensure_exact_tun_interface_name(requested_name, device.name())?;
+        self.check_preparation()?;
         Ok(device)
     }
 
@@ -4441,7 +4777,9 @@ impl NetworkPrepareOps for SystemNetworkPrepareOps {
         mtu: u16,
         tunnel_addresses: &[ParsedCidr],
     ) -> Result<(), ControllerError> {
-        apply_tunnel_link_config(interface_name, mtu, tunnel_addresses)
+        apply_tunnel_link_config_with(interface_name, mtu, tunnel_addresses, |program, args| {
+            self.run_command(program, args)
+        })
     }
 
     fn apply_routes(
@@ -4449,28 +4787,44 @@ impl NetworkPrepareOps for SystemNetworkPrepareOps {
         interface_name: &str,
         routes: &[String],
     ) -> Result<(), ControllerError> {
-        apply_route_pushes(interface_name, routes)
+        apply_route_pushes_with(interface_name, routes, |program, args| {
+            self.run_command(program, args)
+        })
     }
 
     fn plan_excluded_route(
         &mut self,
         route: &str,
     ) -> Result<(ExcludedRouteSnapshot, Self::ExcludedRouteMutation), ControllerError> {
-        plan_excluded_route_mutation(route)
+        plan_excluded_route_mutation_with(route, |program, args| self.run_command(program, args))
     }
 
     fn apply_excluded_route(
         &mut self,
+        snapshot: &ExcludedRouteSnapshot,
         mutation: Self::ExcludedRouteMutation,
-    ) -> Result<(), ControllerError> {
-        run_command(DEFAULT_ROUTE_CMD, mutation).map(|_| ())
+    ) -> Result<String, ControllerError> {
+        self.run_command(DEFAULT_ROUTE_CMD, mutation.clone())?;
+        let installed =
+            capture_existing_route_with(snapshot.family, &snapshot.cidr, |program, args| {
+                self.run_command(program, args)
+            })?
+            .ok_or_else(|| {
+                ControllerError::State(format!(
+                    "excluded route {} was absent immediately after successful installation",
+                    snapshot.cidr
+                ))
+            })?;
+        validate_installed_excluded_route(snapshot, &mutation, &installed)?;
+        Ok(installed)
     }
 
     fn plan_dns(
         &mut self,
         interface_name: &str,
         dns_servers: &[String],
-    ) -> Option<DnsBackendState> {
+    ) -> Result<Option<DnsBackendState>, ControllerError> {
+        self.check_preparation()?;
         plan_dns_backend(interface_name, dns_servers)
     }
 
@@ -4480,7 +4834,9 @@ impl NetworkPrepareOps for SystemNetworkPrepareOps {
         dns_servers: &[String],
         plan: DnsBackendState,
     ) -> Result<DnsBackendState, ControllerError> {
-        apply_dns_plan(interface_name, dns_servers, plan)
+        apply_dns_plan_with(interface_name, dns_servers, plan, |program, args| {
+            self.run_command(program, args)
+        })
     }
 }
 #[cfg(any(target_os = "linux", test))]
@@ -4507,8 +4863,20 @@ fn persist_network_prepare_journal<O: NetworkPrepareOps>(
 fn prepare_tunnel(
     payload: &AuthenticatedPrivilegedNetworkPlan,
     state: &mut State,
+    network_worker: &NetworkWorkerProcess,
 ) -> Result<PreparedTunnel, ControllerError> {
-    prepare_tunnel_with(payload, state, &mut SystemNetworkPrepareOps)
+    // Pin the remaining signed lifetime to the monotonic clock once. A later wall-clock rollback
+    // must not extend root mutation authority, and no system command may finish after this bound.
+    let started = Instant::now();
+    let ticket_remaining =
+        authenticated_ticket_expiry_remaining_at(payload.ticket_expires_at_ms, unix_now_ms()?)?;
+    let deadline = privileged_preparation_deadline_at(started, ticket_remaining)?;
+    let mut operations = SystemNetworkPrepareOps {
+        network_worker,
+        ticket_expires_at_ms: payload.ticket_expires_at_ms,
+        deadline,
+    };
+    prepare_tunnel_with(payload, state, &mut operations)
 }
 #[cfg(any(target_os = "linux", test))]
 fn prepare_tunnel_with<O: NetworkPrepareOps>(
@@ -4516,22 +4884,27 @@ fn prepare_tunnel_with<O: NetworkPrepareOps>(
     state: &mut State,
     operations: &mut O,
 ) -> Result<PreparedTunnel<O::Device>, ControllerError> {
+    operations.check_preparation()?;
     let interface_name = desired_interface_name(payload.session_id.as_str())?;
     let mtu = normalize_mtu(payload.mtu_bytes)?;
     let tunnel_addresses = parse_tunnel_addresses(&payload.tunnel_addresses)?;
-    let planned_dns = operations.plan_dns(&interface_name, &payload.dns_servers);
+    let planned_dns = operations.plan_dns(&interface_name, &payload.dns_servers)?;
+    operations.check_preparation()?;
     let mut applied_network = AppliedNetworkState {
         interface_name: interface_name.clone(),
         journal_phase: NetworkJournalPhase::Planned,
         dns_backend: None,
         excluded_route_snapshots: Vec::new(),
     };
-    // Snapshot every exclusion against the pre-VPN route table. In particular, a pushed default
-    // route must not become the gateway used to construct the exclusions that are supposed to
-    // bypass it. The complete rollback set is durable before the first TUN or route mutation.
+    // Prove every excluded exact prefix absent against the pre-VPN route table and derive its
+    // exclusive add before pushing any tunnel route. In particular, a pushed default must not
+    // become its own bypass gateway. The complete cleanup intent is durable before the first TUN
+    // or route mutation; ambient exact routes are conflicts rather than state we replace.
     let mut excluded_route_mutations = Vec::with_capacity(payload.excluded_routes.len());
     for route in &payload.excluded_routes {
+        operations.check_preparation()?;
         let (snapshot, mutation) = operations.plan_excluded_route(route)?;
+        operations.check_preparation()?;
         applied_network.excluded_route_snapshots.push(snapshot);
         excluded_route_mutations.push(mutation);
     }
@@ -4539,13 +4912,17 @@ fn prepare_tunnel_with<O: NetworkPrepareOps>(
     // its link-local routes disappear when the supervisor fd closes; every host-global mutation
     // already has enough journaled state to be undone after a crash.
     persist_network_prepare_journal(state, &applied_network, "preparing tunnel", operations)?;
+    operations.check_preparation()?;
 
     let device = operations.create_tun(&interface_name)?;
+    operations.check_preparation()?;
     applied_network.interface_name = operations.tun_name(&device).to_owned();
     applied_network.journal_phase = NetworkJournalPhase::TunCreated;
     persist_network_prepare_journal(state, &applied_network, "created tunnel device", operations)?;
+    operations.check_preparation()?;
 
     operations.apply_link(&applied_network.interface_name, mtu, &tunnel_addresses)?;
+    operations.check_preparation()?;
     applied_network.journal_phase = NetworkJournalPhase::LinkConfigured;
     persist_network_prepare_journal(
         state,
@@ -4553,8 +4930,10 @@ fn prepare_tunnel_with<O: NetworkPrepareOps>(
         "configured tunnel link",
         operations,
     )?;
+    operations.check_preparation()?;
 
     operations.apply_routes(&applied_network.interface_name, &payload.route_pushes)?;
+    operations.check_preparation()?;
     applied_network.journal_phase = NetworkJournalPhase::RoutesConfigured;
     persist_network_prepare_journal(
         state,
@@ -4562,9 +4941,22 @@ fn prepare_tunnel_with<O: NetworkPrepareOps>(
         "configured tunnel routes",
         operations,
     )?;
+    operations.check_preparation()?;
 
-    for mutation in excluded_route_mutations {
-        operations.apply_excluded_route(mutation)?;
+    for (index, mutation) in excluded_route_mutations.into_iter().enumerate() {
+        operations.check_preparation()?;
+        let snapshot = applied_network.excluded_route_snapshots[index].clone();
+        let installed_route = operations.apply_excluded_route(&snapshot, mutation)?;
+        operations.check_preparation()?;
+        applied_network.excluded_route_snapshots[index].installed_route = Some(installed_route);
+        applied_network.journal_phase = NetworkJournalPhase::ConfiguringExcludedRoutes;
+        persist_network_prepare_journal(
+            state,
+            &applied_network,
+            "journaled exact installed excluded route",
+            operations,
+        )?;
+        operations.check_preparation()?;
     }
     applied_network.journal_phase = NetworkJournalPhase::ExcludedRoutesConfigured;
     persist_network_prepare_journal(
@@ -4573,6 +4965,7 @@ fn prepare_tunnel_with<O: NetworkPrepareOps>(
         "configured excluded routes",
         operations,
     )?;
+    operations.check_preparation()?;
 
     if let Some(planned_dns) = planned_dns {
         applied_network.dns_backend = Some(planned_dns.clone());
@@ -4583,11 +4976,13 @@ fn prepare_tunnel_with<O: NetworkPrepareOps>(
             "journaled DNS mutation",
             operations,
         )?;
+        operations.check_preparation()?;
         let applied_dns = operations.apply_dns(
             &applied_network.interface_name,
             &payload.dns_servers,
             planned_dns,
         )?;
+        operations.check_preparation()?;
         applied_network.dns_backend = Some(applied_dns);
     }
     applied_network.journal_phase = NetworkJournalPhase::Prepared;
@@ -4597,6 +4992,7 @@ fn prepare_tunnel_with<O: NetworkPrepareOps>(
         "tunnel prepared; awaiting worker",
         operations,
     )?;
+    operations.check_preparation()?;
 
     Ok(PreparedTunnel {
         device,
@@ -4883,14 +5279,12 @@ where
     R: AsyncRead + Unpin,
 {
     let mut decoder = PacketStreamDecoder::new(packet_read_mtu)?;
-    let mut frame = [0u8; VPN_CELL_LEN];
     loop {
-        match read_exact_or_eof(recv, &mut frame).await {
+        let mut frame = VpnPaddedCellV1::zeroed();
+        match read_exact_or_eof(recv, frame.as_mut()).await {
             Ok(true) => {
-                let cell = VpnPaddedCellV1::parse_bytes_with_flow_label_bits(
-                    &frame,
-                    VpnFlowLabelV1::MAX_BITS,
-                )?;
+                let cell = frame.parse_with_flow_label_bits(VpnFlowLabelV1::MAX_BITS)?;
+                drop(frame);
                 if cell.header.class != VpnCellClassV1::Data {
                     continue;
                 }
@@ -5337,9 +5731,6 @@ fn encode_packet_stream_frame(packet: &[u8]) -> Result<Vec<u8>, ControllerError>
 trait NetworkCleanupOps {
     fn persist(&mut self, state: &State) -> Result<(), ControllerError>;
     fn revert_resolved(&mut self, interface_name: &str) -> Result<(), ControllerError>;
-    fn restore_resolv_conf(&mut self) -> Result<bool, ControllerError>;
-    fn remove_resolv_conf_backup(&mut self) -> Result<(), ControllerError>;
-    fn resolv_conf_backup_exists(&mut self) -> Result<bool, ControllerError>;
     fn restore_excluded_route(
         &mut self,
         snapshot: &ExcludedRouteSnapshot,
@@ -5353,18 +5744,6 @@ impl NetworkCleanupOps for SystemNetworkCleanupOps {
 
     fn revert_resolved(&mut self, interface_name: &str) -> Result<(), ControllerError> {
         cleanup_resolved_dns(interface_name)
-    }
-
-    fn restore_resolv_conf(&mut self) -> Result<bool, ControllerError> {
-        restore_resolv_conf_from_backup()
-    }
-
-    fn remove_resolv_conf_backup(&mut self) -> Result<(), ControllerError> {
-        remove_resolv_conf_backup_if_present()
-    }
-
-    fn resolv_conf_backup_exists(&mut self) -> Result<bool, ControllerError> {
-        resolv_conf_backup_exists()
     }
 
     fn restore_excluded_route(
@@ -5394,17 +5773,6 @@ fn cleanup_persisted_network_with<O: NetworkCleanupOps>(
     operations: &mut O,
 ) -> Result<(), ControllerError> {
     if state.applied_network.is_none() {
-        if operations.resolv_conf_backup_exists()? {
-            persist_cleanup_transition(state, operations, |next| {
-                next.active = false;
-                next.repair_required = true;
-                next.message =
-                    "repair required: resolver backup exists without a cleanup journal".to_owned();
-            })?;
-            return Err(ControllerError::State(
-                "refusing to consume an unjournaled resolver backup".to_owned(),
-            ));
-        }
         return Ok(());
     }
 
@@ -5438,45 +5806,6 @@ fn cleanup_persisted_network_with<O: NetworkCleanupOps>(
                 })?;
             }
             Some(DnsBackendState::ResolvedReverted { .. }) => {
-                persist_cleanup_transition(state, operations, |next| {
-                    next.applied_network
-                        .as_mut()
-                        .expect("cleanup journal remains present")
-                        .dns_backend = None;
-                    next.network_service = None;
-                })?;
-            }
-            Some(DnsBackendState::ResolvConf) => {
-                let backup_present = operations.restore_resolv_conf()?;
-                if !backup_present {
-                    return Err(ControllerError::State(
-                        "active resolv.conf cleanup journal is missing its durable backup"
-                            .to_owned(),
-                    ));
-                }
-                // Keep the backup until this restored phase is itself durable. If this persist
-                // fails, replay restores from the still-present backup again.
-                persist_cleanup_transition(state, operations, |next| {
-                    next.applied_network
-                        .as_mut()
-                        .expect("cleanup journal remains present")
-                        .dns_backend = Some(DnsBackendState::ResolvConfRestored);
-                })?;
-            }
-            Some(DnsBackendState::ResolvConfPlanned) => {
-                let _ = operations.restore_resolv_conf()?;
-                // No backup means the crash happened before backup creation and therefore before
-                // the global resolver mutation. When a backup exists, retain it through the same
-                // durable restored phase used by an active resolv.conf journal.
-                persist_cleanup_transition(state, operations, |next| {
-                    next.applied_network
-                        .as_mut()
-                        .expect("cleanup journal remains present")
-                        .dns_backend = Some(DnsBackendState::ResolvConfRestored);
-                })?;
-            }
-            Some(DnsBackendState::ResolvConfRestored) => {
-                operations.remove_resolv_conf_backup()?;
                 persist_cleanup_transition(state, operations, |next| {
                     next.applied_network
                         .as_mut()
@@ -5523,14 +5852,20 @@ fn cleanup_persisted_network_with<O: NetworkCleanupOps>(
     })
 }
 fn cleanup_persisted_network(state: &mut State) -> Result<(), ControllerError> {
+    #[cfg(target_os = "linux")]
+    quiesce_system_command_cgroup_until(Instant::now() + PROCESS_KILL_REAP_TIMEOUT)?;
     cleanup_persisted_network_with(state, &mut SystemNetworkCleanupOps)
 }
-fn apply_tunnel_link_config(
+fn apply_tunnel_link_config_with<F>(
     interface_name: &str,
     mtu: u16,
     tunnel_addresses: &[ParsedCidr],
-) -> Result<(), ControllerError> {
-    run_command(
+    mut run: F,
+) -> Result<(), ControllerError>
+where
+    F: FnMut(&str, Vec<String>) -> Result<String, ControllerError>,
+{
+    run(
         DEFAULT_ROUTE_CMD,
         vec![
             "link".to_owned(),
@@ -5543,17 +5878,24 @@ fn apply_tunnel_link_config(
         ],
     )?;
     for address in tunnel_addresses {
-        run_command(
+        run(
             DEFAULT_ROUTE_CMD,
             tunnel_address_add_args(interface_name, *address),
         )?;
     }
     Ok(())
 }
-fn apply_route_pushes(interface_name: &str, routes: &[String]) -> Result<(), ControllerError> {
+fn apply_route_pushes_with<F>(
+    interface_name: &str,
+    routes: &[String],
+    mut run: F,
+) -> Result<(), ControllerError>
+where
+    F: FnMut(&str, Vec<String>) -> Result<String, ControllerError>,
+{
     for route in routes {
         let parsed = parse_cidr(route)?;
-        run_command(
+        run(
             DEFAULT_ROUTE_CMD,
             tunnel_route_add_args(interface_name, parsed),
         )?;
@@ -5580,13 +5922,21 @@ fn tunnel_route_add_args(interface_name: &str, route: ParsedCidr) -> Vec<String>
         interface_name.to_owned(),
     ]
 }
-fn plan_excluded_route_mutation(
+fn plan_excluded_route_mutation_with<F>(
     route: &str,
-) -> Result<(ExcludedRouteSnapshot, Vec<String>), ControllerError> {
+    mut run: F,
+) -> Result<(ExcludedRouteSnapshot, Vec<String>), ControllerError>
+where
+    F: FnMut(&str, Vec<String>) -> Result<String, ControllerError>,
+{
     let normalized = route.trim().to_owned();
     let parsed = parse_cidr(&normalized)?;
-    let previous_route = capture_existing_route(parsed.family(), &normalized)?;
-    let default_route = capture_default_route(parsed.family())?;
+    if capture_existing_route_with(parsed.family(), &normalized, &mut run)?.is_some() {
+        return Err(ControllerError::State(format!(
+            "cannot install excluded route {normalized}: an exact ambient route already exists"
+        )));
+    }
+    let default_route = capture_default_route_with(parsed.family(), &mut run)?;
     let Some((via, dev)) = default_route else {
         return Err(ControllerError::State(format!(
             "cannot install excluded route {normalized}: no system default route for {}",
@@ -5599,7 +5949,7 @@ fn plan_excluded_route_mutation(
     let mut command = vec![
         parsed.family().flag().to_owned(),
         "route".to_owned(),
-        "replace".to_owned(),
+        "add".to_owned(),
         normalized.clone(),
     ];
     if let Some(via) = via {
@@ -5610,22 +5960,41 @@ fn plan_excluded_route_mutation(
         command.push("dev".to_owned());
         command.push(dev);
     }
+    if !command
+        .iter()
+        .any(|argument| argument == "via" || argument == "dev")
+    {
+        return Err(ControllerError::State(format!(
+            "cannot install excluded route {normalized}: default route has neither a gateway nor a device"
+        )));
+    }
+    // Numeric protocol 186 is reserved by this first-release helper contract as an ownership
+    // marker. Cleanup still requires the entire exact readback, not merely this marker.
+    command.push("proto".to_owned());
+    command.push("186".to_owned());
     Ok((
         ExcludedRouteSnapshot {
             cidr: normalized,
             family: parsed.family(),
-            previous_route,
+            installed_route: None,
         },
         command,
     ))
 }
-fn capture_default_route(family: IpFamily) -> Result<Option<RouteViaDev>, ControllerError> {
-    let output = run_command(
+fn capture_default_route_with<F>(
+    family: IpFamily,
+    mut run: F,
+) -> Result<Option<RouteViaDev>, ControllerError>
+where
+    F: FnMut(&str, Vec<String>) -> Result<String, ControllerError>,
+{
+    let output = run(
         DEFAULT_ROUTE_CMD,
         vec![
             family.flag().to_owned(),
             DEFAULT_ROUTE_SHOW_PREFIX[0].to_owned(),
             DEFAULT_ROUTE_SHOW_PREFIX[1].to_owned(),
+            DEFAULT_ROUTE_SHOW_PREFIX[2].to_owned(),
             "default".to_owned(),
         ],
     )?;
@@ -5634,66 +6003,208 @@ fn capture_default_route(family: IpFamily) -> Result<Option<RouteViaDev>, Contro
     };
     Ok(Some(parse_route_via_dev(line)))
 }
-fn capture_existing_route(family: IpFamily, cidr: &str) -> Result<Option<String>, ControllerError> {
-    let output = run_command(
+fn capture_existing_route_with<F>(
+    family: IpFamily,
+    cidr: &str,
+    mut run: F,
+) -> Result<Option<String>, ControllerError>
+where
+    F: FnMut(&str, Vec<String>) -> Result<String, ControllerError>,
+{
+    let output = run(
         DEFAULT_ROUTE_CMD,
         vec![
             family.flag().to_owned(),
             DEFAULT_ROUTE_SHOW_PREFIX[0].to_owned(),
             DEFAULT_ROUTE_SHOW_PREFIX[1].to_owned(),
+            DEFAULT_ROUTE_SHOW_PREFIX[2].to_owned(),
             cidr.to_owned(),
         ],
     )?;
-    Ok(output
+    exact_route_readback(&output, cidr)
+}
+fn capture_existing_route(family: IpFamily, cidr: &str) -> Result<Option<String>, ControllerError> {
+    capture_existing_route_with(family, cidr, |program, args| run_command(program, args))
+}
+fn exact_route_readback(output: &str, cidr: &str) -> Result<Option<String>, ControllerError> {
+    if output.as_bytes().contains(&0) {
+        return Err(ControllerError::State(format!(
+            "route readback for {cidr} contains an embedded NUL"
+        )));
+    }
+    let mut routes = output
         .lines()
-        .find(|line| !line.trim().is_empty())
-        .map(|line| line.trim().to_owned()))
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    let Some(route) = routes.next() else {
+        return Ok(None);
+    };
+    if routes.next().is_some() {
+        return Err(ControllerError::State(format!(
+            "route readback for {cidr} is ambiguous"
+        )));
+    }
+    if !route_destination_matches_cidr(route, cidr) {
+        return Err(ControllerError::State(format!(
+            "route readback for {cidr} returned a different destination"
+        )));
+    }
+    Ok(Some(route.to_owned()))
+}
+fn route_destination_matches_cidr(route: &str, cidr: &str) -> bool {
+    let Ok(expected) = parse_cidr(cidr) else {
+        return false;
+    };
+    let Some(destination) = route.split_ascii_whitespace().next() else {
+        return false;
+    };
+    if destination == "default" {
+        return expected.prefix == 0 && expected.address.is_unspecified();
+    }
+    let actual = if destination.contains('/') {
+        parse_cidr(destination).ok()
+    } else {
+        destination
+            .parse::<IpAddr>()
+            .ok()
+            .map(|address| ParsedCidr {
+                prefix: match address {
+                    IpAddr::V4(_) => 32,
+                    IpAddr::V6(_) => 128,
+                },
+                address,
+            })
+    };
+    actual == Some(expected)
+}
+fn route_has_exact_field(route: &str, field: &str, value: &str) -> bool {
+    route
+        .split_ascii_whitespace()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|pair| pair[0] == field && pair[1] == value)
+}
+fn validate_installed_excluded_route(
+    snapshot: &ExcludedRouteSnapshot,
+    mutation: &[String],
+    installed_route: &str,
+) -> Result<(), ControllerError> {
+    if !route_destination_matches_cidr(installed_route, &snapshot.cidr) {
+        return Err(ControllerError::State(format!(
+            "installed excluded-route readback does not identify exact prefix {}",
+            snapshot.cidr
+        )));
+    }
+    for field in ["via", "dev", "proto"] {
+        let Some(index) = mutation.iter().position(|argument| argument == field) else {
+            continue;
+        };
+        let value = mutation.get(index + 1).ok_or_else(|| {
+            ControllerError::State(format!(
+                "planned excluded-route mutation has a truncated {field} field"
+            ))
+        })?;
+        if !route_has_exact_field(installed_route, field, value) {
+            return Err(ControllerError::State(format!(
+                "installed excluded-route readback for {} does not match planned {field} {value}",
+                snapshot.cidr
+            )));
+        }
+    }
+    Ok(())
+}
+#[derive(Debug, PartialEq, Eq)]
+enum ExcludedRouteRestoreAction {
+    AlreadyAbsent,
+    DeleteInstalled,
+}
+fn excluded_route_restore_action(
+    snapshot: &ExcludedRouteSnapshot,
+    current_route: Option<&str>,
+) -> Result<ExcludedRouteRestoreAction, ControllerError> {
+    if current_route.is_none() {
+        return Ok(ExcludedRouteRestoreAction::AlreadyAbsent);
+    }
+    if current_route != snapshot.installed_route.as_deref() {
+        return Err(ControllerError::State(format!(
+            "refusing to delete excluded route {} because live route state drifted from the exact helper-installed readback",
+            snapshot.cidr
+        )));
+    }
+    Ok(ExcludedRouteRestoreAction::DeleteInstalled)
 }
 fn restore_excluded_route(snapshot: &ExcludedRouteSnapshot) -> Result<(), ControllerError> {
-    if let Some(previous_route) = &snapshot.previous_route {
-        let mut args = vec![
-            snapshot.family.flag().to_owned(),
-            "route".to_owned(),
-            "replace".to_owned(),
-        ];
-        args.extend(previous_route.split_whitespace().map(ToOwned::to_owned));
-        run_command(DEFAULT_ROUTE_CMD, args)?;
+    let current = capture_existing_route(snapshot.family, &snapshot.cidr)?;
+    let action = excluded_route_restore_action(snapshot, current.as_deref())?;
+    if action == ExcludedRouteRestoreAction::AlreadyAbsent {
         return Ok(());
     }
-    let args = vec![
+    let ExcludedRouteRestoreAction::DeleteInstalled = action else {
+        unreachable!("the already-absent action returned above")
+    };
+    let installed_route = snapshot.installed_route.as_ref().ok_or_else(|| {
+        ControllerError::State(format!(
+            "excluded route {} lacks a durable installed-route ownership readback",
+            snapshot.cidr
+        ))
+    })?;
+    // Delete the exact installed attributes rather than only the prefix. If another route
+    // manager wins the race after the readback check, netlink rejects this deletion instead of
+    // removing that manager's replacement.
+    let mut delete_args = vec![
         snapshot.family.flag().to_owned(),
         "route".to_owned(),
         "del".to_owned(),
-        snapshot.cidr.clone(),
     ];
-    match run_command(DEFAULT_ROUTE_CMD, args) {
-        Ok(_) => Ok(()),
-        Err(ControllerError::State(message))
-            if message.contains("No such process")
-                || message.contains("Cannot find device")
-                || message.contains("No such file or directory") =>
-        {
-            Ok(())
-        }
-        Err(error) => Err(error),
+    delete_args.extend(
+        installed_route
+            .split_ascii_whitespace()
+            .map(ToOwned::to_owned),
+    );
+    run_command(DEFAULT_ROUTE_CMD, delete_args)?;
+
+    let restored = capture_existing_route(snapshot.family, &snapshot.cidr)?;
+    if restored.is_some() {
+        return Err(ControllerError::State(format!(
+            "excluded route {} remained present after exact helper-route deletion",
+            snapshot.cidr
+        )));
     }
+    Ok(())
 }
-fn plan_dns_backend(interface_name: &str, dns_servers: &[String]) -> Option<DnsBackendState> {
+fn plan_dns_backend(
+    interface_name: &str,
+    dns_servers: &[String],
+) -> Result<Option<DnsBackendState>, ControllerError> {
+    plan_dns_backend_for_availability(interface_name, dns_servers, command_exists("resolvectl"))
+}
+fn plan_dns_backend_for_availability(
+    interface_name: &str,
+    dns_servers: &[String],
+    resolvectl_available: bool,
+) -> Result<Option<DnsBackendState>, ControllerError> {
     if dns_servers.is_empty() {
-        None
-    } else if command_exists("resolvectl") {
-        Some(DnsBackendState::Resolved {
+        Ok(None)
+    } else if resolvectl_available {
+        Ok(Some(DnsBackendState::Resolved {
             interface_name: interface_name.to_owned(),
-        })
+        }))
     } else {
-        Some(DnsBackendState::ResolvConfPlanned)
+        Err(ControllerError::State(
+            "V1 DNS configuration requires a trusted resolvectl executable; direct /etc/resolv.conf mutation is unsupported"
+                .to_owned(),
+        ))
     }
 }
-fn apply_dns_plan(
+fn apply_dns_plan_with<F>(
     interface_name: &str,
     dns_servers: &[String],
     plan: DnsBackendState,
-) -> Result<DnsBackendState, ControllerError> {
+    mut run: F,
+) -> Result<DnsBackendState, ControllerError>
+where
+    F: FnMut(&str, Vec<String>) -> Result<String, ControllerError>,
+{
     match plan {
         DnsBackendState::Resolved {
             interface_name: planned_interface,
@@ -5706,8 +6217,8 @@ fn apply_dns_plan(
             let apply_result = (|| -> Result<(), ControllerError> {
                 let mut dns_args = vec!["dns".to_owned(), interface_name.to_owned()];
                 dns_args.extend(dns_servers.iter().map(|item| item.trim().to_owned()));
-                run_command("resolvectl", dns_args)?;
-                run_command(
+                run("resolvectl", dns_args)?;
+                run(
                     "resolvectl",
                     vec![
                         "domain".to_owned(),
@@ -5715,7 +6226,7 @@ fn apply_dns_plan(
                         "~.".to_owned(),
                     ],
                 )?;
-                run_command(
+                run(
                     "resolvectl",
                     vec![
                         "default-route".to_owned(),
@@ -5726,7 +6237,7 @@ fn apply_dns_plan(
                 Ok(())
             })();
             if let Err(error) = apply_result {
-                return match run_command(
+                return match run(
                     "resolvectl",
                     vec!["revert".to_owned(), interface_name.to_owned()],
                 ) {
@@ -5740,70 +6251,7 @@ fn apply_dns_plan(
                 interface_name: interface_name.to_owned(),
             })
         }
-        DnsBackendState::ResolvConfPlanned => {
-            let backup_path = resolv_conf_backup_path();
-            let backup_bytes = read_stable_regular_file_bounded(
-                Path::new("/etc/resolv.conf"),
-                MAX_RESOLV_CONF_BYTES_V1,
-                "resolver configuration",
-            )?;
-            let state_root = backup_path.parent().ok_or_else(|| {
-                ControllerError::State("resolver backup path has no parent".to_owned())
-            })?;
-            prepare_private_state_root(state_root)?;
-            match fs::symlink_metadata(&backup_path) {
-                Ok(_) => {
-                    return Err(ControllerError::State(format!(
-                        "resolver backup {} already exists; repair the prior VPN state before connecting",
-                        backup_path.display()
-                    )));
-                }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
-            }
-            // The backup is atomically written and fsync'd before the global resolver is changed.
-            // A crash while the journal is still ResolvConfPlanned can therefore restore it.
-            write_file_atomic(
-                &backup_path,
-                &backup_bytes,
-                0o600,
-                true,
-                "resolver configuration backup",
-            )?;
-            let mut rendered = String::from("# sora-vpn-controller managed resolv.conf\n");
-            for server in dns_servers {
-                rendered.push_str("nameserver ");
-                rendered.push_str(server.trim());
-                rendered.push('\n');
-            }
-            if let Err(error) = write_file_atomic(
-                Path::new("/etc/resolv.conf"),
-                rendered.as_bytes(),
-                0o644,
-                false,
-                "resolver configuration",
-            ) {
-                return match write_file_atomic(
-                    Path::new("/etc/resolv.conf"),
-                    &backup_bytes,
-                    0o644,
-                    false,
-                    "resolver configuration rollback",
-                ) {
-                    Ok(()) => {
-                        remove_private_file_durable(&backup_path, "resolver configuration backup")?;
-                        Err(error)
-                    }
-                    Err(rollback_error) => Err(ControllerError::State(format!(
-                        "{error}; resolver rollback also failed: {rollback_error}"
-                    ))),
-                };
-            }
-            Ok(DnsBackendState::ResolvConf)
-        }
-        DnsBackendState::ResolvedReverted { .. }
-        | DnsBackendState::ResolvConf
-        | DnsBackendState::ResolvConfRestored => Err(ControllerError::State(
+        DnsBackendState::ResolvedReverted { .. } => Err(ControllerError::State(
             "refusing to apply a DNS journal that is already active or being cleaned".to_owned(),
         )),
     }
@@ -5829,52 +6277,12 @@ fn cleanup_resolved_dns(interface_name: &str) -> Result<(), ControllerError> {
         Err(error) => Err(error),
     }
 }
-fn resolv_conf_backup_exists() -> Result<bool, ControllerError> {
-    match fs::symlink_metadata(resolv_conf_backup_path()) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error.into()),
-    }
-}
-fn restore_resolv_conf_from_backup() -> Result<bool, ControllerError> {
-    let backup = resolv_conf_backup_path();
-    if !resolv_conf_backup_exists()? {
-        return Ok(false);
-    }
-    let bytes = read_private_stable_regular_file_bounded(
-        &backup,
-        MAX_RESOLV_CONF_BYTES_V1,
-        "resolver configuration backup",
-    )?;
-    write_file_atomic(
-        Path::new("/etc/resolv.conf"),
-        &bytes,
-        0o644,
-        false,
-        "resolver configuration",
-    )?;
-    Ok(true)
-}
-fn remove_resolv_conf_backup_if_present() -> Result<(), ControllerError> {
-    let backup = resolv_conf_backup_path();
-    match fs::symlink_metadata(&backup) {
-        Ok(_) => remove_private_file_durable(&backup, "resolver configuration backup"),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
-}
 fn dns_backend_label(backend: &DnsBackendState) -> String {
     match backend {
         DnsBackendState::Resolved { .. } | DnsBackendState::ResolvedReverted { .. } => {
             "resolvectl".to_owned()
         }
-        DnsBackendState::ResolvConf
-        | DnsBackendState::ResolvConfPlanned
-        | DnsBackendState::ResolvConfRestored => "resolv.conf".to_owned(),
     }
-}
-fn resolv_conf_backup_path() -> PathBuf {
-    default_state_root().join(RESOLV_CONF_BACKUP_FILE_NAME)
 }
 fn command_exists(program: &str) -> bool {
     resolve_trusted_command(program).is_some()
@@ -5883,8 +6291,15 @@ fn command_exists(program: &str) -> bool {
 fn validate_system_command_cgroup_directory(
     path: &Path,
     metadata: &fs::Metadata,
+    owner_private: bool,
 ) -> Result<(), ControllerError> {
-    if !metadata.file_type().is_dir() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+    let permissions = metadata.mode() & 0o777;
+    if !metadata.file_type().is_dir()
+        || metadata.uid() != 0
+        || metadata.gid() != 0
+        || metadata.mode() & 0o022 != 0
+        || (owner_private && permissions != 0o700)
+    {
         return Err(ControllerError::CommandCustody(format!(
             "fixed command cgroup {} is not a root-custodied directory",
             path.display()
@@ -5892,50 +6307,139 @@ fn validate_system_command_cgroup_directory(
     }
     Ok(())
 }
+#[cfg(any(target_os = "linux", test))]
+fn system_command_cgroup_control_has_custody(
+    uid: u32,
+    gid: u32,
+    mode: u32,
+    required_owner_bits: u32,
+) -> bool {
+    uid == 0 && gid == 0 && mode & 0o022 == 0 && mode & required_owner_bits == required_owner_bits
+}
+#[cfg(target_os = "linux")]
+fn validate_system_command_cgroup_control(
+    path: &Path,
+    metadata: &fs::Metadata,
+    required_owner_bits: u32,
+) -> Result<(), ControllerError> {
+    if !metadata.file_type().is_file()
+        || !system_command_cgroup_control_has_custody(
+            metadata.uid(),
+            metadata.gid(),
+            metadata.mode(),
+            required_owner_bits,
+        )
+    {
+        return Err(ControllerError::CommandCustody(format!(
+            "fixed command cgroup control {} does not have root-owned, non-writable custody with required owner access",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn validate_cgroup2_mount(root: &Path, owner_private: bool) -> Result<fs::File, ControllerError> {
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_DIRECTORY | nix::libc::O_NOFOLLOW);
+    let root_directory = options.open(root).map_err(|error| {
+        ControllerError::CommandCustody(format!(
+            "failed to open Linux cgroup-v2 custody directory {} without following links: {error}",
+            root.display()
+        ))
+    })?;
+    let opened_metadata = root_directory.metadata().map_err(|error| {
+        ControllerError::CommandCustody(format!(
+            "failed to inspect opened Linux cgroup-v2 custody directory {}: {error}",
+            root.display()
+        ))
+    })?;
+    validate_system_command_cgroup_directory(root, &opened_metadata, owner_private)?;
+    let mut filesystem = std::mem::MaybeUninit::<nix::libc::statfs>::zeroed();
+    // SAFETY: the descriptor pins the opened directory, and `filesystem` provides writable storage
+    // for one statfs result. Checking the filesystem magic prevents a lookalike directory from
+    // satisfying the root-custody checks in a hostile mount namespace.
+    if unsafe { nix::libc::fstatfs(root_directory.as_raw_fd(), filesystem.as_mut_ptr()) } != 0 {
+        return Err(ControllerError::CommandCustody(format!(
+            "failed to identify Linux cgroup-v2 custody directory {}: {}",
+            root.display(),
+            io::Error::last_os_error()
+        )));
+    }
+    // SAFETY: successful fstatfs initializes the result.
+    let filesystem = unsafe { filesystem.assume_init() };
+    if filesystem.f_type as u64 != nix::libc::CGROUP2_SUPER_MAGIC as u64 {
+        return Err(ControllerError::CommandCustody(format!(
+            "Linux privileged command custody directory {} is not on a genuine cgroup-v2 filesystem",
+            root.display()
+        )));
+    }
+    Ok(root_directory)
+}
 #[cfg(target_os = "linux")]
 fn system_command_cgroup_path() -> PathBuf {
     PathBuf::from(SYSTEM_COMMAND_CGROUP_PATH)
 }
 #[cfg(target_os = "linux")]
-fn ensure_system_command_cgroup() -> Result<PathBuf, ControllerError> {
+fn ensure_system_command_cgroup_at(path: &Path) -> Result<PathBuf, ControllerError> {
     let root = Path::new("/sys/fs/cgroup");
+    if path.parent() != Some(root) {
+        return Err(ControllerError::CommandCustody(format!(
+            "command cgroup {} is not a direct child of the cgroup-v2 root",
+            path.display()
+        )));
+    }
     let controllers = root.join("cgroup.controllers");
     let root_metadata = fs::symlink_metadata(root).map_err(|error| {
-        ControllerError::CommandCustody(format!(
-            "Linux cgroup-v2 root is unavailable: {error}"
-        ))
+        ControllerError::CommandCustody(format!("Linux cgroup-v2 root is unavailable: {error}"))
     })?;
-    validate_system_command_cgroup_directory(root, &root_metadata)?;
+    validate_system_command_cgroup_directory(root, &root_metadata, false)?;
+    // Keep the verified mount root open across child-cgroup creation and validation. Cgroupfs
+    // controls are live kernel state rather than persistent files, so fsync is neither supported
+    // nor a durability boundary; the fixed path is rediscovered and proven empty on every cleanup.
+    let root_directory = validate_cgroup2_mount(root, false)?;
     let controllers_metadata = fs::symlink_metadata(&controllers).map_err(|error| {
         ControllerError::CommandCustody(format!(
             "Linux cgroup-v2 controller marker is unavailable: {error}"
         ))
     })?;
-    if !controllers_metadata.file_type().is_file() {
-        return Err(ControllerError::CommandCustody(
-            "Linux privileged command custody requires a cgroup-v2 mount".to_owned(),
-        ));
-    }
+    validate_system_command_cgroup_control(&controllers, &controllers_metadata, 0o400)?;
 
-    let path = system_command_cgroup_path();
-    match fs::create_dir(&path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+    let mut builder = fs::DirBuilder::new();
+    builder.mode(0o700);
+    let created = match builder.create(path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => false,
         Err(error) => {
             return Err(ControllerError::CommandCustody(format!(
                 "failed to create fixed command cgroup {}: {error}",
                 path.display()
             )));
         }
+    };
+    if created && let Err(error) = fs::set_permissions(path, fs::Permissions::from_mode(0o700)) {
+        // The just-created cgroup is necessarily empty. Remove it on a mode failure so an
+        // attacker-controlled umask cannot leave a weaker fixed custody directory behind.
+        let _ = fs::remove_dir(path);
+        return Err(ControllerError::CommandCustody(format!(
+            "failed to make fixed command cgroup {} owner-private: {error}",
+            path.display()
+        )));
     }
-    let metadata = fs::symlink_metadata(&path).map_err(|error| {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
         ControllerError::CommandCustody(format!(
             "failed to inspect fixed command cgroup {}: {error}",
             path.display()
         ))
     })?;
-    validate_system_command_cgroup_directory(&path, &metadata)?;
-    for control in ["cgroup.events", "cgroup.kill", "cgroup.procs"] {
+    validate_system_command_cgroup_directory(path, &metadata, true)?;
+    let command_directory = validate_cgroup2_mount(path, true)?;
+    for (control, required_owner_bits) in [
+        ("cgroup.events", 0o400),
+        ("cgroup.kill", 0o200),
+        ("cgroup.procs", 0o200),
+    ] {
         let control_path = path.join(control);
         let metadata = fs::symlink_metadata(&control_path).map_err(|error| {
             ControllerError::CommandCustody(format!(
@@ -5943,14 +6447,15 @@ fn ensure_system_command_cgroup() -> Result<PathBuf, ControllerError> {
                 control_path.display()
             ))
         })?;
-        if !metadata.file_type().is_file() {
-            return Err(ControllerError::CommandCustody(format!(
-                "fixed command cgroup control {} is not a direct regular control file",
-                control_path.display()
-            )));
-        }
+        validate_system_command_cgroup_control(&control_path, &metadata, required_owner_bits)?;
     }
-    Ok(path)
+    drop(command_directory);
+    drop(root_directory);
+    Ok(path.to_path_buf())
+}
+#[cfg(target_os = "linux")]
+fn ensure_system_command_cgroup() -> Result<PathBuf, ControllerError> {
+    ensure_system_command_cgroup_at(&system_command_cgroup_path())
 }
 #[cfg(any(target_os = "linux", test))]
 fn parse_system_command_cgroup_populated(events: &str) -> Result<bool, ControllerError> {
@@ -6005,9 +6510,14 @@ fn system_command_cgroup_populated(path: &Path) -> Result<bool, ControllerError>
             "failed to open fixed command cgroup events: {error}"
         ))
     })?;
-    let bytes = read_bounded(&mut events, 4 * 1024, "fixed command cgroup events").map_err(
-        |error| ControllerError::CommandCustody(error.to_string()),
-    )?;
+    let metadata = events.metadata().map_err(|error| {
+        ControllerError::CommandCustody(format!(
+            "failed to inspect opened fixed command cgroup events control: {error}"
+        ))
+    })?;
+    validate_system_command_cgroup_control(&events_path, &metadata, 0o400)?;
+    let bytes = read_bounded(&mut events, 4 * 1024, "fixed command cgroup events")
+        .map_err(|error| ControllerError::CommandCustody(error.to_string()))?;
     let events = std::str::from_utf8(&bytes).map_err(|error| {
         ControllerError::CommandCustody(format!(
             "fixed command cgroup events are not UTF-8: {error}"
@@ -6021,6 +6531,11 @@ fn write_system_command_cgroup_control(
     control: &str,
     value: &[u8],
 ) -> Result<(), ControllerError> {
+    if control != "cgroup.kill" {
+        return Err(ControllerError::CommandCustody(format!(
+            "unsupported fixed command cgroup write control {control}"
+        )));
+    }
     let control_path = path.join(control);
     let mut options = fs::OpenOptions::new();
     options
@@ -6032,6 +6547,13 @@ fn write_system_command_cgroup_control(
             control_path.display()
         ))
     })?;
+    let metadata = file.metadata().map_err(|error| {
+        ControllerError::CommandCustody(format!(
+            "failed to inspect opened fixed command cgroup control {}: {error}",
+            control_path.display()
+        ))
+    })?;
+    validate_system_command_cgroup_control(&control_path, &metadata, 0o200)?;
     file.write_all(value).map_err(|error| {
         ControllerError::CommandCustody(format!(
             "failed to update fixed command cgroup control {}: {error}",
@@ -6046,22 +6568,54 @@ fn open_system_command_cgroup_procs(path: &Path) -> Result<fs::File, ControllerE
     options
         .write(true)
         .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
-    options.open(&procs_path).map_err(|error| {
+    let file = options.open(&procs_path).map_err(|error| {
         ControllerError::CommandCustody(format!(
             "failed to open fixed command cgroup membership control {}: {error}",
             procs_path.display()
         ))
-    })
+    })?;
+    let metadata = file.metadata().map_err(|error| {
+        ControllerError::CommandCustody(format!(
+            "failed to inspect opened fixed command cgroup membership control {}: {error}",
+            procs_path.display()
+        ))
+    })?;
+    validate_system_command_cgroup_control(&procs_path, &metadata, 0o200)?;
+    if file.as_raw_fd() > nix::libc::STDERR_FILENO {
+        return Ok(file);
+    }
+    // A caller may invoke the set-user-ID helper with closed stdio. Pin the membership control
+    // above descriptors 0..=2 before Command configures child stdio; otherwise dup2 could replace
+    // this fd with /dev/null and make the pre-exec write falsely appear successful.
+    // SAFETY: F_DUPFD_CLOEXEC duplicates one live descriptor at or above the supplied lower bound.
+    let duplicated = unsafe {
+        nix::libc::fcntl(
+            file.as_raw_fd(),
+            nix::libc::F_DUPFD_CLOEXEC,
+            nix::libc::STDERR_FILENO + 1,
+        )
+    };
+    if duplicated < 0 {
+        return Err(ControllerError::CommandCustody(format!(
+            "failed to pin fixed command cgroup membership control above stdio: {}",
+            io::Error::last_os_error()
+        )));
+    }
+    drop(file);
+    // SAFETY: F_DUPFD_CLOEXEC returned a fresh descriptor now owned by this File.
+    Ok(unsafe { fs::File::from_raw_fd(duplicated) })
 }
 #[cfg(target_os = "linux")]
-fn quiesce_system_command_cgroup_until(deadline: Instant) -> Result<(), ControllerError> {
-    let path = ensure_system_command_cgroup()?;
-    if !system_command_cgroup_populated(&path)? {
+fn quiesce_system_command_cgroup_at_until(
+    path: &Path,
+    deadline: Instant,
+) -> Result<(), ControllerError> {
+    if !system_command_cgroup_populated(path)? {
         return Ok(());
     }
-    write_system_command_cgroup_control(&path, "cgroup.kill", b"1\n")?;
+    write_system_command_cgroup_control(path, "cgroup.kill", b"1\n")?;
     loop {
-        if !system_command_cgroup_populated(&path)? {
+        if !system_command_cgroup_populated(path)? {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -6077,6 +6631,11 @@ fn quiesce_system_command_cgroup_until(deadline: Instant) -> Result<(), Controll
         );
     }
 }
+#[cfg(target_os = "linux")]
+fn quiesce_system_command_cgroup_until(deadline: Instant) -> Result<(), ControllerError> {
+    let path = ensure_system_command_cgroup()?;
+    quiesce_system_command_cgroup_at_until(&path, deadline)
+}
 fn run_command<I, S>(program: &str, args: I) -> Result<String, ControllerError>
 where
     I: IntoIterator<Item = S>,
@@ -6091,12 +6650,254 @@ where
         .collect::<Vec<_>>();
     execute_system_command(program, &program_path, &collected, SYSTEM_COMMAND_TIMEOUT)
 }
+#[cfg(target_os = "linux")]
+fn run_command_until<I, S>(
+    program: &str,
+    args: I,
+    preparation_deadline: Instant,
+) -> Result<String, ControllerError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let program_path = resolve_trusted_command(program).ok_or_else(|| {
+        ControllerError::State(format!("{program} was not found in trusted system paths"))
+    })?;
+    let collected = args
+        .into_iter()
+        .map(|item| item.as_ref().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let (execution_deadline, custody_deadline) =
+        privileged_command_deadlines(preparation_deadline)?;
+    if Instant::now() >= execution_deadline {
+        return Err(ControllerError::State(
+            "privileged preparation has no remaining time for another system command".to_owned(),
+        ));
+    }
+    let cgroup_path = ensure_system_command_cgroup()?;
+    execute_system_command_in_cgroup_until(
+        program,
+        &program_path,
+        &collected,
+        execution_deadline,
+        custody_deadline,
+        &cgroup_path,
+    )
+}
+#[cfg(target_os = "linux")]
+fn spawn_system_command_pipe_reader<R>(
+    reader: R,
+    max_bytes: usize,
+    name: &str,
+) -> io::Result<std::sync::mpsc::Receiver<io::Result<BoundedPipeOutput>>>
+where
+    R: io::Read + Send + 'static,
+{
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(move || {
+            let _ = sender.send(drain_bounded_pipe(reader, max_bytes));
+        })?;
+    Ok(receiver)
+}
+#[cfg(target_os = "linux")]
+fn receive_system_command_pipe_until(
+    receiver: &std::sync::mpsc::Receiver<io::Result<BoundedPipeOutput>>,
+    deadline: Instant,
+    label: &str,
+) -> Result<BoundedPipeOutput, ControllerError> {
+    match receiver.try_recv() {
+        Ok(result) => return result.map_err(Into::into),
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            return Err(ControllerError::State(format!(
+                "{label} drain thread terminated without a result"
+            )));
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+    }
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .ok_or_else(|| {
+            ControllerError::State(format!(
+                "timed out draining {label} after the exact command unit exited"
+            ))
+        })?;
+    match receiver.recv_timeout(remaining) {
+        Ok(result) => result.map_err(Into::into),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(ControllerError::State(format!(
+            "timed out draining {label} after the exact command unit exited"
+        ))),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(ControllerError::State(
+            format!("{label} drain thread terminated without a result"),
+        )),
+    }
+}
+#[cfg(target_os = "linux")]
+fn system_command_leader_exited_unreaped(child_pid: u32) -> io::Result<bool> {
+    let mut information = std::mem::MaybeUninit::<nix::libc::siginfo_t>::zeroed();
+    // SAFETY: `information` points to writable storage for one siginfo_t. WNOWAIT observes only
+    // this direct child and leaves it unreaped, pinning both its PID and process-group identifier.
+    let result = unsafe {
+        nix::libc::waitid(
+            nix::libc::P_PID,
+            child_pid,
+            information.as_mut_ptr(),
+            nix::libc::WEXITED | nix::libc::WNOHANG | nix::libc::WNOWAIT,
+        )
+    };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: successful waitid initializes siginfo_t; WNOHANG reports si_pid == 0 while live.
+    let information = unsafe { information.assume_init() };
+    // SAFETY: waitid(WEXITED) populates the SIGCHLD variant of siginfo_t.
+    let observed_pid = unsafe { information.si_pid() };
+    Ok(observed_pid > 0 && u32::try_from(observed_pid).ok() == Some(child_pid))
+}
+#[cfg(target_os = "linux")]
+fn terminate_system_command_unit_until(
+    child: &mut Child,
+    cgroup_path: &Path,
+    deadline: Instant,
+) -> Result<ExitStatus, ControllerError> {
+    let mut custody_failures = Vec::new();
+    match system_command_cgroup_populated(cgroup_path) {
+        Ok(true) => {
+            if let Err(error) =
+                write_system_command_cgroup_control(cgroup_path, "cgroup.kill", b"1\n")
+            {
+                custody_failures.push(error.to_string());
+            }
+        }
+        Ok(false) => {}
+        Err(error) => custody_failures.push(error.to_string()),
+    }
+    // The leader is deliberately still waitable here, so its PID/PGID cannot be reused before
+    // this group signal. The fixed cgroup independently covers descendants that changed sessions.
+    if let Err(error) = kill_command_process_group(child.id()) {
+        custody_failures.push(format!(
+            "failed to kill exact command process group: {error}"
+        ));
+        let _ = child.kill();
+    }
+
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() < deadline => sleep_blocking(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(SYSTEM_COMMAND_POLL_INTERVAL),
+            ),
+            Ok(None) => {
+                custody_failures.push(format!(
+                    "direct command child {} was not reaped before the absolute custody deadline",
+                    child.id()
+                ));
+                break None;
+            }
+            Err(error) => {
+                custody_failures.push(format!(
+                    "failed to reap direct command child {}: {error}",
+                    child.id()
+                ));
+                break None;
+            }
+        }
+    };
+    if let Err(error) = quiesce_system_command_cgroup_at_until(cgroup_path, deadline) {
+        custody_failures.push(error.to_string());
+    }
+    if !custody_failures.is_empty() {
+        return Err(ControllerError::CommandCustody(custody_failures.join("; ")));
+    }
+    status.ok_or_else(|| {
+        ControllerError::CommandCustody(
+            "direct command child status is unavailable after unit termination".to_owned(),
+        )
+    })
+}
+#[cfg(target_os = "linux")]
+fn setup_system_command_failure(
+    child: &mut Child,
+    cgroup_path: &Path,
+    error: impl std::fmt::Display,
+    custody_deadline: Instant,
+) -> ControllerError {
+    let message = error.to_string();
+    match terminate_system_command_unit_until(child, cgroup_path, custody_deadline) {
+        Ok(_) => ControllerError::State(message),
+        Err(custody_error) => ControllerError::CommandCustody(format!(
+            "{message}; command launch cleanup failed: {custody_error}"
+        )),
+    }
+}
+#[cfg(target_os = "linux")]
 fn execute_system_command(
     program: &str,
     program_path: &Path,
     collected: &[String],
     command_timeout: Duration,
 ) -> Result<String, ControllerError> {
+    let cgroup_path = ensure_system_command_cgroup()?;
+    execute_system_command_in_cgroup(
+        program,
+        program_path,
+        collected,
+        command_timeout,
+        &cgroup_path,
+    )
+}
+#[cfg(target_os = "linux")]
+fn execute_system_command_in_cgroup(
+    program: &str,
+    program_path: &Path,
+    collected: &[String],
+    command_timeout: Duration,
+    cgroup_path: &Path,
+) -> Result<String, ControllerError> {
+    // Derive both phase cutoffs once, before the first custody operation. No error, signal, reap,
+    // cgroup, pipe, or setup path can extend the final deadline with a fresh relative timeout.
+    let started = Instant::now();
+    let execution_deadline = started + command_timeout;
+    let custody_deadline = execution_deadline + PROCESS_KILL_REAP_TIMEOUT;
+    execute_system_command_in_cgroup_until(
+        program,
+        program_path,
+        collected,
+        execution_deadline,
+        custody_deadline,
+        cgroup_path,
+    )
+}
+#[cfg(target_os = "linux")]
+fn execute_system_command_in_cgroup_until(
+    program: &str,
+    program_path: &Path,
+    collected: &[String],
+    execution_deadline: Instant,
+    custody_deadline: Instant,
+    cgroup_path: &Path,
+) -> Result<String, ControllerError> {
+    if execution_deadline > custody_deadline || Instant::now() >= execution_deadline {
+        return Err(ControllerError::State(format!(
+            "{program} command has no remaining absolute execution budget"
+        )));
+    }
+    quiesce_system_command_cgroup_at_until(cgroup_path, custody_deadline)?;
+    if Instant::now() >= execution_deadline {
+        return Err(ControllerError::State(format!(
+            "{program} command exhausted its absolute execution budget while quiescing prior custody"
+        )));
+    }
+    let membership = open_system_command_cgroup_procs(cgroup_path)?;
+    let membership_fd = membership.as_raw_fd();
+    let supervisor_pid = i32::try_from(std::process::id()).map_err(|_| {
+        ControllerError::CommandCustody(
+            "VPN supervisor PID does not fit Linux pid_t for command custody".to_owned(),
+        )
+    })?;
     let mut command = ProcessCommand::new(program_path);
     command
         .env_clear()
@@ -6105,88 +6906,108 @@ fn execute_system_command(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // A timed-out helper may have forked descendants that inherited the pipe descriptors. Put
-    // the command in its own process group so cleanup closes every inherited descriptor instead
-    // of blocking forever while joining the drain threads.
     command.process_group(0);
+    // SAFETY: the closure uses only async-signal-safe integer syscalls between fork and exec. The
+    // membership descriptor remains owned by `membership` until `spawn` returns and is CLOEXEC.
+    unsafe {
+        command.pre_exec(move || {
+            mark_unintended_child_fds_close_on_exec()?;
+            if nix::libc::prctl(nix::libc::PR_SET_PDEATHSIG, nix::libc::SIGKILL, 0, 0, 0) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if nix::libc::getppid() != supervisor_pid {
+                return Err(io::Error::from_raw_os_error(nix::libc::ESRCH));
+            }
+            let membership_value = b"0\n";
+            let written = nix::libc::write(
+                membership_fd,
+                membership_value.as_ptr().cast(),
+                membership_value.len(),
+            );
+            if written != membership_value.len() as isize {
+                return Err(if written < 0 {
+                    io::Error::last_os_error()
+                } else {
+                    io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "failed to enter the fixed command cgroup atomically",
+                    )
+                });
+            }
+            if nix::libc::getppid() != supervisor_pid {
+                return Err(io::Error::from_raw_os_error(nix::libc::ESRCH));
+            }
+            Ok(())
+        });
+    }
     let mut child = command.spawn()?;
-    let stdout = match child.stdout.take() {
-        Some(stdout) => stdout,
-        None => {
-            let _ = kill_command_process_group(child.id());
-            let _ = child.wait();
-            return Err(ControllerError::State(format!(
-                "failed to capture {program} standard output"
-            )));
+    drop(membership);
+    let stdout = child.stdout.take().ok_or_else(|| {
+        setup_system_command_failure(
+            &mut child,
+            cgroup_path,
+            format!("failed to capture {program} standard output"),
+            custody_deadline,
+        )
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        setup_system_command_failure(
+            &mut child,
+            cgroup_path,
+            format!("failed to capture {program} standard error"),
+            custody_deadline,
+        )
+    })?;
+    let stdout_receiver = spawn_system_command_pipe_reader(
+        stdout,
+        MAX_SYSTEM_COMMAND_STDOUT_BYTES,
+        "sora-vpn-command-stdout",
+    )
+    .map_err(|error| {
+        setup_system_command_failure(&mut child, cgroup_path, error, custody_deadline)
+    })?;
+    let stderr_receiver = spawn_system_command_pipe_reader(
+        stderr,
+        MAX_SYSTEM_COMMAND_STDERR_BYTES,
+        "sora-vpn-command-stderr",
+    )
+    .map_err(|error| {
+        setup_system_command_failure(&mut child, cgroup_path, error, custody_deadline)
+    })?;
+    let (timed_out, observation_error) = loop {
+        match system_command_leader_exited_unreaped(child.id()) {
+            Ok(true) => break (false, None),
+            Ok(false) => {}
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => break (false, Some(error)),
         }
-    };
-    let stderr = match child.stderr.take() {
-        Some(stderr) => stderr,
-        None => {
-            let _ = kill_command_process_group(child.id());
-            let _ = child.wait();
-            return Err(ControllerError::State(format!(
-                "failed to capture {program} standard error"
-            )));
+        if Instant::now() >= execution_deadline {
+            break (true, None);
         }
+        sleep_blocking(
+            execution_deadline
+                .saturating_duration_since(Instant::now())
+                .min(SYSTEM_COMMAND_POLL_INTERVAL),
+        );
     };
-    let stdout_thread = match std::thread::Builder::new()
-        .name("sora-vpn-command-stdout".to_owned())
-        .spawn(move || drain_bounded_pipe(stdout, MAX_SYSTEM_COMMAND_STDOUT_BYTES))
-    {
-        Ok(thread) => thread,
-        Err(error) => {
-            let _ = kill_command_process_group(child.id());
-            let _ = child.wait();
-            return Err(error.into());
-        }
-    };
-    let stderr_thread = match std::thread::Builder::new()
-        .name("sora-vpn-command-stderr".to_owned())
-        .spawn(move || drain_bounded_pipe(stderr, MAX_SYSTEM_COMMAND_STDERR_BYTES))
-    {
-        Ok(thread) => thread,
-        Err(error) => {
-            let _ = kill_command_process_group(child.id());
-            let _ = child.wait();
-            let _ = stdout_thread.join();
-            return Err(error.into());
-        }
-    };
-    let deadline = Instant::now() + command_timeout;
-    let (status, timed_out) = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                // The command contract forbids detached work. Ensure descendants cannot retain
-                // pipes or continue privileged mutations after their leader exits.
-                kill_command_process_group(child.id())?;
-                break (status, false);
-            }
-            Ok(None) if Instant::now() < deadline => {
-                sleep_blocking(SYSTEM_COMMAND_POLL_INTERVAL);
-            }
-            Ok(None) => {
-                kill_command_process_group(child.id())?;
-                break (child.wait()?, true);
-            }
-            Err(error) => {
-                let _ = kill_command_process_group(child.id());
-                let _ = child.wait();
-                let _ = stdout_thread.join();
-                let _ = stderr_thread.join();
-                return Err(error.into());
-            }
-        }
-    };
-    let stdout_result = join_bounded_pipe(stdout_thread, "standard output");
-    let stderr_result = join_bounded_pipe(stderr_thread, "standard error");
-    let stdout = stdout_result?;
-    let stderr = stderr_result?;
+    let status = terminate_system_command_unit_until(&mut child, cgroup_path, custody_deadline)?;
+    let stdout = receive_system_command_pipe_until(
+        &stdout_receiver,
+        custody_deadline,
+        "system command standard output",
+    )?;
+    let stderr = receive_system_command_pipe_until(
+        &stderr_receiver,
+        custody_deadline,
+        "system command standard error",
+    )?;
+    if let Some(error) = observation_error {
+        return Err(error.into());
+    }
     if timed_out {
         return Err(ControllerError::State(format!(
-            "{program} {} exceeded the {} second command deadline",
-            collected.join(" "),
-            command_timeout.as_secs_f64()
+            "{program} {} exceeded its absolute command execution deadline",
+            collected.join(" ")
         )));
     }
     if stdout.overflow || stderr.overflow {
@@ -6209,6 +7030,18 @@ fn execute_system_command(
         collected.join(" ")
     )))
 }
+#[cfg(not(target_os = "linux"))]
+fn execute_system_command(
+    _program: &str,
+    _program_path: &Path,
+    _collected: &[String],
+    _command_timeout: Duration,
+) -> Result<String, ControllerError> {
+    Err(ControllerError::State(
+        "privileged system commands are supported only on Linux".to_owned(),
+    ))
+}
+#[cfg(target_os = "linux")]
 fn kill_command_process_group(child_pid: u32) -> io::Result<()> {
     let process_group = i32::try_from(child_pid)
         .map_err(|_| io::Error::other("child PID does not fit a Unix process-group identifier"))?;
@@ -6220,11 +7053,13 @@ fn kill_command_process_group(child_pid: u32) -> io::Result<()> {
         Err(error) => Err(io::Error::from_raw_os_error(error as i32)),
     }
 }
+#[cfg(any(target_os = "linux", test))]
 #[derive(Debug, PartialEq, Eq)]
 struct BoundedPipeOutput {
     bytes: Vec<u8>,
     overflow: bool,
 }
+#[cfg(any(target_os = "linux", test))]
 fn drain_bounded_pipe<R: io::Read>(
     mut reader: R,
     max_bytes: usize,
@@ -6246,15 +7081,6 @@ fn drain_bounded_pipe<R: io::Read>(
     }
     Ok(BoundedPipeOutput { bytes, overflow })
 }
-fn join_bounded_pipe(
-    thread: std::thread::JoinHandle<io::Result<BoundedPipeOutput>>,
-    label: &str,
-) -> Result<BoundedPipeOutput, ControllerError> {
-    thread
-        .join()
-        .map_err(|_| ControllerError::State(format!("{label} drain thread panicked")))?
-        .map_err(Into::into)
-}
 fn resolve_trusted_command(program: &str) -> Option<PathBuf> {
     if !matches!(program, "ip" | "resolvectl") {
         return None;
@@ -6264,6 +7090,37 @@ fn resolve_trusted_command(program: &str) -> Option<PathBuf> {
         .map(|dir| Path::new(dir).join(program))
         .filter_map(|candidate| candidate.canonicalize().ok())
         .find(|candidate| validate_system_executable(candidate).is_ok())
+}
+#[cfg(target_os = "linux")]
+fn system_executable_has_file_capabilities(path: &Path) -> Result<bool, ControllerError> {
+    let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+        ControllerError::State(format!(
+            "system executable {} contains an embedded NUL",
+            path.display()
+        ))
+    })?;
+    let attribute = b"security.capability\0";
+    // SAFETY: both C strings are NUL-terminated and live for the call. A null value with size zero
+    // asks only whether the capability xattr exists, so no output storage is required.
+    let size = unsafe {
+        nix::libc::getxattr(
+            path.as_ptr(),
+            attribute.as_ptr().cast(),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if size >= 0 {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    if error
+        .raw_os_error()
+        .is_some_and(|code| code == nix::libc::ENODATA || code == nix::libc::ENOTSUP)
+    {
+        return Ok(false);
+    }
+    Err(error.into())
 }
 fn validate_system_executable(path: &Path) -> Result<(), ControllerError> {
     if !path.is_absolute() {
@@ -6296,6 +7153,22 @@ fn validate_system_executable(path: &Path) -> Result<(), ControllerError> {
         if metadata.mode() & 0o111 == 0 {
             return Err(ControllerError::State(format!(
                 "system executable {} is not executable",
+                path.display()
+            )));
+        }
+        // Linux clears PDEATHSIG when exec gains privilege through set-ID mode bits or file
+        // capabilities. These commands already run as root, so privileged executable metadata is
+        // unnecessary and would weaken kill-on-supervisor-death custody.
+        if metadata.mode() & 0o6000 != 0 {
+            return Err(ControllerError::State(format!(
+                "system executable {} has set-user-ID or set-group-ID mode",
+                path.display()
+            )));
+        }
+        #[cfg(target_os = "linux")]
+        if system_executable_has_file_capabilities(path)? {
+            return Err(ControllerError::State(format!(
+                "system executable {} has file capabilities",
                 path.display()
             )));
         }
@@ -6469,13 +7342,6 @@ fn read_bounded_into<R: io::Read>(
         )));
     }
     Ok(())
-}
-fn read_stable_regular_file_bounded(
-    path: &Path,
-    max_bytes: usize,
-    label: &str,
-) -> Result<Vec<u8>, ControllerError> {
-    read_stable_regular_file_bounded_with_policy(path, max_bytes, label, false)
 }
 fn read_private_stable_regular_file_bounded(
     path: &Path,
@@ -6797,6 +7663,7 @@ fn applied_network_json_value(state: &AppliedNetworkState) -> JsonValue {
             NetworkJournalPhase::TunCreated => "tun-created",
             NetworkJournalPhase::LinkConfigured => "link-configured",
             NetworkJournalPhase::RoutesConfigured => "routes-configured",
+            NetworkJournalPhase::ConfiguringExcludedRoutes => "configuring-excluded-routes",
             NetworkJournalPhase::ExcludedRoutesConfigured => "excluded-routes-configured",
             NetworkJournalPhase::DnsPlanned => "dns-planned",
             NetworkJournalPhase::Prepared => "prepared",
@@ -6835,15 +7702,6 @@ fn dns_backend_json_value(state: &DnsBackendState) -> JsonValue {
             insert_string(&mut map, "kind", "resolved-reverted");
             insert_string(&mut map, "interface_name", interface_name);
         }
-        DnsBackendState::ResolvConf => {
-            insert_string(&mut map, "kind", "resolv-conf");
-        }
-        DnsBackendState::ResolvConfPlanned => {
-            insert_string(&mut map, "kind", "resolv-conf-planned");
-        }
-        DnsBackendState::ResolvConfRestored => {
-            insert_string(&mut map, "kind", "resolv-conf-restored");
-        }
     }
     JsonValue::Object(map)
 }
@@ -6853,8 +7711,8 @@ fn excluded_route_snapshot_json_value(snapshot: &ExcludedRouteSnapshot) -> JsonV
     insert_string(&mut map, "family", snapshot.family.as_json_label());
     insert_string_option(
         &mut map,
-        "previous_route",
-        snapshot.previous_route.as_deref(),
+        "installed_route",
+        snapshot.installed_route.as_deref(),
     );
     JsonValue::Object(map)
 }
@@ -7929,17 +8787,6 @@ fn write_file_atomic(
     }
     Ok(())
 }
-fn remove_private_file_durable(path: &Path, label: &str) -> Result<(), ControllerError> {
-    let parent = path.parent().ok_or_else(|| {
-        ControllerError::State(format!("{label} path {} has no parent", path.display()))
-    })?;
-    validate_directory_custody(parent)?;
-    let metadata = fs::symlink_metadata(path)?;
-    validate_regular_file_metadata(path, &metadata, label, true)?;
-    fs::remove_file(path)?;
-    fs::File::open(parent)?.sync_all()?;
-    Ok(())
-}
 fn hydrate_runtime_fields(state: &mut State) {
     state.installed = true;
     if state.controller_kind.trim().is_empty() {
@@ -8229,11 +9076,17 @@ fn observe_linux_worker_identity(
 }
 #[cfg(any(target_os = "linux", test))]
 fn worker_cmdline_has_exact_role(cmdline: &[u8], role: WorkerRole) -> bool {
-    let mut args = cmdline
-        .split(|byte| *byte == 0)
-        .filter(|arg| !arg.is_empty());
-    let _program = args.next();
-    args.next() == Some(role.subcommand().as_bytes()) && args.next().is_none()
+    let mut fields = cmdline.split(|byte| *byte == 0);
+    let Some(program) = fields.next() else {
+        return false;
+    };
+    let Some(command) = fields.next() else {
+        return false;
+    };
+    !program.is_empty()
+        && command == role.subcommand().as_bytes()
+        && fields.next() == Some(&[][..])
+        && fields.next().is_none()
 }
 #[cfg(any(target_os = "linux", test))]
 fn parse_linux_process_stat(stat: &str) -> Result<(char, u64), &'static str> {
@@ -8512,6 +9365,33 @@ fn parse_canonical_nonzero_hex_32(value: &str, label: &str) -> Result<[u8; 32], 
     }
     Ok(bytes)
 }
+fn parse_relay_mldsa65_public_key_hex(
+    value: &str,
+    label: &str,
+) -> Result<[u8; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1], ControllerError> {
+    let expected_hex_len = VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1
+        .checked_mul(2)
+        .expect("ML-DSA-65 public key hex length fits usize");
+    if value.len() != expected_hex_len
+        || !value
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        return Err(ControllerError::InvalidPayload(format!(
+            "{label} must be exactly {expected_hex_len} lowercase hexadecimal characters"
+        )));
+    }
+    let mut bytes = [0u8; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1];
+    hex::decode_to_slice(value, &mut bytes)
+        .expect("canonical hexadecimal validation makes decoding infallible");
+    if bytes.iter().all(|byte| *byte == 0) {
+        return Err(ControllerError::InvalidPayload(format!(
+            "{label} must not be all zero"
+        )));
+    }
+    Ok(bytes)
+}
 fn parse_canonical_secret_hex_32(value: &str, label: &str) -> Result<[u8; 32], ControllerError> {
     if value.len() != 64
         || !value
@@ -8543,6 +9423,11 @@ fn parse_connect_payload(raw_payload: Option<&str>) -> Result<ConnectPayload, Co
         relay_endpoint: require_json_string(object, &["relayEndpoint"], "relayEndpoint")?,
         helper_ticket_hex: require_json_string(object, &["helperTicketHex"], "helperTicketHex")?,
         relay_id_hex: require_json_string(object, &["relayIdHex"], "relayIdHex")?,
+        relay_mldsa65_public_key_hex: require_json_string(
+            object,
+            &["relayMlDsa65PublicKeyHex"],
+            "relayMlDsa65PublicKeyHex",
+        )?,
         descriptor_commit_hex: require_json_string(
             object,
             &["descriptorCommitHex"],
@@ -8584,6 +9469,7 @@ fn validate_connect_payload_keys(object: &JsonMap) -> Result<(), ControllerError
         "relayEndpoint",
         "helperTicketHex",
         "relayIdHex",
+        "relayMlDsa65PublicKeyHex",
         "descriptorCommitHex",
         "tlsServerName",
         "relayTlsSpkiSha256Hex",
@@ -8697,6 +9583,15 @@ fn validate_connect_payload_ref(payload: &ConnectPayload) -> Result<(), Controll
     let relay_id = parse_canonical_nonzero_hex_32(payload.relay_id_hex.as_str(), "relayIdHex")?;
     PublicKey::from_bytes(Algorithm::Ed25519, &relay_id).map_err(|error| {
         ControllerError::InvalidPayload(format!("relayIdHex is not a valid Ed25519 key: {error}"))
+    })?;
+    let relay_mldsa65_public_key = parse_relay_mldsa65_public_key_hex(
+        payload.relay_mldsa65_public_key_hex.as_str(),
+        "relayMlDsa65PublicKeyHex",
+    )?;
+    PublicKey::from_bytes(Algorithm::MlDsa, &relay_mldsa65_public_key).map_err(|error| {
+        ControllerError::InvalidPayload(format!(
+            "relayMlDsa65PublicKeyHex is not a valid ML-DSA-65 key: {error}"
+        ))
     })?;
     let _ = parse_canonical_nonzero_hex_32(
         payload.descriptor_commit_hex.as_str(),
@@ -9271,6 +10166,32 @@ mod tests {
         soranet::vpn::VpnTariffV1,
     };
 
+    #[test]
+    fn fixed_secret_owner_redacts_and_uses_the_drop_clear_path() {
+        let mut guarded = WipeArray([0xA5; 16]);
+        assert!(std::mem::needs_drop::<WipeArray<16>>());
+        assert_eq!(
+            format!("{guarded:?}"),
+            "WipeArray(<redacted 16-byte buffer>)"
+        );
+        assert!(!format!("{guarded:?}").contains("165"));
+
+        guarded.clear();
+        assert!(guarded.iter().all(|byte| *byte == 0));
+
+        let mut allocation = vec![0x5A; 64];
+        allocation.truncate(17);
+        let capacity = allocation.capacity();
+        wipe_secret_vec(&mut allocation);
+        assert!(allocation.is_empty());
+        assert_eq!(allocation.capacity(), capacity);
+
+        let mut string = String::with_capacity(64);
+        string.push_str("sensitive credential");
+        wipe_secret_string(&mut string);
+        assert!(string.is_empty());
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_network_ipc_authenticates_frames_and_transfers_one_descriptor() {
@@ -9790,10 +10711,7 @@ mod tests {
         persisted: Option<State>,
         persist_count: usize,
         fail_persist_once_at: Option<usize>,
-        backup_exists: bool,
-        resolv_restores: usize,
         resolv_reverts: usize,
-        backup_removals: usize,
         restored_routes: Vec<String>,
         fail_route_once: Option<String>,
     }
@@ -9815,21 +10733,6 @@ mod tests {
             Ok(())
         }
 
-        fn restore_resolv_conf(&mut self) -> Result<bool, ControllerError> {
-            self.resolv_restores += 1;
-            Ok(self.backup_exists)
-        }
-
-        fn remove_resolv_conf_backup(&mut self) -> Result<(), ControllerError> {
-            self.backup_removals += 1;
-            self.backup_exists = false;
-            Ok(())
-        }
-
-        fn resolv_conf_backup_exists(&mut self) -> Result<bool, ControllerError> {
-            Ok(self.backup_exists)
-        }
-
         fn restore_excluded_route(
             &mut self,
             snapshot: &ExcludedRouteSnapshot,
@@ -9847,10 +10750,10 @@ mod tests {
             active: true,
             repair_required: false,
             interface_name: Some("srvpn0000000000".to_owned()),
-            network_service: Some("resolv.conf".to_owned()),
+            network_service: Some("resolvectl".to_owned()),
             owner_uid: Some(1_000),
             session_id: Some("session-1".to_owned()),
-            relay_endpoint: Some("/ip4/127.0.0.1/udp/7777/quic".to_owned()),
+            relay_endpoint: Some("/ip4/93.184.216.34/udp/7777/quic".to_owned()),
             relay_id: Some([0x22; 32]),
             network_policy_hash: Some([0x11; 32]),
             applied_network: Some(AppliedNetworkState {
@@ -9861,12 +10764,16 @@ mod tests {
                     ExcludedRouteSnapshot {
                         cidr: "192.0.2.0/24".to_owned(),
                         family: IpFamily::V4,
-                        previous_route: None,
+                        installed_route: Some(
+                            "192.0.2.0/24 via 192.0.2.1 dev eth0 proto 186".to_owned(),
+                        ),
                     },
                     ExcludedRouteSnapshot {
                         cidr: "198.51.100.0/24".to_owned(),
                         family: IpFamily::V4,
-                        previous_route: None,
+                        installed_route: Some(
+                            "198.51.100.0/24 via 192.0.2.1 dev eth0 proto 186".to_owned(),
+                        ),
                     },
                 ],
             }),
@@ -9875,15 +10782,15 @@ mod tests {
     }
     #[test]
     fn cleanup_journal_retries_after_dns_success_and_later_route_failure() {
-        let mut state = cleanup_test_state(DnsBackendState::ResolvConf);
+        let mut state = cleanup_test_state(DnsBackendState::Resolved {
+            interface_name: "srvpn0000000000".to_owned(),
+        });
         let mut operations = FakeNetworkCleanupOps {
-            backup_exists: true,
             fail_route_once: Some("198.51.100.0/24".to_owned()),
             ..FakeNetworkCleanupOps::default()
         };
         assert!(cleanup_persisted_network_with(&mut state, &mut operations).is_err());
-        assert_eq!(operations.resolv_restores, 1);
-        assert_eq!(operations.backup_removals, 1);
+        assert_eq!(operations.resolv_reverts, 1);
         assert_eq!(
             state
                 .applied_network
@@ -9895,11 +10802,7 @@ mod tests {
 
         cleanup_persisted_network_with(&mut state, &mut operations)
             .expect("idempotent retry completes remaining routes");
-        assert_eq!(operations.resolv_restores, 1, "DNS was not replayed");
-        assert_eq!(
-            operations.backup_removals, 1,
-            "backup was not consumed twice"
-        );
+        assert_eq!(operations.resolv_reverts, 1, "DNS was not replayed");
         assert_eq!(
             operations.restored_routes,
             ["198.51.100.0/24", "198.51.100.0/24", "192.0.2.0/24",]
@@ -9911,9 +10814,10 @@ mod tests {
     #[test]
     fn cleanup_journal_recovers_from_every_persist_boundary() {
         for fail_at in 1..=7 {
-            let mut state = cleanup_test_state(DnsBackendState::ResolvConf);
+            let mut state = cleanup_test_state(DnsBackendState::Resolved {
+                interface_name: "srvpn0000000000".to_owned(),
+            });
             let mut operations = FakeNetworkCleanupOps {
-                backup_exists: true,
                 fail_persist_once_at: Some(fail_at),
                 ..FakeNetworkCleanupOps::default()
             };
@@ -9922,18 +10826,16 @@ mod tests {
                 .unwrap_or_else(|error| panic!("retry after persist boundary {fail_at}: {error}"));
             assert!(state.applied_network.is_none(), "boundary {fail_at}");
             assert!(!state.repair_required, "boundary {fail_at}");
-            assert!(!operations.backup_exists, "boundary {fail_at}");
         }
     }
 
     #[test]
     fn failed_connect_after_reap_cleans_a_pre_readiness_mutation_journal() {
         let proof = ReapedControllerChild::observed();
-        let mut state = cleanup_test_state(DnsBackendState::ResolvConf);
-        let mut operations = FakeNetworkCleanupOps {
-            backup_exists: true,
-            ..FakeNetworkCleanupOps::default()
-        };
+        let mut state = cleanup_test_state(DnsBackendState::Resolved {
+            interface_name: "srvpn0000000000".to_owned(),
+        });
+        let mut operations = FakeNetworkCleanupOps::default();
 
         finalize_failed_connect_state_with(
             &proof,
@@ -9949,17 +10851,17 @@ mod tests {
         assert!(state.owner_uid.is_none());
         assert!(state.session_id.is_none());
         assert_eq!(state.message, "ready");
-        assert_eq!(operations.resolv_restores, 1);
-        assert_eq!(operations.backup_removals, 1);
+        assert_eq!(operations.resolv_reverts, 1);
         assert_eq!(operations.restored_routes.len(), 2);
     }
 
     #[test]
     fn failed_connect_after_reap_persists_repair_state_until_cleanup_retry() {
         let proof = ReapedControllerChild::observed();
-        let mut state = cleanup_test_state(DnsBackendState::ResolvConf);
+        let mut state = cleanup_test_state(DnsBackendState::Resolved {
+            interface_name: "srvpn0000000000".to_owned(),
+        });
         let mut operations = FakeNetworkCleanupOps {
-            backup_exists: true,
             fail_route_once: Some("198.51.100.0/24".to_owned()),
             ..FakeNetworkCleanupOps::default()
         };
@@ -9994,7 +10896,9 @@ mod tests {
     struct FakeNetworkPrepareOps {
         events: Vec<&'static str>,
         fail_at: Option<usize>,
-        dns_applied: bool,
+        authorization_fails_after_event: Option<&'static str>,
+        persisted_excluded_routes: Vec<Vec<String>>,
+        persisted_installed_routes: Vec<Vec<Option<String>>>,
     }
     impl FakeNetworkPrepareOps {
         fn step(&mut self, event: &'static str) -> Result<(), ControllerError> {
@@ -10011,16 +10915,43 @@ mod tests {
         type Device = String;
         type ExcludedRouteMutation = String;
 
+        fn check_preparation(&mut self) -> Result<(), ControllerError> {
+            if self
+                .authorization_fails_after_event
+                .is_some_and(|event| self.events.last().copied() == Some(event))
+            {
+                return Err(ControllerError::State(
+                    "injected preparation authorization expiry".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+
         fn persist(&mut self, state: &State) -> Result<(), ControllerError> {
             let applied = state
                 .applied_network
                 .as_ref()
                 .expect("preparation persist always carries its repair journal");
+            self.persisted_excluded_routes.push(
+                applied
+                    .excluded_route_snapshots
+                    .iter()
+                    .map(|snapshot| snapshot.cidr.clone())
+                    .collect(),
+            );
+            self.persisted_installed_routes.push(
+                applied
+                    .excluded_route_snapshots
+                    .iter()
+                    .map(|snapshot| snapshot.installed_route.clone())
+                    .collect(),
+            );
             let event = match applied.journal_phase {
                 NetworkJournalPhase::Planned => "persist-planned",
                 NetworkJournalPhase::TunCreated => "persist-tun-created",
                 NetworkJournalPhase::LinkConfigured => "persist-link-configured",
                 NetworkJournalPhase::RoutesConfigured => "persist-routes-configured",
+                NetworkJournalPhase::ConfiguringExcludedRoutes => "persist-installed-exclusion",
                 NetworkJournalPhase::ExcludedRoutesConfigured => "persist-exclusions-configured",
                 NetworkJournalPhase::DnsPlanned => "persist-dns-intent",
                 NetworkJournalPhase::Prepared => "persist-prepared",
@@ -10066,7 +10997,7 @@ mod tests {
                 ExcludedRouteSnapshot {
                     cidr: route.to_owned(),
                     family: IpFamily::V4,
-                    previous_route: None,
+                    installed_route: None,
                 },
                 route.to_owned(),
             ))
@@ -10074,28 +11005,36 @@ mod tests {
 
         fn apply_excluded_route(
             &mut self,
+            snapshot: &ExcludedRouteSnapshot,
             _mutation: Self::ExcludedRouteMutation,
-        ) -> Result<(), ControllerError> {
-            self.step("mutate-excluded-route")
+        ) -> Result<String, ControllerError> {
+            self.step("mutate-excluded-route")?;
+            Ok(format!(
+                "{} via 192.0.2.1 dev eth0 proto 186",
+                snapshot.cidr
+            ))
         }
 
         fn plan_dns(
             &mut self,
-            _interface_name: &str,
+            interface_name: &str,
             _dns_servers: &[String],
-        ) -> Option<DnsBackendState> {
-            Some(DnsBackendState::ResolvConfPlanned)
+        ) -> Result<Option<DnsBackendState>, ControllerError> {
+            Ok(Some(DnsBackendState::Resolved {
+                interface_name: interface_name.to_owned(),
+            }))
         }
 
         fn apply_dns(
             &mut self,
-            _interface_name: &str,
+            interface_name: &str,
             _dns_servers: &[String],
             _plan: DnsBackendState,
         ) -> Result<DnsBackendState, ControllerError> {
             self.step("mutate-dns")?;
-            self.dns_applied = true;
-            Ok(DnsBackendState::ResolvConf)
+            Ok(DnsBackendState::Resolved {
+                interface_name: interface_name.to_owned(),
+            })
         }
     }
     fn privileged_test_plan(payload: &ConnectPayload) -> AuthenticatedPrivilegedNetworkPlan {
@@ -10148,6 +11087,7 @@ mod tests {
                 "mutate-routes",
                 "persist-routes-configured",
                 "mutate-excluded-route",
+                "persist-installed-exclusion",
                 "persist-exclusions-configured",
                 "persist-dns-intent",
                 "mutate-dns",
@@ -10171,24 +11111,103 @@ mod tests {
                 expected_events[..fail_at],
                 "no privileged step may run after injected boundary {fail_at}"
             );
-            if fail_at == 1 {
+            if fail_at <= 2 {
                 assert!(state.applied_network.is_none());
+                assert!(
+                    !state.repair_required,
+                    "a failure before the planned journal is durable precedes every host-network mutation"
+                );
                 continue;
             }
             assert!(
                 state.repair_required,
                 "boundary {fail_at} retains repair intent"
             );
-            let mut cleanup = FakeNetworkCleanupOps {
-                backup_exists: operations.dns_applied,
-                ..FakeNetworkCleanupOps::default()
-            };
+            if expected_events[fail_at - 1] == "persist-installed-exclusion" {
+                assert!(
+                    state
+                        .applied_network
+                        .as_ref()
+                        .expect("last durable journal remains present")
+                        .excluded_route_snapshots
+                        .iter()
+                        .all(|snapshot| snapshot.installed_route.is_none()),
+                    "a failed installed-readback persist must not publish uncommitted ownership"
+                );
+                continue;
+            }
+            let mut cleanup = FakeNetworkCleanupOps::default();
             cleanup_persisted_network_with(&mut state, &mut cleanup).unwrap_or_else(|error| {
                 panic!("durable plan at preparation boundary {fail_at} must clean: {error}")
             });
             assert!(state.applied_network.is_none(), "boundary {fail_at}");
             assert!(!state.repair_required, "boundary {fail_at}");
         }
+    }
+    #[test]
+    fn preparation_authorization_is_rechecked_between_network_steps() {
+        let mut payload = test_connect_payload(TEST_SESSION_ID);
+        payload.excluded_routes = vec!["192.0.2.0/24".to_owned()];
+        let payload = privileged_test_plan(&payload);
+        let mut state = preparation_test_state(&payload);
+        let mut operations = FakeNetworkPrepareOps {
+            authorization_fails_after_event: Some("mutate-link"),
+            ..FakeNetworkPrepareOps::default()
+        };
+
+        let error = match prepare_tunnel_with(&payload, &mut state, &mut operations) {
+            Ok(_) => panic!("expired preparation authorization unexpectedly continued"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("authorization expiry"));
+        assert_eq!(operations.events.last(), Some(&"mutate-link"));
+        assert!(
+            !operations.events.contains(&"persist-link-configured"),
+            "no later journal or host-network step may run after authorization expiry"
+        );
+    }
+    #[test]
+    fn excluded_routes_are_proven_absent_and_journaled_before_any_network_mutation() {
+        let mut payload = test_connect_payload(TEST_SESSION_ID);
+        payload.excluded_routes = vec!["192.0.2.0/24".to_owned(), "198.51.100.7/32".to_owned()];
+        let payload = privileged_test_plan(&payload);
+        let mut state = preparation_test_state(&payload);
+        let mut operations = FakeNetworkPrepareOps::default();
+
+        let prepared = prepare_tunnel_with(&payload, &mut state, &mut operations)
+            .expect("complete fake preparation");
+        drop(prepared);
+
+        assert_eq!(
+            &operations.events[..3],
+            [
+                "plan-excluded-route",
+                "plan-excluded-route",
+                "persist-planned",
+            ],
+            "every route snapshot must precede the first durable journal and TUN mutation"
+        );
+        assert_eq!(
+            operations.persisted_excluded_routes.first(),
+            Some(&payload.excluded_routes),
+            "the first durable repair plan must already contain the complete pre-VPN rollback set"
+        );
+        assert_eq!(operations.events[3], "create-tun");
+        assert!(
+            operations
+                .events
+                .iter()
+                .position(|event| *event == "mutate-routes")
+                .is_some_and(|index| index > 3),
+            "pushed routes must not exist while exclusions are being snapshotted"
+        );
+        assert!(
+            operations
+                .persisted_installed_routes
+                .iter()
+                .any(|routes| { routes.iter().all(Option::is_some) }),
+            "the exact installed readback for every exclusion must become durable before preparation completes"
+        );
     }
 
     const TEST_SESSION_ID: &str = "f69c894aa32726fe586fab520f88ae42";
@@ -10204,6 +11223,23 @@ mod tests {
         bytes
             .try_into()
             .expect("Ed25519 relay identity is 32 bytes")
+    }
+    fn test_relay_mldsa65_public_key_from_seed(
+        seed: u8,
+    ) -> [u8; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1] {
+        let keys = KeyPair::try_from_seed(vec![seed; 32], Algorithm::MlDsa)
+            .expect("derive ML-DSA-65 relay fixture key");
+        let (algorithm, bytes) = keys
+            .public_key()
+            .try_to_bytes()
+            .expect("ML-DSA-65 relay fixture key");
+        assert_eq!(algorithm, Algorithm::MlDsa);
+        bytes
+            .try_into()
+            .expect("ML-DSA-65 relay identity has the fixed V1 width")
+    }
+    fn test_relay_mldsa65_public_key() -> [u8; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1] {
+        test_relay_mldsa65_public_key_from_seed(0x45)
     }
     fn test_ticket_issuer(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -10232,8 +11268,9 @@ mod tests {
             client_ipv4_address: address_plan.client_ipv4_address,
             client_ipv6_address: address_plan.client_ipv6_address,
             network_policy_hash: vpn_helper_network_policy_hash_v1(
-                "/ip4/127.0.0.1/udp/7777/quic",
+                "/ip4/93.184.216.34/udp/7777/quic",
                 &test_relay_id(),
+                &test_relay_mldsa65_public_key(),
                 &[0xCD; 32],
                 "relay.example",
                 &[0xAB; 32],
@@ -10260,9 +11297,10 @@ mod tests {
         let client_ipv4 = Ipv4Addr::from(ticket.client_ipv4_address);
         let client_ipv6 = Ipv6Addr::from(ticket.client_ipv6_address);
         format!(
-            r#"{{"sessionId":"{session_id}","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","helperTicketHex":"{}","relayIdHex":"{}","descriptorCommitHex":"{}","tlsServerName":"relay.example","relayTlsSpkiSha256Hex":"{}","relayCertificateSha256Hex":"{}","directorySnapshotDigestHex":"{}","paddingBudgetMs":15,"routePushes":["0.0.0.0/0"],"excludedRoutes":[],"dnsServers":["1.1.1.1"],"tunnelAddresses":["{client_ipv4}/30","{client_ipv6}/126"],"mtuBytes":1280,"meteringPrivateKeySeedHex":"{metering_seed}"}}"#,
+            r#"{{"sessionId":"{session_id}","relayEndpoint":"/ip4/93.184.216.34/udp/7777/quic","helperTicketHex":"{}","relayIdHex":"{}","relayMlDsa65PublicKeyHex":"{}","descriptorCommitHex":"{}","tlsServerName":"relay.example","relayTlsSpkiSha256Hex":"{}","relayCertificateSha256Hex":"{}","directorySnapshotDigestHex":"{}","paddingBudgetMs":15,"routePushes":["0.0.0.0/0"],"excludedRoutes":[],"dnsServers":["1.1.1.1"],"tunnelAddresses":["{client_ipv4}/30","{client_ipv6}/126"],"mtuBytes":1280,"meteringPrivateKeySeedHex":"{metering_seed}"}}"#,
             ticket.to_hex(test_ticket_issuer(0xAA).private_key()),
             hex::encode(ticket.relay_id),
+            hex::encode(test_relay_mldsa65_public_key()),
             "cd".repeat(32),
             "ab".repeat(32),
             "ef".repeat(32),
@@ -10353,14 +11391,14 @@ mod tests {
                 .is_err(),
             "the inherited token authenticates the fixed worker plan"
         );
-        let mut bad_signature = canonical;
+        let mut bad_signature = canonical.clone();
         bad_signature[PLAN_TICKET_RANGE.end - 1] ^= 1;
         assert!(
             decode_authenticated_network_plan(&bad_signature, &token, issuer.public_key(), now_ms,)
                 .is_err(),
             "root independently verifies the exact signed helper ticket"
         );
-        let mut bad_policy = canonical;
+        let mut bad_policy = canonical.clone();
         encode_plan_cidr(
             &mut bad_policy[PLAN_ROUTE_RANGE.start..PLAN_ROUTE_RANGE.start + PLAN_ROUTE_SLOT_BYTES],
             ParsedCidr {
@@ -10372,6 +11410,18 @@ mod tests {
             decode_authenticated_network_plan(&bad_policy, &token, issuer.public_key(), now_ms,)
                 .is_err(),
             "root recomputes the signed policy hash instead of trusting the parser"
+        );
+        let mut substituted_relay_mldsa65 = canonical.clone();
+        substituted_relay_mldsa65[PLAN_RELAY_MLDSA65_RANGE.start] ^= 1;
+        assert!(
+            decode_authenticated_network_plan(
+                &substituted_relay_mldsa65,
+                &token,
+                issuer.public_key(),
+                now_ms,
+            )
+            .is_err(),
+            "the signed policy must bind the exact live ML-DSA-65 relay identity"
         );
     }
     #[test]
@@ -10395,13 +11445,13 @@ mod tests {
                 "TLS-name padding",
                 PLAN_TLS_NAME_RANGE.start + authenticated.payload.tls_server_name.len(),
             ),
-            ("layout gap", PLAN_TLS_NAME_RANGE.end),
+            ("layout gap", PLAN_RELAY_MLDSA65_RANGE.end),
             ("unused route slot", unused_route),
             ("unused excluded-route slot", PLAN_EXCLUDED_RANGE.start),
             ("unused DNS slot", unused_dns),
             ("tail", NETWORK_WORKER_PLAN_FRAME_BYTES - 1),
         ] {
-            let mut mutated = canonical;
+            let mut mutated = canonical.clone();
             mutated[index] = 1;
             assert!(
                 decode_authenticated_network_plan(&mutated, &token, issuer.public_key(), now_ms,)
@@ -10430,7 +11480,7 @@ mod tests {
             ),
             ("relay length", (PLAN_RELAY_LENGTH_OFFSET, 0xFF)),
         ] {
-            let mut frame = canonical;
+            let mut frame = canonical.clone();
             frame[mutate.0] = mutate.1;
             assert!(
                 decode_authenticated_network_plan(&frame, &token, issuer.public_key(), now_ms)
@@ -10465,25 +11515,45 @@ mod tests {
     }
     #[test]
     fn parse_multiaddr_accepts_ipv4_quic() {
-        let parsed = parse_multiaddr("/ip4/127.0.0.1/udp/7777/quic").expect("parse");
+        let parsed = parse_multiaddr("/ip4/93.184.216.34/udp/7777/quic").expect("parse");
         assert_eq!(
             parsed,
             ParsedMultiaddr {
-                host: ParsedMultiaddrHost::Ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),
+                host: ParsedMultiaddrHost::Ip(IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))),
                 port: 7777,
             }
         );
     }
     #[test]
     fn parse_multiaddr_accepts_ipv6_quic() {
-        let parsed = parse_multiaddr("/ip6/::1/udp/7777/quic").expect("parse");
+        let parsed = parse_multiaddr("/ip6/2606:4700:4700::1111/udp/7777/quic").expect("parse");
         assert_eq!(
             parsed,
             ParsedMultiaddr {
-                host: ParsedMultiaddrHost::Ip(IpAddr::V6(Ipv6Addr::LOCALHOST)),
+                host: ParsedMultiaddrHost::Ip(IpAddr::V6(
+                    "2606:4700:4700::1111".parse().expect("public IPv6"),
+                )),
                 port: 7777,
             }
         );
+    }
+    #[test]
+    fn parse_multiaddr_rejects_special_ip_literals() {
+        for endpoint in [
+            "/ip4/0.0.0.0/udp/7777/quic",
+            "/ip4/10.0.0.1/udp/7777/quic",
+            "/ip4/127.0.0.1/udp/7777/quic",
+            "/ip4/169.254.1.1/udp/7777/quic",
+            "/ip4/192.168.1.1/udp/7777/quic",
+            "/ip4/224.0.0.1/udp/7777/quic",
+            "/ip6/::/udp/7777/quic",
+            "/ip6/::1/udp/7777/quic",
+            "/ip6/fd00::1/udp/7777/quic",
+            "/ip6/fe80::1/udp/7777/quic",
+            "/ip6/ff02::1/udp/7777/quic",
+        ] {
+            assert!(parse_multiaddr(endpoint).is_err(), "accepted {endpoint}");
+        }
     }
     #[test]
     fn parse_multiaddr_accepts_dns_quic() {
@@ -10517,15 +11587,62 @@ mod tests {
         }
     }
     #[test]
+    fn relay_dns_selection_rejects_mixed_or_special_answers_and_pins_one_public_address() {
+        let first: SocketAddr = "93.184.216.35:9443".parse().expect("first answer");
+        let second: SocketAddr = "93.184.216.34:9443".parse().expect("second answer");
+        let selected =
+            select_resolved_relay_addr("relay.example", DnsAddressFamily::V4, 443, [first, second])
+                .expect("public answer set");
+        assert_eq!(
+            selected,
+            "93.184.216.34:443".parse().expect("pinned address")
+        );
+
+        for unsafe_answer in ["127.0.0.1:9443", "10.0.0.1:9443", "[::1]:9443"] {
+            let unsafe_answer = unsafe_answer.parse().expect("unsafe answer fixture");
+            let error = select_resolved_relay_addr(
+                "relay.example",
+                DnsAddressFamily::Any,
+                443,
+                [second, unsafe_answer],
+            )
+            .expect_err("one unsafe answer must reject the entire DNS response");
+            assert!(error.to_string().contains("private, local, reserved"));
+        }
+
+        let wrong_family =
+            select_resolved_relay_addr("relay.example", DnsAddressFamily::V6, 443, [second])
+                .expect_err("signed DNS family must be enforced");
+        assert!(wrong_family.to_string().contains("signed address family"));
+    }
+    #[test]
+    fn relay_dns_selection_caps_answer_cardinality() {
+        let answers = (0..=MAX_RELAY_DNS_ANSWERS_V1)
+            .map(|offset| {
+                let offset = u16::try_from(offset).expect("DNS fixture offset fits u16");
+                SocketAddr::new(
+                    IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34)),
+                    443_u16
+                        .checked_add(offset)
+                        .expect("DNS fixture port fits u16"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let error =
+            select_resolved_relay_addr("relay.example", DnsAddressFamily::Any, 443, answers)
+                .expect_err("oversized DNS answer set must fail");
+        assert!(error.to_string().contains("more than"));
+    }
+    #[test]
     fn parse_multiaddr_rejects_non_udp_transport() {
-        let err = parse_multiaddr("/ip4/127.0.0.1/tcp/7777/quic").expect_err("must fail");
+        let err = parse_multiaddr("/ip4/93.184.216.34/tcp/7777/quic").expect_err("must fail");
         assert!(err.to_string().contains("transport"));
     }
     #[test]
     fn connect_payload_deserializes_camel_case() {
         let payload = test_connect_payload(TEST_SESSION_ID);
         assert_eq!(TEST_SESSION_ID, payload.session_id);
-        assert_eq!("/ip4/127.0.0.1/udp/7777/quic", payload.relay_endpoint);
+        assert_eq!("/ip4/93.184.216.34/udp/7777/quic", payload.relay_endpoint);
         assert_eq!(1280, payload.mtu_bytes);
         assert_eq!(15, payload.padding_budget_ms);
     }
@@ -10544,7 +11661,7 @@ mod tests {
         let state = State {
             owner_uid: Some(1_000),
             session_id: Some("session-1".to_owned()),
-            relay_endpoint: Some("/ip4/127.0.0.1/udp/7777/quic".to_owned()),
+            relay_endpoint: Some("/ip4/93.184.216.34/udp/7777/quic".to_owned()),
             relay_id: Some([0x22; 32]),
             network_policy_hash: Some([0x33; 32]),
             bytes_in: 7,
@@ -10609,23 +11726,142 @@ mod tests {
         assert!(overflow.overflow);
     }
     #[test]
-    fn command_deadline_terminates_descendants_holding_output_pipes() {
-        let shell = Path::new("/bin/sh");
-        if !shell.exists() {
+    fn command_cgroup_events_parser_requires_one_exact_populated_field() {
+        assert!(!parse_system_command_cgroup_populated("populated 0\nfrozen 0\n").unwrap());
+        assert!(parse_system_command_cgroup_populated("frozen 0\npopulated 1\n").unwrap());
+        for malformed in [
+            "",
+            "frozen 0\n",
+            "populated\n",
+            "populated 2\n",
+            "populated 0 extra\n",
+            "populated 0\npopulated 1\n",
+        ] {
+            assert!(
+                matches!(
+                    parse_system_command_cgroup_populated(malformed),
+                    Err(ControllerError::CommandCustody(_))
+                ),
+                "malformed cgroup.events must fail closed: {malformed:?}"
+            );
+        }
+    }
+    #[test]
+    fn command_cgroup_control_custody_rejects_delegated_or_writable_controls() {
+        assert!(system_command_cgroup_control_has_custody(
+            0, 0, 0o100644, 0o400
+        ));
+        assert!(system_command_cgroup_control_has_custody(
+            0, 0, 0o100200, 0o200
+        ));
+        for (uid, gid, mode) in [
+            (1_000, 0, 0o100644),
+            (0, 1_000, 0o100644),
+            (0, 0, 0o100664),
+            (0, 0, 0o100646),
+            (0, 0, 0o100044),
+        ] {
+            assert!(
+                !system_command_cgroup_control_has_custody(uid, gid, mode, 0o400),
+                "delegated or insufficient cgroup control custody must fail closed"
+            );
+        }
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn command_leader_observation_does_not_reap_or_release_its_process_group() {
+        let executable = Path::new("/bin/true");
+        if !executable.exists() {
             return;
         }
-        let started = Instant::now();
+        let mut command = ProcessCommand::new(executable);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command.process_group(0);
+        let mut child = command.spawn().expect("spawn direct command child");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if system_command_leader_exited_unreaped(child.id()).expect("observe direct child") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "direct command child did not exit"
+            );
+            sleep_blocking(SYSTEM_COMMAND_POLL_INTERVAL);
+        }
+        assert!(
+            system_command_leader_exited_unreaped(child.id()).expect("observe zombie again"),
+            "WNOWAIT must leave the leader waitable and its PID/PGID reserved"
+        );
+        kill_command_process_group(child.id()).expect("kill pinned process group");
+        assert!(
+            child
+                .try_wait()
+                .expect("reap exact direct child")
+                .expect("observed child remains waitable")
+                .success()
+        );
+    }
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn privileged_system_commands_fail_closed_outside_linux() {
         let error = execute_system_command(
+            "ip",
+            Path::new("/sbin/ip"),
+            &["route".to_owned()],
+            SYSTEM_COMMAND_TIMEOUT,
+        )
+        .expect_err("non-Linux system command execution must be unreachable");
+        assert!(error.to_string().contains("supported only on Linux"));
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires root and a writable cgroup-v2 mount"]
+    fn command_cgroup_kills_a_descendant_that_detaches_with_setsid() {
+        assert_eq!(
+            effective_uid(),
+            0,
+            "this custody integration test requires root"
+        );
+        let shell = Path::new("/bin/sh");
+        let setsid = [Path::new("/usr/bin/setsid"), Path::new("/bin/setsid")]
+            .into_iter()
+            .find(|candidate| candidate.exists())
+            .expect("setsid is required for the detached-descendant regression");
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("wall clock after Unix epoch")
+            .as_nanos();
+        let test_path = PathBuf::from(format!(
+            "/sys/fs/cgroup/sora-vpn-controller-test-{}-{nonce}",
+            std::process::id()
+        ));
+        let test_path = ensure_system_command_cgroup_at(&test_path)
+            .expect("create isolated command-custody test cgroup");
+        let script = format!("{} /bin/sleep 30 & /bin/sleep 0.1", setsid.display());
+        let started = Instant::now();
+        let result = execute_system_command_in_cgroup(
             "sh",
             shell,
-            &["-c".to_owned(), "sleep 30 & wait".to_owned()],
-            Duration::from_millis(25),
-        )
-        .expect_err("timed-out command group must fail");
-        assert!(error.to_string().contains("deadline"));
+            &["-c".to_owned(), script],
+            Duration::from_secs(2),
+            &test_path,
+        );
+        let cleanup = quiesce_system_command_cgroup_at_until(
+            &test_path,
+            Instant::now() + PROCESS_KILL_REAP_TIMEOUT,
+        );
+        let removal = fs::remove_dir(&test_path);
+
+        cleanup.expect("detached command cgroup must be proven empty");
+        removal.expect("remove isolated empty test cgroup");
+        result.expect("successful leader with detached descendant must retain exact exit status");
         assert!(
             started.elapsed() < Duration::from_secs(2),
-            "descendant inherited a pipe after command-group cleanup"
+            "setsid moved the descendant out of its PGID, but it must remain in recursive cgroup custody"
         );
     }
     #[tokio::test]
@@ -10639,8 +11875,10 @@ mod tests {
         payload.route_pushes = vec!["10.0.0.0/8".to_owned(); MAX_NETWORK_POLICY_ENTRIES_V1 + 1];
         let error = validate_connect_payload(payload)
             .expect_err("validator must enforce the route-count limit before any IPC encoding");
-        assert!(error.to_string().contains("routePushes"));
-        assert!(error.to_string().contains("64"));
+        let message = error.to_string();
+        assert!(message.contains("routePushes"));
+        assert!(message.contains("exceeds the v1 limit"));
+        assert!(message.contains(&MAX_NETWORK_POLICY_ENTRIES_V1.to_string()));
     }
     #[test]
     fn connect_payload_enforces_exact_v1_policy_cardinalities() {
@@ -10776,6 +12014,34 @@ mod tests {
                 .to_string()
                 .contains("exactly 64 lowercase hexadecimal characters")
         );
+
+        let mut uppercase_mldsa = test_connect_payload(TEST_SESSION_ID);
+        uppercase_mldsa
+            .relay_mldsa65_public_key_hex
+            .make_ascii_uppercase();
+        assert!(
+            validate_connect_payload(uppercase_mldsa)
+                .expect_err("uppercase ML-DSA-65 key must fail")
+                .to_string()
+                .contains("lowercase hexadecimal characters")
+        );
+        let mut zero_mldsa = test_connect_payload(TEST_SESSION_ID);
+        zero_mldsa.relay_mldsa65_public_key_hex =
+            "00".repeat(VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1);
+        assert!(
+            validate_connect_payload(zero_mldsa)
+                .expect_err("all-zero ML-DSA-65 key must fail")
+                .to_string()
+                .contains("must not be all zero")
+        );
+        let mut short_mldsa = test_connect_payload(TEST_SESSION_ID);
+        short_mldsa.relay_mldsa65_public_key_hex.pop();
+        assert!(
+            validate_connect_payload(short_mldsa)
+                .expect_err("short ML-DSA-65 key must fail")
+                .to_string()
+                .contains("lowercase hexadecimal characters")
+        );
     }
     #[test]
     fn connect_payload_rejects_unknown_aliases_and_duplicate_fields() {
@@ -10862,11 +12128,15 @@ mod tests {
         let payload = test_connect_payload(TEST_SESSION_ID);
         let mut variants = Vec::new();
         let mut changed = payload.clone();
-        changed.relay_endpoint = "/ip4/127.0.0.2/udp/7777/quic".to_owned();
+        changed.relay_endpoint = "/ip4/93.184.216.35/udp/7777/quic".to_owned();
         variants.push(("relay endpoint", changed));
         let mut changed = payload.clone();
         changed.descriptor_commit_hex = "ce".repeat(32);
         variants.push(("descriptor commitment", changed));
+        let mut changed = payload.clone();
+        changed.relay_mldsa65_public_key_hex =
+            hex::encode(test_relay_mldsa65_public_key_from_seed(0x46));
+        variants.push(("ML-DSA-65 relay identity", changed));
         let mut changed = payload.clone();
         changed.tls_server_name = "other.example".to_owned();
         variants.push(("TLS server name", changed));
@@ -10931,6 +12201,16 @@ mod tests {
             !tls_config.enable_early_data,
             "helper authentication must complete before application data"
         );
+    }
+    #[test]
+    fn vpn_quic_requires_exact_negotiated_alpn() {
+        validate_soranet_quic_alpn(Some(SORANET_QUIC_ALPN))
+            .expect("the canonical SoraNet ALPN must be accepted");
+        for protocol in [None, Some(b"".as_slice()), Some(b"h3".as_slice())] {
+            let error = validate_soranet_quic_alpn(protocol)
+                .expect_err("missing or mismatched ALPN must fail closed");
+            assert!(error.to_string().contains("exact SoraNet QUIC ALPN"));
+        }
     }
     #[test]
     fn helper_ticket_requires_the_pinned_issuer() {
@@ -11171,6 +12451,168 @@ mod tests {
         );
     }
     #[test]
+    fn excluded_route_plan_marks_ownership_and_uses_numeric_exact_readbacks() {
+        let mut outputs = ["\n", "default via 192.0.2.1 dev eth0 proto 4\n"].into_iter();
+        let mut commands = Vec::new();
+        let (snapshot, mutation) =
+            plan_excluded_route_mutation_with("198.51.100.0/24", |_program, args| {
+                commands.push(args);
+                Ok(outputs.next().expect("one fake route readback").to_owned())
+            })
+            .expect("plan exact helper-owned exclusion");
+        assert_eq!(snapshot.installed_route, None);
+        assert!(
+            commands
+                .iter()
+                .all(|args| args.iter().any(|arg| arg == "-N"))
+        );
+        assert_eq!(mutation[1..3], ["route", "add"]);
+        assert!(!mutation.iter().any(|argument| argument == "replace"));
+        assert!(mutation.ends_with(&["proto".to_owned(), "186".to_owned()]));
+        validate_installed_excluded_route(
+            &snapshot,
+            &mutation,
+            "198.51.100.0/24 via 192.0.2.1 dev eth0 proto 186",
+        )
+        .expect("exact numeric readback proves installed ownership");
+
+        for (cidr, installed) in [
+            (
+                "198.51.100.7/32",
+                "198.51.100.7 via 192.0.2.1 dev eth0 proto 186",
+            ),
+            (
+                "2001:db8::7/128",
+                "2001:db8::7 via 2001:db8::1 dev eth0 proto 186",
+            ),
+        ] {
+            let snapshot = ExcludedRouteSnapshot {
+                cidr: cidr.to_owned(),
+                family: parse_cidr(cidr).expect("host exclusion").family(),
+                installed_route: None,
+            };
+            let mutation = installed
+                .split_ascii_whitespace()
+                .take(7)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            validate_installed_excluded_route(&snapshot, &mutation, installed)
+                .expect("iproute2 host-route suffix elision remains semantically exact");
+        }
+    }
+    #[test]
+    fn excluded_route_plan_rejects_an_exact_ambient_route_without_mutation() {
+        let mut commands = Vec::new();
+        let error = plan_excluded_route_mutation_with("198.51.100.0/24", |_program, args| {
+            commands.push(args);
+            Ok("198.51.100.0/24 via 192.0.2.9 dev eth0 proto 4 metric 20\n".to_owned())
+        })
+        .expect_err("first-release exclusions never borrow or replace ambient exact routes");
+        assert!(
+            error
+                .to_string()
+                .contains("exact ambient route already exists")
+        );
+        assert_eq!(
+            commands.len(),
+            1,
+            "no default lookup or mutation follows rejection"
+        );
+    }
+    #[test]
+    fn excluded_route_restore_requires_exact_helper_owned_readback() {
+        let snapshot = ExcludedRouteSnapshot {
+            cidr: "198.51.100.0/24".to_owned(),
+            family: IpFamily::V4,
+            installed_route: Some("198.51.100.0/24 via 192.0.2.1 dev eth0 proto 186".to_owned()),
+        };
+        assert_eq!(
+            excluded_route_restore_action(
+                &snapshot,
+                Some("198.51.100.0/24 via 192.0.2.1 dev eth0 proto 186"),
+            )
+            .expect("exact installed readback is helper-owned"),
+            ExcludedRouteRestoreAction::DeleteInstalled
+        );
+        assert_eq!(
+            excluded_route_restore_action(&snapshot, None).expect("absence is idempotent"),
+            ExcludedRouteRestoreAction::AlreadyAbsent
+        );
+        let drift = excluded_route_restore_action(
+            &snapshot,
+            Some("198.51.100.0/24 via 203.0.113.1 dev eth1 proto 4"),
+        )
+        .expect_err("live external drift must never be overwritten");
+        assert!(drift.to_string().contains("live route state drifted"));
+
+        let unproven = ExcludedRouteSnapshot {
+            installed_route: None,
+            ..snapshot
+        };
+        assert_eq!(
+            excluded_route_restore_action(&unproven, None).expect("no route needs no cleanup"),
+            ExcludedRouteRestoreAction::AlreadyAbsent
+        );
+        assert!(
+            excluded_route_restore_action(
+                &unproven,
+                Some("198.51.100.0/24 via 192.0.2.1 dev eth0 proto 186"),
+            )
+            .is_err(),
+            "a crash before exact installed readback persistence must retain repair state"
+        );
+    }
+    #[test]
+    fn exact_route_readback_rejects_ambiguous_results() {
+        assert_eq!(
+            exact_route_readback("\n", "198.51.100.0/24").expect("absent route"),
+            None
+        );
+        assert_eq!(
+            exact_route_readback(
+                "198.51.100.7 via 192.0.2.1 dev eth0 proto 186\n",
+                "198.51.100.7/32",
+            )
+            .expect("IPv4 host route is semantically exact")
+            .as_deref(),
+            Some("198.51.100.7 via 192.0.2.1 dev eth0 proto 186")
+        );
+        assert_eq!(
+            exact_route_readback(
+                "2001:db8::7 via 2001:db8::1 dev eth0 proto 186\n",
+                "2001:db8::7/128",
+            )
+            .expect("IPv6 host route is semantically exact")
+            .as_deref(),
+            Some("2001:db8::7 via 2001:db8::1 dev eth0 proto 186")
+        );
+        assert!(
+            exact_route_readback(
+                "198.51.100.0/24 dev eth0\n198.51.100.0/24 dev eth1\n",
+                "198.51.100.0/24",
+            )
+            .is_err()
+        );
+        assert!(
+            exact_route_readback("198.51.100.8 dev eth0\n", "198.51.100.7/32").is_err(),
+            "a single nonmatching route is not an exact-prefix readback"
+        );
+    }
+    #[test]
+    fn v1_dns_requires_resolvectl_without_resolv_conf_fallback() {
+        let dns = vec!["1.1.1.1".to_owned()];
+        let error = plan_dns_backend_for_availability("srvpn0000000000", &dns, false)
+            .expect_err("direct resolv.conf mutation is outside the V1 contract");
+        assert!(error.to_string().contains("requires a trusted resolvectl"));
+        assert!(
+            matches!(
+                plan_dns_backend_for_availability("srvpn0000000000", &dns, true),
+                Ok(Some(DnsBackendState::Resolved { .. }))
+            ),
+            "trusted resolvectl is the only V1 DNS backend"
+        );
+    }
+    #[test]
     fn desired_interface_name_is_derived_from_the_authenticated_session() {
         let derived = desired_interface_name("deadbeef").expect("name");
         assert!(derived.starts_with("srvpn"));
@@ -11234,22 +12676,50 @@ mod tests {
         }
     }
     #[test]
-    fn public_connect_deadline_covers_every_bounded_v1_child_phase() {
-        let conservative_system_commands =
-            VPN_MAX_ROUTE_ENTRIES_V1 + 2 * VPN_MAX_ROUTE_ENTRIES_V1 + 16;
-        let child_bound = NETWORK_WORKER_READY_TIMEOUT
-            + NETWORK_WORKER_READY_TIMEOUT
+    fn privileged_preparation_has_one_deadline_inside_the_worker_tun_wait() {
+        assert!(
+            PRIVILEGED_PREPARATION_TIMEOUT < NETWORK_WORKER_TUN_TIMEOUT,
+            "root preparation must fail before the unprivileged worker abandons its TUN wait"
+        );
+        let child_bound = NETWORK_WORKER_READY_TIMEOUT * 4
             + NETWORK_WORKER_TUN_TIMEOUT
-            + SYSTEM_COMMAND_TIMEOUT
-                * u32::try_from(conservative_system_commands).expect("small V1 command count");
+            + PRIVILEGED_PREPARATION_TIMEOUT;
         assert!(
             CONNECT_READY_TIMEOUT > child_bound,
             "the public parent must never kill a legitimate bounded child phase early"
         );
+        let now = Instant::now();
+        let preparation_deadline = now + PRIVILEGED_PREPARATION_TIMEOUT;
+        let first = privileged_command_deadlines(preparation_deadline)
+            .expect("reserve one fixed command-custody interval");
+        let second = privileged_command_deadlines(preparation_deadline)
+            .expect("route count must not create a new relative deadline");
+        assert_eq!(first, second);
+        assert_eq!(first.1, preparation_deadline);
+        assert_eq!(first.0 + PROCESS_KILL_REAP_TIMEOUT, preparation_deadline);
+        assert_eq!(
+            privileged_preparation_deadline_at(now, Duration::from_secs(7))
+                .expect("short authenticated lifetime fits monotonic clock"),
+            now + Duration::from_secs(7),
+            "the signed ticket lifetime must shorten root mutation authority"
+        );
+        assert_eq!(
+            privileged_preparation_deadline_at(now, Duration::from_secs(90))
+                .expect("long authenticated lifetime fits monotonic clock"),
+            preparation_deadline,
+            "the fixed preparation timeout remains the upper bound"
+        );
+        ensure_privileged_preparation_deadline_at(preparation_deadline, now)
+            .expect("future absolute deadline");
+        assert!(
+            ensure_privileged_preparation_deadline_at(preparation_deadline, preparation_deadline,)
+                .is_err(),
+            "the absolute preparation deadline is strict"
+        );
     }
     #[test]
     fn cli_requires_connect_payload_on_stdin() {
-        let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280}"#;
+        let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/93.184.216.34/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","relayTlsSpkiSha256Hex":"abababababababababababababababababababababababababababababababab","paddingBudgetMs":15,"routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280}"#;
         parse_fixed_cli_arguments(vec!["connect".to_owned(), payload.to_owned()])
             .expect_err("connect secrets must not be accepted through argv");
         let cli = parse_fixed_cli_arguments(vec!["connect".to_owned()]).expect("parse");
@@ -11346,6 +12816,25 @@ mod tests {
         builder.mode(0o700);
         builder.create(&path).expect("create private test root");
         path
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fresh_command_file_has_no_privilege_capability_xattr() {
+        let root = private_test_state_root("command-capability-xattr");
+        let path = root.join("command");
+        let mut options = fs::OpenOptions::new();
+        options
+            .create_new(true)
+            .write(true)
+            .mode(0o700)
+            .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+        drop(options.open(&path).expect("create command fixture"));
+        assert!(
+            !system_executable_has_file_capabilities(&path)
+                .expect("query absent security.capability xattr")
+        );
+        fs::remove_file(path).expect("remove command fixture");
+        fs::remove_dir(root).expect("remove command fixture root");
     }
     #[test]
     #[cfg(unix)]
@@ -11526,7 +13015,9 @@ mod tests {
     }
     #[test]
     fn status_never_discloses_another_local_users_session() {
-        let state = cleanup_test_state(DnsBackendState::ResolvConf);
+        let state = cleanup_test_state(DnsBackendState::Resolved {
+            interface_name: "srvpn0000000000".to_owned(),
+        });
         assert!(
             authorize_status_access(
                 &state,
@@ -11584,7 +13075,7 @@ mod tests {
             }),
             owner_uid: Some(1_000),
             session_id: Some("session-1".to_owned()),
-            relay_endpoint: Some("/ip4/127.0.0.1/udp/7777/quic".to_owned()),
+            relay_endpoint: Some("/ip4/93.184.216.34/udp/7777/quic".to_owned()),
             relay_id: Some([0x22; 32]),
             network_policy_hash: Some([0x11; 32]),
             interface_name: Some("srvpn0000000000".to_owned()),
@@ -11631,7 +13122,7 @@ mod tests {
         state.worker_identity.as_mut().expect("identity").pid = 42;
         state.owner_uid = Some(1_000);
         state.session_id = Some("session-1".to_owned());
-        state.relay_endpoint = Some("/ip4/127.0.0.1/udp/7777/quic".to_owned());
+        state.relay_endpoint = Some("/ip4/93.184.216.34/udp/7777/quic".to_owned());
         state.relay_id = Some([0x22; 32]);
         state.network_policy_hash = Some([0x11; 32]);
         assert!(validate_state_invariants(&state).is_ok());
@@ -11681,7 +13172,7 @@ mod tests {
         let state = State {
             owner_uid: Some(1_000),
             session_id: Some("session-1".to_owned()),
-            relay_endpoint: Some("/ip4/127.0.0.1/udp/7777/quic".to_owned()),
+            relay_endpoint: Some("/ip4/93.184.216.34/udp/7777/quic".to_owned()),
             relay_id: Some([0x22; 32]),
             network_policy_hash: Some([0x11; 32]),
             ..State::default()
@@ -11754,6 +13245,17 @@ mod tests {
             ),
             "extra argv is identity drift, never an exact internal launch"
         );
+        for ambiguous in [
+            b"/proc/self/exe\0run-tunnel".as_slice(),
+            b"/proc/self/exe\0run-tunnel\0\0".as_slice(),
+            b"\0/proc/self/exe\0run-tunnel\0".as_slice(),
+            b"/proc/self/exe\0\0run-tunnel\0".as_slice(),
+        ] {
+            assert!(
+                !worker_cmdline_has_exact_role(ambiguous, WorkerRole::Tunnel),
+                "empty fields and missing terminators are argv identity drift"
+            );
+        }
         assert!(
             !worker_cmdline_has_exact_role(b"/bin/other\0changed-role\0", WorkerRole::Tunnel,),
             "same start time with exec/argv drift stays a live process for pidfd termination but fails status authentication"

@@ -938,12 +938,12 @@ fn assert_canonical_privacy_intent_kat(
     );
     assert_eq!(
         normalized_bytes.len(),
-        50_201,
+        50_206,
         "the canonical fixture wire length is part of the cross-SDK KAT"
     );
     assert_eq!(
         hex::encode(expected.as_bytes()),
-        "72e54af5346fdba4d311f23bfcf6318b13a6d39a21e8bae5e8da661f1b31a170",
+        "b6fcc9f51d979881edf5e803fb48e628ac5a8bb95b742edf0957bd98160133e4",
         "canonical privacy transaction-intent V1 digest"
     );
 }
@@ -1246,7 +1246,7 @@ fn vega_intent_projection_zeroes_only_the_derived_hdev_and_breaks_its_cycle() {
         .expect("derive Vega draft intent");
     assert_eq!(
         hex::encode(expected.as_bytes()),
-        "6d058852d1270fccfea6fc72fcdf588043f563e9bb98a54fdd97df2374933384",
+        "855a4bf9e05cb7ccea44020ccc6cdbc1bea2ba9bb3a4a2e74d0a38abae84615b",
         "canonical Vega two-phase transaction-intent projection KAT"
     );
     let mut changed_hdev = payload.clone();
@@ -2693,6 +2693,62 @@ fn verify_signature_accepts_multisig_with_quorum() {
             .verify_signature()
             .expect_err("the primary signature must duplicate the first canonical bundle item"),
         TransactionSignatureError::NonCanonicalMultisigSignatures
+    );
+}
+#[cfg(feature = "json")]
+#[test]
+fn signed_transaction_json_rejects_unknown_authorization_envelope_fields() {
+    let mut single = norito::json::to_value(&sample_signed_transaction())
+        .expect("serialize signed transaction JSON");
+    single
+        .as_object_mut()
+        .expect("signed transaction envelope")
+        .insert("legacy".to_owned(), norito::json::Value::Null);
+    assert!(
+        norito::json::from_value::<SignedTransaction>(single).is_err(),
+        "unknown signed-transaction field must fail closed"
+    );
+
+    let signer = checked_random_keypair();
+    let member =
+        MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
+    let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
+    let payload = empty_multisig_payload(0x2F, policy);
+    let member_signature = checked_transaction_payload_signature(signer.private_key(), &payload);
+    let transaction = SignedTransaction {
+        signature: TransactionSignature(member_signature.clone()),
+        payload,
+        multisig_signatures: Some(MultisigSignatures::new(vec![MultisigSignature::new(
+            signer.public_key().clone(),
+            member_signature,
+        )])),
+    };
+    let canonical =
+        norito::json::to_value(&transaction).expect("serialize multisig transaction JSON");
+
+    let mut bundle = canonical.clone();
+    bundle
+        .get_mut("multisig_signatures")
+        .and_then(norito::json::Value::as_object_mut)
+        .expect("multisig bundle envelope")
+        .insert("legacy".to_owned(), norito::json::Value::Null);
+    assert!(
+        norito::json::from_value::<SignedTransaction>(bundle).is_err(),
+        "unknown multisig bundle field must fail closed"
+    );
+
+    let mut entry = canonical;
+    entry
+        .get_mut("multisig_signatures")
+        .and_then(|bundle| bundle.get_mut("signatures"))
+        .and_then(norito::json::Value::as_array_mut)
+        .and_then(|signatures| signatures.first_mut())
+        .and_then(norito::json::Value::as_object_mut)
+        .expect("multisig signature envelope")
+        .insert("legacy".to_owned(), norito::json::Value::Null);
+    assert!(
+        norito::json::from_value::<SignedTransaction>(entry).is_err(),
+        "unknown multisig signature field must fail closed"
     );
 }
 #[test]

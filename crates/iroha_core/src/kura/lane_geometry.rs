@@ -7,8 +7,8 @@ use super::{
     AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES, AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES,
     AutonomousLaneBlockArtifact, AutonomousLaneBlockLatestAttemptV1, AutonomousLaneMergeBundleV1,
     AutonomousLifecycleBootstrapRecoveryStage, AutonomousLifecycleBootstrapV1,
-    AutonomousLifecycleCursorPhaseKindV2, AutonomousLifecycleCursorPhaseV2,
-    AutonomousLifecycleCursorV2, AutonomousLifecycleTerminalOutcomeSourceV1,
+    AutonomousLifecycleCursorPhaseKindV1, AutonomousLifecycleCursorPhaseV1,
+    AutonomousLifecycleCursorV1, AutonomousLifecycleTerminalOutcomeSourceV1,
     AutonomousLifecycleTerminalOutcomeV1, BlockStore, BlockStoreCommitMarker,
     BoundProgressDirectory, BoundProgressNamespace, BoundProgressPair,
     BoundProgressRecoveryFailure, CERTIFIED_LANE_BLOCKS_DATA_FILE,
@@ -9758,7 +9758,7 @@ impl Kura {
         let mut view_identities = BTreeSet::new();
         let mut height_pointers = BTreeMap::new();
         let mut route_pointer = None;
-        let mut lifecycle_cursors = BTreeMap::<(u64, u64), AutonomousLifecycleCursorV2>::new();
+        let mut lifecycle_cursors = BTreeMap::<(u64, u64), AutonomousLifecycleCursorV1>::new();
         let mut lifecycle_terminal_outcomes =
             BTreeMap::<(u64, u64), (PathBuf, AutonomousLifecycleTerminalOutcomeV1)>::new();
         let mut lifecycle_bootstraps =
@@ -10306,7 +10306,7 @@ impl Kura {
                     )
                 })?;
                 if cursor.sequence() == 1
-                    && cursor.phase_kind() == AutonomousLifecycleCursorPhaseKindV2::Prepared
+                    && cursor.phase_kind() == AutonomousLifecycleCursorPhaseKindV1::Prepared
                     && !lifecycle_bootstraps.contains_key(&identity)
                 {
                     return Err(self.geometry_error(
@@ -10398,7 +10398,7 @@ impl Kura {
                 if require_terminal_lifecycle {
                     let signed_terminal = matches!(
                         cursor.phase(),
-                        AutonomousLifecycleCursorPhaseV2::Terminal { .. }
+                        AutonomousLifecycleCursorPhaseV1::Terminal { .. }
                     );
                     let complete_canonical = outcome.is_some_and(|(_, outcome)| {
                         outcome.is_complete() && outcome.source().is_canonical_carrier()

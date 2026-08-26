@@ -1,10 +1,10 @@
 //! Crash-safe local Norito journal for pending queue routing plans.
 use super::{
-    LaneQueueReservationKeyV2, LaneQueueReservationOwnerPhaseV6,
-    LaneQueueReservationRecoveryPhaseV1, QueuePlanAdmissionContextV2,
-    QueuePlanGlobalAdmissionIdentityV2, QueuePlanReservationPhaseV1, RoutingPlan,
+    LaneQueueReservationKeyV1, LaneQueueReservationOwnerPhaseV1,
+    LaneQueueReservationRecoveryPhaseV1, QueuePlanAdmissionContextV1,
+    QueuePlanGlobalAdmissionIdentityV1, QueuePlanReservationPhaseV1, RoutingPlan,
 };
-use crate::torii_proxy::QueuePlanAdmissionBindingV2;
+use crate::torii_proxy::QueuePlanAdmissionBindingV1;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::transaction::{SignedTransaction, TransactionEntrypoint};
 use norito::codec::{Decode, Encode};
@@ -24,10 +24,10 @@ use std::{
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
-const QUEUE_PLAN_JOURNAL_FRAME_DOMAIN: &[u8] = b"iroha:queue-plan-journal-frame:v4";
-const QUEUE_PLAN_JOURNAL_RECORD_CLAIM_DOMAIN: &[u8] = b"iroha:queue-plan-journal-record-claim:v4";
-const QUEUE_PLAN_JOURNAL_BOOTSTRAP_DOMAIN: &[u8] = b"iroha:queue-plan-journal-bootstrap:v4";
-const QUEUE_PLAN_JOURNAL_SNAPSHOT_DOMAIN: &[u8] = b"iroha:queue-plan-journal-snapshot:v4";
+const QUEUE_PLAN_JOURNAL_FRAME_DOMAIN: &[u8] = b"iroha:queue-plan-journal-frame:v1";
+const QUEUE_PLAN_JOURNAL_RECORD_CLAIM_DOMAIN: &[u8] = b"iroha:queue-plan-journal-record-claim:v1";
+const QUEUE_PLAN_JOURNAL_BOOTSTRAP_DOMAIN: &[u8] = b"iroha:queue-plan-journal-bootstrap:v1";
+const QUEUE_PLAN_JOURNAL_SNAPSHOT_DOMAIN: &[u8] = b"iroha:queue-plan-journal-snapshot:v1";
 const QUEUE_PLAN_STARTUP_LIVE_ROOT_EMPTY_DOMAIN: &[u8] =
     b"iroha:queue-plan-startup-live-root:empty:v1\0";
 const QUEUE_PLAN_STARTUP_LIVE_ROOT_STEP_DOMAIN: &[u8] =
@@ -40,9 +40,9 @@ const QUEUE_PLAN_STARTUP_PHASE_ROOT_STEP_DOMAIN: &[u8] =
     b"iroha:queue-plan-startup-reservation-phase-root:step:v1\0";
 const QUEUE_PLAN_STARTUP_PHASE_ROOT_FINAL_DOMAIN: &[u8] =
     b"iroha:queue-plan-startup-reservation-phase-root:final:v1\0";
-const QUEUE_PLAN_JOURNAL_FRAME_MAGIC: [u8; 8] = *b"IRQPJNL4";
-const QUEUE_PLAN_JOURNAL_FRAME_COMMIT: [u8; 8] = *b"IRQPEND4";
-const QUEUE_PLAN_JOURNAL_FRAME_FORMAT_VERSION: u16 = 4;
+const QUEUE_PLAN_JOURNAL_FRAME_MAGIC: [u8; 8] = *b"IRQPJNL1";
+const QUEUE_PLAN_JOURNAL_FRAME_COMMIT: [u8; 8] = *b"IRQPEND1";
+const QUEUE_PLAN_JOURNAL_FRAME_FORMAT_VERSION: u16 = 1;
 const FRAME_HEADER_BYTES: u64 = 8 + 2 + 4 + 4;
 const FRAME_TRAILER_BYTES: u64 = Hash::LENGTH as u64 + 8;
 // Native deployment frames contain a nested instruction archive whose decoded
@@ -57,7 +57,7 @@ const FRAME_DECODE_ELEMENT_AMPLIFICATION_LIMIT: usize = 2;
 const FRAME_DECODE_ALLOCATION_AMPLIFICATION_LIMIT: usize = 64;
 const FRAME_DECODE_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 64 * 1024;
 /// Version of durable queue plan journal records.
-pub const QUEUE_PLAN_JOURNAL_VERSION: u16 = 4;
+pub const QUEUE_PLAN_JOURNAL_VERSION: u16 = 1;
 type SignedTxHash = HashOf<SignedTransaction>;
 type QueuePlanJournalKey = HashOf<TransactionEntrypoint>;
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,12 +65,12 @@ struct QueuePlanJournalLivePosition {
     plan_digest: Hash,
     claim_digest: Hash,
     ownership_position: u64,
-    record: QueuePlanJournalRecordV4,
+    record: QueuePlanJournalRecordV1,
 }
 impl QueuePlanJournalLivePosition {
-    fn global_admission_binding(&self) -> io::Result<QueuePlanAdmissionBindingV2> {
-        let durable_admission = super::QueuePlanDurableAdmissionV2 {
-            version: super::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+    fn global_admission_binding(&self) -> io::Result<QueuePlanAdmissionBindingV1> {
+        let durable_admission = super::QueuePlanDurableAdmissionV1 {
+            version: super::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
             context: self.record.admission_context.clone(),
             global_admission_identity: self.record.global_admission_identity.clone(),
             routing_plan: self.record.routing_plan.clone(),
@@ -79,7 +79,7 @@ impl QueuePlanJournalLivePosition {
             enqueue_timestamp_ms: self.record.enqueue_timestamp_ms,
             journal_record_digest: self.claim_digest,
         };
-        let binding = QueuePlanAdmissionBindingV2::try_from_durable_admission(&durable_admission)
+        let binding = QueuePlanAdmissionBindingV1::try_from_durable_admission(&durable_admission)
             .map_err(invalid_data)?;
         binding
             .validate_for_transaction_and_plan(&self.record.entrypoint, &self.record.routing_plan)
@@ -88,7 +88,7 @@ impl QueuePlanJournalLivePosition {
     }
     fn validate_global_admission_for_reservation_commit(
         &self,
-        key: &LaneQueueReservationKeyV2,
+        key: &LaneQueueReservationKeyV1,
     ) -> io::Result<()> {
         if self.record.entrypoint_hash != key.entrypoint_hash
             || self.plan_digest != key.routing_plan_digest
@@ -105,7 +105,7 @@ impl QueuePlanJournalLivePosition {
 /// One exact removal carried by an atomic queue-plan journal batch tombstone.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct QueuePlanJournalRemovalV4 {
+struct QueuePlanJournalRemovalV1 {
     /// Typed canonical queue identity.
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     /// Full routing-plan digest that was removed.
@@ -184,7 +184,7 @@ impl QueuePlanJournalLimits {
             .map_err(|_| invalid_input("queue plan journal bootstrap exceeds u64"))?;
         if bootstrap_payload_bytes == 0 || bootstrap_payload_bytes > self.max_frame_payload_bytes {
             return Err(invalid_input(
-                "queue plan journal frame limit cannot hold the V4 bootstrap payload",
+                "queue plan journal frame limit cannot hold the V1 bootstrap payload",
             ));
         }
         let bootstrap_frame_bytes = FRAME_HEADER_BYTES
@@ -193,12 +193,12 @@ impl QueuePlanJournalLimits {
             .ok_or_else(|| invalid_input("queue plan journal bootstrap frame size overflow"))?;
         if bootstrap_frame_bytes > self.max_file_bytes {
             return Err(invalid_input(
-                "queue plan journal file limit cannot hold the V4 bootstrap frame",
+                "queue plan journal file limit cannot hold the V1 bootstrap frame",
             ));
         }
         if bootstrap_frame_bytes > self.max_bytes_before_compact {
             return Err(invalid_input(
-                "queue plan journal compaction threshold cannot be smaller than its V4 bootstrap frame",
+                "queue plan journal compaction threshold cannot be smaller than its V1 bootstrap frame",
             ));
         }
         Ok(self)
@@ -206,7 +206,7 @@ impl QueuePlanJournalLimits {
 }
 /// Pending transaction routing-plan journal record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct QueuePlanJournalRecordV4 {
+pub struct QueuePlanJournalRecordV1 {
     /// Record format version.
     pub version: u16,
     /// Canonical transaction entrypoint.
@@ -218,24 +218,24 @@ pub struct QueuePlanJournalRecordV4 {
     /// Full routing plan admitted for this transaction.
     pub routing_plan: RoutingPlan,
     /// Exact coherent committed generation that admitted `routing_plan`.
-    pub admission_context: QueuePlanAdmissionContextV2,
+    pub admission_context: QueuePlanAdmissionContextV1,
     /// Canonical ingress enqueue timestamp in milliseconds.
     pub enqueue_timestamp_ms: u64,
     /// Global exact-network/request identity for a globally certified admission.
     ///
     /// Ordinary internal queue ownership has no global identity. QueuePlanSynced ownership must
     /// carry this field and reproduce it exactly after restart.
-    pub global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
+    pub global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV1>,
 }
-impl QueuePlanJournalRecordV4 {
-    /// Construct a version-4 journal record.
+impl QueuePlanJournalRecordV1 {
+    /// Construct a version-1 journal record.
     #[must_use]
     pub fn new(
         entrypoint: TransactionEntrypoint,
         routing_plan: RoutingPlan,
-        admission_context: QueuePlanAdmissionContextV2,
+        admission_context: QueuePlanAdmissionContextV1,
         enqueue_timestamp_ms: u64,
-        global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
+        global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV1>,
     ) -> Self {
         let entrypoint_hash = entrypoint.hash();
         let signed_transaction_hash = crate::tx::exact_signed_transaction_hash(&entrypoint);
@@ -271,7 +271,7 @@ impl QueuePlanJournalRecordV4 {
 }
 /// One append-only queue plan journal operation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-enum QueuePlanJournalFrameV4 {
+enum QueuePlanJournalFrameV1 {
     /// Typed file-format marker atomically installed before any ownership operation.
     Bootstrap {
         /// Bootstrap format version.
@@ -280,7 +280,7 @@ enum QueuePlanJournalFrameV4 {
         format_digest: Hash,
     },
     /// Add or replace a pending queue record.
-    Put(QueuePlanJournalRecordV4),
+    Put(QueuePlanJournalRecordV1),
     /// Tombstone a pending queue record.
     Remove {
         /// Typed canonical queue identity.
@@ -294,7 +294,7 @@ enum QueuePlanJournalFrameV4 {
     ///
     /// Replay applies this frame only when every removal matches the live state at the same
     /// prefix. One absent, duplicate, or mismatched removal invalidates the complete frame.
-    RemoveBatch(Vec<QueuePlanJournalRemovalV4>),
+    RemoveBatch(Vec<QueuePlanJournalRemovalV1>),
 }
 /// Typed failure from a strict, synchronously durable journal replacement.
 #[derive(Debug)]
@@ -471,9 +471,9 @@ pub struct QueuePlanJournalReplay {
     live_positions: BTreeMap<QueuePlanJournalKey, QueuePlanJournalLivePosition>,
     removed_positions: BTreeMap<QueuePlanJournalKey, QueuePlanJournalLivePosition>,
 }
-/// Canonical identity of one live V4 QueuePlan claim.
+/// Canonical identity of one live V1 QueuePlan claim.
 ///
-/// The record digest binds the complete typed V4 record. Retaining the typed
+/// The record digest binds the complete typed V1 record. Retaining the typed
 /// entrypoint and routing-plan identities separately makes duplicate/ABA
 /// classification explicit before the rolling root is computed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -482,12 +482,12 @@ pub(super) struct QueuePlanStartupLiveClaimIdentityV1 {
     pub(super) routing_plan_digest: Hash,
     pub(super) journal_record_digest: Hash,
 }
-/// Non-authorizing identity of the exact post-replay V4 journal publication.
+/// Non-authorizing identity of the exact post-replay V1 journal publication.
 ///
 /// This value is process-local evidence, not permission to publish Queue
 /// ownership. It binds the direct journal and parent identities, exact byte
 /// length and content digest, the complete canonical live-record root, and the
-/// exact live/tombstoned classification of every V6 startup owner.
+/// exact live/tombstoned classification of every V1 startup owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct QueuePlanStartupReplayReceiptV1 {
     file_identity: JournalFileIdentity,
@@ -683,7 +683,7 @@ impl QueuePlanJournalReplay {
     ///
     /// # Errors
     /// Returns I/O, malformed-frame, materialized-record, or snapshot consistency errors.
-    pub fn into_verified_records(mut self) -> io::Result<Vec<QueuePlanJournalRecordV4>> {
+    pub fn into_verified_records(mut self) -> io::Result<Vec<QueuePlanJournalRecordV1>> {
         let records = self.live_positions.len();
         self.verify_snapshot_content()?;
         let mut ordered = std::mem::take(&mut self.live_positions)
@@ -723,7 +723,7 @@ impl QueuePlanJournalReplay {
     /// returned by `handle_record`.
     pub fn for_each_record<F>(self, mut handle_record: F) -> io::Result<usize>
     where
-        F: FnMut(QueuePlanJournalRecordV4) -> io::Result<()>,
+        F: FnMut(QueuePlanJournalRecordV1) -> io::Result<()>,
     {
         let records = self.into_verified_records()?;
         let record_count = records.len();
@@ -760,12 +760,12 @@ impl QueuePlanJournalFlush {
     }
 }
 impl QueuePlanJournal {
-    /// Open or create a bounded V4 queue plan journal.
+    /// Open or create a bounded V1 queue plan journal.
     ///
     /// An empty canonical file is only an initialization state: before this method returns it is
-    /// atomically replaced by a durable typed V4 bootstrap frame. Every initialized journal must
-    /// begin with exactly that marker, and every nonempty legacy, headerless, or unknown layout
-    /// fails closed. Startup repairs only a bounded terminal tear admitted by the staged V4 write
+    /// atomically replaced by a durable typed V1 bootstrap frame. Every initialized journal must
+    /// begin with exactly that marker, and every nonempty headerless or unknown layout
+    /// fails closed. Startup repairs only a bounded terminal tear admitted by the staged V1 write
     /// protocol after the bootstrap and durably synchronizes both the repaired file and its parent
     /// directory.
     ///
@@ -803,7 +803,7 @@ impl QueuePlanJournal {
             }
         }
         prepare_regular_journal_path(&path)?;
-        ensure_durable_v4_bootstrap(&path, limits)?;
+        ensure_durable_v1_bootstrap(&path, limits)?;
         repair_incomplete_tail(&path, limits)?;
         if let Some(pending_compaction) = pending_compaction {
             reconcile_pending_compaction_temp(&path, limits, pending_compaction)?;
@@ -886,14 +886,14 @@ impl QueuePlanJournal {
     /// restart reconciliation.
     pub fn replace_strict_durable(
         &mut self,
-        record: QueuePlanJournalRecordV4,
+        record: QueuePlanJournalRecordV1,
     ) -> Result<(), QueuePlanJournalStrictPutError> {
         if self.poisoned {
             return Err(QueuePlanJournalStrictPutError::indeterminate(
                 poisoned_journal_error(),
             ));
         }
-        let replacement = encode_frame(&QueuePlanJournalFrameV4::Put(record), self.limits)
+        let replacement = encode_frame(&QueuePlanJournalFrameV1::Put(record), self.limits)
             .map_err(|error| QueuePlanJournalStrictPutError::definitely_not_live(error, false))?;
         if let Err(initial_capacity_error) = self.ensure_append_capacity(replacement.len()) {
             if self.poisoned {
@@ -1031,7 +1031,7 @@ impl QueuePlanJournal {
                 continue;
             }
             let encoded = encode_frame(
-                &QueuePlanJournalFrameV4::Remove {
+                &QueuePlanJournalFrameV1::Remove {
                     entrypoint_hash: *entrypoint_hash,
                     plan_digest: *plan_digest,
                     claim_digest: *claim_digest,
@@ -1131,21 +1131,21 @@ impl QueuePlanJournal {
         let requested = removals
             .iter()
             .map(
-                |(entrypoint_hash, plan_digest, claim_digest)| QueuePlanJournalRemovalV4 {
+                |(entrypoint_hash, plan_digest, claim_digest)| QueuePlanJournalRemovalV1 {
                     entrypoint_hash: *entrypoint_hash,
                     plan_digest: *plan_digest,
                     claim_digest: *claim_digest,
                 },
             )
             .collect::<Vec<_>>();
-        validate_frame(&QueuePlanJournalFrameV4::RemoveBatch(requested.clone()))?;
+        validate_frame(&QueuePlanJournalFrameV1::RemoveBatch(requested.clone()))?;
         let entrypoints = requested
             .iter()
             .map(|removal| removal.entrypoint_hash)
             .collect::<BTreeSet<_>>();
         let classify = |mut replay: QueuePlanJournalReplay| -> io::Result<(
             Vec<QueuePlanJournalExactRemoveResult>,
-            Vec<QueuePlanJournalRemovalV4>,
+            Vec<QueuePlanJournalRemovalV1>,
         )> {
             replay.verify_snapshot_content()?;
             let mut outcomes = Vec::with_capacity(requested.len());
@@ -1196,7 +1196,7 @@ impl QueuePlanJournal {
             return Ok(outcomes);
         }
         let encoded = encode_frame(
-            &QueuePlanJournalFrameV4::RemoveBatch(live_removals.clone()),
+            &QueuePlanJournalFrameV1::RemoveBatch(live_removals.clone()),
             self.limits,
         )?;
         if let Err(initial_capacity_error) = self.ensure_append_capacity(encoded.len()) {
@@ -1230,10 +1230,10 @@ impl QueuePlanJournal {
     ///
     /// This restart-safe form does not trust the caller to retain the process-local journal claim
     /// digest. It reconstructs and validates the complete global admission binding from the live
-    /// V4 record in a content-bound replay snapshot, checks the exact entrypoint, routing-plan
+    /// V1 record in a content-bound replay snapshot, checks the exact entrypoint, routing-plan
     /// digest, and canonical binding hash supplied by the caller, then delegates to the ordinary
     /// exact tombstone with the live record's claim digest. An absent entrypoint is idempotent only
-    /// while the exact retained V4 tombstone still validates; an unproven absence and every
+    /// while the exact retained V1 tombstone still validates; an unproven absence and every
     /// mismatch fail closed without appending.
     ///
     /// # Errors
@@ -1242,7 +1242,7 @@ impl QueuePlanJournal {
     /// synchronization boundary poisons this open journal.
     pub fn remove_exact_global_admission_binding_strict_durable(
         &mut self,
-        key: &LaneQueueReservationKeyV2,
+        key: &LaneQueueReservationKeyV1,
     ) -> io::Result<QueuePlanJournalExactRemoveResult> {
         self.ensure_healthy()?;
         key.validate().map_err(invalid_data)?;
@@ -1287,7 +1287,7 @@ impl QueuePlanJournal {
     /// poisons this open journal.
     pub fn remove_exact_global_admission_bindings_strict_durable(
         &mut self,
-        keys: &[LaneQueueReservationKeyV2],
+        keys: &[LaneQueueReservationKeyV1],
     ) -> io::Result<Vec<QueuePlanJournalExactRemoveResult>> {
         self.ensure_healthy()?;
         if keys.is_empty() {
@@ -1315,7 +1315,7 @@ impl QueuePlanJournal {
             for key in keys {
                 if let Some(live) = replay.live_positions.get(&key.entrypoint_hash) {
                     live.validate_global_admission_for_reservation_commit(key)?;
-                    let removal = QueuePlanJournalRemovalV4 {
+                    let removal = QueuePlanJournalRemovalV1 {
                         entrypoint_hash: key.entrypoint_hash.clone(),
                         plan_digest: live.plan_digest,
                         claim_digest: live.claim_digest,
@@ -1340,7 +1340,7 @@ impl QueuePlanJournal {
             .iter()
             .map(|(_key, removal)| removal.clone())
             .collect::<Vec<_>>();
-        let encoded = encode_frame(&QueuePlanJournalFrameV4::RemoveBatch(removals), self.limits)?;
+        let encoded = encode_frame(&QueuePlanJournalFrameV1::RemoveBatch(removals), self.limits)?;
         if let Err(initial_capacity_error) = self.ensure_append_capacity(encoded.len()) {
             if self.poisoned {
                 return Err(initial_capacity_error);
@@ -1386,10 +1386,10 @@ impl QueuePlanJournal {
     #[cfg(test)]
     pub fn put_deferred_flush(
         &mut self,
-        record: QueuePlanJournalRecordV4,
+        record: QueuePlanJournalRecordV1,
     ) -> io::Result<QueuePlanJournalFlush> {
         self.ensure_healthy()?;
-        let encoded = encode_frame(&QueuePlanJournalFrameV4::Put(record), self.limits)?;
+        let encoded = encode_frame(&QueuePlanJournalFrameV1::Put(record), self.limits)?;
         self.ensure_append_capacity(encoded.len())?;
         self.append_encoded(&encoded, AppendPhase::OrdinaryPut)
             .map_err(|failure| failure.source)?;
@@ -1416,7 +1416,7 @@ impl QueuePlanJournal {
         let mut encoded_bytes = 0_usize;
         for (entrypoint_hash, plan_digest, claim_digest) in removals {
             let encoded = encode_frame(
-                &QueuePlanJournalFrameV4::Remove {
+                &QueuePlanJournalFrameV1::Remove {
                     entrypoint_hash,
                     plan_digest,
                     claim_digest,
@@ -1551,7 +1551,7 @@ impl QueuePlanJournal {
     /// # Errors
     /// Returns I/O, bound, consistency, or malformed-frame errors.
     #[cfg(test)]
-    pub fn replay(&self) -> io::Result<Vec<QueuePlanJournalRecordV4>> {
+    pub fn replay(&self) -> io::Result<Vec<QueuePlanJournalRecordV1>> {
         self.prepare_replay()?.into_verified_records()
     }
     /// Prepare an inode- and length-stable replay snapshot.
@@ -1564,7 +1564,7 @@ impl QueuePlanJournal {
 }
 include!("journal_reservation_commit_preflight.rs");
 impl QueuePlanJournal {
-    /// Reobserve the complete V4 image and compare every receipt component.
+    /// Reobserve the complete V1 image and compare every receipt component.
     pub(super) fn revalidate_startup_replay_receipt(
         &self,
         expected: &QueuePlanStartupReplayReceiptV1,
@@ -1609,8 +1609,8 @@ impl QueuePlanJournal {
             None,
             |position, frame| {
                 match frame {
-                    QueuePlanJournalFrameV4::Bootstrap { .. } => {}
-                    QueuePlanJournalFrameV4::Put(record) => {
+                    QueuePlanJournalFrameV1::Bootstrap { .. } => {}
+                    QueuePlanJournalFrameV1::Put(record) => {
                         let key = record.entrypoint_hash;
                         if !live_positions.contains_key(&key)
                             && live_positions.len() >= self.limits.max_live_records
@@ -1646,7 +1646,7 @@ impl QueuePlanJournal {
                             }
                         }
                     }
-                    QueuePlanJournalFrameV4::Remove {
+                    QueuePlanJournalFrameV1::Remove {
                         entrypoint_hash,
                         plan_digest,
                         claim_digest,
@@ -1662,7 +1662,7 @@ impl QueuePlanJournal {
                             }
                         }
                     }
-                    QueuePlanJournalFrameV4::RemoveBatch(removals) => {
+                    QueuePlanJournalFrameV1::RemoveBatch(removals) => {
                         if removals.iter().any(|removal| {
                             !live_positions
                                 .get(&removal.entrypoint_hash)
@@ -1792,7 +1792,7 @@ impl QueuePlanJournal {
             let mut written = u64::try_from(bootstrap.len())
                 .map_err(|_| invalid_data("queue plan journal bootstrap exceeds u64"))?;
             replay.for_each_record(|record| {
-                let encoded = encode_frame(&QueuePlanJournalFrameV4::Put(record), self.limits)?;
+                let encoded = encode_frame(&QueuePlanJournalFrameV1::Put(record), self.limits)?;
                 let encoded_len = u64::try_from(encoded.len())
                     .map_err(|_| invalid_data("queue plan journal frame exceeds u64"))?;
                 written = written
@@ -2354,7 +2354,7 @@ enum ScanMode {
     Strict,
 }
 fn encode_frame(
-    frame: &QueuePlanJournalFrameV4,
+    frame: &QueuePlanJournalFrameV1,
     limits: QueuePlanJournalLimits,
 ) -> io::Result<Vec<u8>> {
     validate_frame(frame)?;
@@ -2399,8 +2399,8 @@ fn write_staged_frame(file: &mut File, encoded: &[u8]) -> io::Result<()> {
     file.write_all(&encoded[commit_start..])?;
     file.sync_all()
 }
-fn bootstrap_frame() -> QueuePlanJournalFrameV4 {
-    QueuePlanJournalFrameV4::Bootstrap {
+fn bootstrap_frame() -> QueuePlanJournalFrameV1 {
+    QueuePlanJournalFrameV1::Bootstrap {
         version: QUEUE_PLAN_JOURNAL_VERSION,
         format_digest: Hash::new(QUEUE_PLAN_JOURNAL_BOOTSTRAP_DOMAIN),
     }
@@ -2453,9 +2453,9 @@ fn frame_checksum(version: &[u8; 2], len: &[u8; 4], len_guard: &[u8; 4], payload
     preimage.extend_from_slice(payload);
     Hash::new(preimage)
 }
-fn validate_frame(frame: &QueuePlanJournalFrameV4) -> io::Result<()> {
+fn validate_frame(frame: &QueuePlanJournalFrameV1) -> io::Result<()> {
     match frame {
-        QueuePlanJournalFrameV4::Bootstrap {
+        QueuePlanJournalFrameV1::Bootstrap {
             version,
             format_digest,
         } => {
@@ -2463,11 +2463,11 @@ fn validate_frame(frame: &QueuePlanJournalFrameV4) -> io::Result<()> {
                 || *format_digest != Hash::new(QUEUE_PLAN_JOURNAL_BOOTSTRAP_DOMAIN)
             {
                 return Err(invalid_data(
-                    "queue plan journal bootstrap identity does not match V4",
+                    "queue plan journal bootstrap identity does not match V1",
                 ));
             }
         }
-        QueuePlanJournalFrameV4::Put(record) => {
+        QueuePlanJournalFrameV1::Put(record) => {
             if record.version != QUEUE_PLAN_JOURNAL_VERSION {
                 return Err(invalid_data(format!(
                     "unsupported queue plan journal record version {}; expected {}",
@@ -2490,7 +2490,7 @@ fn validate_frame(frame: &QueuePlanJournalFrameV4) -> io::Result<()> {
                 .validate_for_routing_plan(&record.routing_plan)
                 .map_err(invalid_data)?;
             if let Some(identity) = record.global_admission_identity.as_ref() {
-                if identity.version != super::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2 {
+                if identity.version != super::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1 {
                     return Err(invalid_data(
                         "queue plan journal global-admission identity version is unsupported",
                     ));
@@ -2504,7 +2504,7 @@ fn validate_frame(frame: &QueuePlanJournalFrameV4) -> io::Result<()> {
                 }
             }
         }
-        QueuePlanJournalFrameV4::Remove {
+        QueuePlanJournalFrameV1::Remove {
             entrypoint_hash,
             plan_digest,
             claim_digest,
@@ -2518,7 +2518,7 @@ fn validate_frame(frame: &QueuePlanJournalFrameV4) -> io::Result<()> {
                 ));
             }
         }
-        QueuePlanJournalFrameV4::RemoveBatch(removals) => {
+        QueuePlanJournalFrameV1::RemoveBatch(removals) => {
             if removals.is_empty() {
                 return Err(invalid_data(
                     "queue plan journal RemoveBatch must not be empty",
@@ -2551,7 +2551,7 @@ fn validate_frame(frame: &QueuePlanJournalFrameV4) -> io::Result<()> {
 fn decode_frame(
     payload: &[u8],
     limits: QueuePlanJournalLimits,
-) -> io::Result<QueuePlanJournalFrameV4> {
+) -> io::Result<QueuePlanJournalFrameV1> {
     let configured_payload_limit =
         usize::try_from(limits.max_frame_payload_bytes).unwrap_or(usize::MAX);
     if payload.is_empty() || payload.len() > configured_payload_limit {
@@ -2597,7 +2597,7 @@ fn decode_frame(
         128,
     );
     let frame =
-        norito::decode_canonical_with_limits::<QueuePlanJournalFrameV4>(payload, decode_limits)
+        norito::decode_canonical_with_limits::<QueuePlanJournalFrameV1>(payload, decode_limits)
             .map_err(|error| {
                 if matches!(&error, norito::Error::NonCanonicalEncoding) {
                     invalid_data("queue plan journal payload is not canonically encoded")
@@ -2676,7 +2676,7 @@ fn scan_file<F>(
     mut handle: F,
 ) -> io::Result<()>
 where
-    F: FnMut(u64, QueuePlanJournalFrameV4) -> io::Result<()>,
+    F: FnMut(u64, QueuePlanJournalFrameV1) -> io::Result<()>,
 {
     ensure_file_bound(scan_len, limits)?;
     let actual_len = file.metadata()?.len();
@@ -2687,7 +2687,7 @@ where
     }
     if scan_len == 0 {
         return Err(invalid_data(
-            "queue plan journal is missing its durable V4 bootstrap frame",
+            "queue plan journal is missing its durable V1 bootstrap frame",
         ));
     }
     let mut position = 0_u64;
@@ -2699,17 +2699,17 @@ where
             return Ok(());
         };
         match &frame {
-            QueuePlanJournalFrameV4::Bootstrap { .. } if position == 0 && !saw_bootstrap => {
+            QueuePlanJournalFrameV1::Bootstrap { .. } if position == 0 && !saw_bootstrap => {
                 saw_bootstrap = true;
             }
-            QueuePlanJournalFrameV4::Bootstrap { .. } => {
+            QueuePlanJournalFrameV1::Bootstrap { .. } => {
                 return Err(invalid_data(
                     "queue plan journal bootstrap frame must appear exactly once at offset zero",
                 ));
             }
             _ if !saw_bootstrap => {
                 return Err(invalid_data(
-                    "queue plan journal operation appears before its durable V4 bootstrap frame",
+                    "queue plan journal operation appears before its durable V1 bootstrap frame",
                 ));
             }
             _ => {}
@@ -2719,7 +2719,7 @@ where
     }
     if !saw_bootstrap {
         return Err(invalid_data(
-            "queue plan journal is missing its durable V4 bootstrap frame",
+            "queue plan journal is missing its durable V1 bootstrap frame",
         ));
     }
     Ok(())
@@ -2735,7 +2735,7 @@ fn read_frame_at_position(
     limits: QueuePlanJournalLimits,
     mode: ScanMode,
     repair_path: Option<&Path>,
-) -> io::Result<Option<(u64, QueuePlanJournalFrameV4)>> {
+) -> io::Result<Option<(u64, QueuePlanJournalFrameV1)>> {
     ensure_file_bound(scan_len, limits)?;
     if position >= scan_len {
         return Err(invalid_data(
@@ -2751,7 +2751,7 @@ fn read_frame_at_position(
     // phase-one write. A complete, structurally recognizable header must still have its declared
     // bound validated before repair; otherwise an attacker can disguise an oversized frame as a
     // crash tear. This deliberately does not apply at offset zero: a partial bootstrap cannot
-    // establish that the file is a V4 journal.
+    // establish that the file is a V1 journal.
     if mode == ScanMode::RepairTerminalTear && position != 0 && remaining <= FRAME_HEADER_BYTES {
         if remaining == FRAME_HEADER_BYTES {
             let header_len = usize::try_from(FRAME_HEADER_BYTES)
@@ -2795,14 +2795,14 @@ fn read_frame_at_position(
     }
     if remaining < FRAME_HEADER_BYTES {
         return Err(invalid_data(
-            "queue plan journal has an invalid or legacy terminal header",
+            "queue plan journal has an invalid terminal header",
         ));
     }
     let mut magic = [0_u8; QUEUE_PLAN_JOURNAL_FRAME_MAGIC.len()];
     file.read_exact(&mut magic)?;
     if magic != QUEUE_PLAN_JOURNAL_FRAME_MAGIC {
         let message = if position == 0 {
-            "queue plan journal uses an unsupported, legacy, or corrupt frame magic"
+            "queue plan journal uses an unsupported or corrupt frame magic"
         } else {
             "queue plan journal frame magic mismatch"
         };
@@ -2961,7 +2961,7 @@ fn journal_snapshot_digest(file: &mut File, snapshot_len: u64) -> io::Result<Has
 fn read_frames(
     path: &Path,
     limits: QueuePlanJournalLimits,
-) -> io::Result<Vec<QueuePlanJournalFrameV4>> {
+) -> io::Result<Vec<QueuePlanJournalFrameV1>> {
     let mut frames = Vec::new();
     let mut file = open_regular_read(path)?;
     let file_len = file.metadata()?.len();
@@ -2972,7 +2972,7 @@ fn read_frames(
         ScanMode::Strict,
         None,
         |_position, frame| {
-            if !matches!(&frame, QueuePlanJournalFrameV4::Bootstrap { .. }) {
+            if !matches!(&frame, QueuePlanJournalFrameV1::Bootstrap { .. }) {
                 frames.push(frame);
             }
             Ok(())
@@ -3180,7 +3180,7 @@ fn persist_atomic_replacement(temporary: &Path, destination: &Path) -> io::Resul
     temporary.disable_cleanup(true);
     temporary.persist(destination).map_err(|error| error.error)
 }
-fn ensure_durable_v4_bootstrap(path: &Path, limits: QueuePlanJournalLimits) -> io::Result<()> {
+fn ensure_durable_v1_bootstrap(path: &Path, limits: QueuePlanJournalLimits) -> io::Result<()> {
     let expected = encode_bootstrap_frame(limits)?;
     let canonical = open_regular_read(path)?;
     let canonical_identity = verify_open_regular_path(path, &canonical)?;
@@ -3234,7 +3234,7 @@ fn ensure_durable_v4_bootstrap(path: &Path, limits: QueuePlanJournalLimits) -> i
     replacement.read_to_end(&mut actual)?;
     if actual != expected {
         return Err(invalid_data(
-            "queue plan journal bootstrap replacement bytes are not canonical V4",
+            "queue plan journal bootstrap replacement bytes are not canonical V1",
         ));
     }
     if verify_open_regular_path(path, &canonical)? != canonical_identity
@@ -3315,7 +3315,7 @@ fn open_recoverable_bootstrap_temp(path: &Path, expected: &[u8]) -> io::Result<O
     // carry the exact staged header before their body can be classified as uncommitted residue.
     if bytes.len() > header_end && bytes[..header_end] != expected[..header_end] {
         return Err(invalid_data(
-            "queue plan journal bootstrap temp does not have a recognizable staged V4 header",
+            "queue plan journal bootstrap temp does not have a recognizable staged V1 header",
         ));
     }
     let commit_is_valid = bytes.len() == expected.len()
@@ -3350,7 +3350,7 @@ fn open_recoverable_bootstrap_temp(path: &Path, expected: &[u8]) -> io::Result<O
     file.read_to_end(&mut completed)?;
     if completed != expected || verify_open_regular_path(path, &file)? != identity {
         return Err(invalid_data(
-            "queue plan journal bootstrap temp extension is not canonical V4",
+            "queue plan journal bootstrap temp extension is not canonical V1",
         ));
     }
     file.seek(SeekFrom::Start(0))?;
@@ -3436,8 +3436,8 @@ fn reconcile_pending_compaction_temp(
         None,
         |position, frame| {
             match frame {
-                QueuePlanJournalFrameV4::Bootstrap { .. } => {}
-                QueuePlanJournalFrameV4::Put(record) => {
+                QueuePlanJournalFrameV1::Bootstrap { .. } => {}
+                QueuePlanJournalFrameV1::Put(record) => {
                     let key = record.entrypoint_hash;
                     if !live_positions.contains_key(&key)
                         && live_positions.len() >= limits.max_live_records
@@ -3469,7 +3469,7 @@ fn reconcile_pending_compaction_temp(
                         }
                     }
                 }
-                QueuePlanJournalFrameV4::Remove {
+                QueuePlanJournalFrameV1::Remove {
                     entrypoint_hash,
                     plan_digest,
                     claim_digest,
@@ -3480,7 +3480,7 @@ fn reconcile_pending_compaction_temp(
                         live_positions.remove(&entrypoint_hash);
                     }
                 }
-                QueuePlanJournalFrameV4::RemoveBatch(removals) => {
+                QueuePlanJournalFrameV1::RemoveBatch(removals) => {
                     if removals.iter().any(|removal| {
                         !live_positions
                             .get(&removal.entrypoint_hash)
@@ -3544,7 +3544,7 @@ fn reconcile_pending_compaction_temp(
             &mut pending.file,
             pending.snapshot_len,
             &mut expected_len,
-            &encode_frame(&QueuePlanJournalFrameV4::Put(record), limits)?,
+            &encode_frame(&QueuePlanJournalFrameV1::Put(record), limits)?,
         )?;
     }
     if pending.snapshot_len > expected_len {
@@ -3990,17 +3990,17 @@ mod tests {
             io::ErrorKind::InvalidInput
         );
     }
-    fn record(label: &str) -> QueuePlanJournalRecordV4 {
+    fn record(label: &str) -> QueuePlanJournalRecordV1 {
         record_with_message(label, label.to_owned())
     }
-    fn record_with_message(label: &str, message: String) -> QueuePlanJournalRecordV4 {
+    fn record_with_message(label: &str, message: String) -> QueuePlanJournalRecordV1 {
         let instruction: InstructionBox = Log::new(Level::INFO, message).into();
         record_with_instructions(label, [instruction])
     }
     fn record_with_instructions(
         label: &str,
         instructions: impl IntoIterator<Item = InstructionBox>,
-    ) -> QueuePlanJournalRecordV4 {
+    ) -> QueuePlanJournalRecordV1 {
         let network_id = iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
             iroha_data_model::block::BlockHeader,
         >::from_untyped_unchecked(
@@ -4019,13 +4019,13 @@ mod tests {
         let validators = vec![iroha_data_model::peer::PeerId::new(
             keypair.public_key().clone(),
         )];
-        let admission_context = QueuePlanAdmissionContextV2 {
-            version: super::super::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+        let admission_context = QueuePlanAdmissionContextV1 {
+            version: super::super::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
             authority_height: 0,
             proposal_height: 1,
             predecessor_block_hash: None,
             routing_plan_digest: routing_plan.digest(),
-            route_incarnations: vec![super::super::QueuePlanRouteIncarnationV2 {
+            route_incarnations: vec![super::super::QueuePlanRouteIncarnationV1 {
                 leg: routing_plan.coordinator_leg(),
                 lane_incarnation: Hash::new(b"journal-test-incarnation"),
                 validator_set_hash_version:
@@ -4036,7 +4036,7 @@ mod tests {
                 durability_threshold: 1,
             }],
         };
-        QueuePlanJournalRecordV4::new(
+        QueuePlanJournalRecordV1::new(
             accepted.entrypoint().clone(),
             routing_plan,
             admission_context,
@@ -4045,10 +4045,10 @@ mod tests {
         )
     }
     fn with_single_route(
-        mut record: QueuePlanJournalRecordV4,
+        mut record: QueuePlanJournalRecordV1,
         lane_id: u32,
         dataspace_id: u32,
-    ) -> QueuePlanJournalRecordV4 {
+    ) -> QueuePlanJournalRecordV1 {
         let routing_plan = RoutingPlan::single(super::super::RoutingDecision::new(
             iroha_data_model::nexus::LaneId::new(lane_id),
             iroha_data_model::nexus::DataSpaceId::new(dataspace_id.into()),
@@ -4059,10 +4059,10 @@ mod tests {
         record
     }
     fn admission_binding_for_record(
-        record: &QueuePlanJournalRecordV4,
-    ) -> QueuePlanAdmissionBindingV2 {
-        let durable_admission = super::super::QueuePlanDurableAdmissionV2 {
-            version: super::super::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+        record: &QueuePlanJournalRecordV1,
+    ) -> QueuePlanAdmissionBindingV1 {
+        let durable_admission = super::super::QueuePlanDurableAdmissionV1 {
+            version: super::super::QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
             context: record.admission_context.clone(),
             global_admission_identity: record.global_admission_identity.clone(),
             routing_plan: record.routing_plan.clone(),
@@ -4071,16 +4071,16 @@ mod tests {
             enqueue_timestamp_ms: record.enqueue_timestamp_ms,
             journal_record_digest: record.claim_digest().expect("hash global journal claim"),
         };
-        let binding = QueuePlanAdmissionBindingV2::try_from_durable_admission(&durable_admission)
+        let binding = QueuePlanAdmissionBindingV1::try_from_durable_admission(&durable_admission)
             .expect("reconstruct global admission binding");
         binding
             .validate_for_transaction_and_plan(&record.entrypoint, &record.routing_plan)
-            .expect("validate binding against its exact V4 record");
+            .expect("validate binding against its exact V1 record");
         binding
     }
     fn globally_bound_record(
         label: &str,
-    ) -> (QueuePlanJournalRecordV4, QueuePlanAdmissionBindingV2) {
+    ) -> (QueuePlanJournalRecordV1, QueuePlanAdmissionBindingV1) {
         let mut record = record(label);
         let network_id =
             iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
@@ -4088,8 +4088,8 @@ mod tests {
             ));
         let network_id_digest =
             crate::torii_proxy::queue_plan_admission_network_id_digest(&network_id);
-        record.global_admission_identity = Some(QueuePlanGlobalAdmissionIdentityV2 {
-            version: super::super::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
+        record.global_admission_identity = Some(QueuePlanGlobalAdmissionIdentityV1 {
+            version: super::super::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1,
             network_id_digest,
             request_id: crate::torii_proxy::queue_plan_synced_request_id_from_network_digest(
                 network_id_digest,
@@ -4100,16 +4100,16 @@ mod tests {
         (record, binding)
     }
     fn reservation_key_for_record(
-        record: &QueuePlanJournalRecordV4,
+        record: &QueuePlanJournalRecordV1,
         binding_hash: Hash,
-    ) -> LaneQueueReservationKeyV2 {
+    ) -> LaneQueueReservationKeyV1 {
         let coordinator = record
             .admission_context
             .route_incarnations
             .first()
             .expect("global journal fixture has a coordinator");
-        LaneQueueReservationKeyV2 {
-            version: LaneQueueReservationKeyV2::VERSION,
+        LaneQueueReservationKeyV1 {
+            version: LaneQueueReservationKeyV1::VERSION,
             entrypoint_hash: record.entrypoint_hash.clone(),
             queue_plan_admission_binding_hash: binding_hash,
             routing_plan_digest: record.plan_digest(),
@@ -4125,13 +4125,13 @@ mod tests {
         }
     }
     fn commit_recovery_phase(
-        key: LaneQueueReservationKeyV2,
+        key: LaneQueueReservationKeyV1,
         queue_plan_phase: QueuePlanReservationPhaseV1,
         plan_tombstone_marked: bool,
     ) -> LaneQueueReservationRecoveryPhaseV1 {
         LaneQueueReservationRecoveryPhaseV1 {
             key,
-            reservation_phase: LaneQueueReservationOwnerPhaseV6::CommitBarrier,
+            reservation_phase: LaneQueueReservationOwnerPhaseV1::CommitBarrier,
             queue_plan_phase,
             plan_tombstone_marked,
         }
@@ -4190,7 +4190,7 @@ mod tests {
         );
     }
     #[test]
-    fn startup_replay_tombstone_requires_exact_v4_or_durable_v6_marker() {
+    fn startup_replay_tombstone_requires_exact_v1_claim_or_durable_marker() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("startup-tombstone-proof.norito");
         let (record, binding) = globally_bound_record("startup-tombstone-proof");
@@ -4204,19 +4204,19 @@ mod tests {
             journal
                 .observe_startup_replay_receipt(core::slice::from_ref(&marked_live))
                 .is_err(),
-            "V6 PlanTombstoned must conflict with a live V4 claim"
+            "V1 PlanTombstoned must conflict with a live V1 claim"
         );
         assert_eq!(
             journal
                 .remove_exact_global_admission_binding_strict_durable(&key)
-                .expect("persist exact V4 tombstone"),
+                .expect("persist exact V1 tombstone"),
             QueuePlanJournalExactRemoveResult::Removed
         );
         let unmarked_tombstone =
             commit_recovery_phase(key, QueuePlanReservationPhaseV1::Tombstoned, false);
         journal
             .observe_startup_replay_receipt(core::slice::from_ref(&unmarked_tombstone))
-            .expect("retained exact V4 tombstone proves the unmarked crash window");
+            .expect("retained exact V1 tombstone proves the unmarked crash window");
         journal
             .compact_if_needed()
             .expect("compact retained tombstone");
@@ -4224,13 +4224,13 @@ mod tests {
             journal
                 .observe_startup_replay_receipt(core::slice::from_ref(&unmarked_tombstone))
                 .is_err(),
-            "V4 compaction must make an unmarked absence fail closed"
+            "V1 compaction must make an unmarked absence fail closed"
         );
         let marked_tombstone =
             commit_recovery_phase(key, QueuePlanReservationPhaseV1::Tombstoned, true);
         journal
             .observe_startup_replay_receipt(core::slice::from_ref(&marked_tombstone))
-            .expect("durable V6 marker proves the exact tombstone after V4 compaction");
+            .expect("durable marker proves the exact V1 tombstone after compaction");
     }
     #[test]
     fn finalized_carrier_absence_may_exceed_live_owner_bound_in_one_snapshot() {
@@ -4270,7 +4270,7 @@ mod tests {
         );
     }
     #[test]
-    fn queue_plan_journal_claim_digest_binds_exact_v4_record_bytes_and_context() {
+    fn queue_plan_journal_claim_digest_binds_exact_v1_record_bytes_and_context() {
         let exact = record("claim-digest-exact");
         let exact_bytes =
             norito::encode_canonical(&exact).expect("encode exact canonical journal record");
@@ -4311,15 +4311,15 @@ mod tests {
         );
     }
     #[test]
-    fn v4_put_rejects_every_noncanonical_admission_context_before_append() {
+    fn v1_put_rejects_every_noncanonical_admission_context_before_append() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("noncanonical-context-v4.norito");
-        let mut journal = open(&path).expect("open V4 journal");
+        let path = dir.path().join("noncanonical-context-v1.norito");
+        let mut journal = open(&path).expect("open V1 journal");
         let exact = record("noncanonical-context");
         let mut mutations = Vec::new();
         let mut wrong_version = exact.clone();
         wrong_version.admission_context.version =
-            super::super::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2.saturating_add(1);
+            super::super::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1.saturating_add(1);
         mutations.push(("wrong context version", wrong_version));
         let mut noncontiguous_height = exact.clone();
         noncontiguous_height.admission_context.proposal_height = noncontiguous_height
@@ -4379,7 +4379,7 @@ mod tests {
             "rejected contexts must not write bytes after the durable bootstrap"
         );
     }
-    fn raw_frame(frame: &QueuePlanJournalFrameV4) -> Vec<u8> {
+    fn raw_frame(frame: &QueuePlanJournalFrameV1) -> Vec<u8> {
         let payload = norito::encode_canonical(frame).expect("encode canonical frame payload");
         let len = u32::try_from(payload.len()).expect("payload length");
         encode_payload(&payload, len).expect("frame payload")
@@ -4397,7 +4397,7 @@ mod tests {
         let expected_claim = expected.claim_digest().expect("hash canonical record");
         let mut expected_file = raw_bootstrap_frame();
         expected_file
-            .extend_from_slice(&raw_frame(&QueuePlanJournalFrameV4::Put(expected.clone())));
+            .extend_from_slice(&raw_frame(&QueuePlanJournalFrameV1::Put(expected.clone())));
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         {
@@ -4435,7 +4435,7 @@ mod tests {
     }
     #[test]
     fn frame_decoder_rejects_an_advertised_alternate_layout() {
-        let frame = QueuePlanJournalFrameV4::Put(record("alternate-layout-frame"));
+        let frame = QueuePlanJournalFrameV1::Put(record("alternate-layout-frame"));
         let canonical = norito::encode_canonical(&frame).expect("encode canonical frame payload");
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -4445,7 +4445,7 @@ mod tests {
         };
         assert_ne!(alternate, canonical);
         assert_eq!(
-            norito::decode_from_bytes::<QueuePlanJournalFrameV4>(&alternate)
+            norito::decode_from_bytes::<QueuePlanJournalFrameV1>(&alternate)
                 .expect("ordinary Norito accepts the advertised alternate layout"),
             frame
         );
@@ -4515,7 +4515,7 @@ mod tests {
         payload: &[u8],
         element_budget: usize,
         allocation_budget: usize,
-    ) -> Result<QueuePlanJournalFrameV4, norito::Error> {
+    ) -> Result<QueuePlanJournalFrameV1, norito::Error> {
         let payload_budget = payload.len();
         let limits = norito::DecodeLimits::new(
             payload_budget,
@@ -4524,7 +4524,7 @@ mod tests {
             allocation_budget,
             128,
         );
-        norito::decode_from_bytes_with_limits::<QueuePlanJournalFrameV4>(payload, limits)
+        norito::decode_from_bytes_with_limits::<QueuePlanJournalFrameV1>(payload, limits)
     }
     fn minimum_decode_budgets(payload: &[u8]) -> (usize, usize) {
         let measurement_element_ceiling = payload.len().saturating_mul(64);
@@ -4562,7 +4562,7 @@ mod tests {
         (upper_element_budget, upper_allocation_budget)
     }
     #[test]
-    fn v4_journal_replays_puts_and_exact_removes() {
+    fn v1_journal_replays_puts_and_exact_removes() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("queue-plan.norito");
         let first = record("first");
@@ -4855,7 +4855,7 @@ mod tests {
             frame_count_before + 1,
             "the complete removal set must append exactly one frame",
         );
-        let Some(QueuePlanJournalFrameV4::RemoveBatch(persisted)) = frames.last() else {
+        let Some(QueuePlanJournalFrameV1::RemoveBatch(persisted)) = frames.last() else {
             panic!("the complete exact removal set must be one RemoveBatch frame");
         };
         assert_eq!(
@@ -4863,7 +4863,7 @@ mod tests {
             &removals
                 .iter()
                 .map(
-                    |(entrypoint_hash, plan_digest, claim_digest)| QueuePlanJournalRemovalV4 {
+                    |(entrypoint_hash, plan_digest, claim_digest)| QueuePlanJournalRemovalV1 {
                         entrypoint_hash: *entrypoint_hash,
                         plan_digest: *plan_digest,
                         claim_digest: *claim_digest,
@@ -5058,7 +5058,7 @@ mod tests {
             "one fully staged RemoveBatch must remove either every member or none",
         );
         let frames = read_frames(&path, limits(64)).expect("read parent-sync frames");
-        let Some(QueuePlanJournalFrameV4::RemoveBatch(persisted)) = frames.last() else {
+        let Some(QueuePlanJournalFrameV1::RemoveBatch(persisted)) = frames.last() else {
             panic!("the parent-sync ambiguity must retain one whole RemoveBatch");
         };
         assert_eq!(persisted.len(), records.len());
@@ -5136,7 +5136,7 @@ mod tests {
         let frames = read_frames(&path, limits(64)).expect("read exact removal frames");
         assert!(matches!(
             frames.last(),
-            Some(QueuePlanJournalFrameV4::Remove {
+            Some(QueuePlanJournalFrameV1::Remove {
                 entrypoint_hash: removed_entrypoint_hash,
                 plan_digest: removed_plan_digest,
                 claim_digest: removed_claim_digest,
@@ -5199,7 +5199,7 @@ mod tests {
             "batch validation must reconstruct the journal exactly once"
         );
         let frames = read_frames(&path, batch_limits).expect("read atomic batch frames");
-        let Some(QueuePlanJournalFrameV4::RemoveBatch(removals)) = frames.last() else {
+        let Some(QueuePlanJournalFrameV1::RemoveBatch(removals)) = frames.last() else {
             panic!("the complete removal set must be one atomic RemoveBatch frame");
         };
         assert_eq!(removals.len(), RECORDS);
@@ -5339,13 +5339,13 @@ mod tests {
                 .expect("install second claim");
         }
         let canonical = fs::read(&path).expect("read canonical claims");
-        let torn_batch = raw_frame(&QueuePlanJournalFrameV4::RemoveBatch(vec![
-            QueuePlanJournalRemovalV4 {
+        let torn_batch = raw_frame(&QueuePlanJournalFrameV1::RemoveBatch(vec![
+            QueuePlanJournalRemovalV1 {
                 entrypoint_hash: first.entrypoint_hash.clone(),
                 plan_digest: first.plan_digest(),
                 claim_digest: first.claim_digest().expect("hash first claim"),
             },
-            QueuePlanJournalRemovalV4 {
+            QueuePlanJournalRemovalV1 {
                 entrypoint_hash: second.entrypoint_hash.clone(),
                 plan_digest: second.plan_digest(),
                 claim_digest: second.claim_digest().expect("hash second claim"),
@@ -5458,8 +5458,8 @@ mod tests {
             globally_bound_record("exact-global-binding-same-plan-aba");
         let mut replacement = original.clone();
         replacement.enqueue_timestamp_ms = replacement.enqueue_timestamp_ms.saturating_add(1);
-        replacement.global_admission_identity = Some(QueuePlanGlobalAdmissionIdentityV2 {
-            version: super::super::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
+        replacement.global_admission_identity = Some(QueuePlanGlobalAdmissionIdentityV1 {
+            version: super::super::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1,
             network_id_digest: original_binding.network_id_digest,
             request_id: original_binding.request_id,
         });
@@ -5512,8 +5512,8 @@ mod tests {
         let mut replacement = original.clone();
         replacement.enqueue_timestamp_ms = replacement.enqueue_timestamp_ms.saturating_add(1);
         let bootstrap_len = raw_bootstrap_frame().len();
-        let original_len = raw_frame(&QueuePlanJournalFrameV4::Put(original.clone())).len();
-        let replacement_len = raw_frame(&QueuePlanJournalFrameV4::Put(replacement.clone())).len();
+        let original_len = raw_frame(&QueuePlanJournalFrameV1::Put(original.clone())).len();
+        let replacement_len = raw_frame(&QueuePlanJournalFrameV1::Put(replacement.clone())).len();
         let max_file_bytes = bootstrap_len
             .checked_add(original_len)
             .and_then(|bytes| bytes.checked_add(replacement_len))
@@ -5580,8 +5580,8 @@ mod tests {
         let mut first = record("strict-replacement-bounded-first");
         let second = record("strict-replacement-bounded-second");
         let bootstrap_bytes = raw_bootstrap_frame().len();
-        let first_frame_bytes = raw_frame(&QueuePlanJournalFrameV4::Put(first.clone())).len();
-        let second_frame_bytes = raw_frame(&QueuePlanJournalFrameV4::Put(second.clone())).len();
+        let first_frame_bytes = raw_frame(&QueuePlanJournalFrameV1::Put(first.clone())).len();
+        let second_frame_bytes = raw_frame(&QueuePlanJournalFrameV1::Put(second.clone())).len();
         let compacted_bytes = bootstrap_bytes
             .checked_add(first_frame_bytes)
             .expect("bootstrap plus first frame")
@@ -5625,8 +5625,8 @@ mod tests {
         assert_eq!(
             read_frames(&path, bounded_limits).expect("read final compacted frames"),
             vec![
-                QueuePlanJournalFrameV4::Put(first),
-                QueuePlanJournalFrameV4::Put(second),
+                QueuePlanJournalFrameV1::Put(first),
+                QueuePlanJournalFrameV1::Put(second),
             ]
         );
     }
@@ -5636,7 +5636,7 @@ mod tests {
         let path = dir.path().join("strict-replacement-preflight.norito");
         let mut latest = record("strict-replacement-preflight");
         let bootstrap_bytes = raw_bootstrap_frame().len();
-        let frame_bytes = raw_frame(&QueuePlanJournalFrameV4::Put(latest.clone())).len();
+        let frame_bytes = raw_frame(&QueuePlanJournalFrameV1::Put(latest.clone())).len();
         let max_file_bytes = bootstrap_bytes
             .checked_add(frame_bytes.checked_mul(3).expect("three-frame history"))
             .expect("bootstrap plus history");
@@ -5684,7 +5684,7 @@ mod tests {
             .join("strict-replacement-preflight-failure.norito");
         let mut latest = record("strict-replacement-preflight-failure");
         let bootstrap_bytes = raw_bootstrap_frame().len();
-        let frame_bytes = raw_frame(&QueuePlanJournalFrameV4::Put(latest.clone())).len();
+        let frame_bytes = raw_frame(&QueuePlanJournalFrameV1::Put(latest.clone())).len();
         let max_file_bytes = bootstrap_bytes
             .checked_add(frame_bytes.checked_mul(2).expect("two-frame history"))
             .expect("bootstrap plus history");
@@ -5731,7 +5731,7 @@ mod tests {
         let mut replacement = original.clone();
         replacement.enqueue_timestamp_ms = replacement.enqueue_timestamp_ms.saturating_add(1);
         let bootstrap_bytes = raw_bootstrap_frame().len();
-        let frame_bytes = raw_frame(&QueuePlanJournalFrameV4::Put(original.clone())).len();
+        let frame_bytes = raw_frame(&QueuePlanJournalFrameV1::Put(original.clone())).len();
         let bounded_limits = QueuePlanJournalLimits::new(
             u64::try_from(
                 bootstrap_bytes
@@ -5764,8 +5764,8 @@ mod tests {
         assert_eq!(
             read_frames(&path, bounded_limits).expect("read authoritative append history"),
             vec![
-                QueuePlanJournalFrameV4::Put(original),
-                QueuePlanJournalFrameV4::Put(replacement),
+                QueuePlanJournalFrameV1::Put(original),
+                QueuePlanJournalFrameV1::Put(replacement),
             ],
             "the durably appended replacement remains in the authoritative pre-compaction history"
         );
@@ -5775,7 +5775,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("strict-capacity.norito");
         let expected = record("strict-capacity");
-        let put_bytes = raw_frame(&QueuePlanJournalFrameV4::Put(expected.clone()));
+        let put_bytes = raw_frame(&QueuePlanJournalFrameV1::Put(expected.clone()));
         let max_file_bytes = u64::try_from(
             raw_bootstrap_frame()
                 .len()
@@ -5952,7 +5952,7 @@ mod tests {
         drop(journal);
         let plan_digest = owner.plan_digest();
         let entrypoint_hash = owner.entrypoint_hash;
-        let remove = raw_frame(&QueuePlanJournalFrameV4::Remove {
+        let remove = raw_frame(&QueuePlanJournalFrameV1::Remove {
             entrypoint_hash,
             plan_digest,
             claim_digest: owner.claim_digest().expect("hash owner claim"),
@@ -6049,8 +6049,8 @@ mod tests {
         );
     }
     #[test]
-    fn initial_truncated_v4_header_fails_closed_without_rewrite() {
-        let frame = raw_frame(&QueuePlanJournalFrameV4::Put(record(
+    fn initial_truncated_v1_header_fails_closed_without_rewrite() {
+        let frame = raw_frame(&QueuePlanJournalFrameV1::Put(record(
             "initial-header-prefix",
         )));
         let header_len = usize::try_from(FRAME_HEADER_BYTES).expect("header");
@@ -6072,9 +6072,8 @@ mod tests {
     }
     #[test]
     fn every_ambiguous_initial_magic_prefix_fails_closed_without_rewrite() {
-        let layouts: [(&str, &[u8]); 3] = [
-            ("v4", &QUEUE_PLAN_JOURNAL_FRAME_MAGIC),
-            ("legacy-v2", b"IRQPJNL2"),
+        let layouts: [(&str, &[u8]); 2] = [
+            ("v1", &QUEUE_PLAN_JOURNAL_FRAME_MAGIC),
             ("unknown", b"UNKNOWN!"),
         ];
         for (layout, magic) in layouts {
@@ -6102,18 +6101,18 @@ mod tests {
         }
     }
     #[test]
-    fn headerless_complete_v4_operation_header_fails_closed_without_rewrite() {
-        let frame = raw_frame(&QueuePlanJournalFrameV4::Put(record(
-            "complete-initial-v4-header",
+    fn headerless_complete_v1_operation_header_fails_closed_without_rewrite() {
+        let frame = raw_frame(&QueuePlanJournalFrameV1::Put(record(
+            "complete-initial-v1-header",
         )));
         let header_len = usize::try_from(FRAME_HEADER_BYTES).expect("header");
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("complete-initial-v4-header.norito");
+        let path = dir.path().join("complete-initial-v1-header.norito");
         let bytes = frame[..header_len].to_vec();
-        fs::write(&path, &bytes).expect("write complete headerless V4 operation header");
+        fs::write(&path, &bytes).expect("write complete headerless V1 operation header");
         let error = open(&path)
             .err()
-            .expect("headerless V4 operation must not bootstrap implicitly");
+            .expect("headerless V1 operation must not bootstrap implicitly");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert_eq!(fs::read(&path).expect("retain headerless evidence"), bytes);
     }
@@ -6121,7 +6120,7 @@ mod tests {
     fn duplicate_or_wrong_bootstrap_fails_closed_without_rewrite() {
         let mut duplicate = raw_bootstrap_frame();
         duplicate.extend_from_slice(&raw_bootstrap_frame());
-        let wrong = raw_frame(&QueuePlanJournalFrameV4::Bootstrap {
+        let wrong = raw_frame(&QueuePlanJournalFrameV1::Bootstrap {
             version: QUEUE_PLAN_JOURNAL_VERSION,
             format_digest: Hash::new(b"wrong-bootstrap-domain"),
         });
@@ -6237,7 +6236,7 @@ mod tests {
         let path = dir.path().join("bootstrap-malformed-temp.norito");
         let temporary = path.with_extension("bootstrap.tmp");
         fs::write(&path, []).expect("write empty canonical journal");
-        let malformed = b"not-a-v4-bootstrap-longer-than-one-staged-header".to_vec();
+        let malformed = b"not-a-v1-bootstrap-longer-than-one-staged-header".to_vec();
         fs::write(&temporary, &malformed).expect("write malformed bootstrap temp");
         let error = open(&path)
             .err()
@@ -6258,7 +6257,7 @@ mod tests {
         let path = dir.path().join("first-put-prefix-recovery.norito");
         let bootstrap = raw_bootstrap_frame();
         let first = record("first-put-prefix-recovery");
-        let put = raw_frame(&QueuePlanJournalFrameV4::Put(first));
+        let put = raw_frame(&QueuePlanJournalFrameV1::Put(first));
         for cut in 1..put.len() {
             let mut bytes = bootstrap.clone();
             bytes.extend_from_slice(&put[..cut]);
@@ -6281,9 +6280,9 @@ mod tests {
         }
     }
     #[test]
-    fn corrupt_initial_v4_version_and_length_guard_fail_without_rewrite() {
-        let frame = raw_frame(&QueuePlanJournalFrameV4::Put(record(
-            "corrupt-initial-v4-header",
+    fn corrupt_initial_v1_version_and_length_guard_fail_without_rewrite() {
+        let frame = raw_frame(&QueuePlanJournalFrameV1::Put(record(
+            "corrupt-initial-v1-header",
         )));
         let header_len = usize::try_from(FRAME_HEADER_BYTES).expect("header");
         let version_offset = QUEUE_PLAN_JOURNAL_FRAME_MAGIC.len();
@@ -6308,11 +6307,11 @@ mod tests {
         }
     }
     #[test]
-    fn every_recognizable_terminal_v4_prefix_is_repaired_after_valid_frame() {
+    fn every_recognizable_terminal_v1_prefix_is_repaired_after_valid_frame() {
         let committed = record("committed-before-terminal-prefix");
         let terminal = record("terminal-prefix");
-        let committed_frame = raw_frame(&QueuePlanJournalFrameV4::Put(committed.clone()));
-        let terminal_frame = raw_frame(&QueuePlanJournalFrameV4::Put(terminal.clone()));
+        let committed_frame = raw_frame(&QueuePlanJournalFrameV1::Put(committed.clone()));
+        let terminal_frame = raw_frame(&QueuePlanJournalFrameV1::Put(terminal.clone()));
         let payload_len = terminal_frame.len()
             - usize::try_from(FRAME_HEADER_BYTES + FRAME_TRAILER_BYTES)
                 .expect("constant frame overhead");
@@ -6363,7 +6362,7 @@ mod tests {
     #[test]
     fn arbitrary_phase_one_header_tears_are_repaired_after_valid_history() {
         let committed_record = record("committed-before-garbage-header");
-        let committed = raw_frame(&QueuePlanJournalFrameV4::Put(committed_record.clone()));
+        let committed = raw_frame(&QueuePlanJournalFrameV1::Put(committed_record.clone()));
         let header = usize::try_from(FRAME_HEADER_BYTES).expect("header length");
         for tear_len in [1, header / 2, header.saturating_sub(1), header] {
             let dir = tempfile::tempdir().expect("tempdir");
@@ -6391,12 +6390,12 @@ mod tests {
         }
     }
     #[test]
-    fn terminal_invalid_layouts_longer_than_one_header_do_not_truncate_valid_v4_history() {
-        let committed = raw_frame(&QueuePlanJournalFrameV4::Put(record(
+    fn terminal_invalid_layouts_longer_than_one_header_do_not_truncate_valid_v1_history() {
+        let committed = raw_frame(&QueuePlanJournalFrameV1::Put(record(
             "committed-before-invalid-tail",
         )));
         let header = usize::try_from(FRAME_HEADER_BYTES).expect("header length");
-        for (case, prefix) in [("legacy-v2", b"IRQPJNL2"), ("unknown", b"UNKNOWN!")] {
+        for (case, prefix) in [("unknown", b"UNKNOWN!")] {
             let dir = tempfile::tempdir().expect("tempdir");
             let path = dir.path().join(format!("terminal-{case}.norito"));
             let mut suffix = prefix.to_vec();
@@ -6420,7 +6419,7 @@ mod tests {
     fn truncate_file_sync_then_parent_failure_is_restart_idempotent() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("truncate-parent-failure.norito");
-        let frame = raw_frame(&QueuePlanJournalFrameV4::Put(record("truncate-parent")));
+        let frame = raw_frame(&QueuePlanJournalFrameV1::Put(record("truncate-parent")));
         let bootstrap = raw_bootstrap_frame();
         let mut bytes = bootstrap.clone();
         bytes.extend_from_slice(&frame[..frame.len() / 2]);
@@ -6443,32 +6442,6 @@ mod tests {
                 .replay()
                 .expect("replay")
                 .is_empty()
-        );
-    }
-    #[test]
-    fn nonempty_legacy_v1_layout_fails_closed_without_rewrite() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("legacy-v1.norito");
-        let legacy_payload = norito::to_bytes(&record("legacy")).expect("legacy-ish payload");
-        let mut legacy = u32::try_from(legacy_payload.len())
-            .expect("payload length")
-            .to_le_bytes()
-            .to_vec();
-        legacy.extend_from_slice(&legacy_payload);
-        fs::write(&path, &legacy).expect("write legacy");
-        let error = open(&path).err().expect("legacy must fail");
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert_eq!(fs::read(&path).expect("retain legacy"), legacy);
-        let v2_path = dir.path().join("legacy-v2.norito");
-        let v2_prefix = b"IRQPJNL2";
-        fs::write(&v2_path, v2_prefix).expect("write recognizable V2 prefix");
-        let v2_error = open(&v2_path)
-            .err()
-            .expect("first-release V4 must reject V2 persistence");
-        assert_eq!(v2_error.kind(), io::ErrorKind::InvalidData);
-        assert_eq!(
-            fs::read(&v2_path).expect("retain legacy V2 bytes"),
-            v2_prefix
         );
     }
     include!("plan_journal_bounds_tests.rs");

@@ -5994,28 +5994,29 @@ fn account_dataspace_target<W: WorldReadOnly>(
     let mut primary_dataspace = None;
     if let Some(now_ms) = ledger_time_ms {
         if let Some(label) = account.as_ref().label()
-            && crate::sns::resolve_active_account_alias(
-                world,
-                world.dataspace_catalog(),
-                label,
-                now_ms,
+            && matches!(
+                crate::sns::resolve_active_account_alias(
+                    world,
+                    world.dataspace_catalog(),
+                    label,
+                    now_ms,
+                ),
+                Ok(Some(ref resolved)) if resolved == account_id
             )
-            .as_ref()
-                == Some(account_id)
         {
             primary_dataspace = Some(label.dataspace);
             dataspaces.insert(label.dataspace);
         }
         for alias in world.bound_account_aliases(account_id) {
-            if crate::sns::resolve_active_account_alias(
-                world,
-                world.dataspace_catalog(),
-                &alias,
-                now_ms,
-            )
-            .as_ref()
-                == Some(account_id)
-            {
+            if matches!(
+                crate::sns::resolve_active_account_alias(
+                    world,
+                    world.dataspace_catalog(),
+                    &alias,
+                    now_ms,
+                ),
+                Ok(Some(ref resolved)) if resolved == account_id
+            ) {
                 dataspaces.insert(alias.dataspace);
             }
         }
@@ -7955,7 +7956,6 @@ fn account_matches_literal_or_encoded(pattern: &str, authority: &AccountId) -> b
         return true;
     }
     iroha_data_model::account::AccountId::parse_encoded(pattern)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .is_ok_and(|parsed| parsed == *authority)
 }
 fn account_matches(
@@ -8008,9 +8008,15 @@ fn account_matches_with_world<W: WorldReadOnly>(
         .ok()
         .is_some_and(|alias| {
             ledger_time_ms.is_some_and(|now_ms| {
-                crate::sns::resolve_active_account_alias(world, dataspace_catalog, &alias, now_ms)
-                    .as_ref()
-                    == Some(authority)
+                matches!(
+                    crate::sns::resolve_active_account_alias(
+                        world,
+                        dataspace_catalog,
+                        &alias,
+                        now_ms,
+                    ),
+                    Ok(Some(ref resolved)) if resolved == authority
+                )
             })
         })
 }
@@ -8062,10 +8068,15 @@ fn account_matches_alias_scope_with_world<W: WorldReadOnly>(
         .bound_account_aliases(account_id)
         .into_iter()
         .any(|alias| {
-            if crate::sns::resolve_active_account_alias(world, dataspace_catalog, &alias, now_ms)
-                .as_ref()
-                != Some(account_id)
-            {
+            if !matches!(
+                crate::sns::resolve_active_account_alias(
+                    world,
+                    dataspace_catalog,
+                    &alias,
+                    now_ms,
+                ),
+                Ok(Some(ref resolved)) if resolved == account_id
+            ) {
                 return false;
             }
             alias

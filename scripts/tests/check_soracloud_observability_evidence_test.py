@@ -61,7 +61,31 @@ def test_valid_evidence_passes(tmp_path: Path) -> None:
 
 def test_missing_required_metric_fails(tmp_path: Path) -> None:
     payload = evidence_payload()
-    del payload["metrics"]["hf_fallback_use"]
+    del payload["metrics"]["model_host_stale_heartbeats"]
+    evidence_path = tmp_path / "evidence.json"
+    evidence_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert MODULE.main(["--evidence", str(evidence_path)]) == 1
+
+
+def test_retired_hf_fallback_evidence_fails(tmp_path: Path) -> None:
+    payload = evidence_payload()
+    payload["metrics"]["hf_fallback_use"] = {
+        "present": True,
+        "source": "retired:hf-bridge",
+    }
+    evidence_path = tmp_path / "evidence.json"
+    evidence_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert MODULE.main(["--evidence", str(evidence_path)]) == 1
+
+
+def test_retired_private_session_evidence_fails(tmp_path: Path) -> None:
+    payload = evidence_payload()
+    payload["status_fields"]["private_session_failures"] = {
+        "present": True,
+        "source": "retired:private-session-runtime",
+    }
     evidence_path = tmp_path / "evidence.json"
     evidence_path.write_text(json.dumps(payload), encoding="utf-8")
 

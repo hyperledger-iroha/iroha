@@ -48,9 +48,9 @@ Key flags:
   stdout).
 - `--dry-run` – skip writing any configuration changes while still emitting the summary JSON.
 
-The summary reports the previous and effective proxy modes, target configuration path, telemetry
-label, and guard cache key so downstream automation can record the change or trigger follow-up
-actions (for example, notifying browser extensions about the updated mode).
+The summary reports the previous and effective proxy modes, target configuration path, and
+telemetry label so downstream automation can record the change or trigger follow-up actions.
+Guard cache key material is deliberately omitted.
 
 ```bash
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
@@ -300,13 +300,25 @@ orchestrator. A machine-readable summary is emitted to stdout (and, when
 
 - {{#include sorafs/snippets/multi_source_flag_notes.txt}}
 
-- `--guard-directory=PATH` loads a pinned guard set JSON (see below).
+- `--guard-directory=PATH` loads a pinned Norito guard-directory snapshot (see below).
   `--guard-directory-digest=HEX` is required with it and must be the
   domain-separated BLAKE3 digest published through the independent governance
-  channel. `--guard-cache=PATH` persists cache updates across runs. When you need
-  tamper-evidence for the cache (e.g., storing it on shared network volumes),
-  pass a 32-byte hex key via `--guard-cache-key=HEX`; the orchestrator signs
-  cached guard lists with the key and refuses to load caches whose MAC fails.
+  channel. `--guard-cache=PATH` persists cache updates across runs and requires
+  both a current `--guard-directory`/digest and an owner-private file containing
+  exactly 32 raw non-zero bytes via `--guard-cache-key-file=PATH` (and the key
+  file flag is rejected without a cache path). Key material is never accepted
+  on the process command line.
+  Cached guard state is sticky preference data, not a directory freshness or
+  membership trust anchor. The version-8 loader caps the cache at 2 MiB
+  and 16 unique guards, verifies its keyed BLAKE3 tag before decoding the inner
+  guard records, and rejects malformed or non-canonical persisted fields. There
+  is no unsigned cache-persistence mode. On Unix the cache and its parent are
+  also custody boundaries: the parent must be owned by the invoking user and
+  not group/world writable, while an existing cache must be an owner-private,
+  single-link regular file. Updates use an owner-private same-directory staging
+  file and atomic rename; symlink, hard-link, and permissive-file targets fail
+  closed. Guard-cache persistence is unavailable on platforms that cannot
+  enforce those owner/mode/link checks.
 - The `guard-directory` subcommand helps you keep snapshots current:
 
   ```bash
@@ -335,16 +347,22 @@ orchestrator. A machine-readable summary is emitted to stdout (and, when
   concurrency snapshot inside the scoreboard metadata so
   `cargo xtask sorafs-adoption-check --require-telemetry` can reject captures
   that do not prove their telemetry origin.
-- Guard directory endpoints may now carry a `"tags"` array—mark SoraNet exits
-  capable of proxying Norito streaming traffic with `"norito-stream"` so the
-  orchestrator prioritises those URLs when preparing privacy routes.
-- `--local-proxy-manifest-out=PATH` captures the QUIC proxy manifest
-  (certificate, ALPN, guard cache key, cache-tagging salt, telemetry hints, and
-  Kaigi room policy hint) emitted by the orchestrator. It requires a
+- Guard directory endpoints may carry a `"tags"` array. `"norito-stream"` is
+  reserved for the proof-bound exit adapter; V1 must not interpret it as live
+  token-bearing filesystem route availability while that path is disabled.
+- `--local-proxy-manifest-out=PATH` captures the out-of-band QUIC proxy
+  bootstrap manifest (certificate, ALPN, per-start 256-bit client capability,
+  cache-tagging salt, telemetry hints, and Kaigi room policy hint) emitted by
+  the orchestrator. It requires a
   `local_proxy` config with `emit_browser_manifest = true` and a CLI binary
   built with the `local-quic-proxy` feature. Feed the manifest to the browser
-  extension or SDK adapters; the JSON summary mirrors the same payload under
-  `local_proxy_manifest`.
+  extension or SDK adapters over an owner-only channel. On Unix the CLI creates
+  a fresh mode-`0600`, single-link inode and refuses every existing destination;
+  it never truncates or reuses an inode that another process may already have
+  open. Choose a new path for every proxy start. Treat the result as a bearer
+  credential and never log or archive it. The ordinary JSON summary carries
+  only the public fields under `local_proxy_manifest` and omits
+  `client_capability_hex`.
 - `--local-proxy-kaigi-spool=PATH`/`--local-proxy-kaigi-policy=public|authenticated` override the Kaigi spool directory and advertised room policy for a single run, matching the Norito overrides.
 
 - `chunk_count`, `assembled_bytes`, and `payload` (base64) for quick integrity
@@ -354,10 +372,12 @@ orchestrator. A machine-readable summary is emitted to stdout (and, when
 - `chunk_receipts`, recording which provider ultimately served every chunk.
 - `local_proxy_manifest`, populated when `local_proxy` is enabled in the
   orchestrator config, `emit_browser_manifest` is true, and local QUIC proxy
-  runtime support is compiled in. The object mirrors the browser handshake
-  manifest (certificate PEM, ALPN label, guard cache key, cache-tagging salt,
-  telemetry hints) and the same payload is written to
-  `--local-proxy-manifest-out=PATH` for browser extensions.
+  runtime support is compiled in. The summary object contains the public
+  browser handshake fields (certificate PEM, ALPN label, cache-tagging salt,
+  telemetry hints) but deliberately omits the per-start client capability. The
+  explicitly requested `--local-proxy-manifest-out=PATH` bootstrap file adds
+  that capability for browser extensions. Proxy-local guard cache keys are
+  never included in either form.
 - `manifest_digest_hex`, `manifest_payload_digest_hex`, `manifest_car_digest_hex`, `manifest_content_length`, `manifest_chunk_count`, `manifest_chunk_profile_handle`, and `manifest_governance` surface the manifest metadata downloaded from the gateway. `manifest_payload_digest_hex` binds the unchunked payload, while `manifest_car_digest_hex` binds the entire canonical CARv2 archive (pragma, CARv2 header, embedded CARv1 payload, and index); neither is a fallback for the other. These fields mirror the manifest response returned by `/v1/sorafs/storage/manifest/{id}`, confirm that the orchestrator rebuilt the CAR archive against the expected payload, and expose the council signatures bundled with the manifest (`manifest_governance.council_signatures`).
 - `car_archive` now contains the assembled CAR diagnostics (`payload_digest_hex`, `archive_digest_hex`, `cid_hex`, `root_cids_hex`, `size`) alongside `verified=true` and `por_leaf_count`, proving that the CAR bytes emitted by the gateway match the manifest digests and PoR tree recorded on ingest.
 - `ineligible_providers`, listing any aliases filtered out by capability or

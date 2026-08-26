@@ -266,52 +266,35 @@ fn build_accounts_onboard_exact_body<'a>(
     allowed_fields: &[&str],
     required_fields: &[&str],
 ) -> Result<BorrowedMcpJson<'a>, String> {
-    if let Some(body) = arguments.get("body") {
-        let body_object = body
-            .as_object()
-            .ok_or_else(|| "`body` must be an object".to_owned())?;
-        if let Some(field) = body_object
-            .keys()
-            .find(|field| !allowed_fields.contains(&field.as_str()))
-        {
-            return Err(format!(
-                "unsupported account onboarding field `{field}`; tokens, keys, and legacy identity fields are forbidden"
-            ));
-        }
-        if let Some(field) = required_fields
-            .iter()
-            .find(|field| !body_object.contains_key(**field))
-        {
-            return Err(format!("`{field}` is required"));
-        }
-        return Ok(BorrowedMcpJson::Value(body));
+    if let Some(field) = arguments
+        .keys()
+        .find(|field| !matches!(field.as_str(), "body" | "headers" | "accept"))
+    {
+        return Err(format!(
+            "unsupported account onboarding argument `{field}`; the exact request must be supplied only in `body`"
+        ));
     }
-    let field_count = arguments
-        .iter()
-        .filter(|(key, value)| !matches!(key.as_str(), "headers" | "accept") && !value.is_null())
-        .count();
-    let mut payload = BorrowedMcpJsonObject::try_with_capacity(
-        field_count,
-        "borrowed account-onboarding body fields",
-    )?;
-    for (key, value) in arguments {
-        if matches!(key.as_str(), "headers" | "accept") || value.is_null() {
-            continue;
-        }
-        if !allowed_fields.contains(&key.as_str()) {
-            return Err(format!(
-                "unsupported account onboarding field `{key}`; tokens, keys, and legacy identity fields are forbidden"
-            ));
-        }
-        payload.insert_value(key, value);
+    let body = arguments
+        .get("body")
+        .ok_or_else(|| "`body` is required".to_owned())?;
+    let body_object = body
+        .as_object()
+        .ok_or_else(|| "`body` must be an object".to_owned())?;
+    if let Some(field) = body_object
+        .keys()
+        .find(|field| !allowed_fields.contains(&field.as_str()))
+    {
+        return Err(format!(
+            "unsupported account onboarding field `{field}`; tokens, keys, and legacy identity fields are forbidden"
+        ));
     }
     if let Some(field) = required_fields
         .iter()
-        .find(|field| !payload.contains_key(**field))
+        .find(|field| !body_object.contains_key(**field))
     {
         return Err(format!("`{field}` is required"));
     }
-    Ok(BorrowedMcpJson::Object(payload.sorted()))
+    Ok(BorrowedMcpJson::Value(body))
 }
 
 fn build_accounts_onboard_plan_body(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {
@@ -322,24 +305,59 @@ fn build_accounts_onboard_plan_body(arguments: &Map) -> Result<BorrowedMcpJson<'
     )
 }
 
-fn build_accounts_onboard_apply_body(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {
-    build_accounts_onboard_exact_body(arguments, &["receipt"], &["receipt"])
+fn build_accounts_onboard_prepare_body(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {
+    build_accounts_onboard_exact_body(
+        arguments,
+        &["schema", "binding", "receipt"],
+        &["schema", "binding", "receipt"],
+    )
 }
 
-fn build_accounts_faucet_body(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {
-    if let Some(body) = arguments.get("body") {
-        body.as_object()
-            .ok_or_else(|| "`body` must be an object".to_owned())?;
-        return Ok(BorrowedMcpJson::Value(body));
-    }
-    let account_id = arguments
-        .get("account_id")
-        .filter(|value| value.as_str().is_some())
-        .ok_or_else(|| "`account_id` is required (or provide `body.account_id`)".to_owned())?;
-    let mut payload =
-        BorrowedMcpJsonObject::try_with_capacity(1, "borrowed account-faucet body field")?;
-    payload.insert_value("account_id", account_id);
-    Ok(BorrowedMcpJson::Object(payload))
+fn build_accounts_onboard_submit_body(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {
+    const FIELDS: &[&str] = &[
+        "schema",
+        "binding",
+        "operation",
+        "receipt",
+        "semantic_hash_hex",
+        "account_id",
+        "alias",
+        "disposition",
+        "transaction_hash_hex",
+        "signed_transaction_wire_hex",
+        "signed_transaction_wire_sha256",
+        "fee_payment",
+        "server_signature",
+    ];
+    build_accounts_onboard_exact_body(arguments, FIELDS, FIELDS)
+}
+
+fn build_accounts_faucet_prepare_body(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {
+    build_accounts_onboard_exact_body(
+        arguments,
+        &["schema", "binding", "claim"],
+        &["schema", "binding", "claim"],
+    )
+}
+
+fn build_accounts_faucet_submit_body(arguments: &Map) -> Result<BorrowedMcpJson<'_>, String> {
+    const FIELDS: &[&str] = &[
+        "schema",
+        "binding",
+        "operation",
+        "claim",
+        "semantic_hash_hex",
+        "account_id",
+        "asset_definition_id",
+        "asset_id",
+        "amount",
+        "transaction_hash_hex",
+        "signed_transaction_wire_hex",
+        "signed_transaction_wire_sha256",
+        "fee_payment",
+        "server_signature",
+    ];
+    build_accounts_onboard_exact_body(arguments, FIELDS, FIELDS)
 }
 
 fn require_borrowed_governance_body_string<'a>(
@@ -530,15 +548,16 @@ fn append_transaction_status_query(
     arguments: &Map,
     transaction_hash: &str,
 ) -> Result<String, String> {
-    let nested_query = arguments
+    reject_unknown_arguments(
+        arguments,
+        &["query", "headers", "accept"],
+        "transaction status request",
+    )?;
+    let query = arguments
         .get("query")
-        .map(|query| {
-            query
-                .as_object()
-                .ok_or_else(|| "`query` must be an object".to_owned())
-        })
-        .transpose()?;
-    let source = nested_query.unwrap_or(arguments);
+        .and_then(Value::as_object)
+        .ok_or_else(|| "`query` must be an object".to_owned())?;
+    reject_unknown_arguments(query, &["hash"], "transaction status query")?;
     let query_start = try_begin_form_query(&mut path)?;
     try_append_form_pair(
         &mut path,
@@ -546,31 +565,13 @@ fn append_transaction_status_query(
         "hash",
         canonical_transaction_hash(transaction_hash)?,
     )?;
-    for (key, value) in source {
-        let ignored = if nested_query.is_some() {
-            key == "hash"
-        } else {
-            matches!(key.as_str(), "query" | "headers" | "accept" | "hash")
-        };
-        if ignored || value.is_null() {
-            continue;
-        }
-        let rendered;
-        let value = if let Some(value) = value.as_str() {
-            value
-        } else {
-            rendered =
-                value_to_string(value).ok_or_else(|| format!("invalid query value for `{key}`"))?;
-            rendered.as_str()
-        };
-        try_append_form_pair(&mut path, query_start, key, value)?;
-    }
+    try_append_form_pair(&mut path, query_start, "scope", "global")?;
     Ok(path)
 }
 
 fn transaction_status_poll_route(transaction_hash: &str) -> Result<String, String> {
     const BASE: &str = "/v1/pipeline/transactions/status?hash=";
-    const SUFFIX: &str = "&scope=local";
+    const SUFFIX: &str = "&scope=global";
     let transaction_hash = canonical_transaction_hash(transaction_hash)?;
     let capacity = BASE
         .len()

@@ -4,6 +4,15 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Hard-cut UAID portfolio, binding, and manifest reads to the exact first-release
+  Torii JSON contract. Manifest queries now expose all five current filters,
+  responses require pagination metadata and canonical nested identities, and
+  manifests use numeric version `1` with omitted optional fields. Retired
+  defaults, aliases, numeric coercions, case folding, prefixed hashes, and bare
+  asset-definition ids are rejected before use.
+- Hard-cut pipeline preflight to its current V1 shape: both IVM cycle limits
+  are required and fee-account fields accept only exact canonical I105 ids.
+  Live mutation fixtures now register universal accounts without domain input.
 - Hard-cut the Node/native signed-transaction boundary to the exact canonical
   `VersionedSignedTransaction` V1 wire. Native builders now emit that wire,
   submission and SoraFS pin registration validate it before network I/O, and
@@ -68,8 +77,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 - Made transaction finality polling global-only and state-authoritative across
   the Node, browser, and Nexus clients. Raw status reads retain only explicit
   `local`/`global` diagnostics, while the pre-release `auto` mode, configurable
-  polling scope, and cross-endpoint fallback list were removed. Cache-resolved
-  terminal hints are now retried until state resolution. Validation-fee policy
+  polling scope, cross-endpoint fallback list, and caller-selected success,
+  failure, or terminal statuses were removed. Only exact state-resolved
+  `Applied` succeeds;
+  queue/cache-resolved `Applied` remains pending, while `Rejected` and `Expired`
+  are fixed failures. Validation-fee policy
   admission also rejects contract-address chain discriminants above `u16`
   before account derivation, closing an untrusted-input CPU exhaustion path.
 - Added browser ledger evidence reads for headers, state roots, state QCs, and
@@ -103,7 +115,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 - Migrated typed Sumeragi status parsing to the authoritative flattened v2
   schema. The client now rejects legacy fields, unsupported versions,
   inconsistent frozen contexts or CommitQCs, impossible queue bounds, and
-  malformed canonical lane evidence; generic `/v1/status` parsing remains a
+  malformed canonical lane evidence; generic `/status` parsing remains a
   separate operational-health surface.
 - Added a strict shared native Cargo-profile selector. Production consumers can
   request the workspace's stripped/LTO `deploy` profile, and published checksum

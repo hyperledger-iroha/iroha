@@ -30,7 +30,7 @@ use crate::{
         AutonomousLaneQueueReleasePreparationAuthorization,
         AutonomousLaneRetirementQueueSnapshotPhaseV1, AutonomousLifecycleAttemptBindingV1,
         AutonomousLifecycleCanonicalQueueSourceOutcomeAuthorization,
-        AutonomousLifecycleCursorPhaseKindV2, AutonomousLifecycleCursorV2,
+        AutonomousLifecycleCursorPhaseKindV1, AutonomousLifecycleCursorV1,
         AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization,
     },
     nexus::space_directory::{
@@ -56,14 +56,14 @@ use crate::{
             IN_FLIGHT_FIRST_RELEASE_ACTION_COMPLETE_RESERVATION_RELEASE,
             IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT,
             IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE,
-            IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V1,
             IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_PLAN_TOMBSTONE,
             IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_RESERVATION_COMMITTED,
             IN_FLIGHT_FIRST_RELEASE_ACTION_PREPARE_RESERVATION_RELEASE,
             IN_FLIGHT_FIRST_RELEASE_ACTION_RECOVER_RESERVATION_SNAPSHOT,
             IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT,
             IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO,
-            IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4,
+            IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1,
             IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_ABSENT, IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
             IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED,
             IN_FLIGHT_FIRST_RELEASE_RESERVATION_ABSENT,
@@ -150,7 +150,7 @@ pub use journal::QUEUE_PLAN_JOURNAL_VERSION;
 use journal::QueuePlanJournalTestFault;
 use journal::{
     QueuePlanJournal, QueuePlanJournalExactRemoveResult, QueuePlanJournalFlush,
-    QueuePlanJournalLimits, QueuePlanJournalRecordV4, QueuePlanStartupLiveClaimIdentityV1,
+    QueuePlanJournalLimits, QueuePlanJournalRecordV1, QueuePlanStartupLiveClaimIdentityV1,
     QueuePlanStartupReplayReceiptV1,
 };
 pub(crate) use lane_authority::queue_plan_authoritative_peers_in_view_at_height;
@@ -393,18 +393,18 @@ pub(crate) fn execution_context_for_routing_plan(
     )
 }
 /// Version of the queue-plan lifecycle context embedded in durable admission claims.
-pub const QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2: u16 = 2;
+pub const QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1: u16 = 1;
 /// Version of a queue-plan durable admission claim returned after a strict journal sync.
-pub const QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2: u16 = 2;
+pub const QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1: u16 = 1;
 /// Version of the global admission identity embedded in a strict queue-plan journal record.
-pub const QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2: u16 = 2;
+pub const QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1: u16 = 1;
 /// Exact-network/request identity chosen once by ingress before any authority acquires queue ownership.
 ///
 /// This identity is persisted inside the exact journal record. Together with the record's
 /// canonical enqueue timestamp and claim digest it lets restart recovery reconstruct the same
 /// global admission binding that every authority attested.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct QueuePlanGlobalAdmissionIdentityV2 {
+pub struct QueuePlanGlobalAdmissionIdentityV1 {
     /// Identity layout version.
     pub version: u16,
     /// Domain-separated digest of the exact network identifier.
@@ -414,7 +414,7 @@ pub struct QueuePlanGlobalAdmissionIdentityV2 {
 }
 /// One routing leg paired with the exact active lane incarnation that admitted it.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct QueuePlanRouteIncarnationV2 {
+pub struct QueuePlanRouteIncarnationV1 {
     /// Coordinator or participant route in canonical routing-plan order.
     pub leg: RouteLeg,
     /// Non-zero lane incarnation active for this route at `proposal_height`.
@@ -432,7 +432,7 @@ pub struct QueuePlanRouteIncarnationV2 {
 }
 /// Generation-stable lifecycle context for one queue-plan admission attempt.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct QueuePlanAdmissionContextV2 {
+pub struct QueuePlanAdmissionContextV1 {
     /// Context layout version.
     pub version: u16,
     /// Canonical committed height used to resolve the routing plan.
@@ -444,9 +444,9 @@ pub struct QueuePlanAdmissionContextV2 {
     /// Digest of the complete coordinator/participant routing plan.
     pub routing_plan_digest: Hash,
     /// Coordinator-first route/incarnation pairs for the complete plan.
-    pub route_incarnations: Vec<QueuePlanRouteIncarnationV2>,
+    pub route_incarnations: Vec<QueuePlanRouteIncarnationV1>,
 }
-impl QueuePlanAdmissionContextV2 {
+impl QueuePlanAdmissionContextV1 {
     /// Reconstruct the complete canonical routing plan carried by this context.
     ///
     /// # Errors
@@ -504,10 +504,10 @@ impl QueuePlanAdmissionContextV2 {
                     .to_owned(),
             );
         }
-        if self.version != QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2 {
+        if self.version != QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1 {
             return Err(format!(
                 "unsupported queue-plan admission context version {}; expected {}",
-                self.version, QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2
+                self.version, QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1
             ));
         }
         let Some(expected_proposal_height) = self.authority_height.checked_add(1) else {
@@ -611,14 +611,14 @@ impl QueuePlanAdmissionContextV2 {
 }
 /// Exact evidence returned only after the pending-plan journal Put is durably synchronized.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct QueuePlanDurableAdmissionV2 {
+pub struct QueuePlanDurableAdmissionV1 {
     /// Claim layout version.
     pub version: u16,
     /// Lifecycle context held stable across routing validation and journal synchronization.
-    pub context: QueuePlanAdmissionContextV2,
+    pub context: QueuePlanAdmissionContextV1,
     /// Global exact-network/request identity persisted in the record, when this admission is eligible
     /// for a globally ordered QueuePlan certificate.
-    pub global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
+    pub global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV1>,
     /// Complete routing plan persisted in the journal record.
     pub routing_plan: RoutingPlan,
     /// Typed hash of the exact transaction entrypoint persisted in the journal record.
@@ -627,7 +627,7 @@ pub struct QueuePlanDurableAdmissionV2 {
     pub signed_transaction_hash: Option<HashOf<iroha_data_model::transaction::SignedTransaction>>,
     /// Exact queue timestamp persisted in the journal record.
     pub enqueue_timestamp_ms: u64,
-    /// Domain-separated digest of the canonical `QueuePlanJournalRecordV4` bytes that crossed the
+    /// Domain-separated digest of the canonical `QueuePlanJournalRecordV1` bytes that crossed the
     /// sync boundary.
     pub journal_record_digest: Hash,
 }
@@ -638,11 +638,11 @@ pub struct QueuePlanDurableAdmissionV2 {
 pub fn queue_plan_journal_record_claim_digest(
     entrypoint: TransactionEntrypoint,
     routing_plan: RoutingPlan,
-    admission_context: QueuePlanAdmissionContextV2,
+    admission_context: QueuePlanAdmissionContextV1,
     enqueue_timestamp_ms: u64,
-    global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
+    global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV1>,
 ) -> Result<Hash, norito::Error> {
-    QueuePlanJournalRecordV4::new(
+    QueuePlanJournalRecordV1::new(
         entrypoint,
         routing_plan,
         admission_context,
@@ -703,7 +703,7 @@ pub enum QueuePlanAdmissionContextError {
         /// Protocol-wide roster limit.
         max_validator_count: usize,
     },
-    /// A captured or supplied context violates the canonical V2 layout.
+    /// A captured or supplied context violates the canonical V1 layout.
     #[error("noncanonical queue-plan admission context: {reason}")]
     NonCanonical {
         /// Exact canonicality failure.
@@ -796,7 +796,7 @@ impl LaneQueueReservationRoutingMode {
 /// Complete exact identity of one durable lane queue reservation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-pub struct LaneQueueReservationKeyV2 {
+pub struct LaneQueueReservationKeyV1 {
     /// Exact encoded reservation-key schema version.
     pub version: u16,
     /// Canonical queue identity: the typed hash of the full transaction entrypoint.
@@ -824,9 +824,9 @@ pub struct LaneQueueReservationKeyV2 {
     /// Stable provisional proposal-slot identity.
     pub proposal_identity_hash: Hash,
 }
-impl LaneQueueReservationKeyV2 {
+impl LaneQueueReservationKeyV1 {
     /// Current and only accepted reservation-key schema version.
-    pub const VERSION: u16 = 2;
+    pub const VERSION: u16 = 1;
     /// Return a digest covering every exact identity field.
     #[must_use]
     pub fn digest(&self) -> Hash {
@@ -868,13 +868,13 @@ impl LaneQueueReservationKeyV2 {
 /// absent from the ordinary FIFO so later admissions cannot overtake it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct LaneQueueFifoOrderV5 {
+struct LaneQueueFifoOrderV1 {
     /// FIFO order layout version.
     version: u16,
     /// Monotonic queue admission ordinal.
     ordinal: u64,
 }
-impl LaneQueueFifoOrderV5 {
+impl LaneQueueFifoOrderV1 {
     fn new(ordinal: u64) -> Result<Self, LaneQueueReservationError> {
         if ordinal == 0 {
             return Err(LaneQueueReservationError::InvalidIdentity(
@@ -898,23 +898,22 @@ impl LaneQueueFifoOrderV5 {
 }
 /// Durable journal payload for one live queue reservation.
 ///
-/// Version five is the first-release layout and intentionally rejects every
-/// earlier prototype. In particular, V5 binds every reservation to an exact
-/// globally committed QueuePlan admission identity and persists atomic ordered
-/// release batches.
+/// The first-release V1 layout binds every reservation to an exact globally
+/// committed QueuePlan admission identity and persists atomic ordered release
+/// batches.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct LaneQueueReservationRecordV5 {
+pub(crate) struct LaneQueueReservationRecordV1 {
     /// Record format version.
     version: u16,
     /// Exact reservation identity.
-    key: LaneQueueReservationKeyV2,
+    key: LaneQueueReservationKeyV1,
     /// Original queue admission timestamp retained for release ordering and pressure age.
     enqueue_timestamp_ms: u64,
     /// Original global FIFO position retained while ordinary queue ownership is absent.
-    fifo_order: LaneQueueFifoOrderV5,
+    fifo_order: LaneQueueFifoOrderV1,
 }
-impl LaneQueueReservationRecordV5 {
+impl LaneQueueReservationRecordV1 {
     fn validate(&self) -> Result<(), &'static str> {
         if self.version != LANE_QUEUE_RESERVATION_JOURNAL_VERSION {
             return Err("unsupported lane queue reservation journal version");
@@ -930,7 +929,7 @@ impl LaneQueueReservationRecordV5 {
 /// attempt before it can touch a live reservation from a recreated lane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct LaneQueueReservationReleaseBarrierV3 {
+pub(crate) struct LaneQueueReservationReleaseBarrierV1 {
     /// Reservation-journal schema version.
     pub(crate) version: u16,
     /// Chain context of the retired payload.
@@ -958,10 +957,10 @@ pub(crate) struct LaneQueueReservationReleaseBarrierV3 {
     /// Digest of the exact durable Kura retirement record.
     pub(crate) retirement_hash: Hash,
     /// Original FIFO-ordered reservation identities.
-    pub(crate) ordered_keys: Vec<LaneQueueReservationKeyV2>,
+    pub(crate) ordered_keys: Vec<LaneQueueReservationKeyV1>,
 }
-impl LaneQueueReservationReleaseBarrierV3 {
-    pub(crate) const VERSION: u16 = 3;
+impl LaneQueueReservationReleaseBarrierV1 {
+    pub(crate) const VERSION: u16 = 1;
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         if self.version != Self::VERSION {
             return Err("unsupported lane queue release barrier version");
@@ -1013,7 +1012,7 @@ impl LaneQueueReservationReleaseBarrierV3 {
     #[must_use]
     pub(crate) fn digest(&self) -> Hash {
         Hash::new_from_chunks(&[
-            b"iroha:queue-lane-reservation-release-barrier:v3\0",
+            b"iroha:queue-lane-reservation-release-barrier:v1\0",
             &norito::encode_canonical(self).expect("validated queue release barrier must encode"),
         ])
     }
@@ -1027,17 +1026,17 @@ impl LaneQueueReservationReleaseBarrierV3 {
 /// Queue has no remaining owner for any barrier key.
 #[must_use = "a durable Queue release-barrier proof must be consumed by Kura"]
 pub(crate) struct DurableLaneQueueReleaseBarrierAuthorization {
-    barrier: LaneQueueReservationReleaseBarrierV3,
+    barrier: LaneQueueReservationReleaseBarrierV1,
     terminal_absence: bool,
 }
 impl DurableLaneQueueReleaseBarrierAuthorization {
-    fn durable(barrier: &LaneQueueReservationReleaseBarrierV3) -> Self {
+    fn durable(barrier: &LaneQueueReservationReleaseBarrierV1) -> Self {
         Self {
             barrier: barrier.clone(),
             terminal_absence: false,
         }
     }
-    fn terminal(barrier: &LaneQueueReservationReleaseBarrierV3) -> Self {
+    fn terminal(barrier: &LaneQueueReservationReleaseBarrierV1) -> Self {
         Self {
             barrier: barrier.clone(),
             terminal_absence: true,
@@ -1046,7 +1045,7 @@ impl DurableLaneQueueReleaseBarrierAuthorization {
     /// Consume this proof for Kura's byte-identical claim transition.
     pub(crate) fn consume_for_kura(
         self,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
     ) -> Option<bool> {
         (self.barrier == *barrier).then_some(self.terminal_absence)
     }
@@ -1061,7 +1060,7 @@ enum LaneQueueReleasePreparationGate {
 }
 impl LaneQueueReleasePreparationGate {
     fn from_authorization(
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
         authorization: AutonomousLaneQueueReleasePreparationAuthorization,
     ) -> Result<Self, LaneQueueReservationError> {
         let (projection, claims_fully_released) =
@@ -1138,7 +1137,7 @@ enum LaneQueueReleaseFinalizationGate {
 }
 impl LaneQueueReleaseFinalizationGate {
     fn from_authorization(
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
         authorization: AutonomousLaneQueueReleaseFinalizationAuthorization,
         source_outcome_authorization: AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization,
     ) -> Result<Self, LaneQueueReservationError> {
@@ -1258,7 +1257,7 @@ impl LaneQueueReleaseFinalizationGate {
     }
     fn terminal_evidence(
         &self,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
         reservation_group: LaneQueueReservationGroupBindingV1,
     ) -> Result<Option<AutonomousLaneReleaseQueueTerminalEvidence>, LaneQueueReservationError> {
         let recomputed =
@@ -1322,15 +1321,15 @@ impl LaneQueueReleaseFinalizationGate {
 /// reinsertion restartable without changing global queue order.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-pub(crate) struct LaneQueueReservationReleaseCompletionV5 {
+pub(crate) struct LaneQueueReservationReleaseCompletionV1 {
     /// Reservation-journal schema version.
     pub(crate) version: u16,
     /// Exact prepared release barrier.
-    pub(crate) barrier: LaneQueueReservationReleaseBarrierV3,
+    pub(crate) barrier: LaneQueueReservationReleaseBarrierV1,
     /// Live records in the barrier's original order.
-    pub(crate) ordered_records: Vec<LaneQueueReservationRecordV5>,
+    pub(crate) ordered_records: Vec<LaneQueueReservationRecordV1>,
 }
-impl LaneQueueReservationReleaseCompletionV5 {
+impl LaneQueueReservationReleaseCompletionV1 {
     fn validate(&self) -> Result<(), &'static str> {
         if self.version != LANE_QUEUE_RESERVATION_JOURNAL_VERSION {
             return Err("unsupported lane queue release completion version");
@@ -1358,7 +1357,7 @@ impl LaneQueueReservationReleaseCompletionV5 {
 /// A transaction whose full queue ownership was durably transferred to one lane proposal slot.
 #[derive(Clone)]
 pub struct LaneReservedTransaction {
-    key: LaneQueueReservationKeyV2,
+    key: LaneQueueReservationKeyV1,
     tx: Arc<CheckedTransaction<'static>>,
     routing_plan: RoutingPlan,
     encoded_len: usize,
@@ -1367,7 +1366,7 @@ pub struct LaneReservedTransaction {
 impl LaneReservedTransaction {
     /// Borrow the exact durable reservation identity.
     #[must_use]
-    pub fn key(&self) -> &LaneQueueReservationKeyV2 {
+    pub fn key(&self) -> &LaneQueueReservationKeyV1 {
         &self.key
     }
     /// Clone the accepted transaction owned by this reservation.
@@ -1416,7 +1415,7 @@ pub struct LaneQueueReservationReplaySummary {
     pub awaiting_transaction_replay: usize,
     /// Exact commit barriers awaiting QueuePlan tombstones and/or ordered ForgetCommit.
     pub commit_barriers: usize,
-    /// Commit barriers carrying the exact durable V6 PlanTombstoned marker.
+    /// Commit barriers carrying the exact durable V1 PlanTombstoned marker.
     pub plan_tombstoned: usize,
     /// Prepared ordered releases whose transactions remain lane-owned.
     pub release_barriers: usize,
@@ -1450,7 +1449,7 @@ pub(crate) struct LaneQueueReservationGroupIdentityV1 {
     pub(crate) proposal_identity_hash: Hash,
 }
 impl LaneQueueReservationGroupIdentityV1 {
-    pub(crate) fn from_key(key: &LaneQueueReservationKeyV2) -> Self {
+    pub(crate) fn from_key(key: &LaneQueueReservationKeyV1) -> Self {
         Self {
             lane_id: key.lane_id,
             dataspace_id: key.dataspace_id,
@@ -1496,7 +1495,7 @@ pub(crate) struct LaneQueueReservationGroupBindingV1 {
 /// it internally into the distinct producer-fanout authorization below; the
 /// activation type itself never crosses that transport boundary. Possession
 /// of payload bytes alone is therefore never treated as proof of the
-/// producer's V4/V5 ownership.
+/// producer's exact QueuePlan/reservation ownership.
 #[must_use = "a Queue-authenticated Kura activation must be consumed by the exact producer payload"]
 #[allow(missing_copy_implementations)]
 pub(crate) struct AutonomousLaneKuraActivationAuthorization<'queue> {
@@ -1578,7 +1577,7 @@ pub(crate) fn lane_queue_reservation_group_binding_from_ordered_keys<'a, I>(
     ordered_keys: I,
 ) -> Result<LaneQueueReservationGroupBindingV1, &'static str>
 where
-    I: IntoIterator<Item = &'a LaneQueueReservationKeyV2>,
+    I: IntoIterator<Item = &'a LaneQueueReservationKeyV1>,
 {
     let mut ordered_keys = ordered_keys.into_iter();
     let first = ordered_keys
@@ -1809,7 +1808,7 @@ impl LaneQueueReleaseCompletionResult {
 /// One authorization-consumed Queue cleanup group awaiting the complete
 /// multi-group semantic preflight.
 struct PreparedLaneQueueCarrierCleanupGroup {
-    ordered_keys: Vec<LaneQueueReservationKeyV2>,
+    ordered_keys: Vec<LaneQueueReservationKeyV1>,
     group_binding: LaneQueueReservationGroupBindingV1,
     cleanup_gate: LaneQueueCarrierCleanupGate,
 }
@@ -1823,8 +1822,8 @@ struct LaneQueueCarrierCleanupOwnerSnapshot<'a> {
 #[derive(Default)]
 struct LaneQueueCarrierCleanupJournalPreflight {
     active_phases: Vec<LaneQueueReservationRecoveryPhaseV1>,
-    finalized_keys: Vec<LaneQueueReservationKeyV2>,
-    replica_keys: Vec<LaneQueueReservationKeyV2>,
+    finalized_keys: Vec<LaneQueueReservationKeyV1>,
+    replica_keys: Vec<LaneQueueReservationKeyV1>,
 }
 impl LaneQueueCarrierCleanupGate {
     fn from_authorization(
@@ -1900,8 +1899,8 @@ impl LaneQueueCarrierCleanupGate {
                     producer_alive: true,
                 },
                 history: ProductionInFlightFirstReleaseHistoryProjection {
-                    ever_queue_plan_v4: true,
-                    ever_reservation_v5: true,
+                    ever_queue_plan_v1: true,
+                    ever_reservation_v1: true,
                     ever_execution_input_durable: 1,
                     ever_ready_authorized: 1,
                     ready_signed: 1,
@@ -1947,7 +1946,7 @@ impl LaneQueueCarrierCleanupGate {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LaneQueueReservationReconciliationRecordV1 {
     /// Exact durable reservation identity.
-    pub(crate) key: LaneQueueReservationKeyV2,
+    pub(crate) key: LaneQueueReservationKeyV1,
     /// Exact proposal-slot group reconstructed from the reservation identity.
     pub(crate) group: LaneQueueReservationGroupIdentityV1,
     /// Original queue admission timestamp persisted in both journals.
@@ -1955,7 +1954,7 @@ pub(crate) struct LaneQueueReservationReconciliationRecordV1 {
     /// Original durable global FIFO ordinal.
     pub(crate) fifo_ordinal: u64,
     /// Complete exact QueuePlan claim that authorized reservation ownership.
-    pub(crate) durable_admission: QueuePlanDurableAdmissionV2,
+    pub(crate) durable_admission: QueuePlanDurableAdmissionV1,
 }
 /// Complete FIFO-ordered membership of one exact autonomous proposal slot.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -1964,11 +1963,11 @@ pub(crate) struct LaneQueueReservationReconciliationGroupV1 {
     /// Exact lifecycle and proposal-slot identity.
     pub(crate) identity: LaneQueueReservationGroupIdentityV1,
     /// Complete reservation membership in original global FIFO order.
-    pub(crate) ordered_keys: Vec<LaneQueueReservationKeyV2>,
+    pub(crate) ordered_keys: Vec<LaneQueueReservationKeyV1>,
 }
-/// Exact V6 reservation-journal owner phase for one startup key.
+/// Exact V1 reservation-journal owner phase for one startup key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LaneQueueReservationOwnerPhaseV6 {
+pub(crate) enum LaneQueueReservationOwnerPhaseV1 {
     /// The reservation still owns its exact live FIFO record.
     Live,
     /// Reservation Commit is durable and awaits later cleanup phases.
@@ -1978,7 +1977,7 @@ pub(crate) enum LaneQueueReservationOwnerPhaseV6 {
     /// Release completion owns the exact retained FIFO record.
     ReleaseCompleted,
 }
-impl LaneQueueReservationOwnerPhaseV6 {
+impl LaneQueueReservationOwnerPhaseV1 {
     const fn tag(self) -> u8 {
         match self {
             Self::Live => 0,
@@ -1988,12 +1987,12 @@ impl LaneQueueReservationOwnerPhaseV6 {
         }
     }
 }
-/// Exact V4 QueuePlan phase associated with one V6 reservation owner.
+/// Exact V1 QueuePlan phase associated with one V1 reservation owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum QueuePlanReservationPhaseV1 {
-    /// The exact V4 QueuePlan claim is still live.
+    /// The exact V1 QueuePlan claim is still live.
     Live,
-    /// The exact V4 tombstone is durable. Its V6 marker may still be pending
+    /// The exact V1 tombstone is durable. Its V1 marker may still be pending
     /// across the intentional two-journal crash window.
     Tombstoned,
 }
@@ -2009,12 +2008,12 @@ impl QueuePlanReservationPhaseV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct LaneQueueReservationRecoveryPhaseV1 {
     /// Exact reservation identity shared by both durable journals.
-    pub(crate) key: LaneQueueReservationKeyV2,
-    /// Exact V6 owner family.
-    pub(crate) reservation_phase: LaneQueueReservationOwnerPhaseV6,
-    /// Exact V4 plan phase, independent of whether the V6 marker is durable.
+    pub(crate) key: LaneQueueReservationKeyV1,
+    /// Exact V1 owner family.
+    pub(crate) reservation_phase: LaneQueueReservationOwnerPhaseV1,
+    /// Exact V1 plan phase, independent of whether the V1 marker is durable.
     pub(crate) queue_plan_phase: QueuePlanReservationPhaseV1,
-    /// Whether V6 independently and durably marks the exact V4 tombstone.
+    /// Whether V1 independently and durably marks the exact V1 tombstone.
     pub(crate) plan_tombstone_marked: bool,
 }
 /// Immutable, self-contained queue input for restart reservation classification.
@@ -2025,12 +2024,12 @@ pub(crate) struct LaneQueueReservationReconciliationSnapshotV1 {
     /// Every exact proposal group, ordered by its first FIFO member.
     pub(crate) ordered_groups: Vec<LaneQueueReservationReconciliationGroupV1>,
     /// Exact crash barriers awaiting QueuePlan tombstones and/or ordered ForgetCommit.
-    pub(crate) commit_barriers: Vec<LaneQueueReservationKeyV2>,
+    pub(crate) commit_barriers: Vec<LaneQueueReservationKeyV1>,
     /// Exact prepared release barriers which still own live reservations.
-    pub(crate) prepared_release_barriers: Vec<LaneQueueReservationReleaseBarrierV3>,
+    pub(crate) prepared_release_barriers: Vec<LaneQueueReservationReleaseBarrierV1>,
     /// Exact completed releases awaiting FIFO restoration and ordered ForgetRelease.
-    pub(crate) completed_releases: Vec<LaneQueueReservationReleaseCompletionV5>,
-    /// Every current V6 owner with its exact cross-journal phase, ordered by queue hash.
+    pub(crate) completed_releases: Vec<LaneQueueReservationReleaseCompletionV1>,
+    /// Every current V1 owner with its exact cross-journal phase, ordered by queue hash.
     pub(crate) ordered_owner_phases: Vec<LaneQueueReservationRecoveryPhaseV1>,
 }
 /// Move-only handoff from exact replay observation to the final startup gate.
@@ -2046,7 +2045,7 @@ pub(crate) struct LaneReservationStartupReconciliationReceipt {
 }
 /// One complete composed state selected from an authenticated signed lifecycle cursor.
 ///
-/// The constructor accepts only the public projection surface of a V2 cursor. The caller remains
+/// The constructor accepts only the public projection surface of a V1 cursor. The caller remains
 /// responsible for sourcing that cursor from Kura's signature- and validator-set-validated
 /// inventory; Queue independently rebinds its immutable attempt, exact ordered reservation group,
 /// committee actors, and complete before/after states before accepting the selected recovery
@@ -2058,7 +2057,7 @@ pub(crate) struct LaneReservationSnapshotLifecycleProjectionV1 {
     executable_payload_hash: Hash,
     cursor_sequence: u64,
     cursor_hash: Hash,
-    cursor_phase: AutonomousLifecycleCursorPhaseKindV2,
+    cursor_phase: AutonomousLifecycleCursorPhaseKindV1,
     owner_generation: u64,
     source_generation: Option<u64>,
     validator_set_hash_version: u16,
@@ -2068,7 +2067,7 @@ pub(crate) struct LaneReservationSnapshotLifecycleProjectionV1 {
     local_actor: u128,
     producer: u128,
     reservation_group: LaneQueueReservationGroupBindingV1,
-    ordered_keys: Vec<LaneQueueReservationKeyV2>,
+    ordered_keys: Vec<LaneQueueReservationKeyV1>,
     cursor_before: ProductionInFlightFirstReleaseStateProjection,
     cursor_after: Option<ProductionInFlightFirstReleaseStateProjection>,
     recovered_state: ProductionInFlightFirstReleaseStateProjection,
@@ -2085,8 +2084,8 @@ impl LaneReservationSnapshotLifecycleProjectionV1 {
     /// caller-selected state. Signature and validator-set authentication must already have been
     /// performed by the Kura inventory provider.
     pub(crate) fn from_authenticated_cursor(
-        cursor: &AutonomousLifecycleCursorV2,
-        ordered_keys: Vec<LaneQueueReservationKeyV2>,
+        cursor: &AutonomousLifecycleCursorV1,
+        ordered_keys: Vec<LaneQueueReservationKeyV1>,
         recovered_state: ProductionInFlightFirstReleaseStateProjection,
     ) -> Result<Self, LaneQueueReservationError> {
         let reservation_group =
@@ -2144,7 +2143,7 @@ impl LaneReservationSnapshotLifecycleProjectionV1 {
         })?;
         if matches!(
             cursor.phase_kind(),
-            AutonomousLifecycleCursorPhaseKindV2::Prepared
+            AutonomousLifecycleCursorPhaseKindV1::Prepared
         ) != prepared.is_some()
         {
             return Err(LaneQueueReservationError::InvalidIdentity(
@@ -2246,14 +2245,14 @@ impl LaneQueueReservationReconciliationSnapshotV1 {
     /// the prepared and completed durable owner families distinct in the owned
     /// atomic snapshot.
     #[must_use]
-    pub(crate) fn release_barriers(&self) -> Vec<LaneQueueReservationReleaseBarrierV3> {
+    pub(crate) fn release_barriers(&self) -> Vec<LaneQueueReservationReleaseBarrierV1> {
         let mut barriers = self.prepared_release_barriers.clone();
         for completion in &self.completed_releases {
             if !barriers.contains(&completion.barrier) {
                 barriers.push(completion.barrier.clone());
             }
         }
-        barriers.sort_by_key(LaneQueueReservationReleaseBarrierV3::digest);
+        barriers.sort_by_key(LaneQueueReservationReleaseBarrierV1::digest);
         barriers
     }
     /// Return whether no durable reservation owner remains in any family.
@@ -2308,7 +2307,7 @@ fn lane_reservation_snapshot_group_order_agrees(
     snapshot: &LaneQueueReservationReconciliationSnapshotV1,
     phases: &BTreeMap<EntrypointHash, LaneQueueReservationRecoveryPhaseV1>,
     reservation_group: LaneQueueReservationGroupBindingV1,
-    ordered_keys: &[LaneQueueReservationKeyV2],
+    ordered_keys: &[LaneQueueReservationKeyV1],
 ) -> Result<(), LaneQueueReservationError> {
     let mut record_backed_keys = Vec::new();
     let mut completed_keys = Vec::new();
@@ -2322,14 +2321,14 @@ fn lane_reservation_snapshot_group_order_agrees(
             });
         }
         match phase.reservation_phase {
-            LaneQueueReservationOwnerPhaseV6::Live
-            | LaneQueueReservationOwnerPhaseV6::ReleasePrepared => {
+            LaneQueueReservationOwnerPhaseV1::Live
+            | LaneQueueReservationOwnerPhaseV1::ReleasePrepared => {
                 record_backed_keys.push(*key);
             }
-            LaneQueueReservationOwnerPhaseV6::ReleaseCompleted => {
+            LaneQueueReservationOwnerPhaseV1::ReleaseCompleted => {
                 completed_keys.push(*key);
             }
-            LaneQueueReservationOwnerPhaseV6::CommitBarrier => {}
+            LaneQueueReservationOwnerPhaseV1::CommitBarrier => {}
         }
     }
     let mut observed_record_groups = snapshot
@@ -2366,7 +2365,7 @@ fn lane_reservation_snapshot_group_order_agrees(
     let expects_prepared = ordered_keys.iter().all(|key| {
         phases.get(&key.entrypoint_hash).is_some_and(|phase| {
             phase.key == *key
-                && phase.reservation_phase == LaneQueueReservationOwnerPhaseV6::ReleasePrepared
+                && phase.reservation_phase == LaneQueueReservationOwnerPhaseV1::ReleasePrepared
         })
     });
     match (expects_prepared, observed_prepared_first) {
@@ -2409,7 +2408,7 @@ fn lane_reservation_snapshot_group_order_agrees(
 fn lane_reservation_snapshot_release_retirement_hash(
     snapshot: &LaneQueueReservationReconciliationSnapshotV1,
     reservation_group: LaneQueueReservationGroupBindingV1,
-    ordered_keys: &[LaneQueueReservationKeyV2],
+    ordered_keys: &[LaneQueueReservationKeyV1],
     phase: AutonomousLaneRetirementQueueSnapshotPhaseV1,
 ) -> Result<Hash, LaneQueueReservationError> {
     let mut observed = None;
@@ -2465,7 +2464,7 @@ fn lane_reservation_snapshot_group_phase_agrees(
     snapshot: &LaneQueueReservationReconciliationSnapshotV1,
     phases: &BTreeMap<EntrypointHash, LaneQueueReservationRecoveryPhaseV1>,
     reservation_group: LaneQueueReservationGroupBindingV1,
-    ordered_keys: &[LaneQueueReservationKeyV2],
+    ordered_keys: &[LaneQueueReservationKeyV1],
     recovered_state: ProductionInFlightFirstReleaseStateProjection,
 ) -> Result<BTreeSet<EntrypointHash>, LaneQueueReservationError> {
     let recomputed = lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
@@ -2474,8 +2473,8 @@ fn lane_reservation_snapshot_group_phase_agrees(
         || recovered_state.binding_a
             != canonical_lane_queue_reservation_group_identity_projection(reservation_group)
         || recovered_state.queue.selected_count != reservation_group.reservation_count
-        || !recovered_state.history.ever_queue_plan_v4
-        || !recovered_state.history.ever_reservation_v5
+        || !recovered_state.history.ever_queue_plan_v1
+        || !recovered_state.history.ever_reservation_v1
     {
         return Err(LaneQueueReservationError::InvalidIdentity(
             "signed lifecycle state disagrees with the exact recovered Queue group".to_owned(),
@@ -2560,28 +2559,28 @@ fn lane_reservation_snapshot_group_phase_agrees(
         }
         let agrees = if commit_corridor {
             if ordinal < tombstoned {
-                phase.reservation_phase == LaneQueueReservationOwnerPhaseV6::CommitBarrier
+                phase.reservation_phase == LaneQueueReservationOwnerPhaseV1::CommitBarrier
                     && phase.queue_plan_phase == QueuePlanReservationPhaseV1::Tombstoned
                     && phase.plan_tombstone_marked
             } else if ordinal < committed {
-                phase.reservation_phase == LaneQueueReservationOwnerPhaseV6::CommitBarrier
+                phase.reservation_phase == LaneQueueReservationOwnerPhaseV1::CommitBarrier
                     && !phase.plan_tombstone_marked
                     && (phase.queue_plan_phase == QueuePlanReservationPhaseV1::Live
                         || (ordinal == tombstoned
                             && phase.queue_plan_phase == QueuePlanReservationPhaseV1::Tombstoned))
             } else {
-                phase.reservation_phase == LaneQueueReservationOwnerPhaseV6::Live
+                phase.reservation_phase == LaneQueueReservationOwnerPhaseV1::Live
                     && phase.queue_plan_phase == QueuePlanReservationPhaseV1::Live
                     && !phase.plan_tombstone_marked
             }
         } else {
             let expected_owner = match recovered_state.queue.reservation_state {
-                IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE => LaneQueueReservationOwnerPhaseV6::Live,
+                IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE => LaneQueueReservationOwnerPhaseV1::Live,
                 IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_PREPARED => {
-                    LaneQueueReservationOwnerPhaseV6::ReleasePrepared
+                    LaneQueueReservationOwnerPhaseV1::ReleasePrepared
                 }
                 IN_FLIGHT_FIRST_RELEASE_RESERVATION_RELEASE_COMPLETED => {
-                    LaneQueueReservationOwnerPhaseV6::ReleaseCompleted
+                    LaneQueueReservationOwnerPhaseV1::ReleaseCompleted
                 }
                 _ => {
                     return Err(LaneQueueReservationError::InvalidIdentity(
@@ -2596,7 +2595,7 @@ fn lane_reservation_snapshot_group_phase_agrees(
         };
         if !agrees {
             return Err(LaneQueueReservationError::InvalidIdentity(
-                "signed lifecycle state disagrees with an exact V4/V6 Queue owner phase".to_owned(),
+                "signed lifecycle state disagrees with an exact V1 Queue owner phase".to_owned(),
             ));
         }
         covered.insert(key.entrypoint_hash);
@@ -2623,7 +2622,7 @@ fn lane_reservation_snapshot_group_phase_agrees(
 pub(crate) fn strictly_absent_lane_reservation_snapshot_recovery_state(
     snapshot: &LaneQueueReservationReconciliationSnapshotV1,
     reservation_group: LaneQueueReservationGroupBindingV1,
-    ordered_keys: &[LaneQueueReservationKeyV2],
+    ordered_keys: &[LaneQueueReservationKeyV1],
 ) -> Result<ProductionInFlightFirstReleaseStateProjection, LaneQueueReservationError> {
     let recomputed = lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
         .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
@@ -2658,7 +2657,7 @@ pub(crate) fn strictly_absent_lane_reservation_snapshot_recovery_state(
             .validate_for_routing_plan(&durable.routing_plan)
             .map_err(LaneQueueReservationError::InvalidIdentity)?;
         let admission_binding =
-            crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(durable)
+            crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(durable)
                 .map_err(LaneQueueReservationError::InvalidIdentity)?;
         let coordinator = durable.context.route_incarnations.first().ok_or_else(|| {
             LaneQueueReservationError::InvalidIdentity(
@@ -2757,8 +2756,8 @@ pub(crate) fn strictly_absent_lane_reservation_snapshot_recovery_state(
             ..ProductionInFlightFirstReleaseSessionProjection::default()
         },
         history: ProductionInFlightFirstReleaseHistoryProjection {
-            ever_queue_plan_v4: true,
-            ever_reservation_v5: true,
+            ever_queue_plan_v1: true,
+            ever_reservation_v1: true,
             ..ProductionInFlightFirstReleaseHistoryProjection::default()
         },
         decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
@@ -2774,7 +2773,7 @@ pub(crate) fn strictly_absent_lane_reservation_snapshot_recovery_state(
 fn canonical_carrier_snapshot_recovered_state(
     phases: &BTreeMap<EntrypointHash, LaneQueueReservationRecoveryPhaseV1>,
     reservation_group: LaneQueueReservationGroupBindingV1,
-    ordered_keys: &[LaneQueueReservationKeyV2],
+    ordered_keys: &[LaneQueueReservationKeyV1],
     applied_state: ProductionInFlightFirstReleaseStateProjection,
 ) -> Result<ProductionInFlightFirstReleaseStateProjection, LaneQueueReservationError> {
     let recomputed = lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
@@ -2788,8 +2787,8 @@ fn canonical_carrier_snapshot_recovered_state(
         || applied_state.queue.selected_count != reservation_group.reservation_count
         || applied_state.queue.plan_state != IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED
         || applied_state.queue.reservation_state != IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE
-        || !applied_state.history.ever_queue_plan_v4
-        || !applied_state.history.ever_reservation_v5
+        || !applied_state.history.ever_queue_plan_v1
+        || !applied_state.history.ever_reservation_v1
         || !zero_cleanup_prefixes
         || applied_state.decision.lane_commit_scope != binding_a
         || !applied_state.decision.wsv_committed
@@ -2821,7 +2820,7 @@ fn canonical_carrier_snapshot_recovered_state(
                 phases.get(&key.entrypoint_hash).is_some_and(|phase| {
                     phase.key == **key
                         && phase.reservation_phase
-                            == LaneQueueReservationOwnerPhaseV6::CommitBarrier
+                            == LaneQueueReservationOwnerPhaseV1::CommitBarrier
                 })
             })
             .count();
@@ -2832,7 +2831,7 @@ fn canonical_carrier_snapshot_recovered_state(
                 phases.get(&key.entrypoint_hash).is_some_and(|phase| {
                     phase.key == **key
                         && phase.reservation_phase
-                            == LaneQueueReservationOwnerPhaseV6::CommitBarrier
+                            == LaneQueueReservationOwnerPhaseV1::CommitBarrier
                         && phase.queue_plan_phase == QueuePlanReservationPhaseV1::Tombstoned
                         && phase.plan_tombstone_marked
                 })
@@ -2890,7 +2889,7 @@ fn select_unique_lane_reservation_snapshot_recovered_state(
     snapshot: &LaneQueueReservationReconciliationSnapshotV1,
     phases: &BTreeMap<EntrypointHash, LaneQueueReservationRecoveryPhaseV1>,
     reservation_group: LaneQueueReservationGroupBindingV1,
-    ordered_keys: &[LaneQueueReservationKeyV2],
+    ordered_keys: &[LaneQueueReservationKeyV1],
     cursor_before: ProductionInFlightFirstReleaseStateProjection,
     cursor_after: Option<ProductionInFlightFirstReleaseStateProjection>,
 ) -> Result<ProductionInFlightFirstReleaseStateProjection, LaneQueueReservationError> {
@@ -2920,7 +2919,7 @@ fn select_unique_lane_reservation_snapshot_recovered_state(
     }
 }
 impl LaneReservationSnapshotRecoveryAuthorization {
-    /// Reauthenticate one recovered producer-Queue bootstrap under its exact live V4/V6 custody.
+    /// Reauthenticate one recovered producer-Queue bootstrap under its exact live V1 custody.
     ///
     /// The attempt must be the binding retained by Kura's validated bootstrap inventory. It is
     /// compared with every immutable fact projected from the signed lifecycle cursor before Queue
@@ -2994,7 +2993,7 @@ impl LaneReservationSnapshotRecoveryAuthorization {
             &expected_snapshot,
         )? {
             return Err(LaneQueueReservationError::InvalidIdentity(
-                "recovered ProducerQueue bootstrap has a stale combined V4/V6 Queue receipt"
+                "recovered ProducerQueue bootstrap has a stale combined V1 Queue receipt"
                     .to_owned(),
             ));
         }
@@ -3091,7 +3090,7 @@ pub enum LaneQueueReservationError {
         "lane reservation lifecycle recovery state is not unique: {matching_states} signed states match the exact Queue snapshot"
     )]
     LifecycleStateSelectionConflict {
-        /// Number of complete before/after states agreeing with exact V4/V6 evidence.
+        /// Number of complete before/after states agreeing with exact V1 evidence.
         matching_states: u8,
     },
     /// The requested lane incarnation is stale or inactive.
@@ -3162,18 +3161,18 @@ pub enum LaneQueueReservationError {
 }
 #[derive(Default)]
 struct LaneQueueReservationStore {
-    live_by_entrypoint: HashMap<EntrypointHash, LaneQueueReservationRecordV5>,
-    commit_barriers: Vec<LaneQueueReservationKeyV2>,
-    /// Commit-barrier subset whose exact V4 tombstone has a durable V6 marker.
-    plan_tombstoned: Vec<LaneQueueReservationKeyV2>,
-    release_barriers: Vec<LaneQueueReservationReleaseBarrierV3>,
-    completed_releases: Vec<LaneQueueReservationReleaseCompletionV5>,
+    live_by_entrypoint: HashMap<EntrypointHash, LaneQueueReservationRecordV1>,
+    commit_barriers: Vec<LaneQueueReservationKeyV1>,
+    /// Commit-barrier subset whose exact V1 tombstone has a durable V1 marker.
+    plan_tombstoned: Vec<LaneQueueReservationKeyV1>,
+    release_barriers: Vec<LaneQueueReservationReleaseBarrierV1>,
+    completed_releases: Vec<LaneQueueReservationReleaseCompletionV1>,
     /// Durable reservation-owner identities whose transaction payload is not
     /// currently materialized in `Queue::txs`.
     missing_payload_hashes: HashSet<EntrypointHash>,
 }
 struct DurableFifoOrderReconciliationPlan {
-    assigned: HashMap<EntrypointHash, LaneQueueFifoOrderV5>,
+    assigned: HashMap<EntrypointHash, LaneQueueFifoOrderV1>,
     next_fifo_ordinal: u64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3208,14 +3207,14 @@ impl LaneQueueReservationStore {
         // from FIFO resync and proposal selection before the plan-journal tombstone is available.
         self.durable_owned_hashes().collect()
     }
-    fn exact(&self, key: &LaneQueueReservationKeyV2) -> bool {
+    fn exact(&self, key: &LaneQueueReservationKeyV1) -> bool {
         self.live_by_entrypoint
             .get(&key.entrypoint_hash)
             .is_some_and(|record| record.key == *key)
     }
     fn ensure_no_conflict(
         &self,
-        key: &LaneQueueReservationKeyV2,
+        key: &LaneQueueReservationKeyV1,
     ) -> Result<(), LaneQueueReservationError> {
         if self
             .live_by_entrypoint
@@ -3244,9 +3243,9 @@ impl LaneQueueReservationStore {
     }
     fn ensure_release_no_conflict(
         &self,
-        requested: &LaneQueueReservationReleaseBarrierV3,
+        requested: &LaneQueueReservationReleaseBarrierV1,
     ) -> Result<(), LaneQueueReservationError> {
-        let same_slot = |existing: &LaneQueueReservationReleaseBarrierV3| {
+        let same_slot = |existing: &LaneQueueReservationReleaseBarrierV1| {
             existing.network_id == requested.network_id
                 && existing.epoch == requested.epoch
                 && existing.lane_id == requested.lane_id
@@ -3255,7 +3254,7 @@ impl LaneQueueReservationStore {
                 && existing.proposal_height == requested.proposal_height
                 && existing.lane_block_height == requested.lane_block_height
         };
-        let overlaps = |existing: &LaneQueueReservationReleaseBarrierV3| {
+        let overlaps = |existing: &LaneQueueReservationReleaseBarrierV1| {
             existing.ordered_keys.iter().any(|existing_key| {
                 requested.ordered_keys.iter().any(|requested_key| {
                     requested_key.entrypoint_hash == existing_key.entrypoint_hash
@@ -3293,7 +3292,7 @@ impl LaneQueueReservationStore {
     }
     fn ensure_not_release_prepared(
         &self,
-        key: &LaneQueueReservationKeyV2,
+        key: &LaneQueueReservationKeyV1,
     ) -> Result<(), LaneQueueReservationError> {
         if let Some(barrier) = self
             .release_barriers
@@ -3511,7 +3510,7 @@ pub struct Queue {
     missing_reservation_payload_count: AtomicUsize,
     /// Authoritative cached routing plan per entrypoint hash.
     routing_plans: DashMap<EntrypointHash, RoutingPlan>,
-    /// Bounded claim index rebuilt from live V4 journal records during startup replay.
+    /// Bounded claim index rebuilt from live V1 journal records during startup replay.
     durable_plan_claims: DashMap<EntrypointHash, QueuePlanDurableClaimIndexEntry>,
     /// Cached encoded length per queued transaction hash.
     tx_encoded_len: DashMap<EntrypointHash, usize>,
@@ -3522,7 +3521,7 @@ pub struct Queue {
     /// Local enqueue timestamp in milliseconds for hashes still waiting in `tx_hashes`.
     queued_tx_enqueued_at_ms: DashMap<EntrypointHash, u64>,
     /// Stable FIFO ordinal for every tracked transaction, including lane-owned reservations.
-    fifo_order_by_hash: DashMap<EntrypointHash, LaneQueueFifoOrderV5>,
+    fifo_order_by_hash: DashMap<EntrypointHash, LaneQueueFifoOrderV1>,
     /// Next FIFO ordinal allocated to a newly admitted transaction.
     next_fifo_ordinal: parking_lot::Mutex<u64>,
     /// FIFO enqueue-age index used to read the oldest queued transaction without scanning.
@@ -3539,7 +3538,7 @@ pub struct Queue {
     /// Serializes startup plan-journal installation without retaining either runtime lock across
     /// path repair and replay I/O.
     plan_journal_install_lock: parking_lot::Mutex<()>,
-    /// Non-authorizing identity of the exact post-tombstone V4 startup replay publication.
+    /// Non-authorizing identity of the exact post-tombstone V1 startup replay publication.
     plan_journal_startup_replay_receipt:
         parking_lot::Mutex<Option<QueuePlanStartupReplayReceiptV1>>,
     /// Durable exact ownership of queue entries selected by independent lane ticks.
@@ -3608,7 +3607,7 @@ pub struct Queue {
     /// before durable ForgetCommit removes the exact reservation owner.
     #[cfg(test)]
     hold_next_lane_reservation_commit_after_barrier: AtomicBool,
-    /// One-shot test crash boundary after the V6 PlanTombstoned sync and
+    /// One-shot test crash boundary after the V1 PlanTombstoned sync and
     /// before the matching Queue store publication.
     #[cfg(test)]
     hold_next_lane_reservation_commit_after_plan_marker: AtomicBool,
@@ -3996,8 +3995,8 @@ struct PreparedQueueAdmission {
     encoded_len: usize,
     proposal_gas_cost: u64,
     enqueued_at_ms: u64,
-    admission_context: Option<QueuePlanAdmissionContextV2>,
-    global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
+    admission_context: Option<QueuePlanAdmissionContextV1>,
+    global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV1>,
     expected_journal_record_digest: Option<Hash>,
     replayed_journal_record_digest: Option<Hash>,
     fee_reservation: Option<FeeAdmissionReservation>,
@@ -4007,7 +4006,7 @@ struct PreparedQueueAdmission {
 struct PreparedQueuePlanReplayAdmission {
     admission: PreparedQueueAdmission,
     claim: QueuePlanDurableClaimIndexEntry,
-    fifo_order: LaneQueueFifoOrderV5,
+    fifo_order: LaneQueueFifoOrderV1,
     restored_reservation: bool,
     replaces_missing_payload: bool,
 }
@@ -4024,20 +4023,20 @@ struct PreparedQueuePlanReplay {
 }
 struct QueuePlanReplayReservationShape {
     durable_owned_hashes: HashSet<EntrypointHash>,
-    durable_fifo_orders: HashMap<EntrypointHash, LaneQueueFifoOrderV5>,
+    durable_fifo_orders: HashMap<EntrypointHash, LaneQueueFifoOrderV1>,
     missing_payload_hashes: HashSet<EntrypointHash>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QueuePlanReplayReservationOwner {
     Absent,
-    FifoAnchored(LaneQueueFifoOrderV5),
+    FifoAnchored(LaneQueueFifoOrderV1),
     CommitBarrier,
 }
 impl QueuePlanReplayReservationOwner {
     const fn is_present(self) -> bool {
         !matches!(self, Self::Absent)
     }
-    const fn fifo_order(self) -> Option<LaneQueueFifoOrderV5> {
+    const fn fifo_order(self) -> Option<LaneQueueFifoOrderV1> {
         match self {
             Self::FifoAnchored(order) => Some(order),
             Self::Absent | Self::CommitBarrier => None,
@@ -4056,15 +4055,15 @@ struct QueuePlanDurableClaimIndexEntry {
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     signed_transaction_hash: Option<HashOf<iroha_data_model::transaction::SignedTransaction>>,
     routing_plan: RoutingPlan,
-    admission_context: QueuePlanAdmissionContextV2,
-    global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
+    admission_context: QueuePlanAdmissionContextV1,
+    global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV1>,
     enqueue_timestamp_ms: u64,
     journal_record_digest: Hash,
 }
 impl QueuePlanDurableClaimIndexEntry {
-    fn durable_admission(&self) -> QueuePlanDurableAdmissionV2 {
-        QueuePlanDurableAdmissionV2 {
-            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+    fn durable_admission(&self) -> QueuePlanDurableAdmissionV1 {
+        QueuePlanDurableAdmissionV1 {
+            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
             context: self.admission_context.clone(),
             global_admission_identity: self.global_admission_identity.clone(),
             routing_plan: self.routing_plan.clone(),
@@ -4076,8 +4075,8 @@ impl QueuePlanDurableClaimIndexEntry {
     }
     fn global_admission_binding(
         &self,
-    ) -> Result<crate::torii_proxy::QueuePlanAdmissionBindingV2, String> {
-        crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
+    ) -> Result<crate::torii_proxy::QueuePlanAdmissionBindingV1, String> {
+        crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(
             &self.durable_admission(),
         )
     }
@@ -4365,8 +4364,8 @@ struct QueueAdmissionNotification {
     enqueue_timestamp_ms: u64,
     journal_record_digest: Option<Hash>,
     routing_plan: RoutingPlan,
-    admission_context: Option<QueuePlanAdmissionContextV2>,
-    global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
+    admission_context: Option<QueuePlanAdmissionContextV1>,
+    global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV1>,
     signed_transaction_hash: Option<HashOf<iroha_data_model::transaction::SignedTransaction>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4377,8 +4376,8 @@ struct QueuePushOutcome {
     signed_transaction_hash: Option<HashOf<iroha_data_model::transaction::SignedTransaction>>,
     enqueue_timestamp_ms: u64,
     journal_record_digest: Option<Hash>,
-    admission_context: Option<QueuePlanAdmissionContextV2>,
-    global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
+    admission_context: Option<QueuePlanAdmissionContextV1>,
+    global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV1>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GossipEntryState {
@@ -4541,7 +4540,7 @@ impl QueueDurabilityTransition<'_> {
     fn covers_reservation_keys(
         &self,
         queue: &Queue,
-        ordered_keys: &[LaneQueueReservationKeyV2],
+        ordered_keys: &[LaneQueueReservationKeyV1],
     ) -> bool {
         core::ptr::eq(self.queue, queue)
             && ordered_keys
@@ -5130,7 +5129,7 @@ impl Queue {
                 .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
             if !commit_barriers.contains(key) {
                 return Err(LaneQueueReservationError::InvalidIdentity(
-                    "replayed V6 PlanTombstoned marker has no exact commit barrier".to_owned(),
+                    "replayed V1 PlanTombstoned marker has no exact commit barrier".to_owned(),
                 ));
             }
             if !plan_tombstoned.contains(key) {
@@ -5461,7 +5460,7 @@ impl Queue {
             .copied()
             .collect::<BTreeSet<_>>();
         let mut selected = Vec::<(
-            LaneQueueReservationRecordV5,
+            LaneQueueReservationRecordV1,
             Arc<CheckedTransaction<'static>>,
             RoutingPlan,
             usize,
@@ -5474,7 +5473,7 @@ impl Queue {
             EntrypointHash,
             Arc<CheckedTransaction<'static>>,
             RoutingPlan,
-            crate::torii_proxy::QueuePlanAdmissionBindingV2,
+            crate::torii_proxy::QueuePlanAdmissionBindingV1,
         )>::new();
         for hash in fifo.into_iter().take(limits.max_scan.get()) {
             if selected.len() >= limits.max_transactions.get() {
@@ -5579,8 +5578,8 @@ impl Queue {
             {
                 continue;
             }
-            let key = LaneQueueReservationKeyV2 {
-                version: LaneQueueReservationKeyV2::VERSION,
+            let key = LaneQueueReservationKeyV1 {
+                version: LaneQueueReservationKeyV1::VERSION,
                 entrypoint_hash: tx.as_accepted().hash_as_entrypoint(),
                 queue_plan_admission_binding_hash,
                 routing_plan_digest: routing_plan.digest(),
@@ -5648,7 +5647,7 @@ impl Queue {
                 .validate()
                 .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
             selected.push((
-                LaneQueueReservationRecordV5 {
+                LaneQueueReservationRecordV1 {
                     version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
                     key,
                     enqueue_timestamp_ms,
@@ -5730,9 +5729,9 @@ impl Queue {
             let mut selected_state = initial;
             selected_state.queue.plan_state = IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED;
             selected_state.queue.selected_count = selected_count;
-            selected_state.history.ever_queue_plan_v4 = true;
+            selected_state.history.ever_queue_plan_v1 = true;
             let selected_projection = ProductionInFlightFirstReleaseTransitionProjection {
-                action: IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4,
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1,
                 actor: 0,
                 target: 0,
                 before: initial,
@@ -5751,16 +5750,16 @@ impl Queue {
             }
             let mut reserved_state = selected_state;
             reserved_state.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE;
-            reserved_state.history.ever_reservation_v5 = true;
+            reserved_state.history.ever_reservation_v1 = true;
             let reservation_fsync_projection = ProductionInFlightFirstReleaseTransitionProjection {
-                action: IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5,
+                action: IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V1,
                 actor: 0,
                 target: 0,
                 before: selected_state,
                 after: reserved_state,
             };
             let invalid_fsync = LaneQueueReservationError::InvalidIdentity(String::from(
-                "reservation V5 fsync failed the composed first-release transition gate",
+                "reservation V1 fsync failed the composed first-release transition gate",
             ));
             let checked =
                 check_production_in_flight_first_release_transition(reservation_fsync_projection)
@@ -5823,12 +5822,12 @@ impl Queue {
             return Ok(Vec::new());
         }
         let (checked_reservation_fsync, reservation_fsync_projection) =
-            checked_reservation_fsync.expect("non-empty selection has checked V5 fsync evidence");
+            checked_reservation_fsync.expect("non-empty selection has checked V1 fsync evidence");
         let append_result = self.apply_lane_reservation_journal(|journal| {
             if checked_reservation_fsync.into_projection() != reservation_fsync_projection {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    "checked reservation V5 fsync projection changed before append",
+                    "checked reservation V1 fsync projection changed before append",
                 ));
             }
             journal.put_batch(selected.iter().map(|(record, ..)| record.clone()).collect())
@@ -5887,7 +5886,7 @@ impl Queue {
     /// or lane incarnation.
     pub fn retain_lane_reservation(
         &self,
-        key: &LaneQueueReservationKeyV2,
+        key: &LaneQueueReservationKeyV1,
     ) -> Result<LaneQueueReservationOutcome, LaneQueueReservationError> {
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
@@ -5916,7 +5915,7 @@ impl Queue {
     /// Returns an exact-identity conflict or durable journal failure.
     pub fn release_lane_reservation(
         &self,
-        key: &LaneQueueReservationKeyV2,
+        key: &LaneQueueReservationKeyV1,
     ) -> Result<LaneQueueReservationOutcome, LaneQueueReservationError> {
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
@@ -5989,7 +5988,7 @@ impl Queue {
     /// journal when work remains live, or a durable journal failure.
     pub fn release_lane_reservations_in_order(
         &self,
-        keys: &[LaneQueueReservationKeyV2],
+        keys: &[LaneQueueReservationKeyV1],
     ) -> Result<usize, LaneQueueReservationError> {
         self.release_lane_reservations_in_order_inner(keys, None)
     }
@@ -6001,14 +6000,14 @@ impl Queue {
     /// immediately before the single atomic release-batch append.
     pub(crate) fn release_strictly_absent_lane_reservations_in_order(
         &self,
-        keys: &[LaneQueueReservationKeyV2],
+        keys: &[LaneQueueReservationKeyV1],
         authorizations: Vec<StrictAbsenceDirectReleaseAuthorization>,
     ) -> Result<usize, LaneQueueReservationError> {
         self.release_lane_reservations_in_order_inner(keys, Some(authorizations))
     }
     fn release_lane_reservations_in_order_inner(
         &self,
-        keys: &[LaneQueueReservationKeyV2],
+        keys: &[LaneQueueReservationKeyV1],
         authorizations: Option<Vec<StrictAbsenceDirectReleaseAuthorization>>,
     ) -> Result<usize, LaneQueueReservationError> {
         if self.transaction_selection_durability_faulted() {
@@ -6195,12 +6194,12 @@ impl Queue {
     ///
     /// The same predicate feeds the mutually exclusive producer activation
     /// and direct-release paths. This prevents either path from drifting to a
-    /// weaker definition of live V4/V5 ownership.
+    /// weaker definition of live QueuePlan/reservation ownership.
     fn revalidate_complete_live_pre_kura_group_locked(
         &self,
         expected_group: LaneQueueReservationGroupBindingV1,
-        keys: &[LaneQueueReservationKeyV2],
-    ) -> Result<Vec<LaneQueueReservationRecordV5>, LaneQueueReservationError> {
+        keys: &[LaneQueueReservationKeyV1],
+    ) -> Result<Vec<LaneQueueReservationRecordV1>, LaneQueueReservationError> {
         if self.lane_reservation_journal.lock().is_none() {
             return Err(LaneQueueReservationError::JournalNotInstalled);
         }
@@ -6273,7 +6272,7 @@ impl Queue {
         .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
         if actual_group != expected_group {
             return Err(LaneQueueReservationError::InvalidIdentity(
-                "pre-Kura autonomous durable V5 group differs from its pending batch".to_owned(),
+                "pre-Kura autonomous durable V1 group differs from its pending batch".to_owned(),
             ));
         }
         Ok(records)
@@ -6283,7 +6282,7 @@ impl Queue {
     ///
     /// The returned move-only value retains per-transaction Queue transition
     /// ownership until Kura finishes its persistence attempt. A concurrent
-    /// Commit or release therefore cannot invalidate the V4/V5 facts between
+    /// Commit or release therefore cannot invalidate the V1 facts between
     /// this revalidation and the durable payload boundary.
     ///
     /// # Errors
@@ -6292,7 +6291,7 @@ impl Queue {
     pub(crate) fn authorize_lane_reservation_kura_activation<'queue>(
         &'queue self,
         authorization: AutonomousLaneReservationSelectionAuthorization,
-        ordered_keys: &[LaneQueueReservationKeyV2],
+        ordered_keys: &[LaneQueueReservationKeyV1],
     ) -> Result<AutonomousLaneKuraActivationAuthorization<'queue>, LaneQueueReservationError> {
         if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
@@ -6357,7 +6356,7 @@ impl Queue {
     }
     /// Fence one exact live autonomous group for a producer payload fanout.
     ///
-    /// Queue first performs the same complete durable V4/V5 revalidation as
+    /// Queue first performs the same complete durable V1 revalidation as
     /// producer-side Kura activation, then moves that still-live durability
     /// fence into a transport-only authorization. The caller must consume it
     /// at one exact fresh effect insertion; duplicate effects need no new
@@ -6369,7 +6368,7 @@ impl Queue {
     pub(crate) fn authorize_lane_reservation_payload_fanout<'queue>(
         &'queue self,
         authorization: AutonomousLaneReservationSelectionAuthorization,
-        ordered_keys: &[LaneQueueReservationKeyV2],
+        ordered_keys: &[LaneQueueReservationKeyV1],
     ) -> Result<AutonomousLanePayloadFanoutAuthorization<'queue>, LaneQueueReservationError> {
         let AutonomousLaneKuraActivationAuthorization {
             height_context_id,
@@ -6389,8 +6388,8 @@ impl Queue {
     /// Durably restore one exact locally pending autonomous batch before Kura activation.
     ///
     /// The move-only context can be derived only from the local pending batch. Under the
-    /// reservation transition and queue locks this method re-authenticates every complete V4
-    /// QueuePlan claim against its V5 owner, the exact proposal group, and immutable FIFO order.
+    /// reservation transition and queue locks this method re-authenticates every complete V1
+    /// QueuePlan claim against its V1 owner, the exact proposal group, and immutable FIFO order.
     /// It then consumes the checked composed `Live -> DirectReleased` transition immediately
     /// before the atomic release-batch append. This is not the idempotent restart-release path and
     /// establishes no remote-validator payload custody.
@@ -6478,8 +6477,8 @@ impl Queue {
                 ..ProductionInFlightFirstReleaseSessionProjection::default()
             },
             history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v4: true,
-                ever_reservation_v5: true,
+                ever_queue_plan_v1: true,
+                ever_reservation_v1: true,
                 ..ProductionInFlightFirstReleaseHistoryProjection::default()
             },
             decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
@@ -6565,7 +6564,7 @@ impl Queue {
     /// durable journal failure.
     pub(crate) fn prepare_lane_reservation_release_barrier_with_authorization(
         &self,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
         authorization: AutonomousLaneQueueReleasePreparationAuthorization,
     ) -> Result<DurableLaneQueueReleaseBarrierAuthorization, LaneQueueReservationError> {
         let gate = LaneQueueReleasePreparationGate::from_authorization(barrier, authorization)?;
@@ -6575,7 +6574,7 @@ impl Queue {
     #[cfg(test)]
     pub(crate) fn prepare_lane_reservation_release_barrier(
         &self,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
     ) -> Result<LaneQueueReservationOutcome, LaneQueueReservationError> {
         self.prepare_lane_reservation_release_barrier_inner(
             barrier,
@@ -6585,7 +6584,7 @@ impl Queue {
     }
     fn prepare_lane_reservation_release_barrier_inner(
         &self,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
         gate: LaneQueueReleasePreparationGate,
     ) -> Result<
         (
@@ -6736,7 +6735,7 @@ impl Queue {
     /// durable journal failure.
     pub(crate) fn finalize_lane_reservation_release_barrier_with_authorization(
         &self,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
         authorization: AutonomousLaneQueueReleaseFinalizationAuthorization,
         source_outcome_authorization: AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization,
     ) -> Result<LaneQueueReleaseCompletionResult, LaneQueueReservationError> {
@@ -6766,7 +6765,7 @@ impl Queue {
     /// release barrier/completion remains for any member.
     pub(crate) fn authenticate_autonomous_lifecycle_pending_release_queue_terminal_outcome(
         &self,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
         authorization: AutonomousLaneQueueReleaseFinalizationAuthorization,
         source_outcome_authorization: AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization,
     ) -> Result<AutonomousLaneReleaseQueueTerminalEvidence, LaneQueueReservationError> {
@@ -6811,7 +6810,7 @@ impl Queue {
     /// Queue proof to the exact Kura Pending record observed at startup.
     pub(crate) fn finalize_autonomous_lifecycle_pending_release_queue_terminal_outcome(
         &self,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
         authorization: AutonomousLaneQueueReleaseFinalizationAuthorization,
         source_outcome_authorization: AutonomousLifecycleReleaseQueueSourceOutcomeAuthorization,
     ) -> Result<LaneQueueReleaseCompletionResult, LaneQueueReservationError> {
@@ -6835,7 +6834,7 @@ impl Queue {
     #[cfg(test)]
     pub(crate) fn finalize_lane_reservation_release_barrier(
         &self,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
     ) -> Result<usize, LaneQueueReservationError> {
         let (finalized_reservations, _terminal_evidence) = self
             .finalize_lane_reservation_release_barrier_inner(
@@ -6846,7 +6845,7 @@ impl Queue {
     }
     fn finalize_lane_reservation_release_barrier_inner(
         &self,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
         gate: LaneQueueReleaseFinalizationGate,
     ) -> Result<
         (usize, Option<AutonomousLaneReleaseQueueTerminalEvidence>),
@@ -6908,7 +6907,7 @@ impl Queue {
                 self.validate_live_reservation_against_queue(&record)?;
                 ordered_records.push(record);
             }
-            let completion = LaneQueueReservationReleaseCompletionV5 {
+            let completion = LaneQueueReservationReleaseCompletionV1 {
                 version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
                 barrier: barrier.clone(),
                 ordered_records,
@@ -7072,7 +7071,7 @@ impl Queue {
     #[must_use]
     pub(crate) fn lane_reservation_release_barriers(
         &self,
-    ) -> Vec<LaneQueueReservationReleaseBarrierV3> {
+    ) -> Vec<LaneQueueReservationReleaseBarrierV1> {
         let store = self.lane_reservations.lock();
         let mut barriers = store.release_barriers.clone();
         for completion in &store.completed_releases {
@@ -7080,7 +7079,7 @@ impl Queue {
                 barriers.push(completion.barrier.clone());
             }
         }
-        barriers.sort_by_key(LaneQueueReservationReleaseBarrierV3::digest);
+        barriers.sort_by_key(LaneQueueReservationReleaseBarrierV1::digest);
         barriers
     }
     /// Durably commit a complete canonical carrier's FIFO-ordered autonomous
@@ -7097,7 +7096,7 @@ impl Queue {
     pub(crate) fn commit_lane_reservation_groups_with_authorization(
         &self,
         groups: Vec<(
-            Vec<LaneQueueReservationKeyV2>,
+            Vec<LaneQueueReservationKeyV1>,
             AutonomousLaneQueueCarrierCleanupAuthorization,
         )>,
     ) -> Result<LaneQueueCarrierCleanupResult, LaneQueueReservationError> {
@@ -7125,7 +7124,7 @@ impl Queue {
     #[cfg(test)]
     pub fn commit_lane_reservation_group(
         &self,
-        ordered_keys: &[LaneQueueReservationKeyV2],
+        ordered_keys: &[LaneQueueReservationKeyV1],
     ) -> Result<usize, LaneQueueReservationError> {
         let group_binding =
             lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
@@ -7143,7 +7142,7 @@ impl Queue {
     /// group, leaving its QueuePlan and Commit barriers for crash recovery.
     pub(crate) fn commit_lane_reservation_group_prefix_for_test(
         &self,
-        ordered_keys: &[LaneQueueReservationKeyV2],
+        ordered_keys: &[LaneQueueReservationKeyV1],
         prefix_len: usize,
     ) -> Result<usize, LaneQueueReservationError> {
         let group_binding =
@@ -7160,7 +7159,7 @@ impl Queue {
     #[cfg(test)]
     pub(crate) fn commit_lane_reservation_for_test(
         &self,
-        key: &LaneQueueReservationKeyV2,
+        key: &LaneQueueReservationKeyV1,
     ) -> Result<LaneQueueReservationOutcome, LaneQueueReservationError> {
         Ok(
             if self.commit_lane_reservation_group(core::slice::from_ref(key))? == 1 {
@@ -7307,7 +7306,7 @@ impl Queue {
     fn preflight_lane_reservation_group_locked(
         &self,
         store: &LaneQueueReservationStore,
-        ordered_keys: &[LaneQueueReservationKeyV2],
+        ordered_keys: &[LaneQueueReservationKeyV1],
         ownership: &LaneQueueCarrierCleanupOwnerSnapshot<'_>,
         fifo_ordinal_owners: &BTreeMap<u64, EntrypointHash>,
         journal: &mut LaneQueueCarrierCleanupJournalPreflight,
@@ -7412,7 +7411,7 @@ impl Queue {
                     .ok_or(LaneQueueReservationError::ReconciliationMissingDurableClaim { hash })?;
                 let _authenticated = Self::reconciliation_record_from_durable_claim(record, claim)?;
                 (
-                    LaneQueueReservationOwnerPhaseV6::Live,
+                    LaneQueueReservationOwnerPhaseV1::Live,
                     QueuePlanReservationPhaseV1::Live,
                 )
             } else {
@@ -7426,11 +7425,11 @@ impl Queue {
                 let queue_plan_phase = if let Some(claim) = claim.as_ref() {
                     if plan_tombstone_marked {
                         return Err(LaneQueueReservationError::InvalidIdentity(
-                            "V6 PlanTombstoned marker conflicts with a live QueuePlan claim"
+                            "V1 PlanTombstoned marker conflicts with a live QueuePlan claim"
                                 .to_owned(),
                         ));
                     }
-                    let reconstructed = LaneQueueReservationRecordV5 {
+                    let reconstructed = LaneQueueReservationRecordV1 {
                         version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
                         key: *key,
                         enqueue_timestamp_ms: claim.enqueue_timestamp_ms,
@@ -7446,7 +7445,7 @@ impl Queue {
                     QueuePlanReservationPhaseV1::Tombstoned
                 };
                 (
-                    LaneQueueReservationOwnerPhaseV6::CommitBarrier,
+                    LaneQueueReservationOwnerPhaseV1::CommitBarrier,
                     queue_plan_phase,
                 )
             };
@@ -7529,7 +7528,7 @@ impl Queue {
     fn preflight_committed_replica_owner_locked(
         &self,
         store: &LaneQueueReservationStore,
-        key: &LaneQueueReservationKeyV2,
+        key: &LaneQueueReservationKeyV1,
         ownership: &LaneQueueCarrierCleanupOwnerSnapshot<'_>,
         fifo_ordinal_owners: &BTreeMap<u64, EntrypointHash>,
         allow_active_durability_transition: bool,
@@ -7636,7 +7635,7 @@ impl Queue {
     /// batch has passed its read-only in-memory and journal preflight.
     fn tombstone_committed_replica_plan_journal(
         &self,
-        replica_keys: &[LaneQueueReservationKeyV2],
+        replica_keys: &[LaneQueueReservationKeyV1],
     ) -> Result<(), LaneQueueReservationError> {
         if replica_keys.is_empty() {
             return Ok(());
@@ -7661,7 +7660,7 @@ impl Queue {
     /// partial replica deletion.
     fn remove_preflighted_committed_replica_owners(
         &self,
-        replica_keys: &[LaneQueueReservationKeyV2],
+        replica_keys: &[LaneQueueReservationKeyV1],
         durability_transition: &QueueDurabilityTransition<'_>,
     ) -> Result<usize, LaneQueueReservationError> {
         if replica_keys.is_empty() {
@@ -7766,12 +7765,12 @@ impl Queue {
     }
     /// Reauthenticate the positive Queue half of canonical terminal ownership.
     ///
-    /// Run after final `ForgetCommit` or on an exact already-empty V6 retry. The
+    /// Run after final `ForgetCommit` or on an exact already-empty V1 retry. The
     /// ApplyCarrier base proves canonical WSV ownership, but every Queue index
     /// must prove nonownership; absence from `live_by_entrypoint` is insufficient.
     fn authenticate_canonical_queue_terminal_evidence(
         &self,
-        ordered_keys: &[LaneQueueReservationKeyV2],
+        ordered_keys: &[LaneQueueReservationKeyV1],
         group_binding: LaneQueueReservationGroupBindingV1,
         cleanup_gate: &LaneQueueCarrierCleanupGate,
         durability_transition: &QueueDurabilityTransition<'_>,
@@ -7879,7 +7878,7 @@ impl Queue {
     #[cfg(test)]
     fn commit_lane_reservation_group_prefix(
         &self,
-        ordered_keys: &[LaneQueueReservationKeyV2],
+        ordered_keys: &[LaneQueueReservationKeyV1],
         prefix_len: usize,
         group_binding: LaneQueueReservationGroupBindingV1,
         cleanup_gate: LaneQueueCarrierCleanupGate,
@@ -7964,7 +7963,7 @@ impl Queue {
     /// test-only prefix harness.
     fn commit_lane_reservation(
         &self,
-        ordered_keys: &[LaneQueueReservationKeyV2],
+        ordered_keys: &[LaneQueueReservationKeyV1],
         group_binding: LaneQueueReservationGroupBindingV1,
         stop_after_commit_prefix: Option<usize>,
         cleanup_gate: LaneQueueCarrierCleanupGate,
@@ -8219,7 +8218,7 @@ impl Queue {
             let journal_durability = if plan_tombstone_marked {
                 match self.verify_plan_journal_for_marked_reservation_commit(key) {
                     Ok(durability) => {
-                        // The exact V6 marker proves that the composed action
+                        // The exact V1 marker proves that the composed action
                         // already completed. This checked transition is a
                         // storage revalidation stutter, not a second action.
                         drop(checked_plan_tombstone);
@@ -8264,13 +8263,13 @@ impl Queue {
                         return Err(error);
                     }
                     // PersistPlanTombstone linearizes only after both the
-                    // exact V4 tombstone and V6 marker are synchronously
-                    // durable. A retained V4 tombstone with no marker is a
+                    // exact V1 tombstone and V1 marker are synchronously
+                    // durable. A retained V1 tombstone with no marker is a
                     // fresh completion here, not a stutter.
                     if checked_plan_tombstone.into_projection() != plan_tombstone_projection {
                         let error = std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
-                            "checked QueuePlan tombstone projection changed after V4/V6 sync",
+                            "checked QueuePlan tombstone projection changed after V1 sync",
                         );
                         let publish_fault =
                             self.latch_lane_reservation_post_plan_fault_locked(&error);
@@ -8291,7 +8290,7 @@ impl Queue {
                     .swap(false, Ordering::AcqRel)
             {
                 let error = std::io::Error::other(
-                    "injected crash after V6 PlanTombstoned sync before Queue publication",
+                    "injected crash after V1 PlanTombstoned sync before Queue publication",
                 );
                 self.latch_lane_reservation_post_plan_fault_locked(&error);
                 self.publish_latched_lane_reservation_durability_fault(None);
@@ -8302,7 +8301,7 @@ impl Queue {
             if journal_durability != PlanJournalDurability::StartupPending {
                 if !store.commit_barriers.contains(key) {
                     return Err(LaneQueueReservationError::InvalidIdentity(
-                        "V6 PlanTombstoned publication lost its exact commit barrier".to_owned(),
+                        "V1 PlanTombstoned publication lost its exact commit barrier".to_owned(),
                     ));
                 }
                 if let Some(marked) = store
@@ -8370,7 +8369,7 @@ impl Queue {
             }
             if !store.plan_tombstoned.contains(key) {
                 return Err(LaneQueueReservationError::InvalidIdentity(
-                    "reservation ForgetCommit requires the exact durable V6 PlanTombstoned marker"
+                    "reservation ForgetCommit requires the exact durable V1 PlanTombstoned marker"
                         .to_owned(),
                 ));
             }
@@ -8456,7 +8455,7 @@ impl Queue {
     }
     /// Return exact live reservation identities for restart reconciliation and diagnostics.
     #[must_use]
-    pub fn live_lane_reservations(&self) -> Vec<LaneQueueReservationKeyV2> {
+    pub fn live_lane_reservations(&self) -> Vec<LaneQueueReservationKeyV1> {
         let mut keys: Vec<_> = self
             .lane_reservations
             .lock()
@@ -8464,11 +8463,11 @@ impl Queue {
             .values()
             .map(|record| record.key.clone())
             .collect();
-        keys.sort_by_key(LaneQueueReservationKeyV2::digest);
+        keys.sort_by_key(LaneQueueReservationKeyV1::digest);
         keys
     }
     fn reconciliation_record_from_durable_claim(
-        record: &LaneQueueReservationRecordV5,
+        record: &LaneQueueReservationRecordV1,
         claim: &QueuePlanDurableClaimIndexEntry,
     ) -> Result<LaneQueueReservationReconciliationRecordV1, LaneQueueReservationError> {
         let key = record.key;
@@ -8586,7 +8585,7 @@ impl Queue {
                 })?;
             let authenticated = Self::reconciliation_record_from_durable_claim(record, claim)?;
             return Ok(QueuePlanReplayReservationOwner::FifoAnchored(
-                LaneQueueFifoOrderV5::new(authenticated.fifo_ordinal).map_err(|reason| {
+                LaneQueueFifoOrderV1::new(authenticated.fifo_ordinal).map_err(|reason| {
                     LaneQueueReservationError::ReconciliationDurableClaimMismatch {
                         hash,
                         reason: reason.to_string(),
@@ -8609,7 +8608,7 @@ impl Queue {
         }
         Ok(QueuePlanReplayReservationOwner::Absent)
     }
-    /// Capture the exact per-owner V6/V4 recovery partition while the Queue
+    /// Capture the exact per-owner V1 recovery partition while the Queue
     /// transition and mutation fences are held by the caller.
     fn lane_reservation_recovery_phases_for_claims_locked(
         &self,
@@ -8622,12 +8621,12 @@ impl Queue {
                 .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
             if !store.commit_barriers.contains(key) {
                 return Err(LaneQueueReservationError::InvalidIdentity(
-                    "V6 PlanTombstoned marker has no exact commit barrier".to_owned(),
+                    "V1 PlanTombstoned marker has no exact commit barrier".to_owned(),
                 ));
             }
             if marked.insert(key.entrypoint_hash, *key).is_some() {
                 return Err(LaneQueueReservationError::InvalidIdentity(
-                    "V6 PlanTombstoned marker partition contains a duplicate owner".to_owned(),
+                    "V1 PlanTombstoned marker partition contains a duplicate owner".to_owned(),
                 ));
             }
         }
@@ -8643,7 +8642,7 @@ impl Queue {
             let _authenticated = Self::reconciliation_record_from_durable_claim(record, claim)?;
             let phase = LaneQueueReservationRecoveryPhaseV1 {
                 key: record.key,
-                reservation_phase: LaneQueueReservationOwnerPhaseV6::Live,
+                reservation_phase: LaneQueueReservationOwnerPhaseV1::Live,
                 queue_plan_phase: QueuePlanReservationPhaseV1::Live,
                 plan_tombstone_marked: false,
             };
@@ -8671,7 +8670,7 @@ impl Queue {
                     })?;
                 if plan_tombstone_marked {
                     return Err(LaneQueueReservationError::InvalidIdentity(
-                        "V6 PlanTombstoned marker conflicts with a live QueuePlan claim".to_owned(),
+                        "V1 PlanTombstoned marker conflicts with a live QueuePlan claim".to_owned(),
                     ));
                 }
                 QueuePlanReservationPhaseV1::Live
@@ -8680,7 +8679,7 @@ impl Queue {
             };
             let phase = LaneQueueReservationRecoveryPhaseV1 {
                 key: *key,
-                reservation_phase: LaneQueueReservationOwnerPhaseV6::CommitBarrier,
+                reservation_phase: LaneQueueReservationOwnerPhaseV1::CommitBarrier,
                 queue_plan_phase,
                 plan_tombstone_marked,
             };
@@ -8699,7 +8698,7 @@ impl Queue {
                     )
                 })?;
                 if phase.key != *key
-                    || phase.reservation_phase != LaneQueueReservationOwnerPhaseV6::Live
+                    || phase.reservation_phase != LaneQueueReservationOwnerPhaseV1::Live
                     || phase.queue_plan_phase != QueuePlanReservationPhaseV1::Live
                     || phase.plan_tombstone_marked
                 {
@@ -8707,7 +8706,7 @@ impl Queue {
                         hash: key.entrypoint_hash,
                     });
                 }
-                phase.reservation_phase = LaneQueueReservationOwnerPhaseV6::ReleasePrepared;
+                phase.reservation_phase = LaneQueueReservationOwnerPhaseV1::ReleasePrepared;
             }
         }
         for completion in &store.completed_releases {
@@ -8722,7 +8721,7 @@ impl Queue {
                 let _authenticated = Self::reconciliation_record_from_durable_claim(record, claim)?;
                 let phase = LaneQueueReservationRecoveryPhaseV1 {
                     key: record.key,
-                    reservation_phase: LaneQueueReservationOwnerPhaseV6::ReleaseCompleted,
+                    reservation_phase: LaneQueueReservationOwnerPhaseV1::ReleaseCompleted,
                     queue_plan_phase: QueuePlanReservationPhaseV1::Live,
                     plan_tombstone_marked: false,
                 };
@@ -8821,14 +8820,14 @@ impl Queue {
             key.validate()
                 .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
         }
-        commit_barriers.sort_by_key(LaneQueueReservationKeyV2::digest);
+        commit_barriers.sort_by_key(LaneQueueReservationKeyV1::digest);
         let mut prepared_release_barriers = store.release_barriers.clone();
         for barrier in &prepared_release_barriers {
             barrier
                 .validate()
                 .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
         }
-        prepared_release_barriers.sort_by_key(LaneQueueReservationReleaseBarrierV3::digest);
+        prepared_release_barriers.sort_by_key(LaneQueueReservationReleaseBarrierV1::digest);
         let mut completed_releases = store.completed_releases.clone();
         for completion in &completed_releases {
             completion
@@ -8988,7 +8987,7 @@ impl Queue {
             .iter()
             .copied()
             .map(|identity| (identity, Vec::new()))
-            .collect::<BTreeMap<_, Vec<&LaneQueueReservationRecordV5>>>();
+            .collect::<BTreeMap<_, Vec<&LaneQueueReservationRecordV1>>>();
         let mut selected_by_slot = BTreeMap::<
             (LaneId, DataSpaceId, Hash, u64),
             Vec<LaneQueueReservationGroupIdentityV1>,
@@ -9060,7 +9059,7 @@ impl Queue {
     #[must_use]
     pub fn lane_reservation_group_is_finalized_for_diagnostics(
         &self,
-        keys: &[LaneQueueReservationKeyV2],
+        keys: &[LaneQueueReservationKeyV1],
     ) -> bool {
         if keys.is_empty()
             || keys.len() > iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS
@@ -9152,7 +9151,7 @@ impl Queue {
             return true;
         }
         let reservations = self.lane_reservations.lock();
-        let exact_reservation = |key: &LaneQueueReservationKeyV2| {
+        let exact_reservation = |key: &LaneQueueReservationKeyV1| {
             key.lane_id == lane_id
                 && key.dataspace_id == dataspace_id
                 && key.lane_incarnation == lane_incarnation
@@ -9317,7 +9316,7 @@ impl Queue {
     /// Select the unique complete signed cursor state matching one exact Queue startup group.
     ///
     /// The caller supplies a cursor from Kura's signature-validated inventory and the payload's
-    /// byte-identical ordered reservation keys. Queue freshly revalidates the combined V4/V6
+    /// byte-identical ordered reservation keys. Queue freshly revalidates the combined V1
     /// receipt, then independently tests the cursor's complete before and optional after states
     /// against every current owner phase and durable FIFO/release order. Exactly one state must
     /// match. Zero matches and two matches are both explicit conflicts; the caller never guesses
@@ -9331,8 +9330,8 @@ impl Queue {
     pub(crate) fn select_lane_reservation_snapshot_lifecycle_projection(
         &self,
         reconciliation_receipt: &LaneReservationStartupReconciliationReceipt,
-        cursor: &AutonomousLifecycleCursorV2,
-        ordered_keys: Vec<LaneQueueReservationKeyV2>,
+        cursor: &AutonomousLifecycleCursorV1,
+        ordered_keys: Vec<LaneQueueReservationKeyV1>,
     ) -> Result<LaneReservationSnapshotLifecycleProjectionV1, LaneQueueReservationError> {
         let snapshot = reconciliation_receipt.initial_snapshot.clone();
         if !self.revalidate_lane_reservation_startup_reconciliation_receipt(
@@ -9340,7 +9339,7 @@ impl Queue {
             &snapshot,
         )? {
             return Err(LaneQueueReservationError::InvalidIdentity(
-                "lifecycle state selection has a stale combined V4/V6 Queue receipt".to_owned(),
+                "lifecycle state selection has a stale combined V1 Queue receipt".to_owned(),
             ));
         }
         let reservation_group =
@@ -9371,13 +9370,13 @@ impl Queue {
             recovered_state,
         )
     }
-    /// Bind the combined V4/V6 startup receipt to complete signed lifecycle projections.
+    /// Bind the combined V1 startup receipt to complete signed lifecycle projections.
     ///
     /// Every current Queue owner must occur exactly once in one authenticated ordered reservation
     /// group. Live and Commit groups use the signed cursor state directly; strict absence and
     /// canonical application use planner-terminal evidence; prepared/completed release groups
     /// require both the signed cursor identity and Kura's exact retirement/claim-prefix evidence.
-    /// Queue rechecks the resulting full state against the exact V4/V6 phase and FIFO order before
+    /// Queue rechecks the resulting full state against the exact V1 phase and FIFO order before
     /// deriving action 25 through the shared checked constructor, which must return an exact
     /// actor-zero, target-zero state stutter.
     ///
@@ -9400,8 +9399,7 @@ impl Queue {
             &snapshot,
         )? {
             return Err(LaneQueueReservationError::InvalidIdentity(
-                "snapshot recovery authorization has a stale combined V4/V6 Queue receipt"
-                    .to_owned(),
+                "snapshot recovery authorization has a stale combined V1 Queue receipt".to_owned(),
             ));
         }
         let planner_groups = match planner_evidence {
@@ -9441,14 +9439,14 @@ impl Queue {
         let mut paired_lifecycle_by_group = BTreeMap::new();
         for lifecycle in lifecycle_projections {
             let phase_shape_is_valid = match lifecycle.cursor_phase {
-                AutonomousLifecycleCursorPhaseKindV2::Prepared => {
+                AutonomousLifecycleCursorPhaseKindV1::Prepared => {
                     lifecycle.cursor_after.is_some() && lifecycle.source_generation.is_none()
                 }
-                AutonomousLifecycleCursorPhaseKindV2::Live
-                | AutonomousLifecycleCursorPhaseKindV2::Terminal => {
+                AutonomousLifecycleCursorPhaseKindV1::Live
+                | AutonomousLifecycleCursorPhaseKindV1::Terminal => {
                     lifecycle.cursor_after.is_none() && lifecycle.source_generation.is_none()
                 }
-                AutonomousLifecycleCursorPhaseKindV2::Crashed => {
+                AutonomousLifecycleCursorPhaseKindV1::Crashed => {
                     lifecycle.source_generation.is_some_and(|source| {
                         source < lifecycle.owner_generation && lifecycle.cursor_after.is_some()
                     })
@@ -10155,9 +10153,9 @@ impl Queue {
     }
     /// Return exact crash barriers awaiting QueuePlan tombstones and/or ordered ForgetCommit.
     #[must_use]
-    pub fn lane_reservation_commit_barriers(&self) -> Vec<LaneQueueReservationKeyV2> {
+    pub fn lane_reservation_commit_barriers(&self) -> Vec<LaneQueueReservationKeyV1> {
         let mut keys = self.lane_reservations.lock().commit_barriers.clone();
-        keys.sort_by_key(LaneQueueReservationKeyV2::digest);
+        keys.sort_by_key(LaneQueueReservationKeyV1::digest);
         keys
     }
     /// Retain the next exact Commit barrier at the crash boundary immediately
@@ -10168,7 +10166,7 @@ impl Queue {
         self.hold_next_lane_reservation_commit_after_barrier
             .store(true, Ordering::Release);
     }
-    /// Retain the next exact Commit barrier after the V6 marker reached disk
+    /// Retain the next exact Commit barrier after the V1 marker reached disk
     /// but before that marker reaches the process-local owner store.
     #[cfg(test)]
     pub(crate) fn hold_next_lane_reservation_commit_after_plan_marker_for_test(&self) {
@@ -10287,7 +10285,7 @@ impl Queue {
     #[allow(clippy::too_many_lines)]
     fn prepare_plan_journal_replay_locked(
         &self,
-        records: Vec<QueuePlanJournalRecordV4>,
+        records: Vec<QueuePlanJournalRecordV1>,
         state: &State,
         state_view: &StateView<'_>,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
@@ -10354,7 +10352,7 @@ impl Queue {
             let enqueue_timestamp_ms = record.enqueue_timestamp_ms;
             let recorded_journal_digest = record.claim_digest().map_err(|error| {
                 invalid(format!(
-                    "failed to rebuild V4 queue-plan journal claim: {error}"
+                    "failed to rebuild V1 queue-plan journal claim: {error}"
                 ))
             })?;
             let accepted = AcceptedTransaction::accept_entrypoint_at_time(
@@ -10427,9 +10425,9 @@ impl Queue {
                 (None, false)
             } else if recorded_global_admission_identity.is_some() {
                 let binding =
-                    crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
-                        &QueuePlanDurableAdmissionV2 {
-                            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+                    crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(
+                        &QueuePlanDurableAdmissionV1 {
+                            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
                             context: recorded_admission_context.clone(),
                             global_admission_identity: recorded_global_admission_identity,
                             routing_plan: recorded_routing_plan.clone(),
@@ -10720,7 +10718,7 @@ impl Queue {
                 }
             }
         }
-        let mut fifo_orders = HashMap::<EntrypointHash, LaneQueueFifoOrderV5>::new();
+        let mut fifo_orders = HashMap::<EntrypointHash, LaneQueueFifoOrderV1>::new();
         let mut fifo_ordinal_owners = BTreeMap::<u64, EntrypointHash>::new();
         for entry in &self.fifo_order_by_hash {
             let hash = *entry.key();
@@ -10809,7 +10807,7 @@ impl Queue {
                         anchor_order.ordinal
                     )));
                 }
-                let order = LaneQueueFifoOrderV5::new(candidate)
+                let order = LaneQueueFifoOrderV1::new(candidate)
                     .map_err(|error| invalid(error.to_string()))?;
                 assigned_orders[slot] = Some(order);
                 used_ordinals.insert(candidate);
@@ -10829,7 +10827,7 @@ impl Queue {
                 })?;
             }
             let order =
-                LaneQueueFifoOrderV5::new(candidate).map_err(|error| invalid(error.to_string()))?;
+                LaneQueueFifoOrderV1::new(candidate).map_err(|error| invalid(error.to_string()))?;
             assigned_orders[slot] = Some(order);
             used_ordinals.insert(candidate);
             candidate = candidate.checked_add(1).unwrap_or(0);
@@ -11234,9 +11232,9 @@ impl Queue {
         &self,
         tx: &AcceptedTransaction<'_>,
         routing_plan: &RoutingPlan,
-        admission_context: &QueuePlanAdmissionContextV2,
+        admission_context: &QueuePlanAdmissionContextV1,
         enqueue_timestamp_ms: u64,
-        global_admission_identity: Option<&QueuePlanGlobalAdmissionIdentityV2>,
+        global_admission_identity: Option<&QueuePlanGlobalAdmissionIdentityV1>,
         expected_record_digest: Option<Hash>,
         required: bool,
     ) -> Result<Option<Hash>, (std::io::Error, bool)> {
@@ -11253,7 +11251,7 @@ impl Queue {
                 false,
             ));
         };
-        let record = QueuePlanJournalRecordV4::new(
+        let record = QueuePlanJournalRecordV1::new(
             tx.entrypoint().clone(),
             routing_plan.clone(),
             admission_context.clone(),
@@ -11316,7 +11314,7 @@ impl Queue {
     /// Force-sync one exact losing global-admission tombstone without the queue mutation lock.
     fn tombstone_conflicting_global_admission(
         &self,
-        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     ) -> Result<(), LaneQueueReservationError> {
         let removal = {
             let mut guard = self.plan_journal.lock();
@@ -11354,7 +11352,7 @@ impl Queue {
         hash: EntrypointHash,
         transaction: &Arc<CheckedTransaction<'static>>,
         routing_plan: &RoutingPlan,
-        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     ) -> Result<(), LaneQueueReservationError> {
         if transaction.as_accepted().hash_as_entrypoint() != binding.entrypoint_hash
             || routing_plan.digest() != binding.routing_plan_digest
@@ -11385,7 +11383,7 @@ impl Queue {
     /// live ownership cannot be reconciled with its exact durable journal claim.
     pub fn reject_exact_queue_plan_admission_claim(
         &self,
-        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     ) -> Result<bool, LaneQueueReservationError> {
         binding
             .validate_structure()
@@ -11455,7 +11453,7 @@ impl Queue {
     /// writes, because otherwise a crash could resurrect a transaction already owned by a lane.
     fn remove_plan_journal_for_reservation_commit(
         &self,
-        key: &LaneQueueReservationKeyV2,
+        key: &LaneQueueReservationKeyV1,
     ) -> std::io::Result<PlanJournalDurability> {
         let hash = key.entrypoint_hash;
         let mut guard = self.plan_journal.lock();
@@ -11539,13 +11537,13 @@ impl Queue {
             }
         })
     }
-    /// Revalidate the V4 side of an already durable V6 PlanTombstoned marker.
+    /// Revalidate the V1 side of an already durable V1 PlanTombstoned marker.
     ///
-    /// A marker permits V4 compaction to have discarded the exact tombstone,
+    /// A marker permits V1 compaction to have discarded the exact tombstone,
     /// but it never permits a live claim or a mismatched retained tombstone.
     fn verify_plan_journal_for_marked_reservation_commit(
         &self,
-        key: &LaneQueueReservationKeyV2,
+        key: &LaneQueueReservationKeyV1,
     ) -> std::io::Result<PlanJournalDurability> {
         let guard = self.plan_journal.lock();
         let Some(journal) = guard.as_ref() else {
@@ -11553,7 +11551,7 @@ impl Queue {
         };
         let phase = LaneQueueReservationRecoveryPhaseV1 {
             key: *key,
-            reservation_phase: LaneQueueReservationOwnerPhaseV6::CommitBarrier,
+            reservation_phase: LaneQueueReservationOwnerPhaseV1::CommitBarrier,
             queue_plan_phase: QueuePlanReservationPhaseV1::Tombstoned,
             plan_tombstone_marked: true,
         };
@@ -12602,7 +12600,7 @@ impl Queue {
         state_view: &impl StateReadOnlyWithTransactions,
     ) -> Result<
         Option<(
-            crate::torii_proxy::QueuePlanAdmissionBindingV2,
+            crate::torii_proxy::QueuePlanAdmissionBindingV1,
             QueuePlanAdmissionRegistryMatch,
         )>,
         String,
@@ -13437,7 +13435,7 @@ impl Queue {
     fn durable_plan_claim_context_revalidates_in_view(
         state_view: &impl StateReadOnly,
         routing_plan: &RoutingPlan,
-        admission_context: &QueuePlanAdmissionContextV2,
+        admission_context: &QueuePlanAdmissionContextV1,
     ) -> bool {
         if admission_context
             .validate_for_routing_plan(routing_plan)
@@ -13483,7 +13481,7 @@ impl Queue {
         tx: &AcceptedTransaction<'_>,
         state_view: &impl StateReadOnly,
         routing_plan: &RoutingPlan,
-        expected_admission_context: &QueuePlanAdmissionContextV2,
+        expected_admission_context: &QueuePlanAdmissionContextV1,
     ) -> Result<Option<QueuePlanDurableClaimIndexEntry>, &'static str> {
         let tx_hash = tx.hash_as_entrypoint();
         let Some(existing) = self.durable_plan_claims.get(&tx_hash) else {
@@ -13526,8 +13524,8 @@ impl Queue {
         tx: &AcceptedTransaction<'_>,
         state_view: &impl StateReadOnly,
         routing_plan: &RoutingPlan,
-        requested_context: &QueuePlanAdmissionContextV2,
-        current_context: &QueuePlanAdmissionContextV2,
+        requested_context: &QueuePlanAdmissionContextV1,
+        current_context: &QueuePlanAdmissionContextV1,
     ) -> Result<Option<QueuePlanDurableClaimIndexEntry>, &'static str> {
         let tx_hash = tx.hash_as_entrypoint();
         let Some(existing) = self.durable_plan_claims.get(&tx_hash) else {
@@ -13789,7 +13787,7 @@ impl Queue {
         state_view: &impl StateReadOnly,
         routing_plan: &RoutingPlan,
         authority_height: u64,
-    ) -> Result<QueuePlanAdmissionContextV2, QueuePlanAdmissionContextError> {
+    ) -> Result<QueuePlanAdmissionContextV1, QueuePlanAdmissionContextError> {
         let proposal_height =
             authority_height
                 .checked_add(1)
@@ -13868,7 +13866,7 @@ impl Queue {
             let durability_threshold = u16::try_from(validator_set.len().div_ceil(3))
                 .expect("bounded durable attestation threshold must fit u16");
             let validator_set_hash = HashOf::new(&validator_set);
-            route_incarnations.push(QueuePlanRouteIncarnationV2 {
+            route_incarnations.push(QueuePlanRouteIncarnationV1 {
                 leg,
                 lane_incarnation,
                 validator_set_hash_version:
@@ -13879,8 +13877,8 @@ impl Queue {
                 durability_threshold,
             });
         }
-        let context = QueuePlanAdmissionContextV2 {
-            version: QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+        let context = QueuePlanAdmissionContextV1 {
+            version: QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
             authority_height,
             proposal_height,
             predecessor_block_hash,
@@ -13895,7 +13893,7 @@ impl Queue {
     fn queue_plan_admission_context_in_view(
         state_view: &impl StateReadOnly,
         routing_plan: &RoutingPlan,
-    ) -> Result<QueuePlanAdmissionContextV2, QueuePlanAdmissionContextError> {
+    ) -> Result<QueuePlanAdmissionContextV1, QueuePlanAdmissionContextError> {
         let authority_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
         Self::queue_plan_admission_context_in_view_at_height(
             state_view,
@@ -13916,7 +13914,7 @@ impl Queue {
         &self,
         state: &State,
         routing_plan: &RoutingPlan,
-    ) -> Result<QueuePlanAdmissionContextV2, QueuePlanAdmissionContextError> {
+    ) -> Result<QueuePlanAdmissionContextV1, QueuePlanAdmissionContextError> {
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
@@ -13949,7 +13947,7 @@ impl Queue {
         &self,
         tx: &AcceptedTransaction<'_>,
         state: &State,
-    ) -> Result<Option<QueuePlanDurableAdmissionV2>, RoutingResolveError> {
+    ) -> Result<Option<QueuePlanDurableAdmissionV1>, RoutingResolveError> {
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
@@ -14003,8 +14001,8 @@ impl Queue {
             );
             return Err(RoutingResolveError::StaleRoutingPlan);
         }
-        Ok(Some(QueuePlanDurableAdmissionV2 {
-            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+        Ok(Some(QueuePlanDurableAdmissionV1 {
+            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
             context: claim.admission_context,
             global_admission_identity: claim.global_admission_identity,
             routing_plan: claim.routing_plan,
@@ -14028,7 +14026,7 @@ impl Queue {
         tx: &AcceptedTransaction<'_>,
         state: &State,
         routing_plan: &RoutingPlan,
-        expected_admission_context: &QueuePlanAdmissionContextV2,
+        expected_admission_context: &QueuePlanAdmissionContextV1,
     ) -> bool {
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let state_view = state.view();
@@ -14322,8 +14320,8 @@ impl Queue {
         tx: AcceptedTransaction<'static>,
         state: &State,
         routing_plan: Option<RoutingPlan>,
-        expected_admission_context: Option<&QueuePlanAdmissionContextV2>,
-        expected_admission_binding: Option<&crate::torii_proxy::QueuePlanAdmissionBindingV2>,
+        expected_admission_context: Option<&QueuePlanAdmissionContextV1>,
+        expected_admission_binding: Option<&crate::torii_proxy::QueuePlanAdmissionBindingV1>,
         gossip_payload: Option<Arc<Vec<u8>>>,
         plan_journal_mode: PlanJournalAdmissionMode,
     ) -> Result<QueuePushOutcome, Failure> {
@@ -14858,8 +14856,8 @@ impl Queue {
         &self,
         checked: CheckedTransaction<'static>,
         routing_plan: RoutingPlan,
-        admission_context: Option<QueuePlanAdmissionContextV2>,
-        global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
+        admission_context: Option<QueuePlanAdmissionContextV1>,
+        global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV1>,
         enqueue_timestamp_override_ms: Option<u64>,
         expected_journal_record_digest: Option<Hash>,
         state_access: &mut C,
@@ -15916,8 +15914,8 @@ impl Queue {
         tx: AcceptedTransaction<'static>,
         state: &State,
         routing_plan: RoutingPlan,
-        expected_admission_context: &QueuePlanAdmissionContextV2,
-    ) -> Result<QueuePlanDurableAdmissionV2, Failure> {
+        expected_admission_context: &QueuePlanAdmissionContextV1,
+    ) -> Result<QueuePlanDurableAdmissionV1, Failure> {
         let outcome = self.push_with_lane_internal_with_state_and_routing(
             tx,
             state,
@@ -15933,8 +15931,8 @@ impl Queue {
         let journal_record_digest = outcome
             .journal_record_digest
             .expect("strict durable claim admission must persist a journal record");
-        Ok(QueuePlanDurableAdmissionV2 {
-            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+        Ok(QueuePlanDurableAdmissionV1 {
+            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
             context,
             global_admission_identity: outcome.global_admission_identity,
             routing_plan: outcome.routing_plan,
@@ -15960,8 +15958,8 @@ impl Queue {
         tx: AcceptedTransaction<'static>,
         state: &State,
         routing_plan: RoutingPlan,
-        expected_binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
-    ) -> Result<QueuePlanDurableAdmissionV2, Failure> {
+        expected_binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
+    ) -> Result<QueuePlanDurableAdmissionV1, Failure> {
         let outcome = self.push_with_lane_internal_with_state_and_routing(
             tx,
             state,
@@ -15980,8 +15978,8 @@ impl Queue {
         let journal_record_digest = outcome
             .journal_record_digest
             .expect("strict global admission must persist a journal record");
-        Ok(QueuePlanDurableAdmissionV2 {
-            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2,
+        Ok(QueuePlanDurableAdmissionV1 {
+            version: QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1,
             context,
             global_admission_identity: Some(global_admission_identity),
             routing_plan: outcome.routing_plan,
@@ -17203,7 +17201,7 @@ impl Queue {
     }
     fn validate_live_reservation_against_queue(
         &self,
-        record: &LaneQueueReservationRecordV5,
+        record: &LaneQueueReservationRecordV1,
     ) -> Result<(), LaneQueueReservationError> {
         let hash = record.key.entrypoint_hash;
         let Some(tx) = self.txs.get(&hash) else {
@@ -17245,7 +17243,7 @@ impl Queue {
         hash: EntrypointHash,
         tx: &CheckedTransaction<'static>,
         routing_plan: &RoutingPlan,
-    ) -> Result<Option<LaneQueueFifoOrderV5>, Error> {
+    ) -> Result<Option<LaneQueueFifoOrderV1>, Error> {
         self.restored_reservation_fifo_order_for_identity(
             hash,
             tx.as_accepted().hash_as_entrypoint(),
@@ -17264,7 +17262,7 @@ impl Queue {
         hash: EntrypointHash,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
         routing_plan: &RoutingPlan,
-    ) -> Result<Option<LaneQueueFifoOrderV5>, Error> {
+    ) -> Result<Option<LaneQueueFifoOrderV1>, Error> {
         let store = self.lane_reservations.lock();
         if let Some(key) = store
             .commit_barriers
@@ -17329,8 +17327,8 @@ impl Queue {
     fn ensure_fifo_order_locked(
         &self,
         hash: EntrypointHash,
-        durable: Option<LaneQueueFifoOrderV5>,
-    ) -> Result<LaneQueueFifoOrderV5, LaneQueueReservationError> {
+        durable: Option<LaneQueueFifoOrderV1>,
+    ) -> Result<LaneQueueFifoOrderV1, LaneQueueReservationError> {
         if let Some(existing) = self
             .fifo_order_by_hash
             .get(&hash)
@@ -17355,7 +17353,7 @@ impl Queue {
                     "lane queue FIFO ordinal space is exhausted".to_owned(),
                 ));
             }
-            let order = LaneQueueFifoOrderV5::new(*next)?;
+            let order = LaneQueueFifoOrderV1::new(*next)?;
             *next = next.checked_add(1).unwrap_or(0);
             order
         };
@@ -17374,7 +17372,7 @@ impl Queue {
     fn install_fifo_order_locked(
         &self,
         hash: EntrypointHash,
-        order: LaneQueueFifoOrderV5,
+        order: LaneQueueFifoOrderV1,
     ) -> Result<(), LaneQueueReservationError> {
         order
             .validate()
@@ -17400,9 +17398,9 @@ impl Queue {
     /// hashes are restored. Caller must hold `push_remove_lock`.
     fn plan_durable_fifo_order_reconciliation_locked(
         &self,
-        records: &[LaneQueueReservationRecordV5],
+        records: &[LaneQueueReservationRecordV1],
     ) -> Result<DurableFifoOrderReconciliationPlan, LaneQueueReservationError> {
-        let mut durable_by_hash = HashMap::<EntrypointHash, LaneQueueFifoOrderV5>::new();
+        let mut durable_by_hash = HashMap::<EntrypointHash, LaneQueueFifoOrderV1>::new();
         let mut durable_ordinal_owner = BTreeMap::<u64, EntrypointHash>::new();
         for record in records {
             record
@@ -17443,7 +17441,7 @@ impl Queue {
                     .to_owned(),
             ));
         }
-        let mut assigned = HashMap::<EntrypointHash, LaneQueueFifoOrderV5>::new();
+        let mut assigned = HashMap::<EntrypointHash, LaneQueueFifoOrderV1>::new();
         let mut used = durable_ordinal_owner.into_keys().collect::<BTreeSet<_>>();
         let mut lower = 0_u64;
         let mut cursor = 0usize;
@@ -17467,7 +17465,7 @@ impl Queue {
                         "{needed} replayed FIFO entries do not fit before durable ordinal {anchor_ordinal}"
                     )));
                 }
-                let order = LaneQueueFifoOrderV5::new(candidate)?;
+                let order = LaneQueueFifoOrderV1::new(candidate)?;
                 assigned.insert(*hash, order);
                 used.insert(candidate);
                 candidate = candidate.checked_add(1).unwrap_or(0);
@@ -17495,7 +17493,7 @@ impl Queue {
                     )
                 })?;
             }
-            let order = LaneQueueFifoOrderV5::new(candidate)?;
+            let order = LaneQueueFifoOrderV1::new(candidate)?;
             assigned.insert(*hash, order);
             used.insert(candidate);
             candidate = candidate.checked_add(1).unwrap_or(0);
@@ -17555,7 +17553,7 @@ impl Queue {
     /// after forgetting its completion record.
     fn release_barrier_has_exact_fifo_ownership_locked(
         &self,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
     ) -> bool {
         let fifo = self.fifo_snapshot_locked();
         if fifo.len() < barrier.ordered_keys.len() {
@@ -17635,7 +17633,7 @@ impl Queue {
     fn authenticate_release_queue_terminal_evidence_locked(
         &self,
         store: &LaneQueueReservationStore,
-        barrier: &LaneQueueReservationReleaseBarrierV3,
+        barrier: &LaneQueueReservationReleaseBarrierV1,
         reservation_group: LaneQueueReservationGroupBindingV1,
         gate: &LaneQueueReleaseFinalizationGate,
         allow_active_durability_transition: bool,
@@ -17755,7 +17753,7 @@ impl Queue {
                 return Err(LaneQueueReservationError::ReconciliationFifoOrderMismatch { hash });
             }
             previous_fifo_ordinal = Some(fifo_order.ordinal);
-            let reconstructed = LaneQueueReservationRecordV5 {
+            let reconstructed = LaneQueueReservationRecordV1 {
                 version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
                 key: *key,
                 enqueue_timestamp_ms: claim.enqueue_timestamp_ms,
@@ -17806,7 +17804,7 @@ impl Queue {
     /// Caller must hold `push_remove_lock`.
     fn fifo_with_released_reservations_locked(
         &self,
-        records: &[LaneQueueReservationRecordV5],
+        records: &[LaneQueueReservationRecordV1],
     ) -> Result<Vec<EntrypointHash>, LaneQueueReservationError> {
         let raw_hashes = self.fifo_snapshot_locked();
         // Committed removals deliberately retain a physical FIFO cell behind an exact removal
@@ -19862,12 +19860,12 @@ pub mod tests {
     static NEXT_TEST_DOMAIN_SUFFIX: AtomicU64 = AtomicU64::new(1);
     fn synthetic_queue_plan_admission_context(
         routing_plan: &RoutingPlan,
-    ) -> QueuePlanAdmissionContextV2 {
+    ) -> QueuePlanAdmissionContextV1 {
         let validator_key =
             iroha_crypto::KeyPair::from_seed(vec![0xA6; 32], iroha_crypto::Algorithm::Ed25519);
         let validators = vec![PeerId::new(validator_key.public_key().clone())];
-        QueuePlanAdmissionContextV2 {
-            version: QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+        QueuePlanAdmissionContextV1 {
+            version: QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
             authority_height: 0,
             proposal_height: 1,
             predecessor_block_hash: None,
@@ -19875,7 +19873,7 @@ pub mod tests {
             route_incarnations: routing_plan
                 .legs()
                 .into_iter()
-                .map(|leg| QueuePlanRouteIncarnationV2 {
+                .map(|leg| QueuePlanRouteIncarnationV1 {
                     leg,
                     lane_incarnation: Hash::new(
                         norito::to_bytes(&leg).expect("encode synthetic context leg"),
@@ -20083,7 +20081,7 @@ pub mod tests {
         time_handle: iroha_primitives::time::MockTimeHandle,
         transaction: AcceptedTransaction<'static>,
         follower_transaction: AcceptedTransaction<'static>,
-        binding: crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        binding: crate::torii_proxy::QueuePlanAdmissionBindingV1,
         transaction_time_to_live: Duration,
         _dir: TempDir,
     }
@@ -20198,7 +20196,7 @@ pub mod tests {
         let admission_context = queue
             .plan_admission_context_with_state(&state, &routing_plan)
             .expect("capture global guard fixture context");
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
             state.network_id_ref(),
             transaction.entrypoint(),
             &routing_plan,
@@ -20227,7 +20225,7 @@ pub mod tests {
     }
     fn install_queue_plan_registry_value_for_test(
         state: &State,
-        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+        binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
     ) {
         state
             .install_queue_plan_pending_binding_for_test(binding)
@@ -20237,7 +20235,7 @@ pub mod tests {
         queue: &Queue,
         state: &State,
         transaction: AcceptedTransaction<'static>,
-    ) -> crate::torii_proxy::QueuePlanAdmissionBindingV2 {
+    ) -> crate::torii_proxy::QueuePlanAdmissionBindingV1 {
         assert!(
             queue.plan_journal.lock().is_some(),
             "globally certified reservation fixtures require a queue-plan journal"
@@ -20256,7 +20254,7 @@ pub mod tests {
         let admission_context = queue
             .plan_admission_context_with_state(state, &routing_plan)
             .expect("capture globally certified reservation context");
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
             state.network_id_ref(),
             transaction.entrypoint(),
             &routing_plan,
@@ -23462,7 +23460,7 @@ pub mod tests {
         let context = queue
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture exact queue-plan admission context");
-        assert_eq!(context.version, QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2);
+        assert_eq!(context.version, QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1);
         assert_eq!(context.authority_height, 0);
         assert_eq!(context.proposal_height, 1);
         assert_eq!(context.predecessor_block_hash, None);
@@ -23567,7 +23565,7 @@ pub mod tests {
                 &exact_context,
             )
             .expect("exact context must cross the strict durability boundary");
-        assert_eq!(claim.version, QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2);
+        assert_eq!(claim.version, QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V1);
         assert_eq!(claim.context, exact_context);
         assert_eq!(claim.routing_plan, plan.clone());
         assert_eq!(claim.signed_transaction_hash, signed_transaction_hash);
@@ -23603,14 +23601,14 @@ pub mod tests {
         assert_eq!(
             persisted[0]
                 .claim_digest()
-                .expect("digest persisted V4 record"),
+                .expect("digest persisted V1 record"),
             claim.journal_record_digest
         );
     }
     #[test]
     fn strict_durable_claim_retry_survives_height_advance_before_and_after_restart_replay() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let journal_path = dir.path().join("strict-claim-idempotent-v4.norito");
+        let journal_path = dir.path().join("strict-claim-idempotent-v1.norito");
         let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
@@ -23627,7 +23625,7 @@ pub mod tests {
         let queue = make_queue();
         queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
-            .expect("install V4 claim journal");
+            .expect("install V1 claim journal");
         seed_committed_height_for_queue_test(&state, 1);
         let tx = accepted_tx_by_someone(&time_source);
         register_accepted_tx_authority_for_queue_test(&mut state, &tx);
@@ -23780,7 +23778,7 @@ pub mod tests {
         assert_eq!(
             replay_queue
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
-                .expect("reopen V4 claim journal"),
+                .expect("reopen V1 claim journal"),
             1
         );
         let summary = replay_queue
@@ -23851,7 +23849,7 @@ pub mod tests {
     #[test]
     fn strict_durable_claim_rolls_over_to_exact_current_height_and_overlapping_roster() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let journal_path = dir.path().join("strict-claim-current-rollover-v4.norito");
+        let journal_path = dir.path().join("strict-claim-current-rollover-v1.norito");
         let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
@@ -24086,7 +24084,7 @@ pub mod tests {
                 "fixture must exercise both exact retry and rollover promotion paths"
             );
             let binding_timestamp_ms = unbound_claim.enqueue_timestamp_ms.saturating_add(17);
-            let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
                 state.network_id_ref(),
                 tx.entrypoint(),
                 &plan,
@@ -24103,7 +24101,7 @@ pub mod tests {
                 )
                 .unwrap_or_else(|error| panic!("promote {label} unbound claim: {error:?}"));
             assert_eq!(
-                crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
+                crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(
                     &promoted
                 ),
                 Ok(binding.clone()),
@@ -24161,7 +24159,7 @@ pub mod tests {
                     .expect("installed strict-global promotion journal")
                     .replay()
                     .expect("replay exact promoted journal record"),
-                vec![QueuePlanJournalRecordV4::new(
+                vec![QueuePlanJournalRecordV1::new(
                     tx.entrypoint().clone(),
                     plan,
                     binding_context,
@@ -24175,7 +24173,7 @@ pub mod tests {
     #[test]
     fn strict_global_admission_retry_keeps_the_first_durable_binding_canonical() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let journal_path = dir.path().join("strict-global-idempotent-retry-v4.norito");
+        let journal_path = dir.path().join("strict-global-idempotent-retry-v1.norito");
         let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
@@ -24204,7 +24202,7 @@ pub mod tests {
         let original_context = queue
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture original strict-global retry context");
-        let original_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        let original_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
             state.network_id_ref(),
             tx.entrypoint(),
             &plan,
@@ -24223,7 +24221,7 @@ pub mod tests {
         let original_journal_len = fs::metadata(&journal_path)
             .expect("strict-global retry journal metadata")
             .len();
-        let later_same_context_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        let later_same_context_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
             state.network_id_ref(),
             tx.entrypoint(),
             &plan,
@@ -24256,7 +24254,7 @@ pub mod tests {
         let current_context = queue
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture height-advanced strict-global retry context");
-        let later_height_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        let later_height_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
             state.network_id_ref(),
             tx.entrypoint(),
             &plan,
@@ -24276,7 +24274,7 @@ pub mod tests {
         assert_eq!(queue.active_len(), 1);
         assert_eq!(queue.queued_len(), 1);
         assert_eq!(
-            crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
+            crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(
                 &height_advanced_retry
             ),
             Ok(original_binding),
@@ -24460,7 +24458,7 @@ pub mod tests {
     #[test]
     fn strict_durable_claim_retry_does_not_resurrect_removed_queue_ownership() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let journal_path = dir.path().join("strict-claim-removed-v4.norito");
+        let journal_path = dir.path().join("strict-claim-removed-v1.norito");
         let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
@@ -24543,7 +24541,7 @@ pub mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir
             .path()
-            .join("strict-claim-committed-fifo-tombstone-v4.norito");
+            .join("strict-claim-committed-fifo-tombstone-v1.norito");
         let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
@@ -24625,9 +24623,9 @@ pub mod tests {
         assert!(!queue.transaction_selection_durability_faulted());
     }
     #[test]
-    fn v4_replay_rejects_same_lane_id_after_incarnation_recreation() {
+    fn v1_replay_rejects_same_lane_id_after_incarnation_recreation() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let journal_path = dir.path().join("stale-incarnation-v4.norito");
+        let journal_path = dir.path().join("stale-incarnation-v1.norito");
         let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
@@ -24649,7 +24647,7 @@ pub mod tests {
         let queue = make_queue();
         queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
-            .expect("install V4 stale-incarnation journal");
+            .expect("install V1 stale-incarnation journal");
         let tx = accepted_tx_by_someone(&time_source);
         register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let hash = tx.hash_as_entrypoint();
@@ -24758,9 +24756,9 @@ pub mod tests {
         );
     }
     #[test]
-    fn v4_replay_revalidates_original_generation_across_height_advance() {
+    fn v1_replay_revalidates_original_generation_across_height_advance() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let journal_path = dir.path().join("height-advance-v4.norito");
+        let journal_path = dir.path().join("height-advance-v1.norito");
         let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
@@ -24782,7 +24780,7 @@ pub mod tests {
         let queue = make_queue();
         queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
-            .expect("install V4 height-advance journal");
+            .expect("install V1 height-advance journal");
         let tx = accepted_tx_by_someone(&time_source);
         register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let hash = tx.hash_as_entrypoint();
@@ -24813,7 +24811,7 @@ pub mod tests {
         let replay_queue = make_queue();
         replay_queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
-            .expect("reopen V4 height-advance journal");
+            .expect("reopen V1 height-advance journal");
         let summary = replay_queue
             .replay_plan_journal(&state)
             .expect("replay against a later committed height");
@@ -24835,9 +24833,9 @@ pub mod tests {
         );
     }
     #[test]
-    fn v4_replay_preserves_immutable_admitted_plan_across_router_policy_drift() {
+    fn v1_replay_preserves_immutable_admitted_plan_across_router_policy_drift() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let journal_path = dir.path().join("immutable-plan-policy-drift-v4.norito");
+        let journal_path = dir.path().join("immutable-plan-policy-drift-v1.norito");
         let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
@@ -25526,21 +25524,21 @@ pub mod tests {
         let accepted_hash = accepted.hash_as_entrypoint();
         let accepted_enqueue_timestamp_ms = Queue::duration_to_millis(time_source.get_unix_time());
         let records = [
-            QueuePlanJournalRecordV4::new(
+            QueuePlanJournalRecordV1::new(
                 committed.entrypoint().clone(),
                 plan.clone(),
                 admission_context.clone(),
                 terminal_enqueue_timestamp_ms,
                 None,
             ),
-            QueuePlanJournalRecordV4::new(
+            QueuePlanJournalRecordV1::new(
                 expired.entrypoint().clone(),
                 plan.clone(),
                 admission_context.clone(),
                 terminal_enqueue_timestamp_ms,
                 None,
             ),
-            QueuePlanJournalRecordV4::new(
+            QueuePlanJournalRecordV1::new(
                 accepted.entrypoint().clone(),
                 plan,
                 admission_context,
@@ -25626,7 +25624,7 @@ pub mod tests {
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture admission context");
         let enqueue_timestamp_ms = queue.queue_plan_admission_timestamp_ms();
-        let original_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        let original_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
             state.network_id_ref(),
             &entrypoint,
             &plan,
@@ -25642,7 +25640,7 @@ pub mod tests {
                 &original_binding,
             )
             .expect("admit original binding");
-        let successor_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        let successor_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
             state.network_id_ref(),
             &entrypoint,
             &plan,
@@ -25658,7 +25656,7 @@ pub mod tests {
             original_binding.journal_record_digest,
             successor_binding.journal_record_digest
         );
-        let successor_record = QueuePlanJournalRecordV4::new(
+        let successor_record = QueuePlanJournalRecordV1::new(
             entrypoint,
             plan.clone(),
             context.clone(),
@@ -25763,7 +25761,7 @@ pub mod tests {
             .plan_admission_context_with_state(&state, &routing_plan)
             .expect("capture strict admission context");
         let enqueue_timestamp_ms = queue.queue_plan_admission_timestamp_ms();
-        let mut forged = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        let mut forged = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
             state.network_id_ref(),
             transaction.entrypoint(),
             &routing_plan,
@@ -25907,7 +25905,7 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install empty orphan-FIFO plan journal");
         let orphan = accepted_tx_by_someone(&time_source).hash_as_entrypoint();
-        let fifo_order = LaneQueueFifoOrderV5::new(1).expect("valid orphan FIFO identity");
+        let fifo_order = LaneQueueFifoOrderV1::new(1).expect("valid orphan FIFO identity");
         queue.fifo_order_by_hash.insert(orphan, fifo_order);
         let error = queue
             .replay_plan_journal(&state)

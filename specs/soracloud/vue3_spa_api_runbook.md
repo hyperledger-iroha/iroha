@@ -11,7 +11,7 @@ The single-api path is the recommended workflow for apps that need:
 
 - a static frontend served from the app root on the public host
 - a deterministic IVM API on the same host under `/api`
-- one app manifest that publishes the frontend and deploys one service
+- one app manifest whose release publishes the frontend and submits one service
 
 The split-app path is for apps that need:
 
@@ -20,16 +20,16 @@ The split-app path is for apps that need:
 - a deterministic IVM vault/auth API
 - one shared `/api` surface split by authoritative longest-prefix routing
 
-Hosted-service and split-app deployment requires an explicitly enabled
+Hosted-service and split-app release requires an explicitly enabled
 PortableVM V1 validator whose exact production preflight succeeds. The default
 configuration remains disabled and advertises no hosting capacity.
 
 ## Access Model
 
-Soracloud deploys must behave like IPFS-style publishing for runtime URLs:
+Soracloud releases behave like IPFS-style publishing for runtime URLs:
 
 - the registered vanity host stays fixed
-- deploys update Soracloud route bindings, not DNS records on every release
+- releases update Soracloud route bindings, not DNS records
 - direct vanity-host access remains canonical
 - Taira's owned public browser gateway is `mon.taira.sora.net`
 
@@ -97,8 +97,7 @@ The split-app scaffold produces:
 - `services/vault/`
 - `dev.sh`
 - `build-and-sync.sh`
-- `deploy.sh`
-- `upgrade.sh`
+- `release.sh`
 - `services/live/dev.sh`
 - `services/vault/dev.sh`
 - `services/vault/verify-build.sh`
@@ -110,8 +109,7 @@ The single-api scaffold produces:
 - `services/api/`
 - `dev.sh`
 - `build-and-sync.sh`
-- `deploy.sh`
-- `upgrade.sh`
+- `release.sh`
 - `services/api/dev.sh`
 
 ## 2. Build Artifacts
@@ -142,11 +140,16 @@ iroha soracloud service plan --container ./container_manifest.json --service ./s
 iroha soracloud service dev --container ./container_manifest.json --service ./service_manifest.json --dry-run
 ```
 
-Run generated hosted deploy or upgrade wrappers only against an explicitly
-enabled, currently qualified PortableVM V1 validator.
+Run a generated hosted `release.sh` only against an explicitly enabled,
+currently qualified PortableVM V1 validator.
 
 For deployment qualification, run the ignored privileged Inrou V1 smoke
 against a verified guest asset class on the target Linux/KVM host:
+
+The preparer requires `gpgv` or `gpg`, a trusted Debian keyring, the detached
+`SHA512SUMS.sign`, and agreement between both the authenticated Debian digest
+and the repository-pinned SHA512. Select a keyring with `--debian-keyring` or
+`DEBIAN_ARCHIVE_KEYRING` when no system Debian keyring is installed.
 
 ```bash
 eval "$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)"
@@ -196,9 +199,20 @@ QMP and the bridge receive no traffic before attestation. The dedicated
 cgroup-v2 subtree applies exact CPU, memory, swap, pids, and I/O limits,
 including bounded QEMU overhead; startup and cleanup are deadline-bounded.
 
-PortableVm mounts shared lease storage as persistent block devices. Existing
-volumes are never reformatted after a signature, mount, or health-probe
-failure. The generated scaffold is network-isolated and has no SSH keys.
+PortableVm materializes every root and non-root lease volume as a separate
+replica-private disk; it never shares or multi-attaches a disk between replica
+slots. Mandatory PID-1 `.mount` units are followed by exact
+device/filesystem/UUID/options/custody attestation. The tenant unit is bound to
+each mount and cannot start on the underlying root directory. Admission permits
+at most 32 non-root volumes per replica. Root-private binding sidecars cover
+the admitted revision and replica-private disk contract before publication;
+initialization is committed only after guest health. Existing volumes are never
+reformatted after an unexpected signature or identity failure; interrupted
+initialization is accepted only for a blank disk or the exact deterministic
+ext4 UUID. Preparation has no
+`CAP_SYS_ADMIN`, tenant output and serial capture are disabled, and undeclared
+scratch state is ephemeral. The generated scaffold is network-isolated and has
+no SSH keys.
 PortableVM V1 rejects `Open` and `Allowlist` networking until kernel-owned
 counters can meter all guest traffic.
 
@@ -209,8 +223,7 @@ Hosted HTTP responses forwarded over the Torii P2P proxy path are capped by
 The same `--container` plus `--service` manifest pair also works for other
 service-bound Soracloud commands such as `hf-deploy`, `hf-status`, `hf-lease-renew`,
 `hf-lease-leave`, `training-job-*`, `model-artifact-*`, `model-weight-*`,
-`model-upload-encryption-recipient`, `model-upload-register`, and
-`model-upload-status`. For `status`, the
+`model-upload-register`, and `model-upload-status`. For `status`, the
 manifest-pair form also keeps the same local route and workspace-script
 projection that `plan` reports. The direct `deploy` and `upgrade`
 commands now keep that same local projection in their response as well, and
@@ -297,11 +310,11 @@ iroha soracloud app plan \
 App-wide sync handles mixed manifests because each
 service reference can declare its own `bundle_file`, letting one command
 refresh every `bundle_hash` and referenced container manifest hash before
-deployment. The same path also works for single-api apps, where the manifest
+release. The same path also works for single-api apps, where the manifest
 tracks `services/api/build/api-service.to`. The plan output also reports
 the root `manifest_path`, root `hostname`, and the manifest-adjacent root
 scripts that the generated workspace and CLI wrappers use for `dev`,
-`build-and-sync`, `deploy`, and `upgrade`.
+`build-and-sync`, and `release`.
 
 ## 4. Publish Frontend Assets
 
@@ -317,11 +330,11 @@ iroha app sorafs toolkit pack .soracloud-docs/site/dist \
 For a split app you normally do not need a separate manual packaging step.
 
 For a single-api app you also normally do not need a separate manual packaging
-step because `app deploy` publishes `web/dist` directly from the app manifest.
-`iroha soracloud app deploy` publishes the declared `static_site.dist_dir`
-from the app manifest as part of the app-wide deploy flow, and now returns the
-same root manifest/hostname/workspace metadata, frontend publish projection,
-and per-service manifest metadata that `app status` reports.
+step. `iroha soracloud app release` publishes the declared
+`static_site.dist_dir` from the app manifest as part of the single app-wide
+release flow. Its response carries the same root
+manifest/hostname/workspace metadata, frontend publish projection, and
+per-service manifest metadata that `app status` reports.
 
 For shipping deterministic apps on Taira, keep `https://taira.sora.org/` bound
 to Torii and use it as:
@@ -334,39 +347,38 @@ Use `https://<alias>.mon.taira.sora.net/...` as the Taira public browser URL
 for Soracloud apps that already have a vanity alias host. Do not treat
 `taira.sora.org` paths as canonical app origins.
 
-## 5. Deploy
+## 5. Release
 
-Hosted HTTP service: deploy only to an explicitly enabled validator with a
+Hosted HTTP service: release only to an explicitly enabled validator with a
 currently qualified PortableVM V1 capability.
 
 Single-api app:
 
 ```bash
 cd .soracloud-docs-portal
-TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha soracloud app deploy --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+export IROHA_BIN=/absolute/path/to/same-revision/iroha
+export IROHA_BIN_SHA256="$(sha256sum "$IROHA_BIN" | awk '{print $1}')"
+TORII_URL=http://127.0.0.1:8080 ./release.sh
+"$IROHA_BIN" soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
 ```
 
 Split app: its Inrou member requires an explicitly enabled validator with a
 currently qualified PortableVM V1 capability. `app plan`, `app build --dry-run`,
 and `app dev --dry-run` remain available without a qualified remote host.
 
-Those generated root scripts resolve `IROHA_BIN`, then `iroha` from `PATH`,
-then an explicit source checkout via `IROHA_SOURCE_DIR` or
-`IROHA_MANIFEST_PATH`, so local app workspaces can target a nearby
-`iroha_cli` checkout without requiring a globally installed source wrapper.
-When you drive the fallback through `IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`,
-set `IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to keep Cargo package and
-artifact state isolated from other local builds.
+Generated root scripts require `IROHA_BIN` to name an absolute, executable,
+non-symlinked regular file built from the same revision as the workspace.
+`IROHA_BIN_SHA256` must be the exact 64-character lowercase SHA-256 of that
+file. The scripts do not search `PATH` or build a source checkout.
 
 In local dev, the scaffolded Vite proxy strips the shared `/api` prefix before
 forwarding to the live and vault child processes so the topology can be
-exercised locally before deployment.
+exercised locally before release.
 
-The shipping app deploy flow:
+The shipping app release flow:
 
-- single-api: republishes the static frontend from `web/dist` and deploys
-  `services/api`
+- single-api: rebuilds and republishes the static frontend from `web/dist`, then
+  releases `services/api`
 - returns the root app `manifest_path`, root `workspace_dir`, root
   `workspace_scripts`, root `hostname`, the top-level app `routes` split, and
   one manifest-derived service entry per app service
@@ -417,19 +429,24 @@ Expected local planning checks for a split app:
 - `iroha soracloud app dev --manifest ... --dry-run` resolves the
   same mixed-app entrypoint before execution
 
-## 7. Upgrade and Redeploy
+## 7. Release a New Revision
 
-After rebuilding a shipping single-api app, rerun:
+After incrementing the app and service versions, run the same mandatory release
+path again:
 
 ```bash
 cd .soracloud-docs-portal
-TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+export IROHA_BIN=/absolute/path/to/same-revision/iroha
+export IROHA_BIN_SHA256="$(sha256sum "$IROHA_BIN" | awk '{print $1}')"
+TORII_URL=http://127.0.0.1:8080 ./release.sh
+"$IROHA_BIN" soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
 ```
 
-The generated `upgrade.sh` reruns `./build-and-sync.sh` first, then submits the
-deterministic app-wide upgrade. Hosted-service and split-app upgrades require a
-currently qualified PortableVM V1 host.
+The generated `release.sh` invokes the only first-release app mutation command.
+It performs the mandatory build, validation, publication, submission,
+authoritative-status reconciliation, and live verification sequence without a
+build bypass. Hosted-service and split-app releases require a currently
+qualified PortableVM V1 host.
 
 ## 8. Operations Checklist
 
@@ -440,8 +457,8 @@ currently qualified PortableVM V1 host.
   same-host and proxies it to the local deterministic API shim.
 - Use `iroha soracloud app build --manifest ... --dry-run` when
   you want the CLI to resolve the generated root rebuild path from the app manifest.
-- Use `./upgrade.sh` after validating a new single-api build when you want the
-  scaffolded app-wide upgrade path instead of raw CLI calls.
+- Use `./release.sh` for every single-api revision; it runs the complete
+  first-release app release path instead of a separate upgrade command.
 - Use `http-service` for hosted collectors, SSE, and shared caches, and require
   qualified PortableVM V1 capacity before deployment.
 - Use `iroha soracloud service dev --container ... --service ... --dry-run`
@@ -456,7 +473,7 @@ currently qualified PortableVM V1 host.
   to the live service and `/api/auth*` plus `/api/v1/user*` to the vault dev
   shim while keeping `VITE_PUBLIC_API_BASE=/api`.
 - Use `./build-and-sync.sh` to rebuild a split frontend and inspect its manifest
-  hashes before calling deploy or upgrade against a qualified host.
+  hashes before running `./release.sh` against a qualified host.
 - Use `iroha soracloud app dev --manifest ... --dry-run` or
   `iroha soracloud app build --manifest ... --dry-run` when you
   want the CLI to resolve the generated root scripts from the app manifest first;

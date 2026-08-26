@@ -79,16 +79,16 @@ test("ToriiClient requires allowAbsoluteUrl for cross-host requests without cred
     },
   });
   await assert.rejects(
-    () => client._request("GET", "https://other.example/v1/status"),
+    () => client._request("GET", "https://other.example/status"),
     /absolute URLs are blocked/i,
   );
   assert.equal(calls.length, 0);
 
-  await client._request("GET", "https://other.example/v1/status", {
+  await client._request("GET", "https://other.example/status", {
     allowAbsoluteUrl: true,
   });
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "https://other.example/v1/status");
+  assert.equal(calls[0].url, "https://other.example/status");
 });
 
 test("ToriiClient emits telemetry when allowInsecure is used with credentials", async () => {

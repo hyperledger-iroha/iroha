@@ -3,7 +3,7 @@
 //! The facade keeps the existing low-level Connect, transaction, Torii, and
 //! pipeline APIs intact. SDK applications can use this module to build a
 //! canonical transfer payload, request a wallet signature, finalize the signed
-//! transaction, submit it, and optionally wait for a terminal pipeline status.
+//! transaction, submit it, and optionally wait for exact global, state-resolved `Applied` status.
 use crate::client::{Client, TransactionWaitOptions, TransactionWaitOutcome};
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
@@ -234,7 +234,7 @@ pub struct NexusWalletSignature {
 /// Options for finalization and Torii submission.
 #[derive(Debug, Clone, Default)]
 pub struct NexusFinalizeOptions {
-    /// Wait options. When omitted, the transaction is submitted without polling.
+    /// Fixed-Applied wait timing. When omitted, the transaction is submitted without polling.
     pub wait: Option<TransactionWaitOptions>,
 }
 /// Receipt returned after finalization and Torii submission.
@@ -244,7 +244,7 @@ pub struct NexusTransferReceipt {
     pub signed_transaction: SignedTransaction,
     /// Hex-encoded signed transaction hash.
     pub signed_transaction_hash_hex: String,
-    /// Optional terminal pipeline status.
+    /// Optional globally resolved `Applied` pipeline outcome.
     pub status: Option<TransactionWaitOutcome>,
 }
 /// Connect transport required by the facade.
@@ -288,10 +288,10 @@ pub trait NexusToriiSubmitter {
         &self,
         payload: &TransactionPayload,
     ) -> Result<FeePaymentIntent, NexusAppError>;
-    /// Submit the signed transaction and optionally wait for final status.
+    /// Submit the signed transaction and optionally wait for globally resolved `Applied` status.
     ///
     /// # Errors
-    /// Returns an error if Torii submission fails or waiting for terminal status fails.
+    /// Returns an error if Torii submission or fixed finality waiting fails.
     fn submit_and_wait(
         &self,
         transaction: &SignedTransaction,
@@ -356,7 +356,7 @@ impl NexusToriiSubmitter for Client {
         let status = options
             .wait
             .map(|wait| {
-                self.wait_for_transaction_terminal_status(hash, wait)
+                self.wait_for_transaction_applied(hash, wait)
                     .map_err(|err| NexusAppError::StatusWait(err.to_string()))
             })
             .transpose()?;
@@ -458,7 +458,7 @@ where
         self.connect.request_signature(session, signable)
     }
     /// Build a signed transaction from a wallet signature, submit it to Torii,
-    /// and optionally wait for a terminal pipeline status.
+    /// and optionally wait for globally resolved `Applied` pipeline status.
     ///
     /// # Errors
     /// Returns an error if the wallet signature is unsupported or malformed, if signed transaction
@@ -858,9 +858,7 @@ mod tests {
         rest[..end].parse().expect("fixture integer")
     }
     fn fixture_account(key: &str) -> AccountId {
-        AccountId::parse_encoded(&fixture_string(key))
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("fixture account")
+        AccountId::parse_encoded(&fixture_string(key)).expect("fixture account")
     }
     fn fixture_transfer_input() -> NexusTransferInput {
         let authority = fixture_account("authority");

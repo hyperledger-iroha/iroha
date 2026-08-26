@@ -195,7 +195,7 @@ fn ambiguous_terminal_reservation_appends_fail_closed_for_diagnostics_and_drain(
                         .lock()
                         .as_mut()
                         .expect("installed reservation journal")
-                        .complete_release(LaneQueueReservationReleaseCompletionV5 {
+                        .complete_release(LaneQueueReservationReleaseCompletionV1 {
                             version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
                             barrier: barrier.clone(),
                             ordered_records,

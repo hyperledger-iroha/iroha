@@ -613,12 +613,12 @@ where
 {
     let parsed = iroha::data_model::account::AccountId::parse_encoded(account_id)
         .map_err(|error| eyre!("invalid account_id: {error}"))?;
-    if parsed.canonical() != account_id {
+    if parsed.to_string() != account_id {
         return Err(eyre!(
             "account_id must use the canonical domainless I105 representation"
         ));
     }
-    let account = parsed.into_account_id();
+    let account = parsed;
     let request = AccountAliasesByAccountRequestV1::try_new(&account, dataspace, domain)?;
     let client = context.client_from_config();
     let dto = call(&client, &request)?
@@ -957,9 +957,7 @@ mod tests {
         }
     }
     fn sample_account_id() -> AccountId {
-        AccountId::parse_encoded(SAMPLE_ACCOUNT_ID)
-            .expect("canonical sample account")
-            .into_account_id()
+        AccountId::parse_encoded(SAMPLE_ACCOUNT_ID).expect("canonical sample account")
     }
     #[test]
     fn resolve_helper_prints_result() {

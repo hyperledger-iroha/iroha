@@ -65,7 +65,7 @@ from iroha_python import (
 
 client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
 pair = derive_ed25519_keypair_from_seed(b"demo-seed")
-authority = pair.default_account_id("wonderland")
+authority = pair.account_id()
 
 instruction = Instruction.register_domain("wonderland")
 tx = build_signed_transaction(

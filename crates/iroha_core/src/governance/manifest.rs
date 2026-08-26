@@ -612,7 +612,6 @@ impl GovernanceRules {
                     return Err("validator entry cannot be blank".into());
                 }
                 let account = AccountId::parse_encoded(validator_trimmed)
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .map_err(|err| format!("invalid validator id `{validator_trimmed}`: {err}"))?;
                 if !seen_validators.insert(account.clone()) {
                     return Err(format!(
@@ -3435,7 +3434,6 @@ mod tests {
     }
     #[test]
     fn manifest_rejects_quorum_larger_than_validator_set() {
-        crate::test_alias::ensure();
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
             vec![LaneConfig {
@@ -3470,7 +3468,6 @@ mod tests {
     }
     #[test]
     fn manifest_rejects_quorum_without_validators() {
-        crate::test_alias::ensure();
         let mut governance = GovernanceCatalog::default();
         governance
             .modules
@@ -3498,7 +3495,6 @@ mod tests {
     }
     #[test]
     fn manifest_rejects_unknown_structural_fields_and_hooks() {
-        crate::test_alias::ensure();
         let mut governance = GovernanceCatalog::default();
         governance
             .modules
@@ -3533,7 +3529,6 @@ mod tests {
     }
     #[test]
     fn manifest_parses_validators_and_namespaces() {
-        crate::test_alias::ensure();
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
             vec![LaneConfig {
@@ -3623,7 +3618,6 @@ mod tests {
     }
     #[test]
     fn manifest_rejects_duplicate_protected_namespace() {
-        crate::test_alias::ensure();
         let mut governance = GovernanceCatalog::default();
         governance
             .modules
@@ -3650,7 +3644,6 @@ mod tests {
     }
     #[test]
     fn manifest_rejects_duplicate_runtime_upgrade_allowed_id() {
-        crate::test_alias::ensure();
         let mut governance = GovernanceCatalog::default();
         governance
             .modules
@@ -3677,7 +3670,6 @@ mod tests {
     }
     #[test]
     fn manifests_allow_validator_reuse_across_lanes() {
-        crate::test_alias::ensure();
         let lane_catalog = LaneCatalog::new(
             nonzero!(2_u32),
             vec![
@@ -3958,7 +3950,6 @@ mod tests {
 
     #[test]
     fn manifest_rejects_invalid_validator_torii_url() {
-        crate::test_alias::ensure();
         LaneCatalog::new(
             nonzero!(1_u32),
             vec![LaneConfig {
@@ -3996,7 +3987,6 @@ mod tests {
     }
     #[test]
     fn manifest_rejects_legacy_string_validator_entries() {
-        crate::test_alias::ensure();
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
             vec![LaneConfig {
@@ -4028,7 +4018,6 @@ mod tests {
     }
     #[test]
     fn manifest_rejects_duplicate_validator_binding() {
-        crate::test_alias::ensure();
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
             vec![LaneConfig {
@@ -4064,7 +4053,6 @@ mod tests {
     }
     #[test]
     fn manifest_rejects_duplicate_peer_binding() {
-        crate::test_alias::ensure();
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
             vec![LaneConfig {

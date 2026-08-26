@@ -22,8 +22,6 @@ REQUIRED_METRICS = (
     "disk_pressure",
     "egress_usage",
     "model_host_stale_heartbeats",
-    "hf_fallback_use",
-    "private_session_failures",
 )
 
 REQUIRED_STATUS_FIELDS = (
@@ -38,8 +36,6 @@ REQUIRED_STATUS_FIELDS = (
     "disk_pressure",
     "egress_usage",
     "model_host_heartbeats",
-    "hf_fallback_use",
-    "private_session_failures",
 )
 
 REQUIRED_ALERTS = (
@@ -52,9 +48,9 @@ REQUIRED_ALERTS = (
     "disk_pressure",
     "egress_usage",
     "model_host_stale_heartbeats",
-    "hf_fallback_use",
-    "private_session_failures",
 )
+
+RETIRED_EVIDENCE_FIELDS = ("hf_fallback_use", "private_session_failures")
 
 
 def require_object(value: Any, path: str, errors: list[str]) -> dict[str, Any]:
@@ -133,6 +129,16 @@ def validate_evidence(payload: dict[str, Any]) -> list[str]:
     )
     validate_alerts(payload, errors)
     validate_dashboards(payload, errors)
+    for section_name in ("metrics", "status_fields", "alerts"):
+        section = payload.get(section_name)
+        if not isinstance(section, dict):
+            continue
+        for field in RETIRED_EVIDENCE_FIELDS:
+            if field in section:
+                errors.append(
+                    f"{section_name}.{field} is retired and must not be claimed by "
+                    "production evidence"
+                )
     return errors
 
 

@@ -2930,7 +2930,6 @@ fn parse_json_string_array(bytes: &[u8], keys: &[&str]) -> Result<Vec<String>, V
 }
 fn parse_account_subject_literal(raw: &str) -> Result<AccountId, VMError> {
     AccountId::parse_encoded(raw)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .or_else(|_| {
             raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
                 .map(|address| address.subject_id())
@@ -6933,7 +6932,7 @@ mod tests_null_decode {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
         let schema: Name = "Order".parse().expect("schema name");
-        let json = Json::from_str_norito(r#"{"qty":10, "side":"buy"}"#).expect("json");
+        let json = Json::from_str_norito(r#"{"qty":10,"side":"buy"}"#).expect("json");
         let schema_bytes = norito::to_bytes(&schema).expect("encode schema");
         let json_bytes = norito::to_bytes(&json).expect("encode json");
         let p_schema = vm
@@ -6966,7 +6965,7 @@ mod tests_null_decode {
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
         let schema: Name = "Order".parse().expect("schema name");
-        let json = Json::from_str_norito(r#"{"qty":10, "side":"buy"}"#).expect("json");
+        let json = Json::from_str_norito(r#"{"qty":10,"side":"buy"}"#).expect("json");
         let schema_bytes = norito::to_bytes(&schema).expect("encode schema");
         let json_bytes = norito::to_bytes(&json).expect("encode json");
         let schema_ptr = vm

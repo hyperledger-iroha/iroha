@@ -144,7 +144,7 @@ public final class MultisigSeedHelper {
     }
     final AccountAddress address;
     try {
-      address = AccountAddress.parseEncodedIgnoringCurveSupport(trimmed, null).address;
+      address = AccountAddress.parseEncodedIgnoringCurveSupport(trimmed, null);
     } catch (final AccountAddress.AccountAddressException ignored) {
       return Optional.empty();
     }

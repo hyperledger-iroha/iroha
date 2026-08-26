@@ -379,6 +379,11 @@ function normalizeTokenConfig(payload, context) {
 
 function normalizePuzzleMintResponse(payload, context) {
   const record = ensureRecord(payload, context);
+  const ticketB64Raw = record.ticket_b64 ?? null;
+  const ticketB64 =
+    ticketB64Raw === undefined || ticketB64Raw === null
+      ? null
+      : requireNonEmptyString(ticketB64Raw, `${context}.ticket_b64`);
   const signedB64Raw = record.signed_ticket_b64 ?? null;
   const signedTicketB64 =
     signedB64Raw === undefined || signedB64Raw === null
@@ -393,8 +398,13 @@ function normalizePuzzleMintResponse(payload, context) {
           32,
           `${context}.signed_ticket_fingerprint_hex`,
         );
+  if ((ticketB64 === null) === (signedTicketB64 === null)) {
+    throw new TypeError(
+      `${context} must contain exactly one of ticket_b64 or signed_ticket_b64`,
+    );
+  }
   return {
-    ticketB64: requireNonEmptyString(record.ticket_b64, `${context}.ticket_b64`),
+    ticketB64,
     signedTicketB64,
     signedTicketFingerprintHex,
     difficulty: coerceNonNegativeInteger(record.difficulty, `${context}.difficulty`),

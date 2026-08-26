@@ -1,17 +1,17 @@
 impl QueuePlanJournal {
-    /// Observe the exact post-replay V4 image and classify every V6 startup owner.
+    /// Observe the exact post-replay V1 image and classify every V1 startup owner.
     ///
     /// This receipt is evidence only. It authenticates one direct journal and
     /// parent identity, byte length, content digest, complete live-record root,
-    /// and exact per-owner V4 phase.
+    /// and exact per-owner V1 phase.
     pub(super) fn observe_startup_replay_receipt(
         &self,
         phases: &[LaneQueueReservationRecoveryPhaseV1],
     ) -> io::Result<QueuePlanStartupReplayReceiptV1> {
         self.observe_startup_replay_receipt_with_finalized_absence(phases, &[])
     }
-    /// Validate active V6 phases and already-finalized carrier keys against one
-    /// immutable V4 journal snapshot.
+    /// Validate active V1 phases and already-finalized carrier keys against one
+    /// immutable V1 journal snapshot.
     ///
     /// Active phases remain bounded by the journal's maximum live records.
     /// Finalized keys may include authenticated absent siblings from multiple
@@ -22,7 +22,7 @@ impl QueuePlanJournal {
     pub(super) fn observe_startup_replay_receipt_with_finalized_absence(
         &self,
         phases: &[LaneQueueReservationRecoveryPhaseV1],
-        finalized_keys: &[LaneQueueReservationKeyV2],
+        finalized_keys: &[LaneQueueReservationKeyV1],
     ) -> io::Result<QueuePlanStartupReplayReceiptV1> {
         self.ensure_healthy()?;
         #[cfg(test)]
@@ -52,10 +52,10 @@ impl QueuePlanJournal {
                 ));
             }
             match phase.reservation_phase {
-                LaneQueueReservationOwnerPhaseV6::CommitBarrier => {}
-                LaneQueueReservationOwnerPhaseV6::Live
-                | LaneQueueReservationOwnerPhaseV6::ReleasePrepared
-                | LaneQueueReservationOwnerPhaseV6::ReleaseCompleted => {
+                LaneQueueReservationOwnerPhaseV1::CommitBarrier => {}
+                LaneQueueReservationOwnerPhaseV1::Live
+                | LaneQueueReservationOwnerPhaseV1::ReleasePrepared
+                | LaneQueueReservationOwnerPhaseV1::ReleaseCompleted => {
                     if phase.queue_plan_phase != QueuePlanReservationPhaseV1::Live
                         || phase.plan_tombstone_marked
                     {
@@ -69,7 +69,7 @@ impl QueuePlanJournal {
                 && phase.queue_plan_phase != QueuePlanReservationPhaseV1::Tombstoned
             {
                 return Err(invalid_data(
-                    "V6 PlanTombstoned marker conflicts with a claimed live V4 phase",
+                    "V1 PlanTombstoned marker conflicts with a claimed live V1 phase",
                 ));
             }
         }
@@ -93,7 +93,7 @@ impl QueuePlanJournal {
                 live.validate_global_admission_for_reservation_commit(&phase.key)?;
                 if phase.plan_tombstone_marked {
                     return Err(invalid_data(
-                        "durable V6 PlanTombstoned marker conflicts with a live V4 claim",
+                        "durable V1 PlanTombstoned marker conflicts with a live V1 claim",
                     ));
                 }
                 QueuePlanReservationPhaseV1::Live
@@ -104,12 +104,12 @@ impl QueuePlanJournal {
                 QueuePlanReservationPhaseV1::Tombstoned
             } else {
                 return Err(invalid_data(
-                    "unmarked reservation owner is neither live nor exactly tombstoned in V4",
+                    "unmarked reservation owner is neither live nor exactly tombstoned in V1",
                 ));
             };
             if actual != phase.queue_plan_phase {
                 return Err(invalid_data(
-                    "queue-plan startup phase disagrees with the exact V4 journal image",
+                    "queue-plan startup phase disagrees with the exact V1 journal image",
                 ));
             }
         }
@@ -117,7 +117,7 @@ impl QueuePlanJournal {
             if let Some(live) = replay.live_positions.get(&key.entrypoint_hash) {
                 live.validate_global_admission_for_reservation_commit(key)?;
                 return Err(invalid_data(
-                    "finalized reservation retains a live V4 QueuePlan owner",
+                    "finalized reservation retains a live V1 QueuePlan owner",
                 ));
             }
             if let Some(removed) = replay.removed_positions.get(&key.entrypoint_hash) {

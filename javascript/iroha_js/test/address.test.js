@@ -10,18 +10,19 @@ import {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
-  canonicalizeDomainLabel,
   curveIdFromAlgorithm,
   decodeI105AccountAddress,
   encodeI105AccountAddress,
   inspectAccountId,
   configureCurveSupport,
 } from "../src/address.js";
+import * as sourceAddressModule from "../src/address.js";
 import {
   AccountAddress as DistAccountAddress,
   AccountAddressError as DistAccountAddressError,
   AccountAddressErrorCode as DistAccountAddressErrorCode,
 } from "../dist/address.js";
+import * as distAddressModule from "../dist/address.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -60,21 +61,6 @@ function hexToBytes(hex) {
     out[index] = parseInt(body.slice(index * 2, index * 2 + 2), 16);
   }
   return out;
-}
-
-function parseCanonicalHexFixture(encoded) {
-  try {
-    return AccountAddress.fromCanonicalBytes(hexToBytes(String(encoded)));
-  } catch (error) {
-    if (error instanceof AccountAddressError) {
-      throw error;
-    }
-    throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_HEX_ADDRESS,
-      "invalid canonical hex account address",
-      { cause: error },
-    );
-  }
 }
 
 const DEFAULT_PUBLIC_KEY = hexToBytes(
@@ -354,25 +340,15 @@ test("selector-prefixed noncanonical payloads are rejected", () => {
     prefixedLocal.push(index + 1);
   }
   prefixedLocal.push(...baseCanonical.slice(1));
-  const digestStart = 2; // header (0) + domain tag (1)
-  const truncated = Uint8Array.from(
-    prefixedLocal.slice(0, digestStart + 8).concat(prefixedLocal.slice(digestStart + 12)),
-  );
 
   assert.throws(
     () => AccountAddress.fromCanonicalBytes(Uint8Array.from(prefixedLocal)),
-    (error) => {
-      assert(error instanceof AccountAddressError);
-      assert.ok(
-        error.code === AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES ||
-          error.code === AccountAddressErrorCode.UNKNOWN_CURVE ||
-          error.code === AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT,
-      );
-      return true;
-    },
+    (error) =>
+      error instanceof AccountAddressError &&
+      error.code === AccountAddressErrorCode.UNKNOWN_CURVE,
   );
 
-  const literal = `0x${Buffer.from(truncated).toString("hex")}`;
+  const literal = `0x${Buffer.from(prefixedLocal).toString("hex")}`;
   assert.throws(
     () => inspectAccountId(literal),
     (error) =>
@@ -438,6 +414,13 @@ test("fromAccount rejects unsupported domain and registryId options", () => {
   }
 });
 
+test("AccountAddress exposes no domain-normalization compatibility API", () => {
+  for (const addressModule of [sourceAddressModule, distAddressModule]) {
+    assert.equal("canonicalizeDomainLabel" in addressModule, false);
+    assert.equal("INVALID_DOMAIN_LABEL" in addressModule.AccountAddressErrorCode, false);
+  }
+});
+
 test("fromAccount rejects control and Unicode-confusable curve algorithm aliases in src and dist", () => {
   const sdkVariants = [
     {
@@ -473,57 +456,6 @@ test("fromAccount rejects control and Unicode-confusable curve algorithm aliases
           error.code === sdk.AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
       );
     }
-  }
-});
-
-test("canonicalizeDomainLabel normalizes supported labels and rejects malformed input", () => {
-  const punycode = canonicalizeDomainLabel("xn--exmple-cua");
-  assert.equal(punycode, "xn--exmple-cua");
-  assert.equal(canonicalizeDomainLabel("xn--fa-hia"), "xn--fa-hia");
-  assert.equal(canonicalizeDomainLabel("xn--3xa"), "xn--3xa");
-  assert.equal(canonicalizeDomainLabel("xn--ll-0ea"), "xn--ll-0ea");
-  assert.equal(canonicalizeDomainLabel("xn--mgbh0fb"), "xn--mgbh0fb");
-  assert.equal(canonicalizeDomainLabel("xn--ngba799q"), "xn--ngba799q");
-  assert.equal(canonicalizeDomainLabel("xn--ngba7iz95i"), "xn--ngba7iz95i");
-  assert.equal(canonicalizeDomainLabel("xn--11b2ezcw70k"), "xn--11b2ezcw70k");
-  assert.equal(canonicalizeDomainLabel("xn--mgba3gch31f060k"), "xn--mgba3gch31f060k");
-  assert.equal(canonicalizeDomainLabel("xn--ab-0ea"), "xn--ab-0ea");
-  assert.equal(canonicalizeDomainLabel("xn--a-jib"), "xn--a-jib");
-  assert.equal(canonicalizeDomainLabel("xn--ab-3n4a"), "xn--ab-3n4a");
-  assert.equal(canonicalizeDomainLabel("foo_bar"), "foo_bar");
-  assert.equal(canonicalizeDomainLabel("bücher"), "xn--bcher-kva");
-
-  for (const invalid of [
-    "-leading",
-    "trailing-",
-    "ab--cd",
-    "ḷ",
-    "foo:123",
-    "foo/bar",
-    "foo\\bar",
-    "foo?bar",
-    "foo%41",
-    " foo",
-    "foo ",
-    "\uFEFFfoo",
-    "foo\uFEFF",
-    "xn--",
-    "xn--a",
-    "xn--alice",
-    "xn--ab-uuba211bca8057b",
-    "xn--1-zmcl5hc",
-    "xn--a-zmck6hb",
-    "xn--1-ymcl5hc6o",
-    "xn--_-ymcl5hc",
-    "xn--ab-j1t",
-    "xn--11b2er09f",
-  ]) {
-    assert.throws(
-      () => canonicalizeDomainLabel(invalid),
-      (error) =>
-        error instanceof AccountAddressError &&
-        error.code === AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
-    );
   }
 });
 
@@ -846,7 +778,6 @@ test("inspectAccountId enforces option shape", () => {
       /unsupported fields: foo/.test(error.message),
   );
   const inspected = inspectAccountId(literal, { expectDiscriminant: 753, chainDiscriminant: 753 });
-  assert.equal(inspected.detectedFormat.kind, "i105");
   assert.equal(inspected.i105.chainDiscriminant, 753);
   assert.throws(
     () => inspectAccountId(literal, { chainDiscriminant: "bad" }),
@@ -869,7 +800,7 @@ test("inspectAccountId rejects invalid expectDiscriminant values", () => {
     );
   }
   const inspected = inspectAccountId(literal, { expectDiscriminant: 753 });
-  assert.equal(inspected.detectedFormat.chainDiscriminant, 753);
+  assert.equal(inspected.i105.chainDiscriminant, 753);
 });
 
 test("inspectAccountId preserves detected i105 prefix when rendering outputs", () => {
@@ -877,12 +808,10 @@ test("inspectAccountId preserves detected i105 prefix when rendering outputs", (
   });
   const literal = address.toI105(7);
   const summary = inspectAccountId(literal);
-  assert.equal(summary.detectedFormat.chainDiscriminant, 7);
   assert.equal(summary.i105.chainDiscriminant, 7);
   assert.equal(summary.i105.value, literal);
 
   const overridden = inspectAccountId(literal, { chainDiscriminant: 99 });
-  assert.equal(overridden.detectedFormat.chainDiscriminant, 7);
   assert.equal(overridden.i105.chainDiscriminant, 99);
   assert.equal(overridden.i105.value, address.toI105(99));
 });
@@ -1051,14 +980,10 @@ test("account address compliance vectors", () => {
 function matchesExpectedError(error, expected, caseId) {
   assert(error instanceof AccountAddressError, `${caseId}: unexpected error type ${error}`);
   const normalized = normalizeError(error);
-  let actualKind = normalized.kind;
-  if (actualKind === "UnsupportedAddressFormat" && expected.kind === "ChecksumMismatch") {
-     actualKind = "ChecksumMismatch";
-  }
   assert.equal(
-    actualKind,
+    normalized.kind,
     expected.kind,
-    `${caseId}: error kind mismatch (${actualKind} vs ${expected.kind})`,
+    `${caseId}: error kind mismatch (${normalized.kind} vs ${expected.kind})`,
   );
   if (normalized.kind === "UnexpectedNetworkPrefix") {
     if (normalized.expected !== undefined) {
@@ -1089,8 +1014,6 @@ function normalizeError(error) {
   switch (error.code) {
     case AccountAddressErrorCode.CHECKSUM_MISMATCH:
       return { kind: "ChecksumMismatch" };
-    case AccountAddressErrorCode.INVALID_HEX_ADDRESS:
-      return { kind: "InvalidHexAddress" };
     case AccountAddressErrorCode.INVALID_LENGTH:
       return { kind: "InvalidLength" };
     case AccountAddressErrorCode.INVALID_I105_CHAR:

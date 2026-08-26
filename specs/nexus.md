@@ -96,8 +96,8 @@ and record lifecycle events in world state (`iroha_core::state::space_directory_
    `--reason` backfills `entries[*].notes` for records that omitted operator notes.
 
 3. **Expire** manifests that reached their scheduled end of life or **revoke**
-   UAIDs on demand. Both commands accept `--uaid uaid:<hex>` or a raw 64-hex
-   digest (LSB=1) and the numeric dataspace id:
+   UAIDs on demand. Both commands require exact lower-case
+   `--uaid uaid:<64-hex>` literals (LSB=1) and the numeric dataspace id:
 
    ```bash
    iroha app space-directory manifest expire \

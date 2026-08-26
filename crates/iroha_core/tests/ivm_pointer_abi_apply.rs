@@ -229,11 +229,9 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
         .expect("IVM_DEBUG_ASSET_DEFINITION must be set");
     let domain_raw = std::env::var("IVM_DEBUG_DOMAIN").unwrap_or_else(|_| "centralbank".to_owned());
     let from = iroha_data_model::account::AccountId::parse_encoded(&from_raw)
-        .expect("valid encoded source account")
-        .into_account_id();
+        .expect("valid encoded source account");
     let to = iroha_data_model::account::AccountId::parse_encoded(&to_raw)
-        .expect("valid encoded destination account")
-        .into_account_id();
+        .expect("valid encoded destination account");
     let asset_def: AssetDefinitionId = asset_raw.parse().expect("valid asset definition");
     let amount = Quantity::from(500_u64);
     let from_bytes = tlv_envelope(PointerType::AccountId, &from);
@@ -366,11 +364,9 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
         std::env::var("IVM_DEBUG_DOMAIN").unwrap_or_else(|_| "centralbank.universal".to_owned());
     let ratio_raw = std::env::var("IVM_DEBUG_RATIO").unwrap_or_else(|_| "76".to_owned());
     let reserve = iroha_data_model::account::AccountId::parse_encoded(&reserve_raw)
-        .expect("valid encoded reserve account")
-        .into_account_id();
+        .expect("valid encoded reserve account");
     let dst = iroha_data_model::account::AccountId::parse_encoded(&dst_raw)
-        .expect("valid encoded destination account")
-        .into_account_id();
+        .expect("valid encoded destination account");
     let aed_asset_def: AssetDefinitionId = aed_asset_raw.parse().expect("valid AED asset");
     let cbdc_asset_def: AssetDefinitionId = cbdc_asset_raw.parse().expect("valid CBDC asset");
     let domain_id = DomainId::parse_fully_qualified(&domain_raw).expect("valid domain");
@@ -381,7 +377,7 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
         r#"
         seiyaku DebugTransfer {{
           kotoage fn main() authorize("TransferAsset") {{
-            let ev = Json::parse("{{\"kind\":\"asset_change\",\"op\":\"added\",\"asset_definition_id\":\"{aed}\",\"account_domain\":\"{domain}\",\"account_id\":\"{dst}\",\"amount\":\"1\"}}");
+            let ev = Json::parse("{{\"account_domain\":\"{domain}\",\"account_id\":\"{dst}\",\"amount\":\"1\",\"asset_definition_id\":\"{aed}\",\"kind\":\"asset_change\",\"op\":\"added\"}}");
             let recipient = ev.get_account_id(Name::parse("account_id")).unwrap_or(AccountId::parse("{dst}"));
             let quantity amount = ev.get_quantity(Name::parse("amount")).unwrap_or(0);
             ledger::asset::transfer(source: recipient, destination: AccountId::parse("{reserve}"), asset_definition: AssetDefinitionId::parse("{aed}"), amount: amount, dataspace: DataSpaceId::parse("0"));

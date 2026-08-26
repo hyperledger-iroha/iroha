@@ -178,7 +178,7 @@ fn uploaded_model_bundle_register_provenance_payload_encodes_bundle_value() {
         family: "demo-family".to_string(),
         modalities: vec!["text".to_string()],
         plaintext_root: sample_hash(30),
-        runtime_format: SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors,
+        package_format: SoraUploadedModelPackageFormatV1::NormalizedHuggingFaceSafetensorsV1,
         bundle_root: sample_hash(31),
         sorafs_manifest_digest: ManifestDigest::new([0xA5; 32]),
         chunk_count: 2,
@@ -701,7 +701,6 @@ fn sample_container() -> SoraContainerManifestV1 {
                 SoraNetworkAllowlistEntryV1::new("api.sora.internal", [443]),
                 SoraNetworkAllowlistEntryV1::new("rpc.sora.internal", [443]),
             ]),
-            allow_wallet_signing: true,
             allow_state_writes: true,
             allow_model_inference: true,
             allow_model_training: false,
@@ -710,7 +709,7 @@ fn sample_container() -> SoraContainerManifestV1 {
             cpu_millis: NonZeroU32::new(750).expect("nonzero"),
             memory_bytes: NonZeroU64::new(536_870_912).expect("nonzero"),
             ephemeral_storage_bytes: NonZeroU64::new(2_147_483_648).expect("nonzero"),
-            max_open_files: NonZeroU32::new(512).expect("nonzero"),
+            max_open_files_per_process: NonZeroU32::new(512).expect("nonzero"),
             max_tasks: NonZeroU16::new(64).expect("nonzero"),
         },
         lifecycle: SoraLifecycleHooksV1 {
@@ -723,7 +722,6 @@ fn sample_container() -> SoraContainerManifestV1 {
 fn sample_inrou_manifest() -> SoraInrouManifestV1 {
     SoraInrouManifestV1 {
         schema_version: SORA_INROU_MANIFEST_VERSION_V1,
-        guest_os: SoraInrouGuestOsV1::DebianSlim,
         guest_images: BTreeMap::from([
             (
                 SoraInrouGuestIsaV1::X8664,
@@ -731,8 +729,7 @@ fn sample_inrou_manifest() -> SoraInrouManifestV1 {
                     kernel_image_path: "/inrou/x86_64/vmlinux".to_string(),
                     rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_string(),
                     initrd_image_path: None,
-                    distribution: SoraArtifactDistributionPolicyV1::default(),
-                    published_artifact: None,
+                    published_artifact: sample_published_inrou_guest_image_artifact(0x31),
                 },
             ),
             (
@@ -741,24 +738,18 @@ fn sample_inrou_manifest() -> SoraInrouManifestV1 {
                     kernel_image_path: "/inrou/aarch64/vmlinux".to_string(),
                     rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_string(),
                     initrd_image_path: None,
-                    distribution: SoraArtifactDistributionPolicyV1::default(),
-                    published_artifact: None,
+                    published_artifact: sample_published_inrou_guest_image_artifact(0x32),
                 },
             ),
         ]),
-        bootstrap_user_data_path: None,
-        ssh_authorized_keys: vec!["ssh-ed25519 test-key soracloud-tests".to_string()],
     }
 }
 fn sample_published_inrou_guest_image_artifact(seed: u8) -> SoraPublishedInrouGuestImageArtifactV1 {
-    let manifest_digest_hex = hex::encode([seed; 32]);
     SoraPublishedInrouGuestImageArtifactV1 {
-        manifest_digest_hex: manifest_digest_hex.clone(),
+        manifest_digest_hex: hex::encode([seed; 32]),
         content_cid: encode_lowercase_multibase_base32(
             &sorafs_manifest::canonical_manifest_root_cid([seed; 32]),
         ),
-        manifest_id_hex: Some(manifest_digest_hex),
-        distribution: SoraArtifactDistributionPolicyV1::default(),
     }
 }
 fn assert_soracloud_invalid_field(error: SoracloudManifestError, expected_field: &'static str) {
@@ -782,7 +773,7 @@ fn sample_inrou_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
             volume_name: "index_state".parse().expect("valid name"),
             kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
             storage_class: StorageClass::Warm,
-            mount_path: "/var/lib/ton-indexer".to_string(),
+            mount_path: "/var/lib/soracloud/volumes/index_state".to_string(),
             max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
         },
     ]
@@ -853,15 +844,15 @@ fn sample_update_handler() -> SoraServiceHandlerV1 {
         }),
     }
 }
-fn sample_private_update_handler() -> SoraServiceHandlerV1 {
+fn sample_ciphertext_update_handler() -> SoraServiceHandlerV1 {
     SoraServiceHandlerV1 {
-        handler_name: "private_update".parse().expect("valid name"),
-        class: SoraServiceHandlerClassV1::PrivateUpdate,
-        entrypoint: "apply_private_update".to_string(),
-        route_path: Some("/private/update".to_string()),
+        handler_name: "ciphertext_update".parse().expect("valid name"),
+        class: SoraServiceHandlerClassV1::Update,
+        entrypoint: "apply_ciphertext_update".to_string(),
+        route_path: Some("/ciphertext/update".to_string()),
         certified_response: SoraCertifiedResponsePolicyV1::None,
         mailbox: Some(SoraMailboxContractV1 {
-            queue_name: "private_updates".parse().expect("valid name"),
+            queue_name: "ciphertext_updates".parse().expect("valid name"),
             max_pending_messages: NonZeroU32::new(256).expect("nonzero"),
             max_message_bytes: NonZeroU64::new(131_072).expect("nonzero"),
             retention_blocks: NonZeroU32::new(2_880).expect("nonzero"),
@@ -873,7 +864,7 @@ fn sample_handlers() -> Vec<SoraServiceHandlerV1> {
         sample_asset_handler(),
         sample_query_handler(),
         sample_update_handler(),
-        sample_private_update_handler(),
+        sample_ciphertext_update_handler(),
     ]
 }
 fn sample_artifacts() -> Vec<SoraArtifactRefV1> {
@@ -894,7 +885,7 @@ fn sample_artifacts() -> Vec<SoraArtifactRefV1> {
             kind: SoraArtifactKindV1::Checkpoint,
             artifact_hash: sample_hash(17),
             artifact_path: "/checkpoints/portal.chk".to_string(),
-            handler_name: Some("private_update".parse().expect("valid name")),
+            handler_name: Some("ciphertext_update".parse().expect("valid name")),
         },
     ]
 }
@@ -1044,6 +1035,47 @@ fn sample_agent_apartment_audit_event() -> SoraAgentApartmentAuditEventV1 {
         checkpoint_artifact_hash: None,
         succeeded: None,
     }
+}
+#[test]
+fn agent_wallet_request_ids_are_canonical_in_persisted_state() {
+    let record = sample_agent_apartment_record();
+    record.validate().expect("canonical apartment record");
+
+    let mut noncanonical_record = record;
+    let mut noncanonical_request = noncanonical_record
+        .pending_wallet_requests
+        .remove("ops_agent:wallet:35")
+        .expect("wallet request fixture");
+    noncanonical_request.request_id = " ops_agent:wallet:35".to_owned();
+    noncanonical_record.pending_wallet_requests.insert(
+        noncanonical_request.request_id.clone(),
+        noncanonical_request,
+    );
+    noncanonical_record
+        .validate()
+        .expect_err("noncanonical pending wallet request ID must fail closed");
+
+    let mut wallet_event = sample_agent_apartment_audit_event();
+    wallet_event.action = SoraAgentApartmentActionV1::WalletSpendRequested;
+    wallet_event.request_id = Some("ops-wallet-request-1".to_owned());
+    wallet_event.asset_definition = Some("61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned());
+    wallet_event.amount = Some(xor_quantity_from_nanos(1_000_000));
+    wallet_event
+        .validate()
+        .expect("canonical wallet audit event");
+
+    for request_id in [None, Some(" request-1".to_owned())] {
+        let mut invalid = wallet_event.clone();
+        invalid.request_id = request_id;
+        invalid
+            .validate()
+            .expect_err("missing or noncanonical wallet audit request ID must fail closed");
+    }
+    let mut missing_amount = wallet_event;
+    missing_amount.amount = None;
+    missing_amount
+        .validate()
+        .expect_err("wallet audit event without amount must fail closed");
 }
 #[cfg(feature = "json")]
 #[test]
@@ -1223,7 +1255,6 @@ fn sample_fhe_param_set() -> FheParamSetV1 {
         max_multiplicative_depth: NonZeroU16::new(2).expect("nonzero"),
         lifecycle: FheParamLifecycleV1::Active,
         activation_height: Some(10_000),
-        deprecation_height: Some(20_000),
         withdraw_height: Some(40_000),
         parameter_digest: sample_hash(77),
         rns_modulus_chain_digest: sample_hash(78),
@@ -1684,6 +1715,54 @@ fn sample_service_audit_event() -> SoraServiceAuditEventV1 {
         signer: sample_signer(),
     }
 }
+#[test]
+fn persisted_service_runtime_identifiers_and_state_paths_are_exact() {
+    let audit = sample_service_audit_event();
+    audit.validate().expect("canonical service audit event");
+
+    let mut padded_version = audit.clone();
+    padded_version.from_version = Some(" 1.0.0".to_owned());
+    padded_version
+        .validate()
+        .expect_err("audit version aliases must fail closed");
+
+    let mut padded_rollout = audit.clone();
+    padded_rollout.rollout_handle = Some("rollout-1 ".to_owned());
+    padded_rollout
+        .validate()
+        .expect_err("rollout-handle aliases must fail closed");
+
+    let mut noncanonical_state_path = audit.clone();
+    noncanonical_state_path.state_key = Some("/state//patient-1".to_owned());
+    noncanonical_state_path
+        .validate()
+        .expect_err("state paths must use exact canonical components");
+
+    let mut spaced_jurisdiction = audit;
+    spaced_jurisdiction.jurisdiction_tag = Some("us hipaa".to_owned());
+    spaced_jurisdiction
+        .validate()
+        .expect_err("jurisdiction tags must be exact tokens");
+
+    let runtime = sample_service_runtime_state();
+    runtime.validate().expect("canonical service runtime state");
+    let mut padded_active_version = runtime.clone();
+    padded_active_version.active_service_version.push(' ');
+    padded_active_version
+        .validate()
+        .expect_err("active service-version aliases must fail closed");
+    let mut padded_runtime_rollout = runtime;
+    padded_runtime_rollout.rollout_handle = Some(" rollout-1".to_owned());
+    padded_runtime_rollout
+        .validate()
+        .expect_err("runtime rollout-handle aliases must fail closed");
+
+    let mut inrou_runtime = sample_inrou_replica_runtime_state();
+    inrou_runtime.service_version = "2026.4 ".to_owned();
+    inrou_runtime
+        .validate()
+        .expect_err("Inrou runtime service-version aliases must fail closed");
+}
 fn sample_service_mailbox_message() -> SoraServiceMailboxMessageV1 {
     SoraServiceMailboxMessageV1 {
         schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
@@ -1691,7 +1770,7 @@ fn sample_service_mailbox_message() -> SoraServiceMailboxMessageV1 {
         from_service: "portal".parse().expect("valid name"),
         from_handler: "update".parse().expect("valid name"),
         to_service: "audit".parse().expect("valid name"),
-        to_handler: "private_update".parse().expect("valid name"),
+        to_handler: "ciphertext_update".parse().expect("valid name"),
         payload_bytes: b"ciphertext".to_vec(),
         payload_commitment: Hash::new(b"ciphertext"),
         enqueue_sequence: 10,
@@ -1713,11 +1792,34 @@ fn sample_runtime_receipt() -> SoraRuntimeReceiptV1 {
         emitted_sequence: 44,
         placement_id: Some(sample_hash(170)),
         selected_validator_account_id: Some(sample_account_id(171)),
-        selected_peer_id: Some("12D3KooWRuntimePrimary".to_string()),
+        selected_peer_id: Some(sample_peer_id(171)),
         mailbox_message_id: Some(sample_hash(163)),
         journal_artifact_hash: Some(sample_hash(168)),
         checkpoint_artifact_hash: Some(sample_hash(169)),
     }
+}
+#[test]
+fn runtime_receipt_requires_an_exact_selected_hf_peer_id() {
+    let mut receipt = sample_runtime_receipt();
+    receipt
+        .validate()
+        .expect("canonical runtime receipt host attribution");
+    receipt.selected_peer_id = Some(format!(
+        "{} ",
+        receipt
+            .selected_peer_id
+            .as_deref()
+            .expect("selected peer fixture")
+    ));
+    receipt
+        .validate()
+        .expect_err("selected HF peer aliases must fail closed");
+
+    let mut padded_service_version = sample_runtime_receipt();
+    padded_service_version.service_version.push(' ');
+    padded_service_version
+        .validate()
+        .expect_err("runtime receipt service-version aliases must fail closed");
 }
 #[cfg(feature = "json")]
 #[test]
@@ -1834,16 +1936,6 @@ fn sample_host_state_mutation_request_envelope() -> SoracloudHostRequestEnvelope
         ),
     }
 }
-fn host_request_envelope(
-    operation: SoracloudHostOperationV1,
-    payload: SoracloudHostRequestPayloadV1,
-) -> SoracloudHostRequestEnvelopeV1 {
-    SoracloudHostRequestEnvelopeV1 {
-        schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
-        operation,
-        payload,
-    }
-}
 fn host_response_envelope(
     operation: SoracloudHostOperationV1,
     payload: SoracloudHostResponsePayloadV1,
@@ -1854,15 +1946,12 @@ fn host_response_envelope(
         payload,
     }
 }
-fn sample_host_egress_response_envelope() -> SoracloudHostResponseEnvelopeV1 {
-    let body = br#"{"ok":true}"#.to_vec();
+fn sample_host_config_response_envelope() -> SoracloudHostResponseEnvelopeV1 {
     host_response_envelope(
-        SoracloudHostOperationV1::EgressFetch,
-        SoracloudHostResponsePayloadV1::EgressFetch(SoracloudEgressFetchResponseV1 {
-            status_code: 200,
-            content_type: Some("application/json".to_string()),
-            body_hash: Hash::new(&body),
-            body,
+        SoracloudHostOperationV1::ReadConfig,
+        SoracloudHostResponsePayloadV1::ReadConfig(SoracloudReadConfigResponseV1 {
+            found: true,
+            payload_bytes: br#"{"ok":true}"#.to_vec(),
         }),
     )
 }
@@ -1905,13 +1994,6 @@ fn host_protocol_v1_json_rejects_unknown_fields_across_the_direct_graph() {
         available_after_sequence: 1,
         expires_at_sequence: None,
     };
-    let egress_response = SoracloudEgressFetchResponseV1 {
-        status_code: 204,
-        content_type: None,
-        body: Vec::new(),
-        body_hash: Hash::new([]),
-    };
-
     assert_unknown_rejected!(
         SoracloudHostOperationV1::ReadConfig,
         SoracloudHostOperationV1,
@@ -1930,12 +2012,15 @@ fn host_protocol_v1_json_rejects_unknown_fields_across_the_direct_graph() {
         "host request payload"
     );
     assert_unknown_rejected!(
-        sample_host_egress_response_envelope(),
+        sample_host_config_response_envelope(),
         SoracloudHostResponseEnvelopeV1,
         "host response envelope"
     );
     assert_unknown_rejected!(
-        SoracloudHostResponsePayloadV1::EgressFetch(egress_response.clone()),
+        SoracloudHostResponsePayloadV1::ReadConfig(SoracloudReadConfigResponseV1 {
+            found: false,
+            payload_bytes: Vec::new(),
+        }),
         SoracloudHostResponsePayloadV1,
         "host response payload"
     );
@@ -2033,50 +2118,6 @@ fn host_protocol_v1_json_rejects_unknown_fields_across_the_direct_graph() {
         SoracloudReadSecretEnvelopeResponseV1 { envelope: None },
         SoracloudReadSecretEnvelopeResponseV1,
         "read secret envelope response"
-    );
-    assert_unknown_rejected!(
-        SoracloudReadSecretRequestV1 {
-            secret_name: "db/password".to_owned(),
-        },
-        SoracloudReadSecretRequestV1,
-        "read secret request"
-    );
-    assert_unknown_rejected!(
-        SoracloudReadSecretResponseV1 {
-            found: false,
-            payload_bytes: Vec::new(),
-        },
-        SoracloudReadSecretResponseV1,
-        "read secret response"
-    );
-    assert_unknown_rejected!(
-        SoracloudReadCredentialRequestV1 {
-            credential_name: "service-account".to_owned(),
-        },
-        SoracloudReadCredentialRequestV1,
-        "read credential request"
-    );
-    assert_unknown_rejected!(
-        SoracloudReadCredentialResponseV1 {
-            found: false,
-            payload_bytes: Vec::new(),
-        },
-        SoracloudReadCredentialResponseV1,
-        "read credential response"
-    );
-    assert_unknown_rejected!(
-        SoracloudEgressFetchRequestV1 {
-            url: "https://oracle.example/data.json".to_owned(),
-            max_bytes: 4096,
-            expected_hash: None,
-        },
-        SoracloudEgressFetchRequestV1,
-        "egress fetch request"
-    );
-    assert_unknown_rejected!(
-        egress_response,
-        SoracloudEgressFetchResponseV1,
-        "egress fetch response"
     );
 }
 #[cfg(feature = "json")]
@@ -2212,56 +2253,6 @@ fn host_protocol_v1_json_requires_explicit_null_and_empty_keys() {
         SoracloudReadSecretEnvelopeResponseV1,
         ["envelope"],
         "read secret envelope response"
-    );
-    assert_required_fields!(
-        SoracloudReadSecretResponseV1 {
-            found: false,
-            payload_bytes: Vec::new(),
-        },
-        SoracloudReadSecretResponseV1,
-        ["payload_bytes"],
-        "read secret response"
-    );
-    assert_required_fields!(
-        SoracloudReadCredentialResponseV1 {
-            found: false,
-            payload_bytes: Vec::new(),
-        },
-        SoracloudReadCredentialResponseV1,
-        ["payload_bytes"],
-        "read credential response"
-    );
-    assert_required_nulls!(
-        SoracloudEgressFetchRequestV1 {
-            url: "https://oracle.example/data.json".to_owned(),
-            max_bytes: 4096,
-            expected_hash: None,
-        },
-        SoracloudEgressFetchRequestV1,
-        ["expected_hash"],
-        "egress fetch request"
-    );
-    assert_required_fields!(
-        SoracloudEgressFetchResponseV1 {
-            status_code: 204,
-            content_type: None,
-            body: Vec::new(),
-            body_hash: Hash::new([]),
-        },
-        SoracloudEgressFetchResponseV1,
-        ["body"],
-        "egress fetch response"
-    );
-    assert_required_nulls!(
-        SoracloudEgressFetchResponseV1 {
-            status_code: 204,
-            content_type: None,
-            body: Vec::new(),
-            body_hash: Hash::new([]),
-        },
-        SoracloudEgressFetchResponseV1,
-        ["content_type"],
-        "egress fetch response"
     );
 }
 #[cfg(feature = "json")]
@@ -2739,18 +2730,6 @@ fn host_request_envelope_validation_rejects_zero_prehash_digest_sentinels() {
         .validate()
         .expect_err("state mutation payload placeholder commitment must fail admission");
     assert_zero_prehash_digest_error(&error, "payload_commitment");
-    let egress = host_request_envelope(
-        SoracloudHostOperationV1::EgressFetch,
-        SoracloudHostRequestPayloadV1::EgressFetch(SoracloudEgressFetchRequestV1 {
-            url: "https://oracle.example/data.json".to_string(),
-            max_bytes: 4096,
-            expected_hash: Some(zero_digest),
-        }),
-    );
-    let error = egress
-        .validate()
-        .expect_err("egress expected-hash placeholder must fail admission");
-    assert_zero_prehash_digest_error(&error, "expected_hash");
 }
 #[test]
 fn host_request_envelope_validation_rejects_adversarial_state_payload_metadata() {
@@ -2806,7 +2785,7 @@ fn host_request_envelope_validation_rejects_adversarial_state_payload_metadata()
 }
 #[test]
 fn host_response_envelope_validation_accepts_consistent_payload() {
-    let envelope = sample_host_egress_response_envelope();
+    let envelope = sample_host_config_response_envelope();
     assert!(
         envelope.validate().is_ok(),
         "valid host response envelope must pass"
@@ -2814,8 +2793,8 @@ fn host_response_envelope_validation_accepts_consistent_payload() {
 }
 #[test]
 fn host_response_envelope_validation_rejects_payload_operation_mismatch() {
-    let mut envelope = sample_host_egress_response_envelope();
-    envelope.operation = SoracloudHostOperationV1::ReadConfig;
+    let mut envelope = sample_host_config_response_envelope();
+    envelope.operation = SoracloudHostOperationV1::ReadCommittedState;
     let error = envelope
         .validate()
         .expect_err("host response operation must match payload variant");
@@ -2876,50 +2855,6 @@ fn host_response_envelope_validation_rejects_zero_prehash_digest_sentinels() {
         },),
         SoracloudHostOperationV1::PublishCheckpoint
     );
-    assert_response_digest_rejects!(
-        "body_hash",
-        SoracloudHostResponsePayloadV1::EgressFetch(SoracloudEgressFetchResponseV1 {
-            status_code: 200,
-            content_type: None,
-            body: b"ok".to_vec(),
-            body_hash: zero_digest,
-        }),
-        SoracloudHostOperationV1::EgressFetch
-    );
-}
-#[test]
-fn host_response_envelope_validation_rejects_adversarial_egress_metadata() {
-    let mut wrong_body_hash = sample_host_egress_response_envelope();
-    let SoracloudHostResponsePayloadV1::EgressFetch(response) = &mut wrong_body_hash.payload else {
-        panic!("sample response uses egress payload");
-    };
-    response.body_hash = sample_hash(233);
-    let error = wrong_body_hash
-        .validate()
-        .expect_err("egress body hash must bind to the actual response body");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "body_hash",
-            ..
-        }
-    ));
-    let mut empty_content_type = sample_host_egress_response_envelope();
-    let SoracloudHostResponsePayloadV1::EgressFetch(response) = &mut empty_content_type.payload
-    else {
-        panic!("sample response uses egress payload");
-    };
-    response.content_type = Some(String::new());
-    let error = empty_content_type
-        .validate()
-        .expect_err("egress content type must not be empty");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "content_type",
-            ..
-        }
-    ));
 }
 #[test]
 fn container_validate_rejects_invalid_healthcheck_path() {
@@ -2994,6 +2929,7 @@ fn container_validate_accepts_inrou_runtime() {
     container.runtime = SoraContainerRuntimeV1::Inrou;
     container.entrypoint = "/app/bin/service".to_string();
     container.inrou = Some(sample_inrou_manifest());
+    container.capabilities.network = SoraNetworkPolicyV1::Isolated;
     assert!(
         container.validate().is_ok(),
         "Inrou Soracloud manifests should be admitted by the data model"
@@ -3041,22 +2977,6 @@ fn container_validate_rejects_nonportable_inrou_bundle_paths() {
         error,
         SoracloudManifestError::InvalidField {
             field: "entrypoint",
-            ..
-        }
-    ));
-    let mut container = sample_container();
-    container.runtime = SoraContainerRuntimeV1::Inrou;
-    container.entrypoint = "/app/bin/service".to_string();
-    let mut inrou = sample_inrou_manifest();
-    inrou.bootstrap_user_data_path = Some("/cloud//user-data".to_string());
-    container.inrou = Some(inrou);
-    let error = container
-        .validate()
-        .expect_err("nonportable bootstrap member path must fail admission");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "bootstrap_user_data_path",
             ..
         }
     ));
