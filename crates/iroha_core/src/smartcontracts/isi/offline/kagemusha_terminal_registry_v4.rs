@@ -79,6 +79,7 @@ use rustix::fs::{
 use sha2::{Digest as _, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    io::Read,
     path::{Component, Path, PathBuf},
     sync::Arc,
 };
@@ -89,7 +90,7 @@ use std::{
 use std::{
     ffi::OsStr,
     fs::{self, File},
-    io::{Read, Seek as _, SeekFrom},
+    io::{Seek as _, SeekFrom},
     os::unix::fs::MetadataExt as _,
     sync::Mutex,
 };
