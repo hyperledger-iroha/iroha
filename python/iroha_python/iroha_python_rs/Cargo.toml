@@ -5,8 +5,6 @@ edition = "2024"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(feature, values("compact-len"))',
-    'cfg(feature, values("packed-struct"))',
     'cfg(feature, values("schema-structural"))',
 ] }
 

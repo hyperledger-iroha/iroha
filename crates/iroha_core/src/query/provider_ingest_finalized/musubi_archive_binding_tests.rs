@@ -24,7 +24,7 @@ fn bind_musubi_archive(archived: &mut ProviderIngestFinalizedArchivedOrderV1, se
 #[test]
 fn first_projection_rejects_conflicting_provider_archive_bindings_for_one_order() {
     let mut projection = projection(7);
-    let shared_order = ReplicationOrderId::new([0xA1; 32]);
+    let shared_order = ReplicationOrderId::new([0x21; 32]);
     for provider in &mut projection.providers {
         if let Some(archived) = provider
             .orders
@@ -54,7 +54,7 @@ fn archive_preserves_musubi_binding_and_rejects_late_or_substituted_binding() {
     let mut first = projection(7);
     for provider in &mut first.providers {
         for archived in &mut provider.orders {
-            if archived.order_id() == ReplicationOrderId::new([0xA1; 32]) {
+            if archived.order_id() == ReplicationOrderId::new([0x21; 32]) {
                 bind_musubi_archive(archived, 0x81);
             }
         }
@@ -76,7 +76,7 @@ fn archive_preserves_musubi_binding_and_rejects_late_or_substituted_binding() {
     let mut removed = advance_projection(&first, 8);
     for provider in &mut removed.providers {
         for archived in &mut provider.orders {
-            if archived.order_id() == ReplicationOrderId::new([0xA1; 32]) {
+            if archived.order_id() == ReplicationOrderId::new([0x21; 32]) {
                 archived.musubi_archive = None;
                 archived.replication_order.musubi_archive = None;
             }
@@ -89,7 +89,7 @@ fn archive_preserves_musubi_binding_and_rejects_late_or_substituted_binding() {
     let mut substituted = advance_projection(&first, 8);
     for provider in &mut substituted.providers {
         for archived in &mut provider.orders {
-            if archived.order_id() == ReplicationOrderId::new([0xA1; 32]) {
+            if archived.order_id() == ReplicationOrderId::new([0x21; 32]) {
                 let binding = archived.musubi_archive.as_mut().expect("bound order");
                 binding.commitment.car_digest = MusubiContentDigestV1::new([0xF1; 32]);
                 binding.archive_id = binding.commitment.archive_id();
@@ -104,7 +104,7 @@ fn archive_preserves_musubi_binding_and_rejects_late_or_substituted_binding() {
     let mut mismatched = projection(9);
     for provider in &mut mismatched.providers {
         for archived in &mut provider.orders {
-            if archived.order_id() == ReplicationOrderId::new([0xA1; 32]) {
+            if archived.order_id() == ReplicationOrderId::new([0x21; 32]) {
                 bind_musubi_archive(archived, 0x82);
                 let binding = archived.musubi_archive.as_mut().expect("bound order");
                 binding.commitment.content_length += 1;

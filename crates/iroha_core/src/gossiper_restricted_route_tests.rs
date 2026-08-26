@@ -2,9 +2,7 @@
 #[allow(clippy::too_many_lines)]
 async fn gossip_accepts_restricted_route_match() {
     let temp_dir = tempdir().expect("temp dir");
-    let kura_cfg = KuraConfig {
-        init_mode: InitMode::Strict,
-        store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
+    let kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
         max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,

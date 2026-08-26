@@ -1230,6 +1230,10 @@ fn manifest_snapshot(manifest: &PinManifestRecord) -> json::Map {
         status_epoch.map_or(Value::Null, Value::from),
     );
     manifest_obj.insert(
+        "approved_epoch".into(),
+        manifest.approved_epoch.map_or(Value::Null, Value::from),
+    );
+    manifest_obj.insert(
         "chunk_digest_sha3_256_hex".into(),
         Value::String(hex::encode(manifest.chunk_digest_sha3_256)),
     );
@@ -1334,6 +1338,7 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
         ReplicationOrderStatus::Pending => ("pending", None),
         ReplicationOrderStatus::Completed(epoch) => ("completed", Some(epoch)),
         ReplicationOrderStatus::Expired(epoch) => ("expired", Some(epoch)),
+        ReplicationOrderStatus::Cancelled(epoch) => ("cancelled", Some(epoch)),
     };
     order_obj.insert("status".into(), Value::String(status_label.into()));
     order_obj.insert(

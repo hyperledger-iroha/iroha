@@ -538,6 +538,12 @@ PRIVACY_COMPILED_PROFILE_C_SYMBOLS=(
   iroha_privacy_free_buffer
 )
 
+PARLIAMENT_TIMED_OVN_C_SYMBOLS=(
+  connect_norito_parliament_timed_ovn_verify_casting_proof_v1
+  connect_norito_parliament_timed_ovn_registration_from_proof_v1
+  connect_norito_parliament_timed_ovn_ballot_from_proof_v1
+)
+
 REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_bridge_abi_version
   connect_norito_free
@@ -550,6 +556,7 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_canonical_json_blake3_v1
   connect_norito_encode_account_onboarding_plan_body_v1
   connect_norito_alias_instruction_round_trip_v1
+  "${PARLIAMENT_TIMED_OVN_C_SYMBOLS[@]}"
   "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}"
   connect_norito_sorafs_reference_validate_bundle_json
   connect_norito_sorafs_reference_validate_governance_json
@@ -640,6 +647,13 @@ VALIDATION_FEE_JNI_SYMBOLS=(
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeBridgeAbiVersion
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeEncodeCurrentPolicyProofRequestV1
   Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeVerifyCurrentPolicyProofV1
+)
+
+PARLIAMENT_TIMED_OVN_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeVerifyCastingProofV1
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeRegistrationFromProofV1
+  Java_org_hyperledger_iroha_sdk_governance_ParliamentTimedOvnNativeEndpointV1_nativeBallotFromProofV1
 )
 
 SORAFS_APPEAL_FINANCE_JNI_SYMBOLS=(
@@ -2804,6 +2818,7 @@ check_android_native_symbols() {
   local namespace
   local expected_jni=(
     "${VALIDATION_FEE_JNI_SYMBOLS[@]}"
+    "${PARLIAMENT_TIMED_OVN_JNI_SYMBOLS[@]}"
     "${SORAFS_APPEAL_FINANCE_JNI_SYMBOLS[@]}"
     "${PRIVACY_COMPILED_PROFILE_JNI_SYMBOLS[@]}"
     "${NATIVE_SIGNER_JNI_CONTRACT_SYMBOLS[@]}"
@@ -2837,6 +2852,7 @@ check_android_native_symbols() {
   done
   if ! run_isolated_checker_python - "$abi" \
     "${KAGEMUSHA_C_SYMBOLS[@]}" \
+    "${PARLIAMENT_TIMED_OVN_C_SYMBOLS[@]}" \
     "${SORAFS_APPEAL_FINANCE_C_SYMBOLS[@]}" \
     "${PRIVACY_COMPILED_PROFILE_C_SYMBOLS[@]}" \
     -- "${expected_jni[@]}" 3<<<"$symbols" <<'PY'

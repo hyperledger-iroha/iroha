@@ -640,7 +640,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         }
 
         let kagemusha = try IrohaPeerWireMessageV1(
-            profile: .kagemushaRecursiveSpend,
+            profile: .kagemusha,
             kind: .payment,
             schemaVersion: 0x0102,
             canonicalPayload: irohaPeerKagemushaStructuralArchiveV1(
@@ -652,7 +652,7 @@ final class IrohaPeerQRV1Tests: XCTestCase {
             IrohaPeerQRCodecV1.staticCompleteTextCandidate(for: kagemusha)
         )
         let accepted = try IrohaPeerQRScanSessionV1(
-            expectedProfile: .kagemushaRecursiveSpend,
+            expectedProfile: .kagemusha,
             expectedKind: .payment,
             expectedSchemaVersion: 0x0102
         ).ingest(kagemushaText)

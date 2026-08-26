@@ -17,9 +17,7 @@ public final class NoritoCodec {
 
   private static final ThreadLocal<Deque<Integer>> DECODE_FLAGS_STACK =
       ThreadLocal.withInitial(ArrayDeque::new);
-  private static final ThreadLocal<Deque<Integer>> DECODE_FLAGS_HINT_STACK =
-      ThreadLocal.withInitial(ArrayDeque::new);
-  private static final ThreadLocal<Deque<ContextFlags>> ACTIVE_DECODE_CONTEXTS =
+  private static final ThreadLocal<Deque<Integer>> ACTIVE_DECODE_CONTEXTS =
       ThreadLocal.withInitial(ArrayDeque::new);
 
   private static final ThreadLocal<byte[]> DECODE_ROOT_PAYLOAD = new ThreadLocal<>();
@@ -96,20 +94,15 @@ public final class NoritoCodec {
     return encodeAdaptive(value, adapter, DEFAULT_FLAGS);
   }
 
-  private static int combineFlags(int flags, int hint) {
-    int normalizedFlags = flags & 0xFF;
-    return normalizedFlags;
-  }
-
   public static <T> T decodeAdaptive(byte[] payload, TypeAdapter<T> adapter) {
     Objects.requireNonNull(payload);
     Objects.requireNonNull(adapter);
     Deque<Integer> stack = DECODE_FLAGS_STACK.get();
     int flags = stack.isEmpty() ? applyAdaptiveFlags(DEFAULT_FLAGS, payload.length) : stack.peekLast();
     T value;
-    try (RootGuard guard = new RootGuard(payload, flags, NoritoHeader.MINOR_VERSION)) {
+    try (RootGuard guard = new RootGuard(payload, flags)) {
       guard.keepAlive();
-      NoritoDecoder decoder = new NoritoDecoder(payload, flags, NoritoHeader.MINOR_VERSION);
+      NoritoDecoder decoder = new NoritoDecoder(payload, flags);
       value = adapter.decode(decoder);
       if (decoder.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after Norito decode");
@@ -120,22 +113,18 @@ public final class NoritoCodec {
 
   public static void resetDecodeState() {
     DECODE_FLAGS_STACK.get().clear();
-    DECODE_FLAGS_HINT_STACK.get().clear();
     ACTIVE_DECODE_CONTEXTS.get().clear();
     DECODE_ROOT_PAYLOAD.remove();
   }
 
   public static Integer effectiveDecodeFlags() {
-    Deque<ContextFlags> contexts = ACTIVE_DECODE_CONTEXTS.get();
+    Deque<Integer> contexts = ACTIVE_DECODE_CONTEXTS.get();
     if (!contexts.isEmpty()) {
-      ContextFlags ctx = contexts.peekLast();
-      return combineFlags(ctx.flags(), ctx.hint());
+      return contexts.peekLast();
     }
     Deque<Integer> stack = DECODE_FLAGS_STACK.get();
     if (!stack.isEmpty()) {
-      Deque<Integer> hints = DECODE_FLAGS_HINT_STACK.get();
-      int hint = hints.isEmpty() ? NoritoHeader.MINOR_VERSION : hints.peekLast();
-      return combineFlags(stack.peekLast(), hint);
+      return stack.peekLast();
     }
     return null;
   }
@@ -143,20 +132,14 @@ public final class NoritoCodec {
   public static final class DecodeFlagsGuard implements AutoCloseable {
     private boolean active;
 
-    private DecodeFlagsGuard(int flags, int hint) {
+    private DecodeFlagsGuard(int flags) {
       Deque<Integer> stack = DECODE_FLAGS_STACK.get();
       stack.addLast(flags & 0xFF);
-      Deque<Integer> hints = DECODE_FLAGS_HINT_STACK.get();
-      hints.addLast(hint & 0xFF);
       this.active = true;
     }
 
     public static DecodeFlagsGuard enter(int flags) {
-      return new DecodeFlagsGuard(flags, NoritoHeader.MINOR_VERSION);
-    }
-
-    public static DecodeFlagsGuard enterWithHint(int flags, int hint) {
-      return new DecodeFlagsGuard(flags, hint);
+      return new DecodeFlagsGuard(flags);
     }
 
     @Override
@@ -165,10 +148,6 @@ public final class NoritoCodec {
         Deque<Integer> stack = DECODE_FLAGS_STACK.get();
         if (!stack.isEmpty()) {
           stack.removeLast();
-        }
-        Deque<Integer> hints = DECODE_FLAGS_HINT_STACK.get();
-        if (!hints.isEmpty()) {
-          hints.removeLast();
         }
         active = false;
       }
@@ -206,18 +185,16 @@ public final class NoritoCodec {
     }
     byte[] payload = result.payload();
     header.validateChecksum(payload);
-    return new ArchiveView(payload, header.flags(), header.minor());
+    return new ArchiveView(payload, header.flags());
   }
 
   public static final class ArchiveView {
     private final byte[] payload;
     private final int flags;
-    private final int flagsHint;
 
-    ArchiveView(byte[] payload, int flags, int flagsHint) {
+    ArchiveView(byte[] payload, int flags) {
       this.payload = Objects.requireNonNull(payload);
       this.flags = flags & 0xFF;
-      this.flagsHint = flagsHint & 0xFF;
     }
 
     public byte[] asBytes() {
@@ -228,15 +205,11 @@ public final class NoritoCodec {
       return flags;
     }
 
-    public int flagsHint() {
-      return flagsHint;
-    }
-
     public <T> T decode(TypeAdapter<T> adapter) {
       Objects.requireNonNull(adapter);
-      try (RootGuard guard = new RootGuard(payload, flags, flagsHint)) {
+      try (RootGuard guard = new RootGuard(payload, flags)) {
         guard.keepAlive();
-        NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
+        NoritoDecoder decoder = new NoritoDecoder(payload, flags);
         T value = adapter.decode(decoder);
         if (decoder.remaining() != 0) {
           throw new IllegalArgumentException("Trailing bytes after Norito decode");
@@ -264,10 +237,9 @@ public final class NoritoCodec {
     }
     header.validateChecksum(decodedPayload);
     T value;
-    try (RootGuard guard = new RootGuard(decodedPayload, header.flags(), header.minor())) {
+    try (RootGuard guard = new RootGuard(decodedPayload, header.flags())) {
       guard.keepAlive();
-      NoritoDecoder decoder =
-          new NoritoDecoder(decodedPayload, header.flags(), header.minor());
+      NoritoDecoder decoder = new NoritoDecoder(decodedPayload, header.flags());
       value = adapter.decode(decoder);
       if (decoder.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after Norito decode");
@@ -290,10 +262,9 @@ public final class NoritoCodec {
       byte[] decodedPayload = NoritoCompression.decompressZstd(compressed, header.payloadLength());
       header.validateChecksum(decodedPayload);
       T value;
-      try (RootGuard guard = new RootGuard(decodedPayload, header.flags(), header.minor())) {
+      try (RootGuard guard = new RootGuard(decodedPayload, header.flags())) {
         guard.keepAlive();
-        NoritoDecoder decoder =
-            new NoritoDecoder(decodedPayload, header.flags(), header.minor());
+        NoritoDecoder decoder = new NoritoDecoder(decodedPayload, header.flags());
         value = adapter.decode(decoder);
         if (decoder.remaining() != 0) {
           throw new IllegalArgumentException("Trailing bytes after Norito decode");
@@ -306,9 +277,9 @@ public final class NoritoCodec {
     }
     header.validateChecksum(payload);
     T value;
-    try (RootGuard guard = new RootGuard(payload, header.flags(), header.minor())) {
+    try (RootGuard guard = new RootGuard(payload, header.flags())) {
       guard.keepAlive();
-      NoritoDecoder decoder = new NoritoDecoder(payload, header.flags(), header.minor());
+      NoritoDecoder decoder = new NoritoDecoder(payload, header.flags());
       value = adapter.decode(decoder);
       if (decoder.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after Norito decode");
@@ -453,10 +424,10 @@ public final class NoritoCodec {
     private final boolean contextPushed;
 
     RootGuard(byte[] payload) {
-      this(payload, null, null);
+      this(payload, null);
     }
 
-    RootGuard(byte[] payload, Integer flags, Integer hint) {
+    RootGuard(byte[] payload, Integer flags) {
       Objects.requireNonNull(payload, "payload");
       if (DECODE_ROOT_PAYLOAD.get() == null) {
         DECODE_ROOT_PAYLOAD.set(Arrays.copyOf(payload, payload.length));
@@ -465,17 +436,14 @@ public final class NoritoCodec {
         installed = false;
       }
       if (flags != null) {
-        int normalizedHint = hint == null ? NoritoHeader.MINOR_VERSION : hint & 0xFF;
-        ACTIVE_DECODE_CONTEXTS
-            .get()
-            .addLast(new ContextFlags(flags & 0xFF, normalizedHint));
+        ACTIVE_DECODE_CONTEXTS.get().addLast(flags & 0xFF);
         contextPushed = true;
       } else {
         contextPushed = false;
       }
     }
 
-    RootGuard(ByteBuffer payload, Integer flags, Integer hint) {
+    RootGuard(ByteBuffer payload, Integer flags) {
       Objects.requireNonNull(payload, "payload");
       if (DECODE_ROOT_PAYLOAD.get() == null) {
         ByteBuffer view = payload.slice();
@@ -487,10 +455,7 @@ public final class NoritoCodec {
         installed = false;
       }
       if (flags != null) {
-        int normalizedHint = hint == null ? NoritoHeader.MINOR_VERSION : hint & 0xFF;
-        ACTIVE_DECODE_CONTEXTS
-            .get()
-            .addLast(new ContextFlags(flags & 0xFF, normalizedHint));
+        ACTIVE_DECODE_CONTEXTS.get().addLast(flags & 0xFF);
         contextPushed = true;
       } else {
         contextPushed = false;
@@ -504,7 +469,7 @@ public final class NoritoCodec {
     @Override
     public void close() {
       if (contextPushed) {
-        Deque<ContextFlags> contexts = ACTIVE_DECODE_CONTEXTS.get();
+        Deque<Integer> contexts = ACTIVE_DECODE_CONTEXTS.get();
         if (!contexts.isEmpty()) {
           contexts.removeLast();
         }
@@ -519,6 +484,4 @@ public final class NoritoCodec {
     byte[] current = DECODE_ROOT_PAYLOAD.get();
     return current == null ? null : Arrays.copyOf(current, current.length);
   }
-
-  private record ContextFlags(int flags, int hint) {}
 }

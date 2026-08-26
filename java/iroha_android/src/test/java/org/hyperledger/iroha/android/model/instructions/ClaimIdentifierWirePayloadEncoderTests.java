@@ -72,7 +72,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
         NoritoHeader.decode(wirePayload.payloadBytes(), null);
     decoded.header().validateChecksum(decoded.payload());
 
-    final NoritoDecoder claimDecoder = new NoritoDecoder(decoded.payload(), decoded.header().flags(), 0);
+    final NoritoDecoder claimDecoder = new NoritoDecoder(decoded.payload(), decoded.header().flags());
     final byte[] encodedAccount = readSizedField(claimDecoder);
     final byte[] encodedReceipt = readSizedField(claimDecoder);
     assert claimDecoder.remaining() == 0 : "ClaimIdentifier must not contain trailing bytes";
@@ -80,7 +80,7 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
             encodedAccount, TransferWirePayloadEncoder.encodeAccountIdPayload(ACCOUNT_ID))
         : "AccountId field mismatch";
 
-    final NoritoDecoder receiptDecoder = new NoritoDecoder(encodedReceipt, decoded.header().flags(), 0);
+    final NoritoDecoder receiptDecoder = new NoritoDecoder(encodedReceipt, decoded.header().flags());
     final byte[] embeddedPayload = readSizedField(receiptDecoder);
     final byte[] embeddedAttestation = readSizedField(receiptDecoder);
     assert receiptDecoder.remaining() == 0 : "Receipt payload must not contain trailing bytes";

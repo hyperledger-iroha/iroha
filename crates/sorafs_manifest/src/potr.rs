@@ -827,7 +827,7 @@ mod tests {
     fn borrowed_signing_payload_preserves_historical_bytes_for_every_layout() {
         let receipt = base_receipt();
         for flags in supported_layouts() {
-            let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
             assert_eq!(
                 receipt
                     .signing_payload_bytes()

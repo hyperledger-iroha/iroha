@@ -26,7 +26,9 @@ pub use canonical_topk::{
     CanonicalQueryOutputLimits, canonical_query_candidate_allocation_bytes,
 };
 use eyre::Result;
-use fast_iter_decode::{FastIterComponentDecoder, decode_iter_query_payload_exact};
+use fast_iter_decode::FastIterComponentDecoder;
+#[cfg(test)]
+use fast_iter_decode::decode_exact_in_scope;
 use iroha_config::parameters::{
     actual::{Pipeline as PipelineActual, Torii as ToriiActual},
     defaults::pipeline as pipeline_defaults,
@@ -69,16 +71,6 @@ use std::{
     ops::ControlFlow,
     sync::{Arc, Mutex, Weak},
 };
-/// Return the legacy boxed iterable carrier when one is present.
-///
-/// Canonical [`QueryWithParams`] envelopes now carry their typed components
-/// directly, so merged callers must take the item-kind dispatch path.
-#[inline]
-fn legacy_query_box(
-    _query: &iroha_data_model::query::QueryWithParams,
-) -> Option<&iroha_data_model::query::QueryBox<QueryOutputBatchBox>> {
-    None
-}
 #[inline]
 fn ensure_query_registry_initialized() {
     // Initialize the global query registry once. Safe to call multiple times:
@@ -1099,14 +1091,6 @@ impl ExecuteSingularQuery for SingularQueryBox {
         }
     }
 }
-#[allow(dead_code)]
-trait ExecuteQueryBox {
-    fn execute(
-        self,
-        state: &impl StateReadOnly,
-        params: &QueryParams,
-    ) -> Result<QueryOutputBatchBox, Error>;
-}
 /// Execute through a source-specific ordinary adapter when limits are attached.
 fn execute_iterable_source<T, Q>(
     query: Q,
@@ -1142,129 +1126,6 @@ fn encode_stored_query_revalidation_request(
             "failed to encode stored-query authorization request: {error}"
         ))
     })
-}
-// NOTE: This trait is currently unused. Iterable query execution of erased
-// `QueryBox<QueryOutputBatchBox>` is performed in `ValidQueryRequest::execute`
-// via registry-based dispatch (`iter_query_inner::<T>`), followed by
-// post-processing and registration in the live-query store. If a direct
-// `QueryBox::execute` path becomes necessary, this impl should be updated to
-// mirror that behavior instead of returning an error.
-impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
-    fn execute(
-        self,
-        state: &impl StateReadOnly,
-        params: &QueryParams,
-    ) -> Result<QueryOutputBatchBox, Error> {
-        use iroha_data_model as dm;
-        fn run_dispatch<T, Q>(
-            qbox: &QueryBox<QueryOutputBatchBox>,
-            state: &impl StateReadOnly,
-            params: &QueryParams,
-            limits: QueryLimits,
-        ) -> Option<Result<QueryOutputBatchBox, Error>>
-        where
-            T: HasProjection<SelectorMarker, AtomType = ()>
-                + HasProjection<PredicateMarker>
-                + NoritoSerialize
-                + SortableQueryOutput
-                + Send
-                + Sync
-                + 'static,
-            <T as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<T> + Send + Sync,
-            Q: super::super::ValidQuery<Item = T> + norito::codec::Decode + norito::codec::Encode,
-            QueryOutputBatchBox: From<Vec<T>>,
-        {
-            let erased = dm::query::iter_query_inner::<T>(qbox)?;
-            let concrete = match decode_iter_query_payload_exact::<Q>(erased.payload()) {
-                Some(query) => query,
-                None => return None,
-            };
-            let iter =
-                match super::super::ValidQuery::execute(concrete, erased.predicate_cloned(), state)
-                {
-                    Ok(iter) => iter,
-                    Err(err) => return Some(Err(err)),
-                };
-            let mut batched =
-                match apply_query_postprocessing(iter, erased.selector_cloned(), params, limits) {
-                    Ok(b) => b,
-                    Err(err) => return Some(Err(err)),
-                };
-            let (tuple, _next) = match batched.next_batch(0) {
-                Ok(batch) => batch,
-                Err(err) => return Some(Err(err)),
-            };
-            let batch = tuple
-                .into_iter()
-                .next()
-                .unwrap_or_else(|| QueryOutputBatchBox::from(Vec::<T>::new()));
-            Some(Ok(batch))
-        }
-        let limits = QueryLimits::from_defaults();
-        macro_rules! dispatch {
-            ($($item:ty => $query:ty),+ $(,)?) => {{
-                $(if let Some(out) = run_dispatch::<$item, $query>(&self, state, params, limits) {
-                    return out;
-                })+
-            }};
-        }
-        dispatch! {
-            dm::domain::Domain => dm::query::domain::prelude::FindDomainsByAccountId,
-            dm::domain::Domain => dm::query::domain::prelude::FindDomains,
-            dm::account::Account => dm::query::account::prelude::FindAccounts,
-            dm::account::AccountId => dm::query::account::prelude::FindAccountIds,
-            dm::account::Account => dm::query::account::prelude::FindAccountsWithAsset,
-            dm::asset::value::Asset => dm::query::asset::prelude::FindAssets,
-            dm::asset::value::Asset => dm::query::asset::prelude::FindAssetsByAccountId,
-            dm::asset::definition::AssetDefinition =>
-                dm::query::asset::prelude::FindAssetsDefinitions,
-            dm::repo::RepoAgreement => dm::query::repo::prelude::FindRepoAgreements,
-            dm::nft::Nft => dm::query::nft::prelude::FindNfts,
-            dm::nft::Nft => dm::query::nft::prelude::FindNftsByAccountId,
-            dm::rwa::Rwa => dm::query::rwa::prelude::FindRwas,
-            dm::role::Role => dm::query::role::prelude::FindRoles,
-            dm::role::RoleId => dm::query::role::prelude::FindRoleIds,
-            dm::role::RoleId => dm::query::role::prelude::FindRolesByAccountId,
-            dm::permission::Permission =>
-                dm::query::permission::prelude::FindPermissionsByAccountId,
-            dm::peer::PeerId => dm::query::peer::prelude::FindPeers,
-            dm::trigger::Trigger => dm::query::trigger::prelude::FindTriggers,
-            dm::trigger::TriggerId => dm::query::trigger::prelude::FindActiveTriggerIds,
-            dm::block::SignedBlock => dm::query::block::prelude::FindBlocks,
-            dm::block::BlockHeader => dm::query::block::prelude::FindBlockHeaders,
-            dm::proof::ProofRecord => dm::query::proof::prelude::FindProofRecordsByBackend,
-            dm::proof::ProofRecord => dm::query::proof::prelude::FindProofRecordsByStatus,
-            dm::proof::ProofRecord => dm::query::proof::prelude::FindProofRecords,
-            dm::oracle::FeedConfig => dm::query::oracle::prelude::FindOracleFeeds,
-            dm::events::data::oracle::FeedEventRecord =>
-                dm::query::oracle::prelude::FindOracleHistoryByFeedId,
-            dm::oracle::OracleProviderStatsRecord =>
-                dm::query::oracle::prelude::FindOracleProviderStatsByFeedId,
-            dm::oracle::OracleDispute => dm::query::oracle::prelude::FindOracleDisputes,
-            dm::oracle::OracleDispute =>
-                dm::query::oracle::prelude::FindOracleDisputesByFeedId,
-            dm::oracle::OracleChangeProposal => dm::query::oracle::prelude::FindOracleChanges,
-            dm::oracle::TwitterBindingRecord =>
-                dm::query::oracle::prelude::FindTwitterBindingsByUaid,
-            dm::oracle::DefiOracleAttestation =>
-                dm::query::oracle::prelude::FindDefiOracleAttestationsByKey,
-            dm::query::CommittedTransaction => dm::query::transaction::prelude::FindTransactions,
-            dm::escrow::AssetEscrowRecord => dm::query::escrow::prelude::FindAssetEscrows,
-            dm::escrow::AssetEscrowRecord =>
-                dm::query::escrow::prelude::FindAssetEscrowsBySeller,
-            dm::escrow::AssetEscrowRecord =>
-                dm::query::escrow::prelude::FindAssetEscrowsByBuyer,
-            dm::escrow::AssetEscrowRecord =>
-                dm::query::escrow::prelude::FindAssetEscrowsByStatus,
-            dm::nexus::FeeSponsorProgram =>
-                dm::query::nexus::prelude::FindFeeSponsorProgramsBySponsor,
-            dm::nexus::FeeSponsorProgram => dm::query::nexus::prelude::FindFeeSponsorPrograms,
-            dm::nexus::FeeSponsorProgramId => dm::query::nexus::prelude::FindFeeSponsorProgramIds,
-        }
-        Err(Error::Conversion(
-            "dynamic QueryBox execution type not supported".to_string(),
-        ))
-    }
 }
 impl SortableQueryOutput for iroha_data_model::block::SignedBlock {
     type TiebreakKey = Vec<u8>;
@@ -2880,6 +2741,7 @@ impl<T: SortableQueryOutput> ExactSizeIterator for IncrementalSortedValues<T> {
         self.end.saturating_sub(self.next)
     }
 }
+#[cfg(test)]
 fn apply_query_postprocessing_ephemeral_with_budget<I>(
     iter: I,
     selector: SelectorTuple<I::Item>,

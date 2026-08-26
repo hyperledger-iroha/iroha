@@ -1681,7 +1681,7 @@ mod tests {
         },
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinManifestRecord, PinPolicy,
-            PinStatus, ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+            ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
             ProviderIngestFinalizedAnchorV1, ReplicationOrderCompletionRecord, ReplicationOrderId,
             ReplicationOrderRecord, ReplicationOrderStatus,
         },
@@ -1757,7 +1757,7 @@ mod tests {
             None,
             Metadata::default(),
         );
-        pin_manifest.status = PinStatus::Approved(1);
+        pin_manifest.approve(1, None);
         let order_id = [order_seed; 32];
         let canonical = ReplicationOrderV1 {
             version: REPLICATION_ORDER_VERSION_V1,
@@ -2515,7 +2515,7 @@ mod tests {
             1_800_000_000_000,
         )
         .expect("exact key");
-        let after_order_id = ReplicationOrderId::new([0x81; 32]);
+        let after_order_id = ReplicationOrderId::new([0x01; 32]);
         *query.active.lock().expect("active cursor lock") = Some(ActiveArchiveScanV1 {
             key,
             cursor: ProviderIngestFinalizedArchiveCursorV1 {
@@ -2548,7 +2548,7 @@ mod tests {
                     height: 7,
                     block_hash: [0x71; 32],
                 }),
-                Some([0x82; 32]),
+                Some([0x02; 32]),
                 1,
             ),
             Err(ProviderIngestFinalizedLedgerErrorV1::Rejected),

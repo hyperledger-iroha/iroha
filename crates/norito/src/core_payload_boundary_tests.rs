@@ -28,7 +28,7 @@ fn string_and_str_decode_require_payload_context() {
 #[test]
 fn aos_views_reject_oversize_field_len() {
     reset_decode_state();
-    let _guard = DecodeFlagsGuard::enter_with_hint(0, 0);
+    let _guard = DecodeFlagsGuard::enter(0);
     let overflow = (usize::MAX as u128)
         .checked_add(1)
         .and_then(|value| u64::try_from(value).ok())

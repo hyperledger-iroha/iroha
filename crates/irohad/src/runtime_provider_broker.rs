@@ -32,9 +32,8 @@ mod launcher;
 pub use api::StockRuntimeProviderBrokerRegistryV1;
 pub use api::{
     BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
-    BoundGlobalBeaconPartialSignerBrokerBackendV1,
-    BoundParliamentTlePartialReleaseSignerBrokerBackendV1, ConsensusSignerProviderQualificationV1,
-    GlobalBeaconPartialSignerBrokerBackendErrorV1, GlobalBeaconPartialSignerBrokerBackendV1,
+    ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1,
+    GlobalBeaconPartialSignerBrokerBackendV1,
     ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     ParliamentTlePartialReleaseSignerBrokerBackendV1, RuntimeProviderBrokerBackendsV1,
     RuntimeProviderBrokerLifecycleV1, RuntimeProviderBrokerReadinessErrorV1,

@@ -3,6 +3,7 @@ use norito::{
     Decode, Encode,
     codec::{Decode as _, DecodeAll as _, Encode as _},
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
 #[derive(Encode, Decode, PartialEq, Debug, iroha_schema::IntoSchema)]
 struct Sample(u32);
 #[derive(Encode, Decode, PartialEq, Debug, iroha_schema::IntoSchema)]
@@ -10,6 +11,56 @@ enum Color {
     Red,
     Green(u8),
     Blue(u8),
+}
+
+static TRACKED_SERIALIZE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug, PartialEq, Eq)]
+struct AccessTrackedByte(u8);
+
+impl norito::NoritoSerialize for AccessTrackedByte {
+    fn serialize(&self, encoder: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        TRACKED_SERIALIZE_CALLS.fetch_add(1, Ordering::Relaxed);
+        encoder.write_all(&[self.0])?;
+        Ok(())
+    }
+}
+
+impl<'a> norito::NoritoDeserialize<'a> for AccessTrackedByte {
+    fn deserialize(archived: &'a norito::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("valid tracked byte")
+    }
+
+    fn try_deserialize(archived: &'a norito::Archived<Self>) -> Result<Self, norito::Error> {
+        let ptr = std::ptr::from_ref(archived).cast::<u8>();
+        let mut offset = 0;
+        let [value] = norito::core::decode_context_byte_array::<1>(ptr, &mut offset)?;
+        norito::core::finish_context_fields(ptr, offset)?;
+        Ok(Self(value))
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PartiallyReadPair(u8);
+
+impl norito::NoritoSerialize for PartiallyReadPair {
+    fn serialize(&self, encoder: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        encoder.write_all(&[self.0, 0])?;
+        Ok(())
+    }
+}
+
+impl<'a> norito::NoritoDeserialize<'a> for PartiallyReadPair {
+    fn deserialize(archived: &'a norito::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("valid partially read pair")
+    }
+
+    fn try_deserialize(archived: &'a norito::Archived<Self>) -> Result<Self, norito::Error> {
+        let ptr = std::ptr::from_ref(archived).cast::<u8>();
+        let mut offset = 0;
+        let [value] = norito::core::decode_context_byte_array::<1>(ptr, &mut offset)?;
+        Ok(Self(value))
+    }
 }
 #[test]
 fn codec_roundtrip() {
@@ -29,7 +80,153 @@ fn decode_all_roundtrip() {
 fn decode_all_rejects_trailing_bytes() {
     let mut bytes = norito::to_bytes(&Sample(7)).expect("encode header");
     bytes.extend_from_slice(&[1, 2, 3]);
-    assert!(norito::decode_from_bytes::<Sample>(&bytes).is_err());
+    assert!(matches!(
+        norito::decode_from_bytes::<Sample>(&bytes),
+        Err(norito::Error::LengthMismatch)
+    ));
+    assert!(matches!(
+        norito::decode_from_reader::<_, Sample>(bytes.as_slice()),
+        Err(norito::Error::LengthMismatch)
+    ));
+}
+
+#[test]
+fn framed_decoders_reject_concatenated_zstd_frame() {
+    let value = vec![1_u8, 2, 3];
+    let mut frame = norito::to_compressed_bytes(&value, Some(norito::CompressionConfig::default()))
+        .expect("encode compressed frame");
+    frame.extend_from_slice(
+        &zstd::stream::encode_all([].as_slice(), 1).expect("encode empty zstd frame"),
+    );
+
+    assert!(matches!(
+        norito::decode_from_bytes::<Vec<u8>>(&frame),
+        Err(norito::Error::LengthMismatch)
+    ));
+    assert!(matches!(
+        norito::decode_from_reader::<_, Vec<u8>>(frame.as_slice()),
+        Err(norito::Error::LengthMismatch)
+    ));
+}
+
+fn frame_with_checksummed_payload<T: norito::NoritoSerialize>(payload: &[u8]) -> Vec<u8> {
+    const LENGTH_OFFSET: usize = 23;
+    const CHECKSUM_OFFSET: usize = 31;
+    let mut frame = norito::to_bytes(&0_u8).expect("encode header template");
+    frame.truncate(norito::core::Header::SIZE);
+    frame[LENGTH_OFFSET..CHECKSUM_OFFSET].copy_from_slice(&(payload.len() as u64).to_le_bytes());
+    frame[CHECKSUM_OFFSET..CHECKSUM_OFFSET + 8]
+        .copy_from_slice(&norito::hardware_crc64(payload).to_le_bytes());
+    frame[6..22].copy_from_slice(&<T as norito::NoritoSerialize>::schema_hash());
+    frame.extend_from_slice(payload);
+    frame
+}
+
+fn compressed_frame_with_checksummed_payload<T: norito::NoritoSerialize>(
+    payload: &[u8],
+) -> Vec<u8> {
+    const COMPRESSION_OFFSET: usize = 22;
+    let mut frame = frame_with_checksummed_payload::<T>(payload);
+    frame.truncate(norito::core::Header::SIZE);
+    frame[COMPRESSION_OFFSET] = norito::Compression::Zstd as u8;
+    frame.extend_from_slice(
+        &zstd::stream::encode_all(payload, 1).expect("compress forged test payload"),
+    );
+    frame
+}
+
+#[test]
+fn framed_decoders_reject_checksummed_payload_suffix() {
+    let frame = frame_with_checksummed_payload::<u8>(&[7, 8]);
+    assert!(matches!(
+        norito::decode_from_bytes::<u8>(&frame),
+        Err(norito::Error::LengthMismatch)
+    ));
+    assert!(matches!(
+        norito::decode_from_reader::<_, u8>(frame.as_slice()),
+        Err(norito::Error::LengthMismatch)
+    ));
+}
+
+#[test]
+fn bare_decoders_reject_payload_suffix() {
+    let mut payload = norito::codec::encode_adaptive(&7_u8);
+    payload.push(8);
+    assert!(matches!(
+        norito::codec::decode_adaptive::<u8>(&payload),
+        Err(norito::Error::LengthMismatch)
+    ));
+    assert!(matches!(
+        u8::decode_all(&mut payload.as_slice()),
+        Err(norito::Error::LengthMismatch)
+    ));
+}
+
+#[test]
+fn decoders_do_not_confuse_rust_size_with_wire_consumption() {
+    let mut string_payload = norito::codec::encode_adaptive(&String::from("a"));
+    assert!(string_payload.len() < size_of::<String>());
+    string_payload.resize(size_of::<String>(), 0);
+
+    let string_frame = frame_with_checksummed_payload::<String>(&string_payload);
+    norito::decode_from_bytes::<String>(&string_frame)
+        .expect_err("framed string tail must be rejected");
+    norito::codec::decode_adaptive::<String>(&string_payload)
+        .expect_err("bare string tail must be rejected");
+
+    let mut vec_payload = norito::codec::encode_adaptive(&vec![1_u8]);
+    assert!(vec_payload.len() < size_of::<Vec<u8>>());
+    vec_payload.resize(size_of::<Vec<u8>>(), 0);
+    let vec_frame = compressed_frame_with_checksummed_payload::<Vec<u8>>(&vec_payload);
+    norito::decode_from_bytes::<Vec<u8>>(&vec_frame)
+        .expect_err("compressed vector tail must be rejected");
+    norito::decode_from_reader::<_, Vec<u8>>(vec_frame.as_slice())
+        .expect_err("streamed compressed vector tail must be rejected");
+}
+
+#[test]
+fn exact_decode_fast_path_does_not_serialize_again() {
+    let payload = norito::codec::encode_adaptive(&AccessTrackedByte(9));
+    TRACKED_SERIALIZE_CALLS.store(0, Ordering::Relaxed);
+
+    let decoded = norito::codec::decode_adaptive::<AccessTrackedByte>(&payload)
+        .expect("decode access-tracked byte");
+
+    assert_eq!(decoded, AccessTrackedByte(9));
+    assert_eq!(TRACKED_SERIALIZE_CALLS.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn exact_decode_fallback_compares_unread_bytes() {
+    let canonical = norito::codec::encode_adaptive(&PartiallyReadPair(7));
+    assert_eq!(canonical, [7, 0]);
+    assert_eq!(
+        norito::codec::decode_adaptive::<PartiallyReadPair>(&canonical)
+            .expect("canonical partially read payload"),
+        PartiallyReadPair(7)
+    );
+
+    let forged = [7_u8, 9];
+    assert!(matches!(
+        norito::codec::decode_adaptive::<PartiallyReadPair>(&forged),
+        Err(norito::Error::LengthMismatch)
+    ));
+
+    let framed = frame_with_checksummed_payload::<PartiallyReadPair>(&forged);
+    assert!(matches!(
+        norito::decode_from_bytes::<PartiallyReadPair>(&framed),
+        Err(norito::Error::LengthMismatch)
+    ));
+
+    let compressed = compressed_frame_with_checksummed_payload::<PartiallyReadPair>(&forged);
+    assert!(matches!(
+        norito::decode_from_bytes::<PartiallyReadPair>(&compressed),
+        Err(norito::Error::LengthMismatch)
+    ));
+    assert!(matches!(
+        norito::decode_from_reader::<_, PartiallyReadPair>(compressed.as_slice()),
+        Err(norito::Error::LengthMismatch)
+    ));
 }
 #[test]
 fn string_roundtrip() {

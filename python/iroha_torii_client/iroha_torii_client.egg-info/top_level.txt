@@ -1,1 +1,0 @@
-iroha_torii_client

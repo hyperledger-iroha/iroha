@@ -1,7 +1,6 @@
 //! Support types for SM2/SM3/SM4 primitives.
 #[cfg(feature = "sm-ffi-openssl")]
 pub use self::openssl_sm::{OpenSslSmBackend, OpenSslSmError};
-#[cfg(not(feature = "ffi_import"))]
 use crate::Algorithm;
 use crate::{
     Error, ParseError,
@@ -289,16 +288,16 @@ impl Sm2PublicKey {
     /// # Errors
     /// Returns [`ParseError`] when the public key payload cannot be encoded into
     /// the canonical SM2 multihash form.
-    #[cfg(not(feature = "ffi_import"))]
     pub fn try_to_prefixed_string(&self) -> Result<String, ParseError> {
         let sec1 = self.to_sec1_bytes(false);
         let payload = encode_sm2_public_key_payload(self.distid(), &sec1)?;
-        crate::multihash::encode_public_key_prefixed(Algorithm::Sm2, &payload)
-            .map_err(|err| ParseError(err.to_string()))
+        Ok(crate::multihash::encode_public_key_prefixed(
+            Algorithm::Sm2,
+            &payload,
+        ))
     }
     /// Format as an algorithm-prefixed multihash string (e.g., `sm2:...`),
     /// embedding the distinguishing identifier alongside the SEC1 payload.
-    #[cfg(not(feature = "ffi_import"))]
     #[must_use]
     pub fn to_prefixed_string(&self) -> String {
         self.try_to_prefixed_string().unwrap_or_else(|_| {
@@ -3489,7 +3488,6 @@ mod tests {
         let distid = "a".repeat(8192);
         assert!(Sm2PrivateKey::try_random(distid, &mut rng).is_err());
     }
-    #[cfg(not(feature = "ffi_import"))]
     #[test]
     fn sm2_public_key_prefixed_string_matches_public_key_helper() {
         use crate::{Algorithm, PublicKey};

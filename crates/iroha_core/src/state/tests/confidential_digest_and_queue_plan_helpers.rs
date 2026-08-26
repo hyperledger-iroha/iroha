@@ -128,7 +128,13 @@ state_test! { sync malformed_merge_execution_batch_rejects_empty_lane_set
     let application_block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
     let_row! { batch = MergeExecutionBatch { version: 1, base_state_height: 0, base_state_hash: HashOf::from_untyped_unchecked(Hash::new(b"execution-base")), application_block_header, execution_root: Hash::new(b"execution-root"), lanes: Vec::new(), entrypoint_count: 0, entrypoint_merkle_root: HashOf::from_untyped_unchecked(Hash::new(b"execution-entrypoints")), result_merkle_root: HashOf::from_untyped_unchecked(Hash::new(b"execution-results")), application_write_set_root: Hash::new(b"application-write-set"), write_set_root: Hash::new(b"write-set"), expected_post_state_hash: HashOf::from_untyped_unchecked(Hash::new(b"post-state")), batch_hash: Hash::new(b"batch"), } };
     assert!(matches!(
-        state.validate_merge_execution_batch(&[], &batch, &BTreeMap::new(), true),
+        state.validate_merge_execution_batch(
+            &[],
+            &batch,
+            &BTreeMap::new(),
+            true,
+            Some(ConsensusMode::Permissioned),
+        ),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason))
             if reason == "lane count is empty or exceeds the hard limit"
     ));
@@ -530,7 +536,7 @@ fn commit_exact_merge_carrier_to_state(
     entry: &MergeLedgerEntry,
 ) {
     persist_merge_carrier_finality_for_state_test(&state.kura, carrier);
-    let_row! { mut state_block = state .block_with_certified_merge_entry(carrier.header().clone(), entry) .expect("certified merge entry must stage on its exact carrier") };
+    let_row! { mut state_block = state .block_with_certified_merge_entry(carrier.header().clone(), entry, ConsensusMode::Permissioned) .expect("certified merge entry must stage on its exact carrier") };
     state_block.block_hashes.push(carrier.hash());
     insert_empty_transaction_block_for_state_commit(&mut state_block, carrier);
     state_block
@@ -564,6 +570,67 @@ fn configured_single_lane_merge_state() -> (State, Vec<KeyPair>, Vec<KeyPair>, S
         .expect("store merge fixture carrier parent");
     commit_block_metadata_with_genesis_checkpoint_to_state(&state, &parent);
     (state, validator_keypairs, commit_keypairs, parent)
+}
+fn advance_queue_plan_fixture_to_beacon_parent(
+    state: &State,
+    mut parent: SignedBlock,
+) -> SignedBlock {
+    const FIRST_PULSE_HEIGHT: u64 = 5;
+
+    assert_eq!(
+        parent.header().height().get(),
+        1,
+        "QueuePlan beacon fixture must advance from genesis",
+    );
+    while parent.header().height().get() < FIRST_PULSE_HEIGHT {
+        let successor = empty_global_block_after(Some(&parent));
+        state
+            .kura
+            .store_block(Arc::new(successor.clone()))
+            .expect("store contiguous QueuePlan beacon fixture history");
+        commit_block_metadata_to_state(state, &successor);
+        parent = successor;
+    }
+
+    let (beacon_key, beacon_pulse) = crate::beacon::tests::signed_persisted_pulse_fixture_for_world(
+        *state.network_id_ref(),
+        parent.header().height().get(),
+    );
+    let beacon_link =
+        crate::beacon::validate_persisted_global_threshold_beacon_pulse_v1(&beacon_pulse)
+            .expect("canonical QueuePlan beacon pulse link");
+    {
+        let mut world = state.world.block();
+        world
+            .global_beacon_key_sessions
+            .insert(beacon_pulse.session_id, beacon_key);
+        world.global_beacon_active_session.insert(
+            crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY,
+            beacon_pulse.session_id,
+        );
+        world
+            .global_beacon_pulses
+            .insert(beacon_pulse.pulse_id, beacon_pulse);
+        world.global_beacon_latest_pulse.insert(
+            crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY,
+            beacon_link,
+        );
+        world.commit();
+    }
+    parent
+}
+fn configured_single_lane_queue_plan_state() -> (State, Vec<KeyPair>, Vec<KeyPair>, SignedBlock) {
+    let (state, validator_keypairs, commit_keypairs, parent) = configured_single_lane_merge_state();
+    let parent = advance_queue_plan_fixture_to_beacon_parent(&state, parent);
+    (state, validator_keypairs, commit_keypairs, parent)
+}
+fn queue_plan_authority_height_for_state_test(state: &State) -> u64 {
+    u64::try_from(state.committed_height()).expect("QueuePlan fixture height fits u64")
+}
+fn queue_plan_proposal_height_for_state_test(state: &State) -> u64 {
+    queue_plan_authority_height_for_state_test(state)
+        .checked_add(1)
+        .expect("QueuePlan fixture proposal height")
 }
 fn queue_plan_entrypoint_for_state_test(state: &State, tag: u8) -> TransactionEntrypoint {
     let_row! { transaction_keypair = KeyPair::try_from_seed(vec![tag.wrapping_add(0x31); 32], Algorithm::Ed25519) .expect("deterministic QueuePlan transaction key") };

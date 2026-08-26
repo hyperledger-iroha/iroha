@@ -1952,13 +1952,13 @@ mod tests {
         SigningKey::from_bytes(&[seed; 32])
     }
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
-        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
         norito::core::serialize_to_buffer(value, &mut bytes).expect("serialize explicit layout");
         bytes
     }
     fn encode_frame_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
-        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         norito::to_bytes(value).expect("serialize explicit canonical frame")
     }
     fn supported_layouts() -> [u8; 8] {
@@ -2529,7 +2529,7 @@ mod tests {
                 encode_frame_with_flags(&owned_cancel, flags),
                 "borrowed cancellation signing frame changed for flags 0x{flags:02x}"
             );
-            let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
             assert_eq!(
                 order_request_signature_digest_v1(&order).expect("stream order digest"),
                 historical_signature_digest(ORDERBOOK_ORDER_SIGNATURE_DOMAIN_V1, &owned_order,),
@@ -2563,7 +2563,7 @@ mod tests {
                 borrowed_bytes, owned_bytes,
                 "borrowed settlement signing bytes changed for flags 0x{flags:02x}"
             );
-            let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
             assert_eq!(
                 borrowed.encoded_len_exact(),
                 owned.encoded_len_exact(),

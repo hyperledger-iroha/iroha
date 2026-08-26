@@ -190,7 +190,7 @@ object PrivacyExact12FixtureCodecV1 {
     const val SCHEMA_NAME: String = "iroha.privacy.exact12-typed-fixture-bundle.v1"
     const val SUBMIT_PROOF_WIRE_ID: String = "iroha.privacy.submit_proof.v1"
     const val CANONICAL_ARCHIVE_SHA256_HEX: String =
-        "1fe944a149ffab36a1f3ea04af029c07446d586ead7ae479bbdacf0e02d99397"
+        "d1d77f56ecbf20446a7c79b5756a2bb65f76cf93dd9c87b2bbb54c18aaa41305"
     const val VERSION: Int = 1
     const val ROW_COUNT: Int = 12
     const val HASH_BYTES: Int = 32
@@ -245,7 +245,6 @@ object PrivacyExact12FixtureCodecV1 {
         val decoder = NoritoDecoder(
             decodedHeader.payload,
             decodedHeader.header.flags,
-            decodedHeader.header.minor,
         )
         val bundle = BundleAdapter.decode(decoder)
         require(decoder.remaining() == 0) { "exact-12 fixture contains trailing payload data" }
@@ -487,7 +486,6 @@ object PrivacyExact12FixtureCodecV1 {
         val child = NoritoDecoder(
             decoder.readBytes(encodedLength.toInt()),
             decoder.flags,
-            decoder.flagsHint,
         )
         val declaredLength = child.readLength(false)
         require(declaredLength in 1L..maximum.toLong()) { "$fieldName byte length is invalid" }
@@ -536,7 +534,7 @@ object PrivacyExact12FixtureCodecV1 {
         length: Int,
         fieldName: String,
     ): T {
-        val child = NoritoDecoder(decoder.readBytes(length), decoder.flags, decoder.flagsHint)
+        val child = NoritoDecoder(decoder.readBytes(length), decoder.flags)
         val value = adapter.decode(child)
         require(child.remaining() == 0) { "$fieldName contains trailing or unknown data" }
         return value

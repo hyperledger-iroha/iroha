@@ -2146,60 +2146,6 @@ export interface ToriiContractEventItem {
   fee_payment?: NoritoFeePaymentIntent;
 }
 
-export interface ToriiProverReport {
-  id: string;
-  ok: boolean;
-  error: string | null;
-  content_type: string;
-  size: number;
-  created_ms: number;
-  processed_ms: number;
-  latency_ms: number;
-  zk1_tags: ReadonlyArray<string> | null;
-}
-
-export interface ToriiProverReportIdList {
-  kind: "ids";
-  ids: ReadonlyArray<string>;
-}
-
-export interface ToriiProverReportMessageSummary {
-  id: string;
-  error: string | null;
-}
-
-export interface ToriiProverReportMessagesList {
-  kind: "messages";
-  messages: ReadonlyArray<ToriiProverReportMessageSummary>;
-}
-
-export interface ToriiProverReportFilters {
-  okOnly?: boolean;
-  failedOnly?: boolean;
-  errorsOnly?: boolean;
-  idsOnly?: boolean;
-  messagesOnly?: boolean;
-  latest?: boolean;
-  contentType?: string;
-  hasTag?: string;
-  id?: string;
-  limit?: NumericLike;
-  offset?: NumericLike;
-  sinceMs?: NumericLike;
-  beforeMs?: NumericLike;
-  order?: "asc" | "desc";
-}
-
-export interface ToriiProverReportCollection {
-  kind: "reports";
-  reports: ReadonlyArray<ToriiProverReport>;
-}
-
-export type ToriiProverReportListResult =
-  | ToriiProverReportCollection
-  | ToriiProverReportIdList
-  | ToriiProverReportMessagesList;
-
 export interface ToriiAttachmentMetadata {
   id: string;
   contentType: string;
@@ -8100,10 +8046,6 @@ export interface IsoMessageWaitOptions {
   signal?: AbortSignal;
   retryProfile?: string;
   resolveOnAcceptedWithoutTransaction?: boolean;
-  /**
-   * Alias for {@link resolveOnAcceptedWithoutTransaction}.
-   */
-  resolveOnAccepted?: boolean;
   onPoll?: (event: IsoMessagePollEvent) => void | Promise<void>;
 }
 
@@ -9038,7 +8980,7 @@ export interface SorafsPorExportOptions {
 
 export type SorafsIsoWeekInput = string | { year: number; week: number };
 
-export interface SorafsChunkerHandle {
+export interface SorafsPinChunkerProfileHandle {
   profile_id: number;
   namespace: string;
   name: string;
@@ -9046,73 +8988,51 @@ export interface SorafsChunkerHandle {
   multihash_code: number;
 }
 
-export interface SorafsManifestAliasBinding {
-  namespace: string;
+export interface SorafsPinManifestAliasBinding {
   name: string;
-  proof_b64: string;
+  namespace: string;
+  proof: string;
 }
 
-export type SorafsManifestStatusState = "pending" | "approved" | "retired";
-
-export interface SorafsManifestStatus {
-  state: SorafsManifestStatusState;
-  epoch: number | null;
+export interface SorafsPinPolicy {
+  min_replicas: number;
+  storage_class: {
+    type: "Hot" | "Warm" | "Cold";
+    value: null;
+  };
+  retention_epoch: number;
 }
 
-export interface SorafsGovernanceReferenceTargets {
-  alias: string | null;
-  pin_digest_hex: string | null;
+export interface SorafsPinFeePayment {
+  paid_by: string;
+  fee_asset_id: string;
+  treasury_account_id: string;
+  amount: string;
 }
 
-export interface SorafsGovernanceReference {
-  cid: string | null;
-  kind: string;
-  effective_at: string | null;
-  effective_at_unix: number | null;
-  targets: SorafsGovernanceReferenceTargets;
-  signers: ReadonlyArray<string>;
-}
-
-export interface SorafsLineageSuccessor {
-  digest_hex: string;
-  status: SorafsManifestStatus;
-  approved_epoch: number | null;
-  approved_at: string | null;
-  status_timestamp_unix: number | null;
-}
-
-export interface SorafsManifestLineage {
-  successor_of_hex: string | null;
-  head_hex: string;
-  depth_to_head: number;
-  is_head: boolean;
-  superseded_by: SorafsLineageSuccessor | null;
-  immediate_successor: SorafsLineageSuccessor | null;
-  anomalies: ReadonlyArray<string>;
-}
-
-export interface SorafsManifestRecord {
-  digest_hex: string;
-  chunker: SorafsChunkerHandle;
-  chunk_digest_sha3_256_hex: string;
-  pin_policy: Record<string, unknown>;
+export interface SorafsPinManifestRecord {
+  digest: Uint8Array;
+  root_cid: Uint8Array;
+  chunker: SorafsPinChunkerProfileHandle;
+  chunk_digest_sha3_256: Uint8Array;
+  por_root: Uint8Array;
+  content_length: number;
+  policy: SorafsPinPolicy;
   submitted_by: string;
   submitted_epoch: number;
-  status: SorafsManifestStatus;
+  approved_epoch: number | null;
+  alias: SorafsPinManifestAliasBinding | null;
   metadata: Record<string, unknown>;
-  alias: SorafsManifestAliasBinding | null;
-  successor_of_hex: string | null;
-  status_timestamp_unix: number | null;
-  governance_refs: ReadonlyArray<SorafsGovernanceReference>;
-  council_envelope_digest_hex: string | null;
-  lineage: SorafsManifestLineage | null;
+  status: SorafsPinNativeStatus;
+  council_envelope_digest: Uint8Array | null;
+  successor_of?: Uint8Array;
+  retirement_reason?: string;
+  pin_fee_payment?: SorafsPinFeePayment;
 }
 
-export interface SorafsPinManifestResponse {
-  attestation: Record<string, unknown> | null;
-  manifest: SorafsManifestRecord;
-  aliases: ReadonlyArray<SorafsAliasRecord>;
-  replication_orders: ReadonlyArray<SorafsReplicationOrderRecord>;
+export interface SorafsPinManifestFinalizedRecordV1 {
+  finalized_cursor: SorafsPinFinalizedCursorV1;
+  manifest: SorafsPinManifestRecord;
 }
 
 export interface SorafsPinFinalizedCursorV1 {
@@ -9130,6 +9050,8 @@ export type SorafsPinNativeStatus =
   | { status: "Approved"; value: number }
   | { status: "Retired"; value: number };
 
+export type SorafsPinStatusState = "pending" | "approved" | "retired";
+
 export interface SorafsPinManifestSummaryV1 {
   digest: Uint8Array;
   submitted_by: string;
@@ -9137,6 +9059,7 @@ export interface SorafsPinManifestSummaryV1 {
   content_length: number;
   retention_epoch: number;
   status: SorafsPinNativeStatus;
+  approved_epoch: number | null;
   successor_of: Uint8Array | null;
 }
 
@@ -9149,10 +9072,16 @@ export interface SorafsPinListResponse {
 }
 
 export interface SorafsPinListOptions {
-  status?: SorafsManifestStatusState;
+  status?: SorafsPinStatusState;
   limit?: NumericLike;
   maxBytes?: NumericLike;
   afterDigestHex?: string;
+  expectedFinalizedHeight?: NumericLike;
+  expectedFinalizedBlockHashHex?: string;
+  signal?: AbortSignal;
+}
+
+export interface SorafsPinManifestOptions {
   expectedFinalizedHeight?: NumericLike;
   expectedFinalizedBlockHashHex?: string;
   signal?: AbortSignal;
@@ -9187,6 +9116,109 @@ export interface SorafsPinRegisterResponse {
   manifest_digest_hex: string;
 }
 
+export type SorafsAliasCacheDecisionV1 = "serve" | "hold" | "refuse";
+
+export type SorafsAliasCacheStatusV1 =
+  | "fresh"
+  | "fresh-rotate"
+  | "refresh"
+  | "refresh-rotate"
+  | "expired"
+  | "hard-expired"
+  | "lineage-invalid"
+  | "governance-refused"
+  | "successor-refused"
+  | "refresh-successor"
+  | "refresh-governance"
+  | "pending-successor";
+
+export type SorafsAliasCacheReasonV1 =
+  | "ApprovedSuccessor"
+  | "ApprovedSuccessorGrace"
+  | "ApprovedSuccessorPending"
+  | "ExpiredTTL"
+  | "GovernanceFrozen"
+  | "GovernanceGrace"
+  | "GovernanceRevoked"
+  | "GovernanceRotated"
+  | "HardExpired"
+  | "LineageCycleDetected"
+  | "LineageDepthExceeded"
+  | "ManifestMissing"
+  | "MissingTimestamp"
+  | "PendingSuccessor"
+  | "RefreshWindow"
+  | "RotationDue"
+  | "SuccessorForkResolved";
+
+export type SorafsAliasLineageAnomalyV1 =
+  | "ManifestMissing"
+  | "LineageDepthExceeded"
+  | "LineageCycleDetected"
+  | "SuccessorForkResolved";
+
+export type SorafsAliasManifestStatusV1 =
+  | { state: "pending" }
+  | { state: "approved"; epoch: number }
+  | { state: "retired"; epoch: number };
+
+export interface SorafsAliasLineageSuccessorV1 {
+  digest_hex: string;
+  status: SorafsAliasManifestStatusV1;
+  approved_epoch: number | null;
+  approved_at: string | null;
+  status_timestamp_unix: number | null;
+}
+
+export interface SorafsAliasLineageV1 {
+  successor_of_hex: string | null;
+  head_hex: string;
+  depth_to_head: number;
+  is_head: boolean;
+  superseded_by: SorafsAliasLineageSuccessorV1 | null;
+  immediate_successor: SorafsAliasLineageSuccessorV1 | null;
+  anomalies: ReadonlyArray<SorafsAliasLineageAnomalyV1>;
+}
+
+export interface SorafsAliasGovernanceFlagsV1 {
+  revoked: boolean;
+  frozen: boolean;
+  rotated: boolean;
+}
+
+export interface SorafsAliasGovernanceAssessmentV1 {
+  ref_ids: ReadonlyArray<string>;
+  revoked: boolean;
+  frozen: boolean;
+  rotated: boolean;
+  flags: SorafsAliasGovernanceFlagsV1;
+  effective_at_unix: number | null;
+  effective_at: string | null;
+}
+
+export interface SorafsAliasSuccessorAssessmentV1 {
+  exists: boolean;
+  head_hex: string;
+  approved: boolean;
+  approved_at: string | null;
+  approved_at_unix: number | null;
+  depth_to_head: number;
+  anomalies: ReadonlyArray<SorafsAliasLineageAnomalyV1>;
+}
+
+export interface SorafsAliasCacheEvaluationV1 {
+  decision: SorafsAliasCacheDecisionV1;
+  reasons: ReadonlyArray<SorafsAliasCacheReasonV1>;
+  ttl_expires_at: string | null;
+  ttl_expires_at_unix: number;
+  serve_until: string | null;
+  serve_until_unix: number | null;
+  successor: SorafsAliasSuccessorAssessmentV1;
+  governance: SorafsAliasGovernanceAssessmentV1;
+  policy_successor_grace_secs: number;
+  policy_governance_grace_secs: number;
+}
+
 export interface SorafsAliasRecord {
   alias: string;
   namespace: string;
@@ -9196,27 +9228,27 @@ export interface SorafsAliasRecord {
   bound_epoch: number;
   expiry_epoch: number;
   proof_b64: string;
-  cache_state: string | null;
-  status_label: string | null;
-  cache_rotation_due: boolean | null;
-  cache_age_seconds: number | null;
-  proof_generated_at_unix: number | null;
-  proof_expires_at_unix: number | null;
-  proof_expires_in_seconds: number | null;
-  policy_positive_ttl_secs: number | null;
-  policy_refresh_window_secs: number | null;
-  policy_hard_expiry_secs: number | null;
-  policy_rotation_max_age_secs: number | null;
-  policy_successor_grace_secs: number | null;
-  policy_governance_grace_secs: number | null;
-  cache_decision: string | null;
-  cache_reasons: ReadonlyArray<string> | null;
-  cache_evaluation: Record<string, unknown> | null;
-  lineage: Record<string, unknown> | null;
+  cache_state: SorafsAliasCacheStatusV1;
+  status_label: SorafsAliasCacheStatusV1;
+  lineage: SorafsAliasLineageV1;
+  cache_rotation_due: boolean;
+  cache_age_seconds: number;
+  proof_generated_at_unix: number;
+  proof_expires_at_unix: number;
+  proof_expires_in_seconds?: number;
+  policy_positive_ttl_secs: number;
+  policy_refresh_window_secs: number;
+  policy_hard_expiry_secs: number;
+  policy_rotation_max_age_secs: number;
+  policy_successor_grace_secs: number;
+  policy_governance_grace_secs: number;
+  cache_evaluation: SorafsAliasCacheEvaluationV1;
+  cache_decision: SorafsAliasCacheDecisionV1;
+  cache_reasons: ReadonlyArray<SorafsAliasCacheReasonV1>;
 }
 
 export interface SorafsAliasListResponse {
-  attestation: Record<string, unknown> | null;
+  attestation: SorafsRegistryAttestationV1;
   total_count: number;
   returned_count: number;
   offset: number;
@@ -9233,11 +9265,67 @@ export interface SorafsAliasListOptions {
   canonicalAuth: CanonicalRequestAuth;
 }
 
-export interface SorafsReplicationReceipt {
+export type SorafsReplicationOrderStatus =
+  | { state: "pending" }
+  | { state: "completed"; epoch: number }
+  | { state: "expired"; epoch: number }
+  | { state: "cancelled"; epoch: number };
+
+export interface SorafsReplicationAssignmentV1 {
+  provider_id_hex: string;
+  slice_gib: number;
+  lane: string | null;
+}
+
+export interface SorafsReplicationSlaV1 {
+  ingest_deadline_secs: number;
+  min_availability_percent_milli: number;
+  min_por_success_percent_milli: number;
+}
+
+export interface SorafsReplicationMetadataEntryV1 {
+  key: string;
+  value: string;
+}
+
+export interface SorafsReplicationCanonicalOrderV1 {
+  version: 1;
+  order_id_hex: string;
+  manifest_cid_b64: string;
+  manifest_digest_hex: string;
+  chunking_profile: string;
+  target_replicas: number;
+  assignments: ReadonlyArray<SorafsReplicationAssignmentV1>;
+  issued_at: number;
+  deadline_at: number;
+  sla: SorafsReplicationSlaV1;
+  metadata: ReadonlyArray<SorafsReplicationMetadataEntryV1>;
+}
+
+export interface SorafsProviderIngestSignerPolicyV1 {
+  policy_id_hex: string;
+  revision: number;
+  predecessor_digest_hex: string | null;
+  policy_digest_hex: string;
+}
+
+export interface SorafsProviderIngestCompletionAuthorityV1 {
+  provider_owner: string;
+  signer_policy: SorafsProviderIngestSignerPolicyV1;
+}
+
+export interface SorafsProviderIngestFinalizedAnchorV1 {
+  height: number;
+  block_hash_hex: string;
+}
+
+export interface SorafsReplicationCompletionV1 {
   provider_hex: string;
-  status: string;
-  timestamp: number;
-  por_sample_digest_hex: string | null;
+  completed_by: string;
+  completion_epoch: number;
+  assignment_revision: number;
+  completion_authority: SorafsProviderIngestCompletionAuthorityV1;
+  finalized_anchor: SorafsProviderIngestFinalizedAnchorV1;
 }
 
 export interface SorafsReplicationOrderRecord {
@@ -9246,15 +9334,22 @@ export interface SorafsReplicationOrderRecord {
   issued_by: string;
   issued_epoch: number;
   deadline_epoch: number;
-  status: { state: string; epoch: number | null };
+  status: SorafsReplicationOrderStatus;
   canonical_order_b64: string;
-  order: Record<string, unknown>;
-  receipts: ReadonlyArray<SorafsReplicationReceipt>;
+  assignment_revision: number;
+  order: SorafsReplicationCanonicalOrderV1;
+  provider_completions: ReadonlyArray<SorafsReplicationCompletionV1>;
   providers: ReadonlyArray<string>;
 }
 
+export interface SorafsRegistryAttestationV1 {
+  block_height: number;
+  block_hash_hex: string | null;
+  chain_id: string;
+}
+
 export interface SorafsReplicationListResponse {
-  attestation: Record<string, unknown> | null;
+  attestation: SorafsRegistryAttestationV1;
   total_count: number;
   returned_count: number;
   offset: number;
@@ -9263,7 +9358,7 @@ export interface SorafsReplicationListResponse {
 }
 
 export interface SorafsReplicationListOptions {
-  status?: "pending" | "completed" | "expired";
+  status?: "pending" | "completed" | "expired" | "cancelled";
   manifestDigestHex?: string;
   limit?: NumericLike;
   offset?: NumericLike;
@@ -11277,12 +11372,8 @@ export declare class ToriiClient {
   ): Promise<Record<string, unknown>>;
   getSorafsPinManifest(
     digestHex: string,
-    options?: { headers?: Record<string, string>; signal?: AbortSignal },
-  ): Promise<Record<string, unknown> | null>;
-  getSorafsPinManifestTyped(
-    digestHex: string,
-    options?: { headers?: Record<string, string>; signal?: AbortSignal },
-  ): Promise<SorafsPinManifestResponse>;
+    options?: SorafsPinManifestOptions,
+  ): Promise<SorafsPinManifestFinalizedRecordV1 | null>;
   registerSorafsPinManifest(
     signedTransaction: VersionedSignedTransactionV1,
     options?: { signal?: AbortSignal },
@@ -11774,30 +11865,6 @@ export declare class ToriiClient {
   streamKaigiRelayEvents(
     options?: KaigiRelayEventsOptions,
   ): AsyncGenerator<ToriiSseEvent<KaigiRelayEventPayload>, void, unknown>;
-  listProverReports(
-    filters?: ToriiProverReportFilters,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiProverReportListResult>;
-  iterateProverReports(
-    filters?: ToriiProverReportFilters,
-    options?: PaginationIteratorOptions & { signal?: AbortSignal },
-  ): AsyncGenerator<
-    ToriiProverReport | string | ToriiProverReportMessageSummary,
-    void,
-    unknown
-  >;
-  getProverReport(
-    reportId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiProverReport>;
-  deleteProverReport(
-    reportId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<void>;
-  countProverReports(
-    filters?: ToriiProverReportFilters,
-    options?: { signal?: AbortSignal },
-  ): Promise<number>;
   submitIsoPacs008(
     message: ArrayBufferView | ArrayBuffer | Buffer | string,
     options?: {
@@ -13081,10 +13148,24 @@ export interface ExpireReplicationOrderInstruction {
 
 export interface SorafsReplicationOrderPayloadSummaryV1 {
   orderId: string;
+  manifestCidBase64: string;
+  manifestDigestHex: string;
+  chunkingProfile: string;
   targetReplicas: number;
+  assignments: Array<{
+    providerIdHex: string;
+    sliceGiB: string;
+    lane: string | null;
+  }>;
   providerIds: string[];
   issuedAt: string;
   deadlineAt: string;
+  sla: {
+    ingestDeadlineSecs: number;
+    minAvailabilityPercentMilli: number;
+    minPorSuccessPercentMilli: number;
+  };
+  metadata: Array<{ key: string; value: string }>;
 }
 
 /**
@@ -13953,10 +14034,9 @@ export interface SoracloudPrivateUploadedModelExecuteInput {
   serviceName: string;
   serviceVersion: string;
   weightVersion: string;
-  modelId: string | null;
-  modelName: string | null;
-  /** Exact uppercase checksummed marker-bit Iroha Hash literal, or null. */
-  bundleRoot: string | null;
+  modelId: string;
+  /** Exact uppercase checksummed marker-bit Iroha Hash literal. */
+  bundleRoot: string;
   decryptionRequestId: string;
   inputArtifact: SoracloudPrivateArtifactRefInput;
   outputRecipient: SoracloudPrivateOutputRecipientInput;
@@ -13975,6 +14055,191 @@ export interface SoracloudPrivateUploadedModelReceiptQueryInput {
   countMode?: "bounded" | "exact";
 }
 
+/** Lossless normalized representation of one Norito JSON unsigned 64-bit integer. */
+export type SoracloudPrivateUploadedModelU64 = number | bigint;
+
+export interface SoracloudPrivateKemV1 {
+  readonly kem: "X25519HkdfSha256";
+  readonly value: null;
+}
+
+export interface SoracloudPrivateAeadV1 {
+  readonly aead: "Aes256Gcm";
+  readonly value: null;
+}
+
+export interface SoracloudPrivateRuntimeFormatV1 {
+  readonly runtime_format: "DeterministicQuantizedCpuV1";
+  readonly value: null;
+}
+
+export interface SoracloudPrivateModelArtifactRefV1 {
+  readonly schema_version: 1;
+  readonly sorafs_manifest_digest: ReadonlyArray<number>;
+  readonly sorafs_root_cid: ReadonlyArray<number>;
+  readonly artifact_hash: string;
+  readonly ciphertext_bytes: number;
+  readonly artifact_role: "input" | "output";
+}
+
+export interface SoracloudPrivateEncryptionRecipientV1 {
+  readonly schema_version: 1;
+  readonly key_id: string;
+  readonly key_version: number;
+  readonly kem: SoracloudPrivateKemV1;
+  readonly aead: SoracloudPrivateAeadV1;
+  readonly public_key_bytes: string;
+  readonly public_key_fingerprint: string;
+}
+
+export interface SoracloudPrivateWrappedBundleKeyV1 {
+  readonly schema_version: 1;
+  readonly recipient_key_id: string;
+  readonly recipient_key_version: number;
+  readonly kem: SoracloudPrivateKemV1;
+  readonly aead: SoracloudPrivateAeadV1;
+  readonly ephemeral_public_key: string;
+  readonly nonce: string;
+  readonly wrapped_key_ciphertext: string;
+  readonly ciphertext_hash: string;
+  readonly aad_digest: string;
+}
+
+export interface SoracloudPrivateUploadedModelBundleV1 {
+  readonly schema_version: 1;
+  readonly service_name: string;
+  readonly model_id: string;
+  readonly weight_version: string;
+  readonly family: string;
+  readonly modalities: ReadonlyArray<string>;
+  readonly plaintext_root: string;
+  readonly runtime_format: SoracloudPrivateRuntimeFormatV1;
+  readonly bundle_root: string;
+  readonly sorafs_manifest_digest: ReadonlyArray<number>;
+  readonly chunk_count: number;
+  readonly plaintext_bytes: SoracloudPrivateUploadedModelU64;
+  readonly ciphertext_bytes: SoracloudPrivateUploadedModelU64;
+  readonly chunk_manifest_root: string;
+  readonly upload_recipient: SoracloudPrivateEncryptionRecipientV1;
+  readonly wrapped_bundle_key: SoracloudPrivateWrappedBundleKeyV1;
+  readonly pricing_policy: Readonly<{ storage_price: string }>;
+  readonly decryption_policy_ref: string;
+}
+
+export interface SoracloudPrivateUploadedModelArtifactStatusV1 {
+  readonly service_name: string;
+  readonly model_name: string;
+  readonly artifact_id: string;
+  readonly training_job_id: string;
+  readonly weight_version: string | null;
+  readonly weight_artifact_hash: string;
+  readonly dataset_ref: string;
+  readonly training_config_hash: string;
+  readonly reproducibility_hash: string;
+  readonly provenance_attestation_hash: string;
+  readonly registered_sequence: SoracloudPrivateUploadedModelU64;
+  readonly consumed_by_version: string | null;
+  readonly chunk_manifest_root: string | null;
+}
+
+export interface SoracloudPrivateUploadedModelStatusV1 {
+  readonly schema_version: 1;
+  readonly bundle: SoracloudPrivateUploadedModelBundleV1;
+  readonly artifact: SoracloudPrivateUploadedModelArtifactStatusV1 | null;
+}
+
+export interface SoracloudPrivateAttestingValidatorV1 {
+  readonly lane_id: number;
+  readonly validator_account_id: string;
+  readonly peer_id: string;
+}
+
+export interface SoracloudPrivateUploadedModelExecutionReceiptV1 {
+  readonly schema_version: 1;
+  readonly network_id: string;
+  readonly receipt_id: string;
+  readonly service_name: string;
+  readonly service_version: string;
+  readonly model_id: string;
+  readonly weight_version: string;
+  readonly runtime_version: "soracloud.quantized-cpu.v1";
+  readonly model_manifest_digest: ReadonlyArray<number>;
+  readonly model_bundle_root: string;
+  readonly policy_id: string;
+  readonly decryption_request_id: string;
+  readonly attesting_validator: SoracloudPrivateAttestingValidatorV1;
+  readonly input_artifact: SoracloudPrivateModelArtifactRefV1 & {
+    readonly artifact_role: "input";
+  };
+  readonly output_artifact: SoracloudPrivateModelArtifactRefV1 & {
+    readonly artifact_role: "output";
+  };
+  readonly output_replication_order_id: ReadonlyArray<number>;
+  readonly input_commitment: string;
+  readonly output_commitment: string;
+  readonly output_recipient: SoracloudPrivateEncryptionRecipientV1;
+  readonly request_commitment: string;
+  readonly result_commitment: string;
+  readonly authorization_claim_block_height: SoracloudPrivateUploadedModelU64;
+  readonly authorization_claim_epoch: SoracloudPrivateUploadedModelU64;
+  readonly emitted_sequence: SoracloudPrivateUploadedModelU64;
+  readonly emitted_block_height: SoracloudPrivateUploadedModelU64;
+  readonly emitted_epoch: SoracloudPrivateUploadedModelU64;
+}
+
+export type SoracloudPrivateUnassignedExecutionReceiptV1 =
+  Omit<
+    SoracloudPrivateUploadedModelExecutionReceiptV1,
+    | "authorization_claim_block_height"
+    | "authorization_claim_epoch"
+    | "emitted_sequence"
+    | "emitted_block_height"
+    | "emitted_epoch"
+  >
+  & Readonly<{
+    authorization_claim_block_height: 0;
+    authorization_claim_epoch: 0;
+    emitted_sequence: 0;
+    emitted_block_height: 0;
+    emitted_epoch: 0;
+  }>;
+
+export type SoracloudPrivateAssignedExecutionReceiptV1 =
+  SoracloudPrivateUploadedModelExecutionReceiptV1;
+
+export type SoracloudPrivateUploadedModelSubmissionPhaseV1 =
+  | "awaiting_output_durability"
+  | "prepare_submitted"
+  | "receipt_submitted"
+  | "committed";
+
+export interface SoracloudPrivateUploadedModelExecuteResponseCommonV1 {
+  readonly schema_version: 1;
+  readonly status: SoracloudPrivateUploadedModelStatusV1;
+  readonly output_artifact: SoracloudPrivateModelArtifactRefV1 & {
+    readonly artifact_role: "output";
+  };
+}
+
+export type SoracloudPrivateUploadedModelExecuteResponseV1 =
+  SoracloudPrivateUploadedModelExecuteResponseCommonV1 & (
+    | Readonly<{
+        submission_phase: "awaiting_output_durability";
+        transaction_hash: null;
+        receipt: SoracloudPrivateUnassignedExecutionReceiptV1;
+      }>
+    | Readonly<{
+        submission_phase: "prepare_submitted" | "receipt_submitted";
+        transaction_hash: string;
+        receipt: SoracloudPrivateUnassignedExecutionReceiptV1;
+      }>
+    | Readonly<{
+        submission_phase: "committed";
+        transaction_hash: null;
+        receipt: SoracloudPrivateAssignedExecutionReceiptV1;
+      }>
+  );
+
 export function buildSoracloudPrivateUploadedModelExecuteRequest(
   input: SoracloudPrivateUploadedModelExecuteInput,
 ): Record<string, unknown>;
@@ -13982,6 +14247,14 @@ export function buildSoracloudPrivateUploadedModelExecuteRequest(
 export function buildSoracloudPrivateUploadedModelReceiptQuery(
   input?: SoracloudPrivateUploadedModelReceiptQueryInput,
 ): Record<string, string>;
+
+export function normalizeSoracloudPrivateUploadedModelExecutionReceipt(
+  payload: unknown,
+): SoracloudPrivateUploadedModelExecutionReceiptV1;
+
+export function normalizeSoracloudPrivateUploadedModelExecuteResponse(
+  payload: unknown,
+): SoracloudPrivateUploadedModelExecuteResponseV1;
 
 export class NumericV1Error extends Error {
   readonly code: string;

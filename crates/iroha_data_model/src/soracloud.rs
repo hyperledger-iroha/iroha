@@ -6,8 +6,6 @@
 //! deployment/routing policy, state mutation limits, agent-policy envelopes, and deterministic
 //! confidential-compute policy in a form suitable for validator admission and audit trails.
 #![allow(clippy::module_name_repetitions)]
-#[cfg(test)]
-use crate::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
@@ -19,7 +17,8 @@ use crate::{
     peer::PeerId,
     proof::ProofAttachment,
     sorafs::pin_registry::{
-        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, ReplicationOrderId, StorageClass,
+        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, ReplicationOrderId,
+        StorageClass, derive_sorafs_auto_replication_order_id_v1,
     },
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
@@ -260,6 +259,8 @@ pub const SORA_PRIVATE_QUANTIZED_CPU_MAX_OUTPUTS_V1: usize = 4_096;
 pub const SORA_PRIVATE_QUANTIZED_CPU_MAX_WEIGHTS_V1: usize = 64 * 1024 * 1024;
 /// Schema version for [`SoraPrivateUploadedModelExecutionReceiptV1`].
 pub const SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateUploadedModelExecutionClaimV1`].
+pub const SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_CLAIM_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHfSourceRecordV1`].
 pub const SORA_HF_SOURCE_RECORD_VERSION_V1: u16 = 1;
 /// Maximum byte length of one canonical, fully-qualified Hugging Face repository identifier.
@@ -443,8 +444,6 @@ pub const SORA_SERVICE_ROLLOUT_STATE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseStateV1`].
 pub const SORA_SERVICE_LEASE_STATE_VERSION_V1: u16 = 1;
-/// Consensus-block grace before an idle egress reporter may be force-finalized.
-pub const SORA_SERVICE_LEASE_REPORTER_IDLE_GRACE_BLOCKS_V1: u64 = 10_000;
 /// Schema version for [`SoraServiceLeaseUsageAuditV1`].
 pub const SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseReporterAssignmentV1`].

@@ -1,6 +1,5 @@
 #[test]
 fn nested_state_reads_log_the_callee_scope_not_only_the_root_scope() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let state = contract_test_state(&authority);
     let caller_contract = install_contract(
@@ -60,7 +59,6 @@ seiyaku Callee {
 }
 #[test]
 fn nested_view_rollback_preserves_reads_but_discards_writes() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let mut host = CoreHost::new(authority).with_access_logging();
     host.state_access_log.durable_read_paths_complete = true;
@@ -92,7 +90,6 @@ fn nested_view_rollback_preserves_reads_but_discards_writes() {
 }
 #[test]
 fn failed_nested_call_discards_reads_and_composed_state_changes() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let mut host = CoreHost::new(authority).with_access_logging();
     host.state_access_log.durable_read_paths_complete = true;
@@ -115,7 +112,6 @@ fn failed_nested_call_discards_reads_and_composed_state_changes() {
 }
 #[test]
 fn nested_snapshot_shares_large_rollback_state_until_mutated() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let mut host = CoreHost::new(authority);
     let verified_ballot = Arc::clone(&host.zk_verified_ballot);

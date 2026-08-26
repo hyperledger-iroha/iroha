@@ -315,6 +315,11 @@ impl KagemushaTopUpFinalityVerifier {
         {
             return Err(KagemushaTopUpFinalityVerifyError::ReleaseWindowMismatch);
         }
+        // Reject unbounded or malformed typed values before canonical encoding
+        // allocates an artifact-sized buffer for content addressing.
+        roster_artifact
+            .validate_structure()
+            .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
         let roster_reference = &manifest.topup_finality_roster_artifact;
         let roster_bytes = norito::encode_canonical(roster_artifact)
             .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
@@ -327,9 +332,6 @@ impl KagemushaTopUpFinalityVerifier {
         {
             return Err(KagemushaTopUpFinalityVerifyError::ArtifactDigestMismatch);
         }
-        roster_artifact
-            .validate_structure()
-            .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
         let window = roster_artifact
             .window_at(context.height)
             .map_err(|_| KagemushaTopUpFinalityVerifyError::RosterContextMismatch)?;
@@ -362,10 +364,11 @@ impl KagemushaTopUpFinalityVerifier {
         digest: [u8; 32],
     ) -> Result<(), KagemushaTopUpFinalityVerifyError> {
         let mut cache = self.roster_cache.lock();
-        if let Some(position) = cache.iter().position(|(entry, _)| *entry == digest) {
-            let entry = cache
-                .remove(position)
-                .expect("located roster cache entry exists");
+        if let Some(entry) = cache
+            .iter()
+            .position(|(entry, _)| *entry == digest)
+            .and_then(|position| cache.remove(position))
+        {
             let valid = entry.1;
             cache.push_back(entry);
             return if valid {
@@ -1477,6 +1480,23 @@ mod tests {
                 )
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch
+        );
+        assert_eq!(verifier.roster_crypto_verification_count(), 0);
+        let mut oversized_roster = fixture.roster.clone();
+        let extra_window = oversized_roster.windows[0].clone();
+        oversized_roster.windows.push(extra_window);
+        assert_eq!(
+            verifier
+                .verify_v4(
+                    &fixture.proof,
+                    &oversized_roster,
+                    &fixture.anchor,
+                    &fixture.manifest,
+                    fixture.manifest_digest,
+                )
+                .unwrap_err(),
+            KagemushaTopUpFinalityVerifyError::InvalidStructure,
+            "typed roster bounds must be enforced before content addressing"
         );
         assert_eq!(verifier.roster_crypto_verification_count(), 0);
         let mut roster = fixture.roster.clone();

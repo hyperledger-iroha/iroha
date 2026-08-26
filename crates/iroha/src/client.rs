@@ -2804,9 +2804,7 @@ fn validate_parliament_attempt_draft_response(
     response: &ParliamentAttemptDraftResponseV1,
     request: &ParliamentAttemptDraftRequestV1,
 ) -> Result<iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1> {
-    use iroha_data_model::isi::{
-        Instruction as _, governance::CreateParliamentGovernanceAttemptV1,
-    };
+    use iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1;
 
     if request.version != PARLIAMENT_API_VERSION_V1 || response.version != PARLIAMENT_API_VERSION_V1
     {
@@ -2860,9 +2858,7 @@ fn validate_parliament_transition_draft_response(
     response: &ParliamentTransitionDraftResponseV1,
     request: &ParliamentTransitionDraftRequestV1,
 ) -> Result<iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1> {
-    use iroha_data_model::isi::{
-        Instruction as _, governance::SubmitParliamentLifecycleTransitionV1,
-    };
+    use iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1;
 
     request
         .validate_static()
@@ -4457,38 +4453,6 @@ fn validate_account_onboarding_token(token: &str) -> Result<&str> {
     }
     Ok(token)
 }
-/// Filters for `/v1/zk/prover/reports` listing/counting/deletion endpoints.
-#[derive(Debug, Default, Clone)]
-pub struct ZkProverReportsFilter<'a> {
-    /// Only successful reports
-    pub ok_only: Option<bool>,
-    /// Only failed reports
-    pub failed_only: Option<bool>,
-    /// Only error messages (alias for failed-only in some endpoints)
-    pub errors_only: Option<bool>,
-    /// Exact id filter
-    pub id: Option<&'a str>,
-    /// Content-type substring filter
-    pub content_type: Option<&'a str>,
-    /// Require a particular ZK1 tag (e.g., PROF, IPAK)
-    pub has_tag: Option<&'a str>,
-    /// Limit number of results
-    pub limit: Option<u32>,
-    /// Lower bound for `processed_ms`
-    pub since_ms: Option<u64>,
-    /// Upper bound for `processed_ms`
-    pub before_ms: Option<u64>,
-    /// Return only ids
-    pub ids_only: Option<bool>,
-    /// Sort order (`asc`/`desc`)
-    pub order: Option<&'a str>,
-    /// Offset for pagination
-    pub offset: Option<u32>,
-    /// Return only the latest matching report
-    pub latest: Option<bool>,
-    /// Return only messages payloads
-    pub messages_only: Option<bool>,
-}
 /// Unsigned verifying-key registry transaction returned for local signing.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -4499,53 +4463,6 @@ pub struct ZkVkTransactionDraft {
     pub transaction_payload_b64: String,
     /// Exact transaction-payload prehash encoded as padded base64.
     pub signing_message_b64: String,
-}
-impl ZkProverReportsFilter<'_> {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        if let Some(true) = self.ok_only {
-            req = req.param("ok_only", &"true");
-        }
-        if let Some(true) = self.failed_only {
-            req = req.param("failed_only", &"true");
-        }
-        if let Some(true) = self.errors_only {
-            req = req.param("errors_only", &"true");
-        }
-        if let Some(v) = self.id {
-            req = req.param("id", &v);
-        }
-        if let Some(v) = self.content_type {
-            req = req.param("content_type", &v);
-        }
-        if let Some(v) = self.has_tag {
-            req = req.param("has_tag", &v);
-        }
-        if let Some(v) = self.limit {
-            req = req.param("limit", &v);
-        }
-        if let Some(v) = self.since_ms {
-            req = req.param("since_ms", &v);
-        }
-        if let Some(v) = self.before_ms {
-            req = req.param("before_ms", &v);
-        }
-        if let Some(true) = self.ids_only {
-            req = req.param("ids_only", &"true");
-        }
-        if let Some(v) = self.order {
-            req = req.param("order", &v);
-        }
-        if let Some(v) = self.offset {
-            req = req.param("offset", &v);
-        }
-        if let Some(true) = self.latest {
-            req = req.param("latest", &"true");
-        }
-        if let Some(true) = self.messages_only {
-            req = req.param("messages_only", &"true");
-        }
-        req
-    }
 }
 /// Filters for `/v1/zk/proofs` list/count endpoints.
 #[derive(Debug, Default, Clone)]
@@ -5383,31 +5300,6 @@ macro_rules! sorafs_limit_filter {
     };
 }
 
-macro_rules! sorafs_offset_filter {
-    ($name:ident, $selector:ident, $selector_key:literal) => {
-        #[doc = concat!("Offset-based list filter for `", stringify!($name), "`.")]
-        #[derive(Debug, Default, Clone)]
-        pub struct $name<'a> {
-            /// Maximum number of records to return.
-            pub limit: Option<u32>,
-            /// Offset for pagination.
-            pub offset: Option<u32>,
-            /// Optional endpoint-specific selector.
-            pub $selector: Option<&'a str>,
-            /// Optional manifest digest filter (hex-encoded).
-            pub manifest_digest: Option<&'a str>,
-        }
-        impl $name<'_> {
-            fn apply_to_url(&self, url: &mut Url) {
-                append_optional_query(url, "limit", self.limit);
-                append_optional_query(url, "offset", self.offset);
-                append_optional_query(url, $selector_key, self.$selector);
-                append_optional_query(url, "manifest_digest", self.manifest_digest);
-            }
-        }
-    };
-}
-
 sorafs_finalized_anchor!(SorafsPinFinalizedAnchor);
 /// Filters for the finalized /v1/sorafs/pin keyset page.
 #[derive(Debug, Default, Clone, Copy)]
@@ -5418,17 +5310,21 @@ pub struct SorafsPinListFilter<'a> {
     pub limit: Option<u32>,
     /// Maximum canonical encoded page bytes (1 KiB through 256 KiB).
     pub max_bytes: Option<u32>,
-    /// Canonical lowercase exclusive manifest-digest cursor.
+    /// Exact non-zero lowercase 32-byte exclusive manifest-digest cursor.
     pub after_digest_hex: Option<&'a str>,
     /// Optional closed lifecycle selector.
     pub status: Option<PinStatusKindV1>,
 }
 impl SorafsPinListFilter<'_> {
-    fn apply_to_url(self, url: &mut Url) {
+    fn apply_to_url(self, url: &mut Url) -> Result<()> {
+        let after_digest_hex = self
+            .after_digest_hex
+            .map(|digest| require_nonzero_lower_hex32(digest, "SoraFS pin-list cursor"))
+            .transpose()?;
         self.finalized.apply_to_url(url);
         append_optional_query(url, "limit", self.limit);
         append_optional_query(url, "max_bytes", self.max_bytes);
-        append_optional_query(url, "after_digest_hex", self.after_digest_hex);
+        append_optional_query(url, "after_digest_hex", after_digest_hex);
         if let Some(status) = self.status {
             let status = match status {
                 PinStatusKindV1::Pending => "pending",
@@ -5437,10 +5333,90 @@ impl SorafsPinListFilter<'_> {
             };
             append_optional_query(url, "status", Some(status));
         }
+        Ok(())
     }
 }
-sorafs_offset_filter!(SorafsAliasListFilter, namespace, "namespace");
-sorafs_offset_filter!(SorafsReplicationListFilter, status, "status");
+
+/// Offset-based filters for the authenticated `SoraFS` alias projection.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsAliasListFilter<'a> {
+    /// Maximum number of records to return.
+    pub limit: Option<u32>,
+    /// Offset for pagination.
+    pub offset: Option<u32>,
+    /// Optional exact namespace selector.
+    pub namespace: Option<&'a str>,
+    /// Optional canonical non-zero lowercase manifest digest.
+    pub manifest_digest: Option<&'a str>,
+}
+impl SorafsAliasListFilter<'_> {
+    fn apply_to_url(&self, url: &mut Url) -> Result<()> {
+        let manifest_digest = self
+            .manifest_digest
+            .map(|digest| require_nonzero_lower_hex32(digest, "SoraFS alias manifest digest"))
+            .transpose()?;
+        append_optional_query(url, "limit", self.limit);
+        append_optional_query(url, "offset", self.offset);
+        append_optional_query(url, "namespace", self.namespace);
+        append_optional_query(url, "manifest_digest", manifest_digest);
+        Ok(())
+    }
+}
+
+/// Closed lifecycle selector for the authenticated `SoraFS` replication projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SorafsReplicationStatus {
+    /// Orders still awaiting their required provider completions.
+    Pending,
+    /// Orders whose required provider completions are committed.
+    Completed,
+    /// Orders cancelled when their target pin was retired.
+    Cancelled,
+    /// Incomplete orders expired after their inclusive deadline.
+    Expired,
+}
+impl SorafsReplicationStatus {
+    /// Return the exact lowercase query label accepted by Torii V1.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::Expired => "expired",
+        }
+    }
+}
+
+/// Offset-based filters for the authenticated `SoraFS` replication projection.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SorafsReplicationListFilter<'a> {
+    /// Maximum number of records to return.
+    pub limit: Option<u32>,
+    /// Offset for pagination.
+    pub offset: Option<u32>,
+    /// Optional exact lifecycle selector.
+    pub status: Option<SorafsReplicationStatus>,
+    /// Optional canonical non-zero lowercase manifest digest.
+    pub manifest_digest: Option<&'a str>,
+}
+impl SorafsReplicationListFilter<'_> {
+    fn apply_to_url(&self, url: &mut Url) -> Result<()> {
+        let manifest_digest = self
+            .manifest_digest
+            .map(|digest| require_nonzero_lower_hex32(digest, "SoraFS replication manifest digest"))
+            .transpose()?;
+        append_optional_query(url, "limit", self.limit);
+        append_optional_query(url, "offset", self.offset);
+        append_optional_query(
+            url,
+            "status",
+            self.status.map(SorafsReplicationStatus::as_str),
+        );
+        append_optional_query(url, "manifest_digest", manifest_digest);
+        Ok(())
+    }
+}
 sorafs_finalized_anchor!(SorafsRepairFinalizedAnchor);
 sorafs_finalized_id_filter!(
     SorafsRepairTasksFilter,
@@ -7243,7 +7219,7 @@ impl Client {
         context: &'static str,
     ) -> Result<T>
     where
-        T: norito::json::JsonDeserializeOwned,
+        T: norito::json::JsonDeserializeOwned + norito::NoritoSerialize,
         for<'de> T: norito::NoritoDeserialize<'de>,
     {
         if response.status() != expected_status {
@@ -9883,7 +9859,7 @@ mod evidence_http_tests {
         with_mock_http(respond_with(&store, response), || {
             let client = client_with_base_url(base_url());
             let resp = client
-                .get_sorafs_pin_manifest("deadbeef")
+                .get_sorafs_pin_manifest(&"11".repeat(32))
                 .expect("fresh alias proof should be accepted");
             assert_eq!(resp.status(), StatusCode::OK);
         });
@@ -9906,7 +9882,7 @@ mod evidence_http_tests {
         with_mock_http(respond_with(&store, response), || {
             let client = client_with_base_url(base_url());
             let err = client
-                .get_sorafs_pin_manifest("deadbeef")
+                .get_sorafs_pin_manifest(&"11".repeat(32))
                 .expect_err("stale alias proof should be rejected");
             assert!(err.to_string().contains("alias proof"));
         });
@@ -15036,21 +15012,23 @@ impl Client {
     }
     /// Convenience: GET `/v1/sorafs/pin` to list manifests in the pin registry.
     /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
+    /// Returns an error for a noncanonical manifest-digest cursor, request construction, or an
+    /// HTTP failure.
     pub fn get_sorafs_pin_registry(
         &self,
         filter: &SorafsPinListFilter<'_>,
     ) -> Result<Response<Vec<u8>>> {
-        self.send_sorafs_endpoint(
-            SorafsEndpoint::anonymous_json_get("v1/sorafs/pin"),
-            Vec::new(),
-            |url| filter.apply_to_url(url),
-        )
+        let endpoint = SorafsEndpoint::anonymous_json_get("v1/sorafs/pin");
+        let mut url = join_torii_url(&self.torii_url, endpoint.path);
+        filter.apply_to_url(&mut url)?;
+        self.send_sorafs_url(endpoint, url, Vec::new())
     }
     /// Convenience: GET `/v1/sorafs/pin/{digest}` to inspect a specific manifest record.
     /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
+    /// Returns an error if `digest_hex` is not an exact non-zero lowercase 32-byte digest, or if
+    /// request construction or the HTTP call fails.
     pub fn get_sorafs_pin_manifest(&self, digest_hex: &str) -> Result<Response<Vec<u8>>> {
+        let digest_hex = require_nonzero_lower_hex32(digest_hex, "SoraFS pin manifest digest")?;
         let path = format!("v1/sorafs/pin/{digest_hex}");
         let url = join_torii_url(&self.torii_url, &path);
         let response = self
@@ -15828,12 +15806,33 @@ impl Client {
             successor_of,
         ))
     }
-    sorafs_filtered_get_methods!(
-        get_sorafs_aliases(filter: &SorafsAliasListFilter<'_>) =>
-            SorafsEndpoint::account_json_get("v1/sorafs/aliases"),
-        get_sorafs_replication_orders(filter: &SorafsReplicationListFilter<'_>) =>
-            SorafsEndpoint::account_json_get("v1/sorafs/replication"),
-    );
+    /// Fetch the authenticated, filtered `SoraFS` alias projection.
+    /// # Errors
+    /// Returns an error for a noncanonical manifest digest, request construction, signing, or
+    /// transport failure.
+    pub fn get_sorafs_aliases(
+        &self,
+        filter: &SorafsAliasListFilter<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        let endpoint = SorafsEndpoint::account_json_get("v1/sorafs/aliases");
+        let mut url = join_torii_url(&self.torii_url, endpoint.path);
+        filter.apply_to_url(&mut url)?;
+        self.send_sorafs_url(endpoint, url, Vec::new())
+    }
+
+    /// Fetch the authenticated, filtered `SoraFS` replication-order projection.
+    /// # Errors
+    /// Returns an error for a noncanonical manifest digest, request construction, signing, or
+    /// transport failure.
+    pub fn get_sorafs_replication_orders(
+        &self,
+        filter: &SorafsReplicationListFilter<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        let endpoint = SorafsEndpoint::account_json_get("v1/sorafs/replication");
+        let mut url = join_torii_url(&self.torii_url, endpoint.path);
+        filter.apply_to_url(&mut url)?;
+        self.send_sorafs_url(endpoint, url, Vec::new())
+    }
     /// Fetch chain-authoritative `SoraFS` repair counters at an optional finalized anchor.
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -19252,45 +19251,6 @@ impl Client {
             "Failed to fetch proof retention status with HTTP status",
         )
     }
-    /// List prover reports via `/v1/zk/prover/reports` with optional server-side filters.
-    /// If a filter field is `None`, it is omitted.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_zk_prover_reports_list_filtered(
-        &self,
-        filter: &ZkProverReportsFilter,
-    ) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/zk/prover/reports");
-        let mut req = self.default_request(HttpMethod::GET, url);
-        req = filter.apply(req);
-        let resp = self.send_builder(req)?;
-        Self::decode_json_http_status(
-            resp,
-            StatusCode::OK,
-            "Failed to list prover reports with HTTP status",
-        )
-    }
-    /// Get count of prover reports via `/v1/zk/prover/reports/count` with optional filters.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON parse fails.
-    pub fn get_zk_prover_reports_count(&self, filter: &ZkProverReportsFilter) -> Result<u64> {
-        let url = join_torii_url(&self.torii_url, "v1/zk/prover/reports/count");
-        let mut req = self.default_request(HttpMethod::GET, url);
-        req = filter.apply(req);
-        let resp = self.send_builder(req)?;
-        Self::ensure_response_status(
-            &resp,
-            StatusCode::OK,
-            "Failed to get prover reports count with HTTP status",
-            ". ",
-        )?;
-        let v: norito::json::Value = norito::json::from_slice(resp.body())?;
-        v.get("count")
-            .and_then(norito::json::Value::as_u64)
-            .ok_or_else(|| eyre!("invalid count response"))
-    }
     /// Fetch attachment bytes by id via `/v1/zk/attachments/{id}`.
     /// Returns the raw bytes and optional content-type.
     /// # Errors
@@ -19309,7 +19269,7 @@ impl Client {
             .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok().map(str::to_owned));
-        Ok((resp.body().clone(), ct))
+        Ok((resp.into_body(), ct))
     }
     /// Delete attachment by id via `/v1/zk/attachments/{id}`.
     /// # Errors
@@ -19325,67 +19285,6 @@ impl Client {
             ". ",
         )?;
         Ok(())
-    }
-    /// List prover reports via `/v1/zk/prover/reports`. Returns a JSON array of reports.
-    /// This is a non‑consensus, app‑facing helper.
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_zk_prover_reports_list(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/zk/prover/reports");
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
-        Self::decode_json_http_status(
-            resp,
-            StatusCode::OK,
-            "Failed to list prover reports with HTTP status",
-        )
-    }
-    /// Fetch a single prover report JSON by id via `/v1/zk/prover/reports/{id}`.
-    /// Returns a JSON object describing the report.
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_zk_prover_report_json(&self, id: &str) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, &format!("v1/zk/prover/reports/{id}"));
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
-        Self::decode_json_http_status(
-            resp,
-            StatusCode::OK,
-            "Failed to get prover report with HTTP status",
-        )
-    }
-    /// Delete a prover report by id via `/v1/zk/prover/reports/{id}`.
-    /// # Errors
-    /// Returns an error if the HTTP request fails or the response is not `204 No Content`.
-    pub fn delete_zk_prover_report(&self, id: &str) -> Result<()> {
-        let url = join_torii_url(&self.torii_url, &format!("v1/zk/prover/reports/{id}"));
-        let resp = self.send_builder(self.default_request(HttpMethod::DELETE, url))?;
-        Self::ensure_response_status(
-            &resp,
-            StatusCode::NO_CONTENT,
-            "Failed to delete prover report with HTTP status",
-            ". ",
-        )?;
-        Ok(())
-    }
-    /// Bulk delete prover reports via `/v1/zk/prover/reports` with filters.
-    /// Returns the number of deleted reports.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON parse fails.
-    pub fn delete_zk_prover_reports_filtered(&self, filter: &ZkProverReportsFilter) -> Result<u64> {
-        let url = join_torii_url(&self.torii_url, "v1/zk/prover/reports");
-        let mut req = self.default_request(HttpMethod::DELETE, url);
-        req = filter.apply(req);
-        let resp = self.send_builder(req)?;
-        Self::ensure_response_status(
-            &resp,
-            StatusCode::OK,
-            "Failed to bulk delete prover reports with HTTP status",
-            ". ",
-        )?;
-        let v: norito::json::Value = norito::json::from_slice(resp.body())?;
-        v.get("deleted")
-            .and_then(norito::json::Value::as_u64)
-            .ok_or_else(|| eyre!("invalid delete response"))
     }
     /// Prepare a verifying-key registration transaction for local signing.
     ///
@@ -19910,19 +19809,6 @@ where
             }
         }
     }
-}
-#[allow(dead_code)]
-fn contains_tx_hash(
-    batch: &crate::data_model::query::QueryOutputBatchBoxTuple,
-    target: HashOf<SignedTransaction>,
-) -> bool {
-    use crate::data_model::query::QueryOutputBatchBox as Batch;
-    batch.iter().any(|b| match b {
-        Batch::CommittedTransaction(v) => v
-            .iter()
-            .any(|tx| tx.entrypoint_hash().as_ref() == target.as_ref()),
-        _ => false,
-    })
 }
 fn hashes_match(target: &HashOf<SignedTransaction>, entry_hash: impl AsRef<[u8]>) -> bool {
     target.as_ref() == entry_hash.as_ref()
@@ -27283,7 +27169,9 @@ mod tests {
             after_digest_hex: Some(&after_digest),
             status: Some(PinStatusKindV1::Approved),
         };
-        filter.apply_to_url(&mut url);
+        filter
+            .apply_to_url(&mut url)
+            .expect("pin-list filter must be canonical");
         assert_eq!(
             url.query(),
             Some(

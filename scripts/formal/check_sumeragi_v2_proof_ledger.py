@@ -29986,7 +29986,7 @@ max_frame_bytes
         run_items.get("checked_encoded_frame_len"),
         """
 let flags = ncore::default_encode_flags();
-let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+let _guard = ncore::DecodeFlagsGuard::enter(flags);
 let encoded_len = ncore::encoded_frame_len(message)?;
 if encoded_len > frame_plaintext_cap_for::<E>(max_frame_bytes) {
     return Err(Error::FrameTooLarge);

@@ -1186,6 +1186,28 @@ fn private_uploaded_model_execution_receipt_requires_canonical_commitments_and_i
         }
     ));
 
+    let mut substituted_replication_order = canonical.clone();
+    substituted_replication_order.output_replication_order_id = ReplicationOrderId::new([0x65; 32]);
+    substituted_replication_order.request_commitment =
+        derive_soracloud_private_model_request_commitment_v1(&substituted_replication_order);
+    substituted_replication_order.result_commitment =
+        derive_soracloud_private_model_result_commitment_v1(&substituted_replication_order);
+    substituted_replication_order.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(
+            &substituted_replication_order,
+        );
+    let error = substituted_replication_order
+        .validate()
+        .expect_err("a resealed receipt must not reference another output's replication order");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora private uploaded model execution receipt",
+            field: "output_replication_order_id",
+            ..
+        }
+    ));
+
     let mut substituted_request = canonical.clone();
     substituted_request.request_commitment = sample_hash(0xE1);
     substituted_request.receipt_id =
@@ -1254,12 +1276,15 @@ fn private_uploaded_model_execution_receipt_requires_canonical_commitments_and_i
 
     let canonical_id = canonical.receipt_id;
     let mut submission = canonical;
+    submission.authorization_claim_block_height = 0;
+    submission.authorization_claim_epoch = 0;
     submission.emitted_sequence = 0;
     submission.emitted_block_height = 0;
+    submission.emitted_epoch = 0;
     assert_eq!(
         derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&submission),
         canonical_id,
-        "ledger sequence and block-height assignment must not change private receipt identity"
+        "ledger claim, sequence, block-height, and epoch assignment must not change private receipt identity"
     );
     submission
         .validate_submission()

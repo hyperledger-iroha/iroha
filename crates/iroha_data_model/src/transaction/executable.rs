@@ -345,8 +345,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Executable {
         Ok((Self::Instructions(instructions), offset))
     }
 }
-// Collect any iterator of instructions into an executable, avoiding
-// double-boxing when items are already `InstructionBox`.
+// Collect any iterator of instructions into an executable. The identity
+// `Into` implementation keeps existing `InstructionBox` items unchanged.
 impl<A> FromIterator<A> for Executable
 where
     A: Into<InstructionBox>,

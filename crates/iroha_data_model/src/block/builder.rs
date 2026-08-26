@@ -121,6 +121,25 @@ impl BlockBuilder {
             .take()
             .filter(|bundle| !bundle.is_empty());
     }
+    fn finalize_header(&mut self) {
+        self.normalize_empty_da_bundles();
+        self.header.merkle_root = self.entry_merkle.root();
+        self.header.result_merkle_root = self.result_merkle.root();
+        self.header
+            .set_da_proof_policies_hash(self.da_proof_policies.as_ref().map(HashOf::new));
+        self.header.da_commitments_hash = self
+            .da_commitments
+            .as_ref()
+            .and_then(DaCommitmentBundle::merkle_commitment);
+        self.header.da_pin_intents_hash = self
+            .da_pin_intents
+            .as_ref()
+            .and_then(DaPinIntentBundle::merkle_commitment);
+        self.header
+            .set_npos_effects_hash(self.npos_consensus_effects.as_ref().map(HashOf::new));
+        self.header
+            .set_execution_context_hash(self.execution_context.as_ref().map(HashOf::new));
+    }
     /// Attach deterministic `NPoS` effects that will be embedded in the resulting block.
     pub fn set_npos_consensus_effects(&mut self, effects: Option<NposConsensusEffects>) {
         self.npos_consensus_effects = effects.filter(|bundle| !bundle.is_empty());
@@ -135,24 +154,18 @@ impl BlockBuilder {
     }
     /// Build a `SignedBlock` with the provided signatures.
     pub fn build(mut self, signatures: BTreeSet<BlockSignature>) -> SignedBlock {
-        self.normalize_empty_da_bundles();
-        // Write roots into header
-        self.header.merkle_root = self.entry_merkle.root();
-        self.header.result_merkle_root = self.result_merkle.root();
-        let da_commitments = self.da_commitments.clone();
-        let da_proof_policies = self.da_proof_policies.clone();
-        let da_pin_intents = self.da_pin_intents.clone();
-        let npos_consensus_effects = self.npos_consensus_effects.clone();
-        self.header
-            .set_execution_context_hash(self.execution_context.as_ref().map(HashOf::new));
+        self.finalize_header();
+        self.into_block(signatures)
+    }
+    fn into_block(self, signatures: BTreeSet<BlockSignature>) -> SignedBlock {
         let payload = BlockPayload {
             header: self.header,
             external_entrypoints: self.external_entrypoints,
-            execution_context: self.execution_context.clone(),
-            da_commitments,
-            da_proof_policies,
-            da_pin_intents,
-            npos_consensus_effects,
+            execution_context: self.execution_context,
+            da_commitments: self.da_commitments,
+            da_proof_policies: self.da_proof_policies,
+            da_pin_intents: self.da_pin_intents,
+            npos_consensus_effects: self.npos_consensus_effects,
         };
         let result = BlockResult {
             time_triggers: self.time_triggers,
@@ -173,17 +186,11 @@ impl BlockBuilder {
             trigger_completions: Vec::new(),
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),
         };
-        let mut block = SignedBlock {
+        SignedBlock {
             signatures,
             payload,
             result: Some(result),
-        };
-        block.set_da_proof_policies(self.da_proof_policies);
-        block.set_da_commitments(self.da_commitments);
-        block.set_da_pin_intents(self.da_pin_intents);
-        block.set_npos_consensus_effects(self.npos_consensus_effects);
-        block.set_execution_context(self.execution_context);
-        block
+        }
     }
     /// Convenience: fallibly sign the built header hash with a single validator and return the block.
     ///
@@ -196,32 +203,11 @@ impl BlockBuilder {
         signatory_index: u64,
         private_key: &iroha_crypto::PrivateKey,
     ) -> Result<SignedBlock, iroha_crypto::Error> {
-        self.normalize_empty_da_bundles();
-        // Precompute roots and header hash
-        self.header.merkle_root = self.entry_merkle.root();
-        self.header.result_merkle_root = self.result_merkle.root();
-        self.header
-            .set_da_proof_policies_hash(self.da_proof_policies.as_ref().map(HashOf::new));
-        self.header
-            .set_execution_context_hash(self.execution_context.as_ref().map(HashOf::new));
-        self.header.da_commitments_hash = self
-            .da_commitments
-            .as_ref()
-            .and_then(DaCommitmentBundle::merkle_commitment);
-        self.header.da_pin_intents_hash = self
-            .da_pin_intents
-            .as_ref()
-            .and_then(DaPinIntentBundle::merkle_commitment);
-        self.header.set_npos_effects_hash(
-            self.npos_consensus_effects
-                .as_ref()
-                .filter(|bundle| !bundle.is_empty())
-                .map(HashOf::new),
-        );
+        self.finalize_header();
         let sig = SignatureOf::try_from_hash(private_key, self.header.hash())?;
         let mut set = BTreeSet::new();
         set.insert(BlockSignature::new(signatory_index, sig));
-        Ok(self.build(set))
+        Ok(self.into_block(set))
     }
     /// Convenience: sign the built header hash with a single validator and return the block.
     #[must_use]
@@ -412,22 +398,24 @@ mod tests {
         );
     }
     #[test]
-    fn try_build_with_signature_matches_compatibility_signature_and_verifies() {
+    fn try_build_with_signature_matches_build_with_signature_and_verifies() {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let keypair = checked_seeded_keypair(0x42, Algorithm::Ed25519);
-        let builder = BlockBuilder::new(header);
+        let mut builder = BlockBuilder::new(header);
+        builder.set_da_commitments(Some(sample_da_bundle()));
         let fallible = builder
             .clone()
             .try_build_with_signature(7, keypair.private_key())
             .expect("fallible block signing should succeed");
-        let compatibility = builder.build_with_signature(7, keypair.private_key());
-        assert_eq!(fallible.header(), compatibility.header());
+        let infallible = builder.build_with_signature(7, keypair.private_key());
+        assert_eq!(fallible.header(), infallible.header());
+        assert_eq!(fallible.da_commitments(), infallible.da_commitments());
         let fallible_signature = fallible.signatures().next().expect("fallible signature");
-        let compatibility_signature = compatibility
+        let infallible_signature = infallible
             .signatures()
             .next()
-            .expect("compatibility signature");
-        assert_eq!(fallible_signature, compatibility_signature);
+            .expect("infallible signature");
+        assert_eq!(fallible_signature, infallible_signature);
         assert_eq!(fallible_signature.index(), 7);
         fallible_signature
             .signature()

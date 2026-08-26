@@ -176,12 +176,6 @@ def _require_optional_int(obj: Mapping[str, Any], field: str) -> Optional[int]:
     return _require_int(obj, field)
 
 
-def _coerce_str(value: object, field: str) -> str:
-    if not isinstance(value, str):
-        raise TypeError(f"{field} must be a string")
-    return value
-
-
 def _require_fixed_bytes(
     obj: Mapping[str, object], field: str, expected_len: int
 ) -> bytes:

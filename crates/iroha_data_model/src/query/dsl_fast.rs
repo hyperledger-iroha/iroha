@@ -9,6 +9,7 @@ use crate::query::json::{EqualsCondition, InCondition, PredicateJson};
 pub use crate::query::tx_predicate::CommittedTxPredicate;
 use crate::query::tx_predicate::{
     committed_tx_filters_from_predicate, committed_tx_predicate_from_filters,
+    committed_tx_predicate_is_valid,
 };
 #[cfg(feature = "json")]
 use crate::query::tx_predicate::{
@@ -289,7 +290,7 @@ impl<T> CompoundPredicate<T> {
                     right.as_ref().downcast_ref::<CommittedTxPredicate>(),
                 ) {
                     let merged = and_committed_tx_predicates(left_tree.clone(), right_tree.clone());
-                    return Self::with_payload(Arc::new(merged));
+                    return Self::with_committed_tx_predicate(merged);
                 }
                 // JSON and typed committed-transaction predicates must preserve both
                 // sides. Convert the JSON side through the strict typed codec;
@@ -303,7 +304,7 @@ impl<T> CompoundPredicate<T> {
                         .map_or(CommittedTxPredicate::Const(false), |left| {
                             and_committed_tx_predicates(left, tree.clone())
                         });
-                    return Self::with_payload(Arc::new(merged));
+                    return Self::with_committed_tx_predicate(merged);
                 }
                 if let (Some(tree), Some(json)) = (
                     left.as_ref().downcast_ref::<CommittedTxPredicate>(),
@@ -313,9 +314,9 @@ impl<T> CompoundPredicate<T> {
                         .map_or(CommittedTxPredicate::Const(false), |right| {
                             and_committed_tx_predicates(tree.clone(), right)
                         });
-                    return Self::with_payload(Arc::new(merged));
+                    return Self::with_committed_tx_predicate(merged);
                 }
-                Self::with_payload(Arc::new(CommittedTxPredicate::Const(false)))
+                Self::with_committed_tx_predicate(CommittedTxPredicate::Const(false))
             }
         }
     }
@@ -338,6 +339,12 @@ impl<T> CompoundPredicate<T> {
             marker: PhantomData,
         }
     }
+    fn with_committed_tx_predicate(mut tree: CommittedTxPredicate) -> Self {
+        if !committed_tx_predicate_is_valid(&tree) {
+            tree = CommittedTxPredicate::Const(false);
+        }
+        Self::with_payload(Arc::new(tree))
+    }
     fn try_with_owned_payload<P>(payload: P) -> Result<Self, norito::core::Error>
     where
         P: Any + Send + Sync + 'static,
@@ -356,7 +363,7 @@ impl<T> CompoundPredicate<T> {
         {
             let predicate = committed_tx_predicate_from_value(value)
                 .map_err(|error| norito::json::Error::Message(error.to_string()))?;
-            return Ok(Self::with_payload(Arc::new(predicate)));
+            return Ok(Self::with_committed_tx_predicate(predicate));
         }
         match PredicateJson::try_from_value(value) {
             Ok(predicate) if predicate.is_empty() => Ok(Self::PASS),
@@ -374,7 +381,7 @@ impl<T> CompoundPredicate<T> {
         {
             let predicate = committed_tx_predicate_from_predicate_json(predicate)
                 .unwrap_or(CommittedTxPredicate::Const(false));
-            return Self::with_payload(Arc::new(predicate));
+            return Self::with_committed_tx_predicate(predicate);
         }
         let payload = PredicateJsonPayload::from_predicate(predicate);
         Self::with_payload(Arc::new(payload))
@@ -463,7 +470,7 @@ impl<T> CompoundPredicate<T> {
                 if core::any::TypeId::of::<T>()
                     == core::any::TypeId::of::<crate::query::CommittedTransaction>() =>
             {
-                Self::with_payload(Arc::new(tree))
+                Self::with_committed_tx_predicate(tree)
             }
             CompoundPredicateWire::TxPredicate(_) => {
                 return Err(norito::core::Error::Message(
@@ -833,12 +840,16 @@ impl CompoundPredicate<crate::query::CommittedTransaction> {
         if matches!(tree, CommittedTxPredicate::Const(true)) {
             Self::PASS
         } else {
-            Self::with_payload(Arc::new(tree))
+            Self::with_committed_tx_predicate(tree)
         }
     }
     /// Build a predicate from a committed-transaction predicate tree.
+    ///
+    /// Structurally invalid trees are normalized to an always-false predicate
+    /// before they are stored, so evaluation does not repeat validation for
+    /// every transaction.
     pub fn from_committed_tx_predicate(tree: CommittedTxPredicate) -> Self {
-        Self::with_payload(Arc::new(tree))
+        Self::with_committed_tx_predicate(tree)
     }
     fn payload_any(&self) -> Option<&Arc<dyn Any + Send + Sync + 'static>> {
         self.payload.as_ref()
@@ -854,7 +865,7 @@ impl CompoundPredicate<crate::query::CommittedTransaction> {
         if let Some(payload) = self.payload_any()
             && let Some(tree) = payload.downcast_ref::<CommittedTxPredicate>()
         {
-            return tree.applies(input);
+            return tree.applies_unchecked(input);
         }
         self.payload_any().is_none()
     }
@@ -1394,10 +1405,17 @@ mod codec_tests {
                 ..Default::default()
             },
         );
-        assert!(
-            norito::to_bytes(&predicate).is_err(),
-            "invalid internal filters must not enter the binary wire format"
-        );
+        assert!(matches!(
+            predicate.to_wire(),
+            CompoundPredicateWire::TxPredicate(P::Const(false))
+        ));
+        let bytes = norito::to_bytes(&predicate).expect("encode normalized predicate");
+        let binary_decoded: CompoundPredicate<query::CommittedTransaction> =
+            norito::decode_from_bytes(&bytes).expect("decode normalized predicate");
+        assert!(matches!(
+            binary_decoded.to_wire(),
+            CompoundPredicateWire::TxPredicate(P::Const(false))
+        ));
         let raw = norito::json::to_json(&predicate).expect("encode invalid filters safely");
         let decoded: CompoundPredicate<query::CommittedTransaction> =
             norito::json::from_json(&raw).expect("decode fail-closed predicate");
@@ -1405,6 +1423,21 @@ mod codec_tests {
             decoded.to_wire(),
             CompoundPredicateWire::TxPredicate(P::Const(false))
         ));
+    }
+    #[test]
+    fn committed_tx_compound_predicate_normalizes_invalid_trees_once() {
+        let predicate =
+            CompoundPredicate::<query::CommittedTransaction>::from_committed_tx_predicate(P::And(
+                Vec::new(),
+            ));
+        assert!(matches!(
+            predicate.to_wire(),
+            CompoundPredicateWire::TxPredicate(P::Const(false))
+        ));
+
+        let authority = TestAuthority::new(41);
+        let transaction = build_ext_tx(&authority, 1, true, dm::Metadata::default());
+        assert!(!predicate.applies(&transaction));
     }
     #[test]
     fn committed_tx_compound_predicate_norito_roundtrip_preserves_tree_variant() {

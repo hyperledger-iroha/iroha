@@ -701,6 +701,7 @@ pub(crate) struct PinRegistryMetricsSummary {
     pub(crate) orders_pending: u64,
     pub(crate) orders_completed: u64,
     pub(crate) orders_expired: u64,
+    pub(crate) orders_cancelled: u64,
     pub(crate) sla_met: u64,
     pub(crate) sla_missed: u64,
     pub(crate) completion_latencies: Vec<f64>,
@@ -716,27 +717,26 @@ impl PinRegistryMetricsSummary {
             ..Self::default()
         };
         for manifest in &snapshot.manifests {
-            match manifest.status_label() {
-                "pending" => {
+            match &manifest.status {
+                ManifestStatusProjection::Pending => {
                     summary.manifests_pending = summary.manifests_pending.saturating_add(1);
                 }
-                "approved" => {
+                ManifestStatusProjection::Approved { .. } => {
                     summary.manifests_approved = summary.manifests_approved.saturating_add(1);
                 }
-                "retired" => {
+                ManifestStatusProjection::Retired { .. } => {
                     summary.manifests_retired = summary.manifests_retired.saturating_add(1);
                 }
-                _ => {}
             }
         }
         for order in &snapshot.replication_orders {
-            match order.status_label() {
-                "pending" => {
+            match &order.status {
+                ReplicationOrderStatusProjection::Pending => {
                     summary.orders_pending = summary.orders_pending.saturating_add(1);
                     let slack = order.deadline_epoch().saturating_sub(order.issued_epoch()) as f64;
                     summary.deadline_slack_epochs.push(slack);
                 }
-                "completed" => {
+                ReplicationOrderStatusProjection::Completed { .. } => {
                     summary.orders_completed = summary.orders_completed.saturating_add(1);
                     if let Some(completion_epoch) = order.completion_epoch() {
                         let latency = completion_epoch.saturating_sub(order.issued_epoch()) as f64;
@@ -750,11 +750,13 @@ impl PinRegistryMetricsSummary {
                         summary.sla_missed = summary.sla_missed.saturating_add(1);
                     }
                 }
-                "expired" => {
+                ReplicationOrderStatusProjection::Expired { .. } => {
                     summary.orders_expired = summary.orders_expired.saturating_add(1);
                     summary.sla_missed = summary.sla_missed.saturating_add(1);
                 }
-                _ => {}
+                ReplicationOrderStatusProjection::Cancelled { .. } => {
+                    summary.orders_cancelled = summary.orders_cancelled.saturating_add(1);
+                }
             }
         }
         summary
@@ -803,13 +805,10 @@ impl PinRegistrySnapshot {
             anomalies.push("SuccessorForkResolved".to_string());
         }
         let immediate_successor = selection.best.map(lineage_successor_from);
-        let mut approved_successor =
-            immediate_successor
-                .as_ref()
-                .and_then(|succ| match succ.status {
-                    ManifestStatusProjection::Approved { .. } => Some(succ.clone()),
-                    _ => None,
-                });
+        let mut approved_successor = immediate_successor
+            .as_ref()
+            .filter(|successor| successor.approved_epoch.is_some())
+            .cloned();
         let mut head = manifest;
         let mut depth: u32 = 0;
         let mut current = selection.best;
@@ -826,9 +825,7 @@ impl PinRegistrySnapshot {
             }
             depth = depth.saturating_add(1);
             head = next;
-            if approved_successor.is_none()
-                && matches!(next.status, ManifestStatusProjection::Approved { .. })
-            {
+            if approved_successor.is_none() && next.approved_epoch.is_some() {
                 approved_successor = Some(lineage_successor_from(next));
             }
             let next_selection = self.successor_selection(&next.digest_hex);
@@ -856,6 +853,7 @@ pub(crate) struct RegistryManifest {
     pin_policy: Value,
     submitted_by: String,
     submitted_epoch: u64,
+    approved_epoch: Option<u64>,
     alias: Option<AliasBindingProjection>,
     metadata: Value,
     successor_of_hex: Option<String>,
@@ -929,6 +927,7 @@ enum ReplicationOrderStatusProjection {
     Pending,
     Completed { epoch: u64 },
     Expired { epoch: u64 },
+    Cancelled { epoch: u64 },
 }
 #[derive(Debug, Clone)]
 pub(crate) struct ManifestLineageSummary {
@@ -979,6 +978,18 @@ fn unix_to_rfc3339_string(unix: u64) -> Option<String> {
 pub(crate) fn optional_rfc3339(unix: Option<u64>) -> Option<String> {
     unix.and_then(unix_to_rfc3339_string)
 }
+fn lineage_rfc3339_to_json(unix: Option<u64>) -> Result<Value, json::Error> {
+    match unix {
+        None => Ok(Value::Null),
+        Some(unix) => unix_to_rfc3339_string(unix)
+            .map(Value::String)
+            .ok_or_else(|| {
+                json::Error::Message(format!(
+                    "lineage timestamp {unix} is outside the canonical RFC 3339 range"
+                ))
+            }),
+    }
+}
 #[cfg(test)]
 struct SuccessorSelection<'a> {
     best: Option<&'a RegistryManifest>,
@@ -992,21 +1003,14 @@ struct SuccessorIndex {
 }
 #[cfg(test)]
 fn successor_is_better(candidate: &RegistryManifest, current: &RegistryManifest) -> bool {
-    match (&candidate.status, &current.status) {
-        (
-            ManifestStatusProjection::Approved {
-                epoch: candidate_epoch,
-            },
-            ManifestStatusProjection::Approved {
-                epoch: current_epoch,
-            },
-        ) => {
+    match (candidate.approved_epoch, current.approved_epoch) {
+        (Some(candidate_epoch), Some(current_epoch)) => {
             candidate_epoch > current_epoch
                 || (candidate_epoch == current_epoch && candidate.digest_hex > current.digest_hex)
         }
-        (ManifestStatusProjection::Approved { .. }, _) => true,
-        (_, ManifestStatusProjection::Approved { .. }) => false,
-        _ => {
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        (None, None) => {
             candidate.submitted_epoch > current.submitted_epoch
                 || (candidate.submitted_epoch == current.submitted_epoch
                     && candidate.digest_hex > current.digest_hex)
@@ -1154,7 +1158,7 @@ fn lineage_successor_from(manifest: &RegistryManifest) -> LineageSuccessor {
     LineageSuccessor {
         digest_hex: manifest.digest_hex.clone(),
         status: manifest.status.clone(),
-        approved_epoch: manifest.status.approved_epoch(),
+        approved_epoch: manifest.approved_epoch,
         status_timestamp_unix: manifest.status_timestamp_unix,
     }
 }
@@ -1173,36 +1177,28 @@ pub(crate) fn approved_successor_for_tests(
         status_timestamp_unix,
     }
 }
-fn lineage_successor_to_json(successor: &LineageSuccessor) -> Value {
+fn lineage_successor_to_json(successor: &LineageSuccessor) -> Result<Value, json::Error> {
     let mut map = Map::new();
     map.insert(
         "digest_hex".into(),
         Value::String(successor.digest_hex.clone()),
     );
-    map.insert(
-        "status".into(),
-        successor
-            .status
-            .to_json()
-            .unwrap_or_else(|_| Value::String("unknown".to_owned())),
-    );
+    map.insert("status".into(), successor.status.to_json()?);
     map.insert(
         "approved_epoch".into(),
-        json::to_value(&successor.approved_epoch).unwrap_or(Value::Null),
+        json::to_value(&successor.approved_epoch)?,
     );
     map.insert(
         "approved_at".into(),
-        optional_rfc3339(successor.status_timestamp_unix)
-            .map(Value::String)
-            .unwrap_or(Value::Null),
+        lineage_rfc3339_to_json(successor.status_timestamp_unix)?,
     );
     map.insert(
         "status_timestamp_unix".into(),
-        json::to_value(&successor.status_timestamp_unix).unwrap_or(Value::Null),
+        json::to_value(&successor.status_timestamp_unix)?,
     );
-    Value::Object(map)
+    Ok(Value::Object(map))
 }
-pub(crate) fn lineage_to_json(lineage: &ManifestLineageSummary) -> Value {
+pub(crate) fn lineage_to_json(lineage: &ManifestLineageSummary) -> Result<Value, json::Error> {
     let mut map = Map::new();
     map.insert(
         "successor_of_hex".into(),
@@ -1215,25 +1211,23 @@ pub(crate) fn lineage_to_json(lineage: &ManifestLineageSummary) -> Value {
     map.insert("head_hex".into(), Value::String(lineage.head_hex.clone()));
     map.insert(
         "depth_to_head".into(),
-        json::to_value(&lineage.depth_to_head).unwrap_or(Value::Null),
+        json::to_value(&lineage.depth_to_head)?,
     );
     let is_head = lineage.immediate_successor.is_none();
     map.insert("is_head".into(), Value::Bool(is_head));
     map.insert(
         "superseded_by".into(),
-        lineage
-            .approved_successor
-            .as_ref()
-            .map(lineage_successor_to_json)
-            .unwrap_or(Value::Null),
+        match lineage.approved_successor.as_ref() {
+            Some(successor) => lineage_successor_to_json(successor)?,
+            None => Value::Null,
+        },
     );
     map.insert(
         "immediate_successor".into(),
-        lineage
-            .immediate_successor
-            .as_ref()
-            .map(lineage_successor_to_json)
-            .unwrap_or(Value::Null),
+        match lineage.immediate_successor.as_ref() {
+            Some(successor) => lineage_successor_to_json(successor)?,
+            None => Value::Null,
+        },
     );
     map.insert(
         "anomalies".into(),
@@ -1246,7 +1240,7 @@ pub(crate) fn lineage_to_json(lineage: &ManifestLineageSummary) -> Value {
                 .collect(),
         ),
     );
-    Value::Object(map)
+    Ok(Value::Object(map))
 }
 /// Errors raised while preparing pin registry projections.
 #[derive(Debug, Error)]
@@ -1268,6 +1262,8 @@ pub(crate) enum PinRegistryError {
         #[source]
         source: json::Error,
     },
+    #[error("invalid manifest lifecycle for {digest_hex}: {reason}")]
+    InvalidManifestLifecycle { digest_hex: String, reason: String },
     #[error("failed to decode replication order payload for {order_id_hex}: {source}")]
     DecodeReplicationOrder {
         order_id_hex: String,
@@ -1350,6 +1346,7 @@ struct LineageCandidate {
     digest: ManifestDigest,
     status: ManifestStatusProjection,
     submitted_epoch: u64,
+    approved_epoch: Option<u64>,
     status_timestamp_unix: Option<u64>,
 }
 #[derive(Debug, Clone, Default)]
@@ -1376,21 +1373,14 @@ fn manifest_status_projection(status: PinStatus) -> ManifestStatusProjection {
     }
 }
 fn lineage_candidate_is_better(candidate: &LineageCandidate, current: &LineageCandidate) -> bool {
-    match (&candidate.status, &current.status) {
-        (
-            ManifestStatusProjection::Approved {
-                epoch: candidate_epoch,
-            },
-            ManifestStatusProjection::Approved {
-                epoch: current_epoch,
-            },
-        ) => {
+    match (candidate.approved_epoch, current.approved_epoch) {
+        (Some(candidate_epoch), Some(current_epoch)) => {
             candidate_epoch > current_epoch
                 || (candidate_epoch == current_epoch && candidate.digest > current.digest)
         }
-        (ManifestStatusProjection::Approved { .. }, _) => true,
-        (_, ManifestStatusProjection::Approved { .. }) => false,
-        _ => {
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        (None, None) => {
             candidate.submitted_epoch > current.submitted_epoch
                 || (candidate.submitted_epoch == current.submitted_epoch
                     && candidate.digest > current.digest)
@@ -1401,9 +1391,13 @@ fn lineage_successor_from_candidate(candidate: &LineageCandidate) -> LineageSucc
     LineageSuccessor {
         digest_hex: candidate.digest.as_bytes().encode_hex::<String>(),
         status: candidate.status.clone(),
-        approved_epoch: candidate.status.approved_epoch(),
+        approved_epoch: candidate.approved_epoch,
         status_timestamp_unix: candidate.status_timestamp_unix,
     }
+}
+fn deduplicate_lineage_anomalies(anomalies: &mut Vec<String>) {
+    let mut seen = HashSet::with_capacity(anomalies.len());
+    anomalies.retain(|anomaly| seen.insert(anomaly.clone()));
 }
 fn collect_manifest_lineages(
     world: &WorldView<'_>,
@@ -1461,6 +1455,7 @@ fn collect_manifest_lineages(
                 digest: *digest,
                 status: manifest_status_projection(record.status),
                 submitted_epoch: record.submitted_epoch,
+                approved_epoch: record.approved_epoch,
                 status_timestamp_unix: metadata_timestamp_hint(
                     &record.metadata,
                     METADATA_STATUS_TIMESTAMP_KEY,
@@ -1504,9 +1499,7 @@ fn collect_manifest_lineages(
             if state.immediate_successor.is_none() {
                 state.immediate_successor = Some(successor.clone());
             }
-            if state.approved_successor.is_none()
-                && matches!(&next.status, ManifestStatusProjection::Approved { .. })
-            {
+            if state.approved_successor.is_none() && next.approved_epoch.is_some() {
                 state.approved_successor = Some(successor);
             }
             state.depth = state.depth.saturating_add(1);
@@ -1516,13 +1509,16 @@ fn collect_manifest_lineages(
     }
     states
         .into_iter()
-        .map(|state| ManifestLineageSummary {
-            successor_of_hex: state.successor_of_hex,
-            head_hex: state.head.as_bytes().encode_hex::<String>(),
-            depth_to_head: state.depth,
-            approved_successor: state.approved_successor,
-            immediate_successor: state.immediate_successor,
-            anomalies: state.anomalies,
+        .map(|mut state| {
+            deduplicate_lineage_anomalies(&mut state.anomalies);
+            ManifestLineageSummary {
+                successor_of_hex: state.successor_of_hex,
+                head_hex: state.head.as_bytes().encode_hex::<String>(),
+                depth_to_head: state.depth,
+                approved_successor: state.approved_successor,
+                immediate_successor: state.immediate_successor,
+                anomalies: state.anomalies,
+            }
         })
         .collect()
 }
@@ -1562,8 +1558,7 @@ pub(crate) fn collect_alias_page(
     let mut total_count = 0_usize;
     let mut selected = Vec::with_capacity(limit);
     for (alias_id, alias_record) in world.manifest_aliases().iter() {
-        if namespace_filter
-            .is_some_and(|namespace| !alias_id.namespace.eq_ignore_ascii_case(namespace))
+        if namespace_filter.is_some_and(|namespace| alias_id.namespace != namespace)
             || digest_filter.is_some_and(|digest| alias_record.manifest != digest)
         {
             continue;
@@ -1646,6 +1641,25 @@ impl RegistryManifest {
         record: &PinManifestRecord,
     ) -> Result<Self, PinRegistryError> {
         let digest_hex = digest.as_bytes().encode_hex::<String>();
+        let approval_history_is_valid = match record.status {
+            PinStatus::Pending => record.approved_epoch.is_none(),
+            PinStatus::Approved(epoch) => {
+                record.approved_epoch == Some(epoch) && record.submitted_epoch <= epoch
+            }
+            PinStatus::Retired(retired_epoch) => {
+                record.submitted_epoch <= retired_epoch
+                    && record.approved_epoch.is_none_or(|approved_epoch| {
+                        record.submitted_epoch <= approved_epoch && approved_epoch <= retired_epoch
+                    })
+            }
+        };
+        if !approval_history_is_valid {
+            return Err(PinRegistryError::InvalidManifestLifecycle {
+                digest_hex,
+                reason: "status, submitted epoch, and retained approval epoch are inconsistent"
+                    .to_owned(),
+            });
+        }
         let chunker = RegistryChunkerHandle {
             profile_id: record.chunker.profile_id,
             namespace: record.chunker.namespace.clone(),
@@ -1686,6 +1700,7 @@ impl RegistryManifest {
             pin_policy,
             submitted_by: record.submitted_by.to_string(),
             submitted_epoch: record.submitted_epoch,
+            approved_epoch: record.approved_epoch,
             alias,
             metadata,
             successor_of_hex,
@@ -1734,6 +1749,10 @@ impl RegistryManifest {
         map.insert(
             "submitted_epoch".into(),
             json::to_value(&self.submitted_epoch)?,
+        );
+        map.insert(
+            "approved_epoch".into(),
+            json::to_value(&self.approved_epoch)?,
         );
         map.insert("status".into(), self.status.to_json()?);
         map.insert("metadata".into(), self.metadata.clone());
@@ -1819,13 +1838,6 @@ impl ManifestStatusProjection {
             ManifestStatusProjection::Pending => "pending",
             ManifestStatusProjection::Approved { .. } => "approved",
             ManifestStatusProjection::Retired { .. } => "retired",
-        }
-    }
-    fn approved_epoch(&self) -> Option<u64> {
-        if let Self::Approved { epoch } = self {
-            Some(*epoch)
-        } else {
-            None
         }
     }
     fn to_json(&self) -> Result<Value, json::Error> {
@@ -1919,6 +1931,8 @@ impl RegistryReplicationOrder {
             || order.order_id != *record.order_id.as_bytes()
             || order.manifest_digest != *record.manifest_digest.as_bytes()
             || order.manifest_cid.as_slice() != record.manifest_root_cid.as_bytes()
+            || order.issued_at != record.issued_epoch
+            || order.deadline_at != record.deadline_epoch
         {
             return Err(PinRegistryError::InvalidReplicationOrder {
                 order_id_hex,
@@ -1939,6 +1953,7 @@ impl RegistryReplicationOrder {
             });
         }
         let mut completed_providers = HashSet::new();
+        let mut previous_completion_epoch = None;
         for completion in &record.provider_completions {
             if !order
                 .assignments
@@ -1947,6 +1962,8 @@ impl RegistryReplicationOrder {
                 || !completed_providers.insert(*completion.provider_id.as_bytes())
                 || completion.completion_epoch < record.issued_epoch
                 || completion.completion_epoch > record.deadline_epoch
+                || previous_completion_epoch
+                    .is_some_and(|previous| completion.completion_epoch < previous)
                 || completion.assignment_revision != record.assignment_revision
                 || !completion.completion_authority.is_valid()
                 || completion.completed_by != completion.completion_authority.provider_owner
@@ -1954,13 +1971,20 @@ impl RegistryReplicationOrder {
             {
                 return Err(PinRegistryError::InvalidReplicationOrder {
                     order_id_hex,
-                    reason: "provider completion state is duplicate, unassigned, outside the ledger epoch window, or not bound to the exact assignment, authority, and finalized anchor".to_owned(),
+                    reason: "provider completion state is duplicate, out of order, unassigned, outside the ledger epoch window, or not bound to the exact assignment, authority, and finalized anchor".to_owned(),
                 });
             }
+            previous_completion_epoch = Some(completion.completion_epoch);
         }
         let lifecycle_consistent = match record.status {
-            ReplicationOrderStatus::Pending | ReplicationOrderStatus::Expired(_) => {
+            ReplicationOrderStatus::Pending => record.provider_completions.len() < target_replicas,
+            ReplicationOrderStatus::Cancelled(epoch) => {
                 record.provider_completions.len() < target_replicas
+                    && epoch >= record.issued_epoch
+                    && epoch <= record.deadline_epoch
+            }
+            ReplicationOrderStatus::Expired(epoch) => {
+                record.provider_completions.len() < target_replicas && epoch > record.deadline_epoch
             }
             ReplicationOrderStatus::Completed(epoch) => {
                 record.provider_completions.len() == target_replicas
@@ -2019,6 +2043,9 @@ impl RegistryReplicationOrder {
             }
             ReplicationOrderStatus::Expired(epoch) => {
                 ReplicationOrderStatusProjection::Expired { epoch }
+            }
+            ReplicationOrderStatus::Cancelled(epoch) => {
+                ReplicationOrderStatusProjection::Cancelled { epoch }
             }
         };
         Ok(Self {
@@ -2178,6 +2205,7 @@ impl ReplicationOrderStatusProjection {
             ReplicationOrderStatusProjection::Pending => "pending",
             ReplicationOrderStatusProjection::Completed { .. } => "completed",
             ReplicationOrderStatusProjection::Expired { .. } => "expired",
+            ReplicationOrderStatusProjection::Cancelled { .. } => "cancelled",
         }
     }
     fn to_json(&self) -> Result<Value, json::Error> {
@@ -2185,7 +2213,8 @@ impl ReplicationOrderStatusProjection {
         map.insert("state".into(), Value::String(self.label().to_owned()));
         match self {
             ReplicationOrderStatusProjection::Completed { epoch }
-            | ReplicationOrderStatusProjection::Expired { epoch } => {
+            | ReplicationOrderStatusProjection::Expired { epoch }
+            | ReplicationOrderStatusProjection::Cancelled { epoch } => {
                 map.insert("epoch".into(), json::to_value(epoch)?);
             }
             ReplicationOrderStatusProjection::Pending => {}
@@ -2280,6 +2309,23 @@ fn storage_class_label(class: StorageClass) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lineage_anomalies_are_unique_without_reordering() {
+        let mut anomalies = vec![
+            "SuccessorForkResolved".to_owned(),
+            "LineageCycleDetected".to_owned(),
+            "SuccessorForkResolved".to_owned(),
+        ];
+        deduplicate_lineage_anomalies(&mut anomalies);
+        assert_eq!(
+            anomalies,
+            vec![
+                "SuccessorForkResolved".to_owned(),
+                "LineageCycleDetected".to_owned(),
+            ]
+        );
+    }
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
     use iroha_crypto::PublicKey;
     use iroha_data_model::{
@@ -2611,6 +2657,10 @@ mod tests {
             status.get("state").and_then(Value::as_str),
             Some("approved")
         );
+        assert_eq!(
+            object.get("approved_epoch").and_then(Value::as_u64),
+            Some(64)
+        );
         let alias_json = object
             .get("alias")
             .and_then(Value::as_object)
@@ -2621,6 +2671,12 @@ mod tests {
             alias_json.get("proof_b64").and_then(Value::as_str),
             Some(expected_proof.as_str())
         );
+        let mut invalid_history = record.clone();
+        invalid_history.approved_epoch = None;
+        assert!(matches!(
+            RegistryManifest::from_store(&digest, &invalid_history),
+            Err(PinRegistryError::InvalidManifestLifecycle { .. })
+        ));
     }
     #[test]
     fn registry_replication_order_serializes_providers() {
@@ -2644,8 +2700,8 @@ mod tests {
                     lane: None,
                 },
             ],
-            issued_at: 1_699_999_000,
-            deadline_at: 1_700_000_000,
+            issued_at: 10,
+            deadline_at: 20,
             sla: ReplicationOrderSlaV1 {
                 ingest_deadline_secs: 1_000,
                 min_availability_percent_milli: 99_000,
@@ -2779,6 +2835,26 @@ mod tests {
                 .map(|s| BASE64_STD.decode(s.as_bytes()).expect("decode base64")),
             Some(canonical)
         );
+        let mut cancelled_record = record.clone();
+        cancelled_record.provider_completions.clear();
+        cancelled_record.status = ReplicationOrderStatus::Cancelled(16);
+        let cancelled =
+            RegistryReplicationOrder::from_store(&cancelled_record.order_id, &cancelled_record)
+                .expect("cancelled registry order");
+        let cancelled_value = cancelled.to_json().expect("serialize cancelled order");
+        let cancelled_status = cancelled_value
+            .as_object()
+            .and_then(|order| order.get("status"))
+            .and_then(Value::as_object)
+            .expect("cancelled status object");
+        assert_eq!(
+            cancelled_status.get("state").and_then(Value::as_str),
+            Some("cancelled")
+        );
+        assert_eq!(
+            cancelled_status.get("epoch").and_then(Value::as_u64),
+            Some(16)
+        );
         let mut invalid_records = Vec::new();
         let mut zero_assignment_revision = record.clone();
         zero_assignment_revision.assignment_revision = 0;
@@ -2797,11 +2873,95 @@ mod tests {
             .finalized_anchor
             .block_hash = [0; 32];
         invalid_records.push(invalid_anchor);
+        let mut premature_expiry = record.clone();
+        premature_expiry.provider_completions.clear();
+        premature_expiry.status = ReplicationOrderStatus::Expired(record.deadline_epoch);
+        invalid_records.push(premature_expiry);
+        let mut premature_cancellation = record.clone();
+        premature_cancellation.provider_completions.clear();
+        premature_cancellation.status =
+            ReplicationOrderStatus::Cancelled(record.issued_epoch.saturating_sub(1));
+        invalid_records.push(premature_cancellation);
+        let mut substituted_issued_epoch = record.clone();
+        substituted_issued_epoch.issued_epoch += 1;
+        invalid_records.push(substituted_issued_epoch);
+        let mut substituted_deadline_epoch = record.clone();
+        substituted_deadline_epoch.deadline_epoch += 1;
+        invalid_records.push(substituted_deadline_epoch);
+        let mut two_target_payload = order_payload.clone();
+        two_target_payload.target_replicas = 2;
+        let mut decreasing_completion_epochs = record.clone();
+        decreasing_completion_epochs.canonical_order =
+            norito::to_bytes(&two_target_payload).expect("encode two-target order");
+        let mut second_completion = decreasing_completion_epochs.provider_completions[0].clone();
+        second_completion.provider_id = ProviderId::new(order_payload.assignments[1].provider_id);
+        second_completion.completion_epoch = 14;
+        second_completion.finalized_anchor = ProviderIngestFinalizedAnchorV1 {
+            height: 14,
+            block_hash: [0xA4; 32],
+        };
+        decreasing_completion_epochs
+            .provider_completions
+            .push(second_completion);
+        decreasing_completion_epochs.status = ReplicationOrderStatus::Completed(14);
+        invalid_records.push(decreasing_completion_epochs);
         for invalid in invalid_records {
             assert!(
                 RegistryReplicationOrder::from_store(&invalid.order_id, &invalid).is_err(),
                 "invalid assignment, authority, or finalized-anchor binding must fail closed"
             );
         }
+    }
+    #[test]
+    fn lineage_json_preserves_typed_status_and_epochs_without_fallbacks() {
+        let successor = LineageSuccessor {
+            digest_hex: "ab".repeat(32),
+            status: ManifestStatusProjection::Retired { epoch: 4 },
+            approved_epoch: Some(3),
+            status_timestamp_unix: Some(4),
+        };
+        let lineage = ManifestLineageSummary {
+            successor_of_hex: Some("cd".repeat(32)),
+            head_hex: successor.digest_hex.clone(),
+            depth_to_head: 1,
+            approved_successor: Some(successor.clone()),
+            immediate_successor: Some(successor),
+            anomalies: Vec::new(),
+        };
+        let value = lineage_to_json(&lineage).expect("serialize exact lineage projection");
+        let object = value.as_object().expect("lineage object");
+        assert_eq!(object.get("depth_to_head").and_then(Value::as_u64), Some(1));
+        for field in ["superseded_by", "immediate_successor"] {
+            let projected = object
+                .get(field)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{field} successor object"));
+            let status = projected
+                .get("status")
+                .and_then(Value::as_object)
+                .expect("typed successor status");
+            assert_eq!(status.get("state").and_then(Value::as_str), Some("retired"));
+            assert_eq!(status.get("epoch").and_then(Value::as_u64), Some(4));
+            assert_eq!(
+                projected.get("approved_epoch").and_then(Value::as_u64),
+                Some(3)
+            );
+            assert_eq!(
+                projected
+                    .get("status_timestamp_unix")
+                    .and_then(Value::as_u64),
+                Some(4)
+            );
+        }
+        let mut unrepresentable = lineage;
+        unrepresentable
+            .immediate_successor
+            .as_mut()
+            .expect("immediate successor")
+            .status_timestamp_unix = Some(u64::MAX);
+        assert!(
+            lineage_to_json(&unrepresentable).is_err(),
+            "an unrepresentable retained timestamp must fail the response instead of becoming null"
+        );
     }
 }

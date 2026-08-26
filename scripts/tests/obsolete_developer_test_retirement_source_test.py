@@ -125,10 +125,10 @@ harness = false
         "99d9aba43f5e6aae77a818631f034d9465cf1c4e6963fc0b9719ae2016c7d0ab",
         4_723,
         227,
-        "32617b52ced72537c979c749d14adb3006b238a8",
-        "001921234ba49efed859155722186f8a3b1a52d48af593becd8724cb922b6912",
-        4_618,
-        226,
+        "891b8208480e0120b39f41dc6bf3186a8f4f34ff",
+        "2a38dbe53ea64e9a19d79947af8046960c0dcbbd4af0cab4c5a5e0ba915a834b",
+        4_473,
+        217,
     ),
 )
 
@@ -149,6 +149,13 @@ IVM_MANIFEST_PIN = FilePin(
     8_846,
     324,
 )
+CURRENT_IVM_MANIFEST_PIN = FilePin(
+    IVM_MANIFEST,
+    "dcadf8ad542d78055c44e3e631e9ca1c56e7c953",
+    "f08808033d0426b75f17f8842286a23eb3f2febe0dc1fec9b3cdcd680111c7c1",
+    8_758,
+    322,
+)
 OPENING_LOCK_PIN = FilePin(
     LOCKFILE,
     "bf7633694c3f2fdca07de4d99743a09bad2daa12",
@@ -158,10 +165,10 @@ OPENING_LOCK_PIN = FilePin(
 )
 LOCK_PIN = FilePin(
     LOCKFILE,
-    "5d04cef722cb695dd636110be01ff8de52ae7b45",
-    "c90b3659d6cb44cd1d6f9e75e7b98aacc0d30bbe23041d4e6e109e8a206fa76b",
-    311_172,
-    13_613,
+    "e320ffaa8af21674f079573a1aaa1a8d73185ae8",
+    "71df4943f58ae56f1a6f5286962ed02ae21b5c1940ac8d3bede09dc10dd424d2",
+    311_205,
+    13_616,
 )
 REPLACEMENT_PINS = (
     FilePin(
@@ -236,6 +243,35 @@ REPLACEMENT_PINS = (
     ),
 )
 
+CURRENT_REPLACEMENT_OVERRIDES = {
+    "crates/norito/examples/telemetry_dump.rs": FilePin(
+        "crates/norito/examples/telemetry_dump.rs",
+        "b651224a067885addde2b03acc5c2c746f873fd2",
+        "897cbcf20a8a9342df98a7d86f4df623e1ecf0cb3668d90dab3bdba3c5906d42",
+        1_237,
+        36,
+    ),
+    "crates/norito/tests/grouped/group_01.rs": FilePin(
+        "crates/norito/tests/grouped/group_01.rs",
+        "83c5eb43ac3784a224001f332e9e2944716f1d85",
+        "0293632ed881122ad9690cff5c9baa88c3f1ed6f81a1c2735984325c3c29a8d7",
+        1_836,
+        64,
+    ),
+    "crates/norito/README.md": FilePin(
+        "crates/norito/README.md",
+        "ec9359671f5c83686fe9a45b3b5a4886d6e4973d",
+        "6e667d81fc39843f1033b49b2c6b8b3fe22c2b68c6bfaaf86e23f98374a19f5c",
+        30_346,
+        523,
+    ),
+}
+CURRENT_REPLACEMENT_PINS = tuple(
+    CURRENT_REPLACEMENT_OVERRIDES.get(pin.path, pin)
+    for pin in REPLACEMENT_PINS
+    if pin.path != "crates/norito/tests/adaptive_codec_telemetry.rs"
+)
+
 
 @dataclass(frozen=True)
 class InventoryPin:
@@ -276,8 +312,6 @@ REPLACEMENT_MARKERS = {
     "crates/norito/tests/grouped/group_01.rs": (
         ('#[path = "../adaptive_telemetry.rs"]', 1),
         ("mod adaptive_telemetry;", 1),
-        ('#[path = "../adaptive_codec_telemetry.rs"]', 1),
-        ("mod adaptive_codec_telemetry;", 1),
     ),
     "crates/norito/README.md": (
         ("cargo run -p norito --example telemetry_dump", 2),
@@ -529,7 +563,7 @@ def _snapshot() -> Snapshot:
         IVM_MANIFEST,
         WORKFLOW,
         *(pin.path for pin in MANIFEST_PINS),
-        *(pin.path for pin in REPLACEMENT_PINS),
+        *(pin.path for pin in CURRENT_REPLACEMENT_PINS),
     }
     files: dict[str, bytes | None] = {path: _regular_bytes(path) for path in paths}
     for pin in SOURCE_PINS:
@@ -576,7 +610,7 @@ def _validate(snapshot: Snapshot, openings: dict[str, bytes]) -> None:
         NORITO_IMPLICIT_BENCH_INVENTORY,
         "Norito implicit bench",
     )
-    _require(ivm == _git_blob(IVM_MANIFEST_PIN.blob), "IVM manifest changed")
+    _require(ivm == _git_blob(CURRENT_IVM_MANIFEST_PIN.blob), "IVM manifest changed")
     _require(ivm.decode().count("autobins = false") == 1, "IVM autobins changed")
     _require(ivm.decode().count("autotests = false") == 1, "IVM autotests changed")
     _check_inventory(_tables(ivm.decode(), "test"), IVM_TEST_INVENTORY, "IVM test target")
@@ -586,7 +620,7 @@ def _validate(snapshot: Snapshot, openings: dict[str, bytes]) -> None:
     lock = snapshot.files[LOCKFILE]
     assert lock is not None
     _require(lock == _git_blob(LOCK_PIN.blob), "Cargo.lock differs from current authority")
-    for pin in REPLACEMENT_PINS:
+    for pin in CURRENT_REPLACEMENT_PINS:
         data = snapshot.files[pin.path]
         _require(data is not None, f"replacement missing: {pin.path}")
         _require(len(data) == pin.byte_count, f"replacement bytes changed: {pin.path}")

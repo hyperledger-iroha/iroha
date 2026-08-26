@@ -48,17 +48,17 @@ use iroha::{
             SoraAppInfraMutationPreconditionV1, SoraAppInfraServiceRefV1, SoraAppRouteProjectionV1,
             SoraAppStaticSiteBindingV1, SoraArtifactDistributionPolicyV1, SoraArtifactKindV1,
             SoraArtifactRefV1, SoraCertifiedResponsePolicyV1, SoraConfigExportV1,
-            SoraContainerManifestV1,
-            SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
-            SoraHfModelFormatV1, SoraInrouGuestIsaV1, SoraInrouGuestOsV1, SoraInrouManifestV1,
-            SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1, SoraMailboxContractV1,
-            SoraModelHostCapabilityRecordV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
-            SoraPublishedInrouGuestImageArtifactV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
-            SoraServiceExactCurrentRevisionPreconditionV1, SoraServiceExecutionPlaneV1,
-            SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1,
-            SoraServiceLeaseStatusV1, SoraServiceMutationPreconditionV1, SoraStateBindingV1,
-            SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
-            SoraUploadedModelBundleV1, encode_agent_artifact_allow_provenance_payload,
+            SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
+            SoraHfBackendFamilyV1, SoraHfModelFormatV1, SoraInrouGuestIsaV1, SoraInrouGuestOsV1,
+            SoraInrouManifestV1, SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1,
+            SoraMailboxContractV1, SoraModelHostCapabilityRecordV1, SoraNetworkAllowlistEntryV1,
+            SoraNetworkPolicyV1, SoraPublishedInrouGuestImageArtifactV1, SoraRouteTargetV1,
+            SoraRouteVisibilityV1, SoraServiceExactCurrentRevisionPreconditionV1,
+            SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+            SoraServiceLeaseStatusV1, SoraServiceManifestV1, SoraServiceMutationPreconditionV1,
+            SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1,
+            SoraTlsModeV1, SoraUploadedModelBundleV1,
+            encode_agent_artifact_allow_provenance_payload,
             encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
             encode_agent_lease_renew_provenance_payload,
             encode_agent_message_ack_provenance_payload,
@@ -4820,8 +4820,8 @@ define_live_mutation_args! {
         /// Path to an `AgentApartmentManifestV1` JSON document.
         #[arg(long, value_name = "PATH", default_value = DEFAULT_AGENT_APARTMENT_MANIFEST)]
         manifest: PathBuf,
-        /// Lease length, measured in deterministic control-plane sequence ticks.
-        #[arg(long, value_name = "TICKS", default_value_t = 120)]
+        /// Lease length, measured in consensus blocks.
+        #[arg(long, value_name = "BLOCKS", default_value_t = 120)]
         lease_blocks: u64,
         /// Initial autonomy execution budget units.
         #[arg(long, value_name = "UNITS", default_value_t = AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS)]
@@ -4831,7 +4831,7 @@ define_live_mutation_args! {
 impl AgentDeployArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if self.lease_blocks == 0 {
-            return Err(eyre!("--lease-ticks must be greater than zero"));
+            return Err(eyre!("--lease-blocks must be greater than zero"));
         }
         if self.autonomy_budget_units == 0 {
             return Err(eyre!("--autonomy-budget-units must be greater than zero"));
@@ -4865,15 +4865,15 @@ define_live_mutation_args! {
         /// Apartment name to renew.
         #[arg(long, value_name = "NAME")]
         apartment_name: String,
-        /// Lease extension ticks.
-        #[arg(long, value_name = "TICKS", default_value_t = 120)]
+        /// Lease extension in consensus blocks.
+        #[arg(long, value_name = "BLOCKS", default_value_t = 120)]
         lease_blocks: u64,
     }
 }
 impl AgentLeaseRenewArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if self.lease_blocks == 0 {
-            return Err(eyre!("--lease-ticks must be greater than zero"));
+            return Err(eyre!("--lease-blocks must be greater than zero"));
         }
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_agent_lease_renew_request(
@@ -12510,7 +12510,7 @@ fn signed_agent_lease_renew_request(
         return Err(eyre!("--apartment-name must not be empty"));
     }
     if lease_blocks == 0 {
-        return Err(eyre!("--lease-ticks must be greater than zero"));
+        return Err(eyre!("--lease-blocks must be greater than zero"));
     }
     let payload = AgentLeaseRenewPayload {
         apartment_name: apartment_name.to_owned(),
@@ -12635,7 +12635,7 @@ fn sign_generated_hf_apartment_provenance(
     let payload = encode_agent_deploy_provenance_payload(
         manifest.clone(),
         HF_GENERATED_AGENT_LEASE_BLOCKS,
-        Some(HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS),
+        HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS,
     )
     .wrap_err("failed to encode generated HF apartment manifest for signing")?;
     Ok(ManifestProvenance {
@@ -13569,7 +13569,7 @@ fn encode_agent_deploy_signature_payload(payload: &AgentDeployPayload) -> Result
     encode_agent_deploy_provenance_payload(
         payload.manifest.clone(),
         payload.lease_blocks,
-        Some(payload.autonomy_budget_units),
+        payload.autonomy_budget_units,
     )
     .wrap_err("failed to encode agent deploy signature payload tuple")
 }
@@ -16100,8 +16100,7 @@ fn service_handler(
                     max_pending_messages: NonZeroU32::new(max_pending_messages)
                         .expect("nonzero literal"),
                     max_message_bytes: NonZeroU64::new(max_message_bytes).expect("nonzero literal"),
-                    retention_blocks: NonZeroU32::new(retention_blocks)
-                        .expect("nonzero literal"),
+                    retention_blocks: NonZeroU32::new(retention_blocks).expect("nonzero literal"),
                 }
             },
         ),
@@ -17928,8 +17927,7 @@ mod tests {
     #[test]
     fn taira_inrou_canary_validator_accepts_exact_v1_bundle() {
         let bundle = canonical_taira_inrou_bundle_fixture();
-        validate_taira_inrou_canary_bundle(&bundle)
-            .expect("canonical Taira Inrou V1 bundle");
+        validate_taira_inrou_canary_bundle(&bundle).expect("canonical Taira Inrou V1 bundle");
         validate_taira_inrou_canary_source_bundle(&bundle)
             .expect("canonical Taira Inrou V1 source bundle");
     }
@@ -17942,8 +17940,14 @@ mod tests {
         refresh_taira_container_reference(&mut lifecycle);
         validate_taira_inrou_canary_bundle(&lifecycle)
             .expect("generic admission still accepts the alternate lifecycle");
-        validate_taira_inrou_canary_source_bundle(&lifecycle)
+        let lifecycle_error = validate_taira_inrou_canary_source_bundle(&lifecycle)
             .expect_err("release staging must reject an alternate lifecycle");
+        assert!(
+            lifecycle_error
+                .to_string()
+                .contains("exact canonical deploy container and service manifests"),
+            "{lifecycle_error}"
+        );
 
         let mut rollout = canonical_taira_inrou_bundle_fixture();
         rollout.service.rollout.health_window_secs =
@@ -17953,8 +17957,14 @@ mod tests {
             .expect("refresh immutable rollout revision identity");
         validate_taira_inrou_canary_bundle(&rollout)
             .expect("generic admission still accepts the alternate rollout policy");
-        validate_taira_inrou_canary_source_bundle(&rollout)
+        let rollout_error = validate_taira_inrou_canary_source_bundle(&rollout)
             .expect_err("release staging must reject an alternate rollout policy");
+        assert!(
+            rollout_error
+                .to_string()
+                .contains("exact canonical deploy container and service manifests"),
+            "{rollout_error}"
+        );
     }
     #[test]
     fn taira_inrou_canary_bundle_payload_is_the_exact_canonical_archive() {
@@ -18160,8 +18170,14 @@ mod tests {
             }
         }
 
-        create_taira_inrou_canary_workspace(&kernel, &rootfs, &initrd, &output)
+        let reuse_error = create_taira_inrou_canary_workspace(&kernel, &rootfs, &initrd, &output)
             .expect_err("existing workspaces must never be reused");
+        assert!(
+            reuse_error
+                .to_string()
+                .contains("existing directories are never reused"),
+            "{reuse_error}"
+        );
         validate_generated_taira_inrou_workspace(&output)
             .expect("failed reuse must preserve the original valid workspace");
     }
@@ -18212,8 +18228,14 @@ mod tests {
 
         let mut trailing = canonical;
         trailing.push(0);
-        validate_taira_inrou_canary_bundle_payload(&trailing)
+        let trailing_error = validate_taira_inrou_canary_bundle_payload(&trailing)
             .expect_err("trailing archive bytes must fail");
+        assert!(
+            trailing_error
+                .to_string()
+                .contains("exact deterministic gzip/USTAR"),
+            "{trailing_error}"
+        );
     }
     fn python3_available() -> bool {
         Command::new("python3")
@@ -21357,6 +21379,8 @@ mod tests {
                 "recent_audit_events": []
             }
         });
+        StatusOutput::from_network(endpoint.clone(), canonical.clone(), None)
+            .expect("the complete canonical control-plane shape must parse");
         for field in [
             "schema_version",
             "service_count",
@@ -21370,8 +21394,13 @@ mod tests {
                 .and_then(norito::json::Value::as_object_mut)
                 .expect("control-plane object")
                 .remove(field);
-            StatusOutput::from_network(endpoint.clone(), omitted, None)
+            let error = StatusOutput::from_network(endpoint.clone(), omitted, None)
                 .expect_err("an omitted canonical control-plane key must fail");
+            let rendered = format!("{error:#}");
+            assert!(
+                rendered.contains(&format!("missing field `{field}`")),
+                "omitting `{field}` returned an unexpected error: {rendered}"
+            );
         }
 
         let mut unknown = canonical.clone();
@@ -21380,8 +21409,13 @@ mod tests {
             .and_then(norito::json::Value::as_object_mut)
             .expect("control-plane object")
             .insert("legacy_services".to_owned(), norito::json::Value::Null);
-        StatusOutput::from_network(endpoint.clone(), unknown, None)
+        let unknown_error = StatusOutput::from_network(endpoint.clone(), unknown, None)
             .expect_err("an unknown control-plane key must fail");
+        let unknown_rendered = format!("{unknown_error:#}");
+        assert!(
+            unknown_rendered.contains("unknown field `legacy_services`"),
+            "{unknown_rendered}"
+        );
 
         let mut malformed = canonical.clone();
         malformed
@@ -21389,8 +21423,13 @@ mod tests {
             .and_then(norito::json::Value::as_object_mut)
             .expect("control-plane object")
             .insert("services".to_owned(), norito::json::Value::Null);
-        StatusOutput::from_network(endpoint.clone(), malformed, None)
+        let malformed_error = StatusOutput::from_network(endpoint.clone(), malformed, None)
             .expect_err("a malformed control-plane service list must fail");
+        let malformed_rendered = format!("{malformed_error:#}");
+        assert!(
+            malformed_rendered.contains("expected array start"),
+            "{malformed_rendered}"
+        );
 
         let mut inconsistent = canonical;
         inconsistent
@@ -23238,6 +23277,7 @@ mod tests {
             },
             BTreeMap::new(),
             BTreeMap::new(),
+            SoraServiceMutationPreconditionV1::ServiceAbsent,
             Some(&authority),
             &key_pair,
         )
@@ -23289,6 +23329,7 @@ mod tests {
                 services: Vec::new(),
             },
             Vec::new(),
+            SoraAppInfraMutationPreconditionV1::AppAbsent,
             &key_pair,
         )
         .expect("canonical signed app request");
@@ -24034,7 +24075,7 @@ mod tests {
         (
             payload.manifest.clone(),
             payload.lease_blocks,
-            Some(payload.autonomy_budget_units),
+            payload.autonomy_budget_units,
         )
     );
     signature_payload_layout_case!(
@@ -24192,8 +24233,14 @@ mod tests {
             "01234567",
             "0123456789ABCDEF0123456789ABCDEF01234567",
         ] {
-            parse_hf_revision_arg(revision)
+            let error = parse_hf_revision_arg(revision)
                 .expect_err("mutable or noncanonical revision must fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("full 40-character lowercase hexadecimal commit OID"),
+                "{error}"
+            );
         }
     }
     #[test]

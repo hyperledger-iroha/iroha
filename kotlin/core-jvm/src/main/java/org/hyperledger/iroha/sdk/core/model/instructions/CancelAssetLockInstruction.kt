@@ -221,7 +221,6 @@ object CancelAssetLockWirePayloadEncoder {
             val mantissaDecoder = NoritoDecoder(
                 mantissaPayload,
                 decoder.flags,
-                decoder.flagsHint,
             )
             val byteLength = checkedLength(
                 mantissaDecoder.readUInt(32),
@@ -241,7 +240,6 @@ object CancelAssetLockWirePayloadEncoder {
             val scaleDecoder = NoritoDecoder(
                 scalePayload,
                 decoder.flags,
-                decoder.flagsHint,
             )
             val scale = Math.toIntExact(uint32Adapter.decode(scaleDecoder))
             require(scaleDecoder.remaining() == 0) { "Trailing bytes after Quantity.scale" }
@@ -284,7 +282,7 @@ object CancelAssetLockWirePayloadEncoder {
         fieldName: String,
     ): T {
         val payload = decodeSizedRawField(decoder, fieldName)
-        val child = NoritoDecoder(payload, decoder.flags, decoder.flagsHint)
+        val child = NoritoDecoder(payload, decoder.flags)
         val value = adapter.decode(child)
         require(child.remaining() == 0) { "Trailing bytes after $fieldName" }
         return value

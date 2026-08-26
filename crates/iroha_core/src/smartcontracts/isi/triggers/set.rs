@@ -2091,7 +2091,6 @@ mod tests {
     }
     #[test]
     fn match_time_event_skips_recently_registered_triggers() {
-        crate::test_alias::ensure();
         let set = Set::default();
         {
             let mut block = set.block();
@@ -2160,7 +2159,6 @@ mod tests {
     }
     #[test]
     fn match_time_event_caps_periodic_materialisation() {
-        crate::test_alias::ensure();
         let set = Set::default();
         {
             let mut block = set.block();
@@ -2202,7 +2200,6 @@ mod tests {
     }
     #[test]
     fn match_time_event_skips_disabled_triggers() {
-        crate::test_alias::ensure();
         let set = Set::default();
         {
             let mut block = set.block();
@@ -2254,7 +2251,6 @@ mod tests {
     }
     #[test]
     fn match_time_event_requires_registration_metadata() {
-        crate::test_alias::ensure();
         let set = Set::default();
         {
             let mut block = set.block();

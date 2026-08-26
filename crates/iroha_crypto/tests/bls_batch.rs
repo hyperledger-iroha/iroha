@@ -10,19 +10,18 @@ use iroha_crypto::{
     bls_small_verify_aggregate_multi_message, bls_small_verify_aggregate_same_message,
     bls_small_verify_batch_deterministic,
 };
-#[cfg(not(feature = "bls-backend-blstrs"))]
 use w3f_bls::serialize::SerializableToBytes as _;
 fn bls_normal_keypair() -> (BlsNormalPublicKey, BlsNormalPrivateKey) {
-    BlsNormal::keypair(KeyGenOption::Random).expect("random BLS normal keypair")
+    BlsNormal::try_keypair(KeyGenOption::Random).expect("random BLS normal keypair")
 }
 fn bls_small_keypair() -> (BlsSmallPublicKey, BlsSmallPrivateKey) {
-    BlsSmall::keypair(KeyGenOption::Random).expect("random BLS small keypair")
+    BlsSmall::try_keypair(KeyGenOption::Random).expect("random BLS small keypair")
 }
 fn bls_normal_sign(message: &[u8], secret_key: &BlsNormalPrivateKey) -> Vec<u8> {
-    BlsNormal::sign(message, secret_key).expect("BLS normal signature")
+    BlsNormal::try_sign(message, secret_key).expect("BLS normal signature")
 }
 fn bls_small_sign(message: &[u8], secret_key: &BlsSmallPrivateKey) -> Vec<u8> {
-    BlsSmall::sign(message, secret_key).expect("BLS small signature")
+    BlsSmall::try_sign(message, secret_key).expect("BLS small signature")
 }
 #[test]
 fn bls_normal_batch_verify_ok_and_fail() {

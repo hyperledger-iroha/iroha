@@ -665,7 +665,7 @@ For higher-level walkthroughs, see:
   `ToriiClientError.incompatibleDataModel` on mismatch), `getTransactionStatus`, and recovery
   snapshots via `getPipelineRecovery(height:)`.
 - **Network time:** `getTimeNow` for `/v1/time/now` snapshots.
-- **Zero-knowledge:** prover reports/attachments list/count/delete operations and verifying key registry read/event helpers (`getVerifyingKey`, `listVerifyingKeys`, `streamVerifyingKeyEvents`).
+- **Zero-knowledge:** attachment operations and verifying key registry read/event helpers (`getVerifyingKey`, `listVerifyingKeys`, `streamVerifyingKeyEvents`).
 - **Confidential assets:** derive the wallet key hierarchy locally through `deriveConfidentialKeyset`, build memo envelopes with
   `ConfidentialEncryptedPayload`, use the proof-bound Kagemusha public-to-confidential
   top-up flow through `prepareKagemushaTopUpShield` and `submitKagemushaTopUp`,

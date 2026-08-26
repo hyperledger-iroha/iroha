@@ -47,7 +47,7 @@ use iroha::{
     query::QueryError,
 };
 use iroha_config::{
-    kura::{FsyncMode, InitMode},
+    kura::FsyncMode,
     parameters::{
         actual::{Kura as KuraConfig, LaneConfig as ActualLaneConfig},
         defaults,
@@ -5098,7 +5098,7 @@ fn copy_kura_tree_bounded(source: &Path, destination: &Path) -> Result<()> {
 }
 fn offline_kura_config(store_dir: PathBuf) -> KuraConfig {
     KuraConfig {
-        init_mode: InitMode::Strict,
+        init_mode: iroha_config::kura::InitMode::Strict,
         store_dir: WithOrigin::inline(store_dir),
         max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: NonZeroUsize::new(2).expect("two is non-zero"),

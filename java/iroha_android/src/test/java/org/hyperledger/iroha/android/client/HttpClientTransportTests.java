@@ -886,8 +886,6 @@ public final class HttpClientTransportTests {
     assert (assetDefinitionId + "#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV").equals(asset.assetId())
         : "Asset ID mismatch";
     assert assetDefinitionId.equals(asset.assetDefinitionId()) : "Asset definition mismatch";
-    assert assetDefinitionId.equals(asset.asset()) : "Legacy asset accessor mismatch";
-    assert asset.scope() == null : "Modern portfolio payload must not require legacy scope";
     assert "42".equals(asset.quantity()) : "Asset quantity mismatch";
 
     final TransportRequest request = executor.lastRequest();

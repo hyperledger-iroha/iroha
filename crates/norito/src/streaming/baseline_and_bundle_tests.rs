@@ -168,7 +168,7 @@ fn bundle_tables_enforce_max_width() {
         ],
     };
     let checksum = {
-        let _guard = norito_core::DecodeFlagsGuard::enter_with_hint(0, 0);
+        let _guard = norito_core::DecodeFlagsGuard::enter(0);
         let bytes = to_bytes(&body).expect("encode tables");
         let digest = Sha256::digest(bytes);
         let mut out = [0u8; 32];

@@ -10,28 +10,22 @@ public final class SoftwareKeyProviderBouncyCastleTests {
   private SoftwareKeyProviderBouncyCastleTests() {}
 
   public static void main(final String[] args) {
-    helperLoadsBouncyCastle();
-    removeUnknownProviderIsSafe();
+    helperLoadsDirectlyLinkedProvider();
     System.out.println("[IrohaAndroid] Software key provider BouncyCastle tests passed.");
   }
 
-  private static void helperLoadsBouncyCastle() {
-    final String providerName = "BC";
-    Security.removeProvider(providerName);
-    final Optional<KeyPairGenerator> generator = SoftwareKeyProvider.tryBouncyCastleGenerator();
-    assert generator.isPresent() : "Expected BouncyCastle provider to be present";
-    final Provider provider = generator.get().getProvider();
-    assert provider.getName().equals(providerName) : "Unexpected provider name";
-    Security.removeProvider(provider.getName());
-  }
-
-  private static void removeUnknownProviderIsSafe() {
-    Security.removeProvider("BC");
+  private static void helperLoadsDirectlyLinkedProvider() {
+    final Provider registeredProvider = Security.getProvider("BC");
     final Optional<KeyPairGenerator> generator = SoftwareKeyProvider.tryBouncyCastleGenerator();
     assert generator.isPresent() : "BouncyCastle provider should be available";
-    Security.removeProvider(generator.get().getProvider().getName());
     final Optional<KeyPairGenerator> secondAttempt = SoftwareKeyProvider.tryBouncyCastleGenerator();
-    assert secondAttempt.isPresent() : "BouncyCastle provider should remain available on subsequent attempts";
-    Security.removeProvider(secondAttempt.get().getProvider().getName());
+    assert secondAttempt.isPresent()
+        : "BouncyCastle provider should remain available on subsequent attempts";
+    assert generator.get().getProvider().getName().equals("BC") : "Unexpected provider name";
+    assert secondAttempt.get().getProvider().getName().equals("BC") : "Unexpected provider name";
+    final Provider activeProvider = Security.getProvider("BC");
+    assert activeProvider != null : "BouncyCastle provider should be registered";
+    assert registeredProvider == null || activeProvider == registeredProvider
+        : "Helper must retain an already registered provider";
   }
 }

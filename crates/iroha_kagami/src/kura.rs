@@ -375,7 +375,7 @@ mod tests {
     fn sidecar_prints_to_file() {
         use iroha_config::{
             base::WithOrigin,
-            kura::{FsyncMode, InitMode},
+            kura::FsyncMode,
             parameters::{
                 actual::{Kura as KuraConfig, LaneConfig},
                 defaults::kura::{BLOCKS_IN_MEMORY, FSYNC_INTERVAL, MERGE_LEDGER_CACHE_CAPACITY},
@@ -386,7 +386,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let (kura, _count) = Kura::new_fresh_single_lane(
             &KuraConfig {
-                init_mode: InitMode::Strict,
+                init_mode: iroha_config::kura::InitMode::Strict,
                 store_dir: WithOrigin::inline(temp.path().to_owned()),
                 max_disk_usage_bytes:
                     iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,

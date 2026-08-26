@@ -139,6 +139,63 @@ fn prepare_certified_bundle_reset_fixture(
         old_tip,
     }
 }
+
+#[test]
+fn sequential_autonomous_certificates_advance_the_durable_frontier() {
+    let temp_dir = TempDir::new().expect("sequential certificate temp dir");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = two_lane_runtime_config();
+    let lane_id = LaneId::new(1);
+    let lane = lane_config
+        .entry(lane_id)
+        .expect("sequential certificate lane");
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("sequential certificate Kura");
+    // The production constructor authenticates the complete catalog. This test
+    // helper also restores the secondary in-memory entry after the shared Kura
+    // fixture's Nexus projection is assembled independently.
+    kura.replace_lane_storage_entries_for_test(&lane_config);
+
+    for lane_block_height in 1..=2 {
+        let payload = autonomous_capacity_payload_at(
+            lane_id,
+            lane.dataspace_id,
+            lane_block_height,
+            lane_block_height,
+            &signer,
+        );
+        let prepared = prepare_autonomous_certification_for_capacity_payload(
+            &kura,
+            &lane_config,
+            &payload,
+            &signer,
+        );
+        let expected = prepared.source.clone();
+        kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
+            .expect("sequential certificate advances the durable frontier");
+
+        assert_eq!(
+            kura.latest_certified_lane_block_frontier(lane_id)
+                .expect("sequential frontier exists")
+                .proposal
+                .descriptor
+                .lane_block_height,
+            lane_block_height,
+        );
+        assert_eq!(
+            kura.durable_autonomous_lane_merge_source(
+                lane_id,
+                lane_block_height,
+                prepared.network_id,
+                prepared.epoch,
+            )
+            .expect("sequential certified bundle is durably readable"),
+            expected,
+        );
+    }
+}
+
 fn certified_bundle_reserved_for(
     plan: &CertifiedBundleCapacityPlan,
     components: impl IntoIterator<Item = CertifiedBundleCapacityComponent>,

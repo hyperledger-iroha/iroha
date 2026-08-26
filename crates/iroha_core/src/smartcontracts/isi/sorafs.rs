@@ -6,6 +6,8 @@ use crate::{
 use blake3::hash as blake3_hash;
 use core::convert::TryFrom;
 use iroha_crypto::{Algorithm, PublicKey, ed25519_parse_signature};
+#[cfg(test)]
+use iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1;
 use iroha_data_model::{
     asset::AssetId,
     events::data::sorafs::{
@@ -57,7 +59,8 @@ use iroha_data_model::{
             PinManifestSummaryV1, PinPolicy, PinResourceUsage, PinStatus, PinStatusKindV1,
             ProviderIngestCompletionAuthorityV1, ProviderIngestFinalizedAnchorV1,
             ReplicationOrderCompletionRecord, ReplicationOrderId, ReplicationOrderRecord,
-            ReplicationOrderStatus, StorageClass, derive_sorafs_auto_replication_order_id_v1,
+            ReplicationOrderStatus, SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
+            StorageClass, derive_sorafs_auto_replication_order_id_v1,
         },
         pricing::{
             PricingComputationError, PricingScheduleRecord, ProviderCreditRecord,
@@ -86,10 +89,15 @@ use sorafs_manifest::{
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
         ReplicationOrderV1,
     },
+    orderbook::BYTES_PER_GIB,
     repair::{RepairReportV1, RepairSlashProposalV1, RepairTicketId},
     validate_chunker_handle, validate_manifest, validate_manifest_root_cid, validate_pin_policy,
 };
-use std::{collections::BTreeSet, str::FromStr, sync::OnceLock};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+    sync::OnceLock,
+};
 fn next_musubi_location_for_provider(
     provider: ProviderId,
     after: Option<MusubiArchiveLocationKeyV1>,
@@ -758,20 +766,13 @@ fn parse_storage_class_label(
     value: &str,
 ) -> Result<StorageClass, InstructionExecutionError> {
     let provider_hex = hex::encode(provider_id.as_bytes());
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(invalid_parameter(format!(
-            "capacity declaration metadata `{STORAGE_CLASS_METADATA_KEY}` for provider {provider_hex} must not be empty"
-        )));
-    }
-    let normalized = trimmed.to_ascii_lowercase();
-    let class = match normalized.as_str() {
+    let class = match value {
         "hot" => StorageClass::Hot,
         "warm" => StorageClass::Warm,
         "cold" => StorageClass::Cold,
         _ => {
             return Err(invalid_parameter(format!(
-                "capacity declaration metadata `{STORAGE_CLASS_METADATA_KEY}` for provider {provider_hex} must be one of hot, warm, or cold (found `{trimmed}`)"
+                "capacity declaration metadata `{STORAGE_CLASS_METADATA_KEY}` for provider {provider_hex} must be exactly one of lowercase hot, warm, or cold (found `{value}`)"
             )));
         }
     };
@@ -780,10 +781,12 @@ fn parse_storage_class_label(
 fn storage_class_from_declaration_metadata(
     provider_id: ProviderId,
     metadata: &Metadata,
-    default: StorageClass,
 ) -> Result<StorageClass, InstructionExecutionError> {
     let Some(json_value) = metadata.get(storage_class_metadata_key()) else {
-        return Ok(default);
+        return Err(invalid_parameter(format!(
+            "capacity declaration for provider {} must explicitly declare metadata `{STORAGE_CLASS_METADATA_KEY}`",
+            hex::encode(provider_id.as_bytes())
+        )));
     };
     let value: String = json_value.try_into_any().map_err(|err| {
         invalid_parameter(format!(
@@ -795,28 +798,8 @@ fn storage_class_from_declaration_metadata(
 }
 fn storage_class_from_declaration_record(
     record: &CapacityDeclarationRecord,
-    default: StorageClass,
 ) -> Result<StorageClass, InstructionExecutionError> {
-    if record.metadata.get(storage_class_metadata_key()).is_some() {
-        return storage_class_from_declaration_metadata(
-            record.provider_id,
-            &record.metadata,
-            default,
-        );
-    }
-    let provider_id = record.provider_id;
-    let provider_hex = hex::encode(provider_id.as_bytes());
-    let declaration = decode_capacity_declaration_payload(&record.declaration).map_err(|err| {
-        invalid_parameter(format!(
-            "invalid capacity declaration payload for provider {provider_hex}: {err}"
-        ))
-    })?;
-    for entry in &declaration.metadata {
-        if entry.key.trim() == STORAGE_CLASS_METADATA_KEY {
-            return parse_storage_class_label(provider_id, &entry.value);
-        }
-    }
-    Ok(default)
+    storage_class_from_declaration_metadata(record.provider_id, &record.metadata)
 }
 fn merge_declaration_metadata_into_record(
     provider_id: ProviderId,
@@ -834,7 +817,6 @@ fn merge_declaration_metadata_into_record(
                 entry.key, provider_hex
             ))
         })?;
-        let payload_value_trimmed = entry.value.trim();
         if let Some(existing) = record_metadata.get(&key) {
             let existing_str: String = existing.try_into_any().map_err(|err| {
                 invalid_parameter(format!(
@@ -842,7 +824,7 @@ fn merge_declaration_metadata_into_record(
                     entry.key, provider_hex
                 ))
             })?;
-            if existing_str.trim() != payload_value_trimmed {
+            if existing_str != entry.value {
                 return Err(invalid_parameter(format!(
                     "capacity declaration metadata conflict for provider {} on key `{}`: record value `{}`, payload value `{}`",
                     provider_hex, entry.key, existing_str, entry.value
@@ -850,23 +832,115 @@ fn merge_declaration_metadata_into_record(
             }
             continue;
         }
-        record_metadata.insert(key, Json::new(payload_value_trimmed));
+        record_metadata.insert(key, Json::new(entry.value.clone()));
     }
     Ok(())
 }
-fn owner_literal_matches_authority(authority: &AccountId, literal: &str) -> bool {
-    literal == authority.to_string()
-}
-fn same_account_subject(left: &AccountId, right: &AccountId) -> bool {
-    left.subject_id() == right.subject_id()
+/// Validate the canonical payload and every consensus-trusted summary field of a stored capacity
+/// declaration.
+pub(crate) fn validate_stored_capacity_declaration(
+    record: &CapacityDeclarationRecord,
+    record_label: &str,
+) -> Result<CapacityDeclarationV1, InstructionExecutionError> {
+    let invalid = |reason: String| {
+        InstructionExecutionError::InvariantViolation(
+            format!("capacity declaration {record_label} is invalid: {reason}").into(),
+        )
+    };
+    let declaration = decode_capacity_declaration_payload(&record.declaration)
+        .map_err(|error| invalid(format!("canonical payload could not be decoded: {error}")))?;
+    declaration
+        .validate()
+        .map_err(|error| invalid(format!("payload failed validation: {error}")))?;
+    if ProviderId::new(declaration.provider_id) != record.provider_id {
+        return Err(invalid(
+            "payload provider does not match the stored provider".to_owned(),
+        ));
+    }
+    if declaration.committed_capacity_gib != record.committed_capacity_gib {
+        return Err(invalid(
+            "payload capacity does not match the stored capacity summary".to_owned(),
+        ));
+    }
+    if declaration.valid_from != record.valid_from_epoch
+        || declaration.valid_until != record.valid_until_epoch
+    {
+        return Err(invalid(
+            "payload validity timestamps do not exactly match the stored Unix-second summary"
+                .to_owned(),
+        ));
+    }
+    if record.registered_epoch > record.valid_until_epoch {
+        return Err(invalid(
+            "registration timestamp is later than the declaration validity horizon".to_owned(),
+        ));
+    }
+    let payload_storage_class = declaration
+        .metadata
+        .iter()
+        .find(|entry| entry.key == STORAGE_CLASS_METADATA_KEY)
+        .ok_or_else(|| {
+            invalid(format!(
+                "canonical payload must explicitly declare metadata `{STORAGE_CLASS_METADATA_KEY}`"
+            ))
+        })
+        .and_then(|entry| {
+            parse_storage_class_label(record.provider_id, &entry.value)
+                .map_err(|error| invalid(error.to_string()))
+        })?;
+    let payload_owner = declaration
+        .metadata
+        .iter()
+        .find(|entry| entry.key == PROVIDER_OWNER_METADATA_KEY)
+        .ok_or_else(|| {
+            invalid(format!(
+                "canonical payload must explicitly declare metadata `{PROVIDER_OWNER_METADATA_KEY}`"
+            ))
+        })?;
+    let mut merged_metadata = record.metadata.clone();
+    merge_declaration_metadata_into_record(
+        record.provider_id,
+        &mut merged_metadata,
+        &declaration.metadata,
+    )
+    .map_err(|error| invalid(error.to_string()))?;
+    if merged_metadata != record.metadata {
+        return Err(invalid(
+            "stored metadata does not retain every canonical payload entry".to_owned(),
+        ));
+    }
+    let owner_key: Name = PROVIDER_OWNER_METADATA_KEY
+        .parse()
+        .expect("static provider owner metadata key must parse");
+    let retained_owner: String = record
+        .metadata
+        .get(&owner_key)
+        .ok_or_else(|| {
+            invalid(format!(
+                "stored metadata must explicitly retain `{PROVIDER_OWNER_METADATA_KEY}`"
+            ))
+        })?
+        .try_into_any()
+        .map_err(|error| invalid(format!("stored owner metadata is not a string: {error}")))?;
+    if retained_owner != payload_owner.value {
+        return Err(invalid(
+            "canonical payload owner does not exactly match retained record metadata".to_owned(),
+        ));
+    }
+    let record_storage_class =
+        storage_class_from_declaration_metadata(record.provider_id, &record.metadata)
+            .map_err(|error| invalid(error.to_string()))?;
+    if payload_storage_class != record_storage_class {
+        return Err(invalid(
+            "canonical payload storage class does not match retained record metadata".to_owned(),
+        ));
+    }
+    Ok(declaration)
 }
 fn enforce_provider_owner(
-    world: &impl crate::state::WorldReadOnly,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     authority: &AccountId,
     metadata: &Metadata,
     provider_hex: &str,
-    now_ms: u64,
 ) -> Result<(), InstructionExecutionError> {
     let key = Name::from_str(PROVIDER_OWNER_METADATA_KEY).expect("static metadata key");
     let Some(value) = metadata.get(&key) else {
@@ -879,43 +953,19 @@ fn enforce_provider_owner(
             "capacity declaration metadata `{PROVIDER_OWNER_METADATA_KEY}` for provider {provider_hex} must be a string: {err}"
         ))
     })?;
-    let owner_literal = owner_str.trim();
-    if let Some(owner) = crate::block::parse_account_literal_with_world(
-        world,
-        dataspace_catalog,
-        owner_literal,
-        now_ms,
-    ) {
-        if same_account_subject(&owner, authority) {
-            return Ok(());
-        }
-        return Err(invalid_parameter(format!(
-            "capacity declaration metadata `{PROVIDER_OWNER_METADATA_KEY}` for provider {provider_hex} must match the submitting authority"
-        )));
-    }
-    if owner_literal_matches_authority(authority, owner_literal) {
+    if owner_str == authority.to_string() {
         return Ok(());
     }
     Err(invalid_parameter(format!(
-        "capacity declaration metadata `{PROVIDER_OWNER_METADATA_KEY}` for provider {provider_hex} must be a canonical I105 account id or on-chain alias matching the submitting authority"
+        "capacity declaration metadata `{PROVIDER_OWNER_METADATA_KEY}` for provider {provider_hex} must exactly equal the governed owner's canonical I105 account id"
     )))
 }
 fn ensure_provider_owner_matches_authority(
     authority: &AccountId,
     record: &CapacityDeclarationRecord,
-    world: &impl crate::state::WorldReadOnly,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    now_ms: u64,
 ) -> Result<(), InstructionExecutionError> {
     let provider_hex = hex::encode(record.provider_id.as_bytes());
-    enforce_provider_owner(
-        world,
-        dataspace_catalog,
-        authority,
-        &record.metadata,
-        &provider_hex,
-        now_ms,
-    )
+    enforce_provider_owner(authority, &record.metadata, &provider_hex)
 }
 fn ensure_provider_owner_registered(
     state_transaction: &StateTransaction<'_, '_>,
@@ -923,7 +973,7 @@ fn ensure_provider_owner_registered(
     authority: &AccountId,
 ) -> Result<(), InstructionExecutionError> {
     if let Some(owner) = state_transaction.world.provider_owners.get(provider) {
-        if !same_account_subject(owner, authority) {
+        if owner != authority {
             return Err(invalid_parameter(format!(
                 "provider {provider:?} owned by {owner}, but {authority} attempted a SoraFS operation"
             )));
@@ -971,11 +1021,39 @@ fn refresh_provider_musubi_locations(
     }
     Ok(())
 }
+fn ensure_provider_not_needed_by_pending_replication(
+    provider_id: ProviderId,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), InstructionExecutionError> {
+    for (order_id, record) in state_transaction.world.replication_orders.iter() {
+        if !matches!(record.status, ReplicationOrderStatus::Pending) {
+            continue;
+        }
+        let order_label = order_hex(order_id);
+        let payload = validate_stored_replication_order(record, &order_label)?;
+        let is_assigned = payload
+            .assignments
+            .iter()
+            .any(|assignment| assignment.provider_id == *provider_id.as_bytes());
+        let completion_retained = record
+            .provider_completions
+            .iter()
+            .any(|completion| completion.provider_id == provider_id);
+        if is_assigned && !completion_retained {
+            return Err(invalid_parameter(format!(
+                "provider {} is still required by pending replication order {order_label} without a retained completion",
+                hex::encode(provider_id.as_bytes())
+            )));
+        }
+    }
+    Ok(())
+}
 fn ensure_provider_owner_can_change(
     provider_id: ProviderId,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
     let provider_hex = hex::encode(provider_id.as_bytes());
+    ensure_provider_not_needed_by_pending_replication(provider_id, state_transaction)?;
     if state_transaction
         .world
         .capacity_declarations
@@ -1225,6 +1303,7 @@ impl Execute for iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAu
             )
             .into());
         }
+        ensure_provider_not_needed_by_pending_replication(self.provider_id, state_transaction)?;
         state_transaction
             .world
             .provider_ingest_completion_authorities
@@ -1359,19 +1438,24 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
             successor_of,
             Metadata::default(),
         );
+        if !requires_council_approval {
+            record.approve(submitted_epoch, None);
+        }
         let auto_order = if requires_council_approval {
             // Consensus must retain governed submissions as pending. Torii-side
             // manifest checks are only an early rejection layer and can be
             // bypassed by clients submitting the instruction directly.
             None
         } else {
-            let auto_providers = select_auto_replication_providers(
-                state_transaction,
-                &record.chunker,
-                &record.policy,
+            ensure_automatic_replication_order_slot_vacant(state_transaction, &record.digest)?;
+            let auto_providers =
+                select_auto_replication_providers(state_transaction, &record, submitted_epoch)?;
+            Some(build_auto_replication_order(
+                &record,
+                authority,
                 submitted_epoch,
-            )?;
-            build_auto_replication_order(&record, authority, submitted_epoch, &auto_providers)?
+                &auto_providers,
+            )?)
         };
         // Keep every fallible validation/allocation step ahead of fee movement.
         let pin_fee_payment = collect_public_pin_fee(
@@ -1383,7 +1467,6 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
         )?;
         record.record_pin_fee_payment(pin_fee_payment);
         if !requires_council_approval {
-            record.approve(submitted_epoch, None);
             if let Some(alias) = &record.alias {
                 ensure_alias_unique(
                     alias,
@@ -1401,13 +1484,13 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
                 );
             }
         }
-        state_transaction.world.pin_manifests.insert(digest, record);
         if let Some(order) = auto_order {
             state_transaction
                 .world
                 .replication_orders
                 .insert(order.order_id, order);
         }
+        state_transaction.world.pin_manifests.insert(digest, record);
         accounting.apply(state_transaction);
         Ok(())
     }
@@ -1535,13 +1618,15 @@ impl Execute for iroha_data_model::isi::sorafs::ApprovePinManifest {
             )?;
         }
         let auto_order = if was_pending {
-            let auto_providers = select_auto_replication_providers(
-                state_transaction,
-                &record.chunker,
-                &record.policy,
+            ensure_automatic_replication_order_slot_vacant(state_transaction, &record.digest)?;
+            let auto_providers =
+                select_auto_replication_providers(state_transaction, &record, approved_epoch)?;
+            Some(build_auto_replication_order(
+                &record,
+                authority,
                 approved_epoch,
-            )?;
-            build_auto_replication_order(&record, authority, approved_epoch, &auto_providers)?
+                &auto_providers,
+            )?)
         } else {
             None
         };
@@ -1558,16 +1643,16 @@ impl Execute for iroha_data_model::isi::sorafs::ApprovePinManifest {
                 record.policy.retention_epoch,
             );
         }
-        state_transaction
-            .world
-            .pin_manifests
-            .insert(self.digest, record);
         if let Some(order) = auto_order {
             state_transaction
                 .world
                 .replication_orders
                 .insert(order.order_id, order);
         }
+        state_transaction
+            .world
+            .pin_manifests
+            .insert(self.digest, record);
         status_transition.apply(state_transaction);
         Ok(())
     }
@@ -2055,37 +2140,216 @@ fn convert_storage_class(
 fn order_hex(order_id: &ReplicationOrderId) -> String {
     hex::encode(order_id.as_bytes())
 }
-const AUTO_REPLICATION_ORDER_SLICE_GIB: u64 = 1;
-const AUTO_REPLICATION_ORDER_EPOCH_SLACK: u64 = 1;
-const AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS: u32 = 86_400;
 const AUTO_REPLICATION_ORDER_AVAILABILITY_PERCENT_MILLI: u32 = 99_500;
 const AUTO_REPLICATION_ORDER_POR_SUCCESS_PERCENT_MILLI: u32 = 98_000;
-const AUTO_REPLICATION_ORDER_SECS_PER_EPOCH: u64 = 3_600;
-fn supports_chunker_profile(declaration: &CapacityDeclarationV1, profile: &str) -> bool {
-    declaration.chunker_commitments.iter().any(|commitment| {
-        commitment.profile_id == profile
-            || commitment
-                .profile_aliases
-                .as_ref()
-                .is_some_and(|aliases| aliases.iter().any(|alias| alias == profile))
-    })
+fn automatic_replication_slice_gib(content_length: u64) -> Result<u64, InstructionExecutionError> {
+    let whole_gib = content_length / BYTES_PER_GIB;
+    let partial_gib = u64::from(content_length % BYTES_PER_GIB != 0);
+    whole_gib
+        .checked_add(partial_gib)
+        .map(|slice_gib| slice_gib.max(1))
+        .ok_or_else(|| invalid_parameter("automatic replication slice size overflow"))
+}
+fn automatic_replication_deadline_epoch(
+    issued_epoch: u64,
+) -> Result<u64, InstructionExecutionError> {
+    issued_epoch
+        .checked_add(u64::from(
+            SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
+        ))
+        .ok_or_else(|| invalid_parameter("automatic replication deadline epoch overflow"))
+}
+fn ensure_automatic_replication_order_slot_vacant(
+    state_transaction: &StateTransaction<'_, '_>,
+    digest: &ManifestDigest,
+) -> Result<(), InstructionExecutionError> {
+    let order_id = derive_sorafs_auto_replication_order_id_v1(digest);
+    if state_transaction
+        .world
+        .replication_orders
+        .get(&order_id)
+        .is_some()
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "automatic replication order {} already exists for manifest {}",
+                order_hex(&order_id),
+                manifest_hex(digest)
+            )
+            .into(),
+        ));
+    }
+    Ok(())
+}
+/// Return the exact-profile capacity available to a pin throughout an automatic order window.
+pub(crate) fn automatic_replication_profile_capacity_gib(
+    declaration_record: &CapacityDeclarationRecord,
+    pin: &PinManifestRecord,
+    issued_epoch: u64,
+    deadline_epoch: u64,
+) -> Result<Option<u64>, InstructionExecutionError> {
+    let provider_label = hex::encode(declaration_record.provider_id.as_bytes());
+    let declaration = validate_stored_capacity_declaration(declaration_record, &provider_label)?;
+    if issued_epoch < declaration_record.valid_from_epoch
+        || deadline_epoch > declaration_record.valid_until_epoch
+        || storage_class_from_declaration_metadata(
+            declaration_record.provider_id,
+            &declaration_record.metadata,
+        )? != pin.policy.storage_class
+    {
+        return Ok(None);
+    }
+    let canonical_profile = pin.chunker.to_handle();
+    Ok(declaration
+        .chunker_commitments
+        .iter()
+        .find(|commitment| commitment.profile_id == canonical_profile)
+        .map(|commitment| commitment.committed_gib)
+        .filter(|committed_gib| *committed_gib <= declaration.committed_capacity_gib))
+}
+fn active_automatic_allocations(
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<BTreeMap<(ProviderId, String), u64>, InstructionExecutionError> {
+    let mut allocations = BTreeMap::<(ProviderId, String), u64>::new();
+    for (order_id, record) in state_transaction.world.replication_orders.iter() {
+        if !order_id.is_auto() {
+            continue;
+        }
+        if record.order_id != *order_id {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "automatic replication order key {} does not match its stored identifier",
+                    order_hex(order_id)
+                )
+                .into(),
+            ));
+        }
+        let pin = state_transaction
+            .world
+            .pin_manifests
+            .get(&record.manifest_digest)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "automatic replication order {} references a missing pin",
+                        order_hex(order_id)
+                    )
+                    .into(),
+                )
+            })?;
+        let payload =
+            validate_stored_automatic_replication_order(pin, record, &order_hex(order_id))?;
+        if !matches!(pin.status, PinStatus::Approved(_))
+            || !matches!(
+                record.status,
+                ReplicationOrderStatus::Pending | ReplicationOrderStatus::Completed(_)
+            )
+        {
+            continue;
+        }
+        for assignment in &payload.assignments {
+            let provider_id = ProviderId::new(assignment.provider_id);
+            let allocated = allocations
+                .entry((provider_id, payload.chunking_profile.clone()))
+                .or_default();
+            *allocated = allocated.checked_add(assignment.slice_gib).ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "automatic replication capacity allocation overflowed for provider {}",
+                        hex::encode(provider_id.as_bytes())
+                    )
+                    .into(),
+                )
+            })?;
+        }
+    }
+    Ok(allocations)
+}
+fn ensure_capacity_covers_active_automatic_allocations(
+    state_transaction: &StateTransaction<'_, '_>,
+    provider_id: ProviderId,
+    declaration_record: &CapacityDeclarationRecord,
+    declaration: &CapacityDeclarationV1,
+) -> Result<(), InstructionExecutionError> {
+    for (order_id, order) in state_transaction.world.replication_orders.iter() {
+        if !order_id.is_auto()
+            || !matches!(
+                order.status,
+                ReplicationOrderStatus::Pending | ReplicationOrderStatus::Completed(_)
+            )
+        {
+            continue;
+        }
+        let pin = state_transaction
+            .world
+            .pin_manifests
+            .get(&order.manifest_digest)
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "automatic replication order {} references a missing pin",
+                        order_hex(order_id)
+                    )
+                    .into(),
+                )
+            })?;
+        if !matches!(pin.status, PinStatus::Approved(_)) {
+            continue;
+        }
+        let payload =
+            validate_stored_automatic_replication_order(pin, order, &order_hex(order_id))?;
+        if payload
+            .assignments
+            .iter()
+            .any(|assignment| assignment.provider_id == *provider_id.as_bytes())
+            && automatic_replication_profile_capacity_gib(
+                declaration_record,
+                pin,
+                order.issued_epoch,
+                order.deadline_epoch,
+            )?
+            .is_none()
+        {
+            return Err(invalid_parameter(format!(
+                "capacity declaration for provider {} no longer covers the profile, storage class, and deadline of active automatic order {}",
+                hex::encode(provider_id.as_bytes()),
+                order_hex(order_id)
+            )));
+        }
+    }
+    for ((allocated_provider, profile), allocated_gib) in
+        active_automatic_allocations(state_transaction)?
+    {
+        if allocated_provider != provider_id {
+            continue;
+        }
+        let committed_gib = declaration
+            .chunker_commitments
+            .iter()
+            .find(|commitment| commitment.profile_id == profile)
+            .map_or(0, |commitment| commitment.committed_gib);
+        if allocated_gib > committed_gib {
+            return Err(invalid_parameter(format!(
+                "capacity declaration for provider {} commits {committed_gib} GiB to profile `{profile}`, below its active automatic allocation of {allocated_gib} GiB",
+                hex::encode(provider_id.as_bytes())
+            )));
+        }
+    }
+    Ok(())
 }
 fn select_auto_replication_providers(
     state_transaction: &StateTransaction<'_, '_>,
-    chunker: &iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle,
-    policy: &PinPolicy,
-    submitted_epoch: u64,
+    pin: &PinManifestRecord,
+    issued_epoch: u64,
 ) -> Result<Vec<ProviderId>, InstructionExecutionError> {
-    let required_replicas = usize::from(policy.min_replicas);
+    let required_replicas = usize::from(pin.policy.min_replicas);
     if required_replicas == 0 {
         return Ok(Vec::new());
     }
-    let canonical_profile = chunker.to_handle();
-    let default_storage_class = state_transaction
-        .world
-        .sorafs_pricing
-        .get()
-        .default_storage_class;
+    let canonical_profile = pin.chunker.to_handle();
+    let deadline_epoch = automatic_replication_deadline_epoch(issued_epoch)?;
+    let slice_gib = automatic_replication_slice_gib(pin.content_length)?;
+    let active_allocations = active_automatic_allocations(state_transaction)?;
     let mut providers = Vec::new();
     providers.try_reserve_exact(required_replicas).map_err(|_| {
         invalid_parameter(format!(
@@ -2096,10 +2360,15 @@ fn select_auto_replication_providers(
         if providers.len() == required_replicas {
             break;
         }
-        if submitted_epoch < declaration_record.valid_from_epoch
-            || submitted_epoch > declaration_record.valid_until_epoch
-        {
-            continue;
+        if declaration_record.provider_id != *provider_id {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "capacity declaration key {} contains a record for {}",
+                    hex::encode(provider_id.as_bytes()),
+                    hex::encode(declaration_record.provider_id.as_bytes())
+                )
+                .into(),
+            ));
         }
         let Some(provider_owner) = state_transaction.world.provider_owners.get(provider_id) else {
             continue;
@@ -2116,22 +2385,168 @@ fn select_auto_replication_providers(
         {
             continue;
         }
-        let Ok(storage_class) =
-            storage_class_from_declaration_record(declaration_record, default_storage_class)
+        let Some(profile_capacity) = automatic_replication_profile_capacity_gib(
+            declaration_record,
+            pin,
+            issued_epoch,
+            deadline_epoch,
+        )?
         else {
             continue;
         };
-        if storage_class != policy.storage_class {
-            continue;
-        }
-        let Ok(declaration) = decode_capacity_declaration_payload(&declaration_record.declaration)
-        else {
-            continue;
-        };
-        if !supports_chunker_profile(&declaration, &canonical_profile) {
+        let already_allocated = active_allocations
+            .get(&(*provider_id, canonical_profile.clone()))
+            .copied()
+            .unwrap_or(0);
+        let required_capacity = already_allocated.checked_add(slice_gib).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "automatic replication capacity allocation overflowed for provider {}",
+                    hex::encode(provider_id.as_bytes())
+                )
+                .into(),
+            )
+        })?;
+        if required_capacity > profile_capacity {
             continue;
         }
         providers.push(*provider_id);
+    }
+    if providers.len() != required_replicas {
+        return Err(invalid_parameter(format!(
+            "automatic replication requires {required_replicas} eligible providers but found {}",
+            providers.len()
+        )));
+    }
+    Ok(providers)
+}
+/// Install canonical capacity and completion-authority fixtures for automatic replication tests.
+#[cfg(test)]
+pub(crate) fn seed_eligible_auto_replication_providers_for_test(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    owner: &AccountId,
+    count: u16,
+    storage_class: StorageClass,
+    profile: &ChunkerProfileHandle,
+    consensus_epoch: u64,
+    deadline_horizon_secs: u64,
+    per_provider_gib: u64,
+) -> Result<Vec<ProviderId>, InstructionExecutionError> {
+    use sorafs_manifest::{
+        capacity::{CAPACITY_DECLARATION_VERSION_V1, ChunkerCommitmentV1},
+        provider_advert::StakePointer,
+    };
+
+    if per_provider_gib == 0 {
+        return Err(invalid_parameter(
+            "automatic replication test providers require positive profile capacity",
+        ));
+    }
+    let valid_until = consensus_epoch
+        .checked_add(deadline_horizon_secs)
+        .ok_or_else(|| invalid_parameter("automatic replication test validity overflow"))?;
+    if valid_until == consensus_epoch {
+        return Err(invalid_parameter(
+            "automatic replication test providers require a positive deadline horizon",
+        ));
+    }
+    let profile_handle = profile.to_handle();
+    let owner_literal = owner.to_string();
+    let mut providers = Vec::new();
+    providers
+        .try_reserve_exact(usize::from(count))
+        .map_err(|_| invalid_parameter("failed to reserve automatic replication test providers"))?;
+    for index in 0..count {
+        let mut provider_hasher = blake3::Hasher::new();
+        provider_hasher.update(b"iroha.sorafs.auto-replication.test-provider.v1\0");
+        provider_hasher.update(owner_literal.as_bytes());
+        provider_hasher.update(&index.to_le_bytes());
+        let mut provider_bytes = *provider_hasher.finalize().as_bytes();
+        provider_bytes[31] |= 1;
+        let provider_id = ProviderId::new(provider_bytes);
+
+        let mut pool_id = provider_bytes;
+        pool_id[0] ^= 0x5A;
+        pool_id[31] |= 1;
+        let declaration = CapacityDeclarationV1 {
+            version: CAPACITY_DECLARATION_VERSION_V1,
+            provider_id: provider_bytes,
+            stake: StakePointer {
+                pool_id,
+                stake_amount: "1".parse().expect("static positive XOR stake must parse"),
+            },
+            committed_capacity_gib: per_provider_gib,
+            chunker_commitments: vec![ChunkerCommitmentV1 {
+                profile_id: profile_handle.clone(),
+                profile_aliases: None,
+                committed_gib: per_provider_gib,
+                capability_refs: Vec::new(),
+            }],
+            lane_commitments: Vec::new(),
+            pricing: None,
+            valid_from: consensus_epoch,
+            valid_until,
+            metadata: vec![
+                CapacityMetadataEntry {
+                    key: PROVIDER_OWNER_METADATA_KEY.to_owned(),
+                    value: owner_literal.clone(),
+                },
+                CapacityMetadataEntry {
+                    key: STORAGE_CLASS_METADATA_KEY.to_owned(),
+                    value: match storage_class {
+                        StorageClass::Hot => "hot",
+                        StorageClass::Warm => "warm",
+                        StorageClass::Cold => "cold",
+                    }
+                    .to_owned(),
+                },
+            ],
+        };
+        declaration.validate().map_err(|error| {
+            invalid_parameter(format!(
+                "automatic replication test capacity declaration failed validation: {error}"
+            ))
+        })?;
+        let mut metadata = Metadata::default();
+        merge_declaration_metadata_into_record(provider_id, &mut metadata, &declaration.metadata)?;
+        let record = CapacityDeclarationRecord::new(
+            provider_id,
+            norito::encode_canonical(&declaration).map_err(|error| {
+                invalid_parameter(format!(
+                    "failed to encode automatic replication test capacity declaration: {error}"
+                ))
+            })?,
+            per_provider_gib,
+            consensus_epoch,
+            consensus_epoch,
+            valid_until,
+            metadata,
+        );
+        validate_stored_capacity_declaration(&record, &hex::encode(provider_id.as_bytes()))?;
+        state_transaction
+            .world
+            .provider_owners
+            .insert(provider_id, owner.clone());
+        state_transaction
+            .world
+            .provider_ingest_completion_authorities
+            .insert(
+                provider_id,
+                ProviderIngestCompletionAuthorityV1::new(
+                    owner.clone(),
+                    ProviderIngestCompletionSignerPolicyV1 {
+                        policy_id: provider_bytes,
+                        revision: 1,
+                        predecessor_digest: None,
+                        policy_digest: pool_id,
+                    },
+                ),
+            );
+        state_transaction
+            .world
+            .capacity_declarations
+            .insert(provider_id, record);
+        providers.push(provider_id);
     }
     Ok(providers)
 }
@@ -2140,11 +2555,14 @@ fn build_auto_replication_order(
     issued_by: &AccountId,
     issued_epoch: u64,
     assignments: &[ProviderId],
-) -> Result<Option<ReplicationOrderRecord>, InstructionExecutionError> {
-    if assignments.len() < usize::from(record.policy.min_replicas) {
-        return Ok(None);
-    }
+) -> Result<ReplicationOrderRecord, InstructionExecutionError> {
     let assignment_count = usize::from(record.policy.min_replicas);
+    if assignments.len() != assignment_count {
+        return Err(invalid_parameter(format!(
+            "automatic replication requires exactly {assignment_count} assignments but received {}",
+            assignments.len()
+        )));
+    }
     let mut canonical_assignments = Vec::new();
     canonical_assignments
         .try_reserve_exact(assignment_count)
@@ -2153,23 +2571,27 @@ fn build_auto_replication_order(
                 "failed to reserve automatic replication assignment set of {assignment_count} entries"
             ))
         })?;
+    let slice_gib = automatic_replication_slice_gib(record.content_length)?;
     canonical_assignments.extend(assignments.iter().take(assignment_count).map(|provider| {
         ReplicationAssignmentV1 {
             provider_id: *provider.as_bytes(),
-            slice_gib: AUTO_REPLICATION_ORDER_SLICE_GIB,
+            slice_gib,
             lane: None,
         }
     }));
     let order_id = derive_sorafs_auto_replication_order_id_v1(&record.digest);
-    let deadline_epoch = issued_epoch
-        .checked_add(AUTO_REPLICATION_ORDER_EPOCH_SLACK)
-        .ok_or_else(|| invalid_parameter("automatic replication deadline epoch overflow"))?;
-    let issued_at = issued_epoch
-        .checked_mul(AUTO_REPLICATION_ORDER_SECS_PER_EPOCH)
-        .ok_or_else(|| invalid_parameter("automatic replication issuance time overflow"))?;
-    let deadline_at = issued_at
-        .checked_add(u64::from(AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS))
-        .ok_or_else(|| invalid_parameter("automatic replication deadline time overflow"))?;
+    // Pin-registry epochs and replication-order timestamps are both Unix seconds. Keep the
+    // authoritative record and provider-facing payload on that one time base so completion
+    // checks enforce the same 24-hour SLA that providers receive.
+    let deadline_epoch = automatic_replication_deadline_epoch(issued_epoch)?;
+    if deadline_epoch >= record.policy.retention_epoch {
+        return Err(invalid_parameter(format!(
+            "automatic replication deadline epoch {deadline_epoch} must be earlier than manifest retention epoch {}",
+            record.policy.retention_epoch
+        )));
+    }
+    let issued_at = issued_epoch;
+    let deadline_at = deadline_epoch;
     let order = ReplicationOrderV1 {
         version: REPLICATION_ORDER_VERSION_V1,
         order_id: *order_id.as_bytes(),
@@ -2181,7 +2603,7 @@ fn build_auto_replication_order(
         issued_at,
         deadline_at,
         sla: ReplicationOrderSlaV1 {
-            ingest_deadline_secs: AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS,
+            ingest_deadline_secs: SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
             min_availability_percent_milli: AUTO_REPLICATION_ORDER_AVAILABILITY_PERCENT_MILLI,
             min_por_success_percent_milli: AUTO_REPLICATION_ORDER_POR_SUCCESS_PERCENT_MILLI,
         },
@@ -2197,7 +2619,7 @@ fn build_auto_replication_order(
             format!("failed to encode automatic replication order: {error}").into(),
         )
     })?;
-    Ok(Some(ReplicationOrderRecord {
+    let stored_order = ReplicationOrderRecord {
         order_id,
         manifest_digest: record.digest,
         manifest_root_cid: record.root_cid,
@@ -2209,7 +2631,52 @@ fn build_auto_replication_order(
         assignment_revision: 1,
         provider_completions: Vec::new(),
         status: ReplicationOrderStatus::Pending,
-    }))
+    };
+    validate_stored_automatic_replication_order(
+        record,
+        &stored_order,
+        &order_hex(&stored_order.order_id),
+    )?;
+    Ok(stored_order)
+}
+#[cfg(test)]
+pub(crate) fn completed_auto_replication_order_for_test(
+    pin: &PinManifestRecord,
+    issued_by: &AccountId,
+) -> Result<ReplicationOrderRecord, InstructionExecutionError> {
+    let provider_id = ProviderId::new([0xD5; 32]);
+    let issued_epoch = match pin.status {
+        PinStatus::Approved(epoch) => epoch,
+        PinStatus::Pending | PinStatus::Retired(_) => pin.submitted_epoch,
+    };
+    let mut order = build_auto_replication_order(pin, issued_by, issued_epoch, &[provider_id])?;
+    let completion_authority = ProviderIngestCompletionAuthorityV1::new(
+        issued_by.clone(),
+        ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [0xD6; 32],
+            revision: 1,
+            predecessor_digest: None,
+            policy_digest: [0xD7; 32],
+        },
+    );
+    order
+        .provider_completions
+        .push(ReplicationOrderCompletionRecord {
+            provider_id,
+            completed_by: issued_by.clone(),
+            completion_epoch: issued_epoch,
+            assignment_revision: order.assignment_revision,
+            completion_authority,
+            finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                height: 1,
+                block_hash: *iroha_crypto::Hash::new(
+                    b"completed automatic replication order fixture block",
+                )
+                .as_ref(),
+            },
+        });
+    order.status = ReplicationOrderStatus::Completed(issued_epoch);
+    Ok(order)
 }
 fn collect_public_pin_fee(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -2521,6 +2988,23 @@ impl Execute for iroha_data_model::isi::sorafs::RetirePinManifest {
                 .into(),
             ));
         }
+        let automatic_order_id = derive_sorafs_auto_replication_order_id_v1(&self.digest);
+        if retired_epoch < record.policy.retention_epoch
+            && state_transaction
+                .world
+                .replication_orders
+                .get(&automatic_order_id)
+                .is_some_and(|order| {
+                    order.manifest_digest == self.digest
+                        && matches!(order.status, ReplicationOrderStatus::Completed(_))
+                })
+        {
+            return Err(invalid_parameter(format!(
+                "replicated manifest {} cannot retire before its promised retention epoch {}",
+                manifest_hex(&self.digest),
+                record.policy.retention_epoch,
+            )));
+        }
         let retired_status = PinStatus::Retired(retired_epoch);
         let accounting =
             prepare_pin_retirement_accounting(state_transaction, &record, &retired_status)?;
@@ -2559,6 +3043,29 @@ impl Execute for iroha_data_model::isi::sorafs::RetirePinManifest {
                 })
                 .map(|(order_id, _)| *order_id),
         );
+        for order_id in &pending_order_ids {
+            let Some(order) = state_transaction.world.replication_orders.get(order_id) else {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "replication order {} disappeared while validating manifest {} retirement",
+                        order_hex(order_id),
+                        manifest_hex(&self.digest),
+                    )
+                    .into(),
+                ));
+            };
+            if retired_epoch < order.issued_epoch {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "replication order {} issued at {} after manifest {} retirement epoch {retired_epoch}",
+                        order_hex(order_id),
+                        order.issued_epoch,
+                        manifest_hex(&self.digest),
+                    )
+                    .into(),
+                ));
+            }
+        }
         for order_id in pending_order_ids {
             let Some(mut order) = state_transaction
                 .world
@@ -2575,7 +3082,11 @@ impl Execute for iroha_data_model::isi::sorafs::RetirePinManifest {
                     .into(),
                 ));
             };
-            order.status = ReplicationOrderStatus::Expired(retired_epoch);
+            order.status = if retired_epoch <= order.deadline_epoch {
+                ReplicationOrderStatus::Cancelled(retired_epoch)
+            } else {
+                ReplicationOrderStatus::Expired(retired_epoch)
+            };
             state_transaction
                 .world
                 .replication_orders
@@ -2719,6 +3230,25 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDeclaration {
                 "capacity declaration validation failed for provider {provider_hex}: {err}"
             ))
         })?;
+        let payload_storage_class = declaration
+            .metadata
+            .iter()
+            .find(|entry| entry.key == STORAGE_CLASS_METADATA_KEY)
+            .ok_or_else(|| {
+                invalid_parameter(format!(
+                    "capacity declaration for provider {provider_hex} must explicitly declare metadata `{STORAGE_CLASS_METADATA_KEY}` in its canonical payload"
+                ))
+            })?;
+        parse_storage_class_label(provider_id, &payload_storage_class.value)?;
+        if !declaration
+            .metadata
+            .iter()
+            .any(|entry| entry.key == PROVIDER_OWNER_METADATA_KEY)
+        {
+            return Err(invalid_parameter(format!(
+                "capacity declaration for provider {provider_hex} must explicitly declare metadata `{PROVIDER_OWNER_METADATA_KEY}` in its canonical payload"
+            )));
+        }
         let payload_provider = ProviderId::new(declaration.provider_id);
         if payload_provider != provider_id {
             return Err(invalid_parameter(format!(
@@ -2733,10 +3263,41 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDeclaration {
                 record.committed_capacity_gib, declaration.committed_capacity_gib
             )));
         }
+        if declaration.valid_from != record.valid_from_epoch
+            || declaration.valid_until != record.valid_until_epoch
+        {
+            return Err(invalid_parameter(format!(
+                "capacity declaration validity mismatch for provider {provider_hex}: record {}..={}, payload {}..={}",
+                record.valid_from_epoch,
+                record.valid_until_epoch,
+                declaration.valid_from,
+                declaration.valid_until
+            )));
+        }
+        let consensus_epoch = pin_consensus_epoch(state_transaction);
+        if record.registered_epoch != consensus_epoch {
+            return Err(invalid_parameter(format!(
+                "capacity declaration registered epoch {} for provider {provider_hex} must exactly equal consensus Unix second {consensus_epoch}",
+                record.registered_epoch
+            )));
+        }
+        if consensus_epoch > record.valid_until_epoch {
+            return Err(invalid_parameter(format!(
+                "capacity declaration for provider {provider_hex} expired at Unix second {} before registration at {consensus_epoch}",
+                record.valid_until_epoch
+            )));
+        }
         merge_declaration_metadata_into_record(
             provider_id,
             &mut record.metadata,
             &declaration.metadata,
+        )?;
+        validate_stored_capacity_declaration(&record, &provider_hex)?;
+        ensure_capacity_covers_active_automatic_allocations(
+            state_transaction,
+            provider_id,
+            &record,
+            &declaration,
         )?;
         let registered_owner = state_transaction
             .world
@@ -2753,14 +3314,7 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDeclaration {
                 "provider {provider_hex} is owned by {registered_owner}; capacity declarations require the exact registered owner authority {authority}"
             )));
         }
-        enforce_provider_owner(
-            &state_transaction.world,
-            &state_transaction.nexus.dataspace_catalog,
-            &registered_owner,
-            &record.metadata,
-            &provider_hex,
-            state_transaction.block_unix_timestamp_ms(),
-        )?;
+        enforce_provider_owner(&registered_owner, &record.metadata, &provider_hex)?;
         let verified_bond = super::sorafs_reserve::verified_provider_bond(
             state_transaction.world(),
             provider_id,
@@ -2859,17 +3413,10 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
         };
         if policy.require_submitter {
             if let Some(overrides) = policy.per_provider_submitters.get(&provider_id) {
-                if !overrides
-                    .iter()
-                    .any(|allowed| same_account_subject(allowed, authority))
-                {
+                if !overrides.iter().any(|allowed| allowed == authority) {
                     return reject("unauthorised_submitter_provider");
                 }
-            } else if !policy
-                .submitters
-                .iter()
-                .any(|allowed| same_account_subject(allowed, authority))
-            {
+            } else if !policy.submitters.iter().any(|allowed| allowed == authority) {
                 return reject("unauthorised_submitter");
             }
         }
@@ -2886,15 +3433,9 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                         .into(),
                 )
             })?;
-        ensure_provider_owner_matches_authority(
-            authority,
-            declaration_record,
-            &state_transaction.world,
-            &state_transaction.nexus.dataspace_catalog,
-            state_transaction.block_unix_timestamp_ms(),
-        )?;
+        ensure_provider_owner_matches_authority(authority, declaration_record)?;
         if let Some(owner) = state_transaction.world.provider_owners.get(&provider_id)
-            && !same_account_subject(owner, authority)
+            && owner != authority
         {
             return reject("provider_owner_mismatch");
         }
@@ -2959,10 +3500,7 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
             }
         }
         let pricing_schedule = state_transaction.world.sorafs_pricing.get();
-        let storage_class = storage_class_from_declaration_record(
-            declaration_record,
-            pricing_schedule.default_storage_class,
-        )?;
+        let storage_class = storage_class_from_declaration_record(declaration_record)?;
         let storage_fee = pricing_schedule
             .storage_charge(storage_class, record.utilised_gib, window_secs)
             .map_err(|error| pricing_computation_error("storage fee", error))?;
@@ -3309,6 +3847,11 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
             "CanIssueSorafsReplicationOrder",
         )?;
         let order_label = order_hex(&self.order_id);
+        if self.order_id.is_auto() {
+            return Err(invalid_parameter(format!(
+                "replication order {order_label} uses the reserved automatic-order identifier namespace"
+            )));
+        }
         if self.deadline_epoch <= self.issued_epoch {
             return Err(invalid_parameter(format!(
                 "replication order {order_label} deadline {} must be greater than issued_epoch {}",
@@ -3383,6 +3926,13 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
                 "replication order {order_label} payload uses mismatched identifier"
             )));
         }
+        if order_payload.issued_at != self.issued_epoch
+            || order_payload.deadline_at != self.deadline_epoch
+        {
+            return Err(invalid_parameter(format!(
+                "replication order {order_label} record epochs must exactly match its canonical Unix-second payload timestamps"
+            )));
+        }
         let manifest_digest = ManifestDigest::new(order_payload.manifest_digest);
         let manifest_label = manifest_hex(&manifest_digest);
         let manifest_record = state_transaction
@@ -3405,6 +3955,25 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
                 )
                 .into(),
             ));
+        }
+        let Some(approved_epoch) =
+            validate_stored_pin_approval_history(&manifest_record, &manifest_label)?
+        else {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("approved manifest {manifest_label} has no retained approval epoch").into(),
+            ));
+        };
+        if self.issued_epoch < approved_epoch {
+            return Err(invalid_parameter(format!(
+                "replication order {order_label} issued epoch {} predates manifest approval epoch {approved_epoch}",
+                self.issued_epoch
+            )));
+        }
+        if self.deadline_epoch >= manifest_record.policy.retention_epoch {
+            return Err(invalid_parameter(format!(
+                "replication order {order_label} deadline {} must be earlier than manifest retention epoch {}",
+                self.deadline_epoch, manifest_record.policy.retention_epoch
+            )));
         }
         if order_payload.manifest_cid.as_slice() != manifest_record.root_cid.as_bytes() {
             return Err(invalid_parameter(format!(
@@ -3502,12 +4071,6 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
                     "replication order {order_label} does not meet the Musubi minimum of {MUSUBI_MIN_HEALTHY_REPLICAS_V1} replicas"
                 )));
             }
-            if self.deadline_epoch > manifest_record.policy.retention_epoch {
-                return Err(invalid_parameter(format!(
-                    "replication order {order_label} deadline {} exceeds Musubi pin retention epoch {}",
-                    self.deadline_epoch, manifest_record.policy.retention_epoch
-                )));
-            }
             let binding = MusubiReplicationOrderArchiveBindingV1::new(
                 self.order_id,
                 archive_id,
@@ -3569,6 +4132,11 @@ impl Execute for iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignment
             "CanIssueSorafsReplicationOrder",
         )?;
         let order_label = order_hex(&self.order_id);
+        if self.order_id.is_auto() {
+            return Err(invalid_parameter(format!(
+                "replication order {order_label} uses the reserved automatic-order identifier namespace and has immutable assignments"
+            )));
+        }
         let expected_successor = self
             .expected_assignment_revision
             .checked_add(1)
@@ -3738,6 +4306,8 @@ pub(crate) fn validate_stored_replication_order(
     if canonical_payload.order_id != *record.order_id.as_bytes()
         || canonical_payload.manifest_digest != *record.manifest_digest.as_bytes()
         || canonical_payload.manifest_cid.as_slice() != record.manifest_root_cid.as_bytes()
+        || canonical_payload.issued_at != record.issued_epoch
+        || canonical_payload.deadline_at != record.deadline_epoch
     {
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
@@ -3769,6 +4339,7 @@ pub(crate) fn validate_stored_replication_order(
         ));
     }
     let mut completed_providers = BTreeSet::new();
+    let mut previous_completion_epoch = None;
     for completion in &record.provider_completions {
         if !canonical_payload
             .assignments
@@ -3794,6 +4365,8 @@ pub(crate) fn validate_stored_replication_order(
         }
         if completion.completion_epoch < record.issued_epoch
             || completion.completion_epoch > record.deadline_epoch
+            || previous_completion_epoch
+                .is_some_and(|previous| completion.completion_epoch < previous)
             || completion.assignment_revision != record.assignment_revision
             || !completion.completion_authority.is_valid()
             || completion.completion_authority.provider_owner != completion.completed_by
@@ -3805,10 +4378,17 @@ pub(crate) fn validate_stored_replication_order(
                 ).into(),
             ));
         }
+        previous_completion_epoch = Some(completion.completion_epoch);
     }
     match record.status {
-        ReplicationOrderStatus::Pending | ReplicationOrderStatus::Expired(_)
-            if record.provider_completions.len() < target_replicas => {}
+        ReplicationOrderStatus::Pending if record.provider_completions.len() < target_replicas => {}
+        ReplicationOrderStatus::Expired(epoch)
+            if epoch > record.deadline_epoch
+                && record.provider_completions.len() < target_replicas => {}
+        ReplicationOrderStatus::Cancelled(epoch)
+            if epoch >= record.issued_epoch
+                && epoch <= record.deadline_epoch
+                && record.provider_completions.len() < target_replicas => {}
         ReplicationOrderStatus::Completed(epoch)
             if record.provider_completions.len() == target_replicas
                 && record
@@ -3825,6 +4405,122 @@ pub(crate) fn validate_stored_replication_order(
         }
     }
     Ok(canonical_payload)
+}
+/// Validate the durable approval history encoded by a pin lifecycle record.
+pub(crate) fn validate_stored_pin_approval_history(
+    pin: &PinManifestRecord,
+    pin_label: &str,
+) -> Result<Option<u64>, InstructionExecutionError> {
+    let approval_matches_lifecycle = match pin.status {
+        PinStatus::Pending => {
+            pin.approved_epoch.is_none()
+                && pin.council_envelope_digest.is_none()
+                && pin.retirement_reason.is_none()
+        }
+        PinStatus::Approved(status_epoch) => {
+            pin.approved_epoch == Some(status_epoch)
+                && status_epoch >= pin.submitted_epoch
+                && status_epoch < pin.policy.retention_epoch
+                && pin.retirement_reason.is_none()
+        }
+        PinStatus::Retired(retired_epoch) => {
+            retired_epoch >= pin.submitted_epoch
+                && pin.approved_epoch.is_none_or(|approved_epoch| {
+                    approved_epoch >= pin.submitted_epoch
+                        && approved_epoch <= retired_epoch
+                        && approved_epoch < pin.policy.retention_epoch
+                })
+                && (pin.approved_epoch.is_some() || pin.council_envelope_digest.is_none())
+        }
+    };
+    if !approval_matches_lifecycle {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "pin manifest {pin_label} lifecycle does not exactly retain its immutable approval epoch"
+            )
+            .into(),
+        ));
+    }
+    Ok(pin.approved_epoch)
+}
+/// Validate the complete first-release shape of a registry-issued automatic order.
+///
+/// This is stricter than generic replication-order validation: the reserved identifier,
+/// immutable assignment shape, timestamps, SLA, and pin binding are all derived state.
+pub(crate) fn validate_stored_automatic_replication_order(
+    pin: &PinManifestRecord,
+    record: &ReplicationOrderRecord,
+    order_label: &str,
+) -> Result<ReplicationOrderV1, InstructionExecutionError> {
+    let canonical_order = validate_stored_replication_order(record, order_label)?;
+    let pin_label = manifest_hex(&pin.digest);
+    let approved_epoch = validate_stored_pin_approval_history(pin, &pin_label)?;
+    let expected_order_id = derive_sorafs_auto_replication_order_id_v1(&pin.digest);
+    let expected_deadline = record
+        .issued_epoch
+        .checked_add(u64::from(
+            SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
+        ))
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!("automatic replication order {order_label} deadline overflowed").into(),
+            )
+        })?;
+    let issued_epoch_matches_pin = approved_epoch == Some(record.issued_epoch);
+    let lifecycle_matches_pin = match (pin.status, record.status) {
+        (PinStatus::Approved(_), ReplicationOrderStatus::Cancelled(_))
+        | (PinStatus::Pending, _)
+        | (PinStatus::Retired(_), ReplicationOrderStatus::Pending) => false,
+        (PinStatus::Retired(retired_epoch), ReplicationOrderStatus::Cancelled(cancelled_epoch)) => {
+            retired_epoch == cancelled_epoch
+        }
+        (PinStatus::Retired(retired_epoch), ReplicationOrderStatus::Completed(completed_epoch)) => {
+            completed_epoch <= retired_epoch && retired_epoch >= pin.policy.retention_epoch
+        }
+        (PinStatus::Retired(retired_epoch), ReplicationOrderStatus::Expired(expired_epoch)) => {
+            expired_epoch <= retired_epoch
+        }
+        _ => true,
+    };
+    let expected_slice_gib = automatic_replication_slice_gib(pin.content_length).map_err(|_| {
+        InstructionExecutionError::InvariantViolation(
+            format!("automatic replication order {order_label} slice size overflowed").into(),
+        )
+    })?;
+    let exact_assignments = canonical_order.assignments.len()
+        == usize::from(pin.policy.min_replicas)
+        && canonical_order.assignments.iter().all(|assignment| {
+            assignment.slice_gib == expected_slice_gib && assignment.lane.is_none()
+        });
+    if !record.order_id.is_auto()
+        || record.order_id != expected_order_id
+        || record.manifest_digest != pin.digest
+        || record.manifest_root_cid != pin.root_cid
+        || record.musubi_archive.is_some()
+        || record.assignment_revision != 1
+        || !issued_epoch_matches_pin
+        || !lifecycle_matches_pin
+        || record.deadline_epoch != expected_deadline
+        || record.deadline_epoch >= pin.policy.retention_epoch
+        || canonical_order.chunking_profile != pin.chunker.to_handle()
+        || canonical_order.target_replicas != pin.policy.min_replicas
+        || !exact_assignments
+        || canonical_order.sla.ingest_deadline_secs
+            != SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1
+        || canonical_order.sla.min_availability_percent_milli
+            != AUTO_REPLICATION_ORDER_AVAILABILITY_PERCENT_MILLI
+        || canonical_order.sla.min_por_success_percent_milli
+            != AUTO_REPLICATION_ORDER_POR_SUCCESS_PERCENT_MILLI
+        || !canonical_order.metadata.is_empty()
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "automatic replication order {order_label} does not exactly match its derived first-release pin, assignment, epoch, and SLA invariants"
+            )
+            .into(),
+        ));
+    }
+    Ok(canonical_order)
 }
 fn provider_ingest_anchor_matches_committed_prefix(
     anchor: ProviderIngestFinalizedAnchorV1,
@@ -3966,6 +4662,12 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
                     format!("replication order {order_label} expired at epoch {epoch}").into(),
                 ));
             }
+            ReplicationOrderStatus::Cancelled(epoch) => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("replication order {order_label} was cancelled at epoch {epoch}")
+                        .into(),
+                ));
+            }
         }
         if self.completion_epoch < record.issued_epoch {
             return Err(invalid_parameter(format!(
@@ -4004,6 +4706,32 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
                 )
                 .into(),
             ));
+        }
+        if record.order_id.is_auto() {
+            validate_stored_automatic_replication_order(manifest, &record, &order_label)?;
+        }
+        let current_epoch = pin_consensus_epoch(state_transaction);
+        if self.completion_epoch > current_epoch {
+            return Err(invalid_parameter(format!(
+                "completion_epoch {} is later than current consensus epoch {current_epoch} for replication order {order_label}",
+                self.completion_epoch
+            )));
+        }
+        if current_epoch > record.deadline_epoch {
+            return Err(invalid_parameter(format!(
+                "current consensus epoch {current_epoch} is later than deadline_epoch {} for replication order {order_label}",
+                record.deadline_epoch
+            )));
+        }
+        if record
+            .provider_completions
+            .last()
+            .is_some_and(|previous| previous.completion_epoch > self.completion_epoch)
+        {
+            return Err(invalid_parameter(format!(
+                "completion_epoch {} predates the previously retained completion for replication order {order_label}",
+                self.completion_epoch
+            )));
         }
         record
             .provider_completions
@@ -4073,6 +4801,9 @@ impl Execute for iroha_data_model::isi::sorafs::ExpireReplicationOrder {
                 .into(),
             ));
         }
+        if record.order_id.is_auto() {
+            validate_stored_automatic_replication_order(manifest, &record, &order_label)?;
+        }
         match record.status {
             ReplicationOrderStatus::Pending => {}
             ReplicationOrderStatus::Expired(epoch) if epoch == self.expiration_epoch => {
@@ -4089,11 +4820,24 @@ impl Execute for iroha_data_model::isi::sorafs::ExpireReplicationOrder {
                     format!("replication order {order_label} completed at epoch {epoch}").into(),
                 ));
             }
+            ReplicationOrderStatus::Cancelled(epoch) => {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("replication order {order_label} was cancelled at epoch {epoch}")
+                        .into(),
+                ));
+            }
         }
         if self.expiration_epoch <= record.deadline_epoch {
             return Err(invalid_parameter(format!(
                 "expiration_epoch {} must be greater than deadline_epoch {} for replication order {order_label}",
                 self.expiration_epoch, record.deadline_epoch
+            )));
+        }
+        let consensus_epoch = pin_consensus_epoch(state_transaction);
+        if self.expiration_epoch > consensus_epoch {
+            return Err(invalid_parameter(format!(
+                "expiration_epoch {} cannot exceed consensus Unix-second epoch {consensus_epoch} for replication order {order_label}",
+                self.expiration_epoch,
             )));
         }
         if let Some(location) = musubi_location {
@@ -6206,11 +6950,12 @@ fn validate_pin_status_index_marker(
 fn bounded_pin_manifest_summary(
     record: &PinManifestRecord,
 ) -> Result<PinManifestSummaryV1, QueryExecutionFail> {
-    crate::smartcontracts::isi::query::own_singular_query_struct::<PinManifestSummaryV1, 7>(
+    crate::smartcontracts::isi::query::own_singular_query_struct::<PinManifestSummaryV1, 8>(
         [
             &record.digest,
             &record.submitted_by,
             &record.submitted_epoch,
+            &record.approved_epoch,
             &record.content_length,
             &record.policy.retention_epoch,
             &record.status,
@@ -7143,7 +7888,6 @@ mod sorafs_tests {
     use iroha_primitives::{bigint::BigInt, json::Json};
     use nonzero_ext::nonzero;
     use norito::{json, to_bytes};
-    use sorafs_manifest::orderbook::BYTES_PER_GIB;
     use sorafs_manifest::{
         DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
         capacity::{
@@ -7553,6 +8297,9 @@ mod sorafs_tests {
     }
     fn make_state_with_completion_anchor() -> State {
         let mut state = make_state();
+        state
+            .ensure_da_indexes_hydrated()
+            .expect("empty test Kura must hydrate before installing a hash-only prefix");
         state.push_block_hash_for_testing(completion_anchor_hash());
         state
     }
@@ -7747,8 +8494,9 @@ mod sorafs_tests {
     fn register_governed_capacity_declaration(
         stx: &mut crate::state::StateTransaction<'_, '_>,
         authority: &AccountId,
-        record: CapacityDeclarationRecord,
+        mut record: CapacityDeclarationRecord,
     ) -> Result<(), InstructionExecutionError> {
+        record.registered_epoch = pin_consensus_epoch(stx);
         seed_governed_capacity_provider(stx, record.provider_id, authority, Quantity::from(1_u32));
         RegisterCapacityDeclaration { record }.execute(authority, stx)
     }
@@ -7878,7 +8626,7 @@ mod sorafs_tests {
         PinPolicy {
             min_replicas: 3,
             storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Hot,
-            retention_epoch: 42,
+            retention_epoch: 100_000,
         }
     }
     fn musubi_archive_for_pin(pin: &PinManifestRecord, seed: u8) -> MusubiArchiveRecordV1 {
@@ -8644,6 +9392,7 @@ mod sorafs_tests {
         digest: ManifestDigest,
         chunk_digest: [u8; 32],
     ) {
+        seed_automatic_replication_capacity(stx, default_policy().min_replicas);
         let seed = fixture_seed_for_digest(digest);
         let manifest = manifest_fixture_with_chunk_digest(seed, chunk_digest);
         assert_eq!(
@@ -8676,6 +9425,23 @@ mod sorafs_tests {
             council_envelope_digest: None,
         };
         approve.execute(&alice(), stx).expect("approve manifest");
+    }
+    fn seed_automatic_replication_capacity(
+        stx: &mut crate::state::StateTransaction<'_, '_>,
+        replicas: u16,
+    ) {
+        let consensus_epoch = pin_consensus_epoch(stx);
+        seed_eligible_auto_replication_providers_for_test(
+            stx,
+            &alice(),
+            replicas,
+            StorageClass::Hot,
+            &default_chunker(),
+            consensus_epoch,
+            u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+            1_024,
+        )
+        .expect("seed canonical automatic replication providers");
     }
     fn insert_manifest_with_status(
         stx: &mut crate::state::StateTransaction<'_, '_>,
@@ -8869,6 +9635,21 @@ mod sorafs_tests {
     pub(super) fn encode_replication_order(order: &ReplicationOrderV1) -> Vec<u8> {
         norito::encode_canonical(order).expect("serialize canonical replication order")
     }
+    pub(super) fn encode_replication_order_for_epoch_window(
+        mut order: ReplicationOrderV1,
+        issued_epoch: u64,
+        deadline_epoch: u64,
+    ) -> Vec<u8> {
+        let window = deadline_epoch
+            .checked_sub(issued_epoch)
+            .and_then(|seconds| u32::try_from(seconds).ok())
+            .filter(|seconds| *seconds != 0)
+            .expect("replication-order fixture window fits the V1 SLA field");
+        order.issued_at = issued_epoch;
+        order.deadline_at = deadline_epoch;
+        order.sla.ingest_deadline_secs = window;
+        encode_replication_order(&order)
+    }
     fn sample_capacity_declaration() -> CapacityDeclarationV1 {
         CapacityDeclarationV1 {
             version: CAPACITY_DECLARATION_VERSION_V1,
@@ -8886,47 +9667,73 @@ mod sorafs_tests {
             }],
             lane_commitments: Vec::new(),
             pricing: None,
-            valid_from: 1_700_000_000,
-            valid_until: 1_700_086_400,
-            metadata: vec![CapacityMetadataEntry {
-                key: PROVIDER_OWNER_METADATA_KEY.to_owned(),
-                value: account_literal(&alice()),
-            }],
+            valid_from: 0,
+            valid_until: 2_000_000_000,
+            metadata: vec![
+                CapacityMetadataEntry {
+                    key: PROVIDER_OWNER_METADATA_KEY.to_owned(),
+                    value: account_literal(&alice()),
+                },
+                CapacityMetadataEntry {
+                    key: STORAGE_CLASS_METADATA_KEY.to_owned(),
+                    value: "hot".to_owned(),
+                },
+            ],
         }
+    }
+    fn set_capacity_storage_class(declaration: &mut CapacityDeclarationV1, value: &str) {
+        declaration
+            .metadata
+            .iter_mut()
+            .find(|entry| entry.key == STORAGE_CLASS_METADATA_KEY)
+            .expect("capacity fixture explicitly declares its storage class")
+            .value = value.to_owned();
     }
     fn sample_capacity_record() -> (ProviderId, CapacityDeclarationRecord) {
         let declaration = sample_capacity_declaration();
         let canonical_bytes =
             norito::encode_canonical(&declaration).expect("serialize canonical declaration");
         let provider = ProviderId::new(declaration.provider_id);
+        let mut metadata = Metadata::default();
+        merge_declaration_metadata_into_record(provider, &mut metadata, &declaration.metadata)
+            .expect("merge canonical capacity metadata");
         let record = CapacityDeclarationRecord::new(
             provider,
             canonical_bytes,
             declaration.committed_capacity_gib,
-            9,
-            10,
-            20,
-            iroha_data_model::metadata::Metadata::default(),
+            5,
+            declaration.valid_from,
+            declaration.valid_until,
+            metadata,
         );
         (provider, record)
     }
     fn capacity_record_with_owner(owner: &AccountId) -> (ProviderId, CapacityDeclarationRecord) {
         let mut declaration = sample_capacity_declaration();
-        declaration.metadata = vec![CapacityMetadataEntry {
-            key: PROVIDER_OWNER_METADATA_KEY.to_owned(),
-            value: account_literal(owner),
-        }];
+        declaration.metadata = vec![
+            CapacityMetadataEntry {
+                key: PROVIDER_OWNER_METADATA_KEY.to_owned(),
+                value: account_literal(owner),
+            },
+            CapacityMetadataEntry {
+                key: STORAGE_CLASS_METADATA_KEY.to_owned(),
+                value: "hot".to_owned(),
+            },
+        ];
         let canonical_bytes =
             norito::encode_canonical(&declaration).expect("serialize canonical declaration");
         let provider = ProviderId::new(declaration.provider_id);
+        let mut metadata = Metadata::default();
+        merge_declaration_metadata_into_record(provider, &mut metadata, &declaration.metadata)
+            .expect("merge canonical capacity metadata");
         let record = CapacityDeclarationRecord::new(
             provider,
             canonical_bytes,
             declaration.committed_capacity_gib,
-            9,
-            10,
-            20,
-            iroha_data_model::metadata::Metadata::default(),
+            5,
+            declaration.valid_from,
+            declaration.valid_until,
+            metadata,
         );
         (provider, record)
     }
@@ -9135,7 +9942,7 @@ mod sorafs_tests {
         let action_digest =
             repair_action_digest(&alice(), &report).expect("derive canonical action digest");
         let digest = default_digest();
-        let manifest_record = PinManifestRecord::new(
+        let mut manifest_record = PinManifestRecord::new(
             digest,
             default_root_cid(),
             default_chunker(),
@@ -9149,14 +9956,16 @@ mod sorafs_tests {
             None,
             Metadata::default(),
         );
+        manifest_record.policy.retention_epoch =
+            8 + u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1);
+        manifest_record.approve(7, None);
         let providers = [
             ProviderId::new([0x46; 32]),
             ProviderId::new([0x47; 32]),
             ProviderId::new([0x48; 32]),
         ];
         let automatic = build_auto_replication_order(&manifest_record, &alice(), 7, &providers)
-            .expect("build canonical automatic order")
-            .expect("enough providers for automatic order");
+            .expect("build canonical automatic order");
         let alias = default_alias_binding();
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -9198,8 +10007,7 @@ mod sorafs_tests {
             .expect("canonical query budget ignores alternate ambient layout");
         let automatic_under_ambient =
             build_auto_replication_order(&manifest_record, &alice(), 7, &providers)
-                .expect("build automatic order under alternate ambient layout")
-                .expect("enough providers for automatic order");
+                .expect("build automatic order under alternate ambient layout");
         assert_eq!(automatic_under_ambient, automatic);
         let validated_order =
             validate_stored_replication_order(&automatic, "canonical-ambient-order")
@@ -9417,6 +10225,45 @@ mod sorafs_tests {
         }
         .execute(&alice(), &mut stx);
         assert!(err.is_ok(), "ordinary provider owner should be allowed");
+    }
+    #[test]
+    fn capacity_declaration_rejects_unbound_summary_epochs_atomically() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let (provider, record) = capacity_record_with_owner(&alice());
+        seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
+
+        let mut mismatched_validity = record.clone();
+        mismatched_validity.valid_from_epoch += 1;
+        let error = RegisterCapacityDeclaration {
+            record: mismatched_validity,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("record validity must exactly match its canonical payload");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("validity mismatch")
+        ));
+        assert!(stx.world.capacity_declarations.get(&provider).is_none());
+
+        let mut forged_registration_time = record;
+        forged_registration_time.registered_epoch = 4;
+        let error = RegisterCapacityDeclaration {
+            record: forged_registration_time,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("registration time must be the consensus Unix second");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("must exactly equal consensus Unix second 5")
+        ));
+        assert!(stx.world.capacity_declarations.get(&provider).is_none());
     }
     #[test]
     fn capacity_telemetry_is_permissionless_for_provider_owner() {
@@ -9744,7 +10591,7 @@ mod sorafs_tests {
         let (provider, declaration) = sample_capacity_record();
         register_governed_capacity_declaration(&mut stx, &alice(), declaration.clone())
             .expect("register declaration");
-        let replication_order_id = ReplicationOrderId::new([0xAB; 32]);
+        let replication_order_id = ReplicationOrderId::new([0x2B; 32]);
         let dispute = CapacityDisputeV1 {
             version: CAPACITY_DISPUTE_VERSION_V1,
             provider_id: provider.as_bytes().to_owned(),
@@ -9797,6 +10644,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
+        seed_automatic_replication_capacity(&mut stx, default_policy().min_replicas);
         let instruction = RegisterPinManifest {
             manifest_payload: default_manifest_payload(),
             alias: None,
@@ -9813,7 +10661,7 @@ mod sorafs_tests {
         assert_eq!(stored.status, PinStatus::Approved(5));
         assert_eq!(stored.chunk_digest_sha3_256, default_chunk_digest());
         assert!(stored.council_envelope_digest.is_none());
-        assert_eq!(stx.world.replication_orders.iter().count(), 0);
+        assert_eq!(stx.world.replication_orders.iter().count(), 1);
     }
     #[test]
     fn governed_registration_stays_pending_until_verified_approval() {
@@ -9822,9 +10670,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         stx.gov.sorafs_pin_policy.require_council_signatures = true;
-        let (provider, mut declaration) = capacity_record_with_owner(&alice());
-        declaration.valid_from_epoch = 4;
-        declaration.valid_until_epoch = 20;
+        let (provider, declaration) = capacity_record_with_owner(&alice());
         seed_provider_owners(&mut stx, &[provider], &alice());
         stx.world
             .capacity_declarations
@@ -9832,6 +10678,8 @@ mod sorafs_tests {
         let alias = default_alias_binding();
         let mut manifest = manifest_fixture(0xAA);
         manifest.pin_policy.min_replicas = 1;
+        manifest.pin_policy.retention_epoch =
+            6 + u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1);
         let manifest_digest =
             ManifestDigest::from_manifest(&manifest).expect("derive governed manifest digest");
         RegisterPinManifest {
@@ -10269,15 +11117,15 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        let (provider, mut declaration) = capacity_record_with_owner(&alice());
-        declaration.valid_from_epoch = 4;
-        declaration.valid_until_epoch = 20;
+        let (provider, declaration) = capacity_record_with_owner(&alice());
         seed_provider_owners(&mut stx, &[provider], &alice());
         stx.world
             .capacity_declarations
             .insert(provider, declaration);
         let mut manifest = manifest_fixture(0xAA);
         manifest.pin_policy.min_replicas = 1;
+        manifest.pin_policy.retention_epoch =
+            6 + u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1);
         let manifest_digest =
             ManifestDigest::from_manifest(&manifest).expect("derive manifest digest");
         RegisterPinManifest {
@@ -10295,52 +11143,246 @@ mod sorafs_tests {
             .expect("auto replication order stored");
         assert_eq!(order.manifest_digest, manifest_digest);
         assert_eq!(order.issued_epoch, 5);
-        assert_eq!(order.deadline_epoch, 6);
+        assert_eq!(
+            order.deadline_epoch,
+            5 + u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1)
+        );
         let decoded = norito::decode_from_bytes::<ReplicationOrderV1>(&order.canonical_order)
             .expect("decode order");
+        assert_eq!(decoded.issued_at, order.issued_epoch);
+        assert_eq!(decoded.deadline_at, order.deadline_epoch);
         assert_eq!(decoded.target_replicas, 1);
         assert_eq!(decoded.assignments.len(), 1);
         assert_eq!(decoded.assignments[0].provider_id, *provider.as_bytes());
         assert_eq!(decoded.assignments[0].slice_gib, 1);
     }
     #[test]
-    fn automatic_replication_skips_provider_without_completion_authority() {
+    fn automatic_replication_slice_rounds_up_without_overflow() {
+        assert_eq!(automatic_replication_slice_gib(0).expect("zero"), 1);
+        assert_eq!(
+            automatic_replication_slice_gib(BYTES_PER_GIB).expect("one GiB"),
+            1
+        );
+        assert_eq!(
+            automatic_replication_slice_gib(BYTES_PER_GIB + 1).expect("partial second GiB"),
+            2
+        );
+        assert_eq!(
+            automatic_replication_slice_gib(u64::MAX).expect("maximum byte length"),
+            17_179_869_184
+        );
+    }
+    #[test]
+    fn automatic_replication_requires_full_deadline_and_exact_profile_capacity() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        let (provider, mut declaration) = capacity_record_with_owner(&alice());
-        declaration.valid_from_epoch = 4;
-        declaration.valid_until_epoch = 20;
-        stx.world.provider_owners.insert(provider, alice());
-        stx.world
-            .capacity_declarations
-            .insert(provider, declaration);
-        let mut manifest = manifest_fixture(0xAA);
-        manifest.pin_policy.min_replicas = 1;
+        let mut pin = PinManifestRecord::new(
+            default_digest(),
+            default_root_cid(),
+            default_chunker(),
+            default_chunk_digest(),
+            por_root_for_manifest(default_digest()),
+            BYTES_PER_GIB + 1,
+            PinPolicy {
+                min_replicas: 1,
+                ..default_policy()
+            },
+            alice(),
+            5,
+            None,
+            None,
+            Metadata::default(),
+        );
+        pin.approve(5, None);
+        seed_eligible_auto_replication_providers_for_test(
+            &mut stx,
+            &alice(),
+            1,
+            StorageClass::Hot,
+            &default_chunker(),
+            5,
+            u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+            1,
+        )
+        .expect("seed undersized provider");
+        select_auto_replication_providers(&stx, &pin, 5)
+            .expect_err("one-GiB profile commitment cannot accept a two-GiB slice");
+
+        seed_eligible_auto_replication_providers_for_test(
+            &mut stx,
+            &alice(),
+            1,
+            StorageClass::Hot,
+            &default_chunker(),
+            5,
+            u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1) - 1,
+            2,
+        )
+        .expect("seed provider expiring just before the automatic deadline");
+        select_auto_replication_providers(&stx, &pin, 5)
+            .expect_err("capacity must remain valid through the full automatic deadline");
+
+        seed_eligible_auto_replication_providers_for_test(
+            &mut stx,
+            &alice(),
+            1,
+            StorageClass::Hot,
+            &default_chunker(),
+            5,
+            u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+            2,
+        )
+        .expect("seed exact eligible provider");
+        let selected = select_auto_replication_providers(&stx, &pin, 5)
+            .expect("exact two-GiB profile capacity through the deadline is eligible");
+        assert_eq!(selected.len(), 1);
+    }
+    #[test]
+    fn automatic_replication_enforces_aggregate_active_profile_capacity() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        seed_eligible_auto_replication_providers_for_test(
+            &mut stx,
+            &alice(),
+            1,
+            StorageClass::Hot,
+            &default_chunker(),
+            5,
+            u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+            1,
+        )
+        .expect("seed one-GiB provider");
+        let mut first = manifest_fixture(0xAA);
+        first.pin_policy.min_replicas = 1;
+        let first_digest =
+            ManifestDigest::from_manifest(&first).expect("derive first manifest digest");
         RegisterPinManifest {
-            manifest_payload: manifest.encode().expect("encode manifest"),
+            manifest_payload: first.encode().expect("encode first manifest"),
             alias: None,
             successor_of: None,
         }
         .execute(&alice(), &mut stx)
-        .expect("manifest registration remains valid without an eligible replication provider");
-        assert!(
-            stx.world.replication_orders.iter().next().is_none(),
-            "automatic replication must not assign a provider without a completion authority"
-        );
+        .expect("first manifest reserves provider capacity");
+
+        let mut second = manifest_fixture(0xAB);
+        second.pin_policy.min_replicas = 1;
+        let second_digest =
+            ManifestDigest::from_manifest(&second).expect("derive second manifest digest");
+        let error = RegisterPinManifest {
+            manifest_payload: second.encode().expect("encode second manifest"),
+            alias: None,
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("active automatic allocation must prevent oversubscription");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("requires 1 eligible providers but found 0")
+        ));
+        assert!(stx.world.pin_manifests.get(&second_digest).is_none());
+
+        RetirePinManifest {
+            digest: first_digest,
+            reason: Some("cancel unfulfilled replication".to_owned()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("retiring the pending pin releases its capacity reservation");
+        RegisterPinManifest {
+            manifest_payload: second.encode().expect("encode second manifest again"),
+            alias: None,
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("cancelled automatic allocation releases profile capacity");
+        assert!(stx.world.pin_manifests.get(&second_digest).is_some());
     }
     #[test]
-    fn automatic_replication_timestamp_overflow_fails_before_fee_or_state_mutation() {
+    fn automatic_replication_rejects_deadline_after_manifest_retention() {
+        let digest = default_digest();
+        let mut record = PinManifestRecord::new(
+            digest,
+            default_root_cid(),
+            default_chunker(),
+            default_chunk_digest(),
+            por_root_for_manifest(digest),
+            default_content_length(),
+            default_policy(),
+            alice(),
+            5,
+            None,
+            None,
+            Metadata::default(),
+        );
+        record.policy.min_replicas = 1;
+        record.policy.retention_epoch =
+            5 + u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1);
+        record.approve(5, None);
+        let error =
+            build_auto_replication_order(&record, &alice(), 5, &[ProviderId::new([0xA5; 32])])
+                .expect_err("automatic replication must fit inside manifest retention");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("must be earlier than manifest retention epoch")
+        ));
+    }
+    #[test]
+    fn automatic_replication_validator_rejects_mutable_or_noncanonical_shape() {
+        let digest = default_digest();
+        let mut record = PinManifestRecord::new(
+            digest,
+            default_root_cid(),
+            default_chunker(),
+            default_chunk_digest(),
+            por_root_for_manifest(digest),
+            BYTES_PER_GIB + 1,
+            default_policy(),
+            alice(),
+            5,
+            None,
+            None,
+            Metadata::default(),
+        );
+        record.policy.min_replicas = 1;
+        record.policy.retention_epoch =
+            6 + u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1);
+        record.approve(5, None);
+        let automatic =
+            build_auto_replication_order(&record, &alice(), 5, &[ProviderId::new([0x66; 32])])
+                .expect("build exact automatic order");
+        let decoded = norito::decode_from_bytes::<ReplicationOrderV1>(&automatic.canonical_order)
+            .expect("decode exact automatic order");
+        assert_eq!(decoded.assignments[0].slice_gib, 2);
+
+        let mut revised = automatic.clone();
+        revised.assignment_revision = 2;
+        validate_stored_automatic_replication_order(&record, &revised, "revised-auto")
+            .expect_err("automatic assignment revision is immutable");
+
+        let mut altered = automatic;
+        let mut payload = norito::decode_from_bytes::<ReplicationOrderV1>(&altered.canonical_order)
+            .expect("decode automatic payload");
+        payload.assignments[0].slice_gib = 1;
+        altered.canonical_order =
+            norito::encode_canonical(&payload).expect("encode altered automatic payload");
+        validate_stored_automatic_replication_order(&record, &altered, "altered-auto")
+            .expect_err("automatic assignment slice is derived and exact");
+    }
+    #[test]
+    fn automatic_replication_rejects_missing_completion_authority_atomically() {
         let state = make_state();
-        let submitted_epoch = u64::MAX / AUTO_REPLICATION_ORDER_SECS_PER_EPOCH + 1;
-        let mut block = state.block(block_header_at_epoch(submitted_epoch));
+        let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        let (provider, mut declaration) = capacity_record_with_owner(&alice());
-        declaration.valid_from_epoch = 0;
-        declaration.valid_until_epoch = u64::MAX;
-        seed_provider_owners(&mut stx, &[provider], &alice());
+        let (provider, declaration) = capacity_record_with_owner(&alice());
+        stx.world.provider_owners.insert(provider, alice());
         stx.world
             .capacity_declarations
             .insert(provider, declaration);
@@ -10349,22 +11391,21 @@ mod sorafs_tests {
         let treasury_balance_before = pin_fee_balance(&stx, &treasury_account);
         let mut manifest = manifest_fixture(0xAA);
         manifest.pin_policy.min_replicas = 1;
-        manifest.pin_policy.retention_epoch = u64::MAX;
         let error = RegisterPinManifest {
             manifest_payload: manifest.encode().expect("encode manifest"),
             alias: None,
             successor_of: None,
         }
         .execute(&alice(), &mut stx)
-        .expect_err("automatic replication time overflow must fail closed");
+        .expect_err("manifest registration must fail without an eligible replication provider");
         assert!(matches!(
             error,
             InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(message)
-            ) if message.contains("issuance time overflow")
+            ) if message.contains("requires 1 eligible providers but found 0")
         ));
-        assert_eq!(stx.world.pin_manifests.iter().count(), 0);
-        assert_eq!(stx.world.replication_orders.iter().count(), 0);
+        assert!(stx.world.pin_manifests.iter().next().is_none());
+        assert!(stx.world.replication_orders.iter().next().is_none());
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
@@ -10374,23 +11415,52 @@ mod sorafs_tests {
         );
     }
     #[test]
-    fn approval_replication_overflow_does_not_publish_pending_alias() {
+    fn automatic_replication_builder_rejects_deadline_overflow() {
+        let issued_epoch =
+            u64::MAX - u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1) + 1;
+        let digest = default_digest();
+        let mut policy = default_policy();
+        policy.min_replicas = 1;
+        policy.retention_epoch = u64::MAX;
+        let mut record = PinManifestRecord::new(
+            digest,
+            default_root_cid(),
+            default_chunker(),
+            default_chunk_digest(),
+            por_root_for_manifest(digest),
+            default_content_length(),
+            policy,
+            alice(),
+            issued_epoch,
+            None,
+            None,
+            Metadata::default(),
+        );
+        record.approve(issued_epoch, None);
+        let error = build_auto_replication_order(
+            &record,
+            &alice(),
+            issued_epoch,
+            &[ProviderId::new([0x65; 32])],
+        )
+        .expect_err("automatic replication deadline overflow must fail closed");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("deadline epoch overflow")
+        ));
+    }
+    #[test]
+    fn approval_replication_shortfall_does_not_publish_pending_alias() {
         let state = make_state();
-        let approval_epoch = u64::MAX / AUTO_REPLICATION_ORDER_SECS_PER_EPOCH + 1;
+        let approval_epoch = 5;
         let mut block = state.block(block_header_at_epoch(approval_epoch));
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        let (provider, mut declaration) = capacity_record_with_owner(&alice());
-        declaration.valid_from_epoch = 0;
-        declaration.valid_until_epoch = u64::MAX;
-        seed_provider_owners(&mut stx, &[provider], &alice());
-        stx.world
-            .capacity_declarations
-            .insert(provider, declaration);
         let alias = default_alias_binding();
         let mut policy = default_policy();
         policy.min_replicas = 1;
-        policy.retention_epoch = approval_epoch + 1;
         let record = PinManifestRecord::new(
             default_digest(),
             default_root_cid(),
@@ -10419,12 +11489,12 @@ mod sorafs_tests {
             council_envelope_digest: None,
         }
         .execute(&alice(), &mut stx)
-        .expect_err("automatic replication overflow must fail approval atomically");
+        .expect_err("automatic replication shortfall must fail approval atomically");
         assert!(matches!(
             error,
             InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(message)
-            ) if message.contains("issuance time overflow")
+            ) if message.contains("requires 1 eligible providers but found 0")
         ));
         assert_eq!(
             stx.world
@@ -10442,6 +11512,79 @@ mod sorafs_tests {
             "failed approval must not publish the pending alias"
         );
         assert_eq!(stx.world.replication_orders.iter().count(), 0);
+    }
+    #[test]
+    fn approval_never_overwrites_an_automatic_order_collision() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let alias = default_alias_binding();
+        let mut policy = default_policy();
+        policy.min_replicas = 1;
+        policy.retention_epoch =
+            6 + u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1);
+        let record = PinManifestRecord::new(
+            default_digest(),
+            default_root_cid(),
+            default_chunker(),
+            default_chunk_digest(),
+            por_root_for_manifest(default_digest()),
+            default_content_length(),
+            policy,
+            alice(),
+            5,
+            Some(alias.clone()),
+            None,
+            Metadata::default(),
+        );
+        insert_pin_record_with_accounting(&mut stx, record.clone());
+        let mut approved = record.clone();
+        approved.approve(5, None);
+        let collision =
+            build_auto_replication_order(&approved, &alice(), 5, &[ProviderId::new([0x67; 32])])
+                .expect("build collision fixture");
+        stx.world
+            .replication_orders
+            .insert(collision.order_id, collision.clone());
+        let council_key = checked_ed25519_keypair();
+        set_council_approval_policy(
+            &mut stx,
+            1,
+            vec![council_approval_signer("council-a", &council_key, 0, None)],
+        );
+        let (envelope, _) = build_envelope(&record, &council_key);
+        let error = ApprovePinManifest {
+            digest: default_digest(),
+            council_envelope: Some(envelope),
+            council_envelope_digest: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("automatic-order collision must fail approval");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvariantViolation(message)
+                if message.contains("automatic replication order")
+                    && message.contains("already exists")
+        ));
+        assert_eq!(
+            stx.world
+                .pin_manifests
+                .get(&default_digest())
+                .expect("pending manifest retained")
+                .status,
+            PinStatus::Pending
+        );
+        assert_eq!(
+            stx.world.replication_orders.get(&collision.order_id),
+            Some(&collision)
+        );
+        assert!(
+            stx.world
+                .manifest_aliases
+                .get(&ManifestAliasId::from(&alias))
+                .is_none()
+        );
     }
     #[test]
     fn register_manifest_rejects_duplicate_alias_binding() {
@@ -12661,6 +13804,48 @@ mod sorafs_tests {
         ));
     }
     #[test]
+    fn generic_replication_instructions_reject_reserved_automatic_ids() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let order_id = derive_sorafs_auto_replication_order_id_v1(&default_digest());
+        let issue_error = IssueReplicationOrder {
+            order_id,
+            order_payload: Vec::new(),
+            issued_epoch: 1,
+            deadline_epoch: 2,
+            musubi_archive: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("generic issue must not populate the automatic namespace");
+        assert!(matches!(
+            issue_error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("reserved automatic-order identifier namespace")
+        ));
+        let revision_error = ReviseReplicationOrderAssignments::new(
+            order_id,
+            1,
+            2,
+            vec![ReplicationAssignmentV1 {
+                provider_id: [0x21; 32],
+                slice_gib: 1,
+                lane: None,
+            }],
+        )
+        .execute(&alice(), &mut stx)
+        .expect_err("automatic assignments are immutable");
+        assert!(matches!(
+            revision_error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("immutable assignments")
+        ));
+        assert!(stx.world.replication_orders.get(&order_id).is_none());
+    }
+    #[test]
     fn complete_replication_order_requires_permission() {
         let state = make_state();
         let mut block = state.block(block_header());
@@ -12743,7 +13928,7 @@ mod sorafs_tests {
         ];
         seed_provider_owners(&mut stx, &providers, &alice());
         let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
-        let payload = encode_replication_order(&order_struct);
+        let payload = encode_replication_order_for_epoch_window(order_struct, 12, 32);
         let issue = IssueReplicationOrder {
             order_id,
             order_payload: payload.clone(),
@@ -12775,6 +13960,82 @@ mod sorafs_tests {
                 .is_none(),
             "generic SoraFS orders must not acquire a Musubi binding"
         );
+        let mut corrupted = record.clone();
+        corrupted.deadline_epoch = 31;
+        let error = validate_stored_replication_order(&corrupted, "timestamp-mismatch")
+            .expect_err("stored record timestamps must remain bound to the canonical payload");
+        assert!(error.to_string().contains("bound to its record"));
+
+        let mut prematurely_expired = record.clone();
+        prematurely_expired.status =
+            ReplicationOrderStatus::Expired(prematurely_expired.deadline_epoch);
+        let error = validate_stored_replication_order(&prematurely_expired, "premature-expiry")
+            .expect_err("stored expiry must be strictly later than the order deadline");
+        assert!(error.to_string().contains("lifecycle is inconsistent"));
+
+        let mut late_cancellation = record.clone();
+        late_cancellation.status = ReplicationOrderStatus::Cancelled(
+            late_cancellation
+                .deadline_epoch
+                .checked_add(1)
+                .expect("fixture deadline has room"),
+        );
+        let error = validate_stored_replication_order(&late_cancellation, "late-cancellation")
+            .expect_err("stored cancellation cannot occur after the order deadline");
+        assert!(error.to_string().contains("lifecycle is inconsistent"));
+    }
+    #[test]
+    fn issue_replication_order_requires_one_unix_second_window_and_live_pin_horizon() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+        let providers = vec![
+            ProviderId::new([0x91; 32]),
+            ProviderId::new([0x92; 32]),
+            ProviderId::new([0x93; 32]),
+        ];
+        seed_provider_owners(&mut stx, &providers, &alice());
+
+        let mismatched_id = ReplicationOrderId::new([0x60; 32]);
+        let mismatched_payload = encode_replication_order_for_epoch_window(
+            replication_order_struct(mismatched_id, default_digest(), &providers, 3),
+            12,
+            32,
+        );
+        let mismatch = IssueReplicationOrder::new(mismatched_id, mismatched_payload, 12, 31)
+            .execute(&alice(), &mut stx)
+            .expect_err("record epochs must match provider-facing Unix timestamps");
+        assert!(matches!(
+            mismatch,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("must exactly match")
+        ));
+
+        let expiring_id = ReplicationOrderId::new([0x64; 32]);
+        let expiring_payload = encode_replication_order_for_epoch_window(
+            replication_order_struct(expiring_id, default_digest(), &providers, 3),
+            12,
+            default_policy().retention_epoch,
+        );
+        let expiring = IssueReplicationOrder::new(
+            expiring_id,
+            expiring_payload,
+            12,
+            default_policy().retention_epoch,
+        )
+        .execute(&alice(), &mut stx)
+        .expect_err("pin expiry runs before transactions at the retention second");
+        assert!(matches!(
+            expiring,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("must be earlier than manifest retention epoch")
+        ));
+        assert!(stx.world.replication_orders.get(&mismatched_id).is_none());
+        assert!(stx.world.replication_orders.get(&expiring_id).is_none());
     }
     include!("sorafs/musubi_replication_order_tests.rs");
     #[test]
@@ -12803,14 +14064,18 @@ mod sorafs_tests {
         ];
         seed_provider_owners(&mut stx, &providers, &alice());
         let order = replication_order_struct(order_id, default_digest(), &providers, 3);
-        let error = IssueReplicationOrder::new(order_id, encode_replication_order(&order), 12, 32)
-            .for_musubi_archive(archive_id)
-            .execute(&alice(), &mut stx)
-            .expect_err("substituted pin commitment must fail closed");
+        let error = IssueReplicationOrder::new(
+            order_id,
+            encode_replication_order_for_epoch_window(order, 12, 32),
+            12,
+            32,
+        )
+        .for_musubi_archive(archive_id)
+        .execute(&alice(), &mut stx)
+        .expect_err("substituted pin commitment must fail closed");
         assert!(
-            error
-                .to_string()
-                .contains("complete Musubi archive commitment")
+            smart_contract_error_message(&error).contains("complete Musubi archive commitment"),
+            "unexpected Musubi commitment error: {error:?}"
         );
         assert!(stx.world.replication_orders.get(&order_id).is_none());
         assert!(
@@ -12835,7 +14100,7 @@ mod sorafs_tests {
         ];
         seed_provider_owners(&mut stx, &providers, &alice());
         let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
-        let payload = encode_replication_order(&order_struct);
+        let payload = encode_replication_order_for_epoch_window(order_struct, 12, 32);
         let instruction = InstructionBox::from(IssueReplicationOrder {
             order_id,
             order_payload: payload,
@@ -12866,12 +14131,12 @@ mod sorafs_tests {
         ];
         seed_provider_owners(&mut stx, &providers, &alice());
         let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
-        let payload = encode_replication_order(&order_struct);
+        let payload = encode_replication_order_for_epoch_window(order_struct, 1, 10);
         let issue = IssueReplicationOrder {
             order_id,
             order_payload: payload.clone(),
-            issued_epoch: 20,
-            deadline_epoch: 40,
+            issued_epoch: 1,
+            deadline_epoch: 10,
             musubi_archive: None,
         };
         issue
@@ -12907,7 +14172,7 @@ mod sorafs_tests {
         ];
         let mut order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
         order_struct.target_replicas = 2;
-        let payload = encode_replication_order(&order_struct);
+        let payload = encode_replication_order_for_epoch_window(order_struct, 10, 20);
         let issue = IssueReplicationOrder {
             order_id,
             order_payload: payload,
@@ -12944,7 +14209,7 @@ mod sorafs_tests {
         ];
         let mut order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
         order_struct.chunking_profile = "sorafs.sf2@2.0.0".to_owned();
-        let payload = encode_replication_order(&order_struct);
+        let payload = encode_replication_order_for_epoch_window(order_struct, 15, 25);
         let issue = IssueReplicationOrder {
             order_id,
             order_payload: payload,
@@ -12984,7 +14249,7 @@ mod sorafs_tests {
         mismatch.manifest_cid = manifest_fixture(0xBB).root_cid;
         let error = IssueReplicationOrder {
             order_id: mismatch_id,
-            order_payload: encode_replication_order(&mismatch),
+            order_payload: encode_replication_order_for_epoch_window(mismatch, 5, 15),
             issued_epoch: 5,
             deadline_epoch: 15,
             musubi_archive: None,
@@ -12998,8 +14263,11 @@ mod sorafs_tests {
             ) if message.contains("manifest CID does not match content root")
         ));
         let noncanonical_id = ReplicationOrderId::new([0x69; 32]);
-        let noncanonical =
+        let mut noncanonical =
             replication_order_struct(noncanonical_id, default_digest(), &providers, 3);
+        noncanonical.issued_at = 5;
+        noncanonical.deadline_at = 15;
+        noncanonical.sla.ingest_deadline_secs = 10;
         let noncanonical_bytes = {
             let _guard = norito::core::DecodeFlagsGuard::enter(0);
             norito::to_bytes(&noncanonical).expect("encode alternate-layout fixture")
@@ -13059,7 +14327,12 @@ mod sorafs_tests {
                 InvalidParameterError::SmartContract(message)
             ) if message.contains("replication order validation failed")
         ));
-        assert_eq!(stx.world.replication_orders.iter().count(), 0);
+        assert!(
+            stx.world
+                .replication_orders
+                .get(&allocation_bomb_id)
+                .is_none()
+        );
     }
     #[test]
     fn issue_replication_order_rejects_zero_length_epoch_window() {
@@ -13095,7 +14368,7 @@ mod sorafs_tests {
         let providers = vec![ProviderId::new([0x26; 32])];
         seed_provider_owners(&mut stx, &providers, &alice());
         let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
-        let payload = encode_replication_order(&order_struct);
+        let payload = encode_replication_order_for_epoch_window(order_struct, 22, 33);
         let issue = IssueReplicationOrder {
             order_id,
             order_payload: payload,
@@ -13126,7 +14399,7 @@ mod sorafs_tests {
         ];
         seed_provider_owners(&mut stx, &providers, &bob());
         let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
-        let payload = encode_replication_order(&order_struct);
+        let payload = encode_replication_order_for_epoch_window(order_struct, 22, 33);
         let issue = IssueReplicationOrder {
             order_id,
             order_payload: payload,
@@ -13156,7 +14429,7 @@ mod sorafs_tests {
         let order_id = ReplicationOrderId::new([0x46; 32]);
         let providers = vec![ProviderId::new([0x25; 32])];
         let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
-        let payload = encode_replication_order(&order_struct);
+        let payload = encode_replication_order_for_epoch_window(order_struct, 22, 33);
         let issue = IssueReplicationOrder {
             order_id,
             order_payload: payload,
@@ -13188,17 +14461,17 @@ mod sorafs_tests {
         ];
         seed_provider_owners(&mut stx, &providers, &alice());
         let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
-        let payload = encode_replication_order(&order_struct);
+        let payload = encode_replication_order_for_epoch_window(order_struct, 1, 10);
         IssueReplicationOrder {
             order_id,
             order_payload: payload,
-            issued_epoch: 30,
-            deadline_epoch: 60,
+            issued_epoch: 1,
+            deadline_epoch: 10,
             musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect("issue replication order");
-        let complete = completion_instruction(order_id, providers[0], 45, &alice());
+        let complete = completion_instruction(order_id, providers[0], 2, &alice());
         complete
             .execute(&alice(), &mut stx)
             .expect("complete replication order");
@@ -13209,10 +14482,10 @@ mod sorafs_tests {
         )
         .execute(&alice(), &mut stx)
         .expect("rotate completion authority after the retained completion");
-        completion_instruction(order_id, providers[0], 45, &alice())
+        completion_instruction(order_id, providers[0], 2, &alice())
             .execute(&alice(), &mut stx)
             .expect("exact retained completion replay remains idempotent after policy rotation");
-        let conflicting_replay = completion_instruction(order_id, providers[0], 46, &alice())
+        let conflicting_replay = completion_instruction(order_id, providers[0], 3, &alice())
             .execute(&alice(), &mut stx)
             .expect_err("completion replay at a different epoch must fail");
         assert!(matches!(
@@ -13227,7 +14500,7 @@ mod sorafs_tests {
             .expect("order stored");
         assert_eq!(partial_record.provider_completions.len(), 1);
         assert_eq!(partial_record.status, ReplicationOrderStatus::Pending);
-        completion_instruction(order_id, providers[1], 46, &alice())
+        completion_instruction(order_id, providers[1], 3, &alice())
             .execute(&alice(), &mut stx)
             .expect("second provider completion");
         assert_eq!(
@@ -13238,16 +14511,16 @@ mod sorafs_tests {
                 .status,
             ReplicationOrderStatus::Pending
         );
-        completion_instruction(order_id, providers[2], 47, &alice())
+        completion_instruction(order_id, providers[2], 4, &alice())
             .execute(&alice(), &mut stx)
             .expect("target provider completion");
-        let surplus_completion = completion_instruction(order_id, providers[3], 48, &alice())
+        let surplus_completion = completion_instruction(order_id, providers[3], 5, &alice())
             .execute(&alice(), &mut stx)
             .expect_err("completed redundancy target must reject surplus completion");
         assert!(matches!(
             surplus_completion,
             InstructionExecutionError::InvariantViolation(message)
-                if message.contains("reached its redundancy target at epoch 47")
+                if message.contains("reached its redundancy target at epoch 4")
         ));
         let record = stx
             .world
@@ -13256,7 +14529,7 @@ mod sorafs_tests {
             .expect("order stored");
         assert!(matches!(
             record.status,
-            ReplicationOrderStatus::Completed(epoch) if epoch == 47
+            ReplicationOrderStatus::Completed(epoch) if epoch == 4
         ));
         assert_eq!(record.provider_completions.len(), 3);
     }
@@ -13275,17 +14548,16 @@ mod sorafs_tests {
             &[original_provider, replacement_provider],
             &alice(),
         );
-        let payload = encode_replication_order(&replication_order_struct(
-            order_id,
-            default_digest(),
-            &[original_provider],
+        let payload = encode_replication_order_for_epoch_window(
+            replication_order_struct(order_id, default_digest(), &[original_provider], 1),
             1,
-        ));
+            10,
+        );
         IssueReplicationOrder {
             order_id,
             order_payload: payload,
-            issued_epoch: 30,
-            deadline_epoch: 60,
+            issued_epoch: 1,
+            deadline_epoch: 10,
             musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
@@ -13293,7 +14565,7 @@ mod sorafs_tests {
         let revision_one = completion_authority(&alice(), 1);
         let revision_two = completion_authority(&alice(), 2);
         let prepared_under_revision_one =
-            completion_instruction(order_id, original_provider, 45, &alice());
+            completion_instruction(order_id, original_provider, 2, &alice());
         SetProviderIngestCompletionAuthority::new(
             original_provider,
             Some(revision_one),
@@ -13311,7 +14583,7 @@ mod sorafs_tests {
             ) if message.contains("completion authority")
         ));
         let prepared_before_reassignment =
-            completion_instruction(order_id, original_provider, 45, &alice());
+            completion_instruction(order_id, original_provider, 2, &alice());
         ReviseReplicationOrderAssignments::new(
             order_id,
             1,
@@ -13333,7 +14605,7 @@ mod sorafs_tests {
                 InvalidParameterError::SmartContract(message)
             ) if message.contains("assignment revision")
         ));
-        let mut stale_anchor = completion_instruction(order_id, replacement_provider, 46, &alice());
+        let mut stale_anchor = completion_instruction(order_id, replacement_provider, 3, &alice());
         stale_anchor.expected_assignment_revision = 2;
         stale_anchor.finalized_anchor.block_hash = [0xEE; 32];
         let stale_anchor = stale_anchor
@@ -13345,7 +14617,7 @@ mod sorafs_tests {
                 InvalidParameterError::SmartContract(message)
             ) if message.contains("finalized anchor")
         ));
-        let mut valid = completion_instruction(order_id, replacement_provider, 46, &alice());
+        let mut valid = completion_instruction(order_id, replacement_provider, 3, &alice());
         valid.expected_assignment_revision = 2;
         valid
             .execute(&alice(), &mut stx)
@@ -13368,10 +14640,16 @@ mod sorafs_tests {
     #[test]
     fn completion_after_deadline_fails_without_changing_pending_order() {
         let state = make_state_with_completion_anchor();
-        let mut block = state.block(block_header());
+        let mut block = state.block(block_header_at_epoch(16));
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+        insert_manifest_with_status(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            None,
+            PinStatus::Approved(5),
+        );
         let order_id = ReplicationOrderId::new([0x76; 32]);
         let providers = vec![
             ProviderId::new([0x30; 32]),
@@ -13379,12 +14657,11 @@ mod sorafs_tests {
             ProviderId::new([0x32; 32]),
         ];
         seed_provider_owners(&mut stx, &providers, &alice());
-        let payload = encode_replication_order(&replication_order_struct(
-            order_id,
-            default_digest(),
-            &providers,
-            3,
-        ));
+        let payload = encode_replication_order_for_epoch_window(
+            replication_order_struct(order_id, default_digest(), &providers, 3),
+            5,
+            15,
+        );
         IssueReplicationOrder {
             order_id,
             order_payload: payload,
@@ -13394,14 +14671,16 @@ mod sorafs_tests {
         }
         .execute(&alice(), &mut stx)
         .expect("issue order");
-        let error = completion_instruction(order_id, providers[0], 16, &alice())
+        let exact_retry = completion_instruction(order_id, providers[0], 15, &alice());
+        let error = exact_retry
+            .clone()
             .execute(&alice(), &mut stx)
-            .expect_err("late completion must fail");
+            .expect_err("a new completion submitted after the deadline must fail");
         assert!(matches!(
             error,
             InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(message)
-            ) if message.contains("exceeds deadline_epoch")
+            ) if message.contains("current consensus epoch 16 is later than deadline_epoch 15")
         ));
         assert_eq!(
             stx.world
@@ -13411,14 +14690,82 @@ mod sorafs_tests {
                 .status,
             ReplicationOrderStatus::Pending
         );
+        let retained = ReplicationOrderCompletionRecord {
+            provider_id: providers[0],
+            completed_by: alice(),
+            completion_epoch: exact_retry.completion_epoch,
+            assignment_revision: exact_retry.expected_assignment_revision,
+            completion_authority: exact_retry.expected_authority.clone(),
+            finalized_anchor: exact_retry.finalized_anchor,
+        };
+        stx.world
+            .replication_orders
+            .get_mut(&order_id)
+            .expect("order remains")
+            .provider_completions
+            .push(retained);
+        exact_retry
+            .execute(&alice(), &mut stx)
+            .expect("an exact retained completion replay remains idempotent after the deadline");
     }
     #[test]
-    fn expire_replication_order_is_deadline_bound_and_idempotent() {
+    fn future_dated_completion_fails_without_mutating_the_order() {
         let state = make_state_with_completion_anchor();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+        let order_id = ReplicationOrderId::new([0x72; 32]);
+        let providers = vec![
+            ProviderId::new([0x27; 32]),
+            ProviderId::new([0x28; 32]),
+            ProviderId::new([0x29; 32]),
+        ];
+        seed_provider_owners(&mut stx, &providers, &alice());
+        let payload = encode_replication_order_for_epoch_window(
+            replication_order_struct(order_id, default_digest(), &providers, 3),
+            1,
+            10,
+        );
+        IssueReplicationOrder {
+            order_id,
+            order_payload: payload,
+            issued_epoch: 1,
+            deadline_epoch: 10,
+            musubi_archive: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("issue order");
+        let error = completion_instruction(order_id, providers[0], 6, &alice())
+            .execute(&alice(), &mut stx)
+            .expect_err("a completion cannot claim a future consensus second");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("completion_epoch 6 is later than current consensus epoch 5")
+        ));
+        let record = stx
+            .world
+            .replication_orders
+            .get(&order_id)
+            .expect("order remains");
+        assert!(record.provider_completions.is_empty());
+        assert_eq!(record.status, ReplicationOrderStatus::Pending);
+    }
+    #[test]
+    fn expire_replication_order_is_deadline_bound_and_idempotent() {
+        let state = make_state_with_completion_anchor();
+        let mut block = state.block(block_header_at_epoch(16));
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        insert_manifest_with_status(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            None,
+            PinStatus::Approved(5),
+        );
         let order_id = ReplicationOrderId::new([0x74; 32]);
         let providers = vec![
             ProviderId::new([0x2E; 32]),
@@ -13426,12 +14773,11 @@ mod sorafs_tests {
             ProviderId::new([0x30; 32]),
         ];
         seed_provider_owners(&mut stx, &providers, &alice());
-        let payload = encode_replication_order(&replication_order_struct(
-            order_id,
-            default_digest(),
-            &providers,
-            3,
-        ));
+        let payload = encode_replication_order_for_epoch_window(
+            replication_order_struct(order_id, default_digest(), &providers, 3),
+            5,
+            15,
+        );
         IssueReplicationOrder {
             order_id,
             order_payload: payload,
@@ -13461,6 +14807,18 @@ mod sorafs_tests {
                 .status,
             ReplicationOrderStatus::Pending
         );
+        let future = ExpireReplicationOrder {
+            order_id,
+            expiration_epoch: 17,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("expiration cannot claim a future consensus second");
+        assert!(matches!(
+            future,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("cannot exceed consensus Unix-second epoch")
+        ));
         ExpireReplicationOrder {
             order_id,
             expiration_epoch: 16,
@@ -13515,12 +14873,11 @@ mod sorafs_tests {
             ProviderId::new([0x2F; 32]),
         ];
         seed_provider_owners(&mut stx, &providers, &alice());
-        let payload = encode_replication_order(&replication_order_struct(
-            order_id,
-            default_digest(),
-            &providers,
-            3,
-        ));
+        let payload = encode_replication_order_for_epoch_window(
+            replication_order_struct(order_id, default_digest(), &providers, 3),
+            5,
+            15,
+        );
         IssueReplicationOrder {
             order_id,
             order_payload: payload,
@@ -13560,12 +14917,18 @@ mod sorafs_tests {
         ));
     }
     #[test]
-    fn retiring_manifest_expires_its_pending_replication_orders() {
+    fn retiring_manifest_at_order_deadline_cancels_pending_replication() {
         let state = make_state_with_completion_anchor();
-        let mut block = state.block(block_header());
+        let mut block = state.block(block_header_at_epoch(15));
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
-        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+        insert_manifest_with_status(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            None,
+            PinStatus::Approved(5),
+        );
         let order_id = ReplicationOrderId::new([0x75; 32]);
         let providers = vec![
             ProviderId::new([0x2F; 32]),
@@ -13573,12 +14936,11 @@ mod sorafs_tests {
             ProviderId::new([0x31; 32]),
         ];
         seed_provider_owners(&mut stx, &providers, &alice());
-        let payload = encode_replication_order(&replication_order_struct(
-            order_id,
-            default_digest(),
-            &providers,
-            3,
-        ));
+        let payload = encode_replication_order_for_epoch_window(
+            replication_order_struct(order_id, default_digest(), &providers, 3),
+            5,
+            15,
+        );
         IssueReplicationOrder {
             order_id,
             order_payload: payload,
@@ -13600,16 +14962,66 @@ mod sorafs_tests {
                 .get(&order_id)
                 .expect("order remains auditable")
                 .status,
-            ReplicationOrderStatus::Expired(10)
+            ReplicationOrderStatus::Cancelled(15)
         );
-        let error = completion_instruction(order_id, providers[0], 10, &alice())
+        let error = completion_instruction(order_id, providers[0], 15, &alice())
             .execute(&alice(), &mut stx)
-            .expect_err("expired order must not complete");
+            .expect_err("cancelled order must not complete");
         assert!(matches!(
             error,
             InstructionExecutionError::InvariantViolation(message)
-                if message.contains("expired at epoch 10")
+                if message.contains("cancelled at epoch 15")
         ));
+    }
+    #[test]
+    fn retiring_manifest_after_order_deadline_expires_pending_replication() {
+        let state = make_state_with_completion_anchor();
+        let mut block = state.block(block_header_at_epoch(16));
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        insert_manifest_with_status(
+            &mut stx,
+            default_digest(),
+            default_chunk_digest(),
+            None,
+            PinStatus::Approved(5),
+        );
+        let order_id = ReplicationOrderId::new([0x76; 32]);
+        let providers = vec![
+            ProviderId::new([0x32; 32]),
+            ProviderId::new([0x33; 32]),
+            ProviderId::new([0x34; 32]),
+        ];
+        seed_provider_owners(&mut stx, &providers, &alice());
+        let payload = encode_replication_order_for_epoch_window(
+            replication_order_struct(order_id, default_digest(), &providers, 3),
+            5,
+            15,
+        );
+        IssueReplicationOrder {
+            order_id,
+            order_payload: payload,
+            issued_epoch: 5,
+            deadline_epoch: 15,
+            musubi_archive: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("issue order");
+
+        RetirePinManifest {
+            digest: default_digest(),
+            reason: Some("superseded".to_owned()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("retire manifest after order deadline");
+        assert_eq!(
+            stx.world
+                .replication_orders
+                .get(&order_id)
+                .expect("order remains auditable")
+                .status,
+            ReplicationOrderStatus::Expired(16)
+        );
     }
     #[test]
     fn complete_replication_order_requires_permission_after_manifest_setup() {
@@ -13626,18 +15038,18 @@ mod sorafs_tests {
         ];
         seed_provider_owners(&mut stx, &providers, &alice());
         let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
-        let payload = encode_replication_order(&order_struct);
+        let payload = encode_replication_order_for_epoch_window(order_struct, 20, 40);
         IssueReplicationOrder {
             order_id,
             order_payload: payload,
-            issued_epoch: 30,
-            deadline_epoch: 60,
+            issued_epoch: 20,
+            deadline_epoch: 40,
             musubi_archive: None,
         }
         .execute(&alice(), &mut stx)
         .expect("issue replication order");
         remove_permission(&mut stx, "CanCompleteSorafsReplicationOrder");
-        let complete = completion_instruction(order_id, providers[0], 45, &alice());
+        let complete = completion_instruction(order_id, providers[0], 25, &alice());
         let err = complete
             .execute(&alice(), &mut stx)
             .expect_err("missing permission should reject completion");
@@ -13662,7 +15074,7 @@ mod sorafs_tests {
         ];
         seed_provider_owners(&mut stx, &providers, &alice());
         let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
-        let payload = encode_replication_order(&order_struct);
+        let payload = encode_replication_order_for_epoch_window(order_struct, 5, 15);
         IssueReplicationOrder {
             order_id,
             order_payload: payload,
@@ -13692,7 +15104,7 @@ mod sorafs_tests {
         );
     }
     #[test]
-    fn complete_replication_order_rejects_stale_authority_after_owner_transfer() {
+    fn provider_owner_transfer_after_retained_completion_cannot_rewrite_evidence() {
         let mut state = make_state_with_completion_anchor();
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
@@ -13707,7 +15119,7 @@ mod sorafs_tests {
         ];
         seed_provider_owners(&mut stx, &providers, &alice());
         let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
-        let payload = encode_replication_order(&order_struct);
+        let payload = encode_replication_order_for_epoch_window(order_struct, 5, 15);
         IssueReplicationOrder {
             order_id,
             order_payload: payload,
@@ -13717,6 +15129,9 @@ mod sorafs_tests {
         }
         .execute(&alice(), &mut stx)
         .expect("issue replication order");
+        completion_instruction(order_id, providers[0], 10, &alice())
+            .execute(&alice(), &mut stx)
+            .expect("retain the original owner's completion before transfer");
         assert!(
             apply_governed_provider_owner_action(
                 SorafsProviderGovernanceActionV1::Rebind(RebindSorafsProviderOwnerV1 {
@@ -13738,12 +15153,11 @@ mod sorafs_tests {
         let complete = completion_instruction(order_id, providers[0], 12, &alice());
         let error = complete
             .execute(&bob(), &mut stx)
-            .expect_err("owner transfer without completion-authority rotation must fail");
+            .expect_err("a successor owner cannot rewrite retained completion evidence");
         assert!(matches!(
             error,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("must be authorized by its registered owner")
+            InstructionExecutionError::InvariantViolation(message)
+                if message.contains("different retained completion context")
         ));
     }
     #[test]
@@ -13784,18 +15198,24 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let mut declaration = sample_capacity_declaration();
-        declaration.metadata = vec![CapacityMetadataEntry {
-            key: PROVIDER_OWNER_METADATA_KEY.to_owned(),
-            value: alice().to_string(),
-        }];
+        declaration.metadata = vec![
+            CapacityMetadataEntry {
+                key: PROVIDER_OWNER_METADATA_KEY.to_owned(),
+                value: alice().to_string(),
+            },
+            CapacityMetadataEntry {
+                key: STORAGE_CLASS_METADATA_KEY.to_owned(),
+                value: "hot".to_owned(),
+            },
+        ];
         let provider = ProviderId::new(declaration.provider_id);
         let record = CapacityDeclarationRecord::new(
             provider,
             norito::to_bytes(&declaration).expect("serialize declaration"),
             declaration.committed_capacity_gib,
-            9,
-            10,
-            20,
+            5,
+            declaration.valid_from,
+            declaration.valid_until,
             Metadata::default(),
         );
         register_governed_capacity_declaration(&mut stx, &alice(), record)
@@ -14952,10 +16372,16 @@ mod sorafs_tests {
                 pricing: None,
                 valid_from: 1_700_000_000,
                 valid_until: 1_700_000_000 + (SECONDS_PER_BILLING_MONTH * 64),
-                metadata: vec![CapacityMetadataEntry {
-                    key: PROVIDER_OWNER_METADATA_KEY.to_owned(),
-                    value: account_literal(&alice()),
-                }],
+                metadata: vec![
+                    CapacityMetadataEntry {
+                        key: PROVIDER_OWNER_METADATA_KEY.to_owned(),
+                        value: account_literal(&alice()),
+                    },
+                    CapacityMetadataEntry {
+                        key: STORAGE_CLASS_METADATA_KEY.to_owned(),
+                        value: "hot".to_owned(),
+                    },
+                ],
             };
             let canonical_bytes =
                 norito::to_bytes(&declaration).expect("serialize capacity declaration");
@@ -14963,9 +16389,9 @@ mod sorafs_tests {
                 provider,
                 canonical_bytes,
                 committed,
-                0,
-                0,
-                1_800_000_000,
+                5,
+                declaration.valid_from,
+                declaration.valid_until,
                 Metadata::default(),
             );
             register_governed_capacity_declaration(&mut stx, &alice(), record.clone())
@@ -15185,19 +16611,16 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let mut declaration = sample_capacity_declaration();
-        declaration.metadata.push(CapacityMetadataEntry {
-            key: STORAGE_CLASS_METADATA_KEY.to_string(),
-            value: "cold".to_string(),
-        });
+        set_capacity_storage_class(&mut declaration, "cold");
         let canonical_bytes = norito::to_bytes(&declaration).expect("serialize declaration");
         let provider = ProviderId::new(declaration.provider_id);
         let record = CapacityDeclarationRecord::new(
             provider,
             canonical_bytes,
             declaration.committed_capacity_gib,
-            9,
-            10,
-            20,
+            5,
+            declaration.valid_from,
+            declaration.valid_until,
             Metadata::default(),
         );
         register_governed_capacity_declaration(&mut stx, &alice(), record)
@@ -15277,10 +16700,7 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let mut declaration = sample_capacity_declaration();
-        declaration.metadata.push(CapacityMetadataEntry {
-            key: STORAGE_CLASS_METADATA_KEY.to_string(),
-            value: "cold".to_string(),
-        });
+        set_capacity_storage_class(&mut declaration, "cold");
         let canonical_bytes = norito::to_bytes(&declaration).expect("serialize declaration");
         let provider = ProviderId::new(declaration.provider_id);
         let mut metadata = Metadata::default();
@@ -15292,9 +16712,9 @@ mod sorafs_tests {
             provider,
             canonical_bytes,
             declaration.committed_capacity_gib,
-            9,
-            10,
-            20,
+            5,
+            declaration.valid_from,
+            declaration.valid_until,
             metadata,
         );
         let err = RegisterCapacityDeclaration { record }
@@ -15311,19 +16731,115 @@ mod sorafs_tests {
             "unexpected error message: {message}"
         );
     }
+    #[test]
+    fn capacity_declaration_rejects_metadata_whitespace_without_normalization() {
+        for case in ["payload_storage", "record_storage", "payload_owner"] {
+            let state = make_state();
+            let mut block = state.block(block_header());
+            let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx);
+            let (provider, mut record) = capacity_record_with_owner(&alice());
+            seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
+            let mut declaration =
+                decode_capacity_declaration_payload(&record.declaration).expect("decode fixture");
+            let metadata_key = match case {
+                "payload_owner" => PROVIDER_OWNER_METADATA_KEY,
+                "payload_storage" | "record_storage" => STORAGE_CLASS_METADATA_KEY,
+                _ => unreachable!("closed fixture cases"),
+            };
+            let payload_entry = declaration
+                .metadata
+                .iter_mut()
+                .find(|entry| entry.key == metadata_key)
+                .expect("fixture metadata entry");
+            if case != "record_storage" {
+                payload_entry.value.insert(0, ' ');
+            }
+            record.declaration =
+                norito::encode_canonical(&declaration).expect("encode adversarial declaration");
+            if case != "payload_storage" {
+                let key: Name = metadata_key.parse().expect("static metadata key");
+                let retained = if case == "payload_owner" {
+                    format!(" {}", alice())
+                } else {
+                    " hot".to_owned()
+                };
+                record.metadata.insert(key, Json::new(retained));
+            }
+
+            RegisterCapacityDeclaration { record }
+                .execute(&alice(), &mut stx)
+                .expect_err("metadata whitespace must never be normalized");
+            assert!(
+                stx.world.capacity_declarations.get(&provider).is_none(),
+                "rejected {case} metadata must not mutate capacity state"
+            );
+        }
+    }
     include!("sorafs/storage_class_default_test.rs");
     #[test]
-    fn storage_class_metadata_overrides_case_insensitively() {
+    fn register_capacity_declaration_requires_explicit_storage_class() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let (provider, mut record) = capacity_record_with_owner(&alice());
+        let mut declaration =
+            decode_capacity_declaration_payload(&record.declaration).expect("decode declaration");
+        declaration
+            .metadata
+            .retain(|entry| entry.key != STORAGE_CLASS_METADATA_KEY);
+        record.declaration =
+            norito::encode_canonical(&declaration).expect("encode declaration without class");
+        let error = RegisterCapacityDeclaration { record }
+            .execute(&alice(), &mut stx)
+            .expect_err("record-only storage class must reject registration");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("must explicitly declare")
+        ));
+        assert!(stx.world.capacity_declarations.get(&provider).is_none());
+    }
+    #[test]
+    fn register_capacity_declaration_requires_owner_in_canonical_payload() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let (provider, mut record) = capacity_record_with_owner(&alice());
+        let mut declaration =
+            decode_capacity_declaration_payload(&record.declaration).expect("decode declaration");
+        declaration
+            .metadata
+            .retain(|entry| entry.key != PROVIDER_OWNER_METADATA_KEY);
+        record.declaration =
+            norito::encode_canonical(&declaration).expect("encode declaration without owner");
+        let error = RegisterCapacityDeclaration { record }
+            .execute(&alice(), &mut stx)
+            .expect_err("record-only owner must reject registration");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains(PROVIDER_OWNER_METADATA_KEY)
+                && message.contains("canonical payload")
+        ));
+        assert!(stx.world.capacity_declarations.get(&provider).is_none());
+    }
+    #[test]
+    fn storage_class_metadata_rejects_noncanonical_case_and_whitespace() {
         let provider = ProviderId::new([0x22; 32]);
-        let mut metadata = Metadata::default();
-        let key = STORAGE_CLASS_METADATA_KEY
+        let key: Name = STORAGE_CLASS_METADATA_KEY
             .parse()
             .expect("metadata key must parse");
-        let _ = metadata.insert(key, Json::new("CoLd"));
-        let class =
-            super::storage_class_from_declaration_metadata(provider, &metadata, StorageClass::Hot)
-                .expect("metadata override must succeed");
-        assert_eq!(class, StorageClass::Cold);
+        for value in ["CoLd", " cold", "cold "] {
+            let mut metadata = Metadata::default();
+            let _ = metadata.insert(key.clone(), Json::new(value));
+            super::storage_class_from_declaration_metadata(provider, &metadata)
+                .expect_err("storage class must use the exact lowercase spelling");
+        }
     }
     #[test]
     fn storage_class_metadata_rejects_invalid_value() {
@@ -15333,15 +16849,14 @@ mod sorafs_tests {
             .parse()
             .expect("metadata key must parse");
         let _ = metadata.insert(key, Json::new("glacier"));
-        let err =
-            super::storage_class_from_declaration_metadata(provider, &metadata, StorageClass::Hot)
-                .expect_err("invalid value must error");
+        let err = super::storage_class_from_declaration_metadata(provider, &metadata)
+            .expect_err("invalid value must error");
         match err {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 message,
             )) => {
                 assert!(
-                    message.contains("must be one of hot, warm, or cold"),
+                    message.contains("exactly one of lowercase hot, warm, or cold"),
                     "unexpected error: {message}"
                 );
             }
@@ -15349,26 +16864,22 @@ mod sorafs_tests {
         }
     }
     #[test]
-    fn storage_class_from_declaration_record_reads_payload_metadata() {
+    fn storage_class_from_declaration_record_rejects_unmerged_payload_metadata() {
         let mut declaration = sample_capacity_declaration();
-        declaration.metadata.push(CapacityMetadataEntry {
-            key: STORAGE_CLASS_METADATA_KEY.to_string(),
-            value: "cold".to_string(),
-        });
+        set_capacity_storage_class(&mut declaration, "cold");
         let canonical_bytes = norito::to_bytes(&declaration).expect("serialize declaration");
         let provider = ProviderId::new(declaration.provider_id);
         let record = CapacityDeclarationRecord::new(
             provider,
             canonical_bytes,
             declaration.committed_capacity_gib,
-            9,
-            10,
-            20,
+            5,
+            declaration.valid_from,
+            declaration.valid_until,
             Metadata::default(),
         );
-        let class = super::storage_class_from_declaration_record(&record, StorageClass::Hot)
-            .expect("payload metadata lookup must succeed");
-        assert_eq!(class, StorageClass::Cold);
+        super::storage_class_from_declaration_record(&record)
+            .expect_err("stored record must explicitly retain payload metadata");
     }
     #[test]
     fn upsert_provider_credit_requires_registered_provider() {
@@ -15692,6 +17203,74 @@ mod sorafs_tests {
             .expect("exact removal")
         );
         assert!(stx.world.provider_owners.get(&provider).is_none());
+    }
+    #[test]
+    fn pending_replication_blocks_authority_revocation_and_owner_change_atomically() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let providers = seed_eligible_auto_replication_providers_for_test(
+            &mut stx,
+            &alice(),
+            1,
+            StorageClass::Hot,
+            &default_chunker(),
+            5,
+            u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1),
+            1,
+        )
+        .expect("seed eligible provider");
+        let provider = providers[0];
+        let mut manifest = manifest_fixture(0xAA);
+        manifest.pin_policy.min_replicas = 1;
+        RegisterPinManifest {
+            manifest_payload: manifest.encode().expect("encode manifest"),
+            alias: None,
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("register manifest and automatic order");
+        let completion_authority = stx
+            .world
+            .provider_ingest_completion_authorities
+            .get(&provider)
+            .cloned()
+            .expect("completion authority retained");
+
+        let error =
+            RevokeProviderIngestCompletionAuthority::new(provider, completion_authority.clone())
+                .execute(&alice(), &mut stx)
+                .expect_err("pending assignment must prevent authority revocation");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("still required by pending replication order")
+        ));
+        assert_eq!(
+            stx.world
+                .provider_ingest_completion_authorities
+                .get(&provider),
+            Some(&completion_authority)
+        );
+
+        let error = apply_governed_provider_owner_action(
+            SorafsProviderGovernanceActionV1::Rebind(RebindSorafsProviderOwnerV1 {
+                provider_id: provider,
+                expected_owner: alice(),
+                next_owner: bob(),
+            }),
+            &mut stx,
+        )
+        .expect_err("pending assignment must prevent owner rebinding");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("still required by pending replication order")
+        ));
+        assert_eq!(stx.world.provider_owners.get(&provider), Some(&alice()));
     }
     #[test]
     fn provider_ingest_completion_authority_requires_exact_predecessor_chain() {

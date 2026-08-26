@@ -418,7 +418,7 @@ pub mod wire {
     impl ncore::NoritoSerialize for BlockSignatureWireRef<'_> {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             let flags = Self::tuple_flags();
-            let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let _guard = ncore::DecodeFlagsGuard::enter(flags);
             let index_len = <u64 as ncore::NoritoSerialize>::encoded_len_exact(&self.index)
                 .ok_or(ncore::Error::LengthMismatch)?;
             ncore::write_len_with_flags(
@@ -447,7 +447,7 @@ pub mod wire {
         }
         fn encoded_len_exact(&self) -> Option<usize> {
             let flags = Self::tuple_flags();
-            let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let _guard = ncore::DecodeFlagsGuard::enter(flags);
             let index_len = <u64 as ncore::NoritoSerialize>::encoded_len_exact(&self.index)?;
             let payload_wire_len = self.payload_wire_len()?;
             ncore::len_prefix_len_with_flags(index_len, flags)

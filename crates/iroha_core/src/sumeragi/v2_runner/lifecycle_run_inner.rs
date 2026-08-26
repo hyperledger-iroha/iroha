@@ -1487,7 +1487,6 @@ pub(super) fn run_non_pending_lifecycle_loop(
     mut block_sync_server: Option<V2BlockSyncServer>,
 ) -> Result<(), V2RunnerError> {
     let local_peer = common_config.peer.id().clone();
-
     loop {
         cleanup_supervisor.reap_finished();
         if output_guard.restart_required() {

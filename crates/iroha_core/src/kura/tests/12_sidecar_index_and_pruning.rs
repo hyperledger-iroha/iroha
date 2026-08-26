@@ -185,7 +185,7 @@ fn strict_init_prunes_oversized_block_length() {
     let BlockIndex { start, .. } = store.read_block_index(0).unwrap();
     let huge_len = STRICT_INIT_MAX_BLOCK_BYTES + 1;
     store.write_block_index(0, start, huge_len).unwrap();
-    let validation = Kura::init_strict_mode(&mut store, 1, None).unwrap();
+    let validation = Kura::init_canonical_chain(&mut store, 1, None).unwrap();
     assert!(validation.truncated);
     assert!(validation.hashes.is_empty());
     assert_eq!(store.read_index_count().unwrap(), 0);
@@ -209,8 +209,8 @@ fn strict_init_repairs_only_the_hash_suffix_above_v2_finality() {
     store
         .write_block_hash(2, forged)
         .expect("corrupt only the unfinalized hash suffix");
-    let validation =
-        Kura::init_strict_mode(&mut store, 3, Some(2)).expect("repair above finality must succeed");
+    let validation = Kura::init_canonical_chain(&mut store, 3, Some(2))
+        .expect("repair above finality must succeed");
     assert!(validation.hash_mismatch);
     assert!(!validation.truncated);
     assert_eq!(
@@ -241,7 +241,7 @@ fn strict_init_reconstructs_a_missing_hash_suffix_above_v2_finality() {
     store
         .truncate_hashes_to_count(2)
         .expect("remove only the unfinalized hash suffix");
-    let validation = Kura::init_strict_mode(&mut store, 3, Some(2))
+    let validation = Kura::init_canonical_chain(&mut store, 3, Some(2))
         .expect("reconstruct a missing suffix without rewriting finality");
     assert!(!validation.hash_mismatch);
     assert!(!validation.truncated);
@@ -408,6 +408,20 @@ fn hard_fork_extend_hash_only_marks_matching_snapshot_suffix_without_rewrite() {
             ),
             Err(Error::InvalidSnapshotBootstrapMarker { .. })
         ));
+        if init_mode == InitMode::Fast {
+            assert!(matches!(
+                Kura::new_inner(
+                    &reopen_config,
+                    &RuntimeLaneConfig::default(),
+                    None,
+                    Some(2),
+                    false,
+                    PendingControlSidecarLimits::default(),
+                ),
+                Err(Error::InvalidSnapshotBootstrapMarker { .. })
+            ));
+            continue;
+        }
         let (reopened, BlockCount(reopened_count)) = Kura::new_inner(
             &reopen_config,
             &RuntimeLaneConfig::default(),
@@ -416,13 +430,12 @@ fn hard_fork_extend_hash_only_marks_matching_snapshot_suffix_without_rewrite() {
             false,
             PendingControlSidecarLimits::default(),
         )
-        .expect("durable audited prefix opens only for signed-lineage reauthentication");
+        .expect("Strict mode opens the durable prefix for signed-lineage reauthentication");
         assert_eq!(reopened_count, 2);
         assert!(reopened.provisional_snapshot_bootstrap_pending());
         assert_eq!(reopened.hash_only_unavailable_prefix_len(2), 2);
         assert!(reopened.get_block(nonzero!(1_usize)).is_none());
         assert!(reopened.get_block(nonzero!(2_usize)).is_none());
-        drop(reopened);
     }
 }
 #[test]
@@ -442,8 +455,8 @@ fn hash_only_snapshot_rejects_shorter_existing_prefix() {
         .expect("second hash exists");
     {
         let mut block_data = kura.block_data.lock();
-        for (_, block) in block_data.iter_mut() {
-            *block = None;
+        for index in 0..block_data.len() {
+            block_data[index].1 = None;
         }
     }
     kura.hard_fork_hash_only_block_count

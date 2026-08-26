@@ -21,20 +21,20 @@ use crate::{
             DeploySoracloudAgentApartment, DeploySoracloudService, EnqueueSoracloudAgentMessage,
             FinalizeSoracloudUploadedModelBundle, HeartbeatSoracloudModelHost,
             JoinSoracloudHfSharedLease, LeaveSoracloudHfSharedLease, MutateSoracloudState,
-            PromoteSoracloudModelWeight, ReconcileSoracloudInrouPlacements,
-            RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
-            RecordSoracloudMailboxMessage, RecordSoracloudPrivateUploadedModelExecutionReceipt,
-            RecordSoracloudRuntimeReceipt, RegisterSoracloudFhePolicy,
-            RegisterSoracloudModelArtifact, RegisterSoracloudModelWeight,
-            RegisterSoracloudUploadedModelBundle, RenewSoracloudAgentLease,
-            RenewSoracloudHfSharedLease, ReportSoracloudServiceLeaseUsage,
-            RequestSoracloudAgentWalletSpend, RestartSoracloudAgentApartment,
-            RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy, RevokeSoracloudFhePolicy,
-            RollbackSoracloudModelWeight, RollbackSoracloudService, RotateSoracloudFhePolicy,
-            RunSoracloudAgentAutonomy, RunSoracloudFheJob, SetSoracloudInrouReplicaRuntimeState,
-            SetSoracloudRuntimeState, SetSoracloudServiceConfig, SetSoracloudServiceSecret,
-            StartSoracloudTrainingJob, UpgradeSoracloudService, WithdrawSoracloudInrouHost,
-            WithdrawSoracloudModelHost,
+            PrepareSoracloudPrivateUploadedModelExecution, PromoteSoracloudModelWeight,
+            ReconcileSoracloudInrouPlacements, RecordSoracloudAgentAutonomyExecution,
+            RecordSoracloudDecryptionRequest, RecordSoracloudMailboxMessage,
+            RecordSoracloudPrivateUploadedModelExecutionReceipt, RecordSoracloudRuntimeReceipt,
+            RegisterSoracloudFhePolicy, RegisterSoracloudModelArtifact,
+            RegisterSoracloudModelWeight, RegisterSoracloudUploadedModelBundle,
+            RenewSoracloudAgentLease, RenewSoracloudHfSharedLease,
+            ReportSoracloudServiceLeaseUsage, RequestSoracloudAgentWalletSpend,
+            RestartSoracloudAgentApartment, RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy,
+            RevokeSoracloudFhePolicy, RollbackSoracloudModelWeight, RollbackSoracloudService,
+            RotateSoracloudFhePolicy, RunSoracloudAgentAutonomy, RunSoracloudFheJob,
+            SetSoracloudInrouReplicaRuntimeState, SetSoracloudRuntimeState,
+            SetSoracloudServiceConfig, SetSoracloudServiceSecret, StartSoracloudTrainingJob,
+            UpgradeSoracloudService, WithdrawSoracloudInrouHost, WithdrawSoracloudModelHost,
         },
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RebindPublicLaneValidatorPeer,
@@ -562,6 +562,11 @@ fn visit_soracloud_training_instruction<V: Visit + ?Sized>(
         visitor.visit_apply_soracloud_ordered_mailbox_result(v);
     } else if let Some(v) = isi
         .as_any()
+        .downcast_ref::<PrepareSoracloudPrivateUploadedModelExecution>()
+    {
+        visitor.visit_prepare_soracloud_private_uploaded_model_execution(v);
+    } else if let Some(v) = isi
+        .as_any()
         .downcast_ref::<RecordSoracloudPrivateUploadedModelExecutionReceipt>()
     {
         visitor.visit_record_soracloud_private_uploaded_model_execution_receipt(v);
@@ -878,6 +883,9 @@ macro_rules! instruction_visitors {
             visit_record_soracloud_mailbox_message(&RecordSoracloudMailboxMessage),
             visit_record_soracloud_runtime_receipt(&RecordSoracloudRuntimeReceipt),
             visit_apply_soracloud_ordered_mailbox_result(&ApplySoracloudOrderedMailboxResult),
+            visit_prepare_soracloud_private_uploaded_model_execution(
+                &PrepareSoracloudPrivateUploadedModelExecution
+            ),
             visit_record_soracloud_private_uploaded_model_execution_receipt(
                 &RecordSoracloudPrivateUploadedModelExecutionReceipt
             ),

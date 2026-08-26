@@ -30502,8 +30502,7 @@ mod tests {
         let alternate = {
             let packed_flags =
                 norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN;
-            let _layout =
-                norito::core::DecodeFlagsGuard::enter_with_hint(packed_flags, packed_flags);
+            let _layout = norito::core::DecodeFlagsGuard::enter(packed_flags);
             norito::to_bytes(&envelope).expect("encode alternate-layout archive")
         };
         assert_ne!(
@@ -30512,10 +30511,7 @@ mod tests {
             "regression archive must exercise a layout distinct from Connect"
         );
         assert_ne!(alternate, canonical);
-        let _connect_layout = norito::core::DecodeFlagsGuard::enter_with_hint(
-            proto::CONNECT_LAYOUT_FLAGS,
-            proto::CONNECT_LAYOUT_FLAGS,
-        );
+        let _connect_layout = norito::core::DecodeFlagsGuard::enter(proto::CONNECT_LAYOUT_FLAGS);
         let ambient_before = norito::core::effective_decode_flags();
         let decoded: proto::EnvelopeV1 = decode_canonical_kagemusha_archive(&canonical)
             .expect("canonical archive must ignore ambient Connect layout state");

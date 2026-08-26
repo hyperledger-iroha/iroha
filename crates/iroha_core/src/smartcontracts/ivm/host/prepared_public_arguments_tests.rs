@@ -1,7 +1,6 @@
 #[test]
 #[cfg(debug_assertions)]
 fn prepared_public_arguments_decode_once_and_reject_pointer_substitution() {
-    crate::test_alias::ensure();
     let compiler =
         ivm::KotodamaCompiler::new_with_options(ivm::kotodama::compiler::CompilerOptions {
             mode: ivm::kotodama::compiler::CompilerMode::Production,

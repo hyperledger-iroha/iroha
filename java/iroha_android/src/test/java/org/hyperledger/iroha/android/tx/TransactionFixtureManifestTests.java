@@ -1043,7 +1043,7 @@ public final class TransactionFixtureManifestTests {
   }
 
   private static NoritoDecoder canonicalDecoder(final byte[] payload) {
-    return new NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+    return new NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS);
   }
 
   private static byte[] decodeIvmBytecode(final String name, final byte[] payload) {

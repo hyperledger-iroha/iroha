@@ -3,7 +3,7 @@
 use eyre::Result;
 use iroha_config::{
     base::WithOrigin,
-    kura::{FsyncMode, InitMode},
+    kura::FsyncMode,
     parameters::{
         actual::{
             Crypto, Kura as KuraConfig, LaneConfig as LaneDerivedConfig, LaneRoutingMatcher,
@@ -260,7 +260,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
     let store_dir = temp.path().join("kura");
     std::fs::create_dir_all(&store_dir)?;
     let kura_cfg = KuraConfig {
-        init_mode: InitMode::Strict,
+        init_mode: iroha_config::kura::InitMode::Strict,
         store_dir: WithOrigin::inline(store_dir.clone()),
         max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,

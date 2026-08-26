@@ -3301,9 +3301,10 @@ impl ConcreteLifecycleWorkRegistry {
             &AdapterEffect,
             &PendingRuntimeEffectBinding,
             &DurableBodyReceipt,
+            u128,
         ),
     > {
-        self.entries.values().filter_map(|work| {
+        self.entries.iter().filter_map(|(address, work)| {
             let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = &work.kind else {
                 return None;
             };
@@ -3311,6 +3312,7 @@ impl ConcreteLifecycleWorkRegistry {
                 &validate.effect,
                 &validate.pending,
                 &validate.durable_receipt,
+                address.ordinal,
             ))
         })
     }

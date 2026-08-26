@@ -1,5 +1,103 @@
 //! Authoritative SoraCloud agent-apartment ledger transition tests.
 use super::*;
+
+#[test]
+fn agent_apartment_deploy_rejects_lease_height_overflow_without_state() -> Result<(), eyre::Report>
+{
+    let kura = Kura::blank_kura_for_testing();
+    let state = state_with_soracloud_permission(&kura)?;
+    let manifest = sample_agent_manifest_with_capabilities("overflow_agent", &[]);
+    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+        .as_ref()
+        .header();
+    let mut state_block = state.block(block_header);
+    let mut stx = state_block.transaction();
+    let error = iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {
+        manifest: manifest.clone(),
+        lease_blocks: u64::MAX,
+        autonomy_budget_units: 1,
+        provenance: agent_deploy_provenance(manifest, u64::MAX, 1),
+    })
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("an exact lease term must not be truncated at u64::MAX");
+    assert_invalid_parameter_contains(error, "lease expiry height overflowed");
+    assert!(
+        stx.world
+            .soracloud_agent_apartments
+            .get("overflow_agent")
+            .is_none()
+    );
+    assert_eq!(
+        stx.world
+            .soracloud_agent_apartment_audit_events
+            .iter()
+            .count(),
+        0,
+        "a rejected deployment must not consume authoritative audit state"
+    );
+    Ok(())
+}
+
+#[test]
+fn agent_apartment_renew_rejects_lease_height_overflow_without_mutation() -> Result<(), eyre::Report>
+{
+    let kura = Kura::blank_kura_for_testing();
+    let state = state_with_soracloud_permission(&kura)?;
+    let manifest = sample_agent_manifest_with_capabilities("overflow_agent", &[]);
+    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+        .as_ref()
+        .header();
+    let mut state_block = state.block(block_header);
+    let mut stx = state_block.transaction();
+    iroha_data_model::isi::InstructionBox::from(isi::DeploySoracloudAgentApartment {
+        manifest: manifest.clone(),
+        lease_blocks: 120,
+        autonomy_budget_units: 1,
+        provenance: agent_deploy_provenance(manifest, 120, 1),
+    })
+    .execute(&ALICE_ID, &mut stx)?;
+
+    let apartment_name: iroha_data_model::name::Name =
+        "overflow_agent".parse().expect("valid apartment name");
+    let before = stx
+        .world
+        .soracloud_agent_apartments
+        .get("overflow_agent")
+        .cloned()
+        .expect("deployed apartment");
+    let audit_count_before = stx
+        .world
+        .soracloud_agent_apartment_audit_events
+        .iter()
+        .count();
+    let payload = encode_agent_lease_renew_provenance_payload(apartment_name.as_ref(), u64::MAX)?;
+    let error = iroha_data_model::isi::InstructionBox::from(isi::RenewSoracloudAgentLease {
+        apartment_name,
+        lease_blocks: u64::MAX,
+        provenance: ManifestProvenance {
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
+        },
+    })
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("an exact renewal term must not be truncated at u64::MAX");
+    assert_invalid_parameter_contains(error, "lease renewal expiry height overflowed");
+    assert_eq!(
+        stx.world.soracloud_agent_apartments.get("overflow_agent"),
+        Some(&before),
+        "a rejected renewal must leave the apartment record unchanged"
+    );
+    assert_eq!(
+        stx.world
+            .soracloud_agent_apartment_audit_events
+            .iter()
+            .count(),
+        audit_count_before,
+        "a rejected renewal must not append an audit event"
+    );
+    Ok(())
+}
+
 #[test]
 fn agent_apartment_lifecycle_instructions_record_authoritative_state() -> Result<(), eyre::Report> {
     let kura = Kura::blank_kura_for_testing();

@@ -411,7 +411,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     private static byte[] decodeSibling(
         final byte[] payload, final NoritoDecoder parent, final int index) {
       final NoritoDecoder child =
-          new NoritoDecoder(payload, parent.flags(), parent.flagsHint());
+          new NoritoDecoder(payload, parent.flags());
       final Optional<byte[]> sibling = OPTIONAL_LANE_PRIVACY_HASH_ADAPTER.decode(child);
       if (child.remaining() != 0) {
         throw new IllegalArgumentException(
@@ -735,7 +735,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
   static ProofAttachment decodeProofAttachmentPayload(final byte[] encoded, final int flags) {
     final NoritoDecoder decoder =
-        new NoritoDecoder(encoded, flags, NoritoHeader.MINOR_VERSION);
+        new NoritoDecoder(encoded, flags);
     final ProofAttachment value = PROOF_ATTACHMENT_ADAPTER.decode(decoder);
     if (decoder.remaining() != 0) {
       throw new IllegalArgumentException("trailing ProofAttachment payload bytes");
@@ -1060,7 +1060,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       if (payload.length == 0) {
         throw new IllegalArgumentException("Instruction payload must not be empty");
       }
-      final InstructionBox wire = tryDecodeWireInstruction(payload, decoder.flags(), decoder.flagsHint());
+      final InstructionBox wire = tryDecodeWireInstruction(payload, decoder.flags());
       if (wire != null) {
         return wire;
       }
@@ -1167,12 +1167,12 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     @Override
     public String decode(final NoritoDecoder decoder) {
       final byte[] payload = decoder.readBytes(decoder.remaining());
-      return decodePayload(payload, decoder.flags(), decoder.flagsHint());
+      return decodePayload(payload, decoder.flags());
     }
 
     private static String decodePayload(
-        final byte[] payload, final int flags, final int flagsHint) {
-      final NoritoDecoder controllerDecoder = new NoritoDecoder(payload, flags, flagsHint);
+        final byte[] payload, final int flags) {
+      final NoritoDecoder controllerDecoder = new NoritoDecoder(payload, flags);
       final ControllerPayload controller = decodeControllerPayload(controllerDecoder);
       if (controllerDecoder.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after authority payload");
@@ -1433,7 +1433,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       throw new IllegalArgumentException("Field payload too large");
     }
     final byte[] payload = decoder.readBytes((int) length);
-    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
     final T value = adapter.decode(child);
     if (child.remaining() != 0) {
       throw new IllegalArgumentException("Trailing bytes after field payload");
@@ -1451,7 +1451,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       throw new IllegalArgumentException(fieldName + " payload too large");
     }
     final byte[] payload = decoder.readBytes((int) length);
-    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
+    final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags());
     final T value = adapter.decode(child);
     if (child.remaining() != 0) {
       throw new IllegalArgumentException("Trailing bytes after " + fieldName + " payload");
@@ -1499,7 +1499,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       throw new IllegalArgumentException("numeric mantissa payload too large");
     }
     final NoritoDecoder child =
-        new NoritoDecoder(decoder.readBytes((int) length), decoder.flags(), decoder.flagsHint());
+        new NoritoDecoder(decoder.readBytes((int) length), decoder.flags());
     final long byteLength = child.readUInt(32);
     if (byteLength > 64L) {
       throw new IllegalArgumentException("numeric mantissa exceeds 512 bits");
@@ -1554,7 +1554,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       throw new IllegalArgumentException("Field payload too large");
     }
     final byte[] payload = decoder.readBytes((int) length);
-    return AccountIdAdapter.decodePayload(payload, decoder.flags(), decoder.flagsHint());
+    return AccountIdAdapter.decodePayload(payload, decoder.flags());
   }
 
   private static Optional<String> optionalString(final String value) {
@@ -1678,9 +1678,9 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   }
 
   private static InstructionBox tryDecodeWireInstruction(
-      final byte[] payload, final int flags, final int flagsHint) {
+      final byte[] payload, final int flags) {
     try {
-      final NoritoDecoder wireDecoder = new NoritoDecoder(payload, flags, flagsHint);
+      final NoritoDecoder wireDecoder = new NoritoDecoder(payload, flags);
       final String wireName = decodeSizedField(wireDecoder, STRING_ADAPTER);
       final byte[] wirePayload = decodeSizedField(wireDecoder, RAW_BYTE_VEC_ADAPTER);
       if (wireDecoder.remaining() != 0) {
@@ -1775,12 +1775,12 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     @Override
     public byte[] decode(final NoritoDecoder decoder) {
       final byte[] payload = decoder.readBytes(decoder.remaining());
-      return decodePayload(payload, decoder.flags(), decoder.flagsHint());
+      return decodePayload(payload, decoder.flags());
     }
 
     private static byte[] decodePayload(
-        final byte[] payload, final int flags, final int flagsHint) {
-      final NoritoDecoder sized = new NoritoDecoder(payload, flags, flagsHint);
+        final byte[] payload, final int flags) {
+      final NoritoDecoder sized = new NoritoDecoder(payload, flags);
       final byte[] value = decodeSizedField(sized, RAW_BYTE_VEC_ADAPTER);
       if (sized.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after IVM payload");

@@ -415,6 +415,7 @@ fn order_snapshot(order: &ReplicationOrderRecord) -> json::Map {
         ReplicationOrderStatus::Pending => ("pending", None),
         ReplicationOrderStatus::Completed(epoch) => ("completed", Some(epoch)),
         ReplicationOrderStatus::Expired(epoch) => ("expired", Some(epoch)),
+        ReplicationOrderStatus::Cancelled(epoch) => ("cancelled", Some(epoch)),
     };
     order_obj.insert("status".into(), Value::String(status_label.into()));
     order_obj.insert(

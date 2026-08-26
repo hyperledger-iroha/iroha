@@ -2,8 +2,17 @@ use super::{default_oracle, *};
 use norito::codec::{DecodeAll, Encode};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use std::{collections::BTreeMap, marker::PhantomData, sync::OnceLock};
+#[cfg(test)]
+std::thread_local! {
+    static SNAPSHOT_NORITO_CANONICAL_PASSES: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
 enum SnapshotJsonField<'a> {
-    Borrowed(&'a str),
+    Borrowed {
+        raw: &'a str,
+        emergency_fast: bool,
+    },
     #[cfg(test)]
     Owned(json::Value),
 }
@@ -15,8 +24,14 @@ impl<'a> SnapshotJsonField<'a> {
         let decoded: Result<T, json::Error> = match self {
             #[cfg(test)]
             Self::Owned(value) => json::value::from_value(value),
-            Self::Borrowed(raw) => (|| {
+            Self::Borrowed {
+                raw,
+                emergency_fast,
+            } => (|| {
                 let value = json::from_str::<T>(raw)?;
+                if emergency_fast {
+                    return Ok(value);
+                }
                 // TODO: Teach Norito JSON serialization to target a comparison sink so
                 // canonical verification does not need one field-sized temporary String.
                 let canonical = json::to_json(&value)?;
@@ -35,7 +50,10 @@ impl<'a> SnapshotJsonField<'a> {
     }
     fn into_object(self, field: &str) -> Result<SnapshotJsonMap<'a>, json::Error> {
         match self {
-            Self::Borrowed(raw) => SnapshotJsonMap::parse(raw, field),
+            Self::Borrowed {
+                raw,
+                emergency_fast,
+            } => SnapshotJsonMap::parse_with_mode(raw, field, emergency_fast),
             #[cfg(test)]
             Self::Owned(json::Value::Object(map)) => Ok(SnapshotJsonMap::from_owned(map)),
             #[cfg(test)]
@@ -45,9 +63,98 @@ impl<'a> SnapshotJsonField<'a> {
             }),
         }
     }
+    /// Count a snapshot hash array and decode only its terminal element.
+    ///
+    /// Emergency Fast mode needs an exact height/tip binding, but it does not
+    /// need to allocate or type-decode the historical prefix that Kura exposes
+    /// through its read-only hash mapping.
+    fn block_hash_boundary(
+        self,
+        field: &str,
+    ) -> Result<(usize, Option<HashOf<BlockHeader>>), json::Error> {
+        let invalid = |error: json::Error| json::Error::InvalidField {
+            field: field.to_owned(),
+            message: error.to_string(),
+        };
+        match self {
+            Self::Borrowed { raw, .. } => {
+                let mut parser = json::Parser::new(raw);
+                parser.expect(b'[').map_err(&invalid)?;
+                parser.skip_ws();
+                if parser.peek() == Some(b']') {
+                    parser.bump();
+                    parser.skip_ws();
+                    if parser.eof() {
+                        return Ok((0, None));
+                    }
+                    return Err(invalid(json::Error::Message(
+                        "trailing bytes after block hash array".to_owned(),
+                    )));
+                }
+                let mut count = 0_usize;
+                let mut terminal = None;
+                loop {
+                    let start = parser.position();
+                    parser.skip_value().map_err(&invalid)?;
+                    let end = parser.position();
+                    count = count.checked_add(1).ok_or_else(|| {
+                        invalid(json::Error::Message(
+                            "block hash count exceeds platform limits".to_owned(),
+                        ))
+                    })?;
+                    terminal = Some(&raw[start..end]);
+                    parser.skip_ws();
+                    match parser.bump() {
+                        Some(b',') => {
+                            parser.skip_ws();
+                        }
+                        Some(b']') => break,
+                        _ => {
+                            return Err(invalid(json::Error::Message(
+                                "expected comma or block hash array end".to_owned(),
+                            )));
+                        }
+                    }
+                }
+                parser.skip_ws();
+                if !parser.eof() {
+                    return Err(invalid(json::Error::Message(
+                        "trailing bytes after block hash array".to_owned(),
+                    )));
+                }
+                let terminal = terminal
+                    .map(json::from_str::<HashOf<BlockHeader>>)
+                    .transpose()
+                    .map_err(&invalid)?;
+                Ok((count, terminal))
+            }
+            #[cfg(test)]
+            Self::Owned(json::Value::Array(mut hashes)) => {
+                let count = hashes.len();
+                let terminal = hashes
+                    .pop()
+                    .map(json::value::from_value::<HashOf<BlockHeader>>)
+                    .transpose()
+                    .map_err(&invalid)?;
+                Ok((count, terminal))
+            }
+            #[cfg(test)]
+            Self::Owned(_) => Err(json::Error::InvalidField {
+                field: field.to_owned(),
+                message: "expected block hash array".to_owned(),
+            }),
+        }
+    }
     fn validate_sccp_registry(&self) -> Result<(), json::Error> {
         match self {
-            Self::Borrowed(raw) => validate_sccp_registry_cell_json_str(raw),
+            Self::Borrowed {
+                raw: _,
+                emergency_fast: true,
+            } => return Ok(()),
+            Self::Borrowed {
+                raw,
+                emergency_fast: false,
+            } => validate_sccp_registry_cell_json_str(raw),
             #[cfg(test)]
             Self::Owned(value) => validate_sccp_registry_cell_json(value),
         }
@@ -73,6 +180,16 @@ impl<'a> SnapshotJsonMap<'a> {
         }
     }
     fn parse(input: &'a str, field: &str) -> Result<Self, json::Error> {
+        Self::parse_with_mode(input, field, false)
+    }
+    fn parse_emergency_fast(input: &'a str, field: &str) -> Result<Self, json::Error> {
+        Self::parse_with_mode(input, field, true)
+    }
+    fn parse_with_mode(
+        input: &'a str,
+        field: &str,
+        emergency_fast: bool,
+    ) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(input);
         parser
             .expect(b'{')
@@ -109,7 +226,13 @@ impl<'a> SnapshotJsonMap<'a> {
                     })?;
                 let end = parser.position();
                 if fields
-                    .insert(key.clone(), SnapshotJsonField::Borrowed(&input[start..end]))
+                    .insert(
+                        key.clone(),
+                        SnapshotJsonField::Borrowed {
+                            raw: &input[start..end],
+                            emergency_fast,
+                        },
+                    )
                     .is_some()
                 {
                     return Err(json::Error::InvalidField {
@@ -232,7 +355,21 @@ impl KuraSeed {
     /// so restoration never constructs a recursive full-state JSON tree.
     pub(crate) fn into_state_from_json_str(self, input: &str) -> Result<State, json::Error> {
         let map = SnapshotJsonMap::parse(input, "state")?;
-        self.into_state_from_snapshot_map(map, true)
+        self.into_state_from_snapshot_map(map, true, false)
+    }
+    /// Decode a signed snapshot for the read-only emergency startup boundary.
+    ///
+    /// Current-world values remain typed, but redundant canonical
+    /// reserialization and semantic audits are deferred to the required Strict
+    /// restart. Historical transaction membership is discarded, while the
+    /// signed hash array contributes only its exact count and terminal hash;
+    /// State reads the matching Kura prefix through a read-only mapping.
+    pub(crate) fn into_state_from_json_str_emergency_fast(
+        self,
+        input: &str,
+    ) -> Result<State, json::Error> {
+        let map = SnapshotJsonMap::parse_emergency_fast(input, "state")?;
+        self.into_state_from_snapshot_map(map, true, true)
     }
     /// Decode a State without loading, promoting, truncating, or otherwise
     /// recovering any durable Kura-adjacent journal.
@@ -246,7 +383,7 @@ impl KuraSeed {
         input: &str,
     ) -> Result<State, json::Error> {
         let map = SnapshotJsonMap::parse(input, "state")?;
-        self.into_state_from_snapshot_map(map, false)
+        self.into_state_from_snapshot_map(map, false, false)
     }
     #[cfg(test)]
     fn into_state_from_json_with_recovery_mode(
@@ -260,12 +397,17 @@ impl KuraSeed {
                 message: "expected object".into(),
             });
         };
-        self.into_state_from_snapshot_map(SnapshotJsonMap::from_owned(map), allow_durable_recovery)
+        self.into_state_from_snapshot_map(
+            SnapshotJsonMap::from_owned(map),
+            allow_durable_recovery,
+            false,
+        )
     }
     fn into_state_from_snapshot_map(
         self,
         mut map: SnapshotJsonMap<'_>,
         allow_durable_recovery: bool,
+        emergency_fast: bool,
     ) -> Result<State, json::Error> {
         const WITHOUT_BOOTSTRAP: &[&str] = &[
             "chain_id",
@@ -318,7 +460,7 @@ impl KuraSeed {
             ivm: &ivm_runtime,
             _marker: PhantomData,
         };
-        let mut world = parse_world(world_map, &ivm_seed)?;
+        let mut world = parse_world(world_map, &ivm_seed, emergency_fast)?;
         let public_lane_validators: Vec<SnapshotNoritoBlob> =
             take_required(&mut map, "public_lane_validators")?;
         let public_lane_stake_shares: Vec<SnapshotNoritoBlob> =
@@ -333,7 +475,7 @@ impl KuraSeed {
             take_required(&mut map, "nexus_runtime")?;
         let chain_id: ChainId = take_required(&mut map, "chain_id")?;
         let network_id: NetworkId = take_required(&mut map, "network_id")?;
-        {
+        if !emergency_fast {
             let world_view = world.view();
             for (_receipt_id, receipt) in world_view
                 .soracloud_private_uploaded_model_execution_receipts()
@@ -349,39 +491,97 @@ impl KuraSeed {
                 }
             }
         }
-        let block_hashes_vec: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
-        let committed_height =
-            u64::try_from(block_hashes_vec.len()).map_err(|_| json::Error::InvalidField {
-                field: "state.block_hashes".to_owned(),
-                message: "committed height does not fit u64".to_owned(),
+        let (block_hashes, strict_block_hashes, committed_height) = if emergency_fast {
+            let (snapshot_height, snapshot_tip) = take_block_hash_boundary(&mut map)?;
+            let committed_height = u64::try_from(snapshot_height).map_err(|_| {
+                json::Error::InvalidField {
+                    field: "state.block_hashes".to_owned(),
+                    message: "committed height does not fit u64".to_owned(),
+                }
             })?;
-        validate_musubi_resolver_checkpoint_anchors(&world, &block_hashes_vec)?;
-        world
-            .privacy_consensus_policy
-            .view()
-            .get()
-            .validate_at_committed_height(committed_height)
-            .map_err(|error| json::Error::InvalidField {
-                field: "state.world.privacy_consensus_policy".to_owned(),
-                message: error.to_string(),
+            let (durable_height, durable_tip) = self
+                .kura
+                .emergency_fast_snapshot_boundary(snapshot_height)
+                .map_err(|error| json::Error::InvalidField {
+                    field: "state.block_hashes".to_owned(),
+                    message: format!("failed to bind the Kura Fast boundary: {error}"),
+                })?;
+            if durable_height != snapshot_height || durable_tip != snapshot_tip {
+                return Err(json::Error::InvalidField {
+                    field: "state.block_hashes".to_owned(),
+                    message: format!(
+                        "snapshot boundary ({snapshot_height}, {snapshot_tip:?}) differs from durable Kura ({durable_height}, {durable_tip:?})"
+                    ),
+                });
+            }
+            let block_hashes = match self
+                .kura
+                .emergency_fast_snapshot_hash_mapping(snapshot_height)
+                .map_err(|error| json::Error::InvalidField {
+                    field: "state.block_hashes".to_owned(),
+                    message: format!("failed to map the Kura Fast hash prefix: {error}"),
+                })? {
+                Some(mapping) => BlockHashes::new_emergency_fast_mapped(mapping, snapshot_height),
+                None => BlockHashes::default(),
+            };
+            (Some(block_hashes), None, committed_height)
+        } else {
+            let hashes: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
+            let committed_height =
+                u64::try_from(hashes.len()).map_err(|_| json::Error::InvalidField {
+                    field: "state.block_hashes".to_owned(),
+                    message: "committed height does not fit u64".to_owned(),
+                })?;
+            (None, Some(hashes), committed_height)
+        };
+        if !emergency_fast {
+            let block_hashes = strict_block_hashes
+                .as_deref()
+                .expect("Strict snapshot restore retains its hash vector");
+            validate_replication_order_completion_anchors(&world, block_hashes)?;
+            validate_private_uploaded_model_execution_height_anchors(&world, committed_height)?;
+            validate_musubi_resolver_checkpoint_anchors(&world, block_hashes)?;
+            world
+                .privacy_consensus_policy
+                .view()
+                .get()
+                .validate_at_committed_height(committed_height)
+                .map_err(|error| json::Error::InvalidField {
+                    field: "state.world.privacy_consensus_policy".to_owned(),
+                    message: error.to_string(),
+                })?;
+            crate::privacy_state::validate_privacy_activations_at_committed_height_v1(
+                &world.privacy_activations.view(),
+                committed_height,
+            )
+            .map_err(|message| json::Error::InvalidField {
+                field: "state.world.privacy_activations".to_owned(),
+                message,
             })?;
-        crate::privacy_state::validate_privacy_activations_at_committed_height_v1(
-            &world.privacy_activations.view(),
-            committed_height,
-        )
-        .map_err(|message| json::Error::InvalidField {
-            field: "state.world.privacy_activations".to_owned(),
-            message,
-        })?;
+        }
         let (
             restored_nexus,
             lane_incarnations,
             lane_incarnation_activation_heights,
             lane_incarnation_lineage,
             autoscale_sample_history,
-        ) = nexus_from_snapshot_runtime(snapshot_nexus_runtime, &block_hashes_vec)?;
+        ) = if emergency_fast {
+            nexus_from_snapshot_runtime_emergency_fast(snapshot_nexus_runtime)?
+        } else {
+            nexus_from_snapshot_runtime(
+                snapshot_nexus_runtime,
+                strict_block_hashes
+                    .as_deref()
+                    .expect("Strict snapshot restore retains its hash vector"),
+            )?
+        };
         let nexus_runtime_restored_from_snapshot = true;
-        let transactions: TransactionsStorage = take_required(&mut map, "transactions")?;
+        let transactions = if emergency_fast {
+            discard_required(&mut map, "transactions")?;
+            TransactionsStorage::new()
+        } else {
+            take_required(&mut map, "transactions")?
+        };
         let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
         let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
         let snapshot_v2_bootstrap_candidate: Option<SnapshotV2BootstrapRecord> =
@@ -393,51 +593,63 @@ impl KuraSeed {
                 message,
             },
         )?;
-        crate::smartcontracts::code::validate_contract_subject_bindings(&world).map_err(
-            |message| json::Error::InvalidField {
-                field: "contract_subject_bindings".into(),
-                message,
-            },
+        if !emergency_fast {
+            crate::smartcontracts::code::validate_contract_subject_bindings(&world).map_err(
+                |message| json::Error::InvalidField {
+                    field: "contract_subject_bindings".into(),
+                    message,
+                },
+            )?;
+        }
+        let public_lane_validator_records: Vec<PublicLaneValidatorRecord> =
+            decode_snapshot_records(
+                public_lane_validators,
+                "public_lane_validators",
+                !emergency_fast,
+            )?;
+        let public_lane_stake_share_records: Vec<PublicLaneStakeShare> = decode_snapshot_records(
+            public_lane_stake_shares,
+            "public_lane_stake_shares",
+            !emergency_fast,
         )?;
-        let public_lane_validator_records =
-            decode_public_lane_validator_records(public_lane_validators)?;
-        let public_lane_stake_share_records =
-            decode_public_lane_stake_share_records(public_lane_stake_shares)?;
         let public_lane_reward_records = decode_snapshot_records::<PublicLaneRewardRecord>(
             public_lane_rewards,
             "public_lane_rewards",
+            !emergency_fast,
         )?;
-        validate_canonical_snapshot_record_order(
-            &public_lane_validator_records,
-            "public_lane_validators",
-            |record| (record.lane_id, record.validator.clone()),
-        )?;
-        validate_canonical_snapshot_record_order(
-            &public_lane_stake_share_records,
-            "public_lane_stake_shares",
-            |record| {
-                (
-                    record.lane_id,
-                    record.validator.clone(),
-                    record.staker.clone(),
-                )
-            },
-        )?;
-        validate_canonical_snapshot_record_order(
-            &public_lane_reward_records,
-            "public_lane_rewards",
-            |record| (record.lane_id, record.epoch),
-        )?;
-        validate_canonical_snapshot_record_order(
-            &public_lane_reward_claims,
-            "public_lane_reward_claims",
-            |record| (record.lane_id, record.account.clone(), record.asset.clone()),
-        )?;
-        validate_canonical_snapshot_record_order(
-            &space_directory_manifests,
-            "space_directory_manifests",
-            |record| record.uaid,
-        )?;
+        if !emergency_fast {
+            validate_canonical_snapshot_record_order(
+                &public_lane_validator_records,
+                "public_lane_validators",
+                |record| (record.lane_id, record.validator.clone()),
+            )?;
+            validate_canonical_snapshot_record_order(
+                &public_lane_stake_share_records,
+                "public_lane_stake_shares",
+                |record| {
+                    (
+                        record.lane_id,
+                        record.validator.clone(),
+                        record.staker.clone(),
+                    )
+                },
+            )?;
+            validate_canonical_snapshot_record_order(
+                &public_lane_reward_records,
+                "public_lane_rewards",
+                |record| (record.lane_id, record.epoch),
+            )?;
+            validate_canonical_snapshot_record_order(
+                &public_lane_reward_claims,
+                "public_lane_reward_claims",
+                |record| (record.lane_id, record.account.clone(), record.asset.clone()),
+            )?;
+            validate_canonical_snapshot_record_order(
+                &space_directory_manifests,
+                "space_directory_manifests",
+                |record| record.uaid,
+            )?;
+        }
         world.public_lane_validators = public_lane_validator_records
             .into_iter()
             .map(|record| ((record.lane_id, record.validator.clone()), record))
@@ -469,17 +681,24 @@ impl KuraSeed {
             })
             .collect();
         world.space_directory_manifests =
-            decode_space_directory_manifest_sets(space_directory_manifests)?;
-        world
-            .validate_quantity_ledger_invariants()
-            .map_err(|message| json::Error::InvalidField {
-                field: "state.world.numeric_ledgers".to_owned(),
-                message,
-            })?;
+            decode_space_directory_manifest_sets(space_directory_manifests, !emergency_fast)?;
+        if !emergency_fast {
+            world
+                .validate_quantity_ledger_invariants()
+                .map_err(|message| json::Error::InvalidField {
+                    field: "state.world.numeric_ledgers".to_owned(),
+                    message,
+                })?;
+        }
         let state = build_state(
             BuildStateInputs {
                 world,
-                block_hashes: BlockHashes::new(block_hashes_vec),
+                block_hashes: block_hashes.unwrap_or_else(|| {
+                    BlockHashes::new(
+                        strict_block_hashes
+                            .expect("Strict snapshot restore retains its hash vector"),
+                    )
+                }),
                 transactions,
                 commit_topology,
                 prev_commit_topology,
@@ -499,19 +718,108 @@ impl KuraSeed {
                 telemetry: self.telemetry,
             },
             allow_durable_recovery,
+            emergency_fast,
         )
         .map_err(|error| json::Error::InvalidField {
             field: "state.durable_merge_ledger".to_owned(),
             message: error.to_string(),
         })?;
-        super::validate_sccp_state_local_profile(&state).map_err(|message| {
-            json::Error::InvalidField {
-                field: "state.world.sccp".to_owned(),
-                message,
-            }
-        })?;
+        if !emergency_fast {
+            super::validate_sccp_state_local_profile(&state).map_err(|message| {
+                json::Error::InvalidField {
+                    field: "state.world.sccp".to_owned(),
+                    message,
+                }
+            })?;
+        }
         Ok(state)
     }
+}
+fn nexus_from_snapshot_runtime_emergency_fast(
+    runtime: SnapshotNexusRuntime,
+) -> Result<
+    (
+        iroha_config::parameters::actual::Nexus,
+        BTreeMap<LaneId, Hash>,
+        BTreeMap<LaneId, u64>,
+        BTreeMap<LaneId, LaneIncarnationLineage>,
+        VecDeque<AutoscaleSampleRecord>,
+    ),
+    json::Error,
+> {
+    if runtime.version != SnapshotNexusRuntime::VERSION {
+        return Err(json::Error::InvalidField {
+            field: "nexus_runtime.version".to_owned(),
+            message: format!(
+                "unsupported Nexus runtime snapshot version {}; expected {}",
+                runtime.version,
+                SnapshotNexusRuntime::VERSION
+            ),
+        });
+    }
+    let scale_out_window =
+        std::num::NonZeroU16::new(runtime.autoscale_scale_out_window_blocks).ok_or_else(|| {
+            json::Error::InvalidField {
+                field: "nexus_runtime.autoscale_scale_out_window_blocks".to_owned(),
+                message: "autoscale scale-out window must be non-zero".to_owned(),
+            }
+        })?;
+    let scale_in_window =
+        std::num::NonZeroU16::new(runtime.autoscale_scale_in_window_blocks).ok_or_else(|| {
+            json::Error::InvalidField {
+                field: "nexus_runtime.autoscale_scale_in_window_blocks".to_owned(),
+                message: "autoscale scale-in window must be non-zero".to_owned(),
+            }
+        })?;
+    let lane_count =
+        std::num::NonZeroU32::new(runtime.lane_count).ok_or_else(|| json::Error::InvalidField {
+            field: "nexus_runtime.lane_count".to_owned(),
+            message: "lane_count must be non-zero".to_owned(),
+        })?;
+    let catalog =
+        LaneCatalog::new(lane_count, runtime.lanes).map_err(|error| json::Error::InvalidField {
+            field: "nexus_runtime.lanes".to_owned(),
+            message: error.to_string(),
+        })?;
+    let lane_incarnation_lineage: BTreeMap<_, _> = runtime
+        .lane_incarnation_lineage
+        .into_iter()
+        .map(|entry| {
+            (
+                entry.lane_id,
+                LaneIncarnationLineage {
+                    generation: entry.generation,
+                    incarnation: entry.incarnation,
+                    activation_height: entry.activation_height,
+                },
+            )
+        })
+        .collect();
+    let mut lane_incarnations = BTreeMap::new();
+    let mut lane_incarnation_activation_heights = BTreeMap::new();
+    for lane in catalog.lanes() {
+        let entry = lane_incarnation_lineage.get(&lane.id).ok_or_else(|| {
+            json::Error::InvalidField {
+                field: "nexus_runtime.lane_incarnation_lineage".to_owned(),
+                message: format!("active lane {} is missing lineage", lane.id),
+            }
+        })?;
+        lane_incarnations.insert(lane.id, entry.incarnation);
+        lane_incarnation_activation_heights.insert(lane.id, entry.activation_height);
+    }
+    let mut nexus = iroha_config::parameters::actual::Nexus::default();
+    nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
+    nexus.lane_catalog = catalog;
+    nexus.autoscale.scale_out_window_blocks = scale_out_window;
+    nexus.autoscale.scale_in_window_blocks = scale_in_window;
+    nexus.autoscale.last_transition_height = runtime.autoscale_last_transition_height;
+    Ok((
+        nexus,
+        lane_incarnations,
+        lane_incarnation_activation_heights,
+        lane_incarnation_lineage,
+        VecDeque::new(),
+    ))
 }
 fn nexus_from_snapshot_runtime(
     runtime: SnapshotNexusRuntime,
@@ -873,6 +1181,7 @@ fn validate_snapshot_autoscale_sample_history(
 fn decode_snapshot_records<T>(
     records: Vec<SnapshotNoritoBlob>,
     field: &str,
+    validate_canonical: bool,
 ) -> Result<Vec<T>, json::Error>
 where
     T: DecodeAll + Encode,
@@ -891,11 +1200,15 @@ where
                 field: field.to_owned(),
                 message: format!("record {index} norito decode failed: {err}"),
             })?;
-            if decoded.encode() != bytes {
-                return Err(json::Error::InvalidField {
-                    field: field.to_owned(),
-                    message: format!("record {index} is not canonical Norito"),
-                });
+            if validate_canonical {
+                #[cfg(test)]
+                SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(passes.get() + 1));
+                if decoded.encode() != bytes {
+                    return Err(json::Error::InvalidField {
+                        field: field.to_owned(),
+                        message: format!("record {index} is not canonical Norito"),
+                    });
+                }
             }
             Ok(decoded)
         })
@@ -927,60 +1240,9 @@ where
     }
     Ok(())
 }
-fn decode_public_lane_validator_records(
-    records: Vec<SnapshotNoritoBlob>,
-) -> Result<Vec<PublicLaneValidatorRecord>, json::Error> {
-    let mut decoded = Vec::with_capacity(records.len());
-    for (index, record) in records.into_iter().enumerate() {
-        let bytes = hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
-            field: "public_lane_validators".to_owned(),
-            message: format!("record {index} hex decode failed: {err}"),
-        })?;
-        let mut cursor = bytes.as_slice();
-        let decoded_record = PublicLaneValidatorRecord::decode_all(&mut cursor).map_err(|err| {
-            json::Error::InvalidField {
-                field: "public_lane_validators".to_owned(),
-                message: format!("record {index} norito decode failed: {err}"),
-            }
-        })?;
-        if decoded_record.encode() != bytes {
-            return Err(json::Error::InvalidField {
-                field: "public_lane_validators".to_owned(),
-                message: format!("record {index} is not canonical Norito"),
-            });
-        }
-        decoded.push(decoded_record);
-    }
-    Ok(decoded)
-}
-fn decode_public_lane_stake_share_records(
-    records: Vec<SnapshotNoritoBlob>,
-) -> Result<Vec<PublicLaneStakeShare>, json::Error> {
-    let mut decoded = Vec::with_capacity(records.len());
-    for (index, record) in records.into_iter().enumerate() {
-        let bytes = hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
-            field: "public_lane_stake_shares".to_owned(),
-            message: format!("record {index} hex decode failed: {err}"),
-        })?;
-        let mut cursor = bytes.as_slice();
-        let decoded_record = PublicLaneStakeShare::decode_all(&mut cursor).map_err(|err| {
-            json::Error::InvalidField {
-                field: "public_lane_stake_shares".to_owned(),
-                message: format!("record {index} norito decode failed: {err}"),
-            }
-        })?;
-        if decoded_record.encode() != bytes {
-            return Err(json::Error::InvalidField {
-                field: "public_lane_stake_shares".to_owned(),
-                message: format!("record {index} is not canonical Norito"),
-            });
-        }
-        decoded.push(decoded_record);
-    }
-    Ok(decoded)
-}
 fn decode_space_directory_manifest_sets(
     records: Vec<SnapshotSpaceDirectoryManifestSet>,
+    validate_canonical: bool,
 ) -> Result<Storage<UniversalAccountId, SpaceDirectoryManifestSet>, json::Error> {
     let mut storage = Storage::default();
     for (index, record) in records.into_iter().enumerate() {
@@ -995,11 +1257,15 @@ fn decode_space_directory_manifest_sets(
                 message: format!("record {index} norito decode failed: {err}"),
             }
         })?;
-        if manifest_set.encode() != bytes {
-            return Err(json::Error::InvalidField {
-                field: "space_directory_manifests".to_owned(),
-                message: format!("record {index} is not canonical Norito"),
-            });
+        if validate_canonical {
+            #[cfg(test)]
+            SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(passes.get() + 1));
+            if manifest_set.encode() != bytes {
+                return Err(json::Error::InvalidField {
+                    field: "space_directory_manifests".to_owned(),
+                    message: format!("record {index} is not canonical Norito"),
+                });
+            }
         }
         if storage.insert(record.uaid, manifest_set).is_some() {
             return Err(json::Error::InvalidField {
@@ -1018,6 +1284,18 @@ where
         .remove(key)
         .ok_or_else(|| json::Error::missing_field(key))?;
     value.decode_canonical(key)
+}
+fn take_block_hash_boundary(
+    map: &mut SnapshotJsonMap<'_>,
+) -> Result<(usize, Option<HashOf<BlockHeader>>), json::Error> {
+    map.remove("block_hashes")
+        .ok_or_else(|| json::Error::missing_field("block_hashes"))?
+        .block_hash_boundary("block_hashes")
+}
+fn discard_required(map: &mut SnapshotJsonMap<'_>, key: &str) -> Result<(), json::Error> {
+    map.remove(key)
+        .map(|_| ())
+        .ok_or_else(|| json::Error::missing_field(key))
 }
 fn take_optional<T>(map: &mut SnapshotJsonMap<'_>, key: &str) -> Result<Option<T>, json::Error>
 where
@@ -1126,6 +1404,251 @@ fn validate_provider_ingest_completion_authorities(
                     hex::encode(provider_id.as_bytes())
                 ),
             });
+        }
+    }
+    Ok(())
+}
+fn validate_capacity_declarations(
+    declarations: &Storage<ProviderId, CapacityDeclarationRecord>,
+    provider_owners: &Storage<ProviderId, AccountId>,
+) -> Result<(), json::Error> {
+    let provider_owners = provider_owners.view();
+    let owner_metadata_key: Name = "sorafs.owner_account_id"
+        .parse()
+        .expect("static capacity owner metadata key");
+    for (provider_id, record) in declarations.view().iter() {
+        let provider_label = hex::encode(provider_id.as_bytes());
+        if record.provider_id != *provider_id {
+            return Err(json::Error::InvalidField {
+                field: "world.capacity_declarations".to_owned(),
+                message: format!(
+                    "capacity declaration key {provider_label} does not match its stored provider"
+                ),
+            });
+        }
+        crate::smartcontracts::isi::sorafs::validate_stored_capacity_declaration(
+            record,
+            &provider_label,
+        )
+        .map_err(|error| json::Error::InvalidField {
+            field: "world.capacity_declarations".to_owned(),
+            message: error.to_string(),
+        })?;
+        let provider_owner = provider_owners.get(provider_id).ok_or_else(|| {
+            json::Error::InvalidField {
+                field: "world.capacity_declarations".to_owned(),
+                message: format!(
+                    "capacity declaration {provider_label} has no governance-established provider owner"
+                ),
+            }
+        })?;
+        let owner_literal = record.metadata.get(&owner_metadata_key).ok_or_else(|| {
+            json::Error::InvalidField {
+                field: "world.capacity_declarations".to_owned(),
+                message: format!(
+                    "capacity declaration {provider_label} omits metadata `sorafs.owner_account_id`"
+                ),
+            }
+        })?;
+        let owner_literal: String = owner_literal.try_into_any().map_err(|error| {
+            json::Error::InvalidField {
+                field: "world.capacity_declarations".to_owned(),
+                message: format!(
+                    "capacity declaration {provider_label} owner metadata must be a canonical account string: {error}"
+                ),
+            }
+        })?;
+        if owner_literal != provider_owner.to_string() {
+            return Err(json::Error::InvalidField {
+                field: "world.capacity_declarations".to_owned(),
+                message: format!(
+                    "capacity declaration {provider_label} owner metadata does not exactly match its governance-established provider owner"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+fn validate_replication_order_completion_anchors(
+    world: &World,
+    block_hashes: &[HashOf<BlockHeader>],
+) -> Result<(), json::Error> {
+    for (order_id, order) in world.replication_orders.view().iter() {
+        let order_label = hex::encode(order_id.as_bytes());
+        for completion in &order.provider_completions {
+            let height = completion.finalized_anchor.height;
+            let index = usize::try_from(height)
+                .ok()
+                .and_then(|height| height.checked_sub(1))
+                .ok_or_else(|| json::Error::InvalidField {
+                    field: "state.world.replication_orders".to_owned(),
+                    message: format!(
+                        "replication order {order_label} completion for provider {} has a finalized anchor height outside the committed block prefix",
+                        hex::encode(completion.provider_id.as_bytes()),
+                    ),
+                })?;
+            let Some(committed_hash) = block_hashes.get(index) else {
+                return Err(json::Error::InvalidField {
+                    field: "state.world.replication_orders".to_owned(),
+                    message: format!(
+                        "replication order {order_label} completion for provider {} anchors unavailable committed height {height}",
+                        hex::encode(completion.provider_id.as_bytes()),
+                    ),
+                });
+            };
+            if *committed_hash.as_ref() != completion.finalized_anchor.block_hash {
+                return Err(json::Error::InvalidField {
+                    field: "state.world.replication_orders".to_owned(),
+                    message: format!(
+                        "replication order {order_label} completion for provider {} finalized anchor hash does not match committed block height {height}",
+                        hex::encode(completion.provider_id.as_bytes()),
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+fn validate_private_uploaded_model_execution_height_anchors(
+    world: &World,
+    committed_height: u64,
+) -> Result<(), json::Error> {
+    for ((service_name, request_id), claim) in world
+        .soracloud_private_uploaded_model_execution_claims
+        .view()
+        .iter()
+    {
+        if claim.claimed_block_height > committed_height {
+            return Err(json::Error::InvalidField {
+                field: "state.world.soracloud_private_uploaded_model_execution_claims".to_owned(),
+                message: format!(
+                    "private execution claim {service_name}/{request_id} anchors future block height {} beyond snapshot committed height {committed_height}",
+                    claim.claimed_block_height,
+                ),
+            });
+        }
+    }
+    for (receipt_id, receipt) in world
+        .soracloud_private_uploaded_model_execution_receipts
+        .view()
+        .iter()
+    {
+        if receipt.authorization_claim_block_height > committed_height {
+            return Err(json::Error::InvalidField {
+                field: "state.world.soracloud_private_uploaded_model_execution_receipts".to_owned(),
+                message: format!(
+                    "private execution receipt {receipt_id} anchors future authorization-claim block height {} beyond snapshot committed height {committed_height}",
+                    receipt.authorization_claim_block_height,
+                ),
+            });
+        }
+        if receipt.emitted_block_height > committed_height {
+            return Err(json::Error::InvalidField {
+                field: "state.world.soracloud_private_uploaded_model_execution_receipts".to_owned(),
+                message: format!(
+                    "private execution receipt {receipt_id} anchors future emission block height {} beyond snapshot committed height {committed_height}",
+                    receipt.emitted_block_height,
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+fn validate_automatic_replication_capacity_state(
+    declarations: &Storage<ProviderId, CapacityDeclarationRecord>,
+    provider_owners: &Storage<ProviderId, AccountId>,
+    completion_authorities: &Storage<ProviderId, ProviderIngestCompletionAuthorityV1>,
+    pin_manifests: &Storage<ManifestDigest, PinManifestRecord>,
+    replication_orders: &Storage<ReplicationOrderId, ReplicationOrderRecord>,
+) -> Result<(), json::Error> {
+    let invalid = |message: String| json::Error::InvalidField {
+        field: "world.replication_orders".to_owned(),
+        message,
+    };
+    let declarations = declarations.view();
+    let provider_owners = provider_owners.view();
+    let completion_authorities = completion_authorities.view();
+    let pin_manifests = pin_manifests.view();
+    let mut allocations = BTreeMap::<(ProviderId, String), u64>::new();
+    for (order_id, order) in replication_orders.view().iter() {
+        if !order_id.is_auto() {
+            continue;
+        }
+        let order_label = hex::encode(order_id.as_bytes());
+        let pin = pin_manifests.get(&order.manifest_digest).ok_or_else(|| {
+            invalid(format!(
+                "automatic replication order {order_label} references a missing pin manifest"
+            ))
+        })?;
+        let payload =
+            crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+                pin,
+                order,
+                &order_label,
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+        if !matches!(pin.status, PinStatus::Approved(_))
+            || !matches!(
+                order.status,
+                ReplicationOrderStatus::Pending | ReplicationOrderStatus::Completed(_)
+            )
+        {
+            continue;
+        }
+        for assignment in &payload.assignments {
+            let provider_id = ProviderId::new(assignment.provider_id);
+            let provider_label = hex::encode(provider_id.as_bytes());
+            let declaration = declarations.get(&provider_id).ok_or_else(|| {
+                invalid(format!(
+                    "automatic replication order {order_label} assigns provider {provider_label} without a retained capacity declaration"
+                ))
+            })?;
+            let Some(profile_capacity) =
+                crate::smartcontracts::isi::sorafs::automatic_replication_profile_capacity_gib(
+                    declaration,
+                    pin,
+                    order.issued_epoch,
+                    order.deadline_epoch,
+                )
+                .map_err(|error| invalid(error.to_string()))?
+            else {
+                return Err(invalid(format!(
+                    "automatic replication order {order_label} assigns provider {provider_label} without exact profile, storage-class, and deadline capacity"
+                )));
+            };
+            let provider_owner = provider_owners.get(&provider_id).ok_or_else(|| {
+                invalid(format!(
+                    "automatic replication order {order_label} assigns provider {provider_label} without a governed owner"
+                ))
+            })?;
+            // A retained completion is immutable self-contained evidence and remains valid across
+            // a later governed owner rotation. Only an assignment that still needs completion
+            // depends on the current owner-bound authority.
+            if order.provider_completion(provider_id).is_none()
+                && !completion_authorities
+                    .get(&provider_id)
+                    .is_some_and(|authority| {
+                        authority.is_valid() && &authority.provider_owner == provider_owner
+                    })
+            {
+                return Err(invalid(format!(
+                    "pending automatic replication order {order_label} assigns provider {provider_label} without a valid owner-bound completion authority"
+                )));
+            }
+            let allocated = allocations
+                .entry((provider_id, payload.chunking_profile.clone()))
+                .or_default();
+            *allocated = allocated.checked_add(assignment.slice_gib).ok_or_else(|| {
+                invalid(format!(
+                    "automatic replication allocation overflowed for provider {provider_label}"
+                ))
+            })?;
+            if *allocated > profile_capacity {
+                return Err(invalid(format!(
+                    "automatic replication allocations oversubscribe provider {provider_label} profile `{}`: allocated {} GiB, committed {profile_capacity} GiB",
+                    payload.chunking_profile, *allocated
+                )));
+            }
         }
     }
     Ok(())
@@ -1388,11 +1911,15 @@ fn take_topology_cell(
         .remove(key)
         .ok_or_else(|| json::Error::missing_field(key))?;
     match value {
-        SnapshotJsonField::Borrowed(raw) if raw.as_bytes().first() == Some(&b'[') => {
-            SnapshotJsonField::Borrowed(raw)
-                .decode_canonical(key)
-                .map(Cell::new)
+        SnapshotJsonField::Borrowed {
+            raw,
+            emergency_fast,
+        } if raw.as_bytes().first() == Some(&b'[') => SnapshotJsonField::Borrowed {
+            raw,
+            emergency_fast,
         }
+        .decode_canonical(key)
+        .map(Cell::new),
         #[cfg(test)]
         SnapshotJsonField::Owned(json::Value::Array(values)) => {
             SnapshotJsonField::Owned(json::Value::Array(values))
@@ -1448,6 +1975,72 @@ pub(crate) fn validate_musubi_location_reverse_indices(
     let by_order = by_order.view();
     let by_provider = by_provider.view();
     for (order, record) in replication_orders.iter() {
+        let pin = pin_manifests
+            .get(&record.manifest_digest)
+            .ok_or_else(|| invalid("replication order targets a missing pin manifest".into()))?;
+        let order_label = hex::encode(order.as_bytes());
+        let approved_epoch =
+            crate::smartcontracts::isi::sorafs::validate_stored_pin_approval_history(
+                pin,
+                &hex::encode(pin.digest.as_bytes()),
+            )
+            .map_err(|error| invalid(error.to_string()))?
+            .ok_or_else(|| {
+                invalid(format!(
+                    "replication order {order_label} targets a pin that was never approved"
+                ))
+            })?;
+        if record.issued_epoch < approved_epoch {
+            return Err(invalid(format!(
+                "replication order {order_label} predates its target pin approval epoch {approved_epoch}"
+            )));
+        }
+        if let PinStatus::Retired(retired_epoch) = pin.status {
+            if record.issued_epoch > retired_epoch
+                || matches!(record.status, ReplicationOrderStatus::Pending)
+                || matches!(record.status, ReplicationOrderStatus::Completed(epoch) | ReplicationOrderStatus::Expired(epoch) if epoch > retired_epoch)
+                || order.is_auto()
+                    && matches!(record.status, ReplicationOrderStatus::Completed(_))
+                    && retired_epoch < pin.policy.retention_epoch
+            {
+                return Err(invalid(format!(
+                    "replication order {order_label} lifecycle falls outside its target pin retirement epoch {retired_epoch}"
+                )));
+            }
+        }
+        let canonical_order = if order.is_auto() {
+            crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+                pin,
+                record,
+                &order_label,
+            )
+        } else {
+            crate::smartcontracts::isi::sorafs::validate_stored_replication_order(
+                record,
+                &order_label,
+            )
+        }
+        .map_err(|error| invalid(error.to_string()))?;
+        if record.order_id != *order
+            || pin.digest != record.manifest_digest
+            || pin.root_cid != record.manifest_root_cid
+            || canonical_order.chunking_profile != pin.chunker.to_handle()
+            || canonical_order.target_replicas < pin.policy.min_replicas
+            || record.deadline_epoch >= pin.policy.retention_epoch
+        {
+            return Err(invalid(
+                "replication order does not match its immutable pin commitment or retention policy"
+                    .into(),
+            ));
+        }
+        if let ReplicationOrderStatus::Cancelled(cancelled_epoch) = record.status
+            && !matches!(pin.status, PinStatus::Retired(retired_epoch) if retired_epoch == cancelled_epoch)
+        {
+            return Err(invalid(
+                "cancelled replication order must exactly match its target pin retirement epoch"
+                    .into(),
+            ));
+        }
         let reference = by_order.get(order);
         match (record.musubi_archive, reference) {
             (None, None) => {}
@@ -1548,7 +2141,7 @@ pub(crate) fn validate_musubi_location_reverse_indices(
                 < iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1
             || canonical_order.target_replicas < pin.policy.min_replicas
             || pin.policy.min_replicas < iroha_data_model::musubi::MUSUBI_MIN_HEALTHY_REPLICAS_V1
-            || order_record.deadline_epoch > pin.policy.retention_epoch
+            || order_record.deadline_epoch >= pin.policy.retention_epoch
         {
             return Err(invalid(
                 "order binding does not match its immutable pin commitment or retention policy"
@@ -1664,6 +2257,46 @@ pub(crate) fn validate_musubi_location_reverse_indices(
                 "current archive location is missing an exact reverse-index entry".into(),
             ));
         }
+    }
+    for (manifest_digest, pin) in pin_manifests.iter() {
+        if manifest_digest != &pin.digest {
+            return Err(invalid(
+                "pin-manifest key does not match its embedded manifest digest".into(),
+            ));
+        }
+        let approval_epoch =
+            crate::smartcontracts::isi::sorafs::validate_stored_pin_approval_history(
+                pin,
+                &hex::encode(manifest_digest.as_bytes()),
+            )
+            .map_err(|error| invalid(error.to_string()))?;
+        let expected_order_id =
+            iroha_data_model::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1(
+                &pin.digest,
+            );
+        if approval_epoch.is_none() {
+            if replication_orders.get(&expected_order_id).is_some() {
+                return Err(invalid(format!(
+                    "never-approved pin manifest {} has an automatic replication order {}",
+                    hex::encode(manifest_digest.as_bytes()),
+                    hex::encode(expected_order_id.as_bytes()),
+                )));
+            }
+            continue;
+        }
+        let record = replication_orders.get(&expected_order_id).ok_or_else(|| {
+            invalid(format!(
+                "approved pin history for manifest {} is missing its mandatory automatic replication order {}",
+                hex::encode(manifest_digest.as_bytes()),
+                hex::encode(expected_order_id.as_bytes()),
+            ))
+        })?;
+        crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
+            pin,
+            record,
+            &hex::encode(expected_order_id.as_bytes()),
+        )
+        .map_err(|error| invalid(error.to_string()))?;
     }
     Ok(())
 }

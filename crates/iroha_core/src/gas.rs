@@ -15,10 +15,7 @@
 //!   monotonic with payload sizes and relative complexity.
 use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
 use iroha_data_model::{
-    isi as dm_isi,
-    isi::{Instruction as _, InstructionBox},
-    proof::ProofAttachment,
-    zk::OpenVerifyEnvelope,
+    isi as dm_isi, isi::InstructionBox, proof::ProofAttachment, zk::OpenVerifyEnvelope,
 };
 use norito::{codec::Encode as _, decode_canonical};
 #[cfg(test)]
@@ -43,7 +40,9 @@ const BASE_EXECUTE_TRIGGER: u64 = 220;
 const BASE_UPGRADE: u64 = 2_000;
 const BASE_LOG: u64 = 8;
 const BASE_CUSTOM: u64 = 128;
-const BASE_SORACLOUD_PRIVATE_EXECUTION_COMMIT: u64 = BASE_REGISTER + BASE_CUSTOM;
+const BASE_SORACLOUD_PRIVATE_EXECUTION_PREPARE: u64 = BASE_REGISTER + BASE_CUSTOM;
+const BASE_SORACLOUD_PRIVATE_EXECUTION_RECEIPT: u64 = BASE_CUSTOM;
+const BASE_REGISTER_PIN_MANIFEST: u64 = BASE_REGISTER;
 const BASE_REGISTER_SMART_CONTRACT: u64 = 320;
 const BASE_KAIGI_CREATE: u64 = 420;
 const BASE_KAIGI_JOIN: u64 = 180;
@@ -67,7 +66,7 @@ pub const DEFAULT_ZK_GAS_PER_COMMITMENT: u64 = 500;
 const FIELD_ELEMENT_BYTES: usize = 32;
 /// Dynamic factors (per-byte) applied to encoded payloads where sensible.
 const PER_BYTE_JSON: u64 = 1; // charge per JSON byte
-const PER_BYTE_GENERIC: u64 = 0; // currently unused; reserved for future
+const PER_BYTE_PIN_MANIFEST: u64 = 1;
 const PER_BYTE_SORACLOUD_PRIVATE_EXECUTION_RECEIPT: u64 = 1;
 const PER_KAIGI_PROOF_BYTE: u64 = 5;
 const PER_BYTE_SEALED_COMMITMENT: u64 = 1;
@@ -222,11 +221,26 @@ fn gas_for_recursive_kagemusha_redeem_v4(
     }
     gas
 }
-fn gas_for_soracloud_private_execution_commit(receipt_bytes: usize) -> u64 {
-    BASE_SORACLOUD_PRIVATE_EXECUTION_COMMIT.saturating_add(
+fn gas_for_register_pin_manifest(manifest_bytes: usize) -> u64 {
+    BASE_REGISTER_PIN_MANIFEST.saturating_add(
+        PER_BYTE_PIN_MANIFEST.saturating_mul(u64::try_from(manifest_bytes).unwrap_or(u64::MAX)),
+    )
+}
+fn gas_for_soracloud_private_execution_receipt(receipt_bytes: usize) -> u64 {
+    BASE_SORACLOUD_PRIVATE_EXECUTION_RECEIPT.saturating_add(
         PER_BYTE_SORACLOUD_PRIVATE_EXECUTION_RECEIPT
             .saturating_mul(u64::try_from(receipt_bytes).unwrap_or(u64::MAX)),
     )
+}
+fn gas_for_soracloud_private_execution_prepare(manifest_bytes: usize, receipt_bytes: usize) -> u64 {
+    BASE_SORACLOUD_PRIVATE_EXECUTION_PREPARE
+        .saturating_add(
+            PER_BYTE_PIN_MANIFEST.saturating_mul(u64::try_from(manifest_bytes).unwrap_or(u64::MAX)),
+        )
+        .saturating_add(
+            PER_BYTE_SORACLOUD_PRIVATE_EXECUTION_RECEIPT
+                .saturating_mul(u64::try_from(receipt_bytes).unwrap_or(u64::MAX)),
+        )
 }
 /// Compute gas for a single instruction using a simple schedule.
 #[allow(clippy::too_many_lines)]
@@ -239,8 +253,7 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
         j.get().len()
     }
     // Downcast by visiting known grouped enums first, then concrete types.
-    // Fall back to Norito-encoded size to keep custom/unknown instructions
-    // bounded deterministically.
+    // Unclassified instructions use the fixed first-release base cost.
     let any = instr.as_any();
     // Register
     if let Some(reg) = any.downcast_ref::<dm_isi::register::RegisterBox>() {
@@ -391,19 +404,32 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     {
         return BASE_REGISTER_SMART_CONTRACT;
     }
-    if let Some(commit) =
+    if let Some(register) = any.downcast_ref::<dm_isi::sorafs::RegisterPinManifest>() {
+        return gas_for_register_pin_manifest(register.manifest_payload.len());
+    }
+    if let Some(prepare) =
+        any.downcast_ref::<dm_isi::soracloud::PrepareSoracloudPrivateUploadedModelExecution>()
+    {
+        return gas_for_soracloud_private_execution_prepare(
+            prepare.output_manifest_payload.len(),
+            prepare.receipt.encoded_len(),
+        );
+    }
+    if let Some(record) =
         any.downcast_ref::<dm_isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt>()
     {
-        return gas_for_soracloud_private_execution_commit(commit.receipt.encode().len());
+        return gas_for_soracloud_private_execution_receipt(record.receipt.encoded_len());
     }
-    // Fallback: charge based on Norito-encoded size of the instruction payload
-    // This ensures determinism for unknown/custom instructions under custom executors.
-    let bytes = instr.dyn_encode();
-    BASE_CUSTOM + PER_BYTE_GENERIC.saturating_mul(bytes.len() as u64)
+    // Unclassified instructions have a fixed first-release cost. Avoid encoding
+    // the full instruction here: the retired per-byte factor was zero, so that
+    // allocation and traversal could not affect the charged gas.
+    BASE_CUSTOM
 }
 /// Compute gas for a sequence of instructions.
 pub fn meter_instructions(is: &[InstructionBox]) -> u64 {
-    is.iter().map(meter_instruction).sum()
+    is.iter().fold(0_u64, |total, instruction| {
+        total.saturating_add(meter_instruction(instruction))
+    })
 }
 /// Return the portion of the gas schedule attributed to confidential ISIs.
 #[must_use]
@@ -476,12 +502,38 @@ mod tests {
         assert!(large > small);
     }
     #[test]
-    fn private_execution_commit_gas_scales_with_receipt_bytes() {
-        let small = gas_for_soracloud_private_execution_commit(1);
-        let large = gas_for_soracloud_private_execution_commit(4096);
-        assert_eq!(small, BASE_REGISTER + BASE_CUSTOM + 1);
-        assert_eq!(large, BASE_REGISTER + BASE_CUSTOM + 4096);
+    fn pin_manifest_registration_gas_scales_with_manifest_bytes() {
+        let small = InstructionBox::from(dm_isi::sorafs::RegisterPinManifest::new(
+            vec![0; 1],
+            None,
+            None,
+        ));
+        let large = InstructionBox::from(dm_isi::sorafs::RegisterPinManifest::new(
+            vec![0; 4096],
+            None,
+            None,
+        ));
+        let small = meter_instruction(&small);
+        let large = meter_instruction(&large);
+        assert_eq!(small, BASE_REGISTER_PIN_MANIFEST + 1);
+        assert_eq!(large, BASE_REGISTER_PIN_MANIFEST + 4096);
         assert_eq!(large - small, 4095);
+    }
+    #[test]
+    fn private_execution_receipt_gas_is_size_sensitive() {
+        let small = gas_for_soracloud_private_execution_receipt(32);
+        let large = gas_for_soracloud_private_execution_receipt(4_096);
+        assert_eq!(small, BASE_SORACLOUD_PRIVATE_EXECUTION_RECEIPT + 32);
+        assert!(large > small);
+    }
+    #[test]
+    fn private_execution_prepare_gas_covers_manifest_and_receipt_bytes() {
+        let small = gas_for_soracloud_private_execution_prepare(32, 64);
+        let larger_manifest = gas_for_soracloud_private_execution_prepare(4_096, 64);
+        let larger_receipt = gas_for_soracloud_private_execution_prepare(32, 4_096);
+        assert!(small > BASE_SORACLOUD_PRIVATE_EXECUTION_PREPARE);
+        assert!(larger_manifest > small);
+        assert!(larger_receipt > small);
     }
     #[test]
     fn batch_meter_sums_items() {
@@ -507,6 +559,40 @@ mod tests {
         ];
         let sum_inline = v.iter().map(meter_instruction).sum::<u64>();
         assert_eq!(sum_inline, meter_instructions(&v));
+    }
+    #[test]
+    fn batch_meter_saturates_on_overflow() {
+        use iroha_data_model::{isi::zk::VerifyProof, proof::VerifyingKeyId};
+
+        let _gas_lock = super::lock_confidential_gas_for_tests();
+        configure_confidential_gas(ConfidentialGasSchedule {
+            base_verify: u64::MAX,
+            per_public_input: 0,
+            per_proof_byte: 0,
+            per_nullifier: 0,
+            per_commitment: 0,
+        });
+        let fixture = halo2_fixture_envelope("halo2/ipa:batch-overflow", [0_u8; 32]);
+        let proof_box = fixture.proof_box("halo2/ipa");
+        let attachment = ProofAttachment::new_ref(
+            proof_box.backend.clone(),
+            proof_box,
+            VerifyingKeyId::new("halo2/ipa", "vk-batch-overflow"),
+        );
+        let instruction: InstructionBox = VerifyProof::new(attachment).into();
+        let gas = meter_instructions(&[instruction.clone(), instruction]);
+        configure_confidential_gas(ConfidentialGasSchedule::default());
+
+        assert_eq!(gas, u64::MAX);
+    }
+    #[test]
+    fn unclassified_instruction_has_fixed_cost() {
+        let instruction = InstructionBox::from(dm_isi::SetParameter::new(
+            iroha_data_model::parameter::Parameter::Sumeragi(
+                iroha_data_model::parameter::system::SumeragiParameter::MaxClockDriftMs(1),
+            ),
+        ));
+        assert_eq!(meter_instruction(&instruction), BASE_CUSTOM);
     }
     #[test]
     fn transfer_batch_gas_matches_entry_sum() {

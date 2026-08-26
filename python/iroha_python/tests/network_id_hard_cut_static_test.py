@@ -329,8 +329,8 @@ def test_pyo3_boundary_and_native_signer_revision_are_exact_abi23_v5() -> None:
         encoding="utf-8"
     )
 
-    assert "norito::json::from_value::<NetworkId>" in rust
-    assert "canonical_network_id_literal(&inner)? != value" in rust
+    assert "value.parse::<NetworkId>()" in rust
+    assert "canonical_network_id_literal(&inner) != value" in rust
     assert "NetworkId must carry the canonical Iroha hash marker bit" in rust
     assert "RETIRED_NETWORK_FIELDS: [&str; 7]" in rust
     for retired in RETIRED_DOMAIN_NAMES:

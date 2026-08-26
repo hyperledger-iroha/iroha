@@ -906,7 +906,7 @@ def _check_cargo_workflow(
     native_lane_job_digests = {
         "privacy_swift_sdk_parse": "7f7765d55844744f84df43017b29fe1539e42b700ce86f6e16507cec6a243ecf",
         "privacy_jvm_sdk_tests": "1f430f2e88d3c455e8ed0a5182308627d6657099093d6c6021c308bbf12aedcb",
-        "privacy_csharp_sdk_tests": "9d449aa16a205b2faf73847b2e863c18c673d51e831efb83396d9e196d021604",
+        "privacy_csharp_sdk_tests": "ac4ee98cb76b98b7539d506755ec1913220b6da0a34e098a9e9979da7d181108",
         "privacy_javascript_sdk_tests": "2a4fe6a4326a2987e8093b5a2a8919b3265364af8ec40287f6ad8d33db701112",
     }
 

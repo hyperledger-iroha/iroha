@@ -2862,7 +2862,7 @@ impl ProductionLifecycleOwnerV1 {
                 )
                 .map_err(ProductionLifecycleLaunchErrorV1::Executor)?;
         }
-        for (effect, pending, durable_receipt) in self
+        for (effect, pending, durable_receipt, lifecycle_ordinal) in self
             .registry
             .registry()
             .recovered_published_validate_retry_markers()
@@ -2872,6 +2872,7 @@ impl ProductionLifecycleOwnerV1 {
                     effect,
                     pending,
                     durable_receipt,
+                    lifecycle_ordinal,
                 )
                 .map_err(ProductionLifecycleLaunchErrorV1::Executor)?;
         }

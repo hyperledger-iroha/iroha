@@ -12648,10 +12648,12 @@ impl SumeragiV2Adapter {
     /// Receipt, manifest, round, and subject authentication has already
     /// completed in [`Self::stage_direct_validation_registry`]. The rebinding
     /// is deliberately narrower than the reducer's generic event-tag rules:
-    /// only a lower-view tag from the same height and local generation may
-    /// acknowledge the exact body work which is still `Durable`. Every other
-    /// tag remains unchanged and therefore reaches the normal fail-closed
-    /// `WrongHeight`, `StaleGeneration`, or `WrongView` classification.
+    /// only a lower-view tag from the same height may acknowledge the exact
+    /// body work which is still `Durable`. Generation is local to one view and
+    /// resets on an ordinary view advance, so it cannot be compared across the
+    /// strict lower-view boundary. Every other tag remains unchanged and
+    /// therefore reaches the normal fail-closed `WrongHeight`,
+    /// `StaleGeneration`, or `WrongView` classification.
     fn validation_completion_tag(
         &self,
         tag: reducer::EventTag,
@@ -12660,7 +12662,6 @@ impl SumeragiV2Adapter {
     ) -> reducer::EventTag {
         let current = self.reducer.current_tag();
         if tag.height() == current.height()
-            && tag.generation() == current.generation()
             && tag.view() < current.view()
             && self.reducer.body_state(round, subject) == reducer::BodyState::Durable
         {
@@ -17797,39 +17798,33 @@ impl SumeragiV2Adapter {
                             }
                         }
                     }
-                    if let reducer::WalRecord::Decision(certificate) = entry.record() {
-                        if self.pending_live_decision_apply.is_some() {
-                            self.fail_closed = true;
-                            return Err(AdapterError::LiveWalReplayCauseMismatch);
-                        }
-                        let Some(frame) = self.wal.recovered_records().last() else {
-                            self.fail_closed = true;
-                            return Err(AdapterError::LiveWalReplayCauseMismatch);
+                    let pending_decision_apply =
+                        if let reducer::WalRecord::Decision(certificate) = entry.record() {
+                            if self.pending_live_decision_apply.is_some() {
+                                self.fail_closed = true;
+                                return Err(AdapterError::LiveWalReplayCauseMismatch);
+                            }
+                            let Some(frame) = self.wal.recovered_records().last() else {
+                                self.fail_closed = true;
+                                return Err(AdapterError::LiveWalReplayCauseMismatch);
+                            };
+                            let Some(wal_identity) =
+                                LiveWalFrameIdentity::from_append_receipt(frame, receipt, id.get())
+                            else {
+                                self.fail_closed = true;
+                                return Err(AdapterError::LiveWalReplayCauseMismatch);
+                            };
+                            let apply = AdapterEffect::Apply {
+                                tag,
+                                subject: self.registry.subject(certificate.subject())?,
+                                certificate: self
+                                    .registry
+                                    .qc_to_wire(certificate, self.aggregator.as_ref())?,
+                            };
+                            Some((wal_identity, apply, certificate.clone()))
+                        } else {
+                            None
                         };
-                        let Some(wal_identity) =
-                            LiveWalFrameIdentity::from_append_receipt(frame, receipt, id.get())
-                        else {
-                            self.fail_closed = true;
-                            return Err(AdapterError::LiveWalReplayCauseMismatch);
-                        };
-                        let apply = AdapterEffect::Apply {
-                            tag,
-                            subject: self.registry.subject(certificate.subject())?,
-                            certificate: self
-                                .registry
-                                .qc_to_wire(certificate, self.aggregator.as_ref())?,
-                        };
-                        let Some(sealed) = SealedLiveWalPersistedEffectV1::from_exact_live_append(
-                            ExactLiveWalPersistedContinuationCause::Apply {
-                                wal_identity,
-                                effect: apply,
-                            },
-                        ) else {
-                            self.fail_closed = true;
-                            return Err(AdapterError::LiveWalReplayCauseMismatch);
-                        };
-                        self.pending_live_decision_apply = Some(sealed);
-                    }
                     self.pending_persistence_id = None;
                     let persisted = reducer::Event::Persisted { tag, id };
                     let continuation = match self.step_reducer(persisted.clone()) {
@@ -17871,6 +17866,51 @@ impl SumeragiV2Adapter {
                             continuation_contains_persist,
                         };
                         return Err(self.fail_macro_step(error));
+                    }
+                    if let Some((wal_identity, apply, decision)) = pending_decision_apply {
+                        let mut direct_apply_count = 0usize;
+                        let mut direct_apply_is_exact = true;
+                        for effect in &continuation {
+                            if let reducer::Effect::Apply {
+                                tag: apply_tag,
+                                subject,
+                                certificate,
+                            } = effect
+                            {
+                                direct_apply_count = direct_apply_count.saturating_add(1);
+                                direct_apply_is_exact &= *apply_tag == tag
+                                    && *subject == decision.subject()
+                                    && certificate == &decision;
+                            }
+                        }
+                        if direct_apply_count > 1
+                            || (direct_apply_count == 1 && !direct_apply_is_exact)
+                        {
+                            self.fail_closed = true;
+                            return Err(AdapterError::LiveWalReplayCauseMismatch);
+                        }
+                        if direct_apply_count == 0 {
+                            // The body is not yet validated, so its source-only
+                            // Decision-WAL seal must wait for the exact Ready
+                            // Validate completion to bind the durable frame and
+                            // predecessor-derived Apply owner. When this same
+                            // persisted continuation emits the exact Apply,
+                            // its authenticated Decision owner is already the
+                            // complete direct handoff and no deferred seal may
+                            // remain stranded in the adapter.
+                            let Some(sealed) =
+                                SealedLiveWalPersistedEffectV1::from_exact_live_append(
+                                    ExactLiveWalPersistedContinuationCause::Apply {
+                                        wal_identity,
+                                        effect: apply,
+                                    },
+                                )
+                            else {
+                                self.fail_closed = true;
+                                return Err(AdapterError::LiveWalReplayCauseMismatch);
+                            };
+                            self.pending_live_decision_apply = Some(sealed);
+                        }
                     }
                     reducer::prepend_causal_continuation(&mut pending, continuation);
                 }

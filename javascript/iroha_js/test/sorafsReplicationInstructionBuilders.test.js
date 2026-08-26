@@ -13,6 +13,7 @@ import {
 import {
   noritoDecodeInstruction,
   noritoEncodeInstruction,
+  validateSorafsReplicationOrderPayloadV1,
 } from "../src/norito.js";
 
 const FIXTURE_ROOT = path.resolve(
@@ -21,7 +22,7 @@ const FIXTURE_ROOT = path.resolve(
 );
 const ORDER_PAYLOAD = fs.readFileSync(path.join(FIXTURE_ROOT, "order_v1.to"));
 const ORDER_PAYLOAD_BASE64 = ORDER_PAYLOAD.toString("base64");
-const ORDER_ID = "ab".repeat(32);
+const ORDER_ID = "2b".repeat(32);
 const MUSUBI_ARCHIVE_ID = "cd".repeat(32);
 const PROVIDER_ID = "10".repeat(32);
 const PROVIDER_OWNER =
@@ -82,6 +83,34 @@ function replaceUnique(buffer, needle, replacement) {
 }
 
 test("SoraFS replication instruction builders emit canonical native field names", () => {
+  const summary = validateSorafsReplicationOrderPayloadV1(ORDER_PAYLOAD, ORDER_ID);
+  assert.equal(summary.manifestDigestHex, "42".repeat(32));
+  assert.equal(
+    summary.manifestCidBase64,
+    Buffer.from(`01711f20${"41".repeat(32)}`, "hex").toString("base64"),
+  );
+  assert.equal(summary.chunkingProfile, "sorafs.sf1@1.0.0");
+  assert.deepEqual(summary.assignments, [
+    {
+      providerIdHex: "10".repeat(32),
+      sliceGiB: "512",
+      lane: "lane-primary",
+    },
+    {
+      providerIdHex: "11".repeat(32),
+      sliceGiB: "512",
+      lane: "lane-secondary",
+    },
+  ]);
+  assert.deepEqual(summary.sla, {
+    ingestDeadlineSecs: 86_400,
+    minAvailabilityPercentMilli: 99_500,
+    minPorSuccessPercentMilli: 98_000,
+  });
+  assert.deepEqual(summary.metadata, [
+    { key: "governance.ticket", value: "ticket-sorafs-0001" },
+  ]);
+
   const issue = buildIssueReplicationOrderInstruction({
     orderId: ORDER_ID,
     orderPayload: ORDER_PAYLOAD_BASE64,

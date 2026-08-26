@@ -4,9 +4,6 @@ use norito::{
     core::{self, Compression, Header, VERSION_MAJOR},
 };
 use std::io::{Cursor, Read};
-fn packed_seq_supported() -> bool {
-    cfg!(feature = "packed-seq")
-}
 fn encode_fixed_vec_u32(values: &[u32]) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(&(values.len() as u64).to_le_bytes());
@@ -58,9 +55,6 @@ fn encode_fixed_tuple_u8_string(value: u8, text: &str) -> Vec<u8> {
 #[test]
 fn decode_mixed_flag_payloads_do_not_leak_state() {
     core::reset_decode_state();
-    if !packed_seq_supported() {
-        return;
-    }
     let canonical = vec![1u32, 2, 3, 4, 5];
     let canonical_bytes = norito::to_bytes(&canonical).expect("encode canonical vec");
     let fixed = vec![10u32, 20, 30];
@@ -68,13 +62,10 @@ fn decode_mixed_flag_payloads_do_not_leak_state() {
     let decoded_canonical: Vec<u32> =
         norito::decode_from_bytes(&canonical_bytes).expect("decode canonical");
     assert_eq!(decoded_canonical, canonical);
-    let err = norito::decode_from_bytes::<Vec<u32>>(&fixed_bytes)
-        .expect_err("fixed layout must be rejected");
-    assert!(matches!(
-        err,
-        norito::core::Error::LengthMismatch | norito::core::Error::DecodePanic { .. }
-    ));
-    // Decode flags should reset even after a failed decode.
+    let decoded_fixed: Vec<u32> =
+        norito::decode_from_bytes(&fixed_bytes).expect("decode explicit fixed layout");
+    assert_eq!(decoded_fixed, fixed);
+    // Decode flags should reset after switching layouts.
     assert_eq!(
         core::get_decode_flags(),
         0,
@@ -88,19 +79,13 @@ fn decode_mixed_flag_payloads_do_not_leak_state() {
 #[test]
 fn decode_mixed_flag_payloads_reverse_order() {
     core::reset_decode_state();
-    if !packed_seq_supported() {
-        return;
-    }
     let canonical = vec![7u32, 42, 99];
     let canonical_bytes = norito::to_bytes(&canonical).expect("encode canonical vec");
     let fixed = vec![100u32, 200, 300, 400];
     let fixed_bytes = encode_fixed_vec_u32(&fixed);
-    let err =
-        norito::decode_from_bytes::<Vec<u32>>(&fixed_bytes).expect_err("fixed decode must fail");
-    assert!(matches!(
-        err,
-        norito::core::Error::LengthMismatch | norito::core::Error::DecodePanic { .. }
-    ));
+    let decoded_fixed: Vec<u32> =
+        norito::decode_from_bytes(&fixed_bytes).expect("decode explicit fixed layout");
+    assert_eq!(decoded_fixed, fixed);
     assert_eq!(
         core::get_decode_flags(),
         0,
@@ -111,11 +96,8 @@ fn decode_mixed_flag_payloads_reverse_order() {
     assert_eq!(decoded_canonical, canonical);
 }
 #[test]
-fn decode_flags_guard_resets_hint_state() {
+fn decode_flags_guard_resets_state() {
     use norito::core::{self, header_flags};
-    if !packed_seq_supported() {
-        return;
-    }
     core::reset_decode_state();
     {
         let _guard =
@@ -159,13 +141,10 @@ fn header_flags_guard_mismatch_fails_fast() {
         err,
         norito::core::Error::DecodeFlagsMismatch {
             header_flags: header_compact,
-            header_hint: 0,
-            active_flags,
-            active_hint
+            active_flags
         } if header_compact == header_flags::COMPACT_LEN
             && active_flags
             == (header_flags::PACKED_SEQ | header_flags::COMPACT_LEN)
-            && active_hint == active_flags
     ));
 }
 #[test]
@@ -201,9 +180,6 @@ fn tuple_decodes_do_not_leak_layout_flags() {
 #[test]
 fn decode_flags_guard_restores_previous_defaults() {
     use norito::core::{self, header_flags};
-    if !packed_seq_supported() {
-        return;
-    }
     core::reset_decode_state();
     core::set_decode_flags(header_flags::PACKED_SEQ | header_flags::COMPACT_LEN);
     assert!(
@@ -255,9 +231,6 @@ fn decode_flags_guard_restores_previous_defaults() {
 #[test]
 fn decode_guard_panics_preserve_state() {
     core::reset_decode_state();
-    if !packed_seq_supported() {
-        return;
-    }
     let canonical = vec![8u64, 9, 10];
     let canonical_bytes = norito::to_bytes(&canonical).expect("encode canonical vec");
     let result = std::panic::catch_unwind(|| {
@@ -325,24 +298,18 @@ fn truncated_vec_payload_returns_error() {
     }
 }
 #[test]
-fn decode_from_bytes_resets_decode_state() {
+fn decode_from_bytes_restores_decode_state() {
     use norito::core::{self, header_flags};
-    if !packed_seq_supported() {
-        return;
-    }
     core::set_decode_flags(header_flags::PACKED_SEQ | header_flags::COMPACT_LEN);
     let fixed = vec![1u32, 2, 3];
     let fixed_bytes = encode_fixed_vec_u32(&fixed);
-    let err =
-        norito::decode_from_bytes::<Vec<u32>>(&fixed_bytes).expect_err("fixed decode must fail");
-    assert!(matches!(
-        err,
-        norito::core::Error::LengthMismatch | norito::core::Error::DecodePanic { .. }
-    ));
+    let decoded: Vec<u32> =
+        norito::decode_from_bytes(&fixed_bytes).expect("frame flags override stale state");
+    assert_eq!(decoded, fixed);
     assert_eq!(
         core::get_decode_flags(),
-        0,
-        "decode flags should reset to 0 on error"
+        header_flags::PACKED_SEQ | header_flags::COMPACT_LEN,
+        "decode flags should restore the ambient state"
     );
     core::reset_decode_state();
 }
@@ -385,29 +352,18 @@ fn stream_vec_collect_handles_empty_payload() {
 #[test]
 fn stream_vec_collect_handles_fixed_layout() {
     core::reset_decode_state();
-    if !packed_seq_supported() {
-        return;
-    }
     let fixed = vec![11u32, 22, 33];
     let fixed_bytes = encode_fixed_vec_u32(&fixed);
-    let err = norito::stream_vec_collect_from_reader::<_, u32>(Cursor::new(fixed_bytes.as_slice()))
-        .expect_err("streaming fixed vec must fail");
-    assert!(matches!(
-        err,
-        norito::core::Error::LengthMismatch | norito::core::Error::DecodePanic { .. }
-    ));
-    let decode_err = norito::decode_from_bytes::<Vec<u32>>(&fixed_bytes)
-        .expect_err("decoding fixed vec must fail");
-    assert!(matches!(
-        decode_err,
-        norito::core::Error::LengthMismatch | norito::core::Error::DecodePanic { .. }
-    ));
+    let streamed =
+        norito::stream_vec_collect_from_reader::<_, u32>(Cursor::new(fixed_bytes.as_slice()))
+            .expect("stream explicit fixed layout");
+    assert_eq!(streamed, fixed);
+    let decoded =
+        norito::decode_from_bytes::<Vec<u32>>(&fixed_bytes).expect("decode explicit fixed layout");
+    assert_eq!(decoded, fixed);
 }
 #[test]
 fn stream_vec_collect_handles_packed_seq() {
-    if !packed_seq_supported() {
-        return;
-    }
     let payload: Vec<u64> = (0..2048u64).collect();
     let _guard = core::DecodeFlagsGuard::enter(norito::core::header_flags::PACKED_SEQ);
     let bytes = norito::to_bytes(&payload).expect("encode large vec");

@@ -3,7 +3,7 @@
 Swift SDK for the first Hyperledger Iroha 3 release on Apple platforms.
 
 Features:
-- Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, prover reports, contracts)
+- Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, contracts)
 - Kagemusha cash models, transaction builders, proof binding helpers, and universal capability discovery through `/v1/offline/readiness`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
@@ -1307,7 +1307,7 @@ The confidential-v2 Swift wallet helpers expose
 `ConfidentialNoteDecryption.decryptNoteWithOwnerTag`,
 `PrivacyConfidentialWitnessV1`, typed witness encoders,
 `LocalZkAssetMerklePathProvider`, and
-`ToriiClient.getMerklePathForCommitment(asset:commitment:)`. Every note
+`ToriiClient.getMerklePathForCommitment(asset:commitment:canonicalAuth:)`. Every note
 decryption requires the configured exact `NetworkId` and derives the expected
 owner tag from the supplied spend key; diversified notes must use the explicit
 expected-owner-tag overload. Decrypted note plaintext rejects noncanonical

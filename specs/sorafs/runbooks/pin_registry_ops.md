@@ -61,7 +61,7 @@ requires those dimensions.
 ## Triage workflow
 
 1. **Identify cause**
-   - Export replication orders at one finalized height/hash and separate pending, completed, and expired records.
+   - Export replication orders at one finalized height/hash and separate pending, completed, expired, and pin-retirement-cancelled records.
    - Correlate late or expired orders with PoR failures and provider availability.
 2. **Validate provider status**
    - Run `iroha app sorafs providers list` and verify the advertised capabilities match replication requirements.

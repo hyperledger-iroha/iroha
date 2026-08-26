@@ -76,69 +76,6 @@ pub trait GlobalBeaconPartialSignerBrokerBackendV1: Send + Sync {
     >;
 }
 
-/// Qualification adapter for an in-process/HSM beacon signer implementation.
-///
-/// The adapter owns only public provider identity plus an opaque signer trait
-/// object. It exposes no key inventory, scalar export, or diagnostic surface.
-pub struct BoundGlobalBeaconPartialSignerBrokerBackendV1 {
-    handle: String,
-    qualification: ConsensusSignerProviderQualificationV1,
-    signer: Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>,
-}
-
-impl BoundGlobalBeaconPartialSignerBrokerBackendV1 {
-    /// Bind one runtime signer to its exact public broker identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns a payload-free error for an empty/non-production handle, zero
-    /// revision, or inert policy digest.
-    pub fn try_new(
-        handle: impl Into<String>,
-        qualification: ConsensusSignerProviderQualificationV1,
-        signer: Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>,
-    ) -> Result<Self, GlobalBeaconPartialSignerBrokerBackendErrorV1> {
-        let handle = handle.into();
-        if !iroha_config::parameters::is_production_runtime_handle(&handle)
-            || qualification.revision == 0
-            || qualification.policy_digest == [0; 32]
-        {
-            return Err(GlobalBeaconPartialSignerBrokerBackendErrorV1);
-        }
-        Ok(Self {
-            handle,
-            qualification,
-            signer,
-        })
-    }
-}
-
-impl GlobalBeaconPartialSignerBrokerBackendV1 for BoundGlobalBeaconPartialSignerBrokerBackendV1 {
-    fn handle(&self) -> &str {
-        &self.handle
-    }
-
-    fn qualification(
-        &self,
-    ) -> Result<ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1>
-    {
-        Ok(self.qualification)
-    }
-
-    fn sign_partial(
-        &self,
-        session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
-        payload: &[u8],
-    ) -> Result<
-        iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1,
-        GlobalBeaconPartialSignerBrokerBackendErrorV1,
-    > {
-        self.signer
-            .sign_partial(session, payload)
-            .map_err(|_| GlobalBeaconPartialSignerBrokerBackendErrorV1)
-    }
-}
-
 /// Authenticated broker-server backend for Parliament TLE partial releases.
 ///
 /// The server reconstructs and validates the complete public release
@@ -164,72 +101,6 @@ pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {
     >;
 }
 
-/// Qualification adapter for an HSM or in-process projected TLE signer.
-///
-/// The adapter owns only public provider identity plus an opaque signer trait
-/// object. It exposes no key-session inventory, scalar export, or diagnostic
-/// surface.
-pub struct BoundParliamentTlePartialReleaseSignerBrokerBackendV1 {
-    handle: String,
-    qualification: ConsensusSignerProviderQualificationV1,
-    signer: Arc<dyn iroha_core::tle_release::TleProjectedPartialReleaseSignerV1>,
-}
-
-impl BoundParliamentTlePartialReleaseSignerBrokerBackendV1 {
-    /// Bind one projected signer to its exact public broker identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns a payload-free error for an empty/non-production handle, zero
-    /// revision, or inert policy digest.
-    pub fn try_new(
-        handle: impl Into<String>,
-        qualification: ConsensusSignerProviderQualificationV1,
-        signer: Arc<dyn iroha_core::tle_release::TleProjectedPartialReleaseSignerV1>,
-    ) -> Result<Self, ParliamentTlePartialReleaseSignerBrokerBackendErrorV1> {
-        let handle = handle.into();
-        if !iroha_config::parameters::is_production_runtime_handle(&handle)
-            || qualification.revision == 0
-            || qualification.policy_digest == [0; 32]
-        {
-            return Err(ParliamentTlePartialReleaseSignerBrokerBackendErrorV1);
-        }
-        Ok(Self {
-            handle,
-            qualification,
-            signer,
-        })
-    }
-}
-
-impl ParliamentTlePartialReleaseSignerBrokerBackendV1
-    for BoundParliamentTlePartialReleaseSignerBrokerBackendV1
-{
-    fn handle(&self) -> &str {
-        &self.handle
-    }
-
-    fn qualification(
-        &self,
-    ) -> Result<
-        ConsensusSignerProviderQualificationV1,
-        ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
-    > {
-        Ok(self.qualification)
-    }
-
-    fn sign_projected_partial_release(
-        &self,
-        projection: &iroha_core::tle_release::ValidatedTleReleaseProjectionV1,
-    ) -> Result<
-        iroha_core::tle_release::TlePartialReleaseShareV1,
-        ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
-    > {
-        self.signer
-            .sign_projected_partial_release(projection)
-            .map_err(|_| ParliamentTlePartialReleaseSignerBrokerBackendErrorV1)
-    }
-}
 /// One-shot lifecycle control shared by a broker launcher and serving thread.
 ///
 /// Readiness publication and shutdown are linearized through a bounded
@@ -999,8 +870,6 @@ impl RuntimeProviderBrokerBackendsV1 {
             || self.potr_gateway_signer.is_some()
             || self.potr_provider_signer.is_some()
             || self.evidence_viewer_receipt_signer.is_some()
-            || self.global_beacon_partial_signer.is_some()
-            || self.parliament_tle_partial_release_signer.is_some()
     }
 }
 /// Payload-free stock broker-server startup or transport failure.

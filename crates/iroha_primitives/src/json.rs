@@ -391,7 +391,7 @@ impl Default for Json {
     }
 }
 // Provide slice-based decoding for Json so it can live inside packed sequences
-// and option fields under Norito's strict-safe path.
+// and option fields on Norito's bounded decode path.
 impl<'a> norito::core::DecodeFromSlice<'a> for Json {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (value, consumed) = Self::decode_wire_text(bytes)?;

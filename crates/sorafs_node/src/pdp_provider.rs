@@ -2373,8 +2373,11 @@ mod tests {
             },
         };
         let (vrf_public, vrf_private) =
-            iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![0x34; 32]))
-                .expect("fixture BLS keypair");
+            iroha_crypto::BlsNormal::try_keypair(iroha_crypto::KeyGenOption::UseSeed(vec![
+                0x34;
+                32
+            ]))
+            .expect("fixture BLS keypair");
         let vrf_pair: KeyPair = (vrf_public, vrf_private).into();
         let proposal = ProviderAdmissionProposalV1 {
             version: sorafs_manifest::PROVIDER_ADMISSION_PROPOSAL_VERSION_V1,

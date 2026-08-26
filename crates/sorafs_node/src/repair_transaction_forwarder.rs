@@ -459,9 +459,8 @@ pub struct RepairTransactionForwarder {
     store: Option<Arc<AtomicCheckpointStore>>,
 }
 impl RepairTransactionForwarder {
-    /// Construct a bounded non-persistent forwarder for unit tests.
-    #[cfg(test)]
-    fn in_memory(
+    /// Construct a bounded non-persistent forwarder for emergency-disabled startup and tests.
+    pub(crate) fn in_memory(
         policy: RepairTransactionForwarderPolicyV1,
     ) -> Result<Self, RepairTransactionForwarderError> {
         policy.validate()?;

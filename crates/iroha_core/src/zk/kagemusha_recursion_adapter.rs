@@ -8731,15 +8731,6 @@ mod scalar_lineage_v1 {
         C::ScalarExt: BigPrimeField,
     {
         pub(super) accumulator: DeferredAccumulator<'chip, C>,
-        #[cfg(feature = "kagemusha-generation-memory-lab")]
-        pub(super) parent_count: AssignedValue<C::ScalarExt>,
-        /// Exact cells loaded into the verified parent proof's sole instance column.
-        #[cfg(feature = "kagemusha-generation-memory-lab")]
-        pub(super) verified_instance_cells: Vec<AssignedValue<C::ScalarExt>>,
-        /// Exact parsed phase-zero witness commitment selected by the V7 profile.
-        #[cfg(feature = "kagemusha-generation-memory-lab")]
-        pub(super) serialized_advice_commitment:
-            Option<super::super::kagemusha_cycle_loader::DeferredScalarPoint<C>>,
         pub(super) stages: Vec<AssignedDeferredEquationStageV4<C::ScalarExt>>,
     }
     pub(super) struct ExposedParentLineageV4<C>
@@ -9171,8 +9162,6 @@ mod scalar_lineage_v1 {
         Ok(())
     }
     include!("kagemusha_recursion_adapter/scalar_lineage_parent_verifier_v4.rs");
-    #[cfg(feature = "kagemusha-generation-memory-lab")]
-    include!("kagemusha_recursion_adapter/scalar_lineage_parent_verifier_v7.rs");
     /// Verify all degree-derived stages for one V4 parent slot; selector-zero bootstrap material remains fully parseable.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn constrain_parent_scalar_lineage_v4<'chip, C>(
@@ -9180,9 +9169,6 @@ mod scalar_lineage_v1 {
         succinct_vk: &IpaSuccinctVerifyingKey<C>,
         protocol: &LoadedParentProtocolV1<'chip, C>,
         parent_slot: usize,
-        #[cfg(feature = "kagemusha-generation-memory-lab")] serialized_phase_zero_rank: Option<
-            usize,
-        >,
         slot_enabled: AssignedValue<C::ScalarExt>,
         authenticated_round_count: u32,
         max_parent_proof_bytes: usize,
@@ -9226,25 +9212,11 @@ mod scalar_lineage_v1 {
             .first()
             .and_then(|column| column.last())
             .ok_or(Error::InvalidInstances)?;
-        #[cfg(feature = "kagemusha-generation-memory-lab")]
-        if serialized_phase_zero_rank.is_none() {
-            // V4 encodes slot presence in the verified parent's live bit.  V7
-            // instead derives child-slot presence from the current child's
-            // authenticated parent count: a bootstrap proof (live = 0) can be
-            // a present parent, while an absent V7 slot uses a canonical null
-            // tuple and gates the parsed dummy proof independently.
-            loader
-                .ctx_mut()
-                .main()
-                .constrain_equal(&parent_live_selector.assigned(), &slot_enabled);
-        }
-        #[cfg(not(feature = "kagemusha-generation-memory-lab"))]
         loader
             .ctx_mut()
             .main()
             .constrain_equal(&parent_live_selector.assigned(), &slot_enabled);
-        let parent_presence = derive_parent_count_and_presence(loader, &loaded_instances)?;
-        let has_carried_lineage = parent_presence.1;
+        let (_, has_carried_lineage) = derive_parent_count_and_presence(loader, &loaded_instances)?;
         let carried_column = loaded_instances
             .get(witness.carried_lineage_instance_column)
             .ok_or(Error::InvalidInstances)?;
@@ -9304,17 +9276,6 @@ mod scalar_lineage_v1 {
         }
         let mut stages = Vec::with_capacity(3);
         let current_start = loader.ecc_chip().equation_count();
-        #[cfg(feature = "kagemusha-generation-memory-lab")]
-        let (current, serialized_advice_commitment) = verify_ordinary_parent(
-            loader,
-            succinct_vk,
-            &protocol.protocol,
-            &loaded_instances,
-            witness.proof_bytes,
-            max_parent_proof_bytes,
-            serialized_phase_zero_rank,
-        )?;
-        #[cfg(not(feature = "kagemusha-generation-memory-lab"))]
         let current = verify_ordinary_parent(
             loader,
             succinct_vk,
@@ -9370,15 +9331,6 @@ mod scalar_lineage_v1 {
         )?;
         Ok(ParentScalarLineageV4 {
             accumulator,
-            #[cfg(feature = "kagemusha-generation-memory-lab")]
-            parent_count: parent_presence.0,
-            #[cfg(feature = "kagemusha-generation-memory-lab")]
-            verified_instance_cells: loaded_instances[0]
-                .iter()
-                .map(|scalar| *scalar.assigned())
-                .collect(),
-            #[cfg(feature = "kagemusha-generation-memory-lab")]
-            serialized_advice_commitment,
             stages,
         })
     }
@@ -9988,8 +9940,6 @@ where
             &recursion.succinct_vk,
             &loaded_protocol,
             slot,
-            #[cfg(feature = "kagemusha-generation-memory-lab")]
-            None,
             slot_present[slot],
             params.k,
             max_parent_proof_bytes,
@@ -11870,10 +11820,6 @@ where
     Ok((proof, verifying_key))
 }
 include!("kagemusha_recursion_adapter/generated_artifacts.rs");
-#[cfg(feature = "kagemusha-generation-memory-lab")]
-include!("kagemusha_recursion_adapter/serialized_audit_vector_v7.rs");
-#[cfg(feature = "kagemusha-generation-memory-lab")]
-include!("kagemusha_recursion_adapter/serialized_audit_bridge_v7.rs");
 include!("kagemusha_recursion_adapter/k17_probe.rs");
 fn kagemusha_eq_recursion_from_bootstrap_v4(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<

@@ -44,18 +44,24 @@ fn autonomy_workflow_json_is_exact_and_requires_explicit_nullable_step_id() -> R
             SoracloudRuntimeExecutionErrorKind::InvalidRequest
         );
         assert!(error.message.contains("not canonical V1 JSON"));
+        assert!(
+            error
+                .to_string()
+                .starts_with("Soracloud runtime invalid request error:"),
+            "unexpected structured runtime error display: {error}"
+        );
     }
     Ok(())
 }
 
 #[test]
 fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure() -> Result<()> {
-    let mut state = test_state();
+    let mut state = test_state_at_height_one()?;
     let fixture = insert_generated_hf_service_fixture(
         &mut state,
         "hf_agent_service",
         "openai-community/gpt2",
-        "main",
+        TEST_HF_COMMIT_OID,
         "gpt2",
     )?;
     set_generated_hf_service_route_visibility(&mut state, &fixture, SoraRouteVisibilityV1::Public);
@@ -80,7 +86,6 @@ fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure(
     let apartment = SoraAgentApartmentRecordV1 {
         schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
         manifest_hash: Hash::new(Encode::encode(&manifest)),
-        status: SoraAgentRuntimeStatusV1::Running,
         deployed_sequence: 1,
         lease_started_height: 1,
         lease_expires_height: 400,
@@ -129,83 +134,12 @@ fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure(
         local_peer_id,
     );
     let temp_dir = tempfile::tempdir()?;
-    let source_root = temp_dir
-        .path()
-        .join("hf_sources")
-        .join(sanitize_path_component(&fixture.source_id.to_string()));
-    let files_root = source_root.join("files");
-    fs::create_dir_all(&files_root)?;
-    let config_json = br#"{
-  "model_type": "gpt2",
-  "_soracloud_fixture": {
-    "mode": "echo",
-    "prefix": "agent:"
-  }
-}"#;
-    let config_path = files_root.join("config.json");
-    write_bytes_atomic(&config_path, config_json)?;
-    let weight_payload = b"authenticated autonomy execution weights";
-    write_bytes_atomic(&files_root.join("model.safetensors"), weight_payload)?;
-    let required_weight_files = vec![HfRequiredWeightFileV1 {
-        path: "model.safetensors".to_owned(),
-        content_length: u64::try_from(weight_payload.len())?,
-        lfs_sha256: hex::encode(iroha_crypto::sha256(weight_payload)),
-    }];
-    let weight_lfs_sha256 = required_weight_files[0].lfs_sha256.clone();
-    let weight_content_length = required_weight_files[0].content_length;
-    let model_info = norito::json!({
-        "sha": TEST_HF_COMMIT_OID,
-        "siblings": [{
-            "rfilename": "model.safetensors",
-            "lfs": {
-                "sha256": weight_lfs_sha256,
-                "size": weight_content_length
-            }
-        }]
-    });
-    let weight_selection =
-        derive_hf_weight_selection_v1(&model_info, 1, u64::MAX, u64::MAX)?
-            .expect("autonomy fixture must select its authenticated weight");
-    let model_info_payload = norito::json::to_vec(&model_info)?;
-    write_bytes_atomic(&source_root.join("model_info.json"), &model_info_payload)?;
-    write_json_atomic(
-        &source_root.join("import_manifest.json"),
-        &HfLocalImportManifestV1 {
-            schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
-            source_id: fixture.source_id.to_string(),
-            repo_id: "openai-community/gpt2".to_owned(),
-            requested_revision: TEST_HF_COMMIT_OID.to_owned(),
-            resolved_commit: Some(TEST_HF_COMMIT_OID.to_owned()),
-            model_name: "gpt2".to_owned(),
-            adapter_id: "hf.shared.v1".to_owned(),
-            pipeline_tag: Some("text-generation".to_owned()),
-            library_name: Some("transformers".to_owned()),
-            tags: vec!["text-generation".to_owned()],
-            imported_at_ms: 20,
-            model_info_content_length: Some(u64::try_from(model_info_payload.len())?),
-            model_info_payload_hash: Some(Hash::new(&model_info_payload).to_string()),
-            selected_weight_format: Some(weight_selection.model_format),
-            weight_selection_commitment: Some(
-                weight_selection.weight_selection_commitment.to_string(),
-            ),
-            required_weight_files,
-            imported_files: vec![
-                HfImportedFileV1 {
-                    path: "config.json".to_owned(),
-                    content_length: u64::try_from(config_json.len())?,
-                    payload_hash: Hash::new(config_json).to_string(),
-                    lfs_sha256: None,
-                },
-                HfImportedFileV1 {
-                    path: "model.safetensors".to_owned(),
-                    content_length: u64::try_from(weight_payload.len())?,
-                    payload_hash: Hash::new(weight_payload).to_string(),
-                    lfs_sha256: Some(hex::encode(iroha_crypto::sha256(weight_payload))),
-                },
-            ],
-            skipped_files: Vec::new(),
-            import_error: None,
-        },
+    let _generation = publish_single_weight_hf_test_generation(
+        temp_dir.path(),
+        &fixture.source_id.to_string(),
+        "openai-community/gpt2",
+        "gpt2",
+        TEST_HF_WEIGHT_PAYLOAD,
     )?;
     let manager = SoracloudRuntimeManager::new(
         test_runtime_manager_config(temp_dir.path().to_path_buf())
@@ -215,16 +149,14 @@ fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure(
     manager.reconcile_once()?;
     let handle = test_runtime_handle(&manager, Arc::clone(&state));
     let request = SoracloudApartmentExecutionRequest {
-        observed_height: 0,
-        observed_block_hash: None,
+        observed_height: 1,
+        observed_block_hash: committed_block_hash(&state.view()),
         apartment_name: apartment_name.to_string(),
         process_generation: apartment.process_generation,
         operation: format!("autonomy-run:{}", run.run_id),
         request_commitment: run.request_commitment,
     };
-    let result = handle
-        .execute_apartment(request.clone())
-        .map_err(|error| eyre::eyre!("{error:?}"))?;
+    let result = handle.execute_apartment(request.clone())?;
     assert_eq!(result.status, SoraAgentRuntimeStatusV1::Running);
     assert!(result.checkpoint_artifact_hash.is_none());
     assert!(result.journal_artifact_hash.is_some());
@@ -234,8 +166,7 @@ fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure(
         &run.run_id,
         run.approved_process_generation,
         run.request_commitment,
-    )
-    .map_err(|error| eyre::eyre!("{error:?}"))?
+    )?
     .expect("persisted autonomy execution summary");
     assert!(!summary.succeeded);
     assert!(summary.workflow_steps.is_empty());
@@ -247,19 +178,16 @@ fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure(
     assert!(summary.response_json.is_none());
     assert!(summary.response_text.is_none());
     assert!(
-        summary
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("authenticated Inrou runtime"))
+        summary.error.as_deref().is_some_and(
+            |error| error.contains("no enabled or explicitly requested runtime backend")
+        )
     );
     assert_eq!(result.journal_artifact_hash, Some(journal_hash));
     assert_eq!(
         result.checkpoint_artifact_hash,
         summary.checkpoint_artifact_hash
     );
-    let second = handle
-        .execute_apartment(request)
-        .map_err(|error| eyre::eyre!("{error:?}"))?;
+    let second = handle.execute_apartment(request)?;
     assert_eq!(second.result_commitment, result.result_commitment);
     assert_eq!(second.journal_artifact_hash, result.journal_artifact_hash);
     assert_eq!(
@@ -270,12 +198,12 @@ fn execute_apartment_generated_hf_autonomy_run_stays_inert_and_persists_failure(
 }
 #[test]
 fn execute_apartment_generated_hf_autonomy_workflow_stays_inert_before_first_step() -> Result<()> {
-    let mut state = test_state();
+    let mut state = test_state_at_height_one()?;
     let fixture = insert_generated_hf_service_fixture(
         &mut state,
         "hf_agent_workflow_service",
         "openai-community/gpt2",
-        "main",
+        TEST_HF_COMMIT_OID,
         "gpt2",
     )?;
     set_generated_hf_service_route_visibility(&mut state, &fixture, SoraRouteVisibilityV1::Public);
@@ -301,7 +229,6 @@ fn execute_apartment_generated_hf_autonomy_workflow_stays_inert_before_first_ste
     let apartment = SoraAgentApartmentRecordV1 {
         schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
         manifest_hash: Hash::new(Encode::encode(&manifest)),
-        status: SoraAgentRuntimeStatusV1::Running,
         deployed_sequence: 1,
         lease_started_height: 1,
         lease_expires_height: 400,
@@ -350,83 +277,12 @@ fn execute_apartment_generated_hf_autonomy_workflow_stays_inert_before_first_ste
         local_peer_id,
     );
     let temp_dir = tempfile::tempdir()?;
-    let source_root = temp_dir
-        .path()
-        .join("hf_sources")
-        .join(sanitize_path_component(&fixture.source_id.to_string()));
-    let files_root = source_root.join("files");
-    fs::create_dir_all(&files_root)?;
-    let config_json = br#"{
-  "model_type": "gpt2",
-  "_soracloud_fixture": {
-    "mode": "echo",
-    "prefix": "wf:"
-  }
-}"#;
-    let config_path = files_root.join("config.json");
-    write_bytes_atomic(&config_path, config_json)?;
-    let weight_payload = b"authenticated autonomy workflow weights";
-    write_bytes_atomic(&files_root.join("model.safetensors"), weight_payload)?;
-    let required_weight_files = vec![HfRequiredWeightFileV1 {
-        path: "model.safetensors".to_owned(),
-        content_length: u64::try_from(weight_payload.len())?,
-        lfs_sha256: hex::encode(iroha_crypto::sha256(weight_payload)),
-    }];
-    let weight_lfs_sha256 = required_weight_files[0].lfs_sha256.clone();
-    let weight_content_length = required_weight_files[0].content_length;
-    let model_info = norito::json!({
-        "sha": TEST_HF_COMMIT_OID,
-        "siblings": [{
-            "rfilename": "model.safetensors",
-            "lfs": {
-                "sha256": weight_lfs_sha256,
-                "size": weight_content_length
-            }
-        }]
-    });
-    let weight_selection =
-        derive_hf_weight_selection_v1(&model_info, 1, u64::MAX, u64::MAX)?
-            .expect("autonomy fixture must select its authenticated weight");
-    let model_info_payload = norito::json::to_vec(&model_info)?;
-    write_bytes_atomic(&source_root.join("model_info.json"), &model_info_payload)?;
-    write_json_atomic(
-        &source_root.join("import_manifest.json"),
-        &HfLocalImportManifestV1 {
-            schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
-            source_id: fixture.source_id.to_string(),
-            repo_id: "openai-community/gpt2".to_owned(),
-            requested_revision: TEST_HF_COMMIT_OID.to_owned(),
-            resolved_commit: Some(TEST_HF_COMMIT_OID.to_owned()),
-            model_name: "gpt2".to_owned(),
-            adapter_id: "hf.shared.v1".to_owned(),
-            pipeline_tag: Some("text-generation".to_owned()),
-            library_name: Some("transformers".to_owned()),
-            tags: vec!["text-generation".to_owned()],
-            imported_at_ms: 20,
-            model_info_content_length: Some(u64::try_from(model_info_payload.len())?),
-            model_info_payload_hash: Some(Hash::new(&model_info_payload).to_string()),
-            selected_weight_format: Some(weight_selection.model_format),
-            weight_selection_commitment: Some(
-                weight_selection.weight_selection_commitment.to_string(),
-            ),
-            required_weight_files,
-            imported_files: vec![
-                HfImportedFileV1 {
-                    path: "config.json".to_owned(),
-                    content_length: u64::try_from(config_json.len())?,
-                    payload_hash: Hash::new(config_json).to_string(),
-                    lfs_sha256: None,
-                },
-                HfImportedFileV1 {
-                    path: "model.safetensors".to_owned(),
-                    content_length: u64::try_from(weight_payload.len())?,
-                    payload_hash: Hash::new(weight_payload).to_string(),
-                    lfs_sha256: Some(hex::encode(iroha_crypto::sha256(weight_payload))),
-                },
-            ],
-            skipped_files: Vec::new(),
-            import_error: None,
-        },
+    let _generation = publish_single_weight_hf_test_generation(
+        temp_dir.path(),
+        &fixture.source_id.to_string(),
+        "openai-community/gpt2",
+        "gpt2",
+        TEST_HF_WEIGHT_PAYLOAD,
     )?;
     let manager = SoracloudRuntimeManager::new(
         test_runtime_manager_config(temp_dir.path().to_path_buf())
@@ -435,34 +291,30 @@ fn execute_apartment_generated_hf_autonomy_workflow_stays_inert_before_first_ste
     );
     manager.reconcile_once()?;
     let handle = test_runtime_handle(&manager, Arc::clone(&state));
-    let result = handle
-        .execute_apartment(SoracloudApartmentExecutionRequest {
-            observed_height: 0,
-            observed_block_hash: None,
-            apartment_name: apartment_name.to_string(),
-            process_generation: apartment.process_generation,
-            operation: format!("autonomy-run:{}", run.run_id),
-            request_commitment: run.request_commitment,
-        })
-        .map_err(|error| eyre::eyre!("{error:?}"))?;
+    let result = handle.execute_apartment(SoracloudApartmentExecutionRequest {
+        observed_height: 1,
+        observed_block_hash: committed_block_hash(&state.view()),
+        apartment_name: apartment_name.to_string(),
+        process_generation: apartment.process_generation,
+        operation: format!("autonomy-run:{}", run.run_id),
+        request_commitment: run.request_commitment,
+    })?;
     let (summary, _journal_hash) = read_apartment_autonomy_execution_summary(
         temp_dir.path(),
         apartment_name.as_ref(),
         &run.run_id,
         run.approved_process_generation,
         run.request_commitment,
-    )
-    .map_err(|error| eyre::eyre!("{error:?}"))?
+    )?
     .expect("persisted workflow summary");
     assert!(!summary.succeeded);
     assert!(summary.workflow_steps.is_empty());
     assert!(summary.runtime_receipt.is_none());
     assert!(summary.response_json.is_none());
     assert!(
-        summary
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("authenticated Inrou runtime"))
+        summary.error.as_deref().is_some_and(
+            |error| error.contains("no enabled or explicitly requested runtime backend")
+        )
     );
     assert!(result.checkpoint_artifact_hash.is_none());
     assert_eq!(

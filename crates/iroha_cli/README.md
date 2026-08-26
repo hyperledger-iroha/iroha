@@ -294,7 +294,7 @@ iroha app zk schema-hash --norito proof_env.norito
 iroha app zk schema-hash --public-inputs-hex 0x0123abcd...
 ```
 
-### ZK attachments and prover reports (app API convenience)
+### ZK attachments (app API convenience)
 
 Upload an attachment (set Content-Type appropriately):
 
@@ -351,42 +351,6 @@ verifier or generic transfer/withdrawal ISI exists.
 iroha app zk verify-batch --norito ./batch.norito
 # Or pass a JSON array of base64-encoded Norito envelopes:
 iroha app zk verify-batch --json ./batch.json
-```
-
-List background prover reports and fetch one (non‑consensus):
-
-```bash
-iroha app zk prover reports list
-iroha app zk prover reports get --id 0123ab...
-```
-
-Count prover reports matching filters (server‑side):
-
-```bash
-# Total count
-iroha app zk prover reports count
-
-# Only Norito reports with a specific ZK1 tag
-iroha app zk prover reports count --content-type application/x-norito --has-tag IPAK
-
-# Only successful reports since a timestamp (ms)
-iroha app zk prover reports count --ok-only --since-ms 1725500000000
-```
-
-Server‑side bulk cleanup (dangerous; use filters + --yes):
-
-```bash
-# Dry‑run: show what would be deleted (client lists, server filters applied by CLI)
-iroha app zk prover reports cleanup --failed-only --content-type application/x-norito
-
-# Server‑side delete of matching reports (confirm with --yes)
-iroha app zk prover reports cleanup --server --yes --failed-only --content-type application/x-norito --since-ms 1725500000000
-
-# Delete within a time window [since_ms, before_ms]
-iroha app zk prover reports cleanup --server --yes \
-  --content-type application/x-norito \
-  --since-ms 1725500000000 \
-  --before-ms 1725600000000
 ```
 
 Run the full sample sequence:

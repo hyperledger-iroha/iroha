@@ -17,8 +17,8 @@ EXPECTED_CASE_COUNT = 53
 BASELINE_RUST_LINES = 5_779
 MAX_POSTIMAGE_RUST_LINES = 3_618
 MINIMUM_NET_REDUCTION = 2_161
-EXPECTED_ASSET_LENGTH = 559_156
-EXPECTED_ASSET_SHA256 = "cdf43965e33878b681d2afb05672d40361aec82989aff0ff82fe73d66f9fbbc9"
+EXPECTED_ASSET_LENGTH = 562_318
+EXPECTED_ASSET_SHA256 = "222ec0a86ee5ed146140b8b4bf7c770b635b832b531b0b36440a2d3919c373a2"
 EXPECTED_CASE_IDS_SHA256 = "cbb80aba2a9376f83abafbd26313371656fb97053cac13566b3b828831068f13"
 
 HOST_PREIMAGE_SHA256 = {
@@ -65,7 +65,7 @@ NEW_CASE_CONTRACT_COUNTS = {
 }
 MIGRATED_CASE_SHA256 = {
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "7e61f7612fa106e3a3649ba8720b172f5d1ec4e901f35c4cf310038b46ba521e",
-    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "f8657c40013539ac11869c3e48c8e0c95213c5d2cce7c9cbe138b7f594f6ffce",
+    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "8580de8cad16b59ab20030e236dff622711612eb41aa6f95adf431a0b1fa2a73",
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "03b7d7a3a9843536bca8c686937561c0c12eea4281e9850de7ee7c841cf6ac48",
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "dc5a58896a12211ec735952b05a411112a8fda45ed60923b1b5f114913a14a12",
 }

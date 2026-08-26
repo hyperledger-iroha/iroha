@@ -17,7 +17,7 @@ Torii also exposes upload readiness and private-execution routes:
 - `GET /v1/soracloud/model/upload/status` (exact-network canonical account
   authentication)
 - `POST /v1/soracloud/model/upload/private/execute` (authenticated,
-  runtime-owned deterministic execution and atomic submission)
+  runtime-owned deterministic execution and durable two-phase submission)
 - `GET /v1/soracloud/model/upload/private/receipts` (exact-network canonical
   account authentication over committed receipts)
 
@@ -62,11 +62,12 @@ prepare the storage, runtime, and signing surfaces as one controlled change.
    must cover the exact committed roots, artifact id, weight version, dataset
    reference, policy id, and SoraFS digest.
 5. Qualify the local deterministic runtime, embedded SoraFS storage, validator
-   identity, runtime-owned journal, and atomic mutation sink together. The
+   identity, runtime-owned journal, and phase-transaction sink together. The
    execute route accepts only an authenticated exact service/model release,
    committed decryption request, rooted encrypted input reference, and typed
-   output recipient. Treat `202 Accepted` as transaction submission; use the
-   committed receipt query or an exact `200 OK` replay as commit evidence.
+   output recipient. Treat `202 Accepted` as progress evidence for its typed
+   submission phase; use the committed receipt query or an exact `200 OK`
+   replay as commit evidence.
 
 ## Chain State
 
@@ -104,16 +105,16 @@ aliases; any pre-existing `UserUpload` projection rejects another finalization.
 
 `PrivateUploadedModelExecuteRequest` is a closed authenticated request. It
 contains exact `service_name`, `service_version`, and `weight_version` values;
-exactly one of `model_id` or `model_name`; an optional exact `bundle_root`
-constraint; the committed `decryption_request_id`; a rooted `input`-role
+the canonical immutable `model_id`; its exact committed `bundle_root`; the
+committed `decryption_request_id`; a rooted `input`-role
 `SoraPrivateModelArtifactRefV1`; and the typed
 `SoraUploadedModelEncryptionRecipientV1` for the output. The input reference
 binds its SoraFS manifest digest, root CID, ciphertext hash, and ciphertext
 length, with encrypted artifacts restricted to `1..=72 MiB` in V1. The output
 recipient carries one canonical non-low-order X25519 public key and its exact
 Iroha BLAKE2b-256 prehash fingerprint. Plaintext, model weights, policy
-overrides, execution-host claims, output claims, and receipts are not request
-fields.
+overrides, execution-host claims, output claims, receipts, and mutable
+`model_name` discovery aliases are not request fields.
 
 Torii verifies the canonical account-signature headers and requires one
 verified signer to equal the signer recorded on the decryption request. The
@@ -128,8 +129,16 @@ lifecycle metadata: promotion may update the weight projection without
 rewriting the immutable artifact, so request revision admission is enforced
 separately. The model and input SoraFS pins must be active and match their
 authoritative content identities. The decryption record and audit event must
-match the service version, bundle policy, and input ciphertext commitment and
-remain active at the candidate block height.
+match the service version, bundle policy, and input ciphertext commitment. A
+fresh execution requires the half-open authorization window to remain active at
+the next possible atomic prepare height. Prepare freezes that exact height and
+consensus epoch in an immutable claim; provider completion and receipt commit
+subsequently rely on the claim instead of extending or recreating the original
+authorization. Fresh private output admission also requires permissionless
+automatic SoraFS pin approval. Torii rejects a council-gated policy before
+inference, and consensus independently rejects a fresh prepare under that
+policy; an already exact-matched claim remains an idempotent no-op if governance
+changes later.
 
 The qualified runtime independently revalidates those bindings, reads the
 encrypted model and input under admitted SoraFS leases, and opens only canonical
@@ -143,39 +152,124 @@ request's typed recipient.
 Torii derives a canonical single-file SoraFS manifest for the encrypted output,
 inherits the input pin's governed storage policy, and durably ingests the
 ciphertext before publishing recovery evidence. An existing output is reused
-only when its content-addressed bytes match exactly.
+only when its content-addressed bytes match exactly. Before execution, after
+inference, and after local output ingestion, both source pins must retain the
+complete three-attempt Prepare horizon, four recovery intervals, and a fixed
+60-second safety allowance. The output lease is paid separately from the later
+of local wall time and finalized consensus time: it covers that full Prepare
+horizon, the strict 24-hour automatic-replication SLA, and then the larger of
+the governed settlement window or the complete three-attempt Receipt horizon
+plus the 600-second consensus recovery floor.
 
 `SoracloudPrivateUploadedModelExecutionJournalV1` is the runtime-owned durable
 outbox keyed by service and decryption request. It stores only the complete
 request fingerprint, canonical output manifest, receipt submission, and latest
 signed transaction; decrypted model, input, and output payloads are absent.
-The runtime durably writes `Prepared(0)` after output ingestion, then journals
-the exact validator-signed transaction before enqueue. Recovery verifies the
+The runtime durably enters the `Prepare` phase after output ingestion, then
+journals the exact validator-signed transaction for `Prepare` and `Receipt`
+before each enqueue. It first fsyncs the exact fee-quoted unsigned payload and
+increments the attempt, then invokes the qualified signer. An unsigned
+reservation recovered after a crash is conservatively consumed and replaced,
+never signed again, so randomized signers cannot escape the hard three-attempt
+cap through a sign-to-journal crash. Every produced signature therefore
+consumes one of exactly three attempts for its phase, including one that is
+immediately found too old to enqueue. A committed Prepare moves to the explicit
+internal `AwaitingDurability` phase while retaining the signed Prepare evidence;
+its HTTP projection deliberately has no transaction hash. Recovery verifies the
 output is still readable, reuses a pending transaction, replaces an expired
-transaction within the three-attempt bound, removes committed or
-authorization-expired entries, and retains terminal evidence for a permanently
-rejected transaction without re-executing.
+transaction within the bound, removes committed entries, removes an
+authorization-expired entry only before its claim is prepared, and retains
+terminal evidence for a permanently rejected transaction without re-executing.
+Malformed journal files are quarantined per entry so they cannot prevent later
+valid entries from reconciling. Exhausted attempts, another validator's winning
+claim, and a retry-stable incompatible output-pin collision are also retained as
+terminal evidence without degrading unrelated entries; exact replay returns
+HTTP `409 Conflict` unless the canonical receipt has since committed, in which
+case that authoritative `200 OK` result wins.
 
-The signed transaction contains one
-`RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction. Its authority
-must be the receipt's exact active public-lane validator attester. Consensus
-revalidates the finalized model, service revision, decryption authorization and
-audit event, authorization height, and input pin. It verifies that the
-canonical output manifest matches the receipt, then atomically registers or
-reuses the output pin and persists the validator receipt. Consensus assigns
-`emitted_sequence` and `emitted_block_height`; exact transaction replay is a
+The first transaction contains one
+`PrepareSoracloudPrivateUploadedModelExecution` instruction carrying the exact
+output `ManifestV1` and complete receipt submission. Consensus canonical-decodes
+the manifest, registers its paid pin when absent or accepts only the exact live
+existing pin, and persists the immutable authorization claim atomically while
+the decryption release and validator attester are active. An exact retry is a
+no-op; different evidence cannot reuse the service/decryption-request key. The
+permissionless registration approves a new pin and creates its deterministic
+automatic replication order in that same transaction; an existing pin must
+already be approved at the claim epoch. The runtime then waits for the exact
+`output_replication_order_id` to reach the configured provider quorum.
+Automatic replication order record
+epochs and provider payload timestamps are Unix seconds, and the governed
+24-hour ingestion deadline must fit within the pin retention horizon. Its ID is
+`BLAKE3("sorafs:auto-replication-order:v1" || manifest_digest)` with the high bit
+of byte zero set to reserve the automatic namespace; generic and Musubi-purpose
+orders must leave that bit clear. The automatic payload has the exact pin root
+and chunker, one immutable assignment per required replica, the fixed V1 SLA,
+and empty metadata. Missing eligible capacity fails pin registration or
+approval atomically, and an existing derived-ID record is never overwritten.
+An eligible provider declaration is exact-bound to its canonical payload and
+the consensus second when it was registered, remains active through the whole
+order deadline, matches the pin's explicit storage class and chunker profile,
+and commits enough profile capacity for the manifest's checked GiB ceiling.
+Completion authority cannot be revoked while an assigned pending order still
+needs that provider. A pending order observed after its deadline is terminally
+invalid rather than continuing to report an awaiting-quorum phase. Only then
+does the runtime submit the second transaction, which contains one
+`RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction. Both
+transactions use the receipt's exact public-lane validator attester as
+authority; active authorization and placement are checked when prepare freezes
+the claim, not recreated at receipt time.
+
+Prepare admission revalidates the finalized model, service revision,
+decryption authorization and audit event, authorization height, active
+validator placement, input pin, exact output manifest, and claim-time output
+retention. Receipt admission requires that exact prepared claim, the approved
+output pin, its canonical deterministic replication order, every assigned
+provider completion needed for the governed replica count, and at least 600
+seconds of post-receipt retention. Consensus
+rejects explicit early retirement of a committed private-output pin until its
+advertised retention epoch, so that admission-time promise remains enforceable.
+It copies `authorization_claim_block_height` and
+`authorization_claim_epoch` from the claim and assigns `emitted_sequence`,
+`emitted_block_height`, and `emitted_epoch`; exact transaction replay is a
 no-op, while different evidence cannot reuse a receipt id or consume the same
-service/decryption request. Both ledger coordinates use the complete unsigned
-64-bit range; Java and Kotlin expose them as `BigInteger` so no valid chain
-height or sequence is narrowed to a signed `long`.
+service/decryption request. All five ledger coordinates use the complete
+unsigned 64-bit range; Java and Kotlin expose them as `BigInteger` so no valid
+chain height, sequence, or consensus epoch is narrowed to a signed `long`.
 
-A fresh or durably recovered submission returns HTTP `202 Accepted` with
-`submission_status = "submitted"`, the signed transaction hash, receipt
-submission, and encrypted output reference. This is admission evidence, not
-commit evidence. Once the exact receipt is visible in world state, replaying
-the request returns HTTP `200 OK` with `submission_status = "committed"`, no
-transaction hash, and the ledger-owned receipt. Concurrent and pre-commit
-exact retries are coalesced without executing the released ciphertext twice.
+Snapshot restore requires capacity declarations, private-execution claims, pin
+manifests, and replication orders together. The signed snapshot authenticates
+the ledger-assigned coordinates and complete world state before decoding;
+historical epochs are not reconstructed from block bodies that may be absent in
+an audited hash-only prefix. Restore still revalidates every claim against its
+retained decryption-release height and timestamp and surrounding world state,
+and every committed receipt must match its claim byte-for-byte after clearing
+the five ledger-owned coordinates. Claim and receipt block heights must also
+fall within the snapshot's committed hash prefix; internally consistent
+future-height evidence is rejected. A retired model or input pin remains valid
+evidence only when its immutable approval epoch and retention horizon prove
+that it was already live and paid through the claim epoch. Every claim also
+requires its exact canonical output order, issued no later than the claim and
+not terminal before it, plus output retention through the order deadline and
+the 600-second receipt-recovery floor. Pin and order lifecycle epochs have
+one-second resolution, so a claim followed by retirement or cancellation later
+in the same epoch remains restorable. Restore rejects an approved pin without
+its one derived automatic order, an automatic order without its exact pin, or
+any claim, declaration, payload, assignment, timestamp, status, or completion
+projection that does not replay the same first-release invariants as live
+admission.
+
+A fresh or durably recovered request returns HTTP `202 Accepted` with one
+closed `submission_phase` value, the receipt submission, and the encrypted
+output reference. `awaiting_output_durability` has no transaction hash;
+`prepare_submitted` and `receipt_submitted` carry the exact current-phase
+transaction hash. These are progress evidence, not receipt-commit evidence.
+Once the exact receipt is visible in world state, replaying the request returns
+HTTP `200 OK` with `submission_phase = "committed"`, no transaction hash, and
+the ledger-owned receipt. Concurrent and pre-commit exact retries are
+coalesced without executing the released ciphertext twice. Pending response
+receipts keep all five ledger-owned coordinates at zero; the committed variant
+requires all five to be non-zero.
 
 The authenticated receipts route queries committed world state by optional
 `receipt_id`, `service_name`, `model_id`, and `weight_version`, with bounded or
@@ -253,8 +347,8 @@ Focused V1 coverage should include:
 
 - registration accepts an exact approved SoraFS pin and rejects missing,
   pending, retired, or mismatched pin metadata;
-- execute decoding requires explicit selector keys, the service version,
-  committed release id, rooted input artifact, and typed output recipient and
+- execute decoding requires the canonical model id, exact bundle root, service
+  version, committed release id, rooted input artifact, and typed output recipient and
   rejects caller-controlled plaintext, policy, host, output, and receipt
   claims;
 - authentication, exact service/model selection, release signer, audit
@@ -266,13 +360,15 @@ Focused V1 coverage should include:
 - encrypted output is durable before `Prepared(0)`, signed evidence is durable
   before enqueue, and restart recovery covers pending, unknown, expired,
   rejected, committed, and authorization-expired journal states;
-- the validator-signed instruction atomically registers the matching output
-  manifest and receipt, assigns sequence and block height, treats exact replay
-  idempotently, and rejects duplicate decryption-request or conflicting
-  receipt evidence;
-- HTTP behavior distinguishes `202 submitted` from `200 committed` replay,
-  coalesces concurrent and pre-commit retries, and exposes committed receipts
-  through authenticated filtered queries;
+- the validator-signed prepare phase atomically registers or exact-matches the
+  output manifest and freezes authorization, waits for its deterministic order
+  and exact replication quorum, and only then permits the receipt phase to copy
+  the claim coordinates and assign sequence, block height, and commit epoch;
+  exact replay is idempotent and duplicate decryption-request or conflicting
+  receipt evidence is rejected;
+- HTTP behavior reports the exact typed pending phase under `202` and
+  `committed` under `200`, coalesces concurrent and pre-commit retries, and
+  exposes committed receipts through authenticated filtered queries;
 - world state and the durable journal contain no model, input, or output
   plaintext;
 - production and non-production parsing accept only the exact opt-in

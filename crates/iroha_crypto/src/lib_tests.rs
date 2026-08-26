@@ -759,20 +759,20 @@ mod tests {
     }
     #[test]
     #[cfg(feature = "bls")]
-    fn bls_pop_hashes_match_legacy_contiguous_layout() {
+    fn bls_pop_hashes_match_reference_contiguous_layout() {
         let pk_bytes = [0x42; 96];
         let pop = [0xA5; 48];
-        let mut legacy_message = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
-        legacy_message.extend_from_slice(POP_DST.as_bytes());
-        legacy_message.extend_from_slice(&pk_bytes);
-        let expected_message_hash: [u8; Hash::LENGTH] = Hash::new(&legacy_message).into();
+        let mut reference_message = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
+        reference_message.extend_from_slice(POP_DST.as_bytes());
+        reference_message.extend_from_slice(&pk_bytes);
+        let expected_message_hash: [u8; Hash::LENGTH] = Hash::new(&reference_message).into();
         assert_eq!(bls_pop_message_hash(&pk_bytes), expected_message_hash);
-        let mut legacy_cache_key = Vec::with_capacity(pk_bytes.len() + pop.len());
-        legacy_cache_key.extend_from_slice(&pk_bytes);
-        legacy_cache_key.extend_from_slice(&pop);
+        let mut reference_cache_key = Vec::with_capacity(pk_bytes.len() + pop.len());
+        reference_cache_key.extend_from_slice(&pk_bytes);
+        reference_cache_key.extend_from_slice(&pop);
         assert_eq!(
             bls_pop_cache_key(&pk_bytes, &pop),
-            Hash::new(&legacy_cache_key)
+            Hash::new(&reference_cache_key)
         );
     }
     #[test]
@@ -867,7 +867,7 @@ mod tests {
         let mut unhashed_msg = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
         unhashed_msg.extend_from_slice(POP_DST.as_bytes());
         unhashed_msg.extend_from_slice(pk_bytes);
-        let pop = signature::bls::BlsNormal::sign(
+        let pop = signature::bls::BlsNormal::try_sign(
             &unhashed_msg,
             match kp.private_key().0.expose_secret() {
                 PrivateKeyInner::BlsNormal(sk) => sk,
@@ -979,13 +979,13 @@ mod tests {
     #[test]
     #[cfg(all(feature = "bls", feature = "rand"))]
     fn bls_normal_multi_message_duplicates_are_rejected() {
-        let (pk1, sk1) =
-            signature::bls::BlsNormal::keypair(super::KeyGenOption::Random).expect("BLS keypair");
-        let (pk2, sk2) =
-            signature::bls::BlsNormal::keypair(super::KeyGenOption::Random).expect("BLS keypair");
+        let (pk1, sk1) = signature::bls::BlsNormal::try_keypair(super::KeyGenOption::Random)
+            .expect("BLS keypair");
+        let (pk2, sk2) = signature::bls::BlsNormal::try_keypair(super::KeyGenOption::Random)
+            .expect("BLS keypair");
         let message = b"duplicate-multi-msg".to_vec();
-        let sig1 = signature::bls::BlsNormal::sign(&message, &sk1).expect("BLS sign");
-        let sig2 = signature::bls::BlsNormal::sign(&message, &sk2).expect("BLS sign");
+        let sig1 = signature::bls::BlsNormal::try_sign(&message, &sk1).expect("BLS sign");
+        let sig2 = signature::bls::BlsNormal::try_sign(&message, &sk2).expect("BLS sign");
         let pk1_bytes = pk1.to_bytes();
         let pk2_bytes = pk2.to_bytes();
         let msgs: Vec<&[u8]> = vec![message.as_slice(), message.as_slice()];
@@ -1003,13 +1003,13 @@ mod tests {
     #[test]
     #[cfg(all(feature = "bls", feature = "rand"))]
     fn bls_small_multi_message_duplicates_are_rejected() {
-        let (pk1, sk1) =
-            signature::bls::BlsSmall::keypair(super::KeyGenOption::Random).expect("BLS keypair");
-        let (pk2, sk2) =
-            signature::bls::BlsSmall::keypair(super::KeyGenOption::Random).expect("BLS keypair");
+        let (pk1, sk1) = signature::bls::BlsSmall::try_keypair(super::KeyGenOption::Random)
+            .expect("BLS keypair");
+        let (pk2, sk2) = signature::bls::BlsSmall::try_keypair(super::KeyGenOption::Random)
+            .expect("BLS keypair");
         let message = b"duplicate-multi-msg-small".to_vec();
-        let sig1 = signature::bls::BlsSmall::sign(&message, &sk1).expect("BLS sign");
-        let sig2 = signature::bls::BlsSmall::sign(&message, &sk2).expect("BLS sign");
+        let sig1 = signature::bls::BlsSmall::try_sign(&message, &sk1).expect("BLS sign");
+        let sig2 = signature::bls::BlsSmall::try_sign(&message, &sk2).expect("BLS sign");
         let pk1_bytes = pk1.to_bytes();
         let pk2_bytes = pk2.to_bytes();
         let msgs: Vec<&[u8]> = vec![message.as_slice(), message.as_slice()];
@@ -1071,20 +1071,12 @@ mod tests {
         for algorithm in [Algorithm::Ed25519, Algorithm::Secp256k1, Algorithm::MlDsa] {
             assert_eq!(public_key_validation_heap_units_for_decode(algorithm), 0);
         }
-        #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-        for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
-            assert_eq!(public_key_validation_heap_units_for_decode(algorithm), 0);
-        }
     }
 
-    #[cfg(any(
-        all(feature = "bls", not(feature = "bls-backend-blstrs")),
-        feature = "gost",
-        feature = "sm"
-    ))]
+    #[cfg(any(feature = "bls", feature = "gost", feature = "sm"))]
     #[test]
     fn allocating_public_key_decode_fallbacks_keep_explicit_heap_units() {
-        #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+        #[cfg(feature = "bls")]
         for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
             assert_eq!(public_key_validation_heap_units_for_decode(algorithm), 2);
         }
@@ -1181,7 +1173,6 @@ mod tests {
         assert_eq!(parsed_prefixed, exposed);
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn exposed_private_key_explicit_exports_roundtrip_and_debug_is_redacted() {
         let (_, private_key) = KeyPair::try_from_seed(vec![0x55; 32], Algorithm::Ed25519)
             .expect("checked Ed25519 seeded keypair")
@@ -1224,7 +1215,6 @@ mod tests {
         assert!(!debug.contains(&payload_hex));
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn public_key_compact_roundtrip_via_canonical_decode() {
         let pk: PublicKey =
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
@@ -1241,7 +1231,6 @@ mod tests {
         assert_eq!(from_decoded, from_original);
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn public_key_encoded_len_exact_matches_norito() {
         let pk: PublicKey =
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
@@ -1257,7 +1246,7 @@ mod tests {
         );
     }
     #[test]
-    #[cfg(all(not(feature = "ffi_import"), feature = "pqc"))]
+    #[cfg(feature = "pqc")]
     fn mldsa_decode_and_structural_encoders_avoid_full_key_reparse() {
         let public_key = checked_seed_keypair(&[0x5A; 32], Algorithm::MlDsa)
             .public_key()
@@ -1333,7 +1322,6 @@ mod tests {
         );
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn public_key_compact_try_deserialize_rejects_invalid_payload() {
         let compact = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
         let (payload, flags) =
@@ -1347,7 +1335,6 @@ mod tests {
         assert!(matches!(err, norito::core::Error::Message(_)));
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn public_key_compact_decode_from_slice_rejects_invalid_payload() {
         let compact = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
         let mut payload = Vec::new();
@@ -1358,7 +1345,6 @@ mod tests {
         assert!(matches!(err, norito::core::Error::Message(_)));
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn public_key_compact_serialize_rejects_malformed_envelope() {
         let compact = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
         let mut encoded = Vec::new();
@@ -1473,8 +1459,8 @@ mod tests {
         }
     }
     #[test]
-    #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-    fn public_key_full_try_payload_borrows_blstrs_bls_payloads() {
+    #[cfg(feature = "bls")]
+    fn public_key_full_try_payload_borrows_bls_payloads() {
         for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
             let public_key = checked_seed_keypair(&[0x42; 32], algorithm)
                 .public_key()
@@ -1488,27 +1474,7 @@ mod tests {
                 .expect("validated BLS public key payload is encodable")
             {
                 Cow::Borrowed(canonical_payload) => assert_eq!(canonical_payload, payload),
-                Cow::Owned(_) => panic!("blstrs BLS full public key payload should borrow"),
-            }
-        }
-    }
-    #[test]
-    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
-    fn public_key_full_try_payload_borrows_w3f_bls_payloads() {
-        for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
-            let public_key = checked_seed_keypair(&[0x42; 32], algorithm)
-                .public_key()
-                .clone();
-            let (algorithm, payload) = public_key
-                .try_to_bytes()
-                .expect("generated BLS public key must be well-formed");
-            let full = PublicKeyFull::from_bytes(algorithm, payload).expect("full key parses");
-            match full
-                .try_payload()
-                .expect("validated BLS public key payload is encodable")
-            {
-                Cow::Borrowed(canonical_payload) => assert_eq!(canonical_payload, payload),
-                Cow::Owned(_) => panic!("w3f BLS full public key payload should borrow"),
+                Cow::Owned(_) => panic!("BLS full public key payload should borrow"),
             }
         }
     }
@@ -1527,7 +1493,6 @@ mod tests {
         );
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn public_key_try_deserialize_rejects_invalid_payload() {
         let bogus = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
         let (payload, flags) =
@@ -1540,7 +1505,6 @@ mod tests {
         assert!(matches!(err, norito::core::Error::Message(_)));
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn public_key_norito_serialize_rejects_malformed_envelope() {
         let malformed = PublicKey(PublicKeyCompact::new(Algorithm::Ed25519, &[]));
         let mut encoded = Vec::new();
@@ -1575,7 +1539,6 @@ mod tests {
             .expect_err("invalid compact algorithm tag must fail closed");
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn public_key_hash_and_ord_handle_malformed_compact_state_without_panic() {
         let valid = checked_seed_keypair(&[0x42; 32], Algorithm::Ed25519)
             .public_key()
@@ -1603,7 +1566,6 @@ mod tests {
         assert!(valid < missing_tag);
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn public_key_fallible_string_encoders_reject_malformed_envelopes_without_panic() {
         let missing_tag = PublicKey(PublicKeyCompact {
             algorithm_and_payload: ConstVec::new(Vec::new()),
@@ -1628,7 +1590,6 @@ mod tests {
             .expect_err("above-protocol payload must not format as prefixed multihash");
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn public_key_infallible_formatters_handle_malformed_compact_state_without_panic() {
         let missing_tag = PublicKey(PublicKeyCompact {
             algorithm_and_payload: ConstVec::new(Vec::new()),
@@ -1711,7 +1672,6 @@ mod tests {
         }
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn display_public_key() {
         assert_eq!(
             format!(
@@ -1759,13 +1719,11 @@ mod tests {
             );
         }
     }
-    #[cfg(not(feature = "ffi_import"))]
     #[derive(Debug, PartialEq)]
     struct TestJson {
         public_key: PublicKey,
         private_key: ExposedPrivateKey,
     }
-    #[cfg(not(feature = "ffi_import"))]
     impl norito::json::JsonSerialize for TestJson {
         fn json_serialize(&self, out: &mut String) {
             use norito::json::{self, Map, Value};
@@ -1781,7 +1739,6 @@ mod tests {
             norito::json::JsonSerialize::json_serialize(&Value::Object(map), out);
         }
     }
-    #[cfg(not(feature = "ffi_import"))]
     impl norito::json::JsonDeserialize for TestJson {
         fn json_deserialize(
             parser: &mut norito::json::Parser<'_>,
@@ -1830,7 +1787,6 @@ mod tests {
         };
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn serde_keys_ed25519() {
         assert_test_json_serde!(
             norito::json!({
@@ -1854,7 +1810,6 @@ mod tests {
         );
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn serde_keys_secp256k1() {
         assert_test_json_serde!(
             norito::json!({
@@ -1877,7 +1832,6 @@ mod tests {
             }
         );
     }
-    #[cfg(not(feature = "ffi_import"))]
     fn assert_bounded_public_key_json(literal: &str, key: &PublicKey) {
         let encoded = format!("\"{literal}\"");
         assert_eq!(
@@ -1912,7 +1866,6 @@ mod tests {
         assert!(usage.total_allocated_bytes() < exact);
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn public_key_bounded_json_is_direct_and_measured() {
         let ed_literal = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
         let ed: PublicKey = ed_literal.parse().expect("Ed25519 fixture");
@@ -1923,7 +1876,6 @@ mod tests {
         assert_bounded_public_key_json(secp_literal, &secp);
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn public_key_value_and_map_key_decoders_do_not_stage_json_text() {
         use norito::json::JsonDeserialize as _;
 
@@ -1952,7 +1904,6 @@ mod tests {
         assert_eq!(usage.total_allocated_bytes(), payload_bytes + 1);
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn public_key_json_rejects_above_protocol_literal_before_hex_decode() {
         let encoded = format!(
             "\"{}\"",
@@ -1965,7 +1916,6 @@ mod tests {
         );
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn fromstr_accepts_algo_prefixed_public_key() {
         // Ed25519 example from existing tests
         let mh_hex = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
@@ -1975,7 +1925,6 @@ mod tests {
         assert_eq!(pk1, pk2);
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn fromstr_accepts_algo_prefixed_private_key() {
         // Ed25519 example from existing tests
         let mh_hex = "8026203A7991AF1ABB77F3FD27CC148404A6AE4439D095A63591B77C788D53F708A02A";
@@ -1994,7 +1943,6 @@ mod tests {
         assert_eq!(format!("{private:?}"), "FromPrivateKey([REDACTED])");
     }
     #[test]
-    #[cfg(not(feature = "ffi_import"))]
     fn prefixed_mismatch_is_error() {
         // Public key: try wrong prefix
         let mh_hex = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
@@ -2007,7 +1955,7 @@ mod tests {
         assert!(wrong_sk.parse::<PrivateKey>().is_err());
     }
     #[test]
-    #[cfg(all(feature = "bls", not(feature = "ffi_import")))]
+    #[cfg(feature = "bls")]
     fn serde_keys_bls() {
         assert_test_json_serde!(
             norito::json!({

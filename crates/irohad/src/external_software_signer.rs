@@ -11,6 +11,8 @@
 //! Torii or runtime-provider registry interfaces.
 #[cfg(unix)]
 mod adapter;
+#[cfg(unix)]
+mod consensus_threshold;
 mod envelope;
 #[cfg(unix)]
 mod journal;
@@ -29,6 +31,15 @@ mod unix;
 pub use adapter::{
     ExternalSoftwareSignerAdapterErrorV1, ExternalSoftwareSignerNativeAdapterV1,
     ExternalSoftwareSignerNativeBackendsV1,
+};
+#[cfg(unix)]
+pub use consensus_threshold::{
+    GLOBAL_BEACON_PARTIAL_SIGNER_CREDENTIAL_NAME_V1,
+    PARLIAMENT_TLE_PARTIAL_RELEASE_SIGNER_CREDENTIAL_NAME_V1,
+    RuntimeConsensusThresholdSignerBackendsV1, RuntimeConsensusThresholdSignerCredentialErrorV1,
+    RuntimeGlobalBeaconShareProvisioningV1, RuntimeParliamentTleShareProvisioningV1,
+    encode_global_beacon_partial_signer_credential_v1,
+    encode_parliament_tle_partial_release_signer_credential_v1,
 };
 pub use envelope::{
     SoftwareSignerEnvelopeErrorV1, SoftwareSignerKeyEnvelopeV1, SoftwareSignerWrappingKeyV1,

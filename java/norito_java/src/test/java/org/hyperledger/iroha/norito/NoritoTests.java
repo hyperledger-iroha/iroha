@@ -40,7 +40,7 @@ public final class NoritoTests {
     testResult();
     testTryDecode();
     testTryDecodeSurfacesStructErrors();
-    testArchiveViewFlagsHint();
+    testArchiveViewFlags();
     testChecksumMismatch();
     testStructAdapter();
     testMapAdapter();
@@ -57,7 +57,7 @@ public final class NoritoTests {
     testDecodeAdaptiveRespectsGuard();
     testDecodeAdaptiveInstallsRootPayload();
     testEffectiveDecodeFlagsDefaultState();
-    testEffectiveDecodeFlagsGuardHint();
+    testEffectiveDecodeFlagsGuard();
     testEffectiveDecodeFlagsHeaderContext();
     testHeaderFlagsOverrideDecodeGuard();
     testEffectiveDecodeFlagsAdaptiveContext();
@@ -380,7 +380,7 @@ public final class NoritoTests {
         0x02, 0x00, 0x00, 0x00
     };
     assert Arrays.equals(encoded, expected) : "sequence encoding mismatch";
-    NoritoDecoder decoder = new NoritoDecoder(encoded, encoding.flags(), NoritoHeader.MINOR_VERSION);
+    NoritoDecoder decoder = new NoritoDecoder(encoded, encoding.flags());
     List<Long> decoded = adapter.decode(decoder);
     assert decoded.equals(values) : "sequence roundtrip mismatch";
     assert decoder.remaining() == 0 : "sequence decoder should consume payload";
@@ -397,7 +397,7 @@ public final class NoritoTests {
         0x01, 0x02
     };
     assert Arrays.equals(encoded, expected) : "byte vec encoding mismatch";
-    NoritoDecoder decoder = new NoritoDecoder(encoded, encoding.flags(), NoritoHeader.MINOR_VERSION);
+    NoritoDecoder decoder = new NoritoDecoder(encoded, encoding.flags());
     byte[] decoded = adapter.decode(decoder);
     assert Arrays.equals(decoded, value) : "byte vec roundtrip mismatch";
     assert decoder.remaining() == 0 : "decoder should consume payload";
@@ -418,7 +418,7 @@ public final class NoritoTests {
         0x05, (byte) 0xFF
     };
     assert Arrays.equals(encoded, expected) : "packed byte vec encoding mismatch";
-    NoritoDecoder decoder = new NoritoDecoder(encoded, flags, NoritoHeader.MINOR_VERSION);
+    NoritoDecoder decoder = new NoritoDecoder(encoded, flags);
     byte[] decoded = adapter.decode(decoder);
     assert Arrays.equals(decoded, value) : "packed byte vec roundtrip mismatch";
     assert decoder.remaining() == 0 : "decoder should consume packed payload";
@@ -434,7 +434,7 @@ public final class NoritoTests {
         0x05, (byte) 0xFF
     };
     assert Arrays.equals(encoded, expected) : "raw byte vec encoding mismatch";
-    NoritoDecoder decoder = new NoritoDecoder(encoded, encoding.flags(), NoritoHeader.MINOR_VERSION);
+    NoritoDecoder decoder = new NoritoDecoder(encoded, encoding.flags());
     byte[] decoded = adapter.decode(decoder);
     assert Arrays.equals(decoded, value) : "raw byte vec roundtrip mismatch";
     assert decoder.remaining() == 0 : "decoder should consume raw payload";
@@ -448,7 +448,7 @@ public final class NoritoTests {
     System.arraycopy(tail, 0, payload, len.length, tail.length);
 
     int flags = NoritoHeader.PACKED_SEQ;
-    NoritoDecoder decoder = new NoritoDecoder(payload, flags, NoritoHeader.MINOR_VERSION);
+    NoritoDecoder decoder = new NoritoDecoder(payload, flags);
     TypeAdapter<List<byte[]>> adapter = NoritoAdapters.sequence(NoritoAdapters.bytesAdapter());
     List<byte[]> decoded = adapter.decode(decoder);
     assert decoded.isEmpty() : "Expected empty sequence";
@@ -465,7 +465,7 @@ public final class NoritoTests {
     System.arraycopy(trailing, 0, payload, len.length + tail.length, trailing.length);
 
     int flags = NoritoHeader.PACKED_SEQ;
-    NoritoDecoder decoder = new NoritoDecoder(payload, flags, NoritoHeader.MINOR_VERSION);
+    NoritoDecoder decoder = new NoritoDecoder(payload, flags);
     TypeAdapter<List<byte[]>> adapter = NoritoAdapters.sequence(NoritoAdapters.bytesAdapter());
     List<byte[]> decoded = adapter.decode(decoder);
     assert decoded.isEmpty() : "Expected empty sequence";
@@ -557,14 +557,13 @@ public final class NoritoTests {
     }
   }
 
-  private static void testArchiveViewFlagsHint() {
+  private static void testArchiveViewFlags() {
     TypeAdapter<List<Long>> adapter = NoritoAdapters.sequence(NoritoAdapters.uint(32));
     List<Long> value = List.of(10L, 20L, 30L);
     String schema = "iroha.test.View";
     byte[] encoded = NoritoCodec.encode(value, schema, adapter);
     NoritoCodec.ArchiveView view = NoritoCodec.fromBytesView(encoded, schema);
     assert view.flags() == NoritoCodec.DEFAULT_FLAGS : "Archive flags mismatch";
-    assert view.flagsHint() == NoritoHeader.MINOR_VERSION : "Archive flags hint mismatch";
     byte[] expectedPayload =
         Arrays.copyOfRange(encoded, NoritoHeader.HEADER_LENGTH, encoded.length);
     assert Arrays.equals(expectedPayload, view.asBytes()) : "Archive payload slice mismatch";
@@ -995,7 +994,7 @@ public final class NoritoTests {
     NoritoCodec.AdaptiveEncoding encoding =
         NoritoCodec.encodeWithHeaderFlags(99L, NoritoAdapters.uint(32));
     try (NoritoCodec.DecodeFlagsGuard guard =
-        NoritoCodec.DecodeFlagsGuard.enterWithHint(encoding.flags(), encoding.flags())) {
+        NoritoCodec.DecodeFlagsGuard.enter(encoding.flags())) {
       long decoded = NoritoCodec.decodeAdaptive(encoding.payload(), adapter);
       assert decoded == 99L : "Root-aware decode mismatch";
     }
@@ -1008,10 +1007,9 @@ public final class NoritoTests {
     assert NoritoCodec.effectiveDecodeFlags() == null : "Expected no effective decode flags";
   }
 
-  private static void testEffectiveDecodeFlagsGuardHint() {
+  private static void testEffectiveDecodeFlagsGuard() {
     NoritoCodec.resetDecodeState();
-    try (NoritoCodec.DecodeFlagsGuard guard =
-        NoritoCodec.DecodeFlagsGuard.enterWithHint(0x12, 0x34)) {
+    try (NoritoCodec.DecodeFlagsGuard guard = NoritoCodec.DecodeFlagsGuard.enter(0x12)) {
       Integer effective = NoritoCodec.effectiveDecodeFlags();
       assert effective != null;
       assert effective == 0x12 : "Guard effective flags mismatch";
@@ -1072,7 +1070,7 @@ public final class NoritoTests {
     assert header.flags() == 0x27 : "Unexpected layout flags";
     assert header.payloadLength() == payload.length : "Payload length mismatch";
     assert header.checksum() == 0xEC51B641A06EA396L : "Checksum mismatch";
-    NoritoDecoder decoder = new NoritoDecoder(payload, header.flags(), NoritoHeader.MINOR_VERSION);
+    NoritoDecoder decoder = new NoritoDecoder(payload, header.flags());
     TypeAdapter<String> adapter = NoritoAdapters.stringAdapter();
     String value = adapter.decode(decoder);
     assert decoder.remaining() == 0 : "Trailing bytes after decode";
@@ -1389,7 +1387,7 @@ public final class NoritoTests {
       byte[] root = NoritoCodec.payloadRootBytes();
       assert root != null : "Expected root payload during decode";
       NoritoDecoder rootDecoder =
-          new NoritoDecoder(root, decoder.flags(), decoder.flagsHint());
+          new NoritoDecoder(root, decoder.flags());
       long rootValue = inner.decode(rootDecoder);
       long actual = inner.decode(decoder);
       assert rootValue == actual : "Root payload mismatch";

@@ -1406,10 +1406,7 @@ impl SoraHttpServiceEconomicsV1 {
         for (field, value) in [
             ("deployment_deposit", &self.deployment_deposit),
             ("prepaid_runtime_balance", &self.prepaid_runtime_balance),
-            (
-                "runtime_price_per_block",
-                &self.runtime_price_per_block,
-            ),
+            ("runtime_price_per_block", &self.runtime_price_per_block),
             (
                 "storage_price_per_gib_block",
                 &self.storage_price_per_gib_block,
@@ -1448,8 +1445,15 @@ pub enum SoraServiceLeaseStatusV1 {
 /// This consensus constant bounds world-state and Norito growth under repeated
 /// revision rollout or validator churn. Once the bound is reached, the exact
 /// newly assigned reporter may advance the reporting epoch only after every
-/// prior checkpoint is terminal and no prior reporter remains actively placed.
+/// prior checkpoint is explicitly terminal and no prior reporter remains
+/// actively placed.
 pub const SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1: usize = 4_096;
+/// Maximum egress-byte increase one reporter may submit per elapsed consensus block.
+///
+/// Live execution and snapshot replay share this consensus bound so a persisted
+/// usage transition is accepted under exactly the same rate limit that admitted
+/// it originally.
+pub const SORA_SERVICE_LEASE_MAX_EGRESS_BYTES_PER_REPORTER_BLOCK_V1: u64 = 1024 * 1024 * 1024;
 /// Immutable placement evidence bound to one admitted egress reporter.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1504,11 +1508,11 @@ pub struct SoraServiceLeaseEgressCheckpointV1 {
     pub last_updated_height: u64,
     /// Whether this reporter identity has submitted its terminal checkpoint.
     ///
-    /// An identical active placement may reopen the checkpoint before serving
-    /// again. A former reporter may only replay the exact terminal value.
+    /// An identical active placement may reopen the checkpoint at exactly this
+    /// terminal byte value before serving again, then resume monotonic reports.
+    /// A former reporter may submit one final monotonic increase; once terminal,
+    /// only an exact replay is idempotent.
     pub finalize_reporter: bool,
-    /// Whether consensus force-finalized an idle reporter after the protocol grace.
-    pub forced_finalization: bool,
 }
 /// Exact input accepted for one hosted-service egress checkpoint transition.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -1567,8 +1571,6 @@ pub struct SoraServiceLeaseReportingEpochRolloverV1 {
     pub replica_slot: u16,
     /// Number of terminal prior-epoch checkpoints folded into settlement.
     pub finalized_checkpoint_count: u32,
-    /// Number of idle prior-epoch checkpoints force-finalized during rollover.
-    pub forced_finalized_checkpoint_count: u32,
     /// Exact prior-epoch bytes added to the settlement baseline.
     pub settled_egress_bytes_delta: u128,
     /// Exact cumulative settled bytes after the rollover.
@@ -1621,13 +1623,6 @@ impl SoraServiceLeaseReportingEpochRolloverV1 {
                 "sora service lease reporting epoch rollover",
                 "finalized_checkpoint_count",
                 "must equal the reporting-epoch checkpoint limit",
-            ));
-        }
-        if self.forced_finalized_checkpoint_count > self.finalized_checkpoint_count {
-            return Err(invalid_field(
-                "sora service lease reporting epoch rollover",
-                "forced_finalized_checkpoint_count",
-                "must not exceed finalized_checkpoint_count",
             ));
         }
         if self
@@ -1723,10 +1718,7 @@ impl SoraServiceLeaseStateV1 {
         validate_nonblank_field("sora service lease state", "quota_class", &self.quota_class)?;
         for (field, value) in [
             ("deployment_deposit", &self.deployment_deposit),
-            (
-                "runtime_price_per_block",
-                &self.runtime_price_per_block,
-            ),
+            ("runtime_price_per_block", &self.runtime_price_per_block),
             (
                 "storage_price_per_gib_block",
                 &self.storage_price_per_gib_block,
@@ -1786,13 +1778,6 @@ impl SoraServiceLeaseStateV1 {
                     "sora service lease state",
                     "egress_reporter_checkpoints",
                     "last_updated_height must be greater than zero",
-                ));
-            }
-            if checkpoint.forced_finalization && !checkpoint.finalize_reporter {
-                return Err(invalid_field(
-                    "sora service lease state",
-                    "egress_reporter_checkpoints",
-                    "forced_finalization requires a terminal checkpoint",
                 ));
             }
         }
@@ -1925,9 +1910,7 @@ impl SoraServiceLeaseStateV1 {
 }
 /// Derive the domain-separated commitment to a complete hosted-service lease state.
 #[must_use]
-pub fn derive_soracloud_service_lease_commitment_v1(
-    lease: &SoraServiceLeaseStateV1,
-) -> Hash {
+pub fn derive_soracloud_service_lease_commitment_v1(lease: &SoraServiceLeaseStateV1) -> Hash {
     let mut transcript = "soracloud:service-lease-state:v1".encode();
     transcript.extend(lease.encode());
     Hash::new(transcript)
@@ -1955,9 +1938,6 @@ pub struct SoraServiceLeaseVolumeStateV1 {
     pub lease_expires_height: u64,
     /// Monotonic platform-side generation for the authoritative binding.
     pub authoritative_generation: u64,
-    /// Latest sequence that materialized this binding on a host, when known.
-    #[norito(required)]
-    pub last_materialized_sequence: Option<u64>,
 }
 impl SoraServiceLeaseVolumeStateV1 {
     /// Validate authoritative leased-volume metadata.
@@ -2001,16 +1981,6 @@ impl SoraServiceLeaseVolumeStateV1 {
                 "sora service lease volume state",
                 "lease_expires_height",
                 "must be greater than lease_started_height",
-            ));
-        }
-        if self
-            .last_materialized_sequence
-            .is_some_and(|sequence| sequence == 0)
-        {
-            return Err(invalid_field(
-                "sora service lease volume state",
-                "last_materialized_sequence",
-                "must be greater than zero when provided",
             ));
         }
         Ok(())
@@ -2523,7 +2493,7 @@ impl SoraServiceManifestV1 {
                         manifest: "sora service manifest",
                         field: "economics.prepaid_runtime_balance",
                         reason: format!(
-                            "must cover at least one billed runtime+storage sequence ({minimum_prepaid})"
+                            "must cover at least one billed runtime+storage block ({minimum_prepaid})"
                         ),
                     });
                 }

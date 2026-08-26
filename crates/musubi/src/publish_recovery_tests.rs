@@ -2046,7 +2046,7 @@ fn replication_requires_three_exact_finalized_providers() {
     ));
     let mut renewed_registration = registration.clone();
     renewed_registration.intent.pin_manifest = ManifestDigest::new([0xD1; 32]);
-    renewed_registration.intent.replication_order = ReplicationOrderId::new([0xD2; 32]);
+    renewed_registration.intent.replication_order = ReplicationOrderId::new([0x52; 32]);
     renewed_registration.intent.renew_after_epoch = 15;
     renewed_registration.intent.expires_at_epoch = 30;
     let mut renewed = location(&request, &renewed_registration, 3);

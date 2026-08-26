@@ -838,11 +838,11 @@ private func encodeChargeLimit(_ value: FeeChargeLimit, compact: Bool) throws ->
 private func encodeFixedBytes(_ bytes: Data, compact: Bool) -> Data {
     if compact {
         var writer = CompactNoritoWriter()
-        for byte in bytes { writer.writeLength(1); writer.writeUInt8(byte) }
+        writer.writeByteFields(bytes)
         return writer.data
     }
     var writer = CanonicalNoritoWriter()
-    for byte in bytes { writer.writeLength(1); writer.writeUInt8(byte) }
+    writer.writeByteFields(bytes)
     return writer.data
 }
 

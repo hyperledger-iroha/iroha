@@ -29,10 +29,9 @@
   instruction deframing; bundled-only streaming defaults). Java bindings
   continue to use the canonical encoder/decoder paths with no API changes, and
   parity was revalidated for the stricter framing.
-- Added `NoritoCodec.fromBytesView`/`ArchiveView` to expose header flags and
-  minor hints (v1 minor fixed to `0x00`), aligning with the Rust
-  `ArchiveView::flags*` helpers and rejecting unsupported minor versions when
-  deframing.
+- Added `NoritoCodec.fromBytesView`/`ArchiveView` to expose the authoritative
+  header flags, aligning with Rust while strictly requiring the fixed V1 minor
+  byte (`0x00`) during deframing.
 - Added enum/discriminant NCB/AoS columnar helpers for `(u64, enum(Name|Code), bool)`
   rows, matching the Rust/Python descriptors and current AoS layout.
 - Enabled Maven/Gradle publishing via `maven-publish` with coordinates

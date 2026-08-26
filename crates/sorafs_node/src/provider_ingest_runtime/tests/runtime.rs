@@ -447,6 +447,21 @@ fn finalized_cursor_and_order_lifecycle_fail_closed_on_substitution() {
         ),
         Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
     ));
+    let mut decreasing_completion_epochs = fixture_row(0x39);
+    decreasing_completion_epochs.order.provider_completions = vec![
+        completion_record(ProviderId::new(LOCAL_PROVIDER), account(8), 8),
+        completion_record(ProviderId::new(SOURCE_PROVIDER), account(9), 7),
+    ];
+    decreasing_completion_epochs.order.status = ReplicationOrderStatus::Completed(7);
+    assert!(matches!(
+        validate_assignment(
+            &decreasing_completion_epochs,
+            cursor(8),
+            LOCAL_PROVIDER,
+            runtime_policy(),
+        ),
+        Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding)
+    ));
 }
 #[test]
 fn finalized_claim_factory_and_runtime_reject_musubi_binding_substitution() {
@@ -1193,7 +1208,7 @@ fn verified_musubi_receipt_rejects_archive_identity_substitution() {
         ..
     } = verified_attestation_bundle_fixture(0xD7);
     let binding = MusubiReplicationOrderArchiveBindingV1::new(
-        ReplicationOrderId::new([0xAD; 32]),
+        ReplicationOrderId::new([0x2D; 32]),
         commitment.archive_id(),
         commitment,
     );
@@ -2319,7 +2334,8 @@ async fn finalized_expiry_cancels_retained_work_without_fetching() {
     let authorization = validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy())
         .unwrap()
         .authorization;
-    row.order.status = ReplicationOrderStatus::Expired(8);
+    row.pin.manifest.retire(21, None);
+    row.order.status = ReplicationOrderStatus::Expired(21);
     let (mut runtime, _, fetch, ingress) = test_runtime(
         row,
         false,
@@ -2335,6 +2351,33 @@ async fn finalized_expiry_cancels_retained_work_without_fetching() {
         runtime.outbox.status(ingress.job_id).unwrap().state,
         ProviderIngestDeliveryStateV1::Cancelled {
             reason: ProviderIngestCancellationReasonV1::OrderExpired,
+            ..
+        }
+    ));
+}
+#[tokio::test]
+async fn finalized_order_cancellation_closes_retained_work_without_fetching() {
+    let mut row = fixture_row(0x38);
+    let authorization = validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy())
+        .unwrap()
+        .authorization;
+    row.pin.manifest.retire(8, None);
+    row.order.status = ReplicationOrderStatus::Cancelled(8);
+    let (mut runtime, _, fetch, ingress) = test_runtime(
+        row,
+        false,
+        Ok(vec![0xA5]),
+        0,
+        ProviderIngestIngressDispositionV1::Submitted,
+        false,
+    );
+    assert_eq!(authorization.job_id(), ingress.job_id);
+    runtime.tick().await.expect("cancellation tick");
+    assert_eq!(fetch.calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        runtime.outbox.status(ingress.job_id).unwrap().state,
+        ProviderIngestDeliveryStateV1::Cancelled {
+            reason: ProviderIngestCancellationReasonV1::ManifestRetired,
             ..
         }
     ));

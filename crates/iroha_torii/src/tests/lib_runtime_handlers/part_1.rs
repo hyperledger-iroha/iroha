@@ -2208,8 +2208,20 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
         None,
         routing::MaybeTelemetry::disabled(),
     );
-    assert_eq!(torii.tx_rate_per_authority_per_sec.unwrap().get(), 123);
-    assert_eq!(torii.tx_burst_per_authority.unwrap().get(), 456);
+    assert!(
+        torii
+            .tx_rate_limiter
+            .allow_cost("configured-tx-rate", 456)
+            .await,
+        "configured burst must admit its full initial capacity"
+    );
+    assert!(
+        !torii
+            .tx_rate_limiter
+            .allow_cost("configured-tx-rate", 456)
+            .await,
+        "configured limiter must reject another full burst immediately"
+    );
     assert_eq!(torii.high_load_tx_threshold, 50);
 }
 #[cfg(feature = "app_api")]

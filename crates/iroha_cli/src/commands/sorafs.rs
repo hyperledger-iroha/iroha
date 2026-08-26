@@ -23,8 +23,8 @@ use iroha::{
         SorafsModerationQuarantineReviewRequest, SorafsModerationScreeningResultRequest,
         SorafsModerationScreeningResultsFilter, SorafsPinAlias, SorafsPinFinalizedAnchor,
         SorafsPinListFilter, SorafsPinRegisterArgs, SorafsRepairFinalizedAnchor,
-        SorafsRepairTasksFilter, SorafsReplicationListFilter, SorafsTokenOverrides,
-        SorafsTransparencyReadbackFilter,
+        SorafsRepairTasksFilter, SorafsReplicationListFilter, SorafsReplicationStatus,
+        SorafsTokenOverrides, SorafsTransparencyReadbackFilter,
     },
     http::{Response, StatusCode},
 };
@@ -12937,7 +12937,7 @@ pub struct PinListArgs {
     /// Maximum canonical encoded page bytes (1024 through 262144).
     #[arg(long)]
     pub max_bytes: Option<u32>,
-    /// Canonical lowercase exclusive manifest-digest cursor.
+    /// Exact non-zero lowercase 32-byte exclusive manifest-digest cursor.
     #[arg(long, value_name = "HEX")]
     pub after_digest_hex: Option<String>,
     /// Non-zero finalized block height anchoring this page.
@@ -12978,6 +12978,11 @@ impl PinListArgs {
         C: RunContext,
         F: FnOnce(&Client, &SorafsPinListFilter<'_>) -> Result<Response<Vec<u8>>>,
     {
+        let after_digest_hex = self
+            .after_digest_hex
+            .as_deref()
+            .map(|digest| required_nonzero_lower_hex32(digest, "--after-digest-hex"))
+            .transpose()?;
         let client = context.client_from_config();
         let filter = SorafsPinListFilter {
             finalized: SorafsPinFinalizedAnchor {
@@ -12989,7 +12994,7 @@ impl PinListArgs {
             status: self.status.map(Into::into),
             limit: self.limit,
             max_bytes: self.max_bytes,
-            after_digest_hex: self.after_digest_hex.as_deref(),
+            after_digest_hex: after_digest_hex.as_deref(),
         };
         let response = fetch(&client, &filter)?;
         render_json_response(context, response)
@@ -12997,7 +13002,7 @@ impl PinListArgs {
 }
 #[derive(clap::Args, Debug)]
 pub struct PinShowArgs {
-    /// Hex-encoded manifest digest.
+    /// Exact non-zero lowercase 32-byte manifest digest.
     #[arg(long, value_name = "HEX")]
     pub digest: String,
 }
@@ -13014,14 +13019,15 @@ impl PinShowArgs {
         C: RunContext,
         F: FnOnce(&Client, &str) -> Result<Response<Vec<u8>>>,
     {
+        let digest = required_nonzero_lower_hex32(&self.digest, "--digest")?;
         let client = context.client_from_config();
-        let response = fetch(&client, &self.digest)?;
+        let response = fetch(&client, &digest)?;
         let status = response.status();
         let body = response.into_body();
         match status {
             StatusCode::OK => render_json_body(context, &body),
             StatusCode::NOT_FOUND => {
-                context.println(format_args!("manifest `{}` not found", self.digest))
+                context.println(format_args!("manifest `{digest}` not found"))
             }
             status => Err(make_http_error(status, &body)),
         }
@@ -13116,10 +13122,10 @@ pub struct AliasListArgs {
     /// Offset for pagination.
     #[arg(long)]
     pub offset: Option<u32>,
-    /// Restrict aliases to a namespace (case-insensitive).
+    /// Restrict aliases to an exact canonical lowercase namespace.
     #[arg(long)]
     pub namespace: Option<String>,
-    /// Restrict aliases bound to a manifest digest (hex-encoded).
+    /// Restrict aliases to an exact non-zero lowercase 32-byte manifest digest.
     #[arg(long, value_name = "HEX")]
     pub manifest_digest: Option<String>,
 }
@@ -13130,12 +13136,17 @@ impl AliasListArgs {
         C: RunContext,
         F: FnOnce(&Client, &SorafsAliasListFilter<'_>) -> Result<Response<Vec<u8>>>,
     {
+        let manifest_digest = self
+            .manifest_digest
+            .as_deref()
+            .map(|digest| required_nonzero_lower_hex32(digest, "--manifest-digest"))
+            .transpose()?;
         let client = context.client_from_config();
         let filter = SorafsAliasListFilter {
             limit: self.limit,
             offset: self.offset,
             namespace: self.namespace.as_deref(),
-            manifest_digest: self.manifest_digest.as_deref(),
+            manifest_digest: manifest_digest.as_deref(),
         };
         let response = fetch(&client, &filter)?;
         render_json_response(context, response)
@@ -13147,6 +13158,27 @@ pub enum ReplicationCommand {
     List(ReplicationListArgs),
 }
 impl_run_for_subcommand!(ReplicationCommand => List);
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum ReplicationStatusSelector {
+    /// Orders still awaiting their required provider completions.
+    Pending,
+    /// Orders whose required provider completions are committed.
+    Completed,
+    /// Orders cancelled when their target pin was retired.
+    Cancelled,
+    /// Incomplete orders expired after their inclusive deadline.
+    Expired,
+}
+impl From<ReplicationStatusSelector> for SorafsReplicationStatus {
+    fn from(value: ReplicationStatusSelector) -> Self {
+        match value {
+            ReplicationStatusSelector::Pending => Self::Pending,
+            ReplicationStatusSelector::Completed => Self::Completed,
+            ReplicationStatusSelector::Cancelled => Self::Cancelled,
+            ReplicationStatusSelector::Expired => Self::Expired,
+        }
+    }
+}
 #[derive(clap::Args, Debug)]
 pub struct ReplicationListArgs {
     /// Maximum number of orders to return.
@@ -13155,10 +13187,10 @@ pub struct ReplicationListArgs {
     /// Offset for pagination.
     #[arg(long)]
     pub offset: Option<u32>,
-    /// Optional status filter (pending, completed, expired).
-    #[arg(long)]
-    pub status: Option<String>,
-    /// Restrict to orders for a manifest digest (hex-encoded).
+    /// Optional exact lifecycle filter.
+    #[arg(long, value_enum)]
+    pub status: Option<ReplicationStatusSelector>,
+    /// Restrict orders to an exact non-zero lowercase 32-byte manifest digest.
     #[arg(long, value_name = "HEX")]
     pub manifest_digest: Option<String>,
 }
@@ -13175,12 +13207,17 @@ impl ReplicationListArgs {
         C: RunContext,
         F: FnOnce(&Client, &SorafsReplicationListFilter<'_>) -> Result<Response<Vec<u8>>>,
     {
+        let manifest_digest = self
+            .manifest_digest
+            .as_deref()
+            .map(|digest| required_nonzero_lower_hex32(digest, "--manifest-digest"))
+            .transpose()?;
         let client = context.client_from_config();
         let filter = SorafsReplicationListFilter {
             limit: self.limit,
             offset: self.offset,
-            status: self.status.as_deref(),
-            manifest_digest: self.manifest_digest.as_deref(),
+            status: self.status.map(Into::into),
+            manifest_digest: manifest_digest.as_deref(),
         };
         let response = fetch(&client, &filter)?;
         render_json_response(context, response)
@@ -18408,34 +18445,36 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             assert!(ctx.printed.is_empty());
         }
         fn pin_show_with_handles_not_found() {
+            let digest = "33".repeat(32);
             let args = PinShowArgs {
-                digest: "deadbeef".to_string(),
+                digest: digest.clone(),
             };
             let mut ctx = TestContext::new();
-            args.run_with(&mut ctx, |_client, digest| {
-                assert_eq!(digest, "deadbeef");
+            args.run_with(&mut ctx, |_client, actual_digest| {
+                assert_eq!(actual_digest, digest.as_str());
     json_response_fixture!(StatusCode::NOT_FOUND,
                         &norito::json!({ "error": "missing" }),
                     )
             })
             .expect("run should succeed for 404");
-            assert_eq_compact! { ctx.printed => vec!["manifest `deadbeef` not found".to_string()] };
+            assert_eq_compact! { ctx.printed => vec![format!("manifest `{digest}` not found")] };
         }
         fn alias_list_with_prints_payload() {
+            let manifest_digest = "44".repeat(32);
             let args = AliasListArgs {
                 limit: Some(3),
                 offset: Some(0),
                 namespace: Some("docs".to_string()),
-                manifest_digest: Some("aa".to_string()),
+                manifest_digest: Some(manifest_digest.clone()),
             };
             let mut ctx = TestContext::new();
             args.run_with(&mut ctx, |_client, filter| {
                 assert_eq!(filter.limit, Some(3));
                 assert_eq!(filter.namespace, Some("docs"));
-                assert_eq!(filter.manifest_digest, Some("aa"));
+                assert_eq!(filter.manifest_digest, Some(manifest_digest.as_str()));
     json_response_fixture!(StatusCode::OK, &norito::json!({
                         "aliases": [
-                            { "alias": "docs/latest", "digest": "aa" }
+                            { "alias": "docs/latest", "digest": manifest_digest }
                         ]
                     }))
             })
@@ -18447,12 +18486,12 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             let args = ReplicationListArgs {
                 limit: Some(2),
                 offset: None,
-                status: Some("completed".to_string()),
+                status: Some(ReplicationStatusSelector::Completed),
                 manifest_digest: None,
             };
             let mut ctx = TestContext::new();
             args.run_with(&mut ctx, |_client, filter| {
-                assert_eq!(filter.status, Some("completed"));
+                assert_eq!(filter.status, Some(SorafsReplicationStatus::Completed));
     json_response_fixture!(StatusCode::OK, &norito::json!({
                         "orders": [
                             { "id": "order1", "status": "completed" }
@@ -18462,6 +18501,88 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             .expect("run should succeed");
             assert_eq!(ctx.printed.len(), 1);
             assert!(ctx.printed[0].contains("\"orders\""));
+        }
+        fn replication_status_cli_is_closed_and_includes_cancelled() {
+            use clap::Parser as _;
+            #[derive(clap::Parser, Debug)]
+            struct Parser {
+                #[command(flatten)]
+                args: ReplicationListArgs,
+            }
+            let parsed = Parser::try_parse_from(["sorafs-test", "--status", "cancelled"])
+                .expect("cancelled must be part of the first-release status set");
+            assert!(matches!(
+                parsed.args.status,
+                Some(ReplicationStatusSelector::Cancelled)
+            ));
+            let error = Parser::try_parse_from(["sorafs-test", "--status", "Completed"])
+                .expect_err("status parsing must remain exact and case-sensitive");
+            assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+        }
+        fn pin_and_inventory_cli_reject_noncanonical_digests_before_fetch() {
+            let mut ctx = TestContext::new();
+            let pin_result = PinShowArgs {
+                digest: "deadbeef".to_owned(),
+            }
+            .run_with(&mut ctx, |_client, _digest| {
+                panic!("invalid pin digest must fail before fetch")
+            });
+            assert!(
+                pin_result
+                    .expect_err("short pin digest must fail")
+                    .to_string()
+                    .contains("64 lowercase")
+            );
+
+            let alias_result = AliasListArgs {
+                limit: None,
+                offset: None,
+                namespace: None,
+                manifest_digest: Some("AA".repeat(32)),
+            }
+            .run_with(&mut ctx, |_client, _filter| {
+                panic!("invalid alias digest must fail before fetch")
+            });
+            assert!(
+                alias_result
+                    .expect_err("uppercase alias digest must fail")
+                    .to_string()
+                    .contains("64 lowercase")
+            );
+
+            let replication_result = ReplicationListArgs {
+                limit: None,
+                offset: None,
+                status: Some(ReplicationStatusSelector::Pending),
+                manifest_digest: Some("00".repeat(32)),
+            }
+            .run_with(&mut ctx, |_client, _filter| {
+                panic!("invalid replication digest must fail before fetch")
+            });
+            assert!(
+                replication_result
+                    .expect_err("zero replication digest must fail")
+                    .to_string()
+                    .contains("non-zero")
+            );
+
+            let pin_list_result = PinListArgs {
+                status: None,
+                limit: None,
+                max_bytes: None,
+                after_digest_hex: Some("abc123".to_owned()),
+                expected_finalized_height: None,
+                expected_finalized_block_hash_hex: None,
+            }
+            .run_with(&mut ctx, |_client, _filter| {
+                panic!("invalid pin-list cursor must fail before fetch")
+            });
+            assert!(
+                pin_list_result
+                    .expect_err("short pin-list cursor must fail")
+                    .to_string()
+                    .contains("64 lowercase")
+            );
         }
         fn transparency_cycles_list_prints_payload() {
             let args = TransparencyCyclesListArgs { limit: Some(8) };

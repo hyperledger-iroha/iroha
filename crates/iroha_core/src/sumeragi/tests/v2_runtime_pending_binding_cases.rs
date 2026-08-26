@@ -1171,7 +1171,9 @@ fn pending_validate_projects_only_the_exact_commit_authorized_apply_successor() 
     );
     let rebound_tag = EventTag::new(
         context.height,
-        tag.view().checked_add(1).expect("fixture view remains bounded"),
+        tag.view()
+            .checked_add(1)
+            .expect("fixture view remains bounded"),
         tag.generation(),
     );
     let rebound_apply = AdapterEffect::Apply {

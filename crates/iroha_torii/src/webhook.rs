@@ -92,10 +92,6 @@ pub struct WebhookEntry {
     pub secret: Option<String>,
     pub filter: Option<crate::filter::FilterExpr>,
 }
-#[allow(dead_code, unused)]
-fn default_active() -> bool {
-    true
-}
 #[derive(Default)]
 struct RegistryInner {
     next_id: u64,
@@ -878,73 +874,6 @@ struct PendingDelivery {
     body: Vec<u8>,
     attempts: u32,
     next_attempt_ms: u64,
-}
-#[allow(dead_code, unused)]
-pub fn enqueue_delivery_for_all(body: Vec<u8>, content_type: &str) {
-    ensure_dirs();
-    if body.len() > WEBHOOK_DELIVERY_MAX_BYTES {
-        iroha_logger::warn!(
-            actual = body.len(),
-            maximum = WEBHOOK_DELIVERY_MAX_BYTES,
-            "dropping oversized webhook delivery"
-        );
-        return;
-    }
-    if content_type.len() > WEBHOOK_DELIVERY_METADATA_MAX_BYTES {
-        iroha_logger::warn!(
-            actual = content_type.len(),
-            maximum = WEBHOOK_DELIVERY_METADATA_MAX_BYTES,
-            "dropping webhook delivery with oversized content type"
-        );
-        return;
-    }
-    let policy = webhook_policy();
-    let mut admission = match QueueAdmission::begin(policy) {
-        Ok(admission) => admission,
-        Err(err) => {
-            iroha_logger::warn!(%err, "failed to inspect webhook queue capacity");
-            return;
-        }
-    };
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-    let guard = lock_registry();
-    for (id, w) in guard.items.iter() {
-        if !w.active {
-            continue;
-        }
-        if admission.is_full() {
-            iroha_logger::warn!(
-                capacity = effective_queue_capacity(policy),
-                "webhook queue at capacity; dropping new deliveries"
-            );
-            break;
-        }
-        let delivery_id = format!("{}-{}", id, now);
-        if !delivery_metadata_is_bounded(&delivery_id, &w.url, content_type) {
-            iroha_logger::warn!(
-                webhook_id = *id,
-                maximum = WEBHOOK_DELIVERY_METADATA_MAX_BYTES,
-                "dropping webhook delivery with oversized metadata"
-            );
-            continue;
-        }
-        let pd = PendingDelivery {
-            id: delivery_id,
-            webhook_id: *id,
-            url: w.url.clone(),
-            content_type: content_type.to_string(),
-            body: body.clone(),
-            attempts: 0,
-            next_attempt_ms: now,
-        };
-        if let Err(err) = admission.persist(&pd) {
-            iroha_logger::warn!(%err, "failed to persist webhook payload");
-            continue;
-        }
-    }
 }
 pub fn enqueue_event_for_matching_webhooks(
     event: &iroha_data_model::events::EventBox,
@@ -3137,38 +3066,6 @@ mod tests {
             g.next_id = 0;
             g.items.clear();
         });
-    }
-    #[test]
-    fn queue_capacity_limits_enqueued_payloads() {
-        let _env = TestDataDirGuard::new();
-        let _ = fs::remove_dir_all(super::queue_dir());
-        super::ensure_dirs();
-        let _policy_guard = WebhookPolicyGuard::new(super::WebhookPolicy {
-            queue_capacity: NonZeroUsize::new(1).unwrap(),
-            max_attempts: NonZeroU32::new(3).unwrap(),
-            backoff_initial: Duration::from_secs(1),
-            backoff_max: Duration::from_secs(1),
-            connect_timeout: Duration::from_secs(1),
-            write_timeout: Duration::from_secs(1),
-            read_timeout: Duration::from_secs(1),
-        });
-        {
-            let mut g = registry().lock().unwrap();
-            g.items.clear();
-            g.items.insert(
-                1,
-                WebhookEntry {
-                    id: 1,
-                    url: "http://example.test/webhook".to_string(),
-                    active: true,
-                    secret: None,
-                    filter: None,
-                },
-            );
-        }
-        super::enqueue_delivery_for_all(b"first".to_vec(), "text/plain");
-        super::enqueue_delivery_for_all(b"second".to_vec(), "text/plain");
-        assert_eq!(super::queue_depth(), 1);
     }
     #[test]
     fn queue_capacity_check_and_persistence_are_atomic() {

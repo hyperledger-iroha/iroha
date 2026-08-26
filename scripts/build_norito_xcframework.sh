@@ -117,6 +117,10 @@ run_python312_clean() {
 
 SCRIPT_DIR="$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+# Cargo and every authenticated helper must resolve workspace state from the
+# same canonical tree whose inputs are source-sealed below, regardless of the
+# caller's working directory.
+builtin cd "$ROOT_DIR"
 CRATE_DIR="$ROOT_DIR/crates/connect_norito_bridge"
 INC_DIR="$CRATE_DIR/include"
 if [[ -z "${NORITO_BRIDGE_OUT_DIR:-}" || -z "${NORITO_BRIDGE_BUILD_DIR:-}" ]]; then
@@ -1286,6 +1290,9 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
+    "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
+    "connect_norito_parliament_timed_ovn_ballot_from_proof_v1",
     "iroha_privacy_compiled_profile_catalog_v1",
     "iroha_privacy_validate_compiled_profile_catalog_v1",
     "iroha_privacy_exact12_fixture_bundle_v1",

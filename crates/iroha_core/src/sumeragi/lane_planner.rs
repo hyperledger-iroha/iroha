@@ -2962,20 +2962,29 @@ pub(crate) fn v2_known_lane_tip_for_route(
                 && tip.lane_incarnation == lane_incarnation
         })
         .collect::<Vec<_>>();
-    if let Some(receipt) = kura.latest_native_amx_participant_application_receipt_matching(
-        lane_id,
-        dataspace_id,
-        lane_incarnation,
-        |receipt| receipt.application_block_height < proposal_height,
-    ) {
-        let descriptor = &receipt.participant_proposal.descriptor;
-        matching.push(LaneBlockTip {
-            lane_id: descriptor.lane_id,
-            dataspace_id: descriptor.dataspace_id,
-            lane_incarnation: descriptor.lane_incarnation,
-            latest_lane_block_height: descriptor.lane_block_height,
-            latest_lane_block_descriptor_hash: Some(descriptor.descriptor_hash),
-        });
+    if !kura.emergency_fast_startup_enabled() {
+        let latest_receipt = kura
+            .checked_latest_native_amx_participant_application_receipt_matching(
+                lane_id,
+                dataspace_id,
+                lane_incarnation,
+                |receipt| receipt.application_block_height < proposal_height,
+            )
+            .ok()?;
+        if let Some(latest_receipt) = latest_receipt {
+            let descriptor = &latest_receipt.participant_proposal.descriptor;
+            matching.push(LaneBlockTip {
+                lane_id: descriptor.lane_id,
+                dataspace_id: descriptor.dataspace_id,
+                lane_incarnation: descriptor.lane_incarnation,
+                latest_lane_block_height: descriptor.lane_block_height,
+                latest_lane_block_descriptor_hash: Some(descriptor.descriptor_hash),
+            });
+        }
+    } else if matching.is_empty() {
+        // The skipped latest-receipt index means an apparently empty route is unknown. Abstain
+        // instead of synthesizing a height-zero predecessor until Strict rebuilds the index.
+        return None;
     }
     if matching.is_empty() {
         return Some((0, None));

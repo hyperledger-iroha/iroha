@@ -944,7 +944,6 @@ fn sample_agent_apartment_record() -> SoraAgentApartmentRecordV1 {
         schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
         manifest_hash: manifest.manifest_hash(),
         manifest,
-        status: SoraAgentRuntimeStatusV1::Running,
         deployed_sequence: 10,
         lease_started_height: 10,
         lease_expires_height: 110,

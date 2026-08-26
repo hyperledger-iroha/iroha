@@ -5306,15 +5306,13 @@ impl RuntimeSchedulerOwnershipEvidence {
                 | RuntimeSelectedOwnerKind::FencePredecessor
                 | RuntimeSelectedOwnerKind::FencePredecessorRetryRetained
         );
-        let pre_timeout_locked_prepare_qc_cut_is_exact = match self
-            .pre_timeout_locked_prepare_qc_physical_cut
-        {
-            Some(cut) => {
-                cut != 0
-                    && self.selected == RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc
-            }
-            None => self.selected != RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc,
-        };
+        let pre_timeout_locked_prepare_qc_cut_is_exact =
+            match self.pre_timeout_locked_prepare_qc_physical_cut {
+                Some(cut) => {
+                    cut != 0 && self.selected == RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc
+                }
+                None => self.selected != RuntimeSelectedOwnerKind::PreTimeoutLockedPrepareQc,
+            };
         let fence_dependency_rank_is_exact = match (
             self.fence_dependency_minimum_lifecycle_ordinal,
             self.fence_dependency_minimum_admission_ordinal,
@@ -7120,9 +7118,9 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
         mut is_certified_fence_escape: impl FnMut(&C) -> bool,
         forced_selection_kind: Option<RuntimeQueueSelectionKind>,
     ) -> Result<Option<(TaggedCommand<C>, RuntimeFifoCandidateOwnership)>, EnqueueError> {
-        if forced_selection_kind.is_some_and(|kind| {
-            kind != RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc
-        }) {
+        if forced_selection_kind
+            .is_some_and(|kind| kind != RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc)
+        {
             return Err(EnqueueError::FailClosed);
         }
         let _ = self.oldest_lifecycle_ordinal()?;
@@ -9361,9 +9359,7 @@ pub(crate) trait RuntimeDriver {
     }
     /// Project the sole current-view unchanged-lock body which an exact
     /// PrepareQC may advance before an already-frozen timeout occurrence.
-    fn pre_timeout_locked_prepare_qc_target(
-        &self,
-    ) -> Option<PreTimeoutLockedPrepareQcTargetV1> {
+    fn pre_timeout_locked_prepare_qc_target(&self) -> Option<PreTimeoutLockedPrepareQcTargetV1> {
         None
     }
     /// Deep-preview one wire PrepareQC without mutating live adapter state.
@@ -9689,9 +9685,7 @@ impl RuntimeDriver for SumeragiV2Adapter {
                     if wire_payload_is_certified_fence_escape(authenticated.payload())
             )
     }
-    fn pre_timeout_locked_prepare_qc_target(
-        &self,
-    ) -> Option<PreTimeoutLockedPrepareQcTargetV1> {
+    fn pre_timeout_locked_prepare_qc_target(&self) -> Option<PreTimeoutLockedPrepareQcTargetV1> {
         SumeragiV2Adapter::pre_timeout_locked_prepare_qc_target(self)
     }
     fn wire_previews_pre_timeout_locked_prepare_qc(
@@ -11203,9 +11197,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             || self.pending_effect_ownership.is_some()
             || !self.pending_leader_wire_terminals.is_empty()
         {
-            self.latch_fail_closed(
-                "pre-timeout PrepareQC cut overtook retained runtime ownership",
-            );
+            self.latch_fail_closed("pre-timeout PrepareQC cut overtook retained runtime ownership");
             return Err("Sumeragi v2 pre-timeout cut ownership was invalid".to_owned());
         }
         if !self.clocks_armed {
@@ -13791,10 +13783,8 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                             .is_some_and(|physical| {
                                 u128::from(physical.source_ordinal) < physical_cut
                             })
-                        && driver.command_previews_pre_timeout_locked_prepare_qc(
-                            &queued.command,
-                            target,
-                        )
+                        && driver
+                            .command_previews_pre_timeout_locked_prepare_qc(&queued.command, target)
                 },
                 |_| false,
                 Some(RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc),
@@ -13806,8 +13796,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let Some((command, candidate)) = selected else {
             return Ok(None);
         };
-        if candidate.selection_seal.kind
-            != RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc
+        if candidate.selection_seal.kind != RuntimeQueueSelectionKind::PreTimeoutLockedPrepareQc
             || !self
                 .driver
                 .command_previews_pre_timeout_locked_prepare_qc(&command.command, target)
@@ -13829,18 +13818,16 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             }
         };
         let parent_statement = command.candidate_semantic_statement;
-        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) = match self
-            .driver
-            .dispatch(command)
-        {
-            Ok(dispatch) => self.accept_driver_dispatch(
-                dispatch,
-                &owner,
-                parent_statement,
-                RuntimeDispatchIngress::DirectAuthenticated,
-            )?,
-            Err(error) => return Err(self.close(error)),
-        };
+        let (effects, retry_unadmitted, producer_handoff, retained_deferred_ingress) =
+            match self.driver.dispatch(command) {
+                Ok(dispatch) => self.accept_driver_dispatch(
+                    dispatch,
+                    &owner,
+                    parent_statement,
+                    RuntimeDispatchIngress::DirectAuthenticated,
+                )?,
+                Err(error) => return Err(self.close(error)),
+            };
         if retry_unadmitted || retained_deferred_ingress {
             self.latch_fail_closed(
                 "pre-timeout PrepareQC preview became retryable or adapter-deferred",

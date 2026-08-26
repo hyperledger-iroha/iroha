@@ -563,12 +563,12 @@ public final class SorafsReputationClient: @unchecked Sendable {
         let headers: [String: String]
         do {
             headers = try ToriiCanonicalRequest.buildHeaders(
-                networkId: networkId,
                 method: "GET",
                 url: url,
                 body: Data(),
                 accountId: accountId,
                 privateKey: privateKey,
+                networkId: networkId,
                 timestampMs: currentTimeMilliseconds(),
                 nonce: nonce
             )

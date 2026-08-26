@@ -1,7 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Verify that Connect routes are stable while runtime configuration controls availability.
 use axum::http::{Request, StatusCode, Uri};
-use iroha_config::base::WithOrigin;
+use iroha_config::{base::WithOrigin, parameters::actual as A};
 use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, queue::Queue,
     state::State,
@@ -350,7 +350,7 @@ fn connect_config_fixture_uses_checked_key_generation() {
     assert_ne!(transport_key_pair.public_key(), key_pair.public_key());
 }
 fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::actual::Root {
-    use iroha_config::parameters::{actual as A, defaults};
+    use iroha_config::parameters::defaults;
     use iroha_crypto::streaming::StreamingKeyMaterial;
     use iroha_data_model::peer::Peer;
 

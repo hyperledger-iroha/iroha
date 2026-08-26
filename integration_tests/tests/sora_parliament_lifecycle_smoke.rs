@@ -51,7 +51,10 @@ use iroha::{
         },
         parameter::{
             Parameter, SetParameter,
-            system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
+            system::{
+                ConsensusHandshakeMetadata, SumeragiConsensusMode, SumeragiNposParameters,
+                consensus_metadata,
+            },
         },
         peer::PeerId,
         permission::Permission,
@@ -63,7 +66,8 @@ use iroha::{
 };
 use iroha_core::{
     beacon::{
-        GlobalThresholdBeaconSessionBindingV1, global_threshold_beacon_roster_hash_v1,
+        GlobalThresholdBeaconSessionBindingV1, global_threshold_beacon_npos_successor_seed_v1,
+        global_threshold_beacon_roster_hash_v1,
         parliament_test_network_signer::deterministic_parliament_beacon_key_record_v1,
         validate_global_threshold_beacon_session_v1,
         verify_finalized_global_threshold_beacon_pulse_v1,
@@ -106,6 +110,7 @@ const COMMITMENT_PHASE_BLOCKS: u64 = 4;
 const RELEASE_DELAY_BLOCKS: u64 = 3;
 const OPENING_PHASE_BLOCKS: u64 = 8;
 const MIN_ENACTMENT_DELAY: u64 = 3;
+const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
 const CONTRACT_ADDRESS: &str = "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
 
@@ -1660,6 +1665,141 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn()
         .client()
         .get_gov_contract_json(&contract_address)
         .wrap_err("normal restart must restore the consensus-enacted contract")?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate() -> Result<()>
+{
+    let mut npos = SumeragiNposParameters::default();
+    npos.epoch_length_blocks = NonZeroU64::new(MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS)
+        .expect("mandatory NPoS epoch length is non-zero");
+    npos.vrf_commit_window_blocks = 2;
+    npos.vrf_reveal_window_blocks = 2;
+    npos.validate()
+        .map_err(|error| eyre!("invalid mandatory NPoS fixture: {error}"))?;
+
+    let builder = NetworkBuilder::new()
+        .with_peers(VALIDATOR_COUNT)
+        .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
+        .with_parliament_test_signers()
+        .with_block_cadence(Duration::from_secs(1))
+        .with_genesis_instruction(SetParameter::new(Parameter::Custom(
+            npos.into_custom_parameter(),
+        )))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanManageParliament),
+            ALICE_ID.clone(),
+        ));
+    let context =
+        stringify!(four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate);
+    let network = sandbox::start_network_async_or_skip(builder, context).await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
+        return Ok(());
+    };
+    assert_eq!(network.peers().len(), VALIDATOR_COUNT);
+    network.ensure_blocks(1).await?;
+
+    let client = network.client();
+    let ordered_roster = ordered_validator_roster(&network)?;
+    let beacon_record =
+        deterministic_parliament_beacon_key_record_v1(network.network_id(), &ordered_roster)
+            .wrap_err("derive mandatory NPoS beacon fixture")?;
+    let beacon_binding = GlobalThresholdBeaconSessionBindingV1 {
+        network_id: beacon_record.session.network_id,
+        session_id: beacon_record.session.session_id,
+        roster_hash: beacon_record.session.roster_hash,
+        transcript_hash: beacon_record.session.transcript_hash,
+    };
+    let validated_beacon_session =
+        validate_global_threshold_beacon_session_v1(beacon_record.session.clone(), &beacon_binding)
+            .wrap_err("replay mandatory NPoS beacon transcript")?;
+
+    let install_height =
+        (current_height(&client)? + 1).max(beacon_record.session.adaptive_dkg.finalized_at_height);
+    advance_to_predecessor(&client, install_height, "mandatory beacon-key installation")?;
+    client.submit_blocking(
+        lifecycle_certificate(
+            &network,
+            &ordered_roster,
+            ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+            beacon_record.session.session_id,
+            beacon_record.session.transcript_hash,
+            norito::encode_canonical(&beacon_record)?,
+            install_height,
+        )?,
+        fee(),
+    )?;
+    assert_eq!(current_height(&client)?, install_height);
+    tick(&client, "activate mandatory NPoS beacon session")?;
+
+    let boundary_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;
+    let pulse_height = boundary_height - 1;
+    advance_to_predecessor(&client, pulse_height, "mandatory pre-boundary pulse")?;
+    assert!(
+        pulse_at(&client, pulse_height - 1).is_err(),
+        "an unrequested non-boundary height must not emit a global pulse"
+    );
+    assert_eq!(
+        tick(&client, "commit mandatory pre-boundary pulse")?,
+        pulse_height
+    );
+    network.ensure_blocks(pulse_height).await?;
+
+    let pulses = network
+        .peers()
+        .iter()
+        .map(|peer| pulse_at(&peer.client(), pulse_height))
+        .collect::<Result<Vec<_>>>()?;
+    assert!(pulses.windows(2).all(|pair| pair[0] == pair[1]));
+    let pulse = &pulses[0];
+    assert_eq!(pulse.height, pulse_height);
+    assert_eq!(pulse.session_id, beacon_record.session.session_id);
+    assert_eq!(pulse.roster_hash, beacon_record.session.roster_hash);
+    assert_eq!(pulse.transcript_hash, beacon_record.session.transcript_hash);
+    assert_eq!(pulse.round, 0, "the mandatory pulse is view-independent");
+    assert_eq!(pulse.finalized_chain_anchor.height + 1, pulse_height);
+    assert_eq!(
+        exact_block(&client, pulse.finalized_chain_anchor.height)?
+            .header()
+            .hash(),
+        pulse.finalized_chain_anchor.block_hash,
+    );
+    verify_finalized_global_threshold_beacon_pulse_v1(
+        &validated_beacon_session,
+        pulse,
+        pulse.finalized_chain_anchor,
+    )
+    .wrap_err("independently verify the mandatory pre-boundary pulse")?;
+
+    let successor_epoch = 1;
+    let successor_seed =
+        global_threshold_beacon_npos_successor_seed_v1(pulse, boundary_height, successor_epoch);
+    assert_eq!(
+        tick(&client, "commit mandatory NPoS boundary")?,
+        boundary_height
+    );
+    assert_eq!(
+        tick(&client, "prove successor epoch can finalize")?,
+        boundary_height + 1
+    );
+    network.ensure_blocks(boundary_height + 1).await?;
+    for peer in network.peers() {
+        let status = peer.client().get_sumeragi_status()?;
+        status
+            .validate()
+            .map_err(|error| eyre!("invalid successor NPoS status: {error}"))?;
+        assert!(status.last_committed_height >= boundary_height + 1);
+        assert_eq!(status.height_context.epoch, successor_epoch);
+        assert_eq!(status.height_context.epoch_seed, successor_seed);
+        assert_eq!(
+            status.height_context.epoch_end_height,
+            boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
+        );
+    }
+
+    network.shutdown().await;
     Ok(())
 }
 

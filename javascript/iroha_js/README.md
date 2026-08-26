@@ -1021,30 +1021,6 @@ console.log(meta.contentType, meta.size, meta.createdMs);
 When you pass `authToken` or `apiToken` credentials, prefer an `https://` Torii base URL; the
 client will reject insecure schemes unless you opt into `allowInsecure: true` for local/dev use.
 
-const reportsResult = await torii.listProverReports({
-  failedOnly: true,
-  hasTag: "PROF",
-  limit: 5,
-});
-if (reportsResult.kind === "reports") {
-  for (const report of reportsResult.reports) {
-    console.log(report.id, report.error, report.latency_ms);
-  }
-} else if (reportsResult.kind === "ids") {
-  console.log("report ids:", reportsResult.ids);
-} else {
-  // messages_only projection
-  console.log("failed messages:", reportsResult.messages);
-}
-// listProverReports/countProverReports accept ToriiProverReportFilters to keep the
-// available query flags (failedOnly, hasTag, sinceMs, order, etc.) fully typed.
-// Pass an AbortSignal as the second argument to the prover helpers to cancel
-// long-running queries before Torii responds.
-for await (const report of torii.iterateProverReports({ failedOnly: true }, { pageSize: 2 })) {
-  // If idsOnly/messagesOnly are provided, the iterator yields strings or message summaries.
-  console.log(report);
-}
-
 const instruction = buildRegisterDomainInstruction({
   domainId: "wonderland",
   metadata: { key: "value" },
@@ -2275,11 +2251,18 @@ if (pinListing.has_more) {
 const aliases = await torii.listSorafsAliases({ namespace: "docs", canonicalAuth });
 console.log(`doc namespace aliases=${aliases.returned_count}`);
 
+// Alias pages are closed first-release projections. Each record carries exact
+// lineage, cache evaluation, successor, governance, and policy state.
+console.log(aliases.attestation.block_height, aliases.aliases[0]?.cache_decision);
+
 const replication = await torii.listSorafsReplicationOrders({
   status: "pending",
   canonicalAuth,
 });
 console.log(`pending replication orders=${replication.total_count}`);
+for (const order of replication.replication_orders) {
+  console.log(order.status.state, order.provider_completions.length);
+}
 
 const orderbook = await torii.getSorafsOrderbook({ limit: 25 });
 console.log(`open committed orders=${orderbook.status.open_orders}`);
@@ -2359,11 +2342,18 @@ details, and lineage expansion are available only from the bounded per-digest
 detail route. The async iterator locks the first page's finalized anchor for
 every subsequent request.
 
-> **Missing manifests:** `getSorafsPinManifest` now returns `null` when Torii
-> responds with `404 Not Found`, allowing scripts to differentiate between a
-> missing manifest and a malformed payload. `getSorafsPinManifestTyped`
-> continues to throw when the digest is absent so automation that expects a
-> manifest still fails fast.
+Replication status is also a closed first-release union: `pending` carries only
+`state`, while `completed`, `expired`, and `cancelled` carry an exact `epoch`.
+Each order exposes the canonical decoded `order`, `assignment_revision`, and
+`provider_completions`.
+
+`getSorafsPinManifest(digestHex)` returns the exact finalized native shape
+`{ finalized_cursor, manifest }`, validates the record's native byte arrays and
+retained approval lifecycle, and returns `null` for `404 Not Found`. Pin detail
+contains only the finalized cursor and native manifest; query aliases and
+replication orders through their dedicated endpoints. Callers may bind the read
+to `expectedFinalizedHeight` and
+`expectedFinalizedBlockHashHex`, which must be supplied together.
 
 PoR automation helpers surface the first-release production endpoints so SDK
 callers can submit authenticated Norito-encoded provider proofs and auditor
@@ -3910,9 +3900,9 @@ With `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite now:
 3. Optionally submits a `pacs.008` message (when `IROHA_TORII_INTEGRATION_ISO_ENABLED=1`)
    to verify the bridge pipeline end-to-end.
 4. Optionally inspects the SoraFS pin registry (when `IROHA_TORII_INTEGRATION_SORAFS_ENABLED=1`),
-   using canonical account signatures for the legacy alias/replication
-   inventory projections. Operator-only storage-state and legacy payload-fetch
-   diagnostics are intentionally excluded from the public integration client.
+   using canonical account signatures for the alias and replication inventory
+   routes. Operator-only storage-state and payload-fetch diagnostics are
+   intentionally excluded from the public integration client.
 5. Optionally submits a DA ingest payload and polls the manifest endpoint (when
    `IROHA_TORII_INTEGRATION_DA_ENABLED=1`), and can stream multi-source fetch
    evidence when `IROHA_TORII_INTEGRATION_DA_GATEWAYS`/`IROHA_TORII_INTEGRATION_DA_TICKET`

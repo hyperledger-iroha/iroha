@@ -1,3 +1,87 @@
+fn advance_direct_validation_fixture_to_next_view(
+    adapter: &mut SumeragiV2Adapter,
+    manifest: &wire::PayloadManifest,
+    durable: &DurableBodyReceipt,
+    execution_commitment: wire::ExecutionCommitment,
+    signature_marker: u8,
+) -> reducer::EventTag {
+    let previous = adapter.current_tag();
+    let prepare = wire::QuorumCertificate {
+        round: manifest.round,
+        proposal_round: manifest.round,
+        phase: wire::GlobalPhase::Prepare,
+        subject: manifest.subject,
+        execution_commitment,
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![signature_marker; 96],
+    };
+    let timeout = wire::TimeoutCertificate {
+        round: manifest.round,
+        groups: vec![wire::TimeoutVoteGroup {
+            highest_prepare_qc: Some(prepare.clone()),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![signature_marker; 96],
+        }],
+    };
+    let entered = adapter
+        .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                timeout,
+            )),
+        ))
+        .expect("install the exact timeout certificate");
+    let current = adapter.current_tag();
+    assert_eq!(current.height(), previous.height());
+    assert_eq!(current.view(), previous.view().checked_add(1).unwrap());
+    assert!(current.strictly_advances(previous));
+    assert!(entered.effects().iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::EnterView { tag, .. } if *tag == current
+    )));
+    assert!(entered.effects().iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::FetchBody {
+            tag,
+            round,
+            subject,
+            certificate: Some(certificate),
+            ..
+        } if *tag == current
+            && *round == manifest.round
+            && *subject == manifest.subject
+            && certificate == &prepare
+    )));
+    let DirectCertifiedBodyAvailablePreparation::Applied(available) = adapter
+        .prepare_direct_certified_body_available(current, manifest)
+        .expect("prepare the protected body after EnterView")
+    else {
+        panic!("the protected missing body must stage one Store successor")
+    };
+    assert!(matches!(
+        available.commit(),
+        AdapterEffect::StoreBody {
+            tag,
+            round,
+            subject,
+        } if tag == current && round == manifest.round && subject == manifest.subject
+    ));
+    let DirectBodyStoredPreparation::Applied(stored) = adapter
+        .prepare_direct_body_stored(current, manifest.round, manifest.subject, durable)
+        .expect("prepare the protected durable body after EnterView")
+    else {
+        panic!("the protected available body must stage one Validate successor")
+    };
+    assert!(matches!(
+        stored.commit(),
+        AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } if tag == current && round == manifest.round && subject == manifest.subject
+    ));
+    current
+}
+
 #[test]
 fn direct_certified_body_preview_is_inert_and_commits_one_store_successor() {
     let directory = TempDir::new().expect("temporary direct-completion directory");
@@ -1008,6 +1092,162 @@ fn direct_validation_apply_preview_preserves_complete_decision_authority() {
 }
 
 #[test]
+fn stale_validation_completion_marks_the_exact_body_valid_before_a_later_decision() {
+    let directory = TempDir::new().expect("temporary stale-validation directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let (stale_tag, manifest, durable, validated) =
+        advance_direct_validation_fixture_to_durable(&mut adapter, 0xB3);
+    let core_round = reducer::Round::new(manifest.round.height, manifest.round.view);
+    let core_subject = reducer::Subject::new(Hash::new(manifest.subject.encode()).into());
+    let current_tag = advance_direct_validation_fixture_to_next_view(
+        &mut adapter,
+        &manifest,
+        &durable,
+        validated.execution_commitment(),
+        0xB3,
+    );
+    assert_eq!(
+        adapter.reducer.body_state(core_round, core_subject),
+        reducer::BodyState::Durable
+    );
+
+    let DirectValidationSucceededPreparation::Inactive(preview) = adapter
+        .prepare_direct_validation_succeeded(
+            stale_tag,
+            manifest.round,
+            manifest.subject,
+            &validated,
+        )
+        .expect("rebind the exact stale validation completion")
+    else {
+        panic!("an old-round valid body must settle without current-view voting")
+    };
+    assert_eq!(
+        preview.disposition(),
+        &DirectValidationSucceededInactive::Superseded(reducer::IgnoreReason::IrrelevantView)
+    );
+    assert!(matches!(
+        &preview.event,
+        reducer::Event::ValidationCompleted {
+            tag,
+            round,
+            subject,
+            valid: true,
+        } if *tag == current_tag && *round == core_round && *subject == core_subject
+    ));
+    assert_eq!(
+        preview.next_reducer.body_state(core_round, core_subject),
+        reducer::BodyState::Validated
+    );
+    let publication = SealedReadyDurableValidateAdapterPreview(
+        ReadyDurableValidateAdapterPreviewKind::ValidatedInactive(preview),
+    )
+    .preflight_publication()
+    .expect("preflight the rebound no-successor publication");
+    publication.commit_no_successor_after_durable_ledger();
+    assert_eq!(
+        adapter.reducer.body_state(core_round, core_subject),
+        reducer::BodyState::Validated
+    );
+
+    let decision = wire::QuorumCertificate {
+        round: manifest.round,
+        proposal_round: manifest.round,
+        phase: wire::GlobalPhase::Commit,
+        subject: manifest.subject,
+        execution_commitment: validated.execution_commitment(),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0xB3; 96],
+    };
+    let decided = adapter
+        .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                decision.clone(),
+            )),
+        ))
+        .expect("install the later exact Decision");
+    assert!(matches!(
+        decided.effects(),
+        [AdapterEffect::Apply {
+            tag,
+            subject,
+            certificate,
+        }] if *tag == current_tag
+            && *subject == manifest.subject
+            && certificate == &decision
+    ));
+    assert!(
+        adapter.pending_live_decision_apply.is_none(),
+        "a persisted Decision which directly emits its exact Apply cannot leave a deferred WAL seal"
+    );
+}
+
+#[test]
+fn stale_validation_completion_uses_the_current_tag_when_decision_arrives_first() {
+    let directory = TempDir::new().expect("temporary decided stale-validation directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let (stale_tag, manifest, durable, validated) =
+        advance_direct_validation_fixture_to_durable(&mut adapter, 0xB4);
+    let current_tag = advance_direct_validation_fixture_to_next_view(
+        &mut adapter,
+        &manifest,
+        &durable,
+        validated.execution_commitment(),
+        0xB4,
+    );
+    let decision = wire::QuorumCertificate {
+        round: manifest.round,
+        proposal_round: manifest.round,
+        phase: wire::GlobalPhase::Commit,
+        subject: manifest.subject,
+        execution_commitment: validated.execution_commitment(),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0xB4; 96],
+    };
+    let decided = adapter
+        .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                decision.clone(),
+            )),
+        ))
+        .expect("install the exact Decision before validation publication");
+    assert!(
+        decided.effects().is_empty(),
+        "a Decision over an already Durable body must not race its retained validation work"
+    );
+    assert!(
+        adapter.pending_live_decision_apply.is_some(),
+        "a decided Durable body must retain its WAL seal for the Ready Validate join"
+    );
+
+    let DirectValidationSucceededPreparation::Apply(preview) = adapter
+        .prepare_direct_validation_succeeded(
+            stale_tag,
+            manifest.round,
+            manifest.subject,
+            &validated,
+        )
+        .expect("rebind the decided stale validation completion")
+    else {
+        panic!("the rebound decided body must emit its sole Apply child")
+    };
+    assert!(matches!(
+        &preview.event,
+        reducer::Event::ValidationCompleted { tag, valid: true, .. } if *tag == current_tag
+    ));
+    assert!(matches!(
+        preview.apply_effect(),
+        AdapterEffect::Apply {
+            tag,
+            subject,
+            certificate,
+        } if *tag == current_tag && *subject == manifest.subject && certificate == &decision
+    ));
+}
+
+#[test]
 fn pending_kura_validated_apply_preview_rejects_foreign_authority_and_fence_exhaustion_inertly() {
     let directory = TempDir::new().expect("temporary pending-Kura preview directory");
     let wal_path = directory.path().join("leader-safety.wal");
@@ -1510,6 +1750,81 @@ fn direct_validation_rejects_foreign_receipts_and_commitments_without_mutation()
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     direct_validation_preview_surface_is_closed_move_only_and_lifecycle_wired
 );
+#[test]
+fn stale_failed_validation_rebinds_only_the_exact_durable_body() {
+    let directory = TempDir::new().expect("temporary stale-rejection directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let (stale_tag, manifest, durable, validated) =
+        advance_direct_validation_fixture_to_durable(&mut adapter, 0xC0);
+    let current_tag = advance_direct_validation_fixture_to_next_view(
+        &mut adapter,
+        &manifest,
+        &durable,
+        validated.execution_commitment(),
+        0xC0,
+    );
+    let core_round = reducer::Round::new(manifest.round.height, manifest.round.view);
+    let core_subject = reducer::Subject::new(Hash::new(manifest.subject.encode()).into());
+
+    let DirectValidationFailedPreparation::NoEffect(preview) = adapter
+        .prepare_direct_validation_failed(stale_tag, manifest.round, manifest.subject, &durable)
+        .expect("rebind the exact stale deterministic rejection")
+    else {
+        panic!("an uncertified stale rejection must settle without a child effect")
+    };
+    assert!(matches!(
+        &preview.event,
+        reducer::Event::ValidationCompleted {
+            tag,
+            round,
+            subject,
+            valid: false,
+        } if *tag == current_tag && *round == core_round && *subject == core_subject
+    ));
+    assert_eq!(
+        preview.next_reducer.body_state(core_round, core_subject),
+        reducer::BodyState::Invalid
+    );
+    drop(preview);
+    assert_eq!(
+        adapter.reducer.body_state(core_round, core_subject),
+        reducer::BodyState::Durable,
+        "dropping the preview cannot consume the exact body work"
+    );
+
+    let foreign_generation = reducer::EventTag::new(
+        current_tag.height(),
+        current_tag.view(),
+        reducer::Generation::new(
+            current_tag
+                .generation()
+                .get()
+                .checked_add(1)
+                .expect("fixture generation remains bounded"),
+        ),
+    );
+    let DirectValidationFailedPreparation::Inactive(foreign) = adapter
+        .prepare_direct_validation_failed(
+            foreign_generation,
+            manifest.round,
+            manifest.subject,
+            &durable,
+        )
+        .expect("classify a foreign validation generation")
+    else {
+        panic!("foreign generation cannot borrow the current reducer tag")
+    };
+    assert_eq!(
+        foreign.disposition(),
+        &DirectValidationFailedInactive::Superseded(reducer::IgnoreReason::StaleGeneration)
+    );
+    assert_eq!(
+        foreign.next_reducer.body_state(core_round, core_subject),
+        reducer::BodyState::Durable
+    );
+}
+
 #[test]
 fn direct_validation_failed_no_effect_preview_is_drop_inert() {
     let directory = TempDir::new().expect("temporary direct-rejection directory");

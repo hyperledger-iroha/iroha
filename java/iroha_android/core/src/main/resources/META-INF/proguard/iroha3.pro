@@ -34,15 +34,10 @@
     public boolean isRoaming();
 }
 
-# BouncyCastle provider - accessed via reflection in SoftwareKeyProvider.java and Blake2b.java
+# BouncyCastle JCA provider discovers algorithm implementations dynamically.
 -keep class org.bouncycastle.jce.provider.BouncyCastleProvider {
     public <init>();
 }
-
-# BouncyCastle Argon2 KDF - accessed via reflection in DeterministicKeyExporter.java
--keep class org.bouncycastle.crypto.params.Argon2Parameters { *; }
--keep class org.bouncycastle.crypto.params.Argon2Parameters$Builder { *; }
--keep class org.bouncycastle.crypto.generators.Argon2BytesGenerator { *; }
 
 # ==================== Suppress Warnings ====================
 

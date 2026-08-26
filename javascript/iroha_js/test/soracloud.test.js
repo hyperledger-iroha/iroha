@@ -4,6 +4,7 @@ import test from "node:test";
 import { computeHashLiteralCrc } from "../src/hashLiteralCrc.js";
 
 import {
+  AccountAddress,
   assembleSoracloudAppInfraRequest,
   assembleSoracloudHfDeployRequest,
   buildSoracloudAppInfraDraft,
@@ -11,6 +12,8 @@ import {
   buildSoracloudPrivateUploadedModelExecuteRequest,
   buildSoracloudPrivateUploadedModelReceiptQuery,
   deploySoracloudAppInfraInstruction,
+  normalizeSoracloudPrivateUploadedModelExecuteResponse,
+  normalizeSoracloudPrivateUploadedModelExecutionReceipt,
   upgradeSoracloudAppInfraInstruction,
 } from "../src/index.js";
 
@@ -48,6 +51,29 @@ const PRIVATE_ZERO_PREHASH_HASH =
   )}`;
 const PRIVATE_MAX_CIPHERTEXT_BYTES = 72 * 1024 * 1024;
 const U32_MAX = 0xffff_ffff;
+const U64_MAX = 0xffff_ffff_ffff_ffffn;
+const PRIVATE_NETWORK_ID =
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+const PRIVATE_OUTPUT_REPLICATION_ORDER_ID = Object.freeze([
+  223, 84, 153, 93, 189, 208, 15, 57,
+  18, 144, 6, 143, 35, 114, 49, 183,
+  235, 169, 151, 26, 48, 191, 231, 173,
+  2, 235, 241, 47, 189, 13, 37, 69,
+]);
+const PRIVATE_VALIDATOR_PUBLIC_KEY = Uint8Array.from(
+  Buffer.from("5866666666666666666666666666666666666666666666666666666666666666", "hex"),
+);
+const PRIVATE_VALIDATOR_ACCOUNT_ID = AccountAddress.fromAccount({
+  publicKey: PRIVATE_VALIDATOR_PUBLIC_KEY,
+  algorithm: "ed25519",
+}).toI105();
+const PRIVATE_VALIDATOR_PEER_ID =
+  `ed0120${Buffer.from(PRIVATE_VALIDATOR_PUBLIC_KEY).toString("hex").toUpperCase()}`;
+const PRIVATE_WRAPPED_NONCE_BASE64 = "CwsLCwsLCwsLCwsL";
+const PRIVATE_WRAPPED_KEY_CIPHERTEXT_BASE64 =
+  "DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM";
+const PRIVATE_WRAPPED_KEY_CIPHERTEXT_HASH =
+  "hash:3177350C03B71E0A4AB35017C6F1B4A041E23194FD7560A5B54147D2C1CED61B#CA93";
 
 function validHfDeployInput(overrides = {}) {
   return {
@@ -82,8 +108,7 @@ function validPrivateExecuteInput(overrides = {}) {
     serviceVersion: "1.0.0",
     weightVersion: "v1",
     modelId: "upload-1",
-    modelName: null,
-    bundleRoot: null,
+    bundleRoot: PRIVATE_BUNDLE_ROOT,
     decryptionRequestId: "decrypt-upload-input",
     inputArtifact: validPrivateArtifact("input"),
     outputRecipient: {
@@ -95,6 +120,147 @@ function validPrivateExecuteInput(overrides = {}) {
       publicKeyBytes: "CQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
       publicKeyFingerprint: PRIVATE_OUTPUT_KEY_FINGERPRINT,
     },
+    ...overrides,
+  };
+}
+
+function privateHashLiteral(seed) {
+  const marked = seed | 1;
+  const body = marked.toString(16).toUpperCase().padStart(2, "0").repeat(32);
+  return `hash:${body}#${computeHashLiteralCrc("hash", body)}`;
+}
+
+function validPrivateWireRecipient(overrides = {}) {
+  return {
+    schema_version: 1,
+    key_id: "recipient-key",
+    key_version: 1,
+    kem: { kem: "X25519HkdfSha256", value: null },
+    aead: { aead: "Aes256Gcm", value: null },
+    public_key_bytes: "CQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    public_key_fingerprint: PRIVATE_OUTPUT_KEY_FINGERPRINT,
+    ...overrides,
+  };
+}
+
+function validPrivateWireArtifact(role, digest, hash, ciphertextBytes) {
+  return {
+    schema_version: 1,
+    sorafs_manifest_digest: Array(32).fill(digest),
+    sorafs_root_cid: [...SORAFS_ROOT_CID],
+    artifact_hash: hash,
+    ciphertext_bytes: ciphertextBytes,
+    artifact_role: role,
+  };
+}
+
+function validPrivateExecutionReceipt(overrides = {}) {
+  return {
+    schema_version: 1,
+    network_id: PRIVATE_NETWORK_ID,
+    receipt_id: PRIVATE_RECEIPT_ID,
+    service_name: "portal",
+    service_version: "2026.1",
+    model_id: "upload-1",
+    weight_version: "v1",
+    runtime_version: "soracloud.quantized-cpu.v1",
+    model_manifest_digest: Array(32).fill(17),
+    model_bundle_root: PRIVATE_BUNDLE_ROOT,
+    policy_id: "policy-1",
+    decryption_request_id: "decrypt-upload-1",
+    attesting_validator: {
+      lane_id: 0,
+      validator_account_id: PRIVATE_VALIDATOR_ACCOUNT_ID,
+      peer_id: PRIVATE_VALIDATOR_PEER_ID,
+    },
+    input_artifact: validPrivateWireArtifact(
+      "input",
+      34,
+      PRIVATE_INPUT_ARTIFACT_HASH,
+      64,
+    ),
+    output_artifact: validPrivateWireArtifact("output", 51, privateHashLiteral(5), 96),
+    output_replication_order_id: [...PRIVATE_OUTPUT_REPLICATION_ORDER_ID],
+    input_commitment: privateHashLiteral(7),
+    output_commitment: privateHashLiteral(9),
+    output_recipient: validPrivateWireRecipient(),
+    request_commitment: privateHashLiteral(11),
+    result_commitment: privateHashLiteral(13),
+    authorization_claim_block_height: 0,
+    authorization_claim_epoch: 0,
+    emitted_sequence: 0,
+    emitted_block_height: 0,
+    emitted_epoch: 0,
+    ...overrides,
+  };
+}
+
+function validPrivateUploadedModelStatus(receipt, overrides = {}) {
+  const chunkManifestRoot = privateHashLiteral(15);
+  return {
+    schema_version: 1,
+    bundle: {
+      schema_version: 1,
+      service_name: receipt.service_name,
+      model_id: receipt.model_id,
+      weight_version: receipt.weight_version,
+      family: "decoder-only",
+      modalities: ["text"],
+      plaintext_root: privateHashLiteral(17),
+      runtime_format: {
+        runtime_format: "DeterministicQuantizedCpuV1",
+        value: null,
+      },
+      bundle_root: receipt.model_bundle_root,
+      sorafs_manifest_digest: [...receipt.model_manifest_digest],
+      chunk_count: 1,
+      plaintext_bytes: 32,
+      ciphertext_bytes: 48,
+      chunk_manifest_root: chunkManifestRoot,
+      upload_recipient: validPrivateWireRecipient({ key_id: "bundle-key" }),
+      wrapped_bundle_key: {
+        schema_version: 1,
+        recipient_key_id: "bundle-key",
+        recipient_key_version: 1,
+        kem: { kem: "X25519HkdfSha256", value: null },
+        aead: { aead: "Aes256Gcm", value: null },
+        ephemeral_public_key: "CQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        nonce: PRIVATE_WRAPPED_NONCE_BASE64,
+        wrapped_key_ciphertext: PRIVATE_WRAPPED_KEY_CIPHERTEXT_BASE64,
+        ciphertext_hash: PRIVATE_WRAPPED_KEY_CIPHERTEXT_HASH,
+        aad_digest: privateHashLiteral(19),
+      },
+      pricing_policy: { storage_price: "1" },
+      decryption_policy_ref: receipt.policy_id,
+    },
+    artifact: {
+      service_name: receipt.service_name,
+      model_name: "portal_model",
+      artifact_id: "artifact-1",
+      training_job_id: "upload-1",
+      weight_version: receipt.weight_version,
+      weight_artifact_hash: PRIVATE_INPUT_ARTIFACT_HASH,
+      dataset_ref: "dataset:upload-1",
+      training_config_hash: privateHashLiteral(21),
+      reproducibility_hash: privateHashLiteral(23),
+      provenance_attestation_hash: privateHashLiteral(25),
+      registered_sequence: 1,
+      consumed_by_version: "v1",
+      chunk_manifest_root: chunkManifestRoot,
+    },
+    ...overrides,
+  };
+}
+
+function validPrivateExecuteResponse(overrides = {}) {
+  const receipt = overrides.receipt ?? validPrivateExecutionReceipt();
+  return {
+    schema_version: 1,
+    status: validPrivateUploadedModelStatus(receipt),
+    submission_phase: "receipt_submitted",
+    transaction_hash: privateHashLiteral(27),
+    receipt,
+    output_artifact: { ...receipt.output_artifact },
     ...overrides,
   };
 }
@@ -1125,7 +1291,7 @@ test("assembleSoracloudHfDeployRequest rejects unknown draft payload fields", ()
 });
 
 test("buildSoracloudPrivateUploadedModelExecuteRequest normalizes encrypted execution requests", () => {
-  const input = validPrivateExecuteInput({ bundleRoot: PRIVATE_BUNDLE_ROOT });
+  const input = validPrivateExecuteInput();
   const request = buildSoracloudPrivateUploadedModelExecuteRequest(input);
 
   assert.deepEqual(request, {
@@ -1133,7 +1299,6 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest normalizes encrypted exec
     service_version: "1.0.0",
     weight_version: "v1",
     model_id: "upload-1",
-    model_name: null,
     bundle_root: PRIVATE_BUNDLE_ROOT,
     decryption_request_id: "decrypt-upload-input",
     input_artifact: {
@@ -1254,7 +1419,6 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest rejects aliases, omission
     "serviceVersion",
     "weightVersion",
     "modelId",
-    "modelName",
     "bundleRoot",
     "decryptionRequestId",
     "inputArtifact",
@@ -1364,7 +1528,7 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest rejects aliases, omission
   );
   const nonEnumerable = validPrivateExecuteInput();
   Object.defineProperty(nonEnumerable, "bundleRoot", {
-    value: null,
+    value: PRIVATE_BUNDLE_ROOT,
     enumerable: false,
   });
   assert.throws(
@@ -1373,32 +1537,27 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest rejects aliases, omission
   );
 });
 
-test("buildSoracloudPrivateUploadedModelExecuteRequest accepts modelName selector", () => {
-  const request = buildSoracloudPrivateUploadedModelExecuteRequest(
-    validPrivateExecuteInput({
-      modelId: null,
-      modelName: "vision",
-    }),
-  );
-
-  assert.equal(request.model_name, "vision");
-  assert.equal(request.model_id, null);
-});
-
-test("buildSoracloudPrivateUploadedModelExecuteRequest rejects invalid selectors, release ids, artifacts, and secrets", () => {
+test("buildSoracloudPrivateUploadedModelExecuteRequest rejects aliases, invalid release ids, artifacts, and secrets", () => {
   assert.throws(
     () =>
       buildSoracloudPrivateUploadedModelExecuteRequest(
         validPrivateExecuteInput({ modelName: "vision" }),
       ),
-    /exactly one of modelId or modelName/,
+    /input\.modelName is not accepted/,
   );
   assert.throws(
     () =>
       buildSoracloudPrivateUploadedModelExecuteRequest(
         validPrivateExecuteInput({ modelId: null }),
       ),
-    /exactly one of modelId or modelName/,
+    /modelId must be a non-empty string/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({ bundleRoot: null }),
+      ),
+    /bundleRoot must be an exact uppercase checksummed marker-bit Iroha Hash literal/,
   );
   assert.throws(
     () =>
@@ -1574,10 +1733,6 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest rejects string normalizat
     [validPrivateExecuteInput({ serviceVersion: "1.0.0\uDFFF" }), /serviceVersion.*unpaired UTF-16/],
     [validPrivateExecuteInput({ weightVersion: "v 1" }), /weightVersion.*ASCII letters/],
     [validPrivateExecuteInput({ modelId: " upload-1" }), /modelId.*surrounding whitespace/],
-    [
-      validPrivateExecuteInput({ modelId: null, modelName: "vision " }),
-      /modelName.*surrounding whitespace/,
-    ],
     [
       validPrivateExecuteInput({ decryptionRequestId: "decrypt\nrequest" }),
       /decryptionRequestId.*control characters/,
@@ -1835,6 +1990,245 @@ test("buildSoracloudPrivateUploadedModelReceiptQuery preserves genuine option om
     () => buildSoracloudPrivateUploadedModelReceiptQuery(inherited),
     /input inherited properties are not accepted/,
   );
+});
+
+test("normalizeSoracloudPrivateUploadedModelExecuteResponse accepts every exact phase shape", () => {
+  for (const [submissionPhase, transactionHash] of [
+    ["awaiting_output_durability", null],
+    ["prepare_submitted", privateHashLiteral(27)],
+    ["receipt_submitted", privateHashLiteral(29)],
+  ]) {
+    const normalized = normalizeSoracloudPrivateUploadedModelExecuteResponse(
+      validPrivateExecuteResponse({
+        submission_phase: submissionPhase,
+        transaction_hash: transactionHash,
+      }),
+    );
+    assert.equal(normalized.submission_phase, submissionPhase);
+    assert.equal(normalized.transaction_hash, transactionHash);
+    assert.equal(normalized.receipt.authorization_claim_block_height, 0);
+    assert.equal(normalized.receipt.authorization_claim_epoch, 0);
+    assert.equal(normalized.receipt.emitted_sequence, 0);
+    assert.equal(normalized.receipt.emitted_block_height, 0);
+    assert.equal(normalized.receipt.emitted_epoch, 0);
+    assert.ok(Object.isFrozen(normalized));
+    assert.ok(Object.isFrozen(normalized.status));
+    assert.ok(Object.isFrozen(normalized.status.bundle));
+    assert.ok(Object.isFrozen(normalized.receipt));
+    assert.ok(Object.isFrozen(normalized.output_artifact));
+  }
+
+  const committedReceipt = validPrivateExecutionReceipt({
+    authorization_claim_block_height: U64_MAX,
+    authorization_claim_epoch: U64_MAX,
+    emitted_sequence: U64_MAX,
+    emitted_block_height: U64_MAX,
+    emitted_epoch: U64_MAX,
+  });
+  const committed = normalizeSoracloudPrivateUploadedModelExecuteResponse(
+    validPrivateExecuteResponse({
+      submission_phase: "committed",
+      transaction_hash: null,
+      receipt: committedReceipt,
+    }),
+  );
+  assert.equal(committed.submission_phase, "committed");
+  assert.equal(committed.transaction_hash, null);
+  assert.equal(committed.receipt.authorization_claim_block_height, U64_MAX);
+  assert.equal(committed.receipt.authorization_claim_epoch, U64_MAX);
+  assert.equal(committed.receipt.emitted_sequence, U64_MAX);
+  assert.equal(committed.receipt.emitted_block_height, U64_MAX);
+  assert.equal(committed.receipt.emitted_epoch, U64_MAX);
+});
+
+test("normalizeSoracloudPrivateUploadedModelExecutionReceipt enforces the tagged automatic order ID", () => {
+  const normalized = normalizeSoracloudPrivateUploadedModelExecutionReceipt(
+    validPrivateExecutionReceipt(),
+  );
+  assert.deepEqual(
+    normalized.output_replication_order_id,
+    PRIVATE_OUTPUT_REPLICATION_ORDER_ID,
+  );
+  assert.ok((normalized.output_replication_order_id[0] & 0x80) !== 0);
+
+  const mismatched = validPrivateExecutionReceipt();
+  mismatched.output_replication_order_id[31] ^= 1;
+  assert.throws(
+    () => normalizeSoracloudPrivateUploadedModelExecutionReceipt(mismatched),
+    /tagged automatic replication-order ID/,
+  );
+});
+
+test("normalizeSoracloudPrivateUploadedModelExecuteResponse rejects phase and ledger-state mismatches", () => {
+  for (const response of [
+    validPrivateExecuteResponse({
+      submission_phase: "awaiting_output_durability",
+      transaction_hash: privateHashLiteral(27),
+    }),
+    validPrivateExecuteResponse({
+      submission_phase: "prepare_submitted",
+      transaction_hash: null,
+    }),
+    validPrivateExecuteResponse({
+      submission_phase: "receipt_submitted",
+      receipt: validPrivateExecutionReceipt({
+        authorization_claim_block_height: 1,
+        authorization_claim_epoch: 1,
+        emitted_sequence: 1,
+        emitted_block_height: 1,
+        emitted_epoch: 1,
+      }),
+    }),
+    validPrivateExecuteResponse({
+      submission_phase: "committed",
+      transaction_hash: null,
+    }),
+  ]) {
+    assert.throws(
+      () => normalizeSoracloudPrivateUploadedModelExecuteResponse(response),
+      /transaction_hash|ledger coordinates/,
+    );
+  }
+
+  assert.throws(
+    () =>
+      normalizeSoracloudPrivateUploadedModelExecuteResponse(
+        validPrivateExecuteResponse({ submission_phase: "submitted" }),
+      ),
+    /closed first-release phase/,
+  );
+});
+
+test("normalizeSoracloudPrivateUploadedModelExecuteResponse rejects aliases and non-data fields", () => {
+  const alias = validPrivateExecuteResponse();
+  delete alias.submission_phase;
+  alias.submission_status = "receipt_submitted";
+  assert.throws(
+    () => normalizeSoracloudPrivateUploadedModelExecuteResponse(alias),
+    /submission_status is not accepted/,
+  );
+
+  const accessor = validPrivateExecuteResponse();
+  Object.defineProperty(accessor, "submission_phase", {
+    enumerable: true,
+    get: () => "receipt_submitted",
+  });
+  assert.throws(
+    () => normalizeSoracloudPrivateUploadedModelExecuteResponse(accessor),
+    /submission_phase must be an enumerable data property/,
+  );
+
+  const inherited = Object.create(validPrivateExecuteResponse());
+  assert.throws(
+    () => normalizeSoracloudPrivateUploadedModelExecuteResponse(inherited),
+    /inherited properties are not accepted/,
+  );
+});
+
+test("normalizeSoracloudPrivateUploadedModelExecuteResponse enforces exact nested status and receipt bindings", () => {
+  const extraBundleField = validPrivateExecuteResponse();
+  extraBundleField.status.bundle.legacy_model_name = "upload-1";
+  assert.throws(
+    () => normalizeSoracloudPrivateUploadedModelExecuteResponse(extraBundleField),
+    /legacy_model_name is not accepted/,
+  );
+
+  const mismatchedModel = validPrivateExecuteResponse();
+  mismatchedModel.status.bundle.model_id = "upload-2";
+  assert.throws(
+    () => normalizeSoracloudPrivateUploadedModelExecuteResponse(mismatchedModel),
+    /bundle\.model_id must match receipt/,
+  );
+
+  const mismatchedManifest = validPrivateExecuteResponse();
+  mismatchedManifest.status.bundle.sorafs_manifest_digest[0] ^= 1;
+  assert.throws(
+    () => normalizeSoracloudPrivateUploadedModelExecuteResponse(mismatchedManifest),
+    /bundle\.sorafs_manifest_digest must match receipt/,
+  );
+
+  const mismatchedArtifact = validPrivateExecuteResponse();
+  mismatchedArtifact.status.artifact.chunk_manifest_root = privateHashLiteral(31);
+  assert.throws(
+    () => normalizeSoracloudPrivateUploadedModelExecuteResponse(mismatchedArtifact),
+    /artifact\.chunk_manifest_root must match bundle/,
+  );
+
+  const mismatchedOutput = validPrivateExecuteResponse();
+  mismatchedOutput.output_artifact.artifact_hash = privateHashLiteral(33);
+  assert.throws(
+    () => normalizeSoracloudPrivateUploadedModelExecuteResponse(mismatchedOutput),
+    /output_artifact must match receipt\.output_artifact/,
+  );
+});
+
+test("private uploaded-model response normalizers require lossless u64 inputs", () => {
+  const coordinateFields = [
+    "authorization_claim_block_height",
+    "authorization_claim_epoch",
+    "emitted_sequence",
+    "emitted_block_height",
+    "emitted_epoch",
+  ];
+  for (const coordinate of coordinateFields) {
+    for (const invalid of [Number(U64_MAX), U64_MAX.toString()]) {
+      assert.throws(
+        () => normalizeSoracloudPrivateUploadedModelExecutionReceipt(
+          validPrivateExecutionReceipt({ [coordinate]: invalid }),
+        ),
+        new RegExp(`${coordinate} must be a lossless unsigned integer`, "u"),
+      );
+    }
+  }
+
+  for (const coordinate of coordinateFields) {
+    assert.throws(
+      () => normalizeSoracloudPrivateUploadedModelExecutionReceipt(
+        validPrivateExecutionReceipt({ [coordinate]: 1 }),
+      ),
+      /ledger coordinates must all be zero or all be positive/,
+    );
+  }
+});
+
+test("private uploaded-model receipts require every ledger coordinate in canonical order", () => {
+  const coordinateFields = [
+    "authorization_claim_block_height",
+    "authorization_claim_epoch",
+    "emitted_sequence",
+    "emitted_block_height",
+    "emitted_epoch",
+  ];
+  for (const coordinate of coordinateFields) {
+    const receipt = validPrivateExecutionReceipt();
+    delete receipt[coordinate];
+    assert.throws(
+      () => normalizeSoracloudPrivateUploadedModelExecutionReceipt(receipt),
+      new RegExp(`${coordinate} is required`, "u"),
+    );
+  }
+
+  for (const receipt of [
+    validPrivateExecutionReceipt({
+      authorization_claim_block_height: 2,
+      authorization_claim_epoch: 1,
+      emitted_sequence: 1,
+      emitted_block_height: 1,
+      emitted_epoch: 1,
+    }),
+    validPrivateExecutionReceipt({
+      authorization_claim_block_height: 1,
+      authorization_claim_epoch: 2,
+      emitted_sequence: 1,
+      emitted_block_height: 1,
+      emitted_epoch: 1,
+    }),
+  ]) {
+    assert.throws(
+      () => normalizeSoracloudPrivateUploadedModelExecutionReceipt(receipt),
+      /emission coordinates must not precede authorization claim coordinates/,
+    );
+  }
 });
 
 test("assembleSoracloudHfDeployRequest rejects inherited model and lease draft fields", () => {

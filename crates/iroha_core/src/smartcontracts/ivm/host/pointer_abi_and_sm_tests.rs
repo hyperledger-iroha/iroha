@@ -218,7 +218,6 @@ fn nft_mint_enqueues_register_and_transfer() {
 #[cfg(all(feature = "telemetry", feature = "sm"))]
 #[test]
 fn sm3_syscall_records_success_metric() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let message = b"telemetry";
     let tlv = pointer_abi_tests::make_tlv(ivm::PointerType::Blob as u16, message);
@@ -256,7 +255,6 @@ fn sm3_syscall_records_success_metric() {
 #[cfg(all(feature = "telemetry", feature = "sm"))]
 #[test]
 fn sm3_syscall_failure_records_failure_metric() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let message = b"not-a-blob";
     // Encode a TLV with the wrong pointer type to trigger a Norito validation error.

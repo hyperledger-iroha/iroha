@@ -21,8 +21,6 @@ public typealias IrohaPeerPayloadProfile = IrohaPeerWireProfileV1
 public typealias IrohaPeerPayloadKind = IrohaPeerWireKindV1
 
 public extension IrohaPeerWireProfileV1 {
-    static var kagemushaRecursiveSpend: Self { .kagemusha }
-
     /// The sole first-release canonical payload schema admitted by this profile.
     var requiredSchemaVersion: UInt16 {
         switch self {

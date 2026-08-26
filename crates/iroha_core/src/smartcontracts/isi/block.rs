@@ -15,6 +15,7 @@ use iroha_telemetry::metrics;
 use nonzero_ext::nonzero;
 use norito::json::Value;
 use std::{collections::BTreeSet, num::NonZeroUsize};
+const EMERGENCY_FAST_MAX_EXPLICIT_BLOCK_HEIGHTS: usize = 256;
 fn block_height_from_value(value: &Value) -> Option<NonZeroUsize> {
     let height = usize::try_from(value.as_u64()?).ok()?;
     NonZeroUsize::new(height)
@@ -48,6 +49,9 @@ fn block_candidate_heights(
             continue;
         }
         if is_hash_field(&cond.field) {
+            if state_ro.kura().emergency_fast_startup_enabled() {
+                continue;
+            }
             intersect_block_candidate_heights(
                 &mut best,
                 block_hash_from_value(&cond.value)
@@ -69,6 +73,9 @@ fn block_candidate_heights(
             continue;
         }
         if is_hash_field(&cond.field) {
+            if state_ro.kura().emergency_fast_startup_enabled() {
+                continue;
+            }
             intersect_block_candidate_heights(
                 &mut best,
                 cond.values
@@ -80,6 +87,24 @@ fn block_candidate_heights(
         }
     }
     best
+}
+fn enforce_emergency_fast_block_query_bound(
+    state_ro: &impl StateReadOnly,
+    candidate_heights: Option<&BTreeSet<NonZeroUsize>>,
+) -> Result<(), QueryExecutionFail> {
+    if !state_ro.kura().emergency_fast_startup_enabled() {
+        return Ok(());
+    }
+    let Some(candidate_heights) = candidate_heights else {
+        return Err(QueryExecutionFail::Conversion(
+            "emergency Fast mode requires block-history queries to include an explicit numeric height filter; restart in Strict mode for unbounded or hash-only history queries"
+                .to_owned(),
+        ));
+    };
+    if candidate_heights.len() > EMERGENCY_FAST_MAX_EXPLICIT_BLOCK_HEIGHTS {
+        return Err(QueryExecutionFail::GasBudgetExceeded);
+    }
+    Ok(())
 }
 fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     if path.is_empty() {
@@ -296,14 +321,16 @@ impl ValidQuery for FindBlocks {
         let predicate_json = filter
             .json_payload()
             .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
-        if let Some(candidate_heights) = predicate_json.as_ref().and_then(|predicate| {
+        let candidate_heights = predicate_json.as_ref().and_then(|predicate| {
             block_candidate_heights(
                 predicate,
                 state_ro,
                 |field| matches!(field, "height" | "header.height" | "payload.header.height"),
                 |field| matches!(field, "hash" | "block_hash" | "header.hash"),
             )
-        }) {
+        });
+        enforce_emergency_fast_block_query_bound(state_ro, candidate_heights.as_ref())?;
+        if let Some(candidate_heights) = candidate_heights {
             let blocks = candidate_heights
                 .into_iter()
                 .filter(|height| height.get() <= state_ro.height())
@@ -352,14 +379,16 @@ impl ValidQuery for FindBlockHeaders {
         let predicate_json = filter
             .json_payload()
             .and_then(|raw| norito::json::from_str::<PredicateJson>(raw).ok());
-        if let Some(candidate_heights) = predicate_json.as_ref().and_then(|predicate| {
+        let candidate_heights = predicate_json.as_ref().and_then(|predicate| {
             block_candidate_heights(
                 predicate,
                 state_ro,
                 |field| field == "height",
                 |field| matches!(field, "hash" | "block_hash"),
             )
-        }) {
+        });
+        enforce_emergency_fast_block_query_bound(state_ro, candidate_heights.as_ref())?;
+        if let Some(candidate_heights) = candidate_heights {
             let blocks = candidate_heights
                 .into_iter()
                 .filter(|height| height.get() <= state_ro.height())

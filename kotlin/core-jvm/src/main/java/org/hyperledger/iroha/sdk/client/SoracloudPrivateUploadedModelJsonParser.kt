@@ -11,21 +11,20 @@ object SoracloudPrivateUploadedModelJsonParser {
 
     private const val U32_MAX = 4_294_967_295L
     private val U64_MAX = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
-    private const val SUBMITTED = "submitted"
-    private const val COMMITTED = "committed"
     private const val X25519_HKDF_SHA256 = "X25519HkdfSha256"
     private const val AES_256_GCM = "Aes256Gcm"
     private val EXECUTE_RESPONSE_FIELDS = setOf(
-        "schema_version", "status", "submission_status", "transaction_hash", "receipt",
+        "schema_version", "status", "submission_phase", "transaction_hash", "receipt",
         "output_artifact",
     )
-    private val UPLOADED_MODEL_STATUS_FIELDS = setOf("schema_version", "bundle", "artifact")
     private val RECEIPT_FIELDS = setOf(
         "schema_version", "network_id", "receipt_id", "service_name", "service_version", "model_id",
         "weight_version", "runtime_version", "model_manifest_digest", "model_bundle_root",
         "policy_id", "decryption_request_id", "attesting_validator", "input_artifact",
-        "output_artifact", "input_commitment", "output_commitment", "output_recipient",
-        "request_commitment", "result_commitment", "emitted_sequence", "emitted_block_height",
+        "output_artifact", "output_replication_order_id", "input_commitment", "output_commitment",
+        "output_recipient", "request_commitment", "result_commitment",
+        "authorization_claim_block_height", "authorization_claim_epoch", "emitted_sequence",
+        "emitted_block_height", "emitted_epoch",
     )
     private val ARTIFACT_FIELDS = setOf(
         "schema_version", "sorafs_manifest_digest", "sorafs_root_cid", "artifact_hash",
@@ -53,20 +52,20 @@ object SoracloudPrivateUploadedModelJsonParser {
             required = EXECUTE_RESPONSE_FIELDS,
             path = "soracloud private execute response",
         )
-        val submissionStatus = submissionStatus(
-            root["submission_status"],
-            "soracloud private execute response.submission_status",
+        val submissionPhase = submissionPhase(
+            root["submission_phase"],
+            "soracloud private execute response.submission_phase",
         )
         val transactionHash = optionalHashLiteral(
             root["transaction_hash"],
             "soracloud private execute response.transaction_hash",
         )
-        requireTransactionHashMatchesStatus(submissionStatus, transactionHash)
+        requireTransactionHashMatchesPhase(submissionPhase, transactionHash)
         val receipt = parseReceipt(
             expectObject(root["receipt"], "soracloud private execute response.receipt"),
             "soracloud private execute response.receipt",
         )
-        requireReceiptPersistenceMatchesStatus(submissionStatus, receipt)
+        requireReceiptPersistenceMatchesPhase(submissionPhase, receipt)
         val outputArtifact = parseArtifact(
             expectObject(
                 root["output_artifact"],
@@ -82,10 +81,19 @@ object SoracloudPrivateUploadedModelJsonParser {
             expectObject(root["status"], "soracloud private execute response.status"),
             "soracloud private execute response.status",
         )
+        try {
+            requireUploadedModelStatusMatchesReceipt(
+                status,
+                receipt,
+                "soracloud private execute response.status",
+            )
+        } catch (error: IllegalArgumentException) {
+            throw IllegalStateException(error.message, error)
+        }
         return SoracloudPrivateUploadedModelExecuteResponse(
             schemaVersion = schemaVersion(root["schema_version"], "soracloud private execute response.schema_version"),
             status = status,
-            submissionStatus = submissionStatus,
+            submissionPhase = submissionPhase,
             transactionHash = transactionHash,
             receipt = receipt,
             outputArtifact = outputArtifact,
@@ -96,15 +104,11 @@ object SoracloudPrivateUploadedModelJsonParser {
         root: Map<String, Any?>,
         context: String,
     ): Map<String, Any?> {
-        requireFields(
-            root,
-            allowed = UPLOADED_MODEL_STATUS_FIELDS,
-            required = UPLOADED_MODEL_STATUS_FIELDS,
-            path = context,
-        )
-        schemaVersion(root["schema_version"], "$context.schema_version")
-        expectObject(root["bundle"], "$context.bundle")
-        root["artifact"]?.let { expectObject(it, "$context.artifact") }
+        try {
+            SoracloudImmutableJsonObject.validateUploadedModelStatus(root, context)
+        } catch (error: IllegalArgumentException) {
+            throw IllegalStateException(error.message, error)
+        }
         return root
     }
 
@@ -123,8 +127,11 @@ object SoracloudPrivateUploadedModelJsonParser {
             val path = "soracloud private receipt list.receipts[$i]"
             val receipt = parseReceipt(expectObject(receiptValues[i], path), path)
             check(
-                receipt.emittedSequence > BigInteger.ZERO &&
-                    receipt.emittedBlockHeight > BigInteger.ZERO
+                receipt.authorizationClaimBlockHeight > BigInteger.ZERO &&
+                    receipt.authorizationClaimEpoch > BigInteger.ZERO &&
+                    receipt.emittedSequence > BigInteger.ZERO &&
+                    receipt.emittedBlockHeight > BigInteger.ZERO &&
+                    receipt.emittedEpoch > BigInteger.ZERO
             ) {
                 "$path must have positive ledger coordinates"
             }
@@ -194,11 +201,55 @@ object SoracloudPrivateUploadedModelJsonParser {
             root["emitted_block_height"],
             "$context.emitted_block_height",
         )
+        val emittedEpoch = unsigned64Integer(
+            root["emitted_epoch"],
+            "$context.emitted_epoch",
+        )
+        val authorizationClaimBlockHeight = unsigned64Integer(
+            root["authorization_claim_block_height"],
+            "$context.authorization_claim_block_height",
+        )
+        val authorizationClaimEpoch = unsigned64Integer(
+            root["authorization_claim_epoch"],
+            "$context.authorization_claim_epoch",
+        )
         check(
-            (emittedSequence == BigInteger.ZERO && emittedBlockHeight == BigInteger.ZERO) ||
-                (emittedSequence > BigInteger.ZERO && emittedBlockHeight > BigInteger.ZERO)
+            (authorizationClaimBlockHeight == BigInteger.ZERO &&
+                authorizationClaimEpoch == BigInteger.ZERO &&
+                emittedSequence == BigInteger.ZERO &&
+                emittedBlockHeight == BigInteger.ZERO &&
+                emittedEpoch == BigInteger.ZERO) ||
+                (authorizationClaimBlockHeight > BigInteger.ZERO &&
+                    authorizationClaimEpoch > BigInteger.ZERO &&
+                    emittedSequence > BigInteger.ZERO &&
+                    emittedBlockHeight > BigInteger.ZERO &&
+                    emittedEpoch > BigInteger.ZERO)
         ) {
-            "$context ledger coordinates must both be zero or both be positive"
+            "$context ledger coordinates must all be zero or all be positive"
+        }
+        check(
+            authorizationClaimBlockHeight == BigInteger.ZERO ||
+                (emittedBlockHeight >= authorizationClaimBlockHeight &&
+                    emittedEpoch >= authorizationClaimEpoch)
+        ) {
+            "$context emission coordinates must not precede authorization claim coordinates"
+        }
+        val outputArtifact = parseArtifact(
+            expectObject(root["output_artifact"], "$context.output_artifact"),
+            "$context.output_artifact",
+            requiredRole = "output",
+        )
+        val outputReplicationOrderId = manifestDigest(
+            root["output_replication_order_id"],
+            "$context.output_replication_order_id",
+        )
+        check(
+            outputReplicationOrderId == deriveSorafsAutoReplicationOrderIdV1(
+                outputArtifact.sorafsManifestDigest,
+            )
+        ) {
+            "$context.output_replication_order_id must equal the tagged automatic " +
+                "replication-order ID derived from output_artifact.sorafs_manifest_digest"
         }
         return SoracloudPrivateUploadedModelExecutionReceipt(
             schemaVersion = schemaVersion(root["schema_version"], "$context.schema_version"),
@@ -225,11 +276,8 @@ object SoracloudPrivateUploadedModelJsonParser {
                 "$context.input_artifact",
                 requiredRole = "input",
             ),
-            outputArtifact = parseArtifact(
-                expectObject(root["output_artifact"], "$context.output_artifact"),
-                "$context.output_artifact",
-                requiredRole = "output",
-            ),
+            outputArtifact = outputArtifact,
+            outputReplicationOrderId = outputReplicationOrderId,
             inputCommitment = hashLiteral(root["input_commitment"], "$context.input_commitment"),
             outputCommitment = hashLiteral(root["output_commitment"], "$context.output_commitment"),
             outputRecipient = parseOutputRecipient(
@@ -238,8 +286,11 @@ object SoracloudPrivateUploadedModelJsonParser {
             ),
             requestCommitment = hashLiteral(root["request_commitment"], "$context.request_commitment"),
             resultCommitment = hashLiteral(root["result_commitment"], "$context.result_commitment"),
+            authorizationClaimBlockHeight = authorizationClaimBlockHeight,
+            authorizationClaimEpoch = authorizationClaimEpoch,
             emittedSequence = emittedSequence,
             emittedBlockHeight = emittedBlockHeight,
+            emittedEpoch = emittedEpoch,
         )
     }
 
@@ -491,12 +542,16 @@ object SoracloudPrivateUploadedModelJsonParser {
         return Collections.unmodifiableList(bytes)
     }
 
-    private fun submissionStatus(value: Any?, path: String): String {
+    private fun submissionPhase(
+        value: Any?,
+        path: String,
+    ): SoracloudPrivateUploadedModelSubmissionPhase {
         val parsed = requiredString(value, path)
-        check(parsed == SUBMITTED || parsed == COMMITTED) {
-            "$path must equal `submitted` or `committed`"
+        return try {
+            SoracloudPrivateUploadedModelSubmissionPhase.fromWireValue(parsed)
+        } catch (error: IllegalArgumentException) {
+            throw IllegalStateException("$path has an unknown first-release phase", error)
         }
-        return parsed
     }
 
     private fun countMode(value: Any?, path: String): String {
@@ -507,35 +562,43 @@ object SoracloudPrivateUploadedModelJsonParser {
         return parsed
     }
 
-    private fun requireTransactionHashMatchesStatus(
-        submissionStatus: String,
+    private fun requireTransactionHashMatchesPhase(
+        submissionPhase: SoracloudPrivateUploadedModelSubmissionPhase,
         transactionHash: String?,
     ) {
-        check(submissionStatus != SUBMITTED || transactionHash != null) {
-            "soracloud private execute response.transaction_hash is required for `submitted`"
-        }
-        check(submissionStatus != COMMITTED || transactionHash == null) {
-            "soracloud private execute response.transaction_hash must be null for `committed`"
+        val required = SoracloudPrivateUploadedModelSubmissionPhase
+            .requiresTransactionHash(submissionPhase)
+        check(required == (transactionHash != null)) {
+            if (required) {
+                "soracloud private execute response.transaction_hash is required for " +
+                    "`${submissionPhase.wireValue}`"
+            } else {
+                "soracloud private execute response.transaction_hash must be null for " +
+                    "`${submissionPhase.wireValue}`"
+            }
         }
     }
 
-    private fun requireReceiptPersistenceMatchesStatus(
-        submissionStatus: String,
+    private fun requireReceiptPersistenceMatchesPhase(
+        submissionPhase: SoracloudPrivateUploadedModelSubmissionPhase,
         receipt: SoracloudPrivateUploadedModelExecutionReceipt,
     ) {
-        check(
-            submissionStatus != SUBMITTED ||
-                (receipt.emittedSequence == BigInteger.ZERO &&
-                    receipt.emittedBlockHeight == BigInteger.ZERO)
-        ) {
-            "soracloud private execute response.receipt must use zero ledger coordinates for `submitted`"
-        }
-        check(
-            submissionStatus != COMMITTED ||
-                (receipt.emittedSequence > BigInteger.ZERO &&
-                    receipt.emittedBlockHeight > BigInteger.ZERO)
-        ) {
-            "soracloud private execute response.receipt must use positive ledger coordinates for `committed`"
+        val assigned =
+            receipt.authorizationClaimBlockHeight > BigInteger.ZERO &&
+                receipt.authorizationClaimEpoch > BigInteger.ZERO &&
+                receipt.emittedSequence > BigInteger.ZERO &&
+                receipt.emittedBlockHeight > BigInteger.ZERO &&
+                receipt.emittedEpoch > BigInteger.ZERO
+        val required = SoracloudPrivateUploadedModelSubmissionPhase
+            .requiresAssignedReceipt(submissionPhase)
+        check(required == assigned) {
+            if (required) {
+                "soracloud private execute response.receipt must use positive ledger coordinates " +
+                    "for `committed`"
+            } else {
+                "soracloud private execute response.receipt must use zero ledger coordinates for " +
+                "`${submissionPhase.wireValue}`"
+            }
         }
     }
 

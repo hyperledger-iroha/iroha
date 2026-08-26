@@ -1,6 +1,8 @@
-# Torii App API: ZK Attachments and Prover (Operator Guide)
+# Torii App API: ZK Attachments and Proof Tooling
 
-This document describes the app‑facing ZK endpoints exposed by Torii for storing proof attachments and inspecting background prover reports. These features are strictly non‑consensus and do not affect block production or validation.
+This document describes the app-facing ZK endpoints exposed by Torii for
+storing proof attachments and running proof tooling. These features are
+strictly non-consensus and do not affect block production or validation.
 
 Contents
 - Endpoints and storage layout
@@ -13,6 +15,7 @@ Contents
 Attachments (store sanitized bytes with metadata):
 - `POST /v1/zk/attachments` — store a new attachment (body = bytes, sanitized on ingest)
 - `GET  /v1/zk/attachments` — list stored attachments (JSON array)
+- `GET  /v1/zk/attachments/count` — count stored attachments
 - `GET  /v1/zk/attachments/{id}` — fetch stored attachment bytes by id
 - `DELETE /v1/zk/attachments/{id}` — delete an attachment
 
@@ -21,13 +24,6 @@ runtime `NetworkId`, HTTP method, URI, nonce, expiry, and bounded raw body. Tori
 verifies these headers before query/path/body extraction and derives the storage
 tenant only from the verified account. An API token, when configured, is an
 additional gate and never establishes attachment ownership.
-
-Background prover reports (non‑consensus verification):
-- `GET    /v1/zk/prover/reports` — list reports (JSON array)
-- `GET    /v1/zk/prover/reports/count` — count reports matching the same list filters
-- `GET    /v1/zk/prover/reports/{id}` — fetch one report (JSON)
-- `DELETE /v1/zk/prover/reports` — bulk delete reports matching the same list filters
-- `DELETE /v1/zk/prover/reports/{id}` — delete a report
 
 Confidential-tree witnesses (committed ledger reads):
 - `POST   /v1/zk/roots` — return the bounded recent-root window for one asset
@@ -51,16 +47,15 @@ Notes
 - Attachments persist on disk under `./storage/torii/zk_attachments/`:
   - `./storage/torii/zk_attachments/{id}.bin` (body)
   - `./storage/torii/zk_attachments/{id}.json` (metadata)
-- Prover reports persist under `./storage/torii/zk_prover/reports/{id}.json`.
-  Query metadata is stored as one bounded, atomically replaced summary shard
+- Background-prover diagnostics persist under
+  `./storage/torii/zk_prover/reports/{id}.json`. They are node-local worker
+  state and have no public HTTP or SDK surface. Metadata is stored as one
+  bounded, atomically replaced summary shard
   per report under `./storage/torii/zk_prover/report_index/{id}.json`; saving a
   report never rewrites a global summary file. A shard is capped at 64 KiB;
   its projected error and content-type fields are capped at 4 KiB and 256
-  bytes respectively. Listing, counting, deletion, and garbage collection scan
-  one shard at a time. Ordered listing retains only compact keys for the
-  requested page window; list responses default to 100 entries, cap at 1000,
-  reject offsets above 10000, and cap full-report JSON responses at 16 MiB.
-  Bulk deletion removes at most 1000 deterministically ordered reports per call.
+  bytes respectively. Retention and garbage collection scan one shard at a
+  time.
 - Base directory is configured with `torii.data_dir`; tests/dev harnesses can override with `data_dir::OverrideGuard`.
 - IVM derive/prove require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and a required typed `fee_payment` intent whose `gas_limit` is set. Obtain the exact intent from `POST /v1/fees/quote`; legacy `fee_sponsor`, `gas_limit`, and `gas_asset_id` metadata keys are rejected.
 - `/v1/zk/ivm/derive` accepts verifying keys with backend `halo2/ipa` or `stark/fri` (including `stark/fri/...` variants) (must be compatible with `ivm-execution-v1`).
@@ -103,7 +98,7 @@ All runtime behavior is configured via `iroha_config` (Torii section). The follo
   - Sanitization timeout in milliseconds.
   - Default: 1000.
 - `torii.zk_prover_enabled` (bool)
-  - Enables background prover scan worker. When disabled, endpoints still serve existing reports, but no new reports are created.
+  - Enables the background prover scan worker. When disabled, no new local diagnostic reports are created.
   - Default: false.
 - `torii.zk_prover_scan_period_secs` (u64)
   - Scan period for the background prover.
@@ -142,7 +137,7 @@ Access control and rate limiting:
 - `torii.require_api_token` (bool) and `torii.api_tokens` (list of strings)
   - When enabled and tokens are provided, app API routes require `x-api-token: <token>` header. Unknown/missing tokens are rejected.
 - `torii.query_rate_per_authority_per_sec` (Option<u32>) and `torii.query_burst_per_authority` (Option<u32>)
-  - Per-authority rate limiter for app API endpoints (attachments and prover routes).
+  - Per-authority rate limiter for app API query endpoints, including attachment reads.
 - `torii.tx_rate_per_authority_per_sec` (Option<u32>) and `torii.tx_burst_per_authority` (Option<u32>)
   - Per-authority transaction submission rate limiter for `/v1/pipeline/transactions` and other tx-producing endpoints.
 - `torii.api_rate_limit_bypass_cidrs` (list of CIDRs)
@@ -152,16 +147,13 @@ Tip: These keys map to the `iroha_config::parameters::user::Torii` section and a
 
 ## Operational Notes
 
-- Non‑consensus: attaching proofs and reading prover reports does not modify WSV or affect consensus. They are app/operator tools.
+- Non-consensus: attaching proofs and running the background verifier does not modify WSV or affect consensus.
 - Determinism & safety: id derivation and report generation are deterministic (based on body and content type). The prover verifies proofs using configured backends; it does not generate proofs or affect consensus.
 - Sanitization: gzip/zstd payloads are expanded within configured limits and only allowlisted types are stored; sanitizer metadata is captured in `provenance` and exports are re‑sanitized.
 - Subprocess isolation: Torii rejects the node binary and differently named helpers, clears the child environment to the three sanitizer protocol variables, exposes only the helper and runtime libraries inside the filesystem sandbox, and caps both request and response streams. Official release bundles and container images ship the helper; Linux images also ship Bubblewrap.
 - GC cadence: attachment GC runs every minute and removes entries older than `attachments_ttl_secs`.
-- Storage hygiene: deleting an attachment removes both `.bin` and `.json`; deleting a report removes the corresponding `.json` under `zk_prover/reports`.
+- Storage hygiene: deleting an attachment removes both `.bin` and `.json`; report retention removes the corresponding node-local files under `zk_prover/reports`.
 - Payloads: the prover expects `ProofAttachment`/`ProofAttachmentList` payloads (Norito or JSON). ZK1/TLV envelopes are tagged but rejected as top‑level payloads. The first-release ZK1 structural profile permits at most 64 TLVs per envelope, and repeated tags are stored once in report metadata.
-- Report filters: `has_tag` matches a ZK1 TLV tag and must be exactly four
-  printable ASCII characters, for example `PROF`; malformed tag filters are
-  rejected with `400 Bad Request`.
 - Key bytes: when a registry entry omits stored VK bytes, the prover loads bytes from `torii.zk_prover_keys_dir` using `<backend>__<name>.vk` naming.
 - VK commitments are domain-separated SHA-256 hashes over the `iroha:zk:v1:vk`
   domain plus length-prefixed backend and VK bytes. Generic ledger
@@ -182,16 +174,6 @@ Tip: These keys map to the `iroha_config::parameters::user::Torii` section and a
 
 ## Examples
 
-Using curl:
-
-```bash
-# List background prover reports (if enabled)
-curl -sS http://localhost:8080/api/v1/zk/prover/reports | jq .
-
-# Fetch a single report
-curl -sS http://localhost:8080/api/v1/zk/prover/reports/<id> | jq .
-```
-
 Raw attachment `curl` calls are intentionally omitted: all five routes require
 the complete canonical exact-network account-signature header set. Prefer the
 CLI or an SDK signer. If `require_api_token=true`, include the configured token
@@ -207,11 +189,6 @@ iroha app zk attachments upload --file ./proof.json --content-type application/j
 iroha app zk attachments list
 iroha app zk attachments get --id <id> --out ./downloaded.bin
 iroha app zk attachments delete --id <id>
-
-# Prover reports (list/get/delete)
-iroha app zk prover reports list
-iroha app zk prover reports get --id <id>
-iroha app zk prover reports delete --id <id>
 
 # IVM prove helper (submit/poll) and proving-key derivation
 iroha app zk ivm prove --json ./ivm_prove_request.json --wait

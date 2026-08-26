@@ -39,7 +39,11 @@ fn assert_merge_queue_plan_synced_intent_error(error: MergeLedgerCommitError) {
 
 #[test]
 fn autonomous_merge_admission_intent_producer_rejects_ordinary_external_before_effects() {
-    let (state, validator_keypairs, _, parent) = configured_single_lane_merge_state();
+    let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
+    let authority_height = parent.header().height().get();
+    let application_height = authority_height
+        .checked_add(1)
+        .expect("fixture application height");
     let tag = 0x79;
     let entrypoint = ordinary_external_entrypoint_for_merge_intent_test(&state, tag);
     assert_eq!(
@@ -54,7 +58,7 @@ fn autonomous_merge_admission_intent_producer_rejects_ordinary_external_before_e
         &state,
         routing_plan.clone(),
         &validator_keypairs,
-        1,
+        authority_height,
         tag,
         &entrypoint,
     );
@@ -75,7 +79,7 @@ fn autonomous_merge_admission_intent_producer_rejects_ordinary_external_before_e
         &validator_keypairs,
     );
     let application_header = BlockHeader::new(
-        nonzero!(2_u64),
+        NonZeroU64::new(application_height).expect("fixture application height is non-zero"),
         Some(parent.hash()),
         None,
         None,
@@ -112,6 +116,7 @@ fn autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_ext
                 &batch,
                 &BTreeMap::new(),
                 validate_live_authority,
+                Some(ConsensusMode::Permissioned),
             )
             .expect("QueuePlanSynced merge content remains valid");
     }
@@ -134,6 +139,7 @@ fn autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_ext
                 &batch,
                 &BTreeMap::new(),
                 validate_live_authority,
+                Some(ConsensusMode::Permissioned),
             )
             .expect_err("follower and historical validation must reject Ordinary content");
         assert_merge_queue_plan_synced_intent_error(error);

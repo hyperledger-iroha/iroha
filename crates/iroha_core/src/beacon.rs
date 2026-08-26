@@ -62,6 +62,30 @@ const GLOBAL_BEACON_GOVERNANCE_SEED_DOMAIN_V1: &[u8] =
 /// observed.
 pub const GLOBAL_THRESHOLD_BEACON_PULSE_ROUND_V1: u64 = 0;
 
+/// Read the sole canonical active global-beacon key-session pointer.
+///
+/// The first-release state shape permits either no entry or exactly one entry
+/// at its internal singleton key. Exposing this checked projection keeps
+/// dependent crates from treating a corrupt storage key as authoritative.
+///
+/// # Errors
+///
+/// Returns [`GlobalThresholdBeaconError::PersistenceConflict`] when the
+/// underlying singleton storage contains a noncanonical key or more than one
+/// entry.
+pub fn active_global_threshold_beacon_session_id_v1(
+    world: &impl crate::state::WorldReadOnly,
+) -> Result<Option<[u8; 32]>, GlobalThresholdBeaconError> {
+    let mut entries = world.global_beacon_active_session().iter();
+    let Some((key, session_id)) = entries.next() else {
+        return Ok(None);
+    };
+    if *key != crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY || entries.next().is_some() {
+        return Err(GlobalThresholdBeaconError::PersistenceConflict);
+    }
+    Ok(Some(*session_id))
+}
+
 /// Hash the exact ordered, domainless validator identities used as DKG seats.
 ///
 /// Consensus power is fixed to one in Sumeragi v2, so the public beacon
@@ -2360,6 +2384,7 @@ pub fn decode_finalized_global_threshold_beacon_pulse_v1(
 fn is_zero(bytes: &[u8]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
 }
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -2406,6 +2431,53 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     struct AcceptingAdaptiveDkgCrypto;
+
+    #[test]
+    fn active_global_beacon_session_projection_rejects_noncanonical_storage() {
+        let world = World::new();
+        assert_eq!(
+            active_global_threshold_beacon_session_id_v1(&world.view()),
+            Ok(None)
+        );
+
+        let canonical = [0x31; 32];
+        {
+            let mut block = world.block();
+            block
+                .global_beacon_active_session
+                .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, canonical);
+            block.commit();
+        }
+        assert_eq!(
+            active_global_threshold_beacon_session_id_v1(&world.view()),
+            Ok(Some(canonical))
+        );
+
+        {
+            let mut block = world.block();
+            block
+                .global_beacon_active_session
+                .remove(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY);
+            block.global_beacon_active_session.insert(1, [0x41; 32]);
+            block.commit();
+        }
+        assert_eq!(
+            active_global_threshold_beacon_session_id_v1(&world.view()),
+            Err(GlobalThresholdBeaconError::PersistenceConflict)
+        );
+
+        {
+            let mut block = world.block();
+            block
+                .global_beacon_active_session
+                .insert(GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, canonical);
+            block.commit();
+        }
+        assert_eq!(
+            active_global_threshold_beacon_session_id_v1(&world.view()),
+            Err(GlobalThresholdBeaconError::PersistenceConflict)
+        );
+    }
 
     impl GlobalThresholdBeaconDkgCryptoV1 for AcceptingAdaptiveDkgCrypto {
         fn derive_generators(
@@ -2864,9 +2936,14 @@ pub(crate) mod tests {
         FinalizedGlobalThresholdBeaconKeySessionRecordV1,
         FinalizedGlobalThresholdBeaconPulseV1,
     ) {
-        assert!(height > 30, "fixture pulse follows DKG finalization");
+        assert!(height > 4, "fixture pulse follows DKG finalization");
         let mut dkg_session = adaptive_dkg_session_fixture();
         dkg_session.network_id = network_id;
+        // Keep the cryptographic fixture compact while retaining the exact
+        // production DKG phase ordering and activation boundary.
+        dkg_session.sharing_end_height = 2;
+        dkg_session.complaints_end_height = 3;
+        dkg_session.responses_end_height = 4;
         dkg_session.session_id = Hash::new_from_chunks(&[
             b"iroha.beacon.world-test-session.v1\0",
             network_id.as_bytes(),

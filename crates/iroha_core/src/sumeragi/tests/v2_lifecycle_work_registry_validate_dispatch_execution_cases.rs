@@ -2352,16 +2352,26 @@ fn recovered_ready_validate_plural_open_fixture() {
         markers[1].execution_commitment(),
     );
     let selected_key = (selected.1, selected.2);
+    let ordinal_by_key = BTreeMap::from([
+        (
+            (durables[1].round(), durables[1].subject()),
+            fixtures[1].lease.ordinal(),
+        ),
+        (
+            (durables[2].round(), durables[2].subject()),
+            fixtures[2].lease.ordinal(),
+        ),
+    ]);
     let selected_before = executor
         .recovered_durable_validate_retry_snapshot_for_test(selected_key)
         .expect("selected Ready key retains its pre-Decision recovered owner");
     let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
     executor
         .reconcile_recovered_validate_retry_decision_for_test(selected, false, &mut services)
-        .expect("Decision cleanup retains only the selected recovered retry seal");
+        .expect("Decision cleanup preserves every still-live recovered retry seal");
     assert_eq!(
         executor.recovered_durable_validate_retry_keys_for_test(),
-        vec![selected_key]
+        ready_keys
     );
     let selected_after = executor
         .recovered_durable_validate_retry_snapshot_for_test(selected_key)
@@ -2373,7 +2383,55 @@ fn recovered_ready_validate_plural_open_fixture() {
     );
     executor
         .reconcile_recovered_validate_retry_decision_for_test(selected, true, &mut services)
-        .expect("terminal Decision cleanup drains the selected recovered retry seal");
+        .expect("terminal Decision cleanup defers every live retry seal to exact resolution");
+    assert_eq!(
+        executor.recovered_durable_validate_retry_keys_for_test(),
+        ready_keys
+    );
+
+    let selected_ordinal = ordinal_by_key[&selected_key];
+    let selected_before_wrong_release = executor
+        .recovered_durable_validate_retry_snapshot_for_test(selected_key)
+        .expect("selected terminal cleanup retains its live recovered owner");
+    let wrong_ordinal = selected_ordinal
+        .checked_add(10_000)
+        .expect("wrong recovered Validate ordinal");
+    assert!(matches!(
+        executor.release_validate_retry_lifecycle_ordinal(selected_key, wrong_ordinal),
+        Err(crate::sumeragi::v2_effects::EffectExecutorError::Contract(reason))
+            if reason.contains("ordinal")
+    ));
+    assert_eq!(
+        executor.recovered_durable_validate_retry_keys_for_test(),
+        ready_keys
+    );
+    assert_eq!(
+        executor.recovered_durable_validate_retry_snapshot_for_test(selected_key),
+        Some(selected_before_wrong_release),
+        "wrong-ordinal release must leave the selected owner byte-for-byte inert",
+    );
+
+    let other_key = ready_keys
+        .iter()
+        .copied()
+        .find(|key| *key != selected_key)
+        .expect("plural Ready census retains one non-selected key");
+    assert_eq!(
+        executor
+            .release_validate_retry_lifecycle_ordinal(other_key, ordinal_by_key[&other_key])
+            .expect("release exact non-selected Ready Validate ordinal"),
+        true,
+    );
+    assert_eq!(
+        executor.recovered_durable_validate_retry_keys_for_test(),
+        vec![selected_key]
+    );
+    assert_eq!(
+        executor
+            .release_validate_retry_lifecycle_ordinal(selected_key, selected_ordinal)
+            .expect("release exact selected Ready Validate ordinal"),
+        true,
+    );
     assert!(
         executor
             .recovered_durable_validate_retry_keys_for_test()

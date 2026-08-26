@@ -1,6 +1,5 @@
 #[test]
 fn execute_query_syscall_returns_norito_response_and_gas() {
-    crate::test_alias::ensure();
     let world = World::new();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -41,7 +40,6 @@ fn execute_query_syscall_returns_norito_response_and_gas() {
 }
 #[test]
 fn execute_query_rejects_oversized_singular_response_before_output_allocation() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let mut metadata = Metadata::default();
     metadata.insert(
@@ -82,7 +80,6 @@ fn execute_query_rejects_oversized_singular_response_before_output_allocation() 
 }
 #[test]
 fn get_account_balance_syscall_returns_canonical_quantity_pointer() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let domain =
         Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
@@ -157,7 +154,6 @@ fn get_account_balance_syscall_returns_canonical_quantity_pointer() {
 }
 #[test]
 fn core_queries_return_typed_handles_and_specialists_remain_norito() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
     let domain = Domain::new(domain_id.clone()).build(&authority);
@@ -447,7 +443,6 @@ seiyaku DedicatedQueryContract {
 }
 #[test]
 fn core_query_get_respects_user_executor_denial_for_every_entity() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&authority);
@@ -576,7 +571,6 @@ fn core_query_page_request_encodes_canonical_account_components() {
 }
 #[test]
 fn core_query_page_respects_user_executor_denial_for_every_entity() {
-    crate::test_alias::ensure();
     let authority: AccountId = fixture_account("alice");
     let account = build_fixture_account(&authority, &authority);
     let world = World::with([], [account], []);
@@ -628,7 +622,6 @@ fn core_query_page_respects_user_executor_denial_for_every_entity() {
 }
 #[test]
 fn core_query_page_is_bounded_ordered_and_validates_arguments() {
-    crate::test_alias::ensure();
     let authority = fixture_account("alice");
     let ids = [
         authority.clone(),

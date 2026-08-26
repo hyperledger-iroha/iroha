@@ -588,6 +588,8 @@ fn authenticated_leader_candidate_recovers_exact_follower_share_after_restart() 
     assert_eq!(
         adapter
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_candidate(&merge_signing_context_for_test(&adapter, &candidate))
             .expect("read exact durable candidate"),
         Some((
@@ -630,6 +632,8 @@ fn authenticated_leader_candidate_recovers_exact_follower_share_after_restart() 
     assert_eq!(
         reopened
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_candidate(&merge_signing_context_for_test(&reopened, &candidate))
             .expect("read restarted exact durable candidate"),
         Some((recovered.message_digest, candidate, candidate_bytes,))
@@ -676,6 +680,8 @@ fn merge_share_transport_rejects_omission_nonleader_body_and_legacy_version() {
     assert_eq!(
         adapter
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_candidate(&merge_signing_context_for_test(&adapter, &candidate))
             .expect("read untouched signing guard"),
         None
@@ -768,6 +774,8 @@ fn merge_leader_candidate_rejects_substitution_outer_epoch_and_oversize_before_j
     assert_eq!(
         adapter
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_candidate(&merge_signing_context_for_test(&adapter, &candidate))
             .expect("read untouched signing guard"),
         None
@@ -828,6 +836,8 @@ fn authenticated_execution_candidate_rejects_noncanonical_carrier_context_header
     assert_eq!(
         adapter
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_candidate(&merge_signing_context_for_test(&adapter, &candidate))
             .expect("read untouched signing guard"),
         None
@@ -872,6 +882,8 @@ fn authenticated_relay_candidate_cannot_be_relabelled_as_execution() {
     assert_eq!(
         adapter
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_candidate(&merge_signing_context_for_test(&adapter, &candidate))
             .expect("read untouched signing guard"),
         None
@@ -922,6 +934,8 @@ fn durable_local_merge_claim_rejects_same_context_candidate_drift() {
     assert_eq!(
         adapter
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_digest(&merge_signing_context_for_test(&adapter, &candidate))
             .expect("read durable exact-context decision"),
         Some(first_digest),
@@ -992,6 +1006,8 @@ fn durable_local_merge_claim_rejects_conflict_after_adapter_reopen() {
     assert_eq!(
         reopened
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_digest(&merge_signing_context_for_test(&reopened, &candidate))
             .expect("read restarted durable decision"),
         Some(first_digest)
@@ -1117,37 +1133,45 @@ fn record_production_merge_candidate_for_persistence_retry(
         .install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
             BTreeMap::from([(lane_id, status)]),
         )));
-    // Mirror the production relay-committee ranking. The fixture has the
-    // exact 3f+1 topology, so every live validator is selected in the
-    // frozen authority geometry used by merge admission.
-    let epoch_seed = crate::sumeragi::npos_seed_for_height_from_world(
-        &adapter.state.world.view(),
-        &adapter.context.network_id,
-        lane_height,
+    let (beacon_key, beacon_pulse) = crate::beacon::tests::signed_persisted_pulse_fixture_for_world(
+        adapter.context.network_id,
+        global_height - 1,
     );
-    let mut seed_preimage = Vec::new();
-    seed_preimage.extend_from_slice(b"iroha:lane-relay:committee-seed:v1");
-    seed_preimage.extend_from_slice(&epoch_seed);
-    seed_preimage.extend_from_slice(&dataspace_id.as_u64().to_le_bytes());
-    seed_preimage.extend_from_slice(&lane_id.as_u32().to_le_bytes());
-    let committee_seed: [u8; 32] = Hash::new(seed_preimage).into();
-    let mut ranked = adapter
+    let beacon_link = crate::beacon::GlobalThresholdBeaconPulseLinkV1 {
+        pulse_id: beacon_pulse.pulse_id,
+        seed: beacon_pulse.seed,
+        height: beacon_pulse.height,
+        round: beacon_pulse.round,
+    };
+    {
+        let mut world = adapter.state.world.block();
+        world
+            .global_beacon_key_sessions
+            .insert(beacon_pulse.session_id, beacon_key);
+        world.global_beacon_active_session.insert(
+            crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY,
+            beacon_pulse.session_id,
+        );
+        world
+            .global_beacon_pulses
+            .insert(beacon_pulse.pulse_id, beacon_pulse);
+        world.global_beacon_latest_pulse.insert(
+            crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY,
+            beacon_link,
+        );
+        world.commit();
+    }
+    // Resolve the production relay committee from the persisted beacon pulse.
+    // The fixture has the exact 3f+1 topology, so every live validator is
+    // selected in the frozen authority geometry used by merge admission.
+    let committee = adapter
         .state
-        .commit_topology_snapshot()
-        .into_iter()
-        .map(|peer| {
-            let mut member_preimage = Vec::new();
-            member_preimage.extend_from_slice(b"iroha:lane-relay:committee-member:v1");
-            member_preimage.extend_from_slice(&committee_seed);
-            member_preimage.extend(
-                norito::encode_canonical(&peer)
-                    .expect("canonically encode relay committee member for ranking"),
-            );
-            (Hash::new(member_preimage), peer)
-        })
-        .collect::<Vec<_>>();
-    ranked.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-    let committee = ranked.into_iter().map(|(_, peer)| peer).collect::<Vec<_>>();
+        .resolve_lane_committee_at_height(
+            crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id),
+            global_height,
+        )
+        .expect("verified beacon pulse resolves the production relay committee")
+        .into_validators();
     assert_eq!(
         committee.len(),
         keys.len(),
@@ -1364,6 +1388,8 @@ fn merge_signing_rejects_block_first_kura_ahead_crash_image() {
     assert_eq!(
         adapter
             .merge_signing_guard
+            .as_ref()
+            .expect("voting adapter has merge signing guard")
             .authorized_digest(&merge_signing_context_for_test(&adapter, &candidate))
             .expect("read durable signing guard"),
         None

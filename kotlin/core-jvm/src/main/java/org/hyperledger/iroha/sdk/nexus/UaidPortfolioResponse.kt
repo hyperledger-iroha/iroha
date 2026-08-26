@@ -15,8 +15,13 @@ class UaidPortfolioResponse(
         accounts: Long,
         positions: Long,
     ) {
-        @JvmField val accounts: Long = maxOf(0L, accounts)
-        @JvmField val positions: Long = maxOf(0L, positions)
+        @JvmField val accounts: Long = accounts
+        @JvmField val positions: Long = positions
+
+        init {
+            require(accounts >= 0L) { "accounts must be non-negative" }
+            require(positions >= 0L) { "positions must be non-negative" }
+        }
     }
 
     /** Dataspace entry within the aggregated portfolio response. */

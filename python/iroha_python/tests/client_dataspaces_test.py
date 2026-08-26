@@ -1008,33 +1008,6 @@ def test_nexus_lane_lifecycle_rejects_unknown_lane_field_before_status_fetch() -
     assert session.calls == []
 
 
-def test_nexus_lane_lifecycle_rejects_retired_operator_only_shape() -> None:
-    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
-    key_pair = Ed25519KeyPair.from_private_key(bytes([11] * 32))
-
-    with pytest.raises(RuntimeError, match="operator-only Nexus lifecycle calls are deprecated"):
-        client.nexus_lane_lifecycle(
-            [],
-            key_pair=key_pair,
-            network_id=NETWORK_ID,
-            fee_payment=FEE_PAYMENT,
-        )
-    with pytest.raises(RuntimeError, match="operator-only Nexus lifecycle calls are deprecated"):
-        client.nexus_lane_lifecycle(
-            [],
-            private_key_hex="11" * 32,
-            network_id=NETWORK_ID,
-            fee_payment=FEE_PAYMENT,
-        )
-    with pytest.raises(RuntimeError, match="operator-only Nexus lifecycle calls are deprecated"):
-        client.nexus_lane_lifecycle(
-            [],
-            private_key="11" * 32,
-            network_id=NETWORK_ID,
-            fee_payment=FEE_PAYMENT,
-        )
-
-
 def test_nexus_lane_lifecycle_requires_full_transaction_signing_context() -> None:
     client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
     with pytest.raises(TypeError, match="network_id"):
@@ -1052,14 +1025,14 @@ def test_nexus_lane_lifecycle_requires_full_transaction_signing_context() -> Non
             private_key=bytes([1] * 32),
             fee_payment=FEE_PAYMENT,
         )
-    with pytest.raises(ValueError, match="authority is required"):
+    with pytest.raises(TypeError, match="authority"):
         client.nexus_lane_lifecycle(
             [],
             network_id=NETWORK_ID,
             private_key=bytes([1] * 32),
             fee_payment=FEE_PAYMENT,
         )
-    with pytest.raises(ValueError, match="private_key bytes are required"):
+    with pytest.raises(TypeError, match="private_key"):
         client.nexus_lane_lifecycle(
             [],
             network_id=NETWORK_ID,

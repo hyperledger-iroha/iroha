@@ -697,7 +697,6 @@
       "javascript/iroha_js/src/authenticatedBlockProofs.js",
       "javascript/iroha_js/src/axt.js",
       "javascript/iroha_js/src/blake2b.js",
-      "javascript/iroha_js/src/blake2s.js",
       "javascript/iroha_js/src/blockProofTypes.d.ts",
       "javascript/iroha_js/src/blockProofVerification.js",
       "javascript/iroha_js/src/bls12381G1.js",
@@ -1533,7 +1532,6 @@
       "IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift",
       "IrohaSwift/Sources/IrohaSwift/TransportSecurity.swift",
       "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift",
-      "IrohaSwift/Sources/IrohaSwift/UInt128.swift",
       "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
       "IrohaSwift/Sources/IrohaSwift/ZkAssetMerklePath.swift"
     ]

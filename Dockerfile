@@ -96,7 +96,7 @@ RUN <<EOT
     if [ "$CONFIG_PROFILE" = "taira" ]; then
       command -v python3 >/dev/null
       command -v qemu-img >/dev/null
-      command -v mkfs.ext4 >/dev/null
+      test -x /usr/sbin/mke2fs || test -x /sbin/mke2fs
       command -v ip >/dev/null
       command -v iptables >/dev/null
       test -x /usr/bin/bwrap

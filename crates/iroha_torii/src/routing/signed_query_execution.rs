@@ -9,7 +9,6 @@ pub struct QueryOptions {
     pub count_mode: Option<String>,
     /// Gas units provided for stored cursor mode (integer). When config minimum > 0,
     /// stored cursors require at least this many units.
-    #[allow(dead_code)]
     pub gas_units: Option<u64>,
 }
 /// Verify a signed query and return the authenticated request payload.

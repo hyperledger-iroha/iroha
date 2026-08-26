@@ -64,6 +64,19 @@ internal sealed class CanonicalNoritoWriter
         WriteBytes(payload);
     }
 
+    internal void WriteByteElements(ReadOnlySpan<byte> values)
+    {
+        var encodedLength = checked(values.Length * 2);
+        var encoded = buffer.GetSpan(encodedLength)[..encodedLength];
+        for (var index = 0; index < values.Length; index++)
+        {
+            encoded[index * 2] = 1;
+            encoded[index * 2 + 1] = values[index];
+        }
+
+        buffer.Advance(encodedLength);
+    }
+
     internal void WriteBytes(ReadOnlySpan<byte> value)
     {
         value.CopyTo(buffer.GetSpan(value.Length));

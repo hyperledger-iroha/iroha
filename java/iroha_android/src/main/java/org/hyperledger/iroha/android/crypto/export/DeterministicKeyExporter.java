@@ -8,6 +8,7 @@ import java.security.KeyFactory;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.PublicKey;
+import java.security.SecureRandom;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayDeque;
@@ -17,11 +18,12 @@ import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;
-import java.security.SecureRandom;
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import org.bouncycastle.crypto.generators.Argon2BytesGenerator;
+import org.bouncycastle.crypto.params.Argon2Parameters;
 import org.hyperledger.iroha.android.crypto.MlDsaPrivateKey;
 import org.hyperledger.iroha.android.crypto.MlDsaPublicKey;
 import org.hyperledger.iroha.android.crypto.NativeSigningKeyMaterial;
@@ -381,30 +383,16 @@ public final class DeterministicKeyExporter {
     final byte[] passphraseBytes = encodeUtf8(passphrase);
     final byte[] kdfOutput = new byte[AES_KEY_LENGTH_BYTES];
     try {
-      final Class<?> paramsClass = Class.forName("org.bouncycastle.crypto.params.Argon2Parameters");
-      final Class<?> builderClass =
-          Class.forName("org.bouncycastle.crypto.params.Argon2Parameters$Builder");
-      final int argon2id = paramsClass.getField("ARGON2_id").getInt(null);
-      final Object builder =
-          builderClass.getConstructor(int.class).newInstance(Integer.valueOf(argon2id));
-      builderClass.getMethod("withSalt", byte[].class).invoke(builder, kdfSalt);
-      builderClass
-          .getMethod("withParallelism", int.class)
-          .invoke(builder, Integer.valueOf(DEFAULT_ARGON2_PARALLELISM));
-      builderClass
-          .getMethod("withIterations", int.class)
-          .invoke(builder, Integer.valueOf(iterations));
-      builderClass
-          .getMethod("withMemoryAsKB", int.class)
-          .invoke(builder, Integer.valueOf(DEFAULT_ARGON2_MEMORY_KIB));
-      final Object params = builderClass.getMethod("build").invoke(builder);
-      final Class<?> generatorClass =
-          Class.forName("org.bouncycastle.crypto.generators.Argon2BytesGenerator");
-      final Object generator = generatorClass.getConstructor().newInstance();
-      generatorClass.getMethod("init", paramsClass).invoke(generator, params);
-      generatorClass
-          .getMethod("generateBytes", byte[].class, byte[].class)
-          .invoke(generator, passphraseBytes, kdfOutput);
+      final Argon2Parameters params =
+          new Argon2Parameters.Builder(Argon2Parameters.ARGON2_id)
+              .withSalt(kdfSalt)
+              .withParallelism(DEFAULT_ARGON2_PARALLELISM)
+              .withIterations(iterations)
+              .withMemoryAsKB(DEFAULT_ARGON2_MEMORY_KIB)
+              .build();
+      final Argon2BytesGenerator generator = new Argon2BytesGenerator();
+      generator.init(params);
+      generator.generateBytes(passphraseBytes, kdfOutput);
       final byte[] derived =
           hkdf(
               kdfOutput,
@@ -413,7 +401,9 @@ public final class DeterministicKeyExporter {
               AES_KEY_LENGTH_BYTES);
       Arrays.fill(kdfOutput, (byte) 0);
       return derived;
-    } catch (final ReflectiveOperationException | LinkageError ex) {
+    } catch (final RuntimeException ex) {
+      throw new KeyExportException("Argon2id derivation failed", ex);
+    } catch (final LinkageError ex) {
       throw new KeyExportException("Argon2id derivation unavailable", ex);
     } finally {
       Arrays.fill(kdfSalt, (byte) 0);

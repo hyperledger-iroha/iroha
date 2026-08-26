@@ -13,7 +13,7 @@ use crate::{
 };
 use iroha_config::{
     base::WithOrigin,
-    kura::{FsyncMode, InitMode},
+    kura::FsyncMode,
     parameters::{
         actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
         defaults::kura::{

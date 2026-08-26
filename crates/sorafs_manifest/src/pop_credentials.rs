@@ -1862,7 +1862,7 @@ mod tests {
         }
     }
     fn encode_frame_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
-        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         norito::to_bytes(value).expect("encode explicit-layout PoP frame")
     }
     fn supported_layouts() -> [u8; 8] {
@@ -2093,7 +2093,7 @@ mod tests {
                 encode_frame_with_flags(&owned_revocations, flags),
                 "borrowed revocation signing frame changed for flags 0x{flags:02x}"
             );
-            let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let _guard = norito::core::DecodeFlagsGuard::enter(flags);
             assert_eq!(
                 pop_credential_signature_digest_v1(&fixture.credential)
                     .expect("stream credential digest"),

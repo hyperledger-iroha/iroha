@@ -31,7 +31,6 @@ from typing import (
     Literal,
     Mapping,
     MutableMapping,
-    NewType,
     Optional,
     Sequence,
     Tuple,
@@ -63,7 +62,6 @@ from iroha_torii_client.client import (
     OfflineLanePrivacyMerkleVariantJson,
     OfflineLanePrivacyMerkleWitnessJson,
     OfflineLanePrivacyProofJson,
-    OfflineLanePrivacyWitnessJson,
     OfflineMerkleProofJson,
     OfflineOperationKind,
     OfflineOperationReference,
@@ -147,7 +145,7 @@ from iroha_torii_client.governance_proposals import (
     GovernanceProposalDeployContract,
     GovernanceProposalKind,
     GovernanceProposalKindTag,
-    GovernanceProposalLifecycleStatus as GovernanceProposalStatus,
+    GovernanceProposalLifecycleStatus,
     GovernanceProposalMusubiRegistryGovernance,
     GovernanceProposalRecord,
     GovernanceProposalResult,
@@ -249,7 +247,6 @@ from .query import (
     asset_definitions_query_envelope,
     asset_holders_query_envelope,
     domain_query_envelope,
-    ensure_aggregate,
     rwa_query_envelope,
 )
 from .repo import RepoAgreementListPage
@@ -999,14 +996,6 @@ def _normalize_optional_string(value: Any, context: str) -> Optional[str]:
     return _require_non_empty_string(value, context)
 
 
-def _dedupe_strings(values: Iterable[str]) -> List[str]:
-    deduped: List[str] = []
-    for value in values:
-        if value not in deduped:
-            deduped.append(value)
-    return deduped
-
-
 def _extract_page_items(payload: Any) -> List[Mapping[str, Any]]:
     raw_items = payload.get("items") if isinstance(payload, Mapping) else payload
     if raw_items is None:
@@ -1365,62 +1354,6 @@ def _normalize_space_directory_manifest_payload(
     return result
 
 
-def _normalize_authority_credentials(
-    payload: Mapping[str, Any],
-    *,
-    context: str,
-) -> Dict[str, str]:
-    if not isinstance(payload, Mapping):
-        raise TypeError(f"{context} must be an object")
-    _reject_alias_keys(
-        payload,
-        {
-            "account": "authority",
-            "privateKey": "private_key",
-            "privateKeyMultihash": "private_key_multihash",
-            "privateKeyHex": "private_key_hex",
-            "privateKeyBytes": "private_key_bytes",
-            "privateKeySeed": "private_key_seed",
-            "privateKeyAlgorithm": "private_key_algorithm",
-        },
-        context=context,
-    )
-    authority_raw = payload.get("authority")
-    authority = _require_non_empty_string(authority_raw, f"{context}.authority")
-    private_key_literal = payload.get("private_key")
-    if private_key_literal is not None:
-        private_key = _require_non_empty_string(private_key_literal, f"{context}.private_key")
-    else:
-        multihash = payload.get("private_key_multihash")
-        if multihash is not None:
-            private_key = _require_non_empty_string(multihash, f"{context}.private_key_multihash")
-        else:
-            hex_literal = payload.get("private_key_hex")
-            bytes_literal = payload.get("private_key_bytes") or payload.get("private_key_seed")
-            if hex_literal is None and bytes_literal is None:
-                raise TypeError(f"{context}.private_key is required")
-            if hex_literal is not None:
-                hex_value = _normalize_hex_string(
-                    hex_literal,
-                    f"{context}.private_key_hex",
-                    expected_length=64,
-                )
-            else:
-                hex_value = _bytes_like_to_hex(
-                    bytes_literal,
-                    f"{context}.private_key_bytes",
-                )
-                if len(hex_value) != 64:
-                    raise ValueError(f"{context}.private_key_bytes must contain 32 bytes")
-            algorithm = payload.get("private_key_algorithm") or "ed25519"
-            algorithm_literal = _require_non_empty_string(
-                algorithm,
-                f"{context}.private_key_algorithm",
-            )
-            private_key = f"{algorithm_literal}:{hex_value.lower()}"
-    return {"authority": authority, "private_key": private_key}
-
-
 def _normalize_publish_space_directory_manifest_request(
     request: Mapping[str, Any],
 ) -> Dict[str, Any]:
@@ -1576,20 +1509,6 @@ def _first_present(source: Mapping[str, Any], *keys: str) -> Any:
     if not present:
         return _MISSING
     return source[present[0]]
-
-
-def _normalize_sorafs_digest_hex(value: Any, context: str) -> str:
-    if isinstance(value, (bytes, bytearray, memoryview, list, tuple)):
-        literal = _bytes_like_to_hex(value, context)
-    elif isinstance(value, str):
-        literal = value.strip()
-        if literal.startswith(("0x", "0X")):
-            literal = literal[2:].strip()
-    else:
-        raise TypeError(f"{context} must be a 32-byte hex string")
-    if not re.fullmatch(r"[0-9a-fA-F]{64}", literal):
-        raise ValueError(f"{context} must be a 32-byte hex string")
-    return literal.lower()
 
 
 def _normalize_sorafs_reputation_snapshot_id_hex(value: Any, context: str) -> str:
@@ -2713,30 +2632,6 @@ def _parse_websocket_json_event(raw: Any, context: str) -> "WebSocketEvent":
     if event is not None:
         event = _require_non_empty_string(event, f"{context}.event")
     return WebSocketEvent(event=event, data=record.get("data", ""), raw=text)
-
-
-def _normalize_sorafs_unsigned_integer(
-    value: Any,
-    context: str,
-    *,
-    allow_zero: bool,
-) -> int:
-    if value is None or value == "":
-        raise TypeError(f"{context} is required")
-    if isinstance(value, bool):
-        raise TypeError(f"{context} must be an integer")
-    if isinstance(value, int):
-        number = value
-    elif isinstance(value, str):
-        literal = value.strip()
-        if not re.fullmatch(r"[+-]?\d+", literal):
-            raise TypeError(f"{context} must be an integer")
-        number = int(literal)
-    else:
-        raise TypeError(f"{context} must be an integer")
-    if number < 0 or (number == 0 and not allow_zero):
-        raise ValueError(f"{context} must be {'non-negative' if allow_zero else 'positive'}")
-    return number
 
 
 def _normalize_required_base64_payload(value: Any, context: str) -> str:
@@ -11769,7 +11664,7 @@ __all__ = [
     "GovernanceProposalRuntimeUpgrade",
     "GovernanceProposalSccpRouteGovernance",
     "GovernanceProposalSorafsProviderGovernance",
-    "GovernanceProposalStatus",
+    "GovernanceProposalLifecycleStatus",
     "GovernanceProposalValidationFeePayoutLifecycle",
     "GovernanceProposalValidationFeePolicy",
     "GovernanceRuntimeUpgradeManifest",
@@ -15018,11 +14913,9 @@ class ToriiClient(
         *,
         fee_payment: Mapping[str, Any],
         network_id: "NetworkId",
+        authority: str,
+        private_key: Union[bytes, bytearray, memoryview],
         retire: Optional[Sequence[int]] = None,
-        authority: Optional[str] = None,
-        key_pair: Optional[Any] = None,
-        private_key: Optional[Union[str, bytes, bytearray, memoryview]] = None,
-        private_key_hex: Optional[str] = None,
         wait: bool = True,
         interval: float = 1.0,
         timeout: Optional[float] = None,
@@ -15030,18 +14923,12 @@ class ToriiClient(
     ) -> tuple["SignedTransactionEnvelope", Optional[Any]]:
         """Submit a signed consensus-replayed Nexus lane lifecycle transaction.
 
-        The former operator-only POST shape is deliberately unsupported. Callers
-        must provide the exact nominal ``network_id``, ``authority``, and raw
-        private-key bytes for an account holding ``CanSetParameters``. The status
-        commitment is fetched once and is never silently refreshed after a
-        stale/concurrent rejection.
+        Callers must provide the exact nominal ``network_id``, ``authority``, and
+        raw private-key bytes for an account holding ``CanSetParameters``. The
+        status commitment is fetched once and is never silently refreshed after
+        a stale or concurrent rejection.
         """
 
-        if key_pair is not None or private_key_hex is not None or isinstance(private_key, str):
-            raise RuntimeError(
-                "operator-only Nexus lifecycle calls are deprecated; provide network_id, "
-                "authority, and private_key bytes to submit SetParameter(nexus_lane_lifecycle_v1)"
-            )
         network_id = _normalize_network_id(network_id, "network_id")
         if authority is None or not isinstance(authority, str) or not authority.strip():
             raise ValueError("authority is required for signed Nexus lane lifecycle submission")
@@ -16861,11 +16748,6 @@ class ToriiClient(
             interval=interval,
         )
 
-    def mint_asset_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
-        """Alias for :meth:`mint_asset_quantity_and_wait`."""
-
-        return self.mint_asset_quantity_and_wait(**kwargs)
-
     def mint_assets_quantity_and_wait(
         self,
         *,
@@ -16915,11 +16797,6 @@ class ToriiClient(
             interval=interval,
         )
 
-    def mint_assets_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
-        """Alias for :meth:`mint_assets_quantity_and_wait`."""
-
-        return self.mint_assets_quantity_and_wait(**kwargs)
-
     def burn_asset_quantity_and_wait(
         self,
         *,
@@ -16953,11 +16830,6 @@ class ToriiClient(
             timeout=timeout,
             interval=interval,
         )
-
-    def burn_asset_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
-        """Alias for :meth:`burn_asset_quantity_and_wait`."""
-
-        return self.burn_asset_quantity_and_wait(**kwargs)
 
     def transfer_asset_quantity_and_wait(
         self,
@@ -16994,11 +16866,6 @@ class ToriiClient(
             timeout=timeout,
             interval=interval,
         )
-
-    def transfer_asset_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
-        """Alias for :meth:`transfer_asset_quantity_and_wait`."""
-
-        return self.transfer_asset_quantity_and_wait(**kwargs)
 
     def transfer_asset_batch_and_wait(
         self,
@@ -17612,11 +17479,6 @@ class ToriiClient(
             timeout=timeout,
             interval=interval,
         )
-
-    def transfer_assets_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
-        """Alias for :meth:`transfer_assets_quantity_and_wait`."""
-
-        return self.transfer_assets_quantity_and_wait(**kwargs)
 
     def register_zk_asset_and_wait(
         self,
@@ -18939,147 +18801,6 @@ class ToriiClient(
     # ------------------------------------------------------------------
     # Contracts API
     # ------------------------------------------------------------------
-    @staticmethod
-    def _contract_response_payload(response: Any) -> Any:
-        if is_dataclass(response):
-            return asdict(response)
-        return _json_safe_value(response)
-
-    @staticmethod
-    def _contract_response_tx_hashes(response: Any) -> List[str]:
-        payload = ToriiClient._contract_response_payload(response)
-        hashes: List[str] = []
-
-        def visit(value: Any) -> None:
-            if isinstance(value, Mapping):
-                for key in ("tx_hash_hex", "hash", "tx_hash", "transaction_hash"):
-                    candidate = value.get(key)
-                    if isinstance(candidate, str) and candidate.strip():
-                        hashes.append(candidate.strip())
-                for child in value.values():
-                    visit(child)
-            elif isinstance(value, list):
-                for child in value:
-                    visit(child)
-
-        visit(payload)
-        return _dedupe_strings(hashes)
-
-    @staticmethod
-    def _contract_response_pipeline_statuses(response: Any) -> List[Mapping[str, Any]]:
-        payload = ToriiClient._contract_response_payload(response)
-        statuses: List[Mapping[str, Any]] = []
-        seen: set[tuple[str, str, str]] = set()
-
-        def add(candidate: Any) -> None:
-            if not isinstance(candidate, Mapping):
-                return
-            # Operation receipts also carry a string-valued ``status`` and a
-            # transaction hash. Treating those as pipeline snapshots lets a
-            # nested ``status: submitted`` shadow an authoritative embedded
-            # ``status: {kind: Committed}`` for the same hash and triggers an
-            # unnecessary (or impossible) poll. Only accept the typed pipeline
-            # response shapes emitted by Torii.
-            direct_status = candidate.get("status")
-            content = candidate.get("content")
-            content_status = content.get("status") if isinstance(content, Mapping) else None
-            if not (
-                isinstance(direct_status, Mapping) and direct_status.get("kind") is not None
-            ) and not (
-                isinstance(content_status, Mapping) and content_status.get("kind") is not None
-            ):
-                return
-            kind = _extract_pipeline_status_kind(candidate)
-            if kind is None:
-                return
-            status_hash = candidate.get("hash") or candidate.get("tx_hash_hex")
-            key = (
-                str(status_hash or ""),
-                kind,
-                json.dumps(_json_safe_value(candidate), sort_keys=True, default=str),
-            )
-            if key in seen:
-                return
-            seen.add(key)
-            statuses.append(candidate)
-
-        def visit(value: Any) -> None:
-            if isinstance(value, Mapping):
-                add(value.get("pipeline_status"))
-                add(value)
-                for child in value.values():
-                    visit(child)
-            elif isinstance(value, list):
-                for child in value:
-                    visit(child)
-
-        visit(payload)
-        return statuses
-
-    def _wait_for_contract_response(
-        self,
-        response: Any,
-        *,
-        timeout_ms: Optional[int],
-        interval: float,
-        scope: str,
-        success_statuses: Optional[Iterable[str]],
-        failure_statuses: Optional[Iterable[str]],
-    ) -> Dict[str, Any]:
-        submit_payload = self._contract_response_payload(response)
-        tx_hashes = self._contract_response_tx_hashes(response)
-        embedded_statuses = self._contract_response_pipeline_statuses(response)
-        embedded_by_hash: Dict[str, Mapping[str, Any]] = {}
-        for status_payload in embedded_statuses:
-            status_hash = status_payload.get("hash") or status_payload.get("tx_hash_hex")
-            if isinstance(status_hash, str) and status_hash.strip():
-                embedded_by_hash[status_hash.strip().lower()] = status_payload
-        success_set = (
-            frozenset(str(s) for s in success_statuses)
-            if success_statuses is not None
-            else _DEFAULT_SUCCESS_STATUSES
-        )
-        failure_set = (
-            frozenset(str(s) for s in failure_statuses)
-            if failure_statuses is not None
-            else _DEFAULT_FAILURE_STATUSES
-        )
-        final_payloads: List[Any] = []
-        for tx_hash in tx_hashes:
-            embedded_status = embedded_by_hash.get(tx_hash.lower())
-            if embedded_status is None and len(tx_hashes) == 1 and len(embedded_statuses) == 1:
-                embedded_status = embedded_statuses[0]
-            embedded_kind = _extract_pipeline_status_kind(embedded_status)
-            if embedded_kind is not None:
-                if embedded_kind in success_set:
-                    final_payloads.append(embedded_status)
-                    continue
-                if embedded_kind in failure_set:
-                    raise TransactionStatusError(tx_hash, embedded_kind, embedded_status)
-            final_payloads.append(
-                self.wait_for_transaction_status(
-                    tx_hash,
-                    interval=interval,
-                    timeout=None if timeout_ms is None else timeout_ms / 1000.0,
-                    scope=scope,
-                    success_statuses=success_statuses,
-                    failure_statuses=failure_statuses,
-                )
-            )
-        final_payload: Any
-        if not final_payloads:
-            final_payload = None
-        elif len(final_payloads) == 1:
-            final_payload = final_payloads[0]
-        else:
-            final_payload = {"items": final_payloads}
-        return {
-            "submit": submit_payload,
-            "tx_hashes": tx_hashes,
-            "terminal_kind": _extract_pipeline_status_kind(final_payload),
-            "r#final": final_payload,
-        }
-
     def register_contract_code(self, manifest: Mapping[str, Any]) -> Optional[Any]:
         response = self._request(
             "POST",

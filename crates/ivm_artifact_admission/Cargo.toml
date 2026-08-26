@@ -12,7 +12,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 hex = { workspace = true, features = ["alloc"] }
-iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["std", "json"] }
+iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["json"] }
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "json", "governance"] }
 ivm_abi = { path = "../ivm_abi" }
 kotodama_lang = { path = "../kotodama_lang" }

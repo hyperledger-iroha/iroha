@@ -601,7 +601,7 @@ pub(crate) fn instruction_document() -> Value {
         .expect("fixture staging receipt verifies");
     let register_archive =
         RegisterMusubiArchiveV1::new(commitment.clone(), staging_receipt, u64::MAX - 30);
-    let replication_order = ReplicationOrderId::new([0xC2; 32]);
+    let replication_order = ReplicationOrderId::new([0x42; 32]);
     let provider_attestations = [
         (0xD1, INSTRUCTION_PROVIDER_1_SEED, 0xE1, 0xF1, 0x71),
         (0xD2, INSTRUCTION_PROVIDER_2_SEED, 0xE2, 0xF2, 0x72),

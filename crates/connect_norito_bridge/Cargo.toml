@@ -6,8 +6,6 @@ edition = "2024"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(feature, values("compact-len"))',
-    'cfg(feature, values("packed-struct"))',
     'cfg(feature, values("schema-structural"))',
 ] }
 
@@ -44,7 +42,7 @@ kagemusha-candidate-evidence-lab = ["iroha_core/kagemusha-candidate-evidence-lab
 cuda = ["ivm/cuda"]
 
 [dependencies]
-norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = false, features = ["node-codec", "std"] }
+norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = false, features = ["node-codec"] }
 # Keep the bridge feature closure explicit so it does not silently inherit a
 # daemon consensus mode. Core currently requires BLS and unconditionally uses
 # its JSON/canonical-query surfaces; the production bridge additionally needs the

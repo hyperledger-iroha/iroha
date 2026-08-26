@@ -17,7 +17,7 @@ public final class SoracloudPrivateUploadedModelJsonParser {
       fields(
           "schema_version",
           "status",
-          "submission_status",
+          "submission_phase",
           "transaction_hash",
           "receipt",
           "output_artifact");
@@ -38,13 +38,17 @@ public final class SoracloudPrivateUploadedModelJsonParser {
           "attesting_validator",
           "input_artifact",
           "output_artifact",
+          "output_replication_order_id",
           "input_commitment",
           "output_commitment",
           "output_recipient",
           "request_commitment",
           "result_commitment",
+          "authorization_claim_block_height",
+          "authorization_claim_epoch",
           "emitted_sequence",
-          "emitted_block_height");
+          "emitted_block_height",
+          "emitted_epoch");
   private static final Set<String> ARTIFACT_FIELDS =
       fields(
           "schema_version",
@@ -98,10 +102,10 @@ public final class SoracloudPrivateUploadedModelJsonParser {
         EXECUTE_RESPONSE_FIELDS,
         EXECUTE_RESPONSE_FIELDS,
         "soracloud private execute response");
-    final String submissionStatus =
-        submissionStatus(
-            root.get("submission_status"),
-            "soracloud private execute response.submission_status");
+    final SoracloudPrivateUploadedModelSubmissionPhase submissionPhase =
+        submissionPhase(
+            root.get("submission_phase"),
+            "soracloud private execute response.submission_phase");
     final String transactionHash =
         optionalHash(
             root.get("transaction_hash"),
@@ -117,11 +121,21 @@ public final class SoracloudPrivateUploadedModelJsonParser {
                 "soracloud private execute response.output_artifact"),
             "soracloud private execute response.output_artifact",
             "output");
+    final Map<String, Object> status =
+        expectObject(root.get("status"), "soracloud private execute response.status");
+    try {
+      SoracloudPrivateModelValidation.validateUploadedModelStatus(
+          status, "soracloud private execute response.status");
+      SoracloudPrivateModelValidation.requireUploadedModelStatusMatchesReceipt(
+          status, receipt, "soracloud private execute response.status");
+    } catch (final IllegalArgumentException error) {
+      throw new IllegalStateException(error.getMessage(), error);
+    }
     return new SoracloudPrivateUploadedModelExecuteResponse(
         schemaVersion(
             root.get("schema_version"), "soracloud private execute response.schema_version"),
-        expectObject(root.get("status"), "soracloud private execute response.status"),
-        submissionStatus,
+        status,
+        submissionPhase,
         transactionHash,
         receipt,
         outputArtifact);
@@ -182,6 +196,32 @@ public final class SoracloudPrivateUploadedModelJsonParser {
         unsigned64Integer(root.get("emitted_sequence"), context + ".emitted_sequence");
     final BigInteger emittedBlockHeight =
         unsigned64Integer(root.get("emitted_block_height"), context + ".emitted_block_height");
+    final BigInteger emittedEpoch =
+        unsigned64Integer(root.get("emitted_epoch"), context + ".emitted_epoch");
+    final BigInteger authorizationClaimBlockHeight =
+        unsigned64Integer(
+            root.get("authorization_claim_block_height"),
+            context + ".authorization_claim_block_height");
+    final BigInteger authorizationClaimEpoch =
+        unsigned64Integer(
+            root.get("authorization_claim_epoch"), context + ".authorization_claim_epoch");
+    final SoracloudPrivateModelArtifactRef outputArtifact =
+        parseArtifact(
+            expectObject(root.get("output_artifact"), context + ".output_artifact"),
+            context + ".output_artifact",
+            "output");
+    final byte[] outputReplicationOrderId =
+        fixedBytes32(
+            root.get("output_replication_order_id"),
+            context + ".output_replication_order_id");
+    try {
+      SoracloudPrivateModelValidation.requireSorafsAutoReplicationOrderIdV1(
+          outputReplicationOrderId,
+          outputArtifact.sorafsManifestDigest(),
+          context + ".output_replication_order_id");
+    } catch (final IllegalArgumentException error) {
+      throw new IllegalStateException(error.getMessage(), error);
+    }
     return new SoracloudPrivateUploadedModelExecutionReceipt(
         schemaVersion(root.get("schema_version"), context + ".schema_version"),
         networkId(root.get("network_id"), context + ".network_id"),
@@ -203,10 +243,8 @@ public final class SoracloudPrivateUploadedModelJsonParser {
             expectObject(root.get("input_artifact"), context + ".input_artifact"),
             context + ".input_artifact",
             "input"),
-        parseArtifact(
-            expectObject(root.get("output_artifact"), context + ".output_artifact"),
-            context + ".output_artifact",
-            "output"),
+        outputArtifact,
+        outputReplicationOrderId,
         requiredHash(root.get("input_commitment"), context + ".input_commitment"),
         requiredHash(root.get("output_commitment"), context + ".output_commitment"),
         parseOutputRecipient(
@@ -214,8 +252,11 @@ public final class SoracloudPrivateUploadedModelJsonParser {
             context + ".output_recipient"),
         requiredHash(root.get("request_commitment"), context + ".request_commitment"),
         requiredHash(root.get("result_commitment"), context + ".result_commitment"),
+        authorizationClaimBlockHeight,
+        authorizationClaimEpoch,
         emittedSequence,
-        emittedBlockHeight);
+        emittedBlockHeight,
+        emittedEpoch);
   }
 
   private static SoracloudPrivateModelArtifactRef parseArtifact(
@@ -392,8 +433,8 @@ public final class SoracloudPrivateUploadedModelJsonParser {
   }
 
   private static boolean asBoolean(final Object value, final String path) {
-    if (value instanceof Boolean bool) {
-      return bool.booleanValue();
+    if (value instanceof Boolean) {
+      return ((Boolean) value).booleanValue();
     }
     throw new IllegalStateException(path + " must be a boolean");
   }
@@ -457,12 +498,13 @@ public final class SoracloudPrivateUploadedModelJsonParser {
     return bytes;
   }
 
-  private static String submissionStatus(final Object value, final String path) {
+  private static SoracloudPrivateUploadedModelSubmissionPhase submissionPhase(
+      final Object value, final String path) {
     final String parsed = requiredString(value, path);
     try {
-      return SoracloudPrivateModelValidation.requireSubmissionStatus(parsed, path);
+      return SoracloudPrivateUploadedModelSubmissionPhase.fromWireValue(parsed);
     } catch (final IllegalArgumentException error) {
-      throw new IllegalStateException(error.getMessage(), error);
+      throw new IllegalStateException(path + " has an unknown first-release phase", error);
     }
   }
 

@@ -45,6 +45,36 @@ fn startup_reconciles_lifecycle_before_lane_work_activation() {
     }
 }
 #[test]
+fn emergency_fast_idles_before_any_active_height_recovery() {
+    let parent = include_str!("../v2_runner.rs");
+    let fast_binding = parent
+        .find("if kura.emergency_fast_startup_enabled()")
+        .expect("runner must check the Kura Fast policy before recovery");
+    let inventory_release = parent[fast_binding..]
+        .find("startup_replay_inventory_guard.finish();")
+        .map(|offset| fast_binding + offset)
+        .expect("Fast runner must release the startup inventory");
+    let ingress_close = parent[inventory_release..]
+        .find("block_rx.close();")
+        .map(|offset| inventory_release + offset)
+        .expect("Fast runner must close consensus ingress directly");
+    let passive_return = parent[ingress_close..]
+        .find("return Ok(());")
+        .map(|offset| ingress_close + offset)
+        .expect("Fast runner must remain passive until shutdown");
+    let platform_check = parent[passive_return..]
+        .find("require_validator_storage_platform(")
+        .map(|offset| passive_return + offset)
+        .expect("Strict platform checks must remain available");
+    let recovery = parent[platform_check..]
+        .find("let recovered = recover_active_height_with_plan")
+        .map(|offset| platform_check + offset)
+        .expect("Strict active-height recovery must remain available");
+    assert!(fast_binding < inventory_release);
+    assert!(inventory_release < ingress_close && ingress_close < passive_return);
+    assert!(passive_return < platform_check && platform_check < recovery);
+}
+#[test]
 fn lane_evidence_repair_fence_accepts_an_empty_unquarantined_replay() {
     let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
     let queue = Queue::from_config(

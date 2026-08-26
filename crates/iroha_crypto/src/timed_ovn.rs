@@ -2490,7 +2490,7 @@ mod tests {
                 binding(11),
                 binding(12),
                 binding(13),
-                *fixture.session.tle_master_public_key(),
+                *fixture.roster.session().tle_master_public_key(),
             ),
             Err(TimedOvnError::ParameterProfileMismatch)
         );
@@ -2620,7 +2620,7 @@ mod tests {
             aggregate_timed_ovn_ballots_v1(&fixture.survivors, &ballots[..2]),
             Err(TimedOvnError::NonCanonicalBallotCorpus)
         );
-        let other = fixture(21);
+        let other = self::fixture(21);
         assert_eq!(
             aggregate.open_and_tally(&fixture.survivors, &other.identity_secret),
             Err(TimedOvnError::ReleaseFailed)

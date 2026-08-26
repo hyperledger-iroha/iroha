@@ -976,6 +976,13 @@ fn locate_instruction_box(
     transaction_hash: &str,
     index: u64,
 ) -> Result<InstructionBox, Error> {
+    if state.emergency_fast_startup_enabled() {
+        return Err(Error::AppServiceUnavailable {
+            code: "emergency_fast_history_unavailable",
+            message: "instruction contract view requires a historical transaction scan that emergency Fast mode deliberately disables; restart in Strict mode"
+                .to_owned(),
+        });
+    }
     let start_height = state.committed_height() as u64;
     if start_height == 0 {
         return Err(not_found());

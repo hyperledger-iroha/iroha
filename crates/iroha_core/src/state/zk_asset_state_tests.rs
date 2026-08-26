@@ -146,6 +146,70 @@ fn invalid_commitment_is_rolled_back() {
     assert!(state.root_history.is_empty());
 }
 #[test]
+fn commitment_preview_matches_append_without_mutating_state() {
+    let mut state = ZkAssetState::default();
+    push_dummy_root(&mut state, 1);
+    let before = norito::encode_canonical(&state).expect("encode state before preview");
+    let previewed = state
+        .preview_commitment_root([2; 32])
+        .expect("preview canonical commitment");
+    assert_eq!(
+        norito::encode_canonical(&state).expect("encode state after preview"),
+        before,
+        "preview must not mutate retained tree state"
+    );
+    let appended = state
+        .push_commitment(
+            [2; 32],
+            NonZeroUsize::new(64).expect("non-zero root history cap"),
+        )
+        .expect("append previewed commitment");
+    assert_eq!(previewed, appended);
+}
+#[test]
+fn commitment_preview_rejects_tampered_frontier_without_mutation() {
+    let mut state = ZkAssetState::default();
+    push_dummy_root(&mut state, 1);
+    state.tree_frontier[0]
+        .as_mut()
+        .expect("one-leaf frontier slot")[0] ^= 0x01;
+    let before = norito::encode_canonical(&state).expect("encode tampered state before preview");
+    let error = state
+        .preview_commitment_root([2; 32])
+        .expect_err("preview must reject a tampered frontier");
+    assert!(error.contains("frontier") || error.contains("current root"));
+    assert_eq!(
+        norito::encode_canonical(&state).expect("encode tampered state after preview"),
+        before,
+        "failed preview must not mutate retained tree state"
+    );
+}
+#[test]
+fn commitment_preview_rejects_tampered_root_history() {
+    let mut state = ZkAssetState::default();
+    push_dummy_root(&mut state, 1);
+    state
+        .root_history
+        .last_mut()
+        .expect("retained current root")[0] ^= 0x01;
+    let error = state
+        .preview_commitment_root([2; 32])
+        .expect_err("preview must reject tampered root history");
+    assert!(error.contains("root history"));
+    assert_eq!(state.commitments, vec![[1; 32]]);
+}
+#[test]
+fn commitment_preview_rejects_a_full_tree() {
+    let mut state = ZkAssetState::default();
+    state.commitments = vec![[1; 32]; state.tree_profile.capacity()];
+    state.root_history.push(state.persisted_root);
+    let error = state
+        .preview_commitment_root([2; 32])
+        .expect_err("preview must reject an append beyond tree capacity");
+    assert!(error.contains("tree capacity"));
+    assert_eq!(state.commitments.len(), state.tree_profile.capacity());
+}
+#[test]
 fn commitment_batch_is_atomic() {
     let mut state = ZkAssetState::default();
     push_dummy_root(&mut state, 1);

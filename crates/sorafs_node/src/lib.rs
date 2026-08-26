@@ -4974,6 +4974,12 @@ pub enum NodeInitError {
         message: &'static str,
     },
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimePersistence {
+    Durable,
+    ProcessLocal,
+}
 impl NodeInitError {
     fn checkpoint(component: &'static str, path: &Path, error: impl std::fmt::Display) -> Self {
         Self::Checkpoint {
@@ -5407,6 +5413,45 @@ impl NodeHandle {
         repair_config: RepairConfig,
         gc_config: GcConfig,
         runtime_deps: NodeRuntimeDeps,
+    ) -> Result<Self, NodeInitError> {
+        Self::try_new_with_runtime_persistence(
+            config,
+            repair_config,
+            gc_config,
+            runtime_deps,
+            RuntimePersistence::Durable,
+        )
+    }
+    /// Construct a disabled, process-local handle without opening any durable runtime state.
+    ///
+    /// This constructor is reserved for emergency read-only startup. It ignores production
+    /// worker policy, installs fixed disabled storage/repair/GC policy, and keeps PoTR plus every
+    /// transaction-forwarder outbox in memory so startup cannot create, scan, recover, or rewrite
+    /// their filesystem trees.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bounded in-memory runtime policy is invalid.
+    pub fn try_new_emergency_disabled(data_dir: PathBuf) -> Result<Self, NodeInitError> {
+        let config = StorageConfig::builder()
+            .enabled(false)
+            .data_dir(data_dir)
+            .runtime_retention(config::RuntimeRetentionPolicy::new(1, 1, 1024 * 1024))
+            .build();
+        Self::try_new_with_runtime_persistence(
+            config,
+            RepairConfig::default(),
+            GcConfig::default(),
+            NodeRuntimeDeps::default(),
+            RuntimePersistence::ProcessLocal,
+        )
+    }
+    fn try_new_with_runtime_persistence(
+        config: StorageConfig,
+        repair_config: RepairConfig,
+        gc_config: GcConfig,
+        runtime_deps: NodeRuntimeDeps,
+        runtime_persistence: RuntimePersistence,
     ) -> Result<Self, NodeInitError> {
         validate_native_repair_config(&repair_config)?;
         let NodeRuntimeDeps {
@@ -5900,14 +5945,17 @@ impl NodeHandle {
             }
         };
         let potr_state_dir = config.data_dir().join("potr-receipts");
-        // Receipt admission remains durable even when this process does not
-        // host provider storage. `enabled` controls chunk storage only; it
-        // must never select process-local PoTR state.
-        let potr = PotrTracker::open(
-            &potr_state_dir,
-            state_entry_limit,
-            config.runtime_retention().checkpoint_max_bytes(),
-        )
+        // Strict receipt admission remains durable even when this process does not host provider
+        // storage. The process-local branch is reachable only through the mutation-disabled Fast
+        // facade and is never exposed to transaction admission or background workers.
+        let potr = match runtime_persistence {
+            RuntimePersistence::Durable => PotrTracker::open(
+                &potr_state_dir,
+                state_entry_limit,
+                config.runtime_retention().checkpoint_max_bytes(),
+            ),
+            RuntimePersistence::ProcessLocal => PotrTracker::in_memory(state_entry_limit),
+        }
         .map_err(|error| NodeInitError::Potr {
             path: potr_state_dir.clone(),
             message: error.to_string(),
@@ -5920,14 +5968,22 @@ impl NodeHandle {
             max_attempts: config.runtime_retention().proof_outcome_max_attempts(),
             checkpoint_max_bytes: config.runtime_retention().checkpoint_max_bytes(),
         };
-        // Proof-ledger handoff is a validator durability boundary independent
-        // of provider storage and is therefore always checkpoint-backed.
-        let proof_outcome_outbox =
-            ProofOutcomeOutbox::open(&proof_outcome_outbox_state_dir, proof_outcome_outbox_policy)
-                .map_err(|error| NodeInitError::ProofOutcomeOutbox {
-                    path: proof_outcome_outbox_state_dir.clone(),
-                    message: error.to_string(),
-                })?;
+        // Strict proof-ledger handoff is a validator durability boundary independent of provider
+        // storage. Fast uses an unreachable process-local placeholder so it need not touch this
+        // checkpoint tree merely to serve degraded reads.
+        let proof_outcome_outbox = match runtime_persistence {
+            RuntimePersistence::Durable => ProofOutcomeOutbox::open(
+                &proof_outcome_outbox_state_dir,
+                proof_outcome_outbox_policy,
+            ),
+            RuntimePersistence::ProcessLocal => {
+                ProofOutcomeOutbox::in_memory(proof_outcome_outbox_policy)
+            }
+        }
+        .map_err(|error| NodeInitError::ProofOutcomeOutbox {
+            path: proof_outcome_outbox_state_dir.clone(),
+            message: error.to_string(),
+        })?;
         let repair_transaction_state_dir = config.data_dir().join("repair-transaction-forwarder");
         let repair_transaction_policy = RepairTransactionForwarderPolicyV1 {
             max_pending: state_entry_limit,
@@ -5937,12 +5993,17 @@ impl NodeHandle {
             max_transaction_bytes: REPAIR_TRANSACTION_MAX_CANONICAL_BYTES_V1,
             checkpoint_max_bytes: config.runtime_retention().checkpoint_max_bytes(),
         };
-        // Native repair operations remain durable on validator-only nodes;
-        // disabling provider storage must not introduce a process-local queue.
-        let repair_transaction_forwarder = RepairTransactionForwarder::open(
-            &repair_transaction_state_dir,
-            repair_transaction_policy,
-        )
+        // Strict native repair operations remain durable on validator-only nodes. Fast has no
+        // repair admission or worker and therefore uses an unreachable process-local placeholder.
+        let repair_transaction_forwarder = match runtime_persistence {
+            RuntimePersistence::Durable => RepairTransactionForwarder::open(
+                &repair_transaction_state_dir,
+                repair_transaction_policy,
+            ),
+            RuntimePersistence::ProcessLocal => {
+                RepairTransactionForwarder::in_memory(repair_transaction_policy)
+            }
+        }
         .map_err(|error| NodeInitError::RepairTransactionForwarder {
             path: repair_transaction_state_dir.clone(),
             message: error.to_string(),
@@ -5958,13 +6019,18 @@ impl NodeHandle {
             max_transaction_bytes: ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1,
             checkpoint_max_bytes: orderbook_worker_policy.checkpoint_max_bytes(),
         };
-        // This durability boundary is independent of both provider storage and
-        // supervised scanning. `enabled` gates only the worker loop; any
-        // operation admitted through this handle is always persisted.
-        let orderbook_transaction_forwarder = OrderbookTransactionForwarder::open(
-            &orderbook_transaction_state_dir,
-            orderbook_transaction_policy,
-        )
+        // In Strict this durability boundary is independent of provider storage and supervised
+        // scanning. Fast has no orderbook admission or worker and uses only a process-local
+        // placeholder.
+        let orderbook_transaction_forwarder = match runtime_persistence {
+            RuntimePersistence::Durable => OrderbookTransactionForwarder::open(
+                &orderbook_transaction_state_dir,
+                orderbook_transaction_policy,
+            ),
+            RuntimePersistence::ProcessLocal => {
+                OrderbookTransactionForwarder::in_memory(orderbook_transaction_policy)
+            }
+        }
         .map_err(|error| NodeInitError::OrderbookTransactionForwarder {
             path: orderbook_transaction_state_dir.clone(),
             message: error.to_string(),
@@ -5982,13 +6048,18 @@ impl NodeHandle {
             max_transaction_bytes: RESERVE_TRANSACTION_MAX_CANONICAL_BYTES_V1,
             checkpoint_max_bytes: reserve_worker_policy.checkpoint_max_bytes(),
         };
-        // This durability boundary is independent of both provider storage and
-        // supervised scanning. `enabled` gates only the worker loop; any
-        // operation admitted through this handle is always persisted.
-        let reserve_transaction_forwarder = ReserveTransactionForwarder::open(
-            &reserve_transaction_state_dir,
-            reserve_transaction_policy,
-        )
+        // In Strict this durability boundary is independent of provider storage and supervised
+        // scanning. Fast has no reserve admission or worker and uses only a process-local
+        // placeholder.
+        let reserve_transaction_forwarder = match runtime_persistence {
+            RuntimePersistence::Durable => ReserveTransactionForwarder::open(
+                &reserve_transaction_state_dir,
+                reserve_transaction_policy,
+            ),
+            RuntimePersistence::ProcessLocal => {
+                ReserveTransactionForwarder::in_memory(reserve_transaction_policy)
+            }
+        }
         .map_err(|error| NodeInitError::ReserveTransactionForwarder {
             path: reserve_transaction_state_dir.clone(),
             message: error.to_string(),

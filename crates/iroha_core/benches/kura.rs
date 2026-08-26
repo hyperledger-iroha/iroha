@@ -257,9 +257,8 @@ fn seeded_eviction_bench(
 fn measure_block_size_for_n_executors(n_executors: u32) {
     let dir = tempfile::tempdir().expect("Could not create tempfile.");
     let cfg = Config {
-        // Use Fast mode for benches to avoid strict full-scan on empty stores.
         init_mode: iroha_config::kura::InitMode::Fast,
-        debug_output_new_blocks: false,
+        // Use Fast mode for benches to avoid strict full-scan on empty stores. debug_output_new_blocks: false,
         blocks_in_memory: BLOCKS_IN_MEMORY,
         store_dir: WithOrigin::inline(dir.path().to_path_buf()),
         max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,

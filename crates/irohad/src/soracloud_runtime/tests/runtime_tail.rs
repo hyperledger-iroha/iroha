@@ -120,46 +120,26 @@ fn inrou_portable_smoke_boots_external_bundle_and_serves_healthcheck() -> Result
         .validate_for_admission()
         .map_err(|error| eyre::eyre!("invalid external Inrou smoke-test bundle: {error}"))?;
     let mut state = test_state();
-    let deployment_state = sample_deployment_state(&bundle);
+    let mut deployment_state = sample_deployment_state(&bundle);
+    seed_open_inrou_reporter_fixture(
+        &mut deployment_state,
+        &bundle,
+        temp_dir.path(),
+        1,
+        &ALICE_ID,
+        local_peer_id,
+        selected_guest_isa,
+    )?;
     {
         let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-        world.soracloud_service_revisions_mut_for_testing().insert(
-            (
-                bundle.service.service_name.to_string(),
-                bundle.service.service_version.clone(),
-            ),
-            bundle.clone(),
+        insert_service_revision_fixture(world, &bundle);
+        insert_service_deployment_fixture(world, &bundle, deployment_state);
+        insert_local_inrou_service_placement_fixture(
+            world,
+            &bundle,
+            local_peer_id,
+            selected_guest_isa,
         );
-        world
-            .soracloud_service_deployments_mut_for_testing()
-            .insert(bundle.service.service_name.clone(), deployment_state);
-        world
-            .soracloud_inrou_service_placements_mut_for_testing()
-            .insert(
-                (
-                    bundle.service.service_name.to_string(),
-                    bundle.service.service_version.clone(),
-                ),
-                iroha_data_model::soracloud::SoraInrouServicePlacementRecordV1 {
-                    schema_version:
-                        iroha_data_model::soracloud::SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
-                    service_name: bundle.service.service_name.clone(),
-                    service_version: bundle.service.service_version.clone(),
-                    desired_replica_count: bundle.service.replicas.get(),
-                    eligible_validator_count: 1,
-                    placements: vec![SoraInrouReplicaPlacementV1 {
-                        replica_slot: 1,
-                        validator_account_id: ALICE_ID.clone(),
-                        peer_id: local_peer_id.to_owned(),
-                        selected_guest_isa,
-                        selected_geography_tag: None,
-                        selection_latency_ms: None,
-                    }],
-                    reconciled_at_ms: 1,
-                    last_error: None,
-                },
-            );
-        insert_active_inrou_host_authority_fixture(world, local_peer_id, selected_guest_isa);
     }
     let artifacts_root = temp_dir.path().join("artifacts");
     fs::create_dir_all(&artifacts_root)?;
@@ -516,23 +496,9 @@ fn execute_local_read_fails_closed_when_runtime_snapshot_is_behind() -> Result<(
     )?;
     {
         let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-        world.soracloud_service_revisions_mut_for_testing().insert(
-            (
-                bundle.service.service_name.to_string(),
-                bundle.service.service_version.clone(),
-            ),
-            bundle.clone(),
-        );
-        world
-            .soracloud_service_deployments_mut_for_testing()
-            .insert(
-                bundle.service.service_name.clone(),
-                sample_deployment_state(&bundle),
-            );
-        world.soracloud_service_runtime_mut_for_testing().insert(
-            bundle.service.service_name.clone(),
-            sample_runtime_state(&bundle),
-        );
+        insert_service_revision_fixture(world, &bundle);
+        insert_service_deployment_fixture(world, &bundle, sample_deployment_state(&bundle));
+        insert_service_runtime_fixture(world, &bundle, sample_runtime_state(&bundle));
     }
     let manager = SoracloudRuntimeManager::new(
         test_runtime_manager_config(temp_dir.path().to_path_buf()),

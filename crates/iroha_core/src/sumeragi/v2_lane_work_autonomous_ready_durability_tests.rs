@@ -1942,7 +1942,12 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
     let mut sidecar_only_successor = successor_context_for_parent(&adapter, &block);
     sidecar_only_successor.epoch = {
         let world = adapter.state.world_view();
-        crate::sumeragi::epoch_for_height_from_world(&world, sidecar_only_successor.height)
+        crate::sumeragi::epoch_for_height_from_world(
+            &world,
+            sidecar_only_successor.height,
+            sidecar_only_successor.mode,
+        )
+        .expect("fixture has a valid committed epoch schedule")
     };
     adapter.context = sidecar_only_successor;
     let conflicting_session = CommittedLaneBlockSession {
@@ -2065,7 +2070,12 @@ fn recovered_autonomous_certificate_repairs_ready_before_certified_publication()
     let mut successor_context = successor_context_for_parent(&adapter, &block);
     successor_context.epoch = {
         let world = adapter.state.world_view();
-        crate::sumeragi::epoch_for_height_from_world(&world, successor_context.height)
+        crate::sumeragi::epoch_for_height_from_world(
+            &world,
+            successor_context.height,
+            successor_context.mode,
+        )
+        .expect("fixture has a valid committed epoch schedule")
     };
     adapter.context = successor_context;
     assert!(proposal.descriptor.proposal_height < adapter.context.height);

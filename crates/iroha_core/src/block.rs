@@ -7148,6 +7148,7 @@ pub(crate) mod valid {
             block: &SignedBlock,
             state: &'state State,
             soft_fork: bool,
+            authoritative_mode: Option<iroha_data_model::block::consensus_v2::ConsensusMode>,
         ) -> Result<Box<StateBlock<'state>>, BlockValidationError> {
             let execution_context = block.execution_context();
             let merge_reference = execution_context.and_then(|bundle| bundle.merge_entry.as_ref());
@@ -7180,8 +7181,13 @@ pub(crate) mod valid {
                         "soft-fork replacement cannot safely apply a certified merge entry",
                     ));
                 }
+                let frozen_mode = authoritative_mode.ok_or_else(|| {
+                    Self::execution_context_error(
+                        "certified merge execution requires an authenticated consensus mode",
+                    )
+                })?;
                 return state
-                    .block_with_certified_merge_reference(block.header(), reference)
+                    .block_with_certified_merge_reference(block.header(), reference, frozen_mode)
                     .map(Box::new)
                     .map_err(|error| match error {
                         crate::state::MergeLedgerCommitError::MissingCertifiedMergeSidecar {
@@ -7547,7 +7553,12 @@ pub(crate) mod valid {
                 timings.execution_da_indexes_ms = to_ms(da_indexes_start.elapsed());
             }
             let state_block_start = Instant::now();
-            let mut state_block = match Self::state_block_for_execution(&block, state, soft_fork) {
+            let mut state_block = match Self::state_block_for_execution(
+                &block,
+                state,
+                soft_fork,
+                validation_profile.authoritative_consensus_mode(),
+            ) {
                 Ok(state_block) => state_block,
                 Err(error) => {
                     record_timings(&mut timings, stateless_elapsed, Some(execution_start));
@@ -9335,9 +9346,9 @@ pub(crate) mod valid {
             else {
                 return false;
             };
-            if state
+            let latest_receipt = match state
                 .kura()
-                .latest_native_amx_participant_application_receipt_matching(
+                .checked_latest_native_amx_participant_application_receipt_matching(
                     descriptor.lane_id,
                     descriptor.dataspace_id,
                     descriptor.lane_incarnation,
@@ -9345,11 +9356,13 @@ pub(crate) mod valid {
                         receipt.participant_proposal.descriptor.proposal_height
                             <= descriptor.proposal_height
                     },
-                )
-                .is_some_and(|receipt| {
-                    receipt.participant_proposal.descriptor.lane_block_height >= previous_height
-                })
-            {
+                ) {
+                Ok(receipt) => receipt,
+                Err(_) => return false,
+            };
+            if latest_receipt.is_some_and(|receipt| {
+                receipt.participant_proposal.descriptor.lane_block_height >= previous_height
+            }) {
                 return false;
             }
             state
@@ -9511,9 +9524,9 @@ pub(crate) mod valid {
                     exact_current_slot = true;
                 }
             }
-            if state
+            let latest_receipt = state
                 .kura()
-                .latest_native_amx_participant_application_receipt_matching(
+                .checked_latest_native_amx_participant_application_receipt_matching(
                     descriptor.lane_id,
                     descriptor.dataspace_id,
                     descriptor.lane_incarnation,
@@ -9522,10 +9535,14 @@ pub(crate) mod valid {
                             <= descriptor.proposal_height
                     },
                 )
-                .is_some_and(|receipt| {
-                    receipt.participant_proposal.descriptor.lane_block_height >= lane_block_height
-                })
-            {
+                .map_err(|_| {
+                    slot_error(
+                        "cannot validate Native AMX slot while emergency Fast auxiliary history is unavailable",
+                    )
+                })?;
+            if latest_receipt.is_some_and(|receipt| {
+                receipt.participant_proposal.descriptor.lane_block_height >= lane_block_height
+            }) {
                 return Err(slot_error(
                     "conflicts with an applied Native AMX participant slot",
                 ));
@@ -11419,16 +11436,12 @@ pub(crate) mod valid {
             let n = entrypoints.len();
             let routing_ledger_time_ms =
                 u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX);
-            let tx_hashes: std::collections::HashSet<_> = entrypoints
-                .iter()
-                .map(TransactionEntrypoint::hash)
-                .collect();
             let height_u64 = block.header().height().get();
             let height_usize = height_u64.try_into().expect("block height fits usize");
             let block_height =
                 std::num::NonZeroUsize::new(height_usize).expect("block height greater than zero");
-            // Contextless routing is a block-level gate: do not stage transaction membership or
-            // construct any route-bearing output until every entrypoint has a canonical route.
+            // Contextless routing is a block-level gate: do not execute or construct any
+            // route-bearing output until every external entrypoint has a canonical route.
             let embedded_routing = Self::embedded_routing_decisions_for_entrypoints(block, n);
             let routing_decisions = if let Some(decisions) = embedded_routing {
                 decisions
@@ -11455,9 +11468,6 @@ pub(crate) mod valid {
                 }
                 decisions
             };
-            state_block
-                .transactions
-                .insert_block(tx_hashes, block_height);
             let transaction_event_hashes: Vec<_> = entrypoints
                 .iter()
                 .map(Self::signed_transaction_from_entrypoint)
@@ -11648,6 +11658,9 @@ pub(crate) mod valid {
             if sccp_root_validation == SccpRootValidation::Enforce {
                 Self::validate_sccp_commitment_root(block)?;
             }
+            state_block
+                .transactions
+                .insert_block(block.entrypoint_hashes().collect(), block_height);
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), start) {
                 let elapsed = to_ms(start.elapsed());
                 timings.execution_tx_apply_ms = elapsed;
@@ -11867,16 +11880,12 @@ pub(crate) mod valid {
             if queue_plan_stateless_validation_times.len() != txs.len() {
                 return Err(BlockValidationError::MerkleRootMismatch);
             }
-            let tx_hashes: std::collections::HashSet<_> = prepared_txs
-                .iter()
-                .map(|prepared| prepared.metadata.entrypoint_hash)
-                .collect();
             let height_u64 = block.header().height().get();
             let height_usize = height_u64.try_into().expect("block height fits usize");
             let block_height =
                 std::num::NonZeroUsize::new(height_usize).expect("block height greater than zero");
-            // Contextless routing is a block-level gate: do not stage transaction membership or
-            // construct any route-bearing output until every entrypoint has a canonical route.
+            // Contextless routing is a block-level gate: do not execute or construct any
+            // route-bearing output until every external entrypoint has a canonical route.
             // Strategy controlled by configuration (no env reliance)
             let dynamic_prepass = state_block.pipeline.dynamic_prepass;
             // Load worker bound from config once to reuse across stages
@@ -12038,9 +12047,6 @@ pub(crate) mod valid {
                 }
                 routing_decisions
             };
-            state_block
-                .transactions
-                .insert_block(tx_hashes, block_height);
             let mut prechecked_signature_results: Vec<
                 Option<Result<(), crate::tx::SignatureVerificationFail>>,
             > = vec![None; txs.len()];
@@ -15637,6 +15643,9 @@ pub(crate) mod valid {
                 timings.execution_tx_apply_results_ms = apply_results_ms;
                 timings.execution_tx_apply_other_ms = apply_ms.saturating_sub(known_apply_ms);
             }
+            state_block
+                .transactions
+                .insert_block(block.entrypoint_hashes().collect(), block_height);
             state_block
                 .resolve_queue_plan_pending_obligations_from_block(block)
                 .map_err(|error| {
@@ -30316,9 +30325,55 @@ seiyaku DynamicTarget {
     }
     #[test]
     fn block_validation_non_external_entrypoint_uses_sequential_fallback() {
+        use crate::state::TransactionsReadOnly;
+        use iroha_data_model::{
+            events::time::{ExecutionTime, TimeEventFilter},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+
         let chain_id = ChainId::from("non-external-sequential-fallback");
         let (authority, keypair) = gen_account_in("wonderland");
         let state = state_with_transaction_policy(&chain_id, &authority, false, false);
+        let time_trigger_id = "non_external_sequential_heartbeat"
+            .parse()
+            .expect("trigger id");
+        let mut trigger_metadata = Metadata::default();
+        trigger_metadata.insert(
+            "__registered_block_height"
+                .parse()
+                .expect("registered-height key"),
+            Json::new(0_u64),
+        );
+        trigger_metadata.insert(
+            "__registered_at_ms".parse().expect("registered-time key"),
+            Json::new(0_u64),
+        );
+        let time_trigger = Trigger::new(
+            time_trigger_id,
+            Action::new(
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "sequential heartbeat".to_owned(),
+                ))],
+                Repeats::Exactly(1),
+                authority.clone(),
+                TimeEventFilter::new(ExecutionTime::PreCommit),
+            )
+            .expect("time-trigger action")
+            .with_metadata(trigger_metadata),
+        );
+        {
+            let mut triggers_block = state.world.triggers.block();
+            let mut triggers_transaction = triggers_block.transaction();
+            triggers_transaction
+                .add_time_trigger(time_trigger.try_into().expect("specialized time trigger"))
+                .expect("add time trigger");
+            triggers_transaction.apply();
+            triggers_block.commit();
+        }
         let metadata_key = Name::from_str("sequential_fallback_marker").expect("metadata key");
         let (commitment_entrypoint, _reveal_entrypoint) =
             sealed_set_key_entrypoints(state.network_id, &authority, &keypair, 2, 4, metadata_key);
@@ -30334,12 +30389,27 @@ seiyaku DynamicTarget {
             .validate_and_record_transactions(&mut state_block)
             .unpack(|_| {});
         let results: Vec<_> = valid_block.as_ref().entrypoint_results().collect();
-        assert_eq!(results.len(), 1);
+        assert_eq!(results.len(), 2);
         assert_eq!(results[0].1.hash(), commitment_entrypoint_hash);
         assert!(
             results[0].2.0.is_ok(),
             "non-external entrypoint fallback must preserve execution: {:?}",
             results[0].2
+        );
+        let time_trigger_hash = results[1].1.hash();
+        assert!(
+            results[1].2.0.is_ok(),
+            "sequential time trigger must execute successfully: {:?}",
+            results[1].2
+        );
+        assert_eq!(
+            state_block.transactions.get(&commitment_entrypoint_hash),
+            Some(nonzero!(1_usize))
+        );
+        assert_eq!(
+            state_block.transactions.get(&time_trigger_hash),
+            Some(nonzero!(1_usize)),
+            "the staged membership set must include deterministic time-trigger entrypoints"
         );
     }
     #[test]

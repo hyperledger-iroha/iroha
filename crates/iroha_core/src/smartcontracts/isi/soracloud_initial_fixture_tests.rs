@@ -1026,8 +1026,14 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         .as_ref()
         .expect("unassigned hosted-service lease")
         .reporting_epoch;
+    let lease_started_height = deployment_before_usage
+        .service_lease
+        .as_ref()
+        .expect("unassigned hosted-service lease")
+        .lease_started_height;
     let lease_error = isi::ReportSoracloudServiceLeaseUsage {
         service_name: lease_victim_name.clone(),
+        lease_started_height,
         reporting_epoch,
         active_service_version: lease_victim_version.to_owned(),
         replica_slot: 1,
@@ -1246,8 +1252,11 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         output_commitment: Hash::new(b"output-commitment"),
         request_commitment: Hash::prehashed([0; 32]),
         result_commitment: Hash::prehashed([0; 32]),
+        authorization_claim_block_height: 0,
+        authorization_claim_epoch: 0,
         emitted_sequence: 0,
         emitted_block_height: 0,
+        emitted_epoch: 0,
     };
     let (_, private_output_manifest_digest) =
         private_artifact_manifest_fixture(0xD3, private_receipt.output_artifact.ciphertext_bytes);

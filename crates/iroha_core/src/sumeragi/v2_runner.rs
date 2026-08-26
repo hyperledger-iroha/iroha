@@ -906,6 +906,22 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         consensus_frame_byte_capacity,
         block_sync_frame_byte_capacity,
     } = worker;
+    if kura.emergency_fast_startup_enabled() {
+        // Fast is a read-only emergency posture. Stop before active-height
+        // recovery: that path may hash the complete WSV, derive and persist
+        // H+1, repair lifecycle ledgers, or reconcile certified payload files.
+        // Strict startup remains the sole authority for all such recovery.
+        startup_replay_inventory_guard.finish();
+        ingress_ready.store(false, Ordering::Release);
+        block_rx.close();
+        iroha_logger::warn!(
+            "emergency Fast startup skipped Sumeragi recovery and keeps consensus ingress closed until a Strict restart"
+        );
+        while !shutdown_signal.is_sent() {
+            let _ = wake_rx.recv_timeout(IDLE_POLL);
+        }
+        return Ok(());
+    }
     // Reject an unsupported voting host before any recovery or durable
     // consensus constructor can touch validator storage. Observers remain
     // available for sync and query service on other platforms.
@@ -2111,6 +2127,12 @@ fn claim_runner_lifecycle_process_generation(
 ) -> Result<Option<AutonomousLifecycleProcessGenerationClaim>, V2RunnerError> {
     match role {
         NodeRole::Observer => Ok(None),
+        NodeRole::Validator if kura.emergency_fast_startup_enabled() => {
+            iroha_logger::warn!(
+                "emergency Fast startup left the validator process generation untouched and disabled local lifecycle production until a Strict restart"
+            );
+            Ok(None)
+        }
         NodeRole::Validator => kura
             .claim_autonomous_lifecycle_process_generation(context.network_id, local_peer)
             .map(Some)
@@ -2340,6 +2362,7 @@ fn candidate_attachments(
                 round_header,
                 expected_merge_epoch,
                 merge_selection,
+                context.mode,
             )
             .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
     } else {

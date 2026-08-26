@@ -19,6 +19,11 @@ def _source() -> str:
 def test_cargo_slice_builds_use_one_locked_offline_single_job_target() -> None:
     source = _source()
     lines = source.splitlines()
+    root_assignment = source.index('ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"')
+    root_anchor = source.index('builtin cd "$ROOT_DIR"')
+    cargo_runner = source.index("run_hermetic_apple_cargo()")
+    assert root_assignment < root_anchor < cargo_runner
+
     call_starts = [
         index
         for index, line in enumerate(lines)

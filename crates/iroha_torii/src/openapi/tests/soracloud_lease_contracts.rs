@@ -73,7 +73,6 @@ fn soracloud_control_plane_openapi_exposes_authoritative_lease_accounting() {
                 "accounted_egress_bytes",
                 "last_updated_height",
                 "finalize_reporter",
-                "forced_finalization",
             ],
         ),
         (
@@ -96,7 +95,6 @@ fn soracloud_control_plane_openapi_exposes_authoritative_lease_accounting() {
                 "active_service_version",
                 "replica_slot",
                 "finalized_checkpoint_count",
-                "forced_finalized_checkpoint_count",
                 "settled_egress_bytes_delta",
                 "settled_egress_bytes",
             ],
@@ -391,4 +389,76 @@ fn soracloud_runtime_execution_host_openapi_is_first_release_exact() {
         !schemas.contains_key("SoraRuntimeInrouReplicaHostV1"),
         "retired Inrou runtime-host schema must not remain public"
     );
+}
+
+#[test]
+fn soracloud_mailbox_and_agent_request_openapi_are_first_release_exact() {
+    let document = canonical_document();
+    let schemas = component_schemas(&document);
+
+    assert_strict_object_schema(
+        schemas,
+        "SoraMailboxContractV1",
+        &[
+            "queue_name",
+            "max_pending_messages",
+            "max_message_bytes",
+            "retention_blocks",
+        ],
+        &[],
+    );
+    assert_strict_object_schema(
+        schemas,
+        "SoracloudRuntimeMailboxPlan",
+        &[
+            "handler_name",
+            "queue_name",
+            "max_pending_messages",
+            "max_message_bytes",
+            "retention_blocks",
+        ],
+        &[],
+    );
+    for owner in ["SoraMailboxContractV1", "SoracloudRuntimeMailboxPlan"] {
+        assert!(
+            !component_properties(schemas, owner).contains_key("retention_sequences"),
+            "{owner} must reject the retired sequence-clock field"
+        );
+    }
+
+    assert_strict_object_schema(
+        schemas,
+        "AgentDeployPayload",
+        &["manifest", "lease_blocks", "autonomy_budget_units"],
+        &[],
+    );
+    assert_strict_object_schema(
+        schemas,
+        "AgentLeaseRenewPayload",
+        &["apartment_name", "lease_blocks"],
+        &[],
+    );
+
+    let minimum = |owner: &str, property: &str| {
+        component_properties(schemas, owner)[property]["minimum"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("{owner}.{property} minimum"))
+    };
+    assert_eq!(minimum("SoraMailboxContractV1", "max_message_bytes"), 16);
+    assert_eq!(minimum("SoraMailboxContractV1", "retention_blocks"), 1);
+    assert_eq!(
+        minimum("SoracloudRuntimeMailboxPlan", "max_pending_messages"),
+        1
+    );
+    assert_eq!(
+        minimum("SoracloudRuntimeMailboxPlan", "max_message_bytes"),
+        16
+    );
+    assert_eq!(
+        minimum("SoracloudRuntimeMailboxPlan", "retention_blocks"),
+        1
+    );
+    assert_eq!(minimum("AgentDeployPayload", "lease_blocks"), 1);
+    assert_eq!(minimum("AgentDeployPayload", "autonomy_budget_units"), 1);
+    assert_eq!(minimum("AgentLeaseRenewPayload", "lease_blocks"), 1);
 }

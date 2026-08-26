@@ -1,7 +1,12 @@
 import { x25519 } from "@noble/curves/ed25519";
+import { blake3 } from "@noble/hashes/blake3";
+import { AccountAddress } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
+import { publicKeyMulticodecForCurveId } from "./curveRegistry.js";
 import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
 import { assertWellFormedUtf16 } from "./instructionBuilderPrimitives.js";
+import { NetworkId } from "./networkId.js";
+import { KotodamaQuantity } from "./numericV1.js";
 import { strictDecodeBase64 } from "./toriiClientEncoding.js";
 
 const BASE58_PATTERN = /^[1-9A-HJ-NP-Za-km-z]+$/;
@@ -32,6 +37,8 @@ export const SORACLOUD_APP_INFRA_UPGRADE_WIRE_ID =
 const PRIVATE_UPLOADED_MODEL_COUNT_MODES = new Set(["bounded", "exact"]);
 const PRIVATE_UPLOADED_MODEL_IDENTIFIER_PATTERN = /^[A-Za-z0-9._:#-]+$/u;
 const PRIVATE_UPLOADED_MODEL_U32_MAX = 0xffff_ffff;
+const PRIVATE_UPLOADED_MODEL_U64_MAX = 0xffff_ffff_ffff_ffffn;
+const PRIVATE_UPLOADED_MODEL_SAFE_INTEGER_MAX = BigInt(Number.MAX_SAFE_INTEGER);
 const PRIVATE_UPLOADED_MODEL_RECEIPT_MAX_LIMIT = 500;
 const PRIVATE_UPLOADED_MODEL_RECEIPT_CURSOR_PATTERN = /^[A-Za-z0-9_-]{114}$/u;
 const PRIVATE_UPLOADED_MODEL_MAX_CIPHERTEXT_BYTES = 72 * 1024 * 1024;
@@ -41,6 +48,116 @@ const PRIVATE_UPLOADED_MODEL_BIDI_CONTROL_PATTERN =
   /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
 const PRIVATE_UPLOADED_MODEL_NAME_FORBIDDEN_PATTERN = /[@#$]/u;
 const PRIVATE_UPLOADED_MODEL_UTF8_ENCODER = new TextEncoder();
+const PRIVATE_UPLOADED_MODEL_RUNTIME_VERSION_V1 = "soracloud.quantized-cpu.v1";
+const PRIVATE_UPLOADED_MODEL_AUTO_ORDER_DOMAIN_V1 =
+  PRIVATE_UPLOADED_MODEL_UTF8_ENCODER.encode("sorafs:auto-replication-order:v1");
+const PRIVATE_UPLOADED_MODEL_SUBMISSION_PHASES = new Set([
+  "awaiting_output_durability",
+  "prepare_submitted",
+  "receipt_submitted",
+  "committed",
+]);
+const PRIVATE_UPLOADED_MODEL_EXECUTE_RESPONSE_FIELDS = [
+  "schema_version",
+  "status",
+  "submission_phase",
+  "transaction_hash",
+  "receipt",
+  "output_artifact",
+];
+const PRIVATE_UPLOADED_MODEL_RECEIPT_FIELDS = [
+  "schema_version",
+  "network_id",
+  "receipt_id",
+  "service_name",
+  "service_version",
+  "model_id",
+  "weight_version",
+  "runtime_version",
+  "model_manifest_digest",
+  "model_bundle_root",
+  "policy_id",
+  "decryption_request_id",
+  "attesting_validator",
+  "input_artifact",
+  "output_artifact",
+  "output_replication_order_id",
+  "input_commitment",
+  "output_commitment",
+  "output_recipient",
+  "request_commitment",
+  "result_commitment",
+  "authorization_claim_block_height",
+  "authorization_claim_epoch",
+  "emitted_sequence",
+  "emitted_block_height",
+  "emitted_epoch",
+];
+const PRIVATE_UPLOADED_MODEL_ARTIFACT_FIELDS = [
+  "schema_version",
+  "sorafs_manifest_digest",
+  "sorafs_root_cid",
+  "artifact_hash",
+  "ciphertext_bytes",
+  "artifact_role",
+];
+const PRIVATE_UPLOADED_MODEL_RECIPIENT_FIELDS = [
+  "schema_version",
+  "key_id",
+  "key_version",
+  "kem",
+  "aead",
+  "public_key_bytes",
+  "public_key_fingerprint",
+];
+const PRIVATE_UPLOADED_MODEL_STATUS_FIELDS = ["schema_version", "bundle", "artifact"];
+const PRIVATE_UPLOADED_MODEL_BUNDLE_FIELDS = [
+  "schema_version",
+  "service_name",
+  "model_id",
+  "weight_version",
+  "family",
+  "modalities",
+  "plaintext_root",
+  "runtime_format",
+  "bundle_root",
+  "sorafs_manifest_digest",
+  "chunk_count",
+  "plaintext_bytes",
+  "ciphertext_bytes",
+  "chunk_manifest_root",
+  "upload_recipient",
+  "wrapped_bundle_key",
+  "pricing_policy",
+  "decryption_policy_ref",
+];
+const PRIVATE_UPLOADED_MODEL_WRAPPED_KEY_FIELDS = [
+  "schema_version",
+  "recipient_key_id",
+  "recipient_key_version",
+  "kem",
+  "aead",
+  "ephemeral_public_key",
+  "nonce",
+  "wrapped_key_ciphertext",
+  "ciphertext_hash",
+  "aad_digest",
+];
+const PRIVATE_UPLOADED_MODEL_ARTIFACT_STATUS_FIELDS = [
+  "service_name",
+  "model_name",
+  "artifact_id",
+  "training_job_id",
+  "weight_version",
+  "weight_artifact_hash",
+  "dataset_ref",
+  "training_config_hash",
+  "reproducibility_hash",
+  "provenance_attestation_hash",
+  "registered_sequence",
+  "consumed_by_version",
+  "chunk_manifest_root",
+];
 const X25519_LOW_ORDER_PROBE_PRIVATE_KEY = new Uint8Array(32).fill(1);
 const JSON_ACCEPT_HEADERS = Object.freeze({ Accept: "application/json" });
 
@@ -70,6 +187,117 @@ function requireExactObject(input, label, allowedFields, requiredFields = allowe
     }
   }
   return input;
+}
+
+function requireExactPrivateResponseObject(input, label, fields) {
+  if (input == null || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  const prototype = Object.getPrototypeOf(input);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(`${label} inherited properties are not accepted`);
+  }
+  const expected = new Set(fields);
+  for (const field of Object.getOwnPropertyNames(input)) {
+    if (!expected.has(field)) {
+      throw new TypeError(`${label}.${field} is not accepted`);
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(input, field);
+    if (descriptor == null || descriptor.enumerable !== true || !("value" in descriptor)) {
+      throw new TypeError(`${label}.${field} must be an enumerable data property`);
+    }
+  }
+  if (Object.getOwnPropertySymbols(input).length > 0) {
+    throw new TypeError(`${label} symbols are not accepted`);
+  }
+  for (const field of fields) {
+    if (!Object.hasOwn(input, field)) {
+      throw new TypeError(`${label}.${field} is required`);
+    }
+  }
+  return input;
+}
+
+function requirePlainDensePrivateArray(value, field) {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    throw new TypeError(`${field} must be a plain array`);
+  }
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    throw new TypeError(`${field} symbols are not accepted`);
+  }
+  for (const property of Object.getOwnPropertyNames(value)) {
+    if (property === "length") {
+      continue;
+    }
+    const index = Number(property);
+    if (!Number.isInteger(index) || index < 0 || index >= value.length || String(index) !== property) {
+      throw new TypeError(`${field}.${property} is not accepted`);
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, property);
+    if (descriptor == null || descriptor.enumerable !== true || !("value" in descriptor)) {
+      throw new TypeError(`${field}[${property}] must be an enumerable data property`);
+    }
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) {
+      throw new TypeError(`${field}[${index}] is required`);
+    }
+  }
+  return value;
+}
+
+function normalizePrivateWireUnsignedInteger(
+  value,
+  field,
+  { minimum = 0n, maximum = PRIVATE_UPLOADED_MODEL_U64_MAX } = {},
+) {
+  let integer;
+  if (
+    typeof value === "number"
+    && Number.isSafeInteger(value)
+    && !Object.is(value, -0)
+  ) {
+    integer = BigInt(value);
+  } else if (typeof value === "bigint") {
+    integer = value;
+  } else {
+    throw new TypeError(`${field} must be a lossless unsigned integer`);
+  }
+  if (integer < minimum || integer > maximum) {
+    throw new RangeError(
+      `${field} must be between ${minimum.toString(10)} and ${maximum.toString(10)}`,
+    );
+  }
+  return integer <= PRIVATE_UPLOADED_MODEL_SAFE_INTEGER_MAX ? Number(integer) : integer;
+}
+
+function normalizePrivateSchemaVersionOne(value, field) {
+  const version = normalizePrivateWireUnsignedInteger(value, field, {
+    minimum: 1n,
+    maximum: 1n,
+  });
+  return version;
+}
+
+function normalizePrivateWireU32(value, field, positive = false) {
+  return normalizePrivateWireUnsignedInteger(value, field, {
+    minimum: positive ? 1n : 0n,
+    maximum: BigInt(PRIVATE_UPLOADED_MODEL_U32_MAX),
+  });
+}
+
+function normalizePrivateWireU64(value, field, positive = false) {
+  return normalizePrivateWireUnsignedInteger(value, field, {
+    minimum: positive ? 1n : 0n,
+  });
+}
+
+function privateUnsignedIsZero(value) {
+  return typeof value === "bigint" ? value === 0n : value === 0;
+}
+
+function privateUnsignedIsPositive(value) {
+  return typeof value === "bigint" ? value > 0n : value > 0;
 }
 
 function rejectSoracloudSigningSecrets(input) {
@@ -517,6 +745,807 @@ function normalizePrivateOutputRecipient(input) {
     public_key_bytes: publicKeyBytes,
     public_key_fingerprint: publicKeyFingerprint,
   };
+}
+
+function normalizePrivateWireUnitVariant(value, field, tag, expected) {
+  const variant = requireExactPrivateResponseObject(value, field, [tag, "value"]);
+  if (variant[tag] !== expected) {
+    throw new TypeError(`${field}.${tag} must be ${expected}`);
+  }
+  if (variant.value !== null) {
+    throw new TypeError(`${field}.value must be null`);
+  }
+  return Object.freeze({ [tag]: expected, value: null });
+}
+
+function normalizeCanonicalPrivateX25519Key(value, field) {
+  const encoded = normalizePrivateExactString(value, field);
+  if (!/^[A-Za-z0-9+/]{43}=$/u.test(encoded)) {
+    throw new TypeError(`${field} must be canonical padded base64 for exactly 32 bytes`);
+  }
+  let decoded;
+  try {
+    decoded = strictDecodeBase64(encoded);
+  } catch (error) {
+    throw new TypeError(`${field} must be canonical padded base64 for exactly 32 bytes`, {
+      cause: error,
+    });
+  }
+  if (decoded.length !== 32) {
+    throw new TypeError(`${field} must encode exactly 32 bytes`);
+  }
+  try {
+    x25519.getSharedSecret(X25519_LOW_ORDER_PROBE_PRIVATE_KEY, decoded);
+  } catch (error) {
+    throw new TypeError(`${field} must not encode a low-order X25519 public key`, {
+      cause: error,
+    });
+  }
+  return { encoded, decoded };
+}
+
+function normalizeCanonicalPrivateBase64(value, field, minimumBytes, maximumBytes) {
+  const encoded = normalizePrivateExactString(value, field);
+  if (
+    encoded.length % 4 !== 0
+    || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(
+      encoded,
+    )
+  ) {
+    throw new TypeError(`${field} must be canonical padded base64`);
+  }
+  let decoded;
+  try {
+    decoded = strictDecodeBase64(encoded);
+  } catch (error) {
+    throw new TypeError(`${field} must be canonical padded base64`, { cause: error });
+  }
+  if (decoded.length < minimumBytes || decoded.length > maximumBytes) {
+    throw new RangeError(
+      `${field} must encode between ${minimumBytes} and ${maximumBytes} bytes`,
+    );
+  }
+  return { encoded, decoded };
+}
+
+function normalizePrivateWireArtifact(value, field, expectedRole) {
+  const artifact = requireExactPrivateResponseObject(
+    value,
+    field,
+    PRIVATE_UPLOADED_MODEL_ARTIFACT_FIELDS,
+  );
+  if (artifact.artifact_role !== expectedRole) {
+    throw new TypeError(`${field}.artifact_role must be ${expectedRole}`);
+  }
+  const ciphertextBytes = normalizePrivateWireU64(
+    artifact.ciphertext_bytes,
+    `${field}.ciphertext_bytes`,
+    true,
+  );
+  if (
+    typeof ciphertextBytes !== "number"
+    || ciphertextBytes > PRIVATE_UPLOADED_MODEL_MAX_CIPHERTEXT_BYTES
+  ) {
+    throw new RangeError(
+      `${field}.ciphertext_bytes must be between 1 and ${PRIVATE_UPLOADED_MODEL_MAX_CIPHERTEXT_BYTES}`,
+    );
+  }
+  return Object.freeze({
+    schema_version: normalizePrivateSchemaVersionOne(
+      artifact.schema_version,
+      `${field}.schema_version`,
+    ),
+    sorafs_manifest_digest: Object.freeze(
+      normalizeManifestDigest(
+        artifact.sorafs_manifest_digest,
+        `${field}.sorafs_manifest_digest`,
+      ),
+    ),
+    sorafs_root_cid: Object.freeze(
+      normalizeManifestRootCid(artifact.sorafs_root_cid, `${field}.sorafs_root_cid`),
+    ),
+    artifact_hash: normalizeCanonicalHashLiteral(
+      artifact.artifact_hash,
+      `${field}.artifact_hash`,
+    ),
+    ciphertext_bytes: ciphertextBytes,
+    artifact_role: expectedRole,
+  });
+}
+
+function normalizePrivateWireRecipient(value, field) {
+  const recipient = requireExactPrivateResponseObject(
+    value,
+    field,
+    PRIVATE_UPLOADED_MODEL_RECIPIENT_FIELDS,
+  );
+  const kem = normalizePrivateWireUnitVariant(
+    recipient.kem,
+    `${field}.kem`,
+    "kem",
+    "X25519HkdfSha256",
+  );
+  const aead = normalizePrivateWireUnitVariant(
+    recipient.aead,
+    `${field}.aead`,
+    "aead",
+    "Aes256Gcm",
+  );
+  const { encoded: publicKeyBytes, decoded } = normalizeCanonicalPrivateX25519Key(
+    recipient.public_key_bytes,
+    `${field}.public_key_bytes`,
+  );
+  const publicKeyFingerprint = normalizeCanonicalHashLiteral(
+    recipient.public_key_fingerprint,
+    `${field}.public_key_fingerprint`,
+  );
+  if (publicKeyFingerprint !== irohaBlake2b256PrehashLiteral(decoded)) {
+    throw new TypeError(
+      `${field}.public_key_fingerprint must equal the Iroha Blake2b-256 prehash of ${field}.public_key_bytes`,
+    );
+  }
+  return Object.freeze({
+    schema_version: normalizePrivateSchemaVersionOne(
+      recipient.schema_version,
+      `${field}.schema_version`,
+    ),
+    key_id: normalizePrivateExactString(recipient.key_id, `${field}.key_id`),
+    key_version: normalizePrivateWireU32(
+      recipient.key_version,
+      `${field}.key_version`,
+      true,
+    ),
+    kem,
+    aead,
+    public_key_bytes: publicKeyBytes,
+    public_key_fingerprint: publicKeyFingerprint,
+  });
+}
+
+function encodePrivateUnsignedLeb128(value) {
+  let remaining = BigInt(value);
+  const bytes = [];
+  do {
+    let byte = Number(remaining & 0x7fn);
+    remaining >>= 7n;
+    if (remaining !== 0n) {
+      byte |= 0x80;
+    }
+    bytes.push(byte);
+  } while (remaining !== 0n);
+  return bytes;
+}
+
+function privateHex(bytes, uppercase) {
+  return Array.from(bytes, (byte) => {
+    const hex = byte.toString(16).padStart(2, "0");
+    return uppercase ? hex.toUpperCase() : hex;
+  }).join("");
+}
+
+function normalizePrivateAttestingValidator(value, field) {
+  const host = requireExactPrivateResponseObject(value, field, [
+    "lane_id",
+    "validator_account_id",
+    "peer_id",
+  ]);
+  const validatorAccountId = normalizePrivateExactString(
+    host.validator_account_id,
+    `${field}.validator_account_id`,
+  );
+  let account;
+  try {
+    account = AccountAddress.fromI105(validatorAccountId);
+  } catch (error) {
+    throw new TypeError(
+      `${field}.validator_account_id must be an exact canonical universal AccountId`,
+      { cause: error },
+    );
+  }
+  const accountBytes = account.canonicalBytes();
+  const addressClass = (accountBytes[0] >> 3) & 0b11;
+  if (
+    addressClass !== 0
+    || accountBytes.length < 4
+    || accountBytes[1] !== 0
+    || accountBytes.length !== 4 + accountBytes[3]
+  ) {
+    throw new TypeError(`${field}.validator_account_id must contain exactly one signatory`);
+  }
+  const curve = accountBytes[2];
+  const publicKey = accountBytes.subarray(4);
+  const multicodec = publicKeyMulticodecForCurveId(curve);
+  if (multicodec === null) {
+    throw new TypeError(`${field}.validator_account_id uses an unsupported signatory curve`);
+  }
+  const expectedPeerId = `${privateHex(encodePrivateUnsignedLeb128(multicodec), false)}${privateHex(
+    encodePrivateUnsignedLeb128(publicKey.length),
+    false,
+  )}${privateHex(publicKey, true)}`;
+  const peerId = normalizePrivateExactString(host.peer_id, `${field}.peer_id`);
+  if (peerId !== expectedPeerId) {
+    throw new TypeError(
+      `${field}.peer_id must equal validator_account_id's exact single signatory`,
+    );
+  }
+  return Object.freeze({
+    lane_id: normalizePrivateWireU32(host.lane_id, `${field}.lane_id`),
+    validator_account_id: validatorAccountId,
+    peer_id: peerId,
+  });
+}
+
+function normalizePrivateWrappedBundleKey(value, field, recipient) {
+  const wrapped = requireExactPrivateResponseObject(
+    value,
+    field,
+    PRIVATE_UPLOADED_MODEL_WRAPPED_KEY_FIELDS,
+  );
+  const recipientKeyId = normalizePrivateExactString(
+    wrapped.recipient_key_id,
+    `${field}.recipient_key_id`,
+  );
+  const recipientKeyVersion = normalizePrivateWireU32(
+    wrapped.recipient_key_version,
+    `${field}.recipient_key_version`,
+    true,
+  );
+  const kem = normalizePrivateWireUnitVariant(
+    wrapped.kem,
+    `${field}.kem`,
+    "kem",
+    "X25519HkdfSha256",
+  );
+  const aead = normalizePrivateWireUnitVariant(
+    wrapped.aead,
+    `${field}.aead`,
+    "aead",
+    "Aes256Gcm",
+  );
+  if (
+    recipientKeyId !== recipient.key_id
+    || recipientKeyVersion !== recipient.key_version
+    || kem.kem !== recipient.kem.kem
+    || aead.aead !== recipient.aead.aead
+  ) {
+    throw new TypeError(`${field} must bind the exact upload_recipient key and suites`);
+  }
+  const { encoded: ephemeralPublicKey } = normalizeCanonicalPrivateX25519Key(
+    wrapped.ephemeral_public_key,
+    `${field}.ephemeral_public_key`,
+  );
+  const { encoded: nonce } = normalizeCanonicalPrivateBase64(
+    wrapped.nonce,
+    `${field}.nonce`,
+    1,
+    256,
+  );
+  const { encoded: wrappedKeyCiphertext, decoded: ciphertextBytes } =
+    normalizeCanonicalPrivateBase64(
+      wrapped.wrapped_key_ciphertext,
+      `${field}.wrapped_key_ciphertext`,
+      1,
+      4_096,
+    );
+  const ciphertextHash = normalizeCanonicalHashLiteral(
+    wrapped.ciphertext_hash,
+    `${field}.ciphertext_hash`,
+  );
+  if (ciphertextHash !== irohaBlake2b256PrehashLiteral(ciphertextBytes)) {
+    throw new TypeError(`${field}.ciphertext_hash must match wrapped_key_ciphertext`);
+  }
+  return Object.freeze({
+    schema_version: normalizePrivateSchemaVersionOne(
+      wrapped.schema_version,
+      `${field}.schema_version`,
+    ),
+    recipient_key_id: recipientKeyId,
+    recipient_key_version: recipientKeyVersion,
+    kem,
+    aead,
+    ephemeral_public_key: ephemeralPublicKey,
+    nonce,
+    wrapped_key_ciphertext: wrappedKeyCiphertext,
+    ciphertext_hash: ciphertextHash,
+    aad_digest: normalizeCanonicalHashLiteral(wrapped.aad_digest, `${field}.aad_digest`),
+  });
+}
+
+function normalizePrivateModalities(value, field) {
+  const values = requirePlainDensePrivateArray(value, field);
+  if (values.length === 0) {
+    throw new TypeError(`${field} must not be empty`);
+  }
+  const modalities = values.map((entry, index) =>
+    normalizePrivateExactString(entry, `${field}[${index}]`),
+  );
+  if (new Set(modalities).size !== modalities.length) {
+    throw new TypeError(`${field} entries must be unique`);
+  }
+  return Object.freeze(modalities);
+}
+
+function normalizePrivatePricingPolicy(value, field) {
+  const pricing = requireExactPrivateResponseObject(value, field, ["storage_price"]);
+  const storagePrice = normalizePrivateExactString(
+    pricing.storage_price,
+    `${field}.storage_price`,
+  );
+  let canonical;
+  try {
+    canonical = new KotodamaQuantity(storagePrice).toString();
+  } catch (error) {
+    throw new TypeError(`${field}.storage_price must be a canonical quantity`, {
+      cause: error,
+    });
+  }
+  if (canonical !== storagePrice) {
+    throw new TypeError(`${field}.storage_price must be a canonical quantity`);
+  }
+  return Object.freeze({ storage_price: storagePrice });
+}
+
+function normalizePrivateUploadedModelBundle(value, field) {
+  const bundle = requireExactPrivateResponseObject(
+    value,
+    field,
+    PRIVATE_UPLOADED_MODEL_BUNDLE_FIELDS,
+  );
+  const uploadRecipient = normalizePrivateWireRecipient(
+    bundle.upload_recipient,
+    `${field}.upload_recipient`,
+  );
+  return Object.freeze({
+    schema_version: normalizePrivateSchemaVersionOne(
+      bundle.schema_version,
+      `${field}.schema_version`,
+    ),
+    service_name: normalizePrivateName(bundle.service_name, `${field}.service_name`),
+    model_id: normalizePrivateIdentifier(bundle.model_id, `${field}.model_id`),
+    weight_version: normalizePrivateIdentifier(
+      bundle.weight_version,
+      `${field}.weight_version`,
+    ),
+    family: normalizePrivateExactString(bundle.family, `${field}.family`),
+    modalities: normalizePrivateModalities(bundle.modalities, `${field}.modalities`),
+    plaintext_root: normalizeCanonicalHashLiteral(
+      bundle.plaintext_root,
+      `${field}.plaintext_root`,
+    ),
+    runtime_format: normalizePrivateWireUnitVariant(
+      bundle.runtime_format,
+      `${field}.runtime_format`,
+      "runtime_format",
+      "DeterministicQuantizedCpuV1",
+    ),
+    bundle_root: normalizeCanonicalHashLiteral(bundle.bundle_root, `${field}.bundle_root`),
+    sorafs_manifest_digest: Object.freeze(
+      normalizeManifestDigest(
+        bundle.sorafs_manifest_digest,
+        `${field}.sorafs_manifest_digest`,
+      ),
+    ),
+    chunk_count: normalizePrivateWireU32(bundle.chunk_count, `${field}.chunk_count`, true),
+    plaintext_bytes: normalizePrivateWireU64(
+      bundle.plaintext_bytes,
+      `${field}.plaintext_bytes`,
+      true,
+    ),
+    ciphertext_bytes: normalizePrivateWireU64(
+      bundle.ciphertext_bytes,
+      `${field}.ciphertext_bytes`,
+      true,
+    ),
+    chunk_manifest_root: normalizeCanonicalHashLiteral(
+      bundle.chunk_manifest_root,
+      `${field}.chunk_manifest_root`,
+    ),
+    upload_recipient: uploadRecipient,
+    wrapped_bundle_key: normalizePrivateWrappedBundleKey(
+      bundle.wrapped_bundle_key,
+      `${field}.wrapped_bundle_key`,
+      uploadRecipient,
+    ),
+    pricing_policy: normalizePrivatePricingPolicy(
+      bundle.pricing_policy,
+      `${field}.pricing_policy`,
+    ),
+    decryption_policy_ref: normalizePrivateExactString(
+      bundle.decryption_policy_ref,
+      `${field}.decryption_policy_ref`,
+    ),
+  });
+}
+
+function normalizeNullablePrivateExactString(value, field, normalizer = normalizePrivateExactString) {
+  return value === null ? null : normalizer(value, field);
+}
+
+function normalizeNullablePrivateHash(value, field) {
+  return value === null ? null : normalizeCanonicalHashLiteral(value, field);
+}
+
+function normalizePrivateArtifactStatus(value, field) {
+  const artifact = requireExactPrivateResponseObject(
+    value,
+    field,
+    PRIVATE_UPLOADED_MODEL_ARTIFACT_STATUS_FIELDS,
+  );
+  return Object.freeze({
+    service_name: normalizePrivateName(artifact.service_name, `${field}.service_name`),
+    model_name: normalizePrivateExactString(artifact.model_name, `${field}.model_name`),
+    artifact_id: normalizePrivateExactString(artifact.artifact_id, `${field}.artifact_id`),
+    training_job_id: normalizePrivateExactString(
+      artifact.training_job_id,
+      `${field}.training_job_id`,
+    ),
+    weight_version: normalizeNullablePrivateExactString(
+      artifact.weight_version,
+      `${field}.weight_version`,
+      normalizePrivateIdentifier,
+    ),
+    weight_artifact_hash: normalizeCanonicalHashLiteral(
+      artifact.weight_artifact_hash,
+      `${field}.weight_artifact_hash`,
+    ),
+    dataset_ref: normalizePrivateExactString(artifact.dataset_ref, `${field}.dataset_ref`),
+    training_config_hash: normalizeCanonicalHashLiteral(
+      artifact.training_config_hash,
+      `${field}.training_config_hash`,
+    ),
+    reproducibility_hash: normalizeCanonicalHashLiteral(
+      artifact.reproducibility_hash,
+      `${field}.reproducibility_hash`,
+    ),
+    provenance_attestation_hash: normalizeCanonicalHashLiteral(
+      artifact.provenance_attestation_hash,
+      `${field}.provenance_attestation_hash`,
+    ),
+    registered_sequence: normalizePrivateWireU64(
+      artifact.registered_sequence,
+      `${field}.registered_sequence`,
+      true,
+    ),
+    consumed_by_version: normalizeNullablePrivateExactString(
+      artifact.consumed_by_version,
+      `${field}.consumed_by_version`,
+    ),
+    chunk_manifest_root: normalizeNullablePrivateHash(
+      artifact.chunk_manifest_root,
+      `${field}.chunk_manifest_root`,
+    ),
+  });
+}
+
+function normalizePrivateUploadedModelStatus(value, field) {
+  const status = requireExactPrivateResponseObject(
+    value,
+    field,
+    PRIVATE_UPLOADED_MODEL_STATUS_FIELDS,
+  );
+  return Object.freeze({
+    schema_version: normalizePrivateSchemaVersionOne(
+      status.schema_version,
+      `${field}.schema_version`,
+    ),
+    bundle: normalizePrivateUploadedModelBundle(status.bundle, `${field}.bundle`),
+    artifact: status.artifact === null
+      ? null
+      : normalizePrivateArtifactStatus(status.artifact, `${field}.artifact`),
+  });
+}
+
+function derivePrivateAutomaticReplicationOrderId(outputManifestDigest) {
+  const preimage = new Uint8Array(
+    PRIVATE_UPLOADED_MODEL_AUTO_ORDER_DOMAIN_V1.length + outputManifestDigest.length,
+  );
+  preimage.set(PRIVATE_UPLOADED_MODEL_AUTO_ORDER_DOMAIN_V1);
+  preimage.set(outputManifestDigest, PRIVATE_UPLOADED_MODEL_AUTO_ORDER_DOMAIN_V1.length);
+  const orderId = Array.from(blake3(preimage));
+  orderId[0] |= 0x80;
+  return orderId;
+}
+
+function privateByteArraysEqual(left, right) {
+  return left.length === right.length && left.every((byte, index) => byte === right[index]);
+}
+
+function privateArtifactsEqual(left, right) {
+  return left.schema_version === right.schema_version
+    && privateByteArraysEqual(left.sorafs_manifest_digest, right.sorafs_manifest_digest)
+    && privateByteArraysEqual(left.sorafs_root_cid, right.sorafs_root_cid)
+    && left.artifact_hash === right.artifact_hash
+    && left.ciphertext_bytes === right.ciphertext_bytes
+    && left.artifact_role === right.artifact_role;
+}
+
+function normalizePrivateNetworkId(value, field) {
+  const literal = normalizePrivateExactString(value, field);
+  try {
+    return NetworkId.parse(literal).toString();
+  } catch (error) {
+    throw new TypeError(
+      `${field} must be an exact canonical checksummed 32-byte NetworkId literal`,
+      { cause: error },
+    );
+  }
+}
+
+function normalizePrivateUploadedModelReceipt(value, field) {
+  const receipt = requireExactPrivateResponseObject(
+    value,
+    field,
+    PRIVATE_UPLOADED_MODEL_RECEIPT_FIELDS,
+  );
+  const inputArtifact = normalizePrivateWireArtifact(
+    receipt.input_artifact,
+    `${field}.input_artifact`,
+    "input",
+  );
+  const outputArtifact = normalizePrivateWireArtifact(
+    receipt.output_artifact,
+    `${field}.output_artifact`,
+    "output",
+  );
+  if (inputArtifact.artifact_hash === outputArtifact.artifact_hash) {
+    throw new TypeError(
+      `${field}.output_artifact.artifact_hash must differ from input_artifact.artifact_hash`,
+    );
+  }
+  const outputReplicationOrderId = Object.freeze(
+    normalizeManifestDigest(
+      receipt.output_replication_order_id,
+      `${field}.output_replication_order_id`,
+    ),
+  );
+  const expectedOrderId = derivePrivateAutomaticReplicationOrderId(
+    outputArtifact.sorafs_manifest_digest,
+  );
+  if (!privateByteArraysEqual(outputReplicationOrderId, expectedOrderId)) {
+    throw new TypeError(
+      `${field}.output_replication_order_id must equal the tagged automatic replication-order ID derived from output_artifact.sorafs_manifest_digest`,
+    );
+  }
+  const emittedSequence = normalizePrivateWireU64(
+    receipt.emitted_sequence,
+    `${field}.emitted_sequence`,
+  );
+  const emittedBlockHeight = normalizePrivateWireU64(
+    receipt.emitted_block_height,
+    `${field}.emitted_block_height`,
+  );
+  const emittedEpoch = normalizePrivateWireU64(
+    receipt.emitted_epoch,
+    `${field}.emitted_epoch`,
+  );
+  const authorizationClaimBlockHeight = normalizePrivateWireU64(
+    receipt.authorization_claim_block_height,
+    `${field}.authorization_claim_block_height`,
+  );
+  const authorizationClaimEpoch = normalizePrivateWireU64(
+    receipt.authorization_claim_epoch,
+    `${field}.authorization_claim_epoch`,
+  );
+  const ledgerCoordinates = [
+    authorizationClaimBlockHeight,
+    authorizationClaimEpoch,
+    emittedSequence,
+    emittedBlockHeight,
+    emittedEpoch,
+  ];
+  const coordinatesAreZero = ledgerCoordinates.every(privateUnsignedIsZero);
+  const coordinatesArePositive = ledgerCoordinates.every(privateUnsignedIsPositive);
+  if (!coordinatesAreZero && !coordinatesArePositive) {
+    throw new TypeError(
+      `${field} ledger coordinates must all be zero or all be positive`,
+    );
+  }
+  if (
+    coordinatesArePositive
+    && (
+      BigInt(emittedBlockHeight) < BigInt(authorizationClaimBlockHeight)
+      || BigInt(emittedEpoch) < BigInt(authorizationClaimEpoch)
+    )
+  ) {
+    throw new TypeError(
+      `${field} emission coordinates must not precede authorization claim coordinates`,
+    );
+  }
+  const runtimeVersion = normalizePrivateExactString(
+    receipt.runtime_version,
+    `${field}.runtime_version`,
+  );
+  if (runtimeVersion !== PRIVATE_UPLOADED_MODEL_RUNTIME_VERSION_V1) {
+    throw new TypeError(
+      `${field}.runtime_version must be ${PRIVATE_UPLOADED_MODEL_RUNTIME_VERSION_V1}`,
+    );
+  }
+  return Object.freeze({
+    schema_version: normalizePrivateSchemaVersionOne(
+      receipt.schema_version,
+      `${field}.schema_version`,
+    ),
+    network_id: normalizePrivateNetworkId(receipt.network_id, `${field}.network_id`),
+    receipt_id: normalizeCanonicalHashLiteral(receipt.receipt_id, `${field}.receipt_id`),
+    service_name: normalizePrivateName(receipt.service_name, `${field}.service_name`),
+    service_version: normalizePrivateExactString(
+      receipt.service_version,
+      `${field}.service_version`,
+      256,
+    ),
+    model_id: normalizePrivateIdentifier(receipt.model_id, `${field}.model_id`),
+    weight_version: normalizePrivateIdentifier(
+      receipt.weight_version,
+      `${field}.weight_version`,
+    ),
+    runtime_version: runtimeVersion,
+    model_manifest_digest: Object.freeze(
+      normalizeManifestDigest(
+        receipt.model_manifest_digest,
+        `${field}.model_manifest_digest`,
+      ),
+    ),
+    model_bundle_root: normalizeCanonicalHashLiteral(
+      receipt.model_bundle_root,
+      `${field}.model_bundle_root`,
+    ),
+    policy_id: normalizePrivateExactString(receipt.policy_id, `${field}.policy_id`),
+    decryption_request_id: normalizePrivateExactString(
+      receipt.decryption_request_id,
+      `${field}.decryption_request_id`,
+    ),
+    attesting_validator: normalizePrivateAttestingValidator(
+      receipt.attesting_validator,
+      `${field}.attesting_validator`,
+    ),
+    input_artifact: inputArtifact,
+    output_artifact: outputArtifact,
+    output_replication_order_id: outputReplicationOrderId,
+    input_commitment: normalizeCanonicalHashLiteral(
+      receipt.input_commitment,
+      `${field}.input_commitment`,
+    ),
+    output_commitment: normalizeCanonicalHashLiteral(
+      receipt.output_commitment,
+      `${field}.output_commitment`,
+    ),
+    output_recipient: normalizePrivateWireRecipient(
+      receipt.output_recipient,
+      `${field}.output_recipient`,
+    ),
+    request_commitment: normalizeCanonicalHashLiteral(
+      receipt.request_commitment,
+      `${field}.request_commitment`,
+    ),
+    result_commitment: normalizeCanonicalHashLiteral(
+      receipt.result_commitment,
+      `${field}.result_commitment`,
+    ),
+    authorization_claim_block_height: authorizationClaimBlockHeight,
+    authorization_claim_epoch: authorizationClaimEpoch,
+    emitted_sequence: emittedSequence,
+    emitted_block_height: emittedBlockHeight,
+    emitted_epoch: emittedEpoch,
+  });
+}
+
+function requirePrivateStatusMatchesReceipt(status, receipt, field) {
+  const { bundle, artifact } = status;
+  for (const [name, expected] of [
+    ["service_name", receipt.service_name],
+    ["model_id", receipt.model_id],
+    ["weight_version", receipt.weight_version],
+    ["bundle_root", receipt.model_bundle_root],
+    ["decryption_policy_ref", receipt.policy_id],
+  ]) {
+    if (bundle[name] !== expected) {
+      throw new TypeError(`${field}.bundle.${name} must match receipt`);
+    }
+  }
+  if (!privateByteArraysEqual(bundle.sorafs_manifest_digest, receipt.model_manifest_digest)) {
+    throw new TypeError(
+      `${field}.bundle.sorafs_manifest_digest must match receipt.model_manifest_digest`,
+    );
+  }
+  if (artifact !== null) {
+    if (artifact.service_name !== receipt.service_name) {
+      throw new TypeError(`${field}.artifact.service_name must match receipt.service_name`);
+    }
+    if (artifact.weight_version !== receipt.weight_version) {
+      throw new TypeError(`${field}.artifact.weight_version must match receipt.weight_version`);
+    }
+    if (artifact.chunk_manifest_root !== bundle.chunk_manifest_root) {
+      throw new TypeError(
+        `${field}.artifact.chunk_manifest_root must match bundle.chunk_manifest_root`,
+      );
+    }
+  }
+}
+
+/**
+ * Strictly normalize one private uploaded-model execution receipt decoded with lossless JSON.
+ * Unsafe JSON integer tokens must reach this function as `bigint`, never rounded `number` values.
+ *
+ * @param {unknown} payload decoded Norito JSON receipt.
+ * @returns {Readonly<Record<string, unknown>>}
+ */
+export function normalizeSoracloudPrivateUploadedModelExecutionReceipt(payload) {
+  return normalizePrivateUploadedModelReceipt(
+    payload,
+    "soracloud private uploaded-model execution receipt",
+  );
+}
+
+/**
+ * Strictly normalize `/v1/soracloud/model/upload/private/execute` response JSON.
+ * Unsafe JSON integer tokens must reach this function as `bigint`, never rounded `number` values.
+ *
+ * @param {unknown} payload decoded Norito JSON response.
+ * @returns {Readonly<Record<string, unknown>>}
+ */
+export function normalizeSoracloudPrivateUploadedModelExecuteResponse(payload) {
+  const field = "soracloud private uploaded-model execute response";
+  const response = requireExactPrivateResponseObject(
+    payload,
+    field,
+    PRIVATE_UPLOADED_MODEL_EXECUTE_RESPONSE_FIELDS,
+  );
+  const phase = normalizePrivateExactString(
+    response.submission_phase,
+    `${field}.submission_phase`,
+  );
+  if (!PRIVATE_UPLOADED_MODEL_SUBMISSION_PHASES.has(phase)) {
+    throw new TypeError(`${field}.submission_phase is not a closed first-release phase`);
+  }
+  const transactionHash = response.transaction_hash === null
+    ? null
+    : normalizeCanonicalHashLiteral(
+        response.transaction_hash,
+        `${field}.transaction_hash`,
+      );
+  const hashRequired = phase === "prepare_submitted" || phase === "receipt_submitted";
+  if (hashRequired !== (transactionHash !== null)) {
+    throw new TypeError(
+      hashRequired
+        ? `${field}.transaction_hash is required for ${phase}`
+        : `${field}.transaction_hash must be null for ${phase}`,
+    );
+  }
+  const receipt = normalizePrivateUploadedModelReceipt(response.receipt, `${field}.receipt`);
+  const assignedReceipt =
+    privateUnsignedIsPositive(receipt.authorization_claim_block_height)
+    && privateUnsignedIsPositive(receipt.authorization_claim_epoch)
+    && privateUnsignedIsPositive(receipt.emitted_sequence)
+    && privateUnsignedIsPositive(receipt.emitted_block_height)
+    && privateUnsignedIsPositive(receipt.emitted_epoch);
+  if ((phase === "committed") !== assignedReceipt) {
+    throw new TypeError(
+      phase === "committed"
+        ? `${field}.receipt must use positive ledger coordinates for committed`
+        : `${field}.receipt must use zero ledger coordinates for ${phase}`,
+    );
+  }
+  const outputArtifact = normalizePrivateWireArtifact(
+    response.output_artifact,
+    `${field}.output_artifact`,
+    "output",
+  );
+  if (!privateArtifactsEqual(outputArtifact, receipt.output_artifact)) {
+    throw new TypeError(`${field}.output_artifact must match receipt.output_artifact`);
+  }
+  const status = normalizePrivateUploadedModelStatus(response.status, `${field}.status`);
+  requirePrivateStatusMatchesReceipt(status, receipt, `${field}.status`);
+  return Object.freeze({
+    schema_version: normalizePrivateSchemaVersionOne(
+      response.schema_version,
+      `${field}.schema_version`,
+    ),
+    status,
+    submission_phase: phase,
+    transaction_hash: transactionHash,
+    receipt,
+    output_artifact: outputArtifact,
+  });
 }
 
 function canonicalSigningPayload(label, payload, schema = PROVENANCE_SCHEMA) {
@@ -1170,13 +2199,13 @@ export function assembleSoracloudHfDeployRequest(draft, provenances = {}) {
 /**
  * Build a canonical private uploaded-model execution request.
  *
- * Exactly one model selector is required. The request binds an exact service
+ * The immutable model id and bundle root are required. The request binds an exact service
  * revision, committed decryption authorization, encrypted SoraFS input, and
  * output-recipient public key plus its Iroha prehash. It never accepts model
  * bytes, plaintext, validator-created output claims, runtime claims, or signing
  * secrets.
  *
- * @param {{ serviceName: string, serviceVersion: string, weightVersion: string, modelId: string | null, modelName: string | null, bundleRoot: string | null, decryptionRequestId: string, inputArtifact: Record<string, unknown>, outputRecipient: Record<string, unknown> }} input
+ * @param {{ serviceName: string, serviceVersion: string, weightVersion: string, modelId: string, bundleRoot: string, decryptionRequestId: string, inputArtifact: Record<string, unknown>, outputRecipient: Record<string, unknown> }} input
  * @returns {Record<string, unknown>}
  */
 export function buildSoracloudPrivateUploadedModelExecuteRequest(input = {}) {
@@ -1186,28 +2215,13 @@ export function buildSoracloudPrivateUploadedModelExecuteRequest(input = {}) {
     "serviceVersion",
     "weightVersion",
     "modelId",
-    "modelName",
     "bundleRoot",
     "decryptionRequestId",
     "inputArtifact",
     "outputRecipient",
   ]);
-  const modelId = normalizeNullablePrivateValue(
-    input.modelId,
-    "modelId",
-    normalizePrivateIdentifier,
-  );
-  const modelName = normalizeNullablePrivateValue(
-    input.modelName,
-    "modelName",
-    normalizePrivateName,
-  );
-  if ((modelId === null) === (modelName === null)) {
-    throw new TypeError("exactly one of modelId or modelName must be provided");
-  }
-  const bundleRoot = input.bundleRoot === null
-    ? null
-    : normalizeCanonicalHashLiteral(input.bundleRoot, "bundleRoot");
+  const modelId = normalizePrivateIdentifier(input.modelId, "modelId");
+  const bundleRoot = normalizeCanonicalHashLiteral(input.bundleRoot, "bundleRoot");
   return {
     service_name: normalizePrivateName(input.serviceName, "serviceName"),
     service_version: normalizePrivateExactString(
@@ -1217,7 +2231,6 @@ export function buildSoracloudPrivateUploadedModelExecuteRequest(input = {}) {
     ),
     weight_version: normalizePrivateIdentifier(input.weightVersion, "weightVersion"),
     model_id: modelId,
-    model_name: modelName,
     bundle_root: bundleRoot,
     decryption_request_id: normalizePrivateExactString(
       input.decryptionRequestId,

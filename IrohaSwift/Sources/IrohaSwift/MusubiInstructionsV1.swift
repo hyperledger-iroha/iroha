@@ -1353,7 +1353,7 @@ private enum MusubiInstructionNoritoV1 {
 
     static func fixedArray(_ bytes: [UInt8]) -> Data {
         var writer = CompactNoritoWriter()
-        for byte in bytes { writer.writeField(Data([byte])) }
+        writer.writeByteFields(bytes)
         return writer.data
     }
 
@@ -1838,10 +1838,7 @@ private func musubiCompactPublicKeyPayloadV1(_ publicKey: MusubiPublicKeyOrderKe
     let bytes = [publicKey.algorithm] + publicKey.payload
     var writer = CompactNoritoWriter()
     writer.writeUInt64LE(UInt64(bytes.count))
-    for byte in bytes {
-        writer.writeLength(1)
-        writer.writeUInt8(byte)
-    }
+    writer.writeByteFields(bytes)
     return writer.data
 }
 

@@ -168,6 +168,19 @@ mod tests {
         }
     }
     #[test]
+    fn canonical_catalog_excludes_unmounted_zk_prover_report_adapters() {
+        for path in [
+            "/v1/zk/prover/reports",
+            "/v1/zk/prover/reports/count",
+            "/v1/zk/prover/reports/{id}",
+        ] {
+            assert!(
+                CATALOGED_ROUTES.iter().all(|route| route.path() != path),
+                "unmounted ZK prover report adapter leaked into the canonical catalog: {path}"
+            );
+        }
+    }
+    #[test]
     fn canonical_catalog_retires_direct_sumeragi_mutation_and_vrf_snapshot_routes() {
         assert_eq!(sumeragi::EVIDENCE_LIST.method(), HttpMethod::Get);
         assert_eq!(sumeragi::EVIDENCE_LIST.path(), "/v1/sumeragi/evidence");

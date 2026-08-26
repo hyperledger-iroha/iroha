@@ -1201,7 +1201,7 @@ pub fn encode_rollout_provenance_payload(
 pub fn encode_agent_deploy_provenance_payload(
     manifest: AgentApartmentManifestV1,
     lease_blocks: u64,
-    autonomy_budget_units: Option<u64>,
+    autonomy_budget_units: u64,
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(manifest, lease_blocks, autonomy_budget_units))
 }

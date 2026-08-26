@@ -1457,11 +1457,11 @@ mod test {
     }
     #[test]
     fn batch_verify_two_signatures_deterministic() {
-        use crate::rng::os_rng;
-        let mut rng1 = os_rng();
+        use crate::rng::rng_from_seed_slice;
+        let mut rng1 = rng_from_seed_slice(b"ed25519 batch verification key one");
         let sk1 = ed25519::PrivateKey::generate(&mut rng1);
         let pk1 = sk1.verifying_key();
-        let mut rng2 = os_rng();
+        let mut rng2 = rng_from_seed_slice(b"ed25519 batch verification key two");
         let sk2 = ed25519::PrivateKey::generate(&mut rng2);
         let pk2 = sk2.verifying_key();
         let m1 = b"msg1".as_ref();
