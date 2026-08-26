@@ -379,7 +379,7 @@ fn unsupported_routed_query_response_is_conflict_not_not_implemented() {
         Some("query_unsupported")
     );
 }
-#[cfg(not(any(feature = "p2p_ws", feature = "connect")))]
+#[cfg(not(feature = "connect"))]
 #[test]
 fn app_api_without_proxy_transport_fails_nonlocal_queries_closed() {
     let response = torii_proxy_transport_disabled_response(RoutingDecision::default());
@@ -392,7 +392,7 @@ fn app_api_without_proxy_transport_fails_nonlocal_queries_closed() {
         Some("route_unavailable")
     );
 }
-#[cfg(all(not(feature = "app_api"), any(feature = "p2p_ws", feature = "connect")))]
+#[cfg(all(not(feature = "app_api"), feature = "connect"))]
 #[test]
 fn app_api_required_torii_proxy_response_is_route_unavailable() {
     let response = app_api_required_torii_proxy_response("Torii read proxying");
@@ -919,24 +919,22 @@ async fn collect_torii_list_json_payloads_keeps_one_route_body_live_at_a_time() 
     assert_eq!(active.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 #[cfg(feature = "app_api")]
-#[tokio::test]
-async fn merged_list_response_accepts_array_payloads_from_legacy_list_handlers() {
+#[test]
+fn merged_list_response_rejects_array_payloads_from_legacy_list_handlers() {
     let payloads = vec![
         norito::json!([{"id": "alpha"}]),
         norito::json!([{"id": "alpha"}, {"id": "beta"}]),
     ];
     let response = merged_list_response(payloads, "fanout", routed_read_test_budget())
-        .expect("raw array list payloads should merge");
-    let body = response_json(response).await;
-    let root = body
-        .as_object()
-        .expect("merged list response should be an object");
-    assert_eq!(root.get("total").and_then(Value::as_u64), Some(2));
-    let items = root
-        .get("items")
-        .and_then(Value::as_array)
-        .expect("merged list response should include items");
-    assert_eq!(items.len(), 2);
+        .expect_err("legacy raw-array list payloads must fail closed");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-iroha-reject-code")
+            .and_then(|value| value.to_str().ok()),
+        Some("invalid_proxy_response")
+    );
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2551,6 +2549,38 @@ async fn merged_pipeline_status_response_prefers_applied_over_cached_rejection()
     assert_eq!(payload.status.kind, "Applied");
     assert_eq!(payload.resolved_from, "state");
 }
+#[tokio::test]
+async fn merged_pipeline_status_response_prefers_state_failure_over_cached_applied() {
+    for failure in ["Rejected", "Expired"] {
+        let response = merged_pipeline_status_response(
+            vec![
+                norito::json!({
+                    "hash": "abc",
+                    "status": {"kind": "Applied", "block_height": 7},
+                    "scope": "global",
+                    "resolved_from": "cache"
+                }),
+                norito::json!({
+                    "hash": "abc",
+                    "status": {"kind": failure, "block_height": 8},
+                    "scope": "global",
+                    "resolved_from": "state"
+                }),
+            ],
+            "proxy",
+            routed_read_test_budget(),
+        )
+        .expect("state finality must outrank a cached terminal hint");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: PipelineTransactionStatusResponse =
+            norito::json::from_slice(&body).expect("status payload");
+        assert_eq!(payload.status.kind, failure);
+        assert_eq!(payload.resolved_from, "state");
+    }
+}
 fn pipeline_status_hint_response(kind: &str, resolved_from: &str) -> Response {
     crate::utils::respond_with_format(
         PipelineTransactionStatusResponse::new(
@@ -2579,8 +2609,8 @@ async fn pipeline_status_hint_ignores_non_terminal_successes() {
     }
 }
 #[tokio::test]
-async fn pipeline_status_hint_ignores_cached_negative_terminal_statuses() {
-    for kind in ["Rejected", "Expired"] {
+async fn pipeline_status_hint_ignores_cached_terminal_statuses() {
+    for kind in ["Applied", "Rejected", "Expired"] {
         let response = pipeline_status_hint_response(kind, "cache");
         let hinted = pipeline_status_hinted_global_response(response, ROUTED_READ_TEST_BODY_BYTES)
             .await
@@ -2593,7 +2623,7 @@ async fn pipeline_status_hint_ignores_cached_negative_terminal_statuses() {
 }
 #[tokio::test]
 async fn pipeline_status_hint_allows_authoritative_terminal_statuses() {
-    for (kind, resolved_from) in [("Applied", "cache"), ("Rejected", "state")] {
+    for (kind, resolved_from) in [("Applied", "state"), ("Rejected", "state")] {
         let response = pipeline_status_hint_response(kind, resolved_from);
         let hinted = pipeline_status_hinted_global_response(response, ROUTED_READ_TEST_BODY_BYTES)
             .await

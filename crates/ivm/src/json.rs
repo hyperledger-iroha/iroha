@@ -8,7 +8,7 @@ use crate::{
 use core::{fmt::Write as _, str::FromStr};
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    account::{AccountId, ParsedAccountId},
+    account::AccountId,
     prelude::{AssetDefinitionId, AssetId, DataSpaceId, DomainId, Name, NftId},
 };
 use iroha_primitives::{
@@ -791,9 +791,7 @@ pub fn build_json(vm: &mut IVM, resolver: AddressResolver) -> Result<u64, VMErro
     Ok(gas)
 }
 fn canonical_account(raw: &str) -> Option<AccountId> {
-    let value = AccountId::parse_encoded(raw)
-        .ok()
-        .map(ParsedAccountId::into_account_id)?;
+    let value = AccountId::parse_encoded(raw).ok()?;
     (value.to_string() == raw).then_some(value)
 }
 fn canonical_asset_definition(raw: &str) -> Option<AssetDefinitionId> {

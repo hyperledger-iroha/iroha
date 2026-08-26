@@ -246,28 +246,85 @@ let torii = ToriiClient(
 )
 
 // Account onboarding requires the dedicated route token explicitly. It remains
-// separate from an optional global X-API-Token configured on the client. Plan
-// first, then apply the exact stateless receipt; neither body contains a key or token.
+// separate from an optional global X-API-Token configured on the client. Plan,
+// prepare, durably persist, and only then submit one exact envelope; no body
+// contains a key or token.
 // The bundled Norito bridge encodes the exact receipt body and verifies its
-// domain-separated hash, exact genesis-derived network, and authority signature before either
-// call returns/submits.
+// domain-separated hash, exact genesis-derived network, and authority signature before
+// prepare or submit.
 // An older/missing bridge fails closed; JSON is never used as receipt hash input.
 let onboardingIntent = try ToriiAccountOnboardingPlanRequest(
     alias: "merchant@paynet",
     accountId: accountId
 )
+// Persist this exact request with the workflow; every prepare, proof read, reopen,
+// and submit requires it so a signed receipt cannot substitute the original intent.
 let onboardingReceipt = try await torii.planAccountOnboarding(
     onboardingIntent,
     onboardingToken: routeToken,
     expectedAuthority: configuredOnboardingAuthority,
     expectedNetworkId: networkId
 )
-let onboarding = try await torii.applyAccountOnboarding(
+let onboardingBinding = try ToriiTairaPublicResetMutationBindingV1(
+    authorizationSHA256: admittedAuthorizationSHA256,
+    authorizationNonce: admittedAuthorizationNonce,
+    kind: .onboarding,
+    phase: "canary",
+    idempotencyKey: onboardingIdempotencySHA256,
+    executionExpiresAtUnixMs: admittedExecutionExpiryMs
+)
+let onboardingPreparation = try await torii.prepareAccountOnboarding(
     onboardingReceipt,
+    request: onboardingIntent,
+    binding: onboardingBinding,
     onboardingToken: routeToken,
     expectedAuthority: configuredOnboardingAuthority,
     expectedNetworkId: networkId
 )
+switch onboardingPreparation {
+case let .proofRequired(proof):
+    // This result is nonterminal. After every prepare or reopen, obtain one
+    // signed atomic observation before treating the original intent as satisfied.
+    try JSONEncoder().encode(proof).write(to: onboardingProofURL, options: .atomic)
+    let retained = try JSONDecoder().decode(
+        ToriiAccountOnboardingProofRequiredPrepareResponseV1.self,
+        from: Data(contentsOf: onboardingProofURL)
+    )
+    let verification = try await torii.verifyAccountOnboardingCurrentState(
+        retained,
+        request: onboardingIntent,
+        receipt: onboardingReceipt,
+        binding: onboardingBinding,
+        expectedAuthority: configuredOnboardingAuthority,
+        expectedNetworkId: networkId,
+        canonicalAuth: canonicalAuth
+    )
+    print(verification)
+case let .prepared(envelope):
+    // The coordinator must persist these exact bytes before the first submit.
+    try JSONEncoder().encode(envelope).write(to: onboardingEnvelopeURL, options: .atomic)
+    let retained = try JSONDecoder().decode(
+        ToriiAccountOnboardingPreparedTransactionV1.self,
+        from: Data(contentsOf: onboardingEnvelopeURL)
+    )
+    let outcome = try await torii.submitPreparedAccountOnboarding(
+        retained,
+        request: onboardingIntent,
+        onboardingToken: routeToken,
+        expectedAuthority: configuredOnboardingAuthority,
+        expectedNetworkId: networkId
+    )
+    // Treat Pending as nonterminal and reconcile this same retained hash.
+    print(outcome.outcome)
+}
+
+// Faucet preparation is a separate child mutation and must happen only after
+// onboarding is Applied. A ProofRequired result is nonterminal until one fresh
+// atomic account-and-alias observation matches; rerun it after reopening
+// durable state. Use a distinct `.faucet` binding/idempotency digest, persist
+// the returned `ToriiAccountFaucetPreparedTransactionV1`, then pass those same bytes to
+// `submitPreparedAccountFaucet(_:expectedAuthority:expectedNetworkId:)` with
+// the configured faucet authority and exact genesis-derived network trust pins.
 
 // Operator alias setup is plan-only on Torii. The wallet verifies the plan
 // hash, its genesis-derived network identity, and byte-identical instruction
@@ -713,6 +770,20 @@ commits; only a receipt read from committed WSV state uses `settled`. Exact
 
 > **Account selectors:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept canonical I105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before serving the response.
 
+### UAID portfolio and Space Directory
+
+`getUaidPortfolio`, `getUaidBindings`, and `getUaidManifests` accept only the
+canonical `uaid:<64 lowercase hex>` literal with its low bit set. Portfolio and
+binding responses require the exact current field sets, canonical I105 accounts,
+and full asset ids bound to their returned definition, account, and dataspace;
+nullable labels and aliases are preserved exactly and are never trimmed.
+Manifest queries expose only exact `dataspace`, `status`, `limit`, `offset`, and
+`count_mode`. Responses require `uaid`, `total`, `has_more`, `count_mode`, and
+`manifests`, with lifecycle-derived status and lowercase manifest hashes. The
+embedded `ToriiUaidAssetPermissionManifest` is numeric V1, requires `issued_ms`,
+`activation_epoch`, and `entries`, and rejects null for fields whose canonical
+JSON representation is omission.
+
 ### Detached asset transfers
 
 Use the SDK-owned two-phase `/v1/assets/transfer` flow for online payments. It
@@ -821,7 +892,7 @@ let finality = try await torii.waitForDetachedContractCallFinality(
 contract, ABI, entrypoint, gas, sponsor, payload, time, and TTL bindings. Submit
 accepts only the public key and detached signature; it fails closed unless the
 returned receipt and queued pipeline status match the draft exactly.
-`waitForDetachedContractCallFinality` then uses the canonical `scope=auto`
+`waitForDetachedContractCallFinality` then uses the canonical `scope=global`
 pipeline lookup and returns only an applied, globally scoped, state-resolved
 status with a positive block height.
 
@@ -1024,23 +1095,25 @@ print(try address.canonicalHex())
 print(try address.toI105(networkPrefix: 753))
 ```
 
-Account address domain labels are canonicalized to lowercase ASCII and must not contain whitespace
-or reserved characters (`@`, `#`, `$`). Use canonical ASCII/punycode labels when working with IDNs.
-Account addresses also validate public key lengths for known algorithms (ed25519 requires 32 bytes;
-secp256k1 requires 33 bytes when enabled), and reject empty keys.
+Account addresses are domainless and accept no domain label or selector. Alias
+labels and routing context are managed separately. Account addresses validate
+public key lengths for known algorithms (ed25519 requires 32 bytes; secp256k1
+requires 33 bytes when enabled) and reject empty keys.
 
 ### Pipeline submission defaults
 
 `IrohaSDK` posts signed payloads to `/v1/pipeline/transactions` and polls
-`/v1/pipeline/transactions/status` until the transaction reaches a terminal state. The
+`/v1/pipeline/transactions/status` until the transaction reaches authoritative finality. The
 helpers in `TxBuilder` (for example `submitAndWait(transfer:keypair:)`) wrap the same
 flow. No additional configuration is required when targeting Torii builds that ship the
-pipeline surface.
+pipeline surface. The primary binary submitter rejects noncanonical or non-V1 signed wires before
+network access and accepts only HTTP `202` as admission success.
 If `/v1/pipeline/transactions/status` responds with `404`, Torii likely restarted or
 evicted the in-memory status cache; the SDK treats this as "pending" and continues polling.
 Pipeline submissions include an `Idempotency-Key` header derived from the transaction
-hash so retries stay safe; override `sdk.pipelineSubmitOptions.idempotencyKeyFactory` or
-set it to `nil` to disable the header when integrating with custom gateways.
+hash. This deduplication hint does not authorize replay after an ambiguous outcome;
+reconcile the exact hash first. Override `sdk.pipelineSubmitOptions.idempotencyKeyFactory`
+or set it to `nil` when integrating with custom gateways.
 
 ### Metadata & governance helpers
 
@@ -1105,7 +1178,7 @@ if #available(iOS 15, macOS 12, *) {
 `IrohaSDK` exposes `submitAndWait` helpers (envelope + transfer/mint/burn variants) that
 POST to `/v1/pipeline/transactions` and poll `/v1/pipeline/transactions/status` until a
 canonical `Applied` status or a failure (`Rejected`/`Expired`) is observed. `Approved` and
-`Committed` remain progress states. Tune timing and failure handling via
+`Committed` remain progress states. Tune only polling timing via
 `PipelineStatusPollOptions` or by setting `sdk.pipelinePollOptions`:
 
 ```swift
@@ -1119,16 +1192,21 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-The public status response is deliberately metadata-only: canonical transaction hash,
+The public status response is deliberately metadata-only: an exact canonical typed
+transaction hash matching `^[0-9a-f]{63}[13579bdf]$`,
 closed status kind, optional committed height, read scope, and resolution source. The
 decoder rejects unknown status kinds and retired rejection, diagnostic, trigger, or batch
-fields. Detailed committed-transaction data requires an involved account or operator to
+fields. Status lookups request exact `scope=global`; responses accept only the current exact
+`local` or `global` scope values; every other spelling is invalid. Detailed
+committed-transaction data requires an involved account or operator to
 submit a canonical signed `FindTransactions` query; Swift does not expose that method until
 its generated signed-query surface is available.
 
 Completion-based variants return a `Task<Void, Never>` so callers can cancel outstanding
-polls. The success state is intentionally not configurable: only exact `Applied` proves
-execution. Failures bubble up as `PipelineStatusError.failure` (rejected/expired) or
+polls. The finality policy is not configurable: only a global, state-resolved `Applied`
+observation with a positive block height proves execution. State-resolved failures bubble
+up as `PipelineStatusError.failure` (`Rejected`/`Expired`), while queue/cache hints remain
+pending even when they carry a terminal kind. Other non-final observations eventually yield
 `PipelineStatusError.timeout` when no terminal status arrives in time. Failure errors expose
 the status kind but never public rejection or execution details.
 
@@ -1137,7 +1215,7 @@ Need to monitor a transaction initiated elsewhere? Use the dedicated helper:
 ```swift
 if #available(iOS 15, macOS 12, *) {
     do {
-        let status = try await sdk.pollPipelineStatus(hashHex: "deadbeef")
+        let status = try await sdk.pollPipelineStatus(hashHex: String(repeating: "b", count: 64))
         print(status.content.status.kind)
     } catch {
         print("pipeline error:", error)
@@ -1467,9 +1545,10 @@ if #available(iOS 15.0, macOS 12.0, *) {
     print("registered multisig:", status.kind)
 }
 ```
-Choose a controller account id in the same domain as the signatories (the key can be random and
-discarded because direct multisig signing is forbidden). Deterministically derived multisig keys are
-quarantined; registration requires a non-derivable account id.
+Choose a fresh canonical domainless controller account id (the key can be random and discarded
+because direct multisig signing is forbidden). Alias domains are independent of canonical account
+identity. Deterministically derived multisig keys are quarantined; registration requires a
+non-derivable account id.
 
 The SDK routes the request through the Norito native bridge so transactions are signed
 locally and submitted through `/v1/pipeline/transactions` with the same deterministic
@@ -1560,8 +1639,8 @@ sdk.pipelineSubmitOptions = PipelineSubmitOptions(
 ```
 Pipeline submissions always use `/v1/pipeline/transactions` and
 `/v1/pipeline/transactions/status`. The owned Torii transport rejects redirects and does not
-retry signed bodies. A custom `ToriiTransactionSubmitting` implementation must provide the
-same one-shot contract.
+retry signed bodies; only HTTP `202` acknowledges admission. A custom
+`ToriiTransactionSubmitting` implementation must provide the same one-shot contract.
 
 Node-local pipeline and clock reads use a separate operator context. Construct
 it once from the deployment's exact genesis `NetworkId` and operator signing
@@ -1580,6 +1659,11 @@ let preflight = try await operatorTorii.getPipelinePreflight()
 let recovery = try await operatorTorii.getPipelineRecovery(height: 42)
 let clock = try await operatorTorii.getTimeStatus()
 ```
+
+`ToriiPipelinePreflightPipeline` exposes the current
+`ivmMaxCyclesUpperBound` and `ivmAdmissionCycleLimit` values. Preflight fee
+accounts must be exact canonical I105 ids; alias-shaped `name@domain` values
+fail decoding.
 
 These helpers sign the exact `GET`, substituted path, query, and empty body,
 then dispatch once without redirects or retries. They reject bearer/API-token

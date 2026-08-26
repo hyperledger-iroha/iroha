@@ -18,8 +18,6 @@ use iroha_primitives::addr::SocketAddrHost;
 use iroha_primitives::addr::{SocketAddr, socket_addr};
 use norito::codec::{Decode, Encode};
 use std::{collections::HashSet, num::NonZeroUsize};
-#[cfg(feature = "p2p_ws")]
-use tokio::net::TcpListener;
 use tokio::time::Duration;
 // These tests assert process-global cap counters, so their snapshots must not overlap.
 static FRAME_CAP_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -85,66 +83,6 @@ async fn wait_for_consensus_cap_increase(start_cap: u64, timeout: Duration) -> O
     })
     .await
     .ok()
-}
-#[cfg(feature = "p2p_ws")]
-async fn forward_one_ws_connection(
-    listener: TcpListener,
-    network: NetworkHandle<BigMsg>,
-) -> std::io::Result<()> {
-    let (stream, remote) = listener.accept().await?;
-    let (read, write) = super::ws_io::accept_bounded(stream).await?;
-    if network
-        .accept_stream(read, write, remote)
-        .await
-        .map_err(|error| {
-            std::io::Error::other(format!("network actor websocket handoff failed: {error}"))
-        })?
-    {
-        Ok(())
-    } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "network actor rejected websocket stream handoff",
-        ))
-    }
-}
-#[cfg(feature = "p2p_ws")]
-async fn assert_ws_global_cap_disconnects(
-    listener: &NetworkHandle<BigMsg>,
-    dialer: &NetworkHandle<BigMsg>,
-    listener_peer: &Peer,
-) {
-    let start_cap = iroha_p2p::network::cap_violations_consensus();
-    dialer.post(Post {
-        data: BigMsg {
-            topic: 0,
-            data: vec![0_u8; 8 * 1024],
-        },
-        peer_id: listener_peer.id().clone(),
-        priority: Priority::High,
-    });
-    assert!(
-        wait_for_peer_state(
-            listener,
-            false,
-            Duration::from_millis(1_500),
-            Duration::from_millis(50),
-        )
-        .await,
-        "listener should disconnect after WS frame cap violation"
-    );
-    assert_eq!(
-        iroha_p2p::network::cap_violations_consensus(),
-        start_cap,
-        "global cap enforcement must precede topic cap accounting",
-    );
-    let _ = wait_for_peer_state(
-        dialer,
-        false,
-        Duration::from_millis(1_000),
-        Duration::from_millis(50),
-    )
-    .await;
 }
 fn default_soranet_handshake() -> ActualSoranetHandshake {
     // Frame-cap tests do not exercise admission puzzles; avoid coupling their
@@ -415,12 +353,9 @@ async fn tls_global_frame_cap_disconnects() {
         port,
     });
     // Listener enforces a small global frame cap, dialer uses a generous cap so outbound succeeds.
-    let mut listener_cfg = make_config(&tls_listen, &public_host, 1024, 4096);
-    listener_cfg.tls_enabled = true;
-    listener_cfg.tls_listen_address = Some(WithOrigin::inline(tls_listen.clone()));
+    let listener_cfg = make_config(&tls_listen, &public_host, 1024, 4096);
     let client_addr = super::next_addr();
-    let mut dialer_cfg = make_config(&client_addr, &client_addr, 16 * 1024, 16 * 1024);
-    dialer_cfg.tls_enabled = true;
+    let dialer_cfg = make_config(&client_addr, &client_addr, 16 * 1024, 16 * 1024);
     let started_listener = NetworkHandle::<BigMsg>::start(
         super::p2p_identity_keys(kp_listener.clone()),
         listener_cfg,
@@ -626,80 +561,4 @@ async fn quic_global_frame_cap_disconnects() {
         }
     })
     .await;
-}
-#[cfg(feature = "p2p_ws")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn ws_global_frame_cap_disconnects() {
-    let _cap_test_guard = FRAME_CAP_TEST_LOCK.lock().await;
-    let chain = super::test_network_id("test_chain_ws");
-    let kp_listener = super::random_node_key_pair();
-    let kp_dialer = super::random_node_key_pair();
-    let ws_listener = match TcpListener::bind("127.0.0.1:0").await {
-        Ok(listener) => listener,
-        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-            eprintln!(
-                "skipping ws_global_frame_cap_disconnects: loopback bind is forbidden: {err}"
-            );
-            return;
-        }
-        Err(err) => panic!("bind ws listener: {err}"),
-    };
-    let ws_addr = ws_listener.local_addr().expect("ws listener addr");
-    let listener_addr = super::next_addr();
-    let listener_cfg = make_config(&listener_addr, &listener_addr, 1_024, 16 * 1024);
-    let (network_listener, _child_listener) = NetworkHandle::<BigMsg>::start(
-        super::p2p_identity_keys(kp_listener.clone()),
-        listener_cfg,
-        chain,
-        None,
-        None,
-        ShutdownSignal::new(),
-    )
-    .await
-    .expect("start websocket listener network");
-    let forwarder = tokio::spawn(forward_one_ws_connection(
-        ws_listener,
-        network_listener.clone(),
-    ));
-    let dialer_addr = super::next_addr();
-    let mut dialer_cfg = make_config(&dialer_addr, &dialer_addr, 16 * 1024, 16 * 1024);
-    dialer_cfg.prefer_ws_fallback = true;
-    let (net_dialer, _child_dialer) = NetworkHandle::<BigMsg>::start(
-        super::p2p_identity_keys(kp_dialer.clone()),
-        dialer_cfg,
-        chain,
-        None,
-        None,
-        ShutdownSignal::new(),
-    )
-    .await
-    .expect("start websocket dialer network");
-    // Listener only needs topology knowledge to accept the inbound session.
-    let peer_dialer = Peer::new(dialer_addr.clone(), kp_dialer.public_key().clone());
-    network_listener.update_topology(UpdateTopology(HashSet::from([peer_dialer.id().clone()])));
-    let listener_host: SocketAddr = format!("localhost:{}", ws_addr.port())
-        .parse()
-        .expect("host socket addr");
-    let peer_listener = Peer::new(listener_host.clone(), kp_listener.public_key().clone());
-    net_dialer.update_topology(UpdateTopology(HashSet::from([peer_listener.id().clone()])));
-    net_dialer.update_peers_addresses(UpdatePeers(vec![(
-        peer_listener.id().clone(),
-        listener_host.clone(),
-    )]));
-    tokio::time::timeout(Duration::from_millis(2_000), forwarder)
-        .await
-        .expect("websocket accept/handshake task timed out")
-        .expect("websocket accept/handshake task panicked")
-        .expect("websocket handshake or network handoff failed");
-    assert!(
-        wait_for_peer_state(
-            &network_listener,
-            true,
-            Duration::from_millis(2_000),
-            Duration::from_millis(50),
-        )
-        .await,
-        "websocket listener network did not observe the peer before the online timeout"
-    );
-    assert_ws_global_cap_disconnects(&network_listener, &net_dialer, &peer_listener).await;
 }

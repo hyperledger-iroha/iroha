@@ -30,7 +30,7 @@ from iroha_python import (
 )
 
 pair = derive_ed25519_keypair_from_seed(b"demo-seed")
-authority = pair.default_account_id("wonderland")  # Canonical I105 account id
+authority = pair.account_id()  # Canonical domainless I105 account id
 network_id = NetworkId.parse(
     "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
 )
@@ -66,17 +66,59 @@ client = create_torii_client(
 ```
 
 Account onboarding uses a dedicated credential in addition to any global
-`X-API-Token`. Callers must pass the raw 32–256 byte printable-ASCII value for
-each request; the SDK does not trim it, store it in default headers, put it in
-the JSON body, retry the POST, or forward it across redirects.
+`X-API-Token`. V1 is explicitly plan, prepare, then exact submit; there is no
+one-shot mutation request. Retain the prepared envelope before submission so a
+lost response can be reconciled against the exact retained transaction hash;
+an ambiguous submit must not create a second submission attempt. A
+proof-required current-state read takes explicit runtime-only canonical request
+authentication so it also works for restricted dataspaces.
 
 ```python
-response = client.onboard_account(
+plan = client.plan_account_onboarding(
     onboarding_token=route_token,
     alias="alice@universal",
-    uaid="uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    public_key_hex="ab" * 32,
+    account_id=canonical_domainless_account_id,
+    expected_authority=configured_onboarding_authority,
+    network_id=network_id,
 )
+onboarding_request = {
+    "version": 1,
+    "alias": "alice@universal",
+    "account_id": canonical_domainless_account_id,
+    "permissions": [],
+}  # persist this complete intent with the receipt
+receipt = plan.json()
+prepared_response = client.prepare_account_onboarding(
+    onboarding_token=route_token,
+    binding=public_reset_binding,
+    receipt=receipt,
+    expected_request=onboarding_request,
+    expected_authority=configured_onboarding_authority,
+    network_id=network_id,
+)
+prepared = prepared_response.json()  # persist before any mutating request
+if prepared["schema"] == "iroha.accounts.onboard.prepare-proof-required.v1":
+    # Authenticated but nonterminal. This one atomic snapshot must be read again
+    # after every durable reopen; the ProofRequired bytes alone never prove success.
+    current = client.prove_account_onboarding_current_state(
+        proof_required=prepared,
+        binding=public_reset_binding,
+        receipt=receipt,
+        expected_request=onboarding_request,
+        expected_authority=configured_onboarding_authority,
+        network_id=network_id,
+        canonical_auth=application_canonical_auth,
+    )
+    if current.kind != "Applied":
+        raise RuntimeError(f"onboarding remains nonterminal: {current.kind}")
+else:
+    response = client.submit_prepared_account_onboarding(
+        onboarding_token=route_token,
+        prepared=prepared,
+        expected_request=onboarding_request,
+        expected_authority=configured_onboarding_authority,
+        network_id=network_id,
+    )
 ```
 
 ## Exact Kotodama numbers
@@ -186,9 +228,9 @@ round-trip canonical bytes and canonical I105 account literals without bespoke c
 ```python
 from iroha_python.address import AccountAddress
 
-# Account IDs are domainless. The compatibility `domain` argument is validated
-# but is not encoded into the canonical address.
-address = AccountAddress.from_account(domain="default", public_key=b"\x00" * 32)
+# Account IDs are domainless; domain context belongs in aliases and other
+# domain-owned state.
+address = AccountAddress.from_account(public_key=b"\x00" * 32)
 print(address.canonical_hex())
 print(address.to_i105(753))
 
@@ -209,11 +251,9 @@ matching logic:
 
 Caller-supplied IDs are sent only to their exact URL-encoded REST routes. The
 client never substitutes a network prefix and never retries an alternate ID.
-`find_account` and `account_exists` fall back to the paginated account list
-only when the exact account route returns `503` with
-`x-iroha-reject-code: route_unavailable`, and the fallback requires exact ID
-equality. A `404` reports absence; `400`, including a wrong-network-prefix
-rejection, propagates without fallback.
+`find_account` and `account_exists` use only that exact account route. A `404`
+reports absence; every other failure, including route unavailability or a
+wrong-network-prefix rejection, propagates without fallback.
 
 ```python
 from iroha_python import ToriiClient, authority_fee_payment
@@ -227,18 +267,31 @@ definition = client.get_asset_definition("ds#wonderland.is")
 
 puzzle = client.get_account_faucet_puzzle()
 anchor_height, nonce_hex = ToriiClient.solve_account_faucet_pow(account_id, puzzle)
-response = client.submit_account_faucet_claim(
+prepared_response = client.prepare_account_faucet(
     account_id,
+    binding=public_reset_binding,
+    expected_authority=configured_faucet_authority,
+    network_id=network_id,
     pow_anchor_height=anchor_height,
     pow_nonce_hex=nonce_hex,
 )
+prepared = prepared_response.json()  # persist before the mutating request
+response = client.submit_prepared_account_faucet(
+    prepared,
+    expected_authority=configured_faucet_authority,
+    network_id=network_id,
+)
 ```
 
-Faucet puzzles use `scrypt-leading-zero-bits-v2` with mandatory positive
+Faucet puzzles use the first-release `scrypt-leading-zero-bits-v1` algorithm
+and `iroha:accounts:faucet:pow:v1` challenge domain with mandatory positive
 difficulty. The solver parses the puzzle's canonical checksummed `network_id`
 as a typed `NetworkId` and hashes its raw 32 bytes into the challenge before
 the exact canonical I105 account id and anchor, so a solution cannot be replayed
-against a same-label network with a different genesis.
+against a same-label network with a different genesis. It rejects non-integer
+or oversized scrypt controls before hashing, caps ROMix memory at 64 MiB and
+parallelization at 16, and accepts only the exact V1 puzzle fields. Pre-release
+labels are rejected.
 
 The same client owns the PoC-facing Torii application helpers for contract,
 SNS, and ZK bootstrap flows:
@@ -729,7 +782,7 @@ for application in diagnostics.native_amx_participant_applications:
 # surface. Its lane commitment and governance fields are intentionally distinct
 # from the authoritative reducer facts returned by `/v1/sumeragi/status`.
 
-# Inspect Nexus lane commitments and governance coverage from `/v1/status`
+# Inspect Nexus lane commitments and governance coverage from `/status`
 status_snapshot = client.get_status_snapshot_typed()
 for commitment in status_snapshot.status.lane_commitments:
     print(
@@ -1099,9 +1152,21 @@ if isinstance(receipt, dict):
 
 Public pipeline status is metadata-only. `get_transaction_status(...)` returns exactly the
 canonical hash, closed status kind, optional committed height, scope, and resolution source;
-retired rejection, diagnostic, trigger, and batch fields are rejected. An involved account or
-operator can request the committed transaction and trigger completions with a canonical signed
-query:
+retired rejection, diagnostic, trigger, and batch fields are rejected. Raw reads may explicitly
+select `local` or `global`. Every wait, submit-and-wait, and contract-and-wait helper is fixed to
+`global`; only an exact `Applied` status resolved from `state` succeeds. State-resolved `Rejected`
+and `Expired` always fail, while queue/cache and pre-Applied lifecycle observations remain
+progress. Wait APIs expose no scope or configurable success-status override. Signed transaction
+hashes must match `[0-9a-f]{63}[13579bdf]` (the canonical Iroha `HashOf` marker) and are never
+trimmed, case-folded, prefix-stripped, or loosely rebound from embedded contract response aliases.
+Status reads accept only an exact HTTP `200` envelope or `404` not-found response; `202` and `204`
+are protocol errors. Polling intervals and timeouts must be finite and non-negative, and
+`max_attempts` must be a positive integer; invalid values are rejected rather than coerced.
+Nexus submission-and-wait bindings accept only the finalizer's exact `signed_transaction` and
+`hash_hex` fields and the canonical receipt fields `payload.entrypoint_hash` and
+`payload.signed_transaction_hash`; camel-case and alternate hash aliases are rejected.
+An involved account or operator can
+request the committed transaction and trigger completions with a canonical signed query:
 
 ```python
 details = client.get_pipeline_transaction_details(
@@ -1721,6 +1786,10 @@ for sample in status.samples:
 print("RTT buckets:", status.rtt.buckets)
 ```
 
+Pipeline preflight requires the current `ivm_max_cycles_upper_bound` and
+`ivm_admission_cycle_limit` fields. Fee sink, sponsor custody, and fee-exempt
+authority values must be exact canonical I105 account ids, never account aliases.
+
 Use these outputs when filing telemetry readiness notes or running the Connect
 automation notebook. The typed DTOs mirror the current Rust payloads.
 
@@ -1762,9 +1831,15 @@ Operators can audit registered Kaigi relays, inspect per-domain metrics, and
 capture health snapshots with typed Torii helpers:
 
 ```python
-from iroha_python import ToriiClient
+from iroha_python import OperatorSigningContext, ToriiClient
 
-client = ToriiClient("http://127.0.0.1:8080", auth_token="admin-token")
+client = ToriiClient(
+    "http://127.0.0.1:8080",
+    operator_signing_context=OperatorSigningContext(
+        network_id=exact_genesis_network_id,
+        key_pair=operator_key_pair,
+    ),
+)
 
 relays = client.list_kaigi_relays_typed()
 for entry in relays.items:
@@ -1789,10 +1864,13 @@ the current Rust payloads so dashboards and readiness scripts can validate the
 same DTOs. The three snapshot calls require the immutable exact-network
 context, generate fresh headers for the final encoded target and empty body,
 and dispatch once with redirects and retries disabled. Tokens and precomputed
-operator headers are rejected. List and health fail closed at Torii's hard
-relay diagnostic cap rather than materializing an unbounded registry. Keep the
-operator key runtime-only; the Kaigi SSE feed retains its separate streaming
-authentication contract.
+operator headers, session authentication, and cookies are rejected. Typed
+responses require Torii's exact first-release fields and integer spellings;
+relay details also verify that the decoded HPKE key hashes to the advertised
+fingerprint. List and health fail closed at Torii's hard relay diagnostic cap
+rather than materializing an unbounded registry. Keep the operator key
+runtime-only; the Kaigi SSE feed retains its separate streaming authentication
+contract.
 
 For configuration changes, the client now mirrors the `/v1/configuration` contract so
 admin scripts can stage updates without hand-editing JSON blobs. For example:
@@ -1837,9 +1915,9 @@ portfolio reads:
 from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="admin-token")
-uaid_literal = "aabb" * 16  # raw hex (LSB=1) accepted; helper normalises to `uaid:<hex>`
+uaid_literal = "uaid:" + "aabb" * 16  # exact lowercase literal; final nibble keeps LSB=1
 
-portfolio = client.get_uaid_portfolio_typed(uaid_literal, asset_id="norito:<portfolio-asset-id-hex>")
+portfolio = client.get_uaid_portfolio_typed(uaid_literal, asset_id="xor#wonderland")
 print("UAID", portfolio.uaid, "positions", portfolio.total_positions)
 for dataspace in portfolio.dataspaces:
     for account in dataspace.accounts:
@@ -1854,7 +1932,9 @@ manifests = client.list_space_directory_manifests_typed(
     uaid_literal,
     dataspace=11,
     status="active",
+    count_mode="exact",
 )
+print("total", manifests.total, "has more", manifests.has_more)
 for record in manifests.manifests:
     print(record.dataspace_alias, record.status, record.manifest_hash)
 
@@ -1863,7 +1943,9 @@ for record in manifests.manifests:
 publish_draft = client.publish_space_directory_manifest(
     {
         "authority": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-        "manifest": manifest_payload,  # matches AssetPermissionManifest JSON
+        # Exact AssetPermissionManifest JSON: numeric version 1, mandatory
+        # issued_ms/activation_epoch, and omitted (never null) optional fields.
+        "manifest": manifest_payload,
         "reason": "CBDC onboarding wave",
     }
 )
@@ -1872,13 +1954,13 @@ revoke_draft = client.revoke_space_directory_manifest(
         "authority": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
         "uaid": uaid_literal,
         "dataspace": 11,
-        "revokedEpoch": 9216,
+        "revoked_epoch": 9216,
         "reason": "deny-wins drill",
     }
 )
 ```
 
-All helpers accept raw hex (LSB=1) or `uaid:<hex>` literals, normalise query parameters, and
+All helpers require exact lowercase `uaid:<64-hex>` literals with LSB=1, validate query parameters, and
 return rich dataclasses (`UaidPortfolioSnapshot`, `UaidBindingsSnapshot`,
 `SpaceDirectoryManifestList`) so callers can render dashboards or build evidence bundles for the
 NX-16 rollout with deterministic parsing.
@@ -2168,18 +2250,14 @@ canonical Norito artifacts. Set `SKIP_LINT=1`, `SKIP_TESTS=1`, or
 Run the Rust unit tests for the bindings with:
 
 ```bash
-./python/iroha_python/scripts/test_rs.sh
+PYO3_PYTHON=/absolute/path/to/python3 cargo test -p iroha_python_rs
 ```
 
-The helper script wraps `cargo test -p iroha_python_rs`, automatically loading a
-local CPython runtime when needed.
-
-The script first looks for an explicit path in
-`python/iroha_python/iroha_python_rs/python-runtime-path`. If that file is
-absent, it tries to auto-detect the shared library by querying `${PYTHON_BIN:-python3}`
-via `sysconfig`. Set `PYTHON_BIN` to point at a specific interpreter (for
-example, a virtualenv) before running the script if you need to override the
-default.
+The build reads `PYO3_PYTHON` to select the interpreter and discovers its shared
+library through `sysconfig`. If discovery is unavailable, set
+`IROHA_PYTHON_RUNTIME_PATH` to the exact CPython shared library or record that
+path in the ignored
+`python/iroha_python/iroha_python_rs/python-runtime-path` file.
 
 ### macOS runtime configuration
 
@@ -2187,9 +2265,9 @@ When running tests on macOS the binary embeds CPython directly. If your system
 Python does not expose the shared library globally (for example, the
 Xcode-provided interpreter), create a `python-runtime-path` file alongside
 `python/iroha_python/iroha_python_rs/Cargo.toml` containing the absolute path to
-the CPython dynamic library. The `test_rs.sh` wrapper reads this file and sets
-the necessary dynamic loader environment variables for you. Lines starting with
-`#` are treated as comments, so the file can also include short notes.
+the CPython dynamic library. The Rust build reads this file directly. Lines
+starting with `#` are treated as comments, so the file can also include short
+notes.
 
 Example `python-runtime-path`:
 
@@ -2350,7 +2428,7 @@ no environment variables need to be exported.
   `AssetId` so Python code can compose Norito payloads with on-chain
   identifiers while preserving Rust validation semantics.
 - Extend the Torii client with configurable retries/auth headers, JSON helper
-  methods for `/v1/status`, `/v1/health`, `/v1/configuration`, `/v1/metrics`,
+  methods for `/status`, `/v1/health`, `/v1/configuration`, `/v1/metrics`,
   and block queries, laying the groundwork for optional gRPC parity.
 - Extend the Torii client with governance helpers (proposal deployment, ballot
   submission, referendum status) so clients can orchestrate governance flows
@@ -2407,8 +2485,10 @@ no environment variables need to be exported.
   (`Eq`, `Between`, `metadata_eq`, `metadata_exists`, `field_in`, …) keeps
   payloads deterministic without hand-crafted JSON.
 - Offer a `wait_for_transaction_status` helper that polls pipeline status until
-  success or failure with configurable intervals, terminal-state handling, and
-  callbacks for UI progress indicators.
+  exact global, state-resolved `Applied` finality. Intervals, timeouts, attempt
+  bounds, and callbacks remain configurable; scope, success, and failure
+  classifications are fixed by the first-release contract. Exact global,
+  state-resolved `Rejected` and `Expired` fail; every other status is progress.
 - Contracts API wrappers (`/v1/contracts/code`, `/v1/contracts/call`,
   `/v1/contracts/code-bytes/{hash}`), SNS helpers, and
   ZK verifying-key helpers round out the Torii surface needed by PoC operators.

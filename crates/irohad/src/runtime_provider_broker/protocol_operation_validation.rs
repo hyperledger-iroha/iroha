@@ -32,7 +32,7 @@ const fn operation_decode_policy(operation: u16) -> DecodeResourcePolicyV1 {
         OPERATION_SEALED_LOAD_V1
         | OPERATION_SEALED_COMPARE_AND_SWAP_V1
         | OPERATION_SEALED_DELETE_V1 => GOVERNANCE_SEALED_STATE_DECODE_POLICY_V1,
-        OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2 => SOURCE_PLAN_DECODE_POLICY_V1,
+        OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1 => SOURCE_PLAN_DECODE_POLICY_V1,
         OPERATION_PROVIDER_INGEST_SIGN_V1 => PROVIDER_INGEST_SIGN_DECODE_POLICY_V1,
         OPERATION_APPEAL_FINANCE_CHECKPOINT_LOAD_V1
         | OPERATION_APPEAL_FINANCE_CHECKPOINT_COMPARE_AND_SWAP_V1 => {
@@ -62,7 +62,6 @@ const fn operation_decode_policy(operation: u16) -> DecodeResourcePolicyV1 {
         | OPERATION_GATEWAY_ACME_ORDER_CERTIFICATE_V1
         | OPERATION_GATEWAY_COMPLIANCE_RESOLVE_V1
         | OPERATION_GATEWAY_COMPLIANCE_FETCH_V1 => OPAQUE_BLOB_DECODE_POLICY_V1,
-        OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1 => SORACLOUD_HF_DECODE_POLICY_V1,
         _ => STANDARD_DECODE_POLICY_V1,
     }
 }
@@ -76,9 +75,6 @@ const fn operation_semantic_frame_limit(operation: u16) -> usize {
         OPERATION_GOVERNANCE_REQUEST_AUTHENTICATE_V1 => MAX_GOVERNANCE_REQUEST_AUTH_FRAME_BYTES_V1,
         OPERATION_NATIVE_TRANSACTION_SIGN_V1 | OPERATION_SORACLOUD_PROVENANCE_SIGN_V1 => {
             MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1
-        }
-        OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1 => {
-            MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1
         }
         OPERATION_STREAM_TOKEN_SIGN_V1 | OPERATION_APPEAL_FINANCE_CHECKPOINT_SIGN_V1 => {
             MAX_STREAM_TOKEN_FRAME_BYTES_V1
@@ -142,7 +138,7 @@ const fn operation_semantic_frame_limit(operation: u16) -> usize {
         | OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1 => {
             MAX_PROVIDER_INGEST_RETENTION_FRAME_BYTES_V1
         }
-        OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2 => {
+        OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1 => {
             MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1
         }
         OPERATION_QUALIFY_V1
@@ -230,9 +226,6 @@ const fn operation_frame_limit(operation: u16) -> usize {
         OPERATION_SIGN_V1 => MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
         OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1
         | OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1 => MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
-        OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1 => {
-            MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1
-        }
         OPERATION_SEALED_LOAD_V1
         | OPERATION_SEALED_COMPARE_AND_SWAP_V1
         | OPERATION_SEALED_DELETE_V1 => MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1,
@@ -300,7 +293,6 @@ const fn operation_is_known(operation: u16) -> bool {
             | OPERATION_GOVERNANCE_REQUEST_AUTHENTICATE_V1
             | OPERATION_NATIVE_TRANSACTION_SIGN_V1
             | OPERATION_SORACLOUD_PROVENANCE_SIGN_V1
-            | OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1
             | OPERATION_STREAM_TOKEN_SIGN_V1
             | OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1
             | OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1
@@ -348,7 +340,7 @@ const fn operation_is_known(operation: u16) -> bool {
             | OPERATION_PROVIDER_INGEST_RETENTION_LOAD_V1
             | OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1
             | OPERATION_PROVIDER_INGEST_SOURCE_READINESS_V1
-            | OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2
+            | OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1
             | OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1
             | OPERATION_MODERATION_QUARANTINE_UNWRAP_DEK_V1
             | OPERATION_EVIDENCE_VIEWER_ISSUE_CHALLENGE_V1
@@ -1128,17 +1120,28 @@ fn validate_operation_response_for_client(
     session_network_id: &NetworkId,
 ) -> Result<(), BrokerError> {
     validate_operation_response_envelope(request, response)?;
+    let threshold_typed_caller = matches!(
+        (request.binding.slot, request.operation),
+        (slot, OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1)
+            if slot == IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id()
+    ) || matches!(
+        (request.binding.slot, request.operation),
+        (slot, OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1)
+            if slot == IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id()
+    );
     if response.status == STATUS_OK_V1
-        && matches!(
+        && (matches!(
             request.operation,
             OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1
                 | OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1
-        )
+        ) || threshold_typed_caller)
     {
-        // The caller decodes and validates the full sealed record exactly
-        // once while the response-owned admission remains live. Repeating
-        // a large typed decode here would multiply the composed
-        // reservation without adding an independent validation boundary.
+        // The typed caller decodes and validates the full result exactly once
+        // while the response-owned admission remains live. Repeating a large
+        // sealed-record decode would multiply the composed reservation, while
+        // repeating a complete threshold transcript reconstruction can exhaust
+        // the daemon's ordinary thread stack. The authenticated server still
+        // performs its independent semantic validation before responding.
         return Ok(());
     }
     validate_operation_result(
@@ -1477,50 +1480,6 @@ fn validate_operation_result(
                     .verify(exact.public_key(), &sign.preimage)
                     .map_err(|_| BrokerError::Protocol)?;
             }
-            OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1 => {
-                if request.binding.slot
-                    != IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id()
-                {
-                    return Err(BrokerError::BindingMismatch);
-                }
-                let mut request_wire =
-                    decode_canonical::<SoracloudHfAuthenticatedInferenceRequestWireV1>(
-                        &request.payload,
-                        MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
-                    )?;
-                let provider_request = crate::soracloud_hf_credential::
-                    SoracloudHfAuthenticatedInferenceRequestV1::try_new(
-                        std::mem::take(&mut request_wire.repo_id),
-                        std::mem::take(&mut request_wire.resolved_revision),
-                        std::mem::take(&mut request_wire.url),
-                        std::mem::take(&mut request_wire.content_type),
-                        request_wire.accept.take(),
-                        std::mem::take(&mut request_wire.body),
-                        request_wire.maximum_response_bytes,
-                    )
-                    .map_err(|_| BrokerError::Protocol)?;
-                let mut response_wire = decode_canonical::<
-                    SoracloudHfAuthenticatedInferenceResponseWireV1,
-                >(
-                    result, MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1
-                )?;
-                let provider_response = crate::soracloud_hf_credential::
-                    SoracloudHfAuthenticatedInferenceResponseV1::try_new(
-                        std::mem::take(&mut response_wire.served_repo_id),
-                        std::mem::take(&mut response_wire.served_revision),
-                        response_wire.status,
-                        response_wire.content_type.take(),
-                        response_wire.content_encoding.take(),
-                        std::mem::take(&mut response_wire.body),
-                        provider_request.maximum_response_bytes(),
-                    )
-                    .map_err(|_| BrokerError::Protocol)?;
-                if provider_response.served_repo_id() != provider_request.repo_id()
-                    || provider_response.served_revision() != provider_request.resolved_revision()
-                {
-                    return Err(BrokerError::Protocol);
-                }
-            }
             OPERATION_QUALIFY_V1
                 if request.binding.slot
                     == IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id() =>
@@ -1533,21 +1492,6 @@ fn validate_operation_result(
                     || Some(qualification.policy_digest) != request.binding.policy_digest
                     || !qualification.active
                     || qualification.test_only
-                {
-                    return Err(BrokerError::Protocol);
-                }
-            }
-            OPERATION_QUALIFY_V1
-                if request.binding.slot
-                    == IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider
-                        .wire_id() =>
-            {
-                let qualification = decode_canonical::<QualificationResultWireV1>(
-                    result,
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )?;
-                if Some(qualification.revision) != request.binding.revision
-                    || Some(qualification.policy_digest) != request.binding.policy_digest
                 {
                     return Err(BrokerError::Protocol);
                 }

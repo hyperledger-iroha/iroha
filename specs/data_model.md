@@ -21,7 +21,7 @@ form the first-release Iroha 3 data model, as implemented in the
 
 ## Names and Identifiers
 
-- `Name`: Valid textual identifier. Disallows whitespace and reserved characters `@`, `#`, `$` (used in composite IDs). Constructible via `FromStr` with validation. Names are normalized to Unicode NFC on parse (canonically equivalent spellings are treated as identical and stored composed). The special name `genesis` is reserved (checked case-insensitively).
+- `Name`: Valid textual identifier. Disallows whitespace and reserved characters `@`, `#`, `$` (used in composite IDs). Constructible via `FromStr` with validation. Names must arrive in their exact Unicode NFC spelling; alternate canonically equivalent spellings are rejected rather than rewritten. The special name `genesis` is reserved (checked case-insensitively).
 - `IdBox`: A sum-type envelope for any supported ID (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Useful for generic flows and Norito encoding as a single type.
 - `ChainId`: Opaque chain identifier used for replay protection in transactions.
 
@@ -122,7 +122,7 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
   - `mint_burn`, `transfer`, `register`, and a `transparent` bundle of helpers.
   - Type enums for meta flows: `InstructionType`, boxed sums like `SetKeyValueBox` (domain/account/asset_def/nft/trigger).
 - Errors: rich error model under `isi::error` (evaluation type errors, find errors, mintability, math, invalid parameters, repetition, invariants).
-- Instruction registry: the `instruction_registry!{ ... }` macro builds a runtime decode registry keyed by type name. Used by `InstructionBox` clone and Norito serde to achieve dynamic (de)serialization. If no registry has been explicitly set via `set_instruction_registry(...)`, a built-in default registry with all core ISI is lazily installed on first use to keep binaries robust.
+- Instruction registry: the `instruction_registry!{ ... }` macro builds a direction-separated registry. Concrete Rust type names select entries only while encoding; decoding accepts only the registered stable wire IDs. `InstructionBox` clone and Norito codecs use this registry for dynamic serialization without a type-name alias. If no registry has been explicitly set via `set_instruction_registry(...)`, a built-in default registry with all core ISI is lazily installed on first use.
 
 ## Transactions
 
@@ -172,6 +172,12 @@ the first release does not decode superseded data-model layouts.
   consensus transition that derives both lifecycle inactivity and an exact zero
   reference count from the same frozen state; no caller-supplied approximation is
   accepted.
+- Account, asset-definition, and containing-domain unregistration scans the
+  typed validation-fee index for retained `Enacted` proposal kinds, not only the
+  active-policy projection. Every policy treasury/DS reference and every payout
+  treasury, pool-vault, recipient, DS, and XOR reference therefore remains pinned
+  during pre-activation and after lifecycle drain. Containing-domain teardown
+  matches its complete definition set in one proposal-index pass.
 
 ## Blocks
 
@@ -213,7 +219,7 @@ the first release does not decode superseded data-model layouts.
   - `QueryBox<T>` is a boxed, erased `Query<Item = T>` with Norito serde backed by a global registry.
   - `QueryWithFilter<T> { query, predicate, selector }` pairs a query with a DSL predicate/selector; converts into an erased iterable query via `From`.
 - Registry and codecs:
-  - `query_registry!{ ... }` builds a global registry mapping concrete query types to constructors by type name for dynamic decode.
+  - The built-in query registry maps concrete query types to frozen wire IDs for encoding and maps only those wire IDs to constructors for dynamic decode. Custom registries may add new types with unique explicit IDs; type-name decode aliases and unregistered encoding fallbacks are rejected.
   - `QueryRequest = Singular(SingularQueryBox) | Start(QueryWithParams) | Continue(ForwardCursor)` and `QueryResponse = Singular(..) | Iterable(QueryOutput)`.
   - `QueryOutputBatchBox` is a sum-type over homogeneous vectors (e.g., `Vec<Account>`, `Vec<Name>`, `Vec<AssetDefinition>`, `Vec<BlockHeader>`), plus tuple and extension helpers for efficient pagination.
 - DSL: Implemented unconditionally in `query::dsl` with projection traits (`HasProjection<PredicateMarker>` / `SelectorMarker`) for compile-time-checked predicates and selectors. Iterable requests carry a canonical item discriminator plus encoded query, predicate, and selector components.

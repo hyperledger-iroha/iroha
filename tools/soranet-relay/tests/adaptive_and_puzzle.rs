@@ -5,9 +5,7 @@ use iroha_crypto::soranet::{
 };
 use rand::{SeedableRng, rngs::StdRng};
 use soranet_relay::{
-    config::{
-        AdaptiveDifficultyConfig, PowConfig, PuzzleConfig, QuotaConfig, RelayMode, SlowlorisConfig,
-    },
+    config::{PowConfig, PuzzleConfig, QuotaConfig, RelayMode, SlowlorisConfig},
     dos::{DoSControls, ThrottleReason},
     metrics::Metrics,
 };
@@ -15,27 +13,16 @@ use std::{
     net::SocketAddr,
     num::NonZeroU32,
     sync::Arc,
-    thread,
     time::{Duration, Instant},
 };
 #[test]
-fn adaptive_difficulty_escalates_after_repeated_failures() {
+fn configured_difficulty_remains_static_after_repeated_failures() {
     let metrics = Arc::new(Metrics::new());
     let mut pow_cfg = PowConfig {
         required: true,
         difficulty: 4,
         max_future_skew_secs: 120,
         min_ticket_ttl_secs: 30,
-        adaptive: AdaptiveDifficultyConfig {
-            enabled: true,
-            min_difficulty: 4,
-            max_difficulty: 10,
-            pow_failure_threshold: 2,
-            success_threshold: 1,
-            window_secs: 1,
-            increase_step: 2,
-            decrease_step: 1,
-        },
         quotas: QuotaConfig {
             per_remote_burst: 16,
             ..QuotaConfig::default()
@@ -43,7 +30,6 @@ fn adaptive_difficulty_escalates_after_repeated_failures() {
         ..PowConfig::default()
     };
     pow_cfg.apply_defaults().expect("pow defaults");
-    assert_eq!(pow_cfg.adaptive.pow_failure_threshold, 2);
     let base = PowParameters::new(
         pow_cfg.difficulty.min(u8::MAX as u32) as u8,
         Duration::from_secs(pow_cfg.max_future_skew_secs),
@@ -59,29 +45,14 @@ fn adaptive_difficulty_escalates_after_repeated_failures() {
     )
     .expect("dos controls");
     let remote: SocketAddr = "192.0.2.10:7447".parse().expect("valid socket");
-    // Cross the failure threshold twice with a small delay so the adaptive window closes.
-    let iterations =
-        usize::try_from(pow_cfg.adaptive.pow_failure_threshold + 1).expect("fits into usize");
-    for _ in 0..iterations {
+    for _ in 0..16 {
         let attempt = controls
             .begin(remote, None)
             .expect("attempt should be accepted");
         controls.record_pow_failure(&attempt, Duration::from_millis(5));
-        thread::sleep(Duration::from_millis(10));
     }
-    // Allow the adaptive window to roll over so adjustments are applied, then trigger an update.
-    thread::sleep(Duration::from_secs(2));
-    let attempt = controls
-        .begin(remote, None)
-        .expect("attempt should be accepted after cooldown");
-    controls.record_pow_failure(&attempt, Duration::from_millis(5));
     let new_params = controls.current_pow_parameters();
-    assert!(
-        new_params.difficulty() > base.difficulty(),
-        "expected difficulty to increase above {}, got {}",
-        base.difficulty(),
-        new_params.difficulty()
-    );
+    assert_eq!(new_params.difficulty(), base.difficulty());
 }
 #[test]
 fn puzzle_failures_surface_and_sync_policies() {
@@ -99,16 +70,6 @@ fn puzzle_failures_surface_and_sync_policies() {
         difficulty: 6,
         max_future_skew_secs: 120,
         min_ticket_ttl_secs: 30,
-        adaptive: AdaptiveDifficultyConfig {
-            enabled: true,
-            min_difficulty: 6,
-            max_difficulty: 12,
-            pow_failure_threshold: 3,
-            success_threshold: 3,
-            window_secs: 1,
-            increase_step: 1,
-            decrease_step: 1,
-        },
         quotas: QuotaConfig {
             per_remote_burst: 8,
             per_descriptor_burst: 4,
@@ -165,7 +126,7 @@ fn puzzle_failures_surface_and_sync_policies() {
     assert_eq!(
         pow_state.difficulty(),
         puzzle_state.difficulty(),
-        "puzzle policy must track adaptive difficulty"
+        "puzzle policy must share the static configured difficulty"
     );
     assert_eq!(
         pow_state.max_future_skew(),
@@ -174,7 +135,7 @@ fn puzzle_failures_surface_and_sync_policies() {
     );
 }
 #[test]
-fn adaptive_difficulty_replay_is_deterministic() {
+fn static_difficulty_outcome_replay_is_deterministic() {
     #[derive(Clone, Copy)]
     enum Outcome {
         Success,
@@ -220,16 +181,6 @@ fn adaptive_difficulty_replay_is_deterministic() {
         difficulty: 5,
         max_future_skew_secs: 300,
         min_ticket_ttl_secs: 60,
-        adaptive: AdaptiveDifficultyConfig {
-            enabled: true,
-            min_difficulty: 5,
-            max_difficulty: 8,
-            pow_failure_threshold: 2,
-            success_threshold: 2,
-            window_secs: 2,
-            increase_step: 2,
-            decrease_step: 1,
-        },
         quotas: QuotaConfig {
             per_remote_burst: 16,
             ..QuotaConfig::default()
@@ -336,16 +287,6 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
         difficulty: 6,
         max_future_skew_secs: 90,
         min_ticket_ttl_secs: 20,
-        adaptive: AdaptiveDifficultyConfig {
-            enabled: false,
-            min_difficulty: 6,
-            max_difficulty: 6,
-            pow_failure_threshold: 4,
-            success_threshold: 4,
-            window_secs: 4,
-            increase_step: 1,
-            decrease_step: 1,
-        },
         quotas: QuotaConfig {
             per_remote_burst: 6,
             per_remote_window_secs: 3,
@@ -497,6 +438,6 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
     assert_eq!(
         controls.current_pow_parameters().difficulty(),
         baseline_difficulty,
-        "pow difficulty should remain stable because adaptive mode is disabled"
+        "pow difficulty must remain at the first-release configured value"
     );
 }

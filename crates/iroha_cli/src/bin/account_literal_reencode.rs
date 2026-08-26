@@ -22,7 +22,6 @@ fn main() -> Result<()> {
             .ok_or_else(|| eyre!("--from-chain-discriminant is required with --account"))?;
         parse_account_address(account, Some(from_chain_discriminant))
             .wrap_err("failed to parse --account as canonical account address")?
-            .address
             .to_account_id()
             .map_err(|err| eyre!(err.to_string()))
             .wrap_err("failed to decode --account")?

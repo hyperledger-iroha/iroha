@@ -5,6 +5,10 @@ class UaidBindingsResponse(
     @JvmField val uaid: String,
     dataspaces: List<UaidBindingsDataspace>,
 ) {
+    init {
+        UaidLiteral.canonicalize(uaid, "uaid")
+    }
+
     @JvmField val dataspaces: List<UaidBindingsDataspace> = dataspaces.toList()
 
     /** Dataspace binding entry returned by Torii. */

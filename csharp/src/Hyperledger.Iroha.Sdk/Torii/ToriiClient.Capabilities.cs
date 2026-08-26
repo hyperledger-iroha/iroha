@@ -1,4 +1,4 @@
-// Node-capability probing, transaction compatibility, and response validation.
+// Node-capability probing, exact transaction-contract checks, and response validation.
 
 using System.Text.Json;
 
@@ -53,7 +53,7 @@ public sealed partial class ToriiClient
         ToriiNodeCapabilitiesJson.ValidateNodeCapabilities(response, context);
     }
 
-    private async Task EnsureTransactionSubmissionCompatibilityAsync(
+    private async Task EnsureCanonicalTransactionContractAsync(
         CancellationToken cancellationToken)
     {
         var capabilities = await GetNodeCapabilitiesAsync(cancellationToken);

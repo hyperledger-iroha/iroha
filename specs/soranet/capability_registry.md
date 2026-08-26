@@ -51,10 +51,11 @@ encoded capability vector is limited to 4,096 bytes.
 | `0x01`   | Dilithium3     | The only accepted first-release `pqsig` policy identifier. |
 | `0x02`   | Falcon-512     | Rejected in the first-release wire protocol. |
 
-`snnet.pqsig` is transcript-bound certificate and descriptor PQ-policy
-metadata, not an online signature-algorithm selector. Online relay
-authentication is a separate Ed25519 signature under the exact identity in the
-dual-signed authenticated directory entry.
+`snnet.pqsig` is transcript-bound handshake policy and compatibility metadata,
+not certificate metadata or an online signature-algorithm selector. Online
+relay authentication unconditionally carries both Ed25519 and ML-DSA-65
+signatures under the exact identities in the dual-signed authenticated
+directory entry.
 
 ## Downgrade handling
 
@@ -62,7 +63,7 @@ dual-signed authenticated directory entry.
   with `flags & 0x01`; `snnet.suite_list` uses the high bit of its first suite
   byte instead.
 - Relays MUST abort the handshake (and emit downgrade telemetry) if they cannot echo a required capability.
-- Absence of `snnet.pqkem` from a relay echo indicates classical-only support; PQ-preferring clients abort and raise alarms.
+- Every first-release NK2/NK3 handshake negotiates a PQ KEM. A missing, unsupported, or mismatched required `snnet.pqkem` echo aborts and raises downgrade telemetry; there is no classical-only compatibility path.
 - Absence of `snnet.constant_rate` triggers a downgrade when clients request SNNet‑17A constant-rate transport. Fixture `snnet-cap-006-constant-rate` captures the warning slug and transcript hash; use it for regression in SDK harnesses.
 
 ## Change control

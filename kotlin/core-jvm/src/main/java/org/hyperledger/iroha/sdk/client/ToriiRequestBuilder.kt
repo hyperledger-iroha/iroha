@@ -120,9 +120,10 @@ internal object ToriiRequestBuilder {
         timeout: Duration?,
         extraHeaders: Map<String, String>?
     ): TransportRequest {
-        val normalizedHash = hashHex.trim()
-        require(normalizedHash.isNotEmpty()) { "hashHex must not be blank" }
-        val target = resolve(baseUri, "$STATUS_PATH?hash=$normalizedHash")
+        require(hashHex.matches(Regex("[0-9a-f]{63}[13579bdf]"))) {
+            "hashHex must be a canonical lowercase marked 32-byte transaction hash"
+        }
+        val target = resolve(baseUri, "$STATUS_PATH?hash=$hashHex&scope=global")
         TransportSecurity.requireHttpRequestAllowed(
             "HttpClientTransport",
             baseUri,

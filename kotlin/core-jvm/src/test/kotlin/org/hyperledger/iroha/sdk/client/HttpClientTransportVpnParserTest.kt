@@ -18,6 +18,7 @@ import org.hyperledger.iroha.sdk.testing.TestNetworkIds
  */
 class HttpClientTransportVpnParserTest {
     private val validEd25519PublicKeyHex = TestEd25519Keys.publicKeyHex(0x22)
+    private val validMldsa65PublicKeyHex = "a5".repeat(1_952)
 
     @Test
     fun getVpnProfileDeserializesNativeLeaseFields() {
@@ -43,6 +44,7 @@ class HttpClientTransportVpnParserTest {
                   "flow_label_bits": 24,
                   "padding_budget_ms": 15,
                   "relay_id_hex": "$validEd25519PublicKeyHex",
+                  "relay_mldsa65_public_key_hex": "$validMldsa65PublicKeyHex",
                   "descriptor_commit_hex": "${"cd".repeat(32)}",
                   "tls_server_name": "relay.example",
                   "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
@@ -67,6 +69,7 @@ class HttpClientTransportVpnParserTest {
         assertEquals(60L, profile.dnsPushIntervalSecs)
         assertEquals(120L, profile.settlementGraceSecs)
         assertEquals(validEd25519PublicKeyHex, profile.relayIdHex)
+        assertEquals(validMldsa65PublicKeyHex, profile.relayMldsa65PublicKeyHex)
         assertEquals("cd".repeat(32), profile.descriptorCommitHex)
         assertEquals("relay.example", profile.tlsServerName)
         assertEquals("ab".repeat(32), profile.relayTlsSpkiSha256Hex)
@@ -74,6 +77,14 @@ class HttpClientTransportVpnParserTest {
         assertEquals("42".repeat(32), profile.directorySnapshotDigestHex)
         assertEquals("GET", executor.lastRequest.method)
         assertEquals("https://torii.example/v1/vpn/profile", executor.lastRequest.uri.toString())
+
+        val shortMldsaIdentity = responseJson.replace(
+            "\"relay_mldsa65_public_key_hex\": \"$validMldsa65PublicKeyHex\"",
+            "\"relay_mldsa65_public_key_hex\": \"55\"",
+        )
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseProfile(shortMldsaIdentity.toByteArray(StandardCharsets.UTF_8))
+        }
 
         val belowMinimum = responseJson.replace("\"dns_push_interval_secs\": 60", "\"dns_push_interval_secs\": 29")
         assertFailsWith<IllegalStateException> {
@@ -92,6 +103,42 @@ class HttpClientTransportVpnParserTest {
         val uppercaseTlsPin = responseJson.replace("ab".repeat(32), "AB".repeat(32))
         assertFailsWith<IllegalStateException> {
             VpnJsonParser.parseProfile(uppercaseTlsPin.toByteArray(StandardCharsets.UTF_8))
+        }
+    }
+
+    @Test
+    fun vpnTrustTupleRequiresCanonicalNonZeroMldsaIdentity() {
+        val quoteId = "ab".repeat(32)
+        val sessionId = "de".repeat(16)
+        val paymentTxHash = "cd".repeat(32)
+        val payloads: List<Pair<() -> String, (ByteArray) -> Any>> = listOf(
+            { vpnProfileJson() } to { VpnJsonParser.parseProfile(it) },
+            { vpnQuoteJson(quoteId, validEd25519PublicKeyHex) } to { VpnJsonParser.parseQuote(it) },
+            { vpnSessionJson(sessionId, quoteId, paymentTxHash) } to { VpnJsonParser.parseSession(it) },
+        )
+
+        payloads.forEach { (payload, parse) ->
+            val valid = payload()
+            val decoded = parse(valid.toByteArray(StandardCharsets.UTF_8))
+            val decodedKey = when (decoded) {
+                is VpnProfile -> decoded.relayMldsa65PublicKeyHex
+                is VpnQuote -> decoded.relayMldsa65PublicKeyHex
+                is VpnSession -> decoded.relayMldsa65PublicKeyHex
+                else -> error("unexpected VPN response type")
+            }
+            assertEquals(validMldsa65PublicKeyHex, decodedKey)
+
+            listOf(
+                validMldsa65PublicKeyHex.uppercase(),
+                "0".repeat(3_904),
+                validMldsa65PublicKeyHex.dropLast(2),
+                "${validMldsa65PublicKeyHex}00",
+            ).forEach { invalid ->
+                val mutated = valid.replace(validMldsa65PublicKeyHex, invalid)
+                assertFailsWith<IllegalStateException> {
+                    parse(mutated.toByteArray(StandardCharsets.UTF_8))
+                }
+            }
         }
     }
 
@@ -128,7 +175,6 @@ class HttpClientTransportVpnParserTest {
                 settled = true,
             ),
         ) as Map<String, Any?>).toMutableMap()
-        receipt.remove("tx_instructions")
         listOf("disconnected", "expired", "replaced", "settlement_pending", "settled")
             .forEach { status ->
                 receipt["status"] = status
@@ -234,9 +280,11 @@ class HttpClientTransportVpnParserTest {
         }
 
         val missingCases = listOf(
+            { VpnJsonParser.parseProfile(missing(profile, "relay_mldsa65_public_key_hex")) },
             { VpnJsonParser.parseProfile(missing(profile, "relay_tls_spki_sha256_hex")) },
+            { VpnJsonParser.parseQuote(missing(quote, "relay_mldsa65_public_key_hex")) },
             { VpnJsonParser.parseQuote(missing(quote, "open_lease_instruction")) },
-            { VpnJsonParser.parseQuote(missing(quote, "tx_instructions")) },
+            { VpnJsonParser.parseSession(missing(session, "relay_mldsa65_public_key_hex")) },
             { VpnJsonParser.parseSession(missing(session, "route_pushes")) },
             { VpnJsonParser.parseReceipt(missing(receipt, "settle_lease_instruction")) },
             { VpnJsonParser.parseReceiptList(missing(receiptList, "items")) },
@@ -358,14 +406,18 @@ class HttpClientTransportVpnParserTest {
               "tunnel_addresses": ["10.208.0.2/32"],
               "mtu_bytes": 1280,
               "display_billing_label": "standard XOR",
-              "fee_asset_id": "xor#universal.universal",
-              "escrow_account_id": "sorauEscrow",
               "operator_account_id": "sorauOperator",
               "lease_fee": "1000000.25",
               "settlement_grace_secs": 120,
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
-              "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}"
+              "relay_id_hex": "$validEd25519PublicKeyHex",
+              "relay_mldsa65_public_key_hex": "$validMldsa65PublicKeyHex",
+              "descriptor_commit_hex": "${"cd".repeat(32)}",
+              "tls_server_name": "relay.example",
+              "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+              "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
+              "directory_snapshot_digest_hex": "${"42".repeat(32)}"
             }
         """.trimIndent()
 
@@ -393,18 +445,18 @@ class HttpClientTransportVpnParserTest {
               "meter_family": "soranet.vpn.standard",
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
+              "relay_id_hex": "$validEd25519PublicKeyHex",
+              "relay_mldsa65_public_key_hex": "$validMldsa65PublicKeyHex",
+              "descriptor_commit_hex": "${"cd".repeat(32)}",
+              "tls_server_name": "relay.example",
               "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+              "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
+              "directory_snapshot_digest_hex": "${"42".repeat(32)}",
               "metering_public_key_hex": "$meteringKey",
               "open_lease_instruction": {
-                "wire_id": "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow",
+"wire_id": "iroha.instruction.v1::vpn::OpenVpnLeaseEscrow",
                 "payload_hex": "cafe"
-              },
-              "tx_instructions": [
-                {
-                  "wire_id": "iroha_data_model::isi::vpn::OpenVpnLeaseEscrow",
-                  "payload_hex": "cafe"
-                }
-              ]
+              }
             }
         """.trimIndent()
 
@@ -430,7 +482,13 @@ class HttpClientTransportVpnParserTest {
               "lease_fee": "1000000.25",
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
+              "relay_id_hex": "$validEd25519PublicKeyHex",
+              "relay_mldsa65_public_key_hex": "$validMldsa65PublicKeyHex",
+              "descriptor_commit_hex": "${"cd".repeat(32)}",
+              "tls_server_name": "relay.example",
               "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
+              "relay_certificate_sha256_hex": "${"ef".repeat(32)}",
+              "directory_snapshot_digest_hex": "${"42".repeat(32)}",
               "route_pushes": ["0.0.0.0/0"],
               "excluded_routes": [],
               "dns_servers": ["1.1.1.1"],
@@ -457,19 +515,12 @@ class HttpClientTransportVpnParserTest {
         val settle = if (settled) {
             """,
               "settle_lease_instruction": {
-                "wire_id": "iroha_data_model::isi::vpn::SettleVpnLease",
+                "wire_id": "iroha.instruction.v1::vpn::SettleVpnLease",
                 "payload_hex": "f00d"
-              },
-              "tx_instructions": [
-                {
-                  "wire_id": "iroha_data_model::isi::vpn::SettleVpnLease",
-                  "payload_hex": "f00d"
-                }
-              ]"""
+              }"""
         } else {
             """,
-              "settle_lease_instruction": null,
-              "tx_instructions": []"""
+              "settle_lease_instruction": null"""
         }
         return """
             {

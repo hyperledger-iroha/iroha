@@ -4,6 +4,7 @@ use crate::telemetry::StateTelemetry;
 use crate::{
     kura::{BlockCount, CommitManifestBindingState, Error as KuraError, Kura},
     query::store::LiveQueryStoreHandle,
+    secure_file_metadata::{self, SecureMetadata},
     state::{
         LaneIncarnationLineage, SnapshotNexusRuntime, SnapshotNoritoBlob,
         SnapshotPublicLaneRewardClaim, SnapshotSpaceDirectoryManifestSet, State, StateBlock,
@@ -51,11 +52,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-fn serialize_state_snapshot(
-    state: &State,
-    out: &mut String,
-    include_space_directory_manifests: bool,
-) {
+fn serialize_state_snapshot(state: &State, out: &mut String) {
     let view = state.view();
     let block_hashes: Vec<HashOf<BlockHeader>> = view.block_hashes.iter().copied().collect();
     let nexus_runtime = SnapshotNexusRuntime::from_nexus_with_autoscale_history(
@@ -111,18 +108,15 @@ fn serialize_state_snapshot(
             },
         )
         .collect();
-    let space_directory_manifests: Vec<_> = if include_space_directory_manifests {
-        view.world
-            .space_directory_manifests
-            .iter()
-            .map(|(uaid, value)| SnapshotSpaceDirectoryManifestSet {
-                uaid: *uaid,
-                encoded_hex: hex::encode(NoritoEncode::encode(value)),
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let space_directory_manifests: Vec<_> = view
+        .world
+        .space_directory_manifests
+        .iter()
+        .map(|(uaid, value)| SnapshotSpaceDirectoryManifestSet {
+            uaid: *uaid,
+            encoded_hex: hex::encode(NoritoEncode::encode(value)),
+        })
+        .collect();
     out.push('{');
     json::write_json_string("chain_id", out);
     out.push(':');
@@ -172,12 +166,10 @@ fn serialize_state_snapshot(
     json::write_json_string("public_lane_reward_claims", out);
     out.push(':');
     json::JsonSerialize::json_serialize(&public_lane_reward_claims, out);
-    if include_space_directory_manifests {
-        out.push(',');
-        json::write_json_string("space_directory_manifests", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&space_directory_manifests, out);
-    }
+    out.push(',');
+    json::write_json_string("space_directory_manifests", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&space_directory_manifests, out);
     out.push(',');
     json::write_json_string("commit_topology", out);
     out.push(':');
@@ -305,7 +297,7 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
 // Serialize State as a minimal snapshot wrapper using Norito JSON writer.
 impl JsonSerializeTrait for State {
     fn json_serialize(&self, out: &mut String) {
-        serialize_state_snapshot(self, out, true);
+        serialize_state_snapshot(self, out);
     }
 }
 /// Name of the [`State`] snapshot file.
@@ -833,17 +825,16 @@ type StableSnapshotFileIdentity = (Option<u32>, Option<u64>);
 #[cfg(not(any(unix, windows)))]
 type StableSnapshotFileIdentity = ();
 #[cfg(unix)]
-fn stable_file_identity(metadata: &std::fs::Metadata) -> StableSnapshotFileIdentity {
+fn stable_file_identity(metadata: &SecureMetadata) -> StableSnapshotFileIdentity {
     use std::os::unix::fs::MetadataExt;
     (metadata.dev(), metadata.ino())
 }
 #[cfg(windows)]
-fn stable_file_identity(metadata: &std::fs::Metadata) -> StableSnapshotFileIdentity {
-    use std::os::windows::fs::MetadataExt;
+fn stable_file_identity(metadata: &SecureMetadata) -> StableSnapshotFileIdentity {
     (metadata.volume_serial_number(), metadata.file_index())
 }
 #[cfg(not(any(unix, windows)))]
-fn stable_file_identity(_metadata: &std::fs::Metadata) -> StableSnapshotFileIdentity {}
+fn stable_file_identity(_metadata: &SecureMetadata) -> StableSnapshotFileIdentity {}
 #[cfg(unix)]
 fn stable_file_identity_available(_identity: StableSnapshotFileIdentity) -> bool {
     true
@@ -856,7 +847,7 @@ fn stable_file_identity_available(identity: StableSnapshotFileIdentity) -> bool 
 fn stable_file_identity_available(_identity: StableSnapshotFileIdentity) -> bool {
     false
 }
-fn regular_file_has_single_link(metadata: &std::fs::Metadata) -> bool {
+fn regular_file_has_single_link(metadata: &SecureMetadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -864,7 +855,6 @@ fn regular_file_has_single_link(metadata: &std::fs::Metadata) -> bool {
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
         metadata.number_of_links() == Some(1)
     }
     #[cfg(not(any(unix, windows)))]
@@ -877,7 +867,7 @@ fn regular_file_has_single_link(metadata: &std::fs::Metadata) -> bool {
 fn snapshot_unix_owner_and_mode_are_trusted(uid: u32, mode: u32, effective_uid: u32) -> bool {
     uid == effective_uid && mode & 0o022 == 0
 }
-fn snapshot_metadata_has_trusted_owner_and_mode(metadata: &std::fs::Metadata) -> bool {
+fn snapshot_metadata_has_trusted_owner_and_mode(metadata: &SecureMetadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -970,7 +960,7 @@ fn bind_snapshot_file_handle_with_digest(
     max_bytes: u64,
     hash_contents: bool,
 ) -> std::io::Result<Option<BoundSnapshotFile>> {
-    let path_before = match std::fs::symlink_metadata(path) {
+    let path_before = match secure_file_metadata::from_path(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
@@ -996,7 +986,7 @@ fn bind_snapshot_file_handle_with_digest(
         ));
     }
     let file = std::fs::File::open(path)?;
-    let opened_before = file.metadata()?;
+    let opened_before = secure_file_metadata::from_file(&file)?;
     if !opened_before.is_file()
         || !regular_file_has_single_link(&opened_before)
         || !stable_file_identity_available(stable_file_identity(&opened_before))
@@ -1024,8 +1014,8 @@ fn bind_snapshot_file_handle_with_digest(
     } else {
         None
     };
-    let opened_after = file.metadata()?;
-    let path_after = std::fs::symlink_metadata(path)?;
+    let opened_after = secure_file_metadata::from_file(&file)?;
+    let path_after = secure_file_metadata::from_path(path)?;
     if path_after.file_type().is_symlink()
         || !path_after.is_file()
         || !regular_file_has_single_link(&path_after)
@@ -1200,11 +1190,9 @@ fn verify_bound_snapshot_file_metadata_at(
     path: &Path,
     binding: &BoundSnapshotFile,
 ) -> Result<(), TryReadError> {
-    let metadata = std::fs::symlink_metadata(path)
+    let metadata = secure_file_metadata::from_path(path)
         .map_err(|error| TryReadError::IO(error, path.to_path_buf()))?;
-    let opened = binding
-        .handle
-        .metadata()
+    let opened = secure_file_metadata::from_file(&binding.handle)
         .map_err(|error| TryReadError::IO(error, binding.path.clone()))?;
     if metadata.file_type().is_symlink()
         || !metadata.is_file()
@@ -1285,16 +1273,14 @@ fn sync_snapshot_directory(
     }
     let file =
         std::fs::File::open(path).map_err(|error| TryReadError::IO(error, path.to_path_buf()))?;
-    let opened_before = file
-        .metadata()
+    let opened_before = secure_file_metadata::from_file(&file)
         .map_err(|error| TryReadError::IO(error, path.to_path_buf()))?;
     if !opened_before.is_dir() || stable_file_identity(&opened_before) != expected_identity {
         return Err(TryReadError::SnapshotBindingChanged(path.to_path_buf()));
     }
     file.sync_all()
         .map_err(|error| TryReadError::IO(error, path.to_path_buf()))?;
-    let opened_after = file
-        .metadata()
+    let opened_after = secure_file_metadata::from_file(&file)
         .map_err(|error| TryReadError::IO(error, path.to_path_buf()))?;
     if !opened_after.is_dir()
         || stable_file_identity(&opened_after) != expected_identity
@@ -1310,7 +1296,7 @@ struct SnapshotReadOutcome {
 fn direct_snapshot_directory_identity(
     path: &Path,
 ) -> Result<StableSnapshotFileIdentity, TryReadError> {
-    let metadata = std::fs::symlink_metadata(path)
+    let metadata = secure_file_metadata::from_path(path)
         .map_err(|error| TryReadError::IO(error, path.to_path_buf()))?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(TryReadError::SnapshotBindingChanged(path.to_path_buf()));
@@ -3250,7 +3236,7 @@ fn bind_snapshot_generation_gc_removal(
             return Ok(None);
         }
         let artifact_path = entry.path();
-        let metadata = std::fs::symlink_metadata(&artifact_path)
+        let metadata = secure_file_metadata::from_path(&artifact_path)
             .map_err(|error| TryWriteError::IO(error, artifact_path.clone()))?;
         if metadata.file_type().is_symlink()
             || !metadata.is_file()
@@ -3329,7 +3315,7 @@ fn verify_snapshot_generation_gc_removal(
         ));
     }
     for file in &removal.files[removed_files..] {
-        let metadata = std::fs::symlink_metadata(&file.path)
+        let metadata = secure_file_metadata::from_path(&file.path)
             .map_err(|error| TryWriteError::IO(error, file.path.clone()))?;
         if metadata.file_type().is_symlink()
             || !metadata.is_file()
@@ -3811,7 +3797,10 @@ fn publish_immutable_snapshot_generation(
     match std::fs::symlink_metadata(&generations_dir) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            #[cfg(unix)]
             let mut builder = std::fs::DirBuilder::new();
+            #[cfg(not(unix))]
+            let builder = std::fs::DirBuilder::new();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt;
@@ -4175,7 +4164,7 @@ fn try_write_snapshot_with_limit_and_policy(
     // TODO: Add a `Write`-backed Norito JSON sink so production can emit this
     // canonical payload directly into the authenticated staging descriptor.
     let mut snapshot_json = String::new();
-    serialize_state_snapshot(state, &mut snapshot_json, true);
+    serialize_state_snapshot(state, &mut snapshot_json);
     try_write_snapshot_payload_with_limit_locked(
         state,
         store_dir,
@@ -4680,24 +4669,14 @@ fn ensure_state_is_backed_by_kura(state: &State) -> Result<(), TryWriteError> {
 /// Canonical bytes for the committed ledger WSV surface used by replay parity tests.
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub(crate) fn canonical_state_snapshot_bytes(state: &State) -> Vec<u8> {
-    canonical_state_snapshot_bytes_with_options(state, true)
-}
-#[cfg(any(test, feature = "iroha-core-tests"))]
-fn canonical_state_snapshot_bytes_with_options(
-    state: &State,
-    include_space_directory_manifests: bool,
-) -> Vec<u8> {
-    json::to_json(&canonical_state_snapshot_value_with_options(
-        state,
-        include_space_directory_manifests,
-    ))
-    .expect("state snapshot serialization must succeed")
-    .into_bytes()
+    json::to_json(&canonical_state_snapshot_value(state))
+        .expect("state snapshot serialization must succeed")
+        .into_bytes()
 }
 /// Canonical hash for the committed ledger WSV surface.
 pub(crate) fn canonical_state_snapshot_hash(state: &State) -> iroha_crypto::Hash {
     let mut snapshot_json = String::new();
-    serialize_state_snapshot(state, &mut snapshot_json, true);
+    serialize_state_snapshot(state, &mut snapshot_json);
     canonical_snapshot_wsv_hash(snapshot_json.as_bytes())
         .expect("typed State serialization must form a canonical WSV snapshot")
 }
@@ -4746,17 +4725,10 @@ pub(crate) fn canonical_staged_state_snapshot_hash(
     )
     .expect("typed staged State serialization must form a canonical WSV snapshot")
 }
-#[cfg(test)]
-fn canonical_state_snapshot_value(state: &State) -> json::Value {
-    canonical_state_snapshot_value_with_options(state, true)
-}
 #[cfg(any(test, feature = "iroha-core-tests"))]
-fn canonical_state_snapshot_value_with_options(
-    state: &State,
-    include_space_directory_manifests: bool,
-) -> json::Value {
+fn canonical_state_snapshot_value(state: &State) -> json::Value {
     let mut json = String::new();
-    serialize_state_snapshot(state, &mut json, include_space_directory_manifests);
+    serialize_state_snapshot(state, &mut json);
     let mut value: json::Value =
         json::from_str(&json).expect("state snapshot serialization must produce valid JSON");
     normalize_mv_cell_fields_in_state_value(&mut value);
@@ -4860,14 +4832,6 @@ fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
     // VRF epoch snapshots are maintained by consensus message handling outside
     // block application. Kura replay verifies block-applied WSV data only.
     world.remove("vrf_epochs");
-}
-/// Canonical hash for the legacy checkpoint surface used before Space Directory manifests
-/// were included in durable snapshots.
-#[cfg(test)]
-pub(crate) fn legacy_state_snapshot_hash_without_space_directory_manifests(
-    state: &State,
-) -> iroha_crypto::Hash {
-    iroha_crypto::Hash::new(canonical_state_snapshot_bytes_with_options(state, false))
 }
 /// Canonical bytes for the committed WSV surface used by replay parity tests.
 #[cfg(any(test, feature = "iroha-core-tests"))]

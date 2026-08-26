@@ -18,6 +18,9 @@ pub enum IdentifierPolicyIdParseError {
     /// The policy literal must use `kind#rule`.
     #[error("identifier policy literal must use `kind#rule`")]
     InvalidFormat,
+    /// The policy literal must not contain surrounding whitespace.
+    #[error("identifier policy literal must not contain surrounding whitespace")]
+    SurroundingWhitespace,
     /// One of the policy components is invalid.
     #[error("{0}")]
     InvalidName(String),
@@ -102,8 +105,10 @@ impl fmt::Display for IdentifierPolicyId {
 impl FromStr for IdentifierPolicyId {
     type Err = IdentifierPolicyIdParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
-        let (kind, business_rule) = trimmed
+        if s.trim() != s {
+            return Err(IdentifierPolicyIdParseError::SurroundingWhitespace);
+        }
+        let (kind, business_rule) = s
             .split_once('#')
             .ok_or(IdentifierPolicyIdParseError::InvalidFormat)?;
         let kind = Name::from_str(kind)
@@ -496,9 +501,13 @@ mod tests {
                 "policy.policy_id" => {
                     let raw = fixture_str(negative, "value");
                     if raw.trim() != raw {
+                        let error = IdentifierPolicyId::from_str(raw)
+                            .expect_err("padded policy ids must be rejected while parsing");
                         assert!(
-                            fixture_str(negative, "expected_error_contains").contains("whitespace"),
-                            "{name} must document whitespace rejection"
+                            error
+                                .to_string()
+                                .contains(fixture_str(negative, "expected_error_contains")),
+                            "{name} returned an unexpected parse error: {error}"
                         );
                         continue;
                     }
@@ -701,9 +710,7 @@ mod tests {
             account_id: AccountId::parse_encoded(
                 "sorauﾛ1NiGｸﾛﾋRuﾎQtﾐpヱﾈｻHﾍﾐ3RZﾕYdvbｺhcｽG8A8ｿRﾗeP1E463",
             )
-            .expect("valid i105 account")
-            .account_id()
-            .clone(),
+            .expect("valid i105 account"),
         }
     }
     fn live_identifier_execution_fixture() -> RamLfeExecutionReceiptPayload {
@@ -825,8 +832,7 @@ mod tests {
             receipt_hash: hash_hex(fixture_str(payload, "receipt_hash")),
             uaid: UniversalAccountId::from_str(fixture_str(payload, "uaid")).expect("valid uaid"),
             account_id: AccountId::parse_encoded(fixture_str(payload, "account_id"))
-                .expect("valid account id")
-                .into_account_id(),
+                .expect("valid account id"),
         }
     }
     fn execution_from_fixture(execution: &norito::json::Value) -> RamLfeExecutionReceiptPayload {

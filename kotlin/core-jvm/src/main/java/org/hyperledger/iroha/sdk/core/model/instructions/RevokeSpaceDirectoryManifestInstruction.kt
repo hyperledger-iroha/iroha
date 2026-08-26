@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import org.hyperledger.iroha.sdk.nexus.UaidLiteral
+
 /** Typed builder for the `RevokeSpaceDirectoryManifest` instruction. */
 class RevokeSpaceDirectoryManifestInstruction private constructor(
     val uaid: String,
@@ -29,7 +31,7 @@ class RevokeSpaceDirectoryManifestInstruction private constructor(
         private var reason: String? = null
 
         fun setUaid(uaid: String) = apply {
-            this.uaid = requireNotNull(uaid) { "uaid" }
+            this.uaid = UaidLiteral.canonicalize(uaid, "uaid")
         }
 
         fun setDataspace(dataspace: Long) = apply {
@@ -73,7 +75,7 @@ class RevokeSpaceDirectoryManifestInstruction private constructor(
 
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): RevokeSpaceDirectoryManifestInstruction {
-            val u = require(arguments, "uaid")
+            val u = UaidLiteral.canonicalize(require(arguments, "uaid"), "uaid")
             val ds = requireLong(arguments, "dataspace")
             val re = requireLong(arguments, "revoked_epoch")
             val reason = arguments["reason"]

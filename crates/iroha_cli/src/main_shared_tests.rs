@@ -770,6 +770,86 @@ fn taira_doctor_cli_parses_public_root_and_json() {
     assert!(cmd.json);
 }
 #[test]
+fn taira_public_reset_exposes_strict_preflight_and_apply() {
+    let args = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "public-reset",
+        "preflight",
+        "--inventory",
+        "/private/runtime/inventory.json",
+        "--authorization",
+        "/private/runtime/authorization.json",
+        "--trusted-public-key",
+        "/private/runtime/trusted-key.json",
+        "--ssh-identity",
+        "/private/runtime/id_ed25519",
+        "--known-hosts",
+        "/private/runtime/known_hosts",
+    ])
+    .expect("parse strict public-reset preflight");
+    assert!(matches!(
+        args.command,
+        Command::Taira(crate::taira::Command::PublicReset(_))
+    ));
+
+    let apply = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "public-reset",
+        "apply",
+        "--inventory",
+        "/private/runtime/inventory.json",
+        "--authorization",
+        "/private/runtime/authorization.json",
+        "--trusted-public-key",
+        "/private/runtime/trusted-key.json",
+        "--ssh-identity",
+        "/private/runtime/id_ed25519",
+        "--known-hosts",
+        "/private/runtime/known_hosts",
+        "--runtime-client-config",
+        "/private/runtime/client.toml",
+        "--validator-client-config",
+        "/private/runtime/validator-1.toml",
+        "/private/runtime/validator-2.toml",
+        "/private/runtime/validator-3.toml",
+        "/private/runtime/validator-4.toml",
+        "--onboarding-token",
+        "/private/runtime/onboarding-token",
+        "--inrou-stage-dir",
+        "/private/runtime/inrou-stage",
+    ])
+    .expect("parse strict public-reset apply");
+    assert!(matches!(
+        apply.command,
+        Command::Taira(crate::taira::Command::PublicReset(_))
+    ));
+
+    for retired in ["--journal-dir", "--canary-fee-payer"] {
+        let error = Args::try_parse_from([
+            "iroha",
+            "taira",
+            "public-reset",
+            "apply",
+            "--inventory",
+            "/private/runtime/inventory.json",
+            "--authorization",
+            "/private/runtime/authorization.json",
+            "--trusted-public-key",
+            "/private/runtime/trusted-key.json",
+            "--ssh-identity",
+            "/private/runtime/id_ed25519",
+            "--known-hosts",
+            "/private/runtime/known_hosts",
+            retired,
+            "retired-value",
+        ])
+        .expect_err("retired public-reset apply flag must be rejected");
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
+}
+#[test]
 fn taira_write_canary_cli_parses_defaults_and_overrides() {
     let args = Args::try_parse_from([
         "iroha",
@@ -781,8 +861,21 @@ fn taira_write_canary_cli_parses_defaults_and_overrides() {
         "asset",
         "--onboarding-token-file",
         "/tmp/taira-onboarding.token",
-        "--write-config",
-        "/tmp/taira-canary-client.toml",
+        "--use-config-signer",
+        "--operation",
+        "final-canary",
+        "--authorization-sha256",
+        "abababababababababababababababababababababababababababababababab",
+        "--authorization-nonce",
+        "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn",
+        "--mutation-phase",
+        "pre_edge",
+        "--idempotency-key",
+        "abababababababababababababababababababababababababababababababab",
+        "--execution-expires-at-unix-ms",
+        "18446744073709551615",
+        "--recover-prepared-envelope-fd",
+        "3",
         "--json",
     ])
     .expect("parse args");
@@ -793,14 +886,22 @@ fn taira_write_canary_cli_parses_defaults_and_overrides() {
     assert_eq!(cmd.alias_prefix, "rollout");
     assert_eq!(cmd.faucet_asset_id, "asset");
     assert_eq!(
-        cmd.onboarding_token_file,
-        std::path::PathBuf::from("/tmp/taira-onboarding.token")
+        cmd.onboarding_token_file.as_deref(),
+        Some(std::path::Path::new("/tmp/taira-onboarding.token"))
     );
-    assert_eq!(
-        cmd.write_config.as_deref(),
-        Some(std::path::Path::new("/tmp/taira-canary-client.toml"))
-    );
+    assert!(cmd.use_config_signer);
+    assert_eq!(cmd.recover_prepared_envelope_fd, Some(3));
     assert!(cmd.json);
+    assert_eq!(
+        cmd.idempotency_key,
+        "abababababababababababababababababababababababababababababababab"
+    );
+
+    for retired in ["--write-config", "--recover-only"] {
+        let error = Args::try_parse_from(["iroha", "taira", "write-canary", retired])
+            .expect_err("retired write-canary flag must fail closed");
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+    }
 }
 #[test]
 fn taira_inrou_workspace_cli_requires_explicit_assets_and_output() {
@@ -903,6 +1004,8 @@ fn taira_inrou_canary_cli_requires_mode_and_parses_explicit_upgrade() {
         "/tmp/taira-inrou-stage",
         "--mode",
         "upgrade",
+        "--idempotency-key",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "--timeout-secs",
         "90",
         "--json",
@@ -916,6 +1019,10 @@ fn taira_inrou_canary_cli_requires_mode_and_parses_explicit_upgrade() {
         std::path::PathBuf::from("/tmp/taira-inrou-stage")
     );
     assert_eq!(cmd.mode, crate::taira::InrouCanaryMode::Upgrade);
+    assert_eq!(
+        cmd.idempotency_key,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
     assert_eq!(cmd.timeout_secs, 90);
     assert!(cmd.json);
 
@@ -927,6 +1034,42 @@ fn taira_inrou_canary_cli_requires_mode_and_parses_explicit_upgrade() {
         "/tmp/taira-inrou-stage",
     ])
     .expect_err("Inrou canary must require an explicit mutation mode");
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+}
+#[test]
+fn taira_inrou_check_is_distinct_and_requires_an_explicit_stage_mode() {
+    let args = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "inrou-check",
+        "--stage-dir",
+        "/tmp/taira-inrou-stage",
+        "--mode",
+        "deploy",
+        "--timeout-secs",
+        "45",
+        "--json",
+    ])
+    .expect("parse read-only Taira Inrou check args");
+    let Command::Taira(crate::taira::Command::InrouCheck(cmd)) = args.command else {
+        panic!("expected taira inrou-check command");
+    };
+    assert_eq!(
+        cmd.stage_dir,
+        std::path::PathBuf::from("/tmp/taira-inrou-stage")
+    );
+    assert_eq!(cmd.mode, crate::taira::InrouCanaryMode::Deploy);
+    assert_eq!(cmd.timeout_secs, 45);
+    assert!(cmd.json);
+
+    let error = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "inrou-check",
+        "--stage-dir",
+        "/tmp/taira-inrou-stage",
+    ])
+    .expect_err("Inrou check must never infer the retained stage mode");
     assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
 }
 #[test]
@@ -1002,6 +1145,8 @@ fn soracloud_service_model_hf_and_agent_parsers_are_namespaced() {
         "status",
         "--repo-id",
         "openai/gpt-oss",
+        "--revision",
+        "0123456789abcdef0123456789abcdef01234567",
         "--lease-term-ms",
         "60000",
     ])

@@ -48,6 +48,9 @@ public sealed partial class ToriiClientTests
     private static readonly string ExplorerNftOwnerAccountId = TestAccountId(0x60);
     private static readonly string ExplorerRwaOwnerAccountId = TestAccountId(0x61);
     private static readonly string UaidPortfolioAccountId = TestAccountId(0x4E);
+    private const string UaidPortfolioAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+    private static readonly string UaidPortfolioAssetId =
+        $"{UaidPortfolioAssetDefinitionId}#{UaidPortfolioAccountId}#dataspace:0";
     private static readonly string UaidBindingsMerchantAccountId = TestAccountId(0x4F);
     private static readonly string UaidBindingsIssuerAccountId = TestAccountId(0x50);
     private static readonly string UaidManifestAccountId = TestAccountId(0x51);
@@ -84,6 +87,7 @@ public sealed partial class ToriiClientTests
     private static readonly string VpnSpkiSha256Hex = string.Concat(Enumerable.Repeat("ab", 32));
     private const string VpnRelayIdHex =
         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+    private static readonly string VpnRelayMldsa65PublicKeyHex = new('a', 3904);
     private static readonly string VpnDescriptorCommitHex = string.Concat(Enumerable.Repeat("cd", 32));
     private static readonly string VpnRelayCertificateSha256Hex = string.Concat(Enumerable.Repeat("ef", 32));
     private static readonly string VpnDirectorySnapshotDigestHex = string.Concat(Enumerable.Repeat("42", 32));
@@ -773,10 +777,7 @@ public sealed partial class ToriiClientTests
             }
             """;
 
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(responseBody),
-        });
+        using var handler = new RecordingHandler(_ => JsonResponse(responseBody));
 
         using var client = CreateRuntimeAuthenticatedClient(handler);
         var capabilities = await client.GetNodeCapabilitiesAsync(cancellationToken: TestContext.Current.CancellationToken);
@@ -3460,9 +3461,13 @@ public sealed partial class ToriiClientTests
         AssertSnapshot(
             node => new ToriiExplorerInstructionJson { Payload = node },
             dto => dto.Payload);
-        AssertSnapshot(
-            node => new ToriiUaidManifestRecord { Manifest = node },
-            dto => dto.Manifest);
+        var manifestSource = UaidManifestRecordObject().Manifest;
+        var manifestDto = new ToriiUaidManifestRecord { Manifest = manifestSource };
+        manifestSource["issued_ms"] = 1;
+        Assert.Equal(1710000000000, manifestDto.Manifest["issued_ms"]!.GetValue<long>());
+        var manifestAccess = manifestDto.Manifest;
+        manifestAccess["issued_ms"] = 2;
+        Assert.Equal(1710000000000, manifestDto.Manifest["issued_ms"]!.GetValue<long>());
         AssertSnapshot(
             node => new ToriiIdentifierPolicySummary { InputEncryptionPublicParametersDecoded = node },
             dto => dto.InputEncryptionPublicParametersDecoded);
@@ -6698,6 +6703,7 @@ public sealed partial class ToriiClientTests
                   "flow_label_bits": 24,
                   "padding_budget_ms": 80,
                   "relay_id_hex": "{{VpnRelayIdHex}}",
+                  "relay_mldsa65_public_key_hex": "{{VpnRelayMldsa65PublicKeyHex}}",
                   "descriptor_commit_hex": "{{VpnDescriptorCommitHex}}",
                   "tls_server_name": "vpn.sora.org",
                   "relay_tls_spki_sha256_hex": "1111111111111111111111111111111111111111111111111111111111111111",
@@ -6718,7 +6724,35 @@ public sealed partial class ToriiClientTests
         Assert.Equal(VpnOperatorAccountId, profile.OperatorAccountId);
         Assert.Equal("1000000.25", profile.LeaseFee);
         Assert.Equal((ushort)80, profile.PaddingBudgetMilliseconds);
+        Assert.Equal(VpnRelayMldsa65PublicKeyHex, profile.RelayMldsa65PublicKeyHex);
         Assert.Equal("/v1/vpn/profile", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public void UnavailableVpnProfileRequiresExplicitEmptyTrustTuple()
+    {
+        var payload = VpnProfileResponseJsonObject(VpnSpkiSha256Hex);
+        payload["available"] = false;
+        payload["relay_endpoint"] = string.Empty;
+        foreach (var field in new[]
+        {
+            "relay_id_hex",
+            "relay_mldsa65_public_key_hex",
+            "descriptor_commit_hex",
+            "tls_server_name",
+            "relay_tls_spki_sha256_hex",
+            "relay_certificate_sha256_hex",
+            "directory_snapshot_digest_hex",
+        })
+        {
+            payload[field] = string.Empty;
+        }
+
+        var profile = JsonSerializer.Deserialize<ToriiVpnProfile>(payload.ToJsonString());
+
+        Assert.NotNull(profile);
+        Assert.False(profile.Available);
+        Assert.Equal(string.Empty, profile.RelayMldsa65PublicKeyHex);
     }
 
     [Theory]
@@ -6989,6 +7023,7 @@ public sealed partial class ToriiClientTests
                       "flow_label_bits": 24,
                       "padding_budget_ms": 80,
                       "relay_id_hex": "{{VpnRelayIdHex}}",
+                      "relay_mldsa65_public_key_hex": "{{VpnRelayMldsa65PublicKeyHex}}",
                       "descriptor_commit_hex": "{{VpnDescriptorCommitHex}}",
                       "tls_server_name": "vpn.sora.org",
                       "relay_tls_spki_sha256_hex": "7878787878787878787878787878787878787878787878787878787878787878",
@@ -7017,6 +7052,7 @@ public sealed partial class ToriiClientTests
         Assert.Equal(VpnOperatorAccountId, quote.OperatorAccountId);
         Assert.Equal("OpenVpnLeaseEscrow", quote.OpenLeaseInstruction.WireId);
         Assert.Equal("xor#universal.universal", quote.FeeAssetId);
+        Assert.Equal(VpnRelayMldsa65PublicKeyHex, quote.RelayMldsa65PublicKeyHex);
     }
 
     public static IEnumerable<object[]> InvalidVpnQuoteCreateRequests()
@@ -7098,6 +7134,7 @@ public sealed partial class ToriiClientTests
                       "flow_label_bits": 24,
                       "padding_budget_ms": 80,
                       "relay_id_hex": "{{VpnRelayIdHex}}",
+                      "relay_mldsa65_public_key_hex": "{{VpnRelayMldsa65PublicKeyHex}}",
                       "descriptor_commit_hex": "{{VpnDescriptorCommitHex}}",
                       "tls_server_name": "vpn.sora.org",
                       "relay_tls_spki_sha256_hex": "7878787878787878787878787878787878787878787878787878787878787878",
@@ -7136,6 +7173,7 @@ public sealed partial class ToriiClientTests
         Assert.Equal(quoteId, session.QuoteId);
         Assert.Equal(paymentTxHash, session.PaymentTransactionHash);
         Assert.Equal("1000000.25", session.LeaseFee);
+        Assert.Equal(VpnRelayMldsa65PublicKeyHex, session.RelayMldsa65PublicKeyHex);
         Assert.Equal(VpnHelperTicketHex, session.HelperTicketHex);
         Assert.Equal(1576, session.HelperTicketHex.Length);
     }
@@ -7227,6 +7265,7 @@ public sealed partial class ToriiClientTests
                       "flow_label_bits": 24,
                       "padding_budget_ms": 80,
                       "relay_id_hex": "{{VpnRelayIdHex}}",
+                      "relay_mldsa65_public_key_hex": "{{VpnRelayMldsa65PublicKeyHex}}",
                       "descriptor_commit_hex": "{{VpnDescriptorCommitHex}}",
                       "tls_server_name": "vpn.sora.org",
                       "relay_tls_spki_sha256_hex": "{{VpnSpkiSha256Hex}}",
@@ -7255,12 +7294,19 @@ public sealed partial class ToriiClientTests
         Assert.Equal(sessionId, active.SessionId);
         Assert.Equal(VpnAccountId, active.AccountId);
         Assert.Equal(quoteId, active.QuoteId);
+        Assert.Equal(VpnRelayMldsa65PublicKeyHex, active.RelayMldsa65PublicKeyHex);
     }
 
     public static IEnumerable<object[]> InvalidVpnResponses()
     {
         yield return new object[] { "profile", "relay_tls_spki_sha256_hex", " " + VpnSpkiSha256Hex, "surrounding whitespace" };
         yield return new object[] { "profile", "relay_tls_spki_sha256_hex", new string('A', 64), "lowercase" };
+        yield return new object[] { "profile", "relay_mldsa65_public_key_hex", new string('A', 3904), "lowercase" };
+        yield return new object[] { "profile", "relay_mldsa65_public_key_hex", new string('0', 3904), "all zero" };
+        yield return new object[] { "profile", "relay_mldsa65_public_key_hex", new string('a', 3902), "1952-byte hex string" };
+        yield return new object[] { "quote", "relay_mldsa65_public_key_hex", new string('A', 3904), "lowercase" };
+        yield return new object[] { "quote", "relay_mldsa65_public_key_hex", new string('0', 3904), "all zero" };
+        yield return new object[] { "quote", "relay_mldsa65_public_key_hex", new string('a', 3902), "1952-byte hex string" };
         yield return new object[] { "quote", "quote_id", new string('1', 63), "32-byte hex string" };
         yield return new object[] { "quote", "session_id_hex", "abc", "16-byte hex string" };
         yield return new object[] { "quote", "quote_id", new string('A', 64), "lowercase" };
@@ -7279,6 +7325,9 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex[..^2], "788-byte hex string" };
         yield return new object[] { "session-get", "payment_tx_hash", VpnPaymentTransactionHashHex[..32] + " " + VpnPaymentTransactionHashHex[32..], "whitespace" };
         yield return new object[] { "session-get", "payment_tx_hash", new string('A', 64), "lowercase" };
+        yield return new object[] { "session-get", "relay_mldsa65_public_key_hex", new string('A', 3904), "lowercase" };
+        yield return new object[] { "session-get", "relay_mldsa65_public_key_hex", new string('0', 3904), "all zero" };
+        yield return new object[] { "session-get", "relay_mldsa65_public_key_hex", new string('a', 3902), "1952-byte hex string" };
         yield return new object[] { "session-get", "relay_tls_spki_sha256_hex", "0x" + VpnSpkiSha256Hex, "32-byte hex string" };
         yield return new object[] { "receipt-submit", "lease_id_hex", new string('1', 63), "32-byte hex string" };
         yield return new object[] { "receipt-submit", "lease_id_hex", new string('A', 64), "lowercase" };
@@ -7371,10 +7420,13 @@ public sealed partial class ToriiClientTests
     public static IEnumerable<object[]> InvalidVpnRequiredStringResponses()
     {
         yield return new object[] { "profile", "relay_endpoint", VpnProfileRawResponseJson("relay_endpoint", null), "must not be null" };
+        yield return new object[] { "profile", "relay_mldsa65_public_key_hex", RemoveTopLevelJsonField(VpnProfileRawResponseJson("relay_mldsa65_public_key_hex", VpnRelayMldsa65PublicKeyHex), "relay_mldsa65_public_key_hex"), "must not be null" };
         yield return new object[] { "profile", "supported_exit_classes[0]", VpnProfileRawResponseJson("supported_exit_classes[0]", null), "must not be null" };
         yield return new object[] { "quote", "quote_id", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("quote_id", VpnQuoteIdHex), "quote_id"), "must not be null" };
+        yield return new object[] { "quote", "relay_mldsa65_public_key_hex", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("relay_mldsa65_public_key_hex", VpnRelayMldsa65PublicKeyHex), "relay_mldsa65_public_key_hex"), "must not be null" };
         yield return new object[] { "quote", "metering_public_key_hex", VpnQuoteRawResponseJson("metering_public_key_hex", null), "must not be null" };
         yield return new object[] { "session-get", "session_id", VpnSessionRawResponseJson("session_id", null), "must not be null" };
+        yield return new object[] { "session-get", "relay_mldsa65_public_key_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("relay_mldsa65_public_key_hex", VpnRelayMldsa65PublicKeyHex), "relay_mldsa65_public_key_hex"), "must not be null" };
         yield return new object[] { "session-get", "helper_ticket_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex), "helper_ticket_hex"), "must not be null" };
         yield return new object[] { "receipt-submit", "status", VpnReceiptRawResponseJson("status", null), "must not be null" };
         yield return new object[] { "receipt-submit", "receipt_source", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("receipt_source", "relay"), "receipt_source"), "must not be null" };
@@ -7976,16 +8028,19 @@ public sealed partial class ToriiClientTests
         yield return new object?[] { "profile", "LeaseSeconds", 0UL };
         yield return new object?[] { "profile", "DnsPushIntervalSeconds", 29UL };
         yield return new object?[] { "profile", "RelayTlsSpkiSha256Hex", "0x" + VpnSpkiSha256Hex };
+        yield return new object?[] { "profile", "RelayMldsa65PublicKeyHex", new string('A', 3904) };
         yield return new object?[] { "tx-instruction", "WireId", " OpenVpnLeaseEscrow" };
         yield return new object?[] { "tx-instruction", "PayloadHex", "CAFE" };
         yield return new object?[] { "quote", "QuoteId", new string('1', 63) };
         yield return new object?[] { "quote", "SessionIdHex", "abc" };
         yield return new object?[] { "quote", "AccountId", "merchant@sora" };
+        yield return new object?[] { "quote", "RelayMldsa65PublicKeyHex", new string('0', 3904) };
         yield return new object?[] { "quote", "MeteringPublicKeyHex", new string('g', 64) };
         yield return new object?[] { "quote", "OpenLeaseInstruction.PayloadHex", "CAFE" };
         yield return new object?[] { "session", "SessionId", "session-1" };
         yield return new object?[] { "session", "SessionId", new string('a', 64) };
         yield return new object?[] { "session", "ConnectedAtMilliseconds", 0UL };
+        yield return new object?[] { "session", "RelayMldsa65PublicKeyHex", new string('a', 3902) };
         yield return new object?[] { "session", "RoutePushes[0]", "10.0.0.0 /8" };
         yield return new object?[] { "session", "HelperTicketHex", "0x" + VpnHelperTicketHex };
         yield return new object?[] { "session", "HelperTicketHex", VpnHelperTicketHex.ToUpperInvariant() };
@@ -8894,7 +8949,7 @@ public sealed partial class ToriiClientTests
             Assert.Equal("application/x-norito", request.Content!.Headers.ContentType!.MediaType);
             Assert.Equal("application/json", request.Headers.Accept.Single().MediaType);
             Assert.Equal(
-                transaction.NoritoBytes,
+                transaction.VersionedNoritoBytes,
                 request.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult());
             return JsonResponse(
                 $$"""{"status":"submitted","tx_hash_hex":"{{transactionHashHex}}","manifest_digest_hex":"{{manifestDigestHex}}"}""",
@@ -11154,6 +11209,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     [InlineData("""{"payload":{"opaque_id":" opaque-1"}}""", "identifier resolve response.payload.opaque_id", "whitespace")]
     [InlineData("""{"payload":{"receipt_hash":"receipt-1 "}}""", "identifier resolve response.payload.receipt_hash", "whitespace")]
     [InlineData("""{"payload":{"uaid":" uaid:0123456789abcdef"}}""", "identifier resolve response.payload.uaid", "whitespace")]
+    [InlineData("""{"payload":{"uaid":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}""", "identifier resolve response.payload.uaid", "canonical")]
+    [InlineData("""{"payload":{"uaid":"UAID:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"}}""", "identifier resolve response.payload.uaid", "canonical")]
+    [InlineData("""{"payload":{"uaid":"uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdee"}}""", "identifier resolve response.payload.uaid", "canonical")]
     [InlineData("""{"payload":{"execution":{"program_id":" identifier_lookup_retail"}}}""", "identifier resolve response.payload.execution.program_id", "whitespace")]
     [InlineData("""{"payload":{"execution":{"program_id":"identifier_lookup retail"}}}""", "identifier resolve response.payload.execution.program_id", "whitespace")]
     [InlineData("""{"payload":{"execution":{"program_digest":"program-digest "}}}""", "identifier resolve response.payload.execution.program_digest", "whitespace")]
@@ -11364,7 +11422,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task GetUaidPortfolioAsyncCanonicalizesLiteralAndAddsAssetIdQuery()
+    public async Task GetUaidPortfolioAsyncPreservesExactLiteralAndAddsAssetIdQuery()
     {
         const string uaidHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -11373,7 +11431,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent($$"""
                 {
                   "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                  "totals": { "accounts": 2, "positions": 3 },
+                  "totals": { "accounts": 1, "positions": 1 },
                   "dataspaces": [
                     {
                       "dataspace_id": 0,
@@ -11384,8 +11442,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                           "label": null,
                           "assets": [
                             {
-                              "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-                              "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+                              "asset_id": "{{UaidPortfolioAssetId}}",
+                              "asset_definition_id": "{{UaidPortfolioAssetDefinitionId}}",
                               "quantity": "500"
                             }
                           ]
@@ -11399,23 +11457,23 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var response = await client.GetUaidPortfolioAsync(
-            $"UAID:{uaidHex.ToUpperInvariant()}",
-            new ToriiUaidPortfolioQuery { AssetId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" }, cancellationToken: TestContext.Current.CancellationToken);
+            $"uaid:{uaidHex}",
+            new ToriiUaidPortfolioQuery { AssetId = UaidPortfolioAssetId }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal($"uaid:{uaidHex}", response.Uaid);
-        Assert.Equal(2, response.Totals.Accounts);
+        Assert.Equal(1UL, response.Totals.Accounts);
         var dataspaces = Assert.IsType<ToriiUaidPortfolioDataspace[]>(response.Dataspaces);
         var accounts = Assert.IsType<ToriiUaidPortfolioAccount[]>(dataspaces[0].Accounts);
         var assets = Assert.IsType<ToriiUaidPortfolioAsset[]>(accounts[0].Assets);
         Assert.Equal(UaidPortfolioAccountId, accounts[0].AccountId);
-        Assert.Equal("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", assets[0].AssetId);
+        Assert.Equal(UaidPortfolioAssetId, assets[0].AssetId);
         dataspaces[0] = UaidPortfolioDataspaceObject() with { DataspaceAlias = "mutated" };
         accounts[0] = UaidPortfolioAccountObject() with { Label = "mutated" };
         assets[0] = UaidPortfolioAssetObject() with { Quantity = "999" };
         Assert.Equal(UaidPortfolioAccountId, response.Dataspaces[0].Accounts[0].AccountId);
-        Assert.Equal("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", response.Dataspaces[0].Accounts[0].Assets[0].AssetId);
+        Assert.Equal(UaidPortfolioAssetId, response.Dataspaces[0].Accounts[0].Assets[0].AssetId);
         Assert.Contains("/v1/accounts/uaid%3A0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/portfolio", handler.LastRequest!.RequestUri!.AbsoluteUri);
-        Assert.Equal("asset_id=62Fk4FPcMuLvW5QjDGNF2a4jAmjM", handler.LastRequest.RequestUri.Query.TrimStart('?'));
+        Assert.Equal($"asset_id={Uri.EscapeDataString(UaidPortfolioAssetId)}", handler.LastRequest.RequestUri.Query.TrimStart('?'));
     }
 
     [Fact]
@@ -11429,7 +11487,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         ToriiUaidPortfolioDataspace[] portfolioDataspaces = [portfolioDataspace];
         var portfolio = UaidPortfolioResponseObject() with { Dataspaces = portfolioDataspaces };
 
-        string[] bindingAccounts = [UaidBindingsMerchantAccountId, UaidBindingsIssuerAccountId];
+        string[] bindingAccounts = [UaidBindingsMerchantAccountId];
         var bindingDataspace = UaidBindingsDataspaceObject() with { Accounts = bindingAccounts };
         ToriiUaidBindingsDataspace[] bindingDataspaces = [bindingDataspace];
         var bindings = UaidBindingsResponseObject() with { Dataspaces = bindingDataspaces };
@@ -11445,7 +11503,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         bindingAccounts[0] = UaidBindingsIssuerAccountId;
         bindingDataspaces[0] = UaidBindingsDataspaceObject() with { DataspaceAlias = "mutated" };
         manifestAccounts[0] = UaidBindingsIssuerAccountId;
-        manifests[0] = UaidManifestRecordObject() with { Status = "Inactive" };
+        manifests[0] = UaidManifestRecordObject() with { Status = ToriiUaidManifestStatus.Pending };
 
         AssertDetachedObjectList(() => portfolioAccount.Assets, asset, UaidPortfolioAssetObject() with { Quantity = "999" });
         AssertDetachedObjectList(() => portfolioDataspace.Accounts, portfolioAccount, UaidPortfolioAccountObject() with { Label = "mutated" });
@@ -11453,7 +11511,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         AssertDetachedStringList(() => bindingDataspace.Accounts, UaidBindingsMerchantAccountId, UaidBindingsIssuerAccountId);
         AssertDetachedObjectList(() => bindings.Dataspaces, bindingDataspace, UaidBindingsDataspaceObject() with { DataspaceAlias = "mutated" });
         AssertDetachedStringList(() => manifest.Accounts, UaidManifestAccountId, UaidBindingsIssuerAccountId);
-        AssertDetachedObjectList(() => manifestResponse.Manifests, manifest, UaidManifestRecordObject() with { Status = "Inactive" });
+        AssertDetachedObjectList(
+            () => manifestResponse.Manifests,
+            manifest,
+            UaidManifestRecordObject() with { Status = ToriiUaidManifestStatus.Pending });
 
         static void AssertDetachedStringList(Func<IReadOnlyList<string>> getter, string expectedFirst, string replacementFirst)
         {
@@ -11486,7 +11547,19 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object?[] { "uaid", UaidPortfolioResponseJson("uaid", null), "must not be null" };
         yield return new object?[] { "totals", UaidPortfolioResponseJson("totals", null), "must not be null" };
         yield return new object?[] { "totals.accounts", RemoveNestedJsonField(UaidPortfolioResponseJson("totals.accounts", 2), "totals", "accounts"), "must not be null" };
-        yield return new object?[] { "totals.accounts", UaidPortfolioResponseJson("totals.accounts", -1L), "non-negative" };
+        yield return new object?[] { "totals.accounts", UaidPortfolioResponseJson("totals.accounts", -1L), "unsigned integer" };
+        yield return new object?[]
+        {
+            "totals",
+            UaidPortfolioResponseJson("totals.accounts", 2),
+            "match the portfolio tree",
+        };
+        yield return new object?[]
+        {
+            "totals",
+            UaidPortfolioResponseJson("totals.positions", 2),
+            "match the portfolio tree",
+        };
         yield return new object?[] { "totals.positions", RemoveNestedJsonField(UaidPortfolioResponseJson("totals.positions", 3), "totals", "positions"), "must not be null" };
         yield return new object?[] { "dataspaces", UaidPortfolioResponseJson("dataspaces", null), "must not be null" };
         yield return new object?[] { "dataspaces[0]", UaidPortfolioResponseJson("dataspaces[0]", null), "must not be null" };
@@ -11503,13 +11576,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             "dataspaces[0].dataspace_id",
             UaidPortfolioResponseJson("dataspaces[0].dataspace_id", -1L),
-            "non-negative",
-        };
-        yield return new object?[]
-        {
-            "dataspaces[0].dataspace_alias",
-            UaidPortfolioResponseJson("dataspaces[0].dataspace_alias", " universal"),
-            "surrounding whitespace",
+            "unsigned integer",
         };
         yield return new object?[]
         {
@@ -11555,12 +11622,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
         yield return new object?[]
         {
-            "dataspaces[0].accounts[0].label",
-            UaidPortfolioResponseJson("dataspaces[0].accounts[0].label", ""),
-            "non-empty",
-        };
-        yield return new object?[]
-        {
             "dataspaces[0].accounts[0].assets",
             UaidPortfolioResponseJson("dataspaces[0].accounts[0].assets", null),
             "must not be null",
@@ -11585,6 +11646,30 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
         yield return new object?[]
         {
+            "dataspaces[0].accounts[0].assets[0].asset_id",
+            UaidPortfolioResponseJson(
+                "dataspaces[0].accounts[0].assets[0].asset_id",
+                UaidPortfolioAssetDefinitionId),
+            "canonical public asset id",
+        };
+        yield return new object?[]
+        {
+            "dataspaces[0].accounts[0].assets[0].asset_id",
+            UaidPortfolioResponseJson(
+                "dataspaces[0].accounts[0].assets[0].asset_id",
+                $"{UaidPortfolioAssetDefinitionId}#{UaidBindingsMerchantAccountId}#dataspace:0"),
+            "match its account and dataspace",
+        };
+        yield return new object?[]
+        {
+            "dataspaces[0].accounts[0].assets[0].asset_id",
+            UaidPortfolioResponseJson(
+                "dataspaces[0].accounts[0].assets[0].asset_id",
+                $"{UaidPortfolioAssetDefinitionId}#{UaidPortfolioAccountId}#dataspace:1"),
+            "match its account and dataspace",
+        };
+        yield return new object?[]
+        {
             "dataspaces[0].accounts[0].assets[0].asset_definition_id",
             UaidPortfolioResponseJson("dataspaces[0].accounts[0].assets[0].asset_definition_id", null),
             "must not be null",
@@ -11594,6 +11679,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             "dataspaces[0].accounts[0].assets[0].asset_definition_id",
             UaidPortfolioResponseJson("dataspaces[0].accounts[0].assets[0].asset_definition_id", "rose\u0001#wonderland"),
             "control characters",
+        };
+        yield return new object?[]
+        {
+            "dataspaces[0].accounts[0].assets[0].asset_id",
+            UaidPortfolioResponseJson(
+                "dataspaces[0].accounts[0].assets[0].asset_definition_id",
+                "61CtjvNd9T3THAR65GsMVHr82Bjc"),
+            "match",
         };
         yield return new object?[]
         {
@@ -11634,7 +11727,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task GetUaidBindingsAsyncCanonicalizesLiteralAndDeserializesDataspaces()
+    public async Task GetUaidBindingsAsyncPreservesExactLiteralAndDeserializesDataspaces()
     {
         const string uaidHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -11647,7 +11740,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                     {
                       "dataspace_id": 42,
                       "dataspace_alias": "payments",
-                      "accounts": ["{{UaidBindingsMerchantAccountId}}", "{{UaidBindingsIssuerAccountId}}"]
+                      "accounts": ["{{UaidBindingsMerchantAccountId}}"]
                     }
                   ]
                 }
@@ -11655,13 +11748,13 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.GetUaidBindingsAsync(uaidHex.ToUpperInvariant(), cancellationToken: TestContext.Current.CancellationToken);
+        var response = await client.GetUaidBindingsAsync($"uaid:{uaidHex}", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal($"uaid:{uaidHex}", response.Uaid);
         var dataspaces = Assert.IsType<ToriiUaidBindingsDataspace[]>(response.Dataspaces);
         Assert.Single(dataspaces);
         var accounts = Assert.IsType<string[]>(dataspaces[0].Accounts);
-        Assert.Equal(42, dataspaces[0].DataspaceId);
+        Assert.Equal(42UL, dataspaces[0].DataspaceId);
         Assert.Equal("payments", dataspaces[0].DataspaceAlias);
         Assert.Equal(UaidBindingsMerchantAccountId, accounts[0]);
         dataspaces[0] = UaidBindingsDataspaceObject() with { DataspaceAlias = "mutated" };
@@ -11693,13 +11786,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             "dataspaces[0].dataspace_id",
             UaidBindingsResponseJson("dataspaces[0].dataspace_id", -1L),
-            "non-negative",
-        };
-        yield return new object?[]
-        {
-            "dataspaces[0].dataspace_alias",
-            UaidBindingsResponseJson("dataspaces[0].dataspace_alias", " payments"),
-            "surrounding whitespace",
+            "unsigned integer",
         };
         yield return new object?[]
         {
@@ -11737,6 +11824,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             UaidBindingsResponseJson("dataspaces[0].accounts[0]", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"),
             "canonical I105",
         };
+        yield return new object?[]
+        {
+            "dataspaces[0].accounts",
+            UaidBindingsResponseJson(
+                "dataspaces[0].accounts",
+                new JsonArray(UaidBindingsMerchantAccountId, UaidBindingsIssuerAccountId)),
+            "at most one universal account",
+        };
     }
 
     [Theory]
@@ -11768,6 +11863,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 {
                   "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                   "total": 1,
+                  "has_more": false,
+                  "count_mode": "exact",
                   "manifests": [
                     {
                       "dataspace_id": 42,
@@ -11776,12 +11873,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                       "status": "Active",
                       "lifecycle": {
                         "activated_epoch": 121,
-                        "expired_epoch": 240,
+                        "expired_epoch": null,
                         "revocation": null
                       },
                       "accounts": ["{{UaidManifestAccountId}}"],
                       "manifest": {
-                        "version": "V1",
+                        "version": 1,
                         "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                         "dataspace": 42,
                         "issued_ms": 1710000000000,
@@ -11797,32 +11894,35 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var response = await client.GetUaidManifestsAsync(
-            $"UAID:{uaidHex.ToUpperInvariant()}",
+            $"uaid:{uaidHex}",
             new ToriiUaidManifestQuery
             {
                 DataspaceId = 42,
                 Status = ToriiUaidManifestStatusFilter.Inactive,
                 Limit = 5,
                 Offset = 2,
+                CountMode = ToriiUaidManifestCountMode.Exact,
             }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal($"uaid:{uaidHex}", response.Uaid);
-        Assert.Equal(1, response.Total);
+        Assert.Equal(1UL, response.Total);
         var manifests = Assert.IsType<ToriiUaidManifestRecord[]>(response.Manifests);
         Assert.Single(manifests);
         var accounts = Assert.IsType<string[]>(manifests[0].Accounts);
         Assert.Equal(UaidManifestHashHex, manifests[0].ManifestHash);
-        Assert.Equal("Active", manifests[0].Status);
+        Assert.Equal(ToriiUaidManifestStatus.Active, manifests[0].Status);
         Assert.Equal(UaidManifestAccountId, accounts[0]);
-        Assert.Equal(121, manifests[0].Lifecycle.ActivatedEpoch);
+        Assert.Equal(121UL, manifests[0].Lifecycle.ActivatedEpoch);
         Assert.NotNull(manifests[0].Manifest);
         Assert.Equal(42, manifests[0].Manifest!["dataspace"]!.GetValue<int>());
-        manifests[0] = UaidManifestRecordObject() with { Status = "Inactive" };
+        manifests[0] = UaidManifestRecordObject() with { Status = ToriiUaidManifestStatus.Pending };
         accounts[0] = UaidBindingsIssuerAccountId;
-        Assert.Equal("Active", response.Manifests[0].Status);
+        Assert.Equal(ToriiUaidManifestStatus.Active, response.Manifests[0].Status);
         Assert.Equal(UaidManifestAccountId, response.Manifests[0].Accounts[0]);
         Assert.Contains("/v1/space-directory/uaids/uaid%3A0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/manifests", handler.LastRequest!.RequestUri!.AbsoluteUri);
-        Assert.Equal("limit=5&offset=2&dataspace=42&status=inactive", handler.LastRequest.RequestUri.Query.TrimStart('?'));
+        Assert.Equal(
+            "dataspace=42&status=inactive&limit=5&offset=2&count_mode=exact",
+            handler.LastRequest.RequestUri.Query.TrimStart('?'));
     }
 
     public static IEnumerable<object?[]> InvalidUaidManifestResponses()
@@ -11844,7 +11944,13 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             UaidManifestsResponseJson("uaid", $"uaid:{uaidHex} "),
             "surrounding whitespace",
         };
-        yield return new object?[] { "total", UaidManifestsResponseJson("total", -1L), "non-negative" };
+        yield return new object?[] { "total", UaidManifestsResponseJson("total", -1L), "unsigned integer" };
+        yield return new object?[]
+        {
+            "total",
+            UaidManifestsResponseJson("total", 0),
+            "smaller than the page",
+        };
         yield return new object?[] { "manifests", UaidManifestsResponseJson("manifests", null), "must not be null" };
         yield return new object?[]
         {
@@ -11865,13 +11971,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             "manifests[0].dataspace_id",
             UaidManifestsResponseJson("manifests[0].dataspace_id", -1L),
-            "non-negative",
-        };
-        yield return new object?[]
-        {
-            "manifests[0].dataspace_alias",
-            UaidManifestsResponseJson("manifests[0].dataspace_alias", " payments"),
-            "surrounding whitespace",
+            "unsigned integer",
         };
         yield return new object?[]
         {
@@ -11921,7 +12021,13 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             "manifests[0].status",
             UaidManifestsResponseJson("manifests[0].status", ""),
-            "non-empty",
+            "unknown manifest status",
+        };
+        yield return new object?[]
+        {
+            "manifests[0].status",
+            UaidManifestsResponseJson("manifests[0].status", "Active"),
+            "match",
         };
         yield return new object?[]
         {
@@ -11933,7 +12039,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             "manifests[0].lifecycle.activated_epoch",
             UaidManifestsResponseJson("manifests[0].lifecycle.activated_epoch", -1L),
-            "non-negative",
+            "unsigned integer",
         };
         yield return new object?[]
         {
@@ -11947,13 +12053,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             "manifests[0].lifecycle.revocation.epoch",
             UaidManifestsResponseJson("manifests[0].lifecycle.revocation.epoch", -1L),
-            "non-negative",
-        };
-        yield return new object?[]
-        {
-            "manifests[0].lifecycle.revocation.reason",
-            UaidManifestsResponseJson("manifests[0].lifecycle.revocation.reason", " rotated"),
-            "surrounding whitespace",
+            "unsigned integer",
         };
         yield return new object?[]
         {
@@ -11993,6 +12093,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
         yield return new object?[]
         {
+            "manifests[0].accounts",
+            UaidManifestsResponseJson(
+                "manifests[0].accounts",
+                new JsonArray(UaidManifestAccountId, UaidBindingsIssuerAccountId)),
+            "at most one universal account",
+        };
+        yield return new object?[]
+        {
             "manifests[0].manifest.version",
             UaidManifestsResponseDuplicateManifestPropertyJson("version"),
             "must not appear more than once",
@@ -12019,6 +12127,24 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Contains("/manifests", handler.LastRequest.RequestUri.AbsoluteUri);
     }
 
+    [Fact]
+    public void UaidFreeTextFieldsPreserveExactStringBytesWithoutTrimming()
+    {
+        var portfolio = JsonSerializer.Deserialize<ToriiUaidPortfolioResponse>(
+            UaidPortfolioResponseJson("dataspaces[0].accounts[0].label", " holder "))!;
+        var portfolioAlias = JsonSerializer.Deserialize<ToriiUaidPortfolioResponse>(
+            UaidPortfolioResponseJson("dataspaces[0].dataspace_alias", " universal "))!;
+        var bindings = JsonSerializer.Deserialize<ToriiUaidBindingsResponse>(
+            UaidBindingsResponseJson("dataspaces[0].dataspace_alias", " payments "))!;
+        var manifests = JsonSerializer.Deserialize<ToriiUaidManifestsResponse>(
+            UaidManifestsResponseJson("manifests[0].lifecycle.revocation.reason", " rotated "))!;
+
+        Assert.Equal(" holder ", portfolio.Dataspaces[0].Accounts[0].Label);
+        Assert.Equal(" universal ", portfolioAlias.Dataspaces[0].DataspaceAlias);
+        Assert.Equal(" payments ", bindings.Dataspaces[0].DataspaceAlias);
+        Assert.Equal(" rotated ", manifests.Manifests[0].Lifecycle.Revocation!.Reason);
+    }
+
     public static IEnumerable<object[]> InvalidRawUaidPortfolioPayloads()
     {
         const string uaidHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -12026,20 +12152,22 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "totals", "UAID portfolio totals", "null", "must not be null" };
         yield return new object[] { "totals", "UAID portfolio totals", "[]", "object" };
         yield return new object[] { "totals", "accounts", UaidPortfolioTotalsDuplicatePropertyJson("accounts"), "must not appear more than once" };
-        yield return new object[] { "totals", "UAID portfolio totals.audit.nonce", UaidPortfolioTotalsUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "totals", "UAID portfolio totals", UaidPortfolioTotalsUnknownExtensionDuplicateJson(), "unknown field" };
         yield return new object[] { "totals", "accounts", RemoveTopLevelJsonField(UaidPortfolioTotalsJson("accounts", 2), "accounts"), "must not be null" };
-        yield return new object[] { "totals", "accounts", UaidPortfolioTotalsJson("accounts", "2"), "integer" };
+        yield return new object[] { "totals", "accounts", UaidPortfolioTotalsJson("accounts", "2"), "unsigned integer" };
         yield return new object[] { "totals", "positions", RemoveTopLevelJsonField(UaidPortfolioTotalsJson("positions", 3), "positions"), "must not be null" };
-        yield return new object[] { "totals", "positions", UaidPortfolioTotalsJson("positions", -1L), "non-negative" };
+        yield return new object[] { "totals", "positions", UaidPortfolioTotalsJson("positions", -1L), "unsigned integer" };
         yield return new object[] { "asset", "UAID portfolio asset", "null", "must not be null" };
         yield return new object[] { "asset", "UAID portfolio asset", "[]", "object" };
         yield return new object[] { "asset", "quantity", UaidPortfolioAssetDuplicatePropertyJson("quantity"), "must not appear more than once" };
-        yield return new object[] { "asset", "UAID portfolio asset.audit.nonce", UaidPortfolioAssetUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "asset", "asset_id", RemoveTopLevelJsonField(UaidPortfolioAssetJson("asset_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), "asset_id"), "must not be null" };
+        yield return new object[] { "asset", "UAID portfolio asset", UaidPortfolioAssetUnknownExtensionDuplicateJson(), "unknown field" };
+        yield return new object[] { "asset", "asset_id", RemoveTopLevelJsonField(UaidPortfolioAssetJson("asset_id", UaidPortfolioAssetId), "asset_id"), "must not be null" };
         yield return new object[] { "asset", "asset_id", UaidPortfolioAssetJson("asset_id", null), "must not be null" };
-        yield return new object[] { "asset", "asset_definition_id", RemoveTopLevelJsonField(UaidPortfolioAssetJson("asset_definition_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), "asset_definition_id"), "must not be null" };
+        yield return new object[] { "asset", "asset_id", UaidPortfolioAssetJson("asset_id", UaidPortfolioAssetDefinitionId), "canonical public asset id" };
+        yield return new object[] { "asset", "asset_definition_id", RemoveTopLevelJsonField(UaidPortfolioAssetJson("asset_definition_id", UaidPortfolioAssetDefinitionId), "asset_definition_id"), "must not be null" };
         yield return new object[] { "asset", "asset_definition_id", UaidPortfolioAssetJson("asset_definition_id", null), "must not be null" };
         yield return new object[] { "asset", "asset_definition_id", UaidPortfolioAssetJson("asset_definition_id", 1), "string" };
+        yield return new object[] { "asset", "asset_id", UaidPortfolioAssetJson("asset_definition_id", "61CtjvNd9T3THAR65GsMVHr82Bjc"), "match" };
         yield return new object[] { "asset", "quantity", RemoveTopLevelJsonField(UaidPortfolioAssetJson("quantity", "500"), "quantity"), "must not be null" };
         yield return new object[] { "asset", "quantity", UaidPortfolioAssetJson("quantity", null), "must not be null" };
         yield return new object[] { "asset", "quantity", UaidPortfolioAssetJson("quantity", "+1"), "canonical non-negative numeric" };
@@ -12047,33 +12175,31 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "account", "UAID portfolio account", "null", "must not be null" };
         yield return new object[] { "account", "UAID portfolio account", "[]", "object" };
         yield return new object[] { "account", "assets", UaidPortfolioAccountDuplicatePropertyJson("assets"), "must not appear more than once" };
-        yield return new object[] { "account", "UAID portfolio account.audit.nonce", UaidPortfolioAccountUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "account", "UAID portfolio account", UaidPortfolioAccountUnknownExtensionDuplicateJson(), "unknown field" };
         yield return new object[] { "account", "account_id", RemoveTopLevelJsonField(UaidPortfolioAccountJson("account_id", "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), "account_id"), "must not be null" };
         yield return new object[] { "account", "account_id", UaidPortfolioAccountJson("account_id", null), "must not be null" };
         yield return new object[] { "account", "account_id", UaidPortfolioAccountJson("account_id", 1), "string" };
         yield return new object[] { "account", "account_id", UaidPortfolioAccountJson("account_id", "merchant@sora"), "canonical I105" };
         yield return new object[] { "account", "account_id", UaidPortfolioAccountJson("account_id", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "canonical I105" };
         yield return new object[] { "account", "account_id", UaidPortfolioAccountJson("account_id", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"), "canonical I105" };
-        yield return new object[] { "account", "label", UaidPortfolioAccountJson("label", ""), "non-empty" };
         yield return new object[] { "account", "assets", UaidPortfolioAccountJson("assets", null), "must not be null" };
         yield return new object[] { "account", "assets", UaidPortfolioAccountJson("assets", 1), "array" };
         yield return new object[] { "account", "assets[0]", UaidPortfolioAccountJson("assets[0]", null), "must not be null" };
         yield return new object[] { "dataspace", "UAID portfolio dataspace", "null", "must not be null" };
         yield return new object[] { "dataspace", "UAID portfolio dataspace", "[]", "object" };
         yield return new object[] { "dataspace", "accounts", UaidPortfolioDataspaceDuplicatePropertyJson("accounts"), "must not appear more than once" };
-        yield return new object[] { "dataspace", "UAID portfolio dataspace.audit.nonce", UaidPortfolioDataspaceUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "dataspace", "UAID portfolio dataspace", UaidPortfolioDataspaceUnknownExtensionDuplicateJson(), "unknown field" };
         yield return new object[] { "dataspace", "dataspace_id", RemoveTopLevelJsonField(UaidPortfolioDataspaceJson("dataspace_id", 0), "dataspace_id"), "must not be null" };
-        yield return new object[] { "dataspace", "dataspace_id", UaidPortfolioDataspaceJson("dataspace_id", "0"), "integer" };
-        yield return new object[] { "dataspace", "dataspace_alias", UaidPortfolioDataspaceJson("dataspace_alias", " universal"), "surrounding whitespace" };
+        yield return new object[] { "dataspace", "dataspace_id", UaidPortfolioDataspaceJson("dataspace_id", "0"), "unsigned integer" };
         yield return new object[] { "dataspace", "accounts", UaidPortfolioDataspaceJson("accounts", null), "must not be null" };
         yield return new object[] { "dataspace", "accounts", UaidPortfolioDataspaceJson("accounts", 1), "array" };
         yield return new object[] { "dataspace", "accounts[0]", UaidPortfolioDataspaceJson("accounts[0]", null), "must not be null" };
         yield return new object[] { "response", "UAID portfolio response", "null", "must not be null" };
         yield return new object[] { "response", "UAID portfolio response", "[]", "object" };
         yield return new object[] { "response", "dataspaces", UaidPortfolioResponseDuplicatePropertyJson("dataspaces"), "must not appear more than once" };
-        yield return new object[] { "response", "UAID portfolio response.audit.nonce", UaidPortfolioResponseUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "response", "UAID portfolio response.totals.audit.nonce", UaidPortfolioResponseTotalsUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "response", "UAID portfolio response.dataspaces[0].accounts[0].assets[0].audit.nonce", UaidPortfolioResponseAssetUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "response", "UAID portfolio response", UaidPortfolioResponseUnknownExtensionDuplicateJson(), "unknown field" };
+        yield return new object[] { "response", "UAID portfolio response.totals", UaidPortfolioResponseTotalsUnknownExtensionDuplicateJson(), "unknown field" };
+        yield return new object[] { "response", "UAID portfolio response.dataspaces[0].accounts[0].assets[0]", UaidPortfolioResponseAssetUnknownExtensionDuplicateJson(), "unknown field" };
         yield return new object[] { "response", "uaid", RemoveTopLevelJsonField(UaidPortfolioResponseJson("uaid", $"uaid:{uaidHex}"), "uaid"), "must not be null" };
         yield return new object[] { "response", "uaid", UaidPortfolioResponseJson("uaid", null), "must not be null" };
         yield return new object[] { "response", "uaid", UaidPortfolioResponseJson("uaid", uaidHex), "canonical" };
@@ -12081,6 +12207,20 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "response", "totals", UaidPortfolioResponseJson("totals", 1), "object" };
         yield return new object[] { "response", "dataspaces", UaidPortfolioResponseJson("dataspaces", 1), "array" };
         yield return new object[] { "response", "dataspaces[0].dataspace_id", RemoveFirstArrayItemObjectJsonField(UaidPortfolioResponseJson("dataspaces[0].dataspace_id", 0), "dataspaces", "dataspace_id"), "must not be null" };
+    }
+
+    [Fact]
+    public void RawUaidUnsignedCountersAcceptFullUInt64Range()
+    {
+        var totals = JsonSerializer.Deserialize<ToriiUaidPortfolioTotals>(
+            $$"""{"accounts":{{ulong.MaxValue}},"positions":0}""");
+        var revocation = JsonSerializer.Deserialize<ToriiUaidManifestRevocation>(
+            $$"""{"epoch":{{ulong.MaxValue}},"reason":null}""");
+
+        Assert.NotNull(totals);
+        Assert.Equal(ulong.MaxValue, totals!.Accounts);
+        Assert.NotNull(revocation);
+        Assert.Equal(ulong.MaxValue, revocation!.Epoch);
     }
 
     [Theory]
@@ -12104,9 +12244,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "dataspace", "UAID bindings dataspace", "null", "must not be null" };
         yield return new object[] { "dataspace", "UAID bindings dataspace", "[]", "object" };
         yield return new object[] { "dataspace", "accounts", UaidBindingsDataspaceDuplicatePropertyJson("accounts"), "must not appear more than once" };
-        yield return new object[] { "dataspace", "UAID bindings dataspace.audit.nonce", UaidBindingsDataspaceUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "dataspace", "UAID bindings dataspace", UaidBindingsDataspaceUnknownExtensionDuplicateJson(), "unknown field" };
         yield return new object[] { "dataspace", "dataspace_id", RemoveTopLevelJsonField(UaidBindingsDataspaceJson("dataspace_id", 42), "dataspace_id"), "must not be null" };
-        yield return new object[] { "dataspace", "dataspace_id", UaidBindingsDataspaceJson("dataspace_id", "42"), "integer" };
+        yield return new object[] { "dataspace", "dataspace_id", UaidBindingsDataspaceJson("dataspace_id", "42"), "unsigned integer" };
         yield return new object[] { "dataspace", "accounts", UaidBindingsDataspaceJson("accounts", null), "must not be null" };
         yield return new object[] { "dataspace", "accounts", UaidBindingsDataspaceJson("accounts", 1), "array" };
         yield return new object[] { "dataspace", "accounts[0]", UaidBindingsDataspaceJson("accounts[0]", null), "must not be null" };
@@ -12118,8 +12258,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "response", "UAID bindings response", "null", "must not be null" };
         yield return new object[] { "response", "UAID bindings response", "[]", "object" };
         yield return new object[] { "response", "dataspaces", UaidBindingsResponseDuplicatePropertyJson("dataspaces"), "must not appear more than once" };
-        yield return new object[] { "response", "UAID bindings response.audit.nonce", UaidBindingsResponseUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "response", "UAID bindings response.dataspaces[0].audit.nonce", UaidBindingsResponseDataspaceUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "response", "UAID bindings response", UaidBindingsResponseUnknownExtensionDuplicateJson(), "unknown field" };
+        yield return new object[] { "response", "UAID bindings response.dataspaces[0]", UaidBindingsResponseDataspaceUnknownExtensionDuplicateJson(), "unknown field" };
         yield return new object[] { "response", "uaid", RemoveTopLevelJsonField(UaidBindingsResponseJson("uaid", $"uaid:{uaidHex}"), "uaid"), "must not be null" };
         yield return new object[] { "response", "uaid", UaidBindingsResponseJson("uaid", null), "must not be null" };
         yield return new object[] { "response", "uaid", UaidBindingsResponseJson("uaid", $"UAID:{uaidHex.ToUpperInvariant()}"), "canonical" };
@@ -12149,33 +12289,32 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "revocation", "UAID manifest revocation", "null", "must not be null" };
         yield return new object[] { "revocation", "UAID manifest revocation", "[]", "object" };
         yield return new object[] { "revocation", "epoch", UaidManifestRevocationDuplicatePropertyJson("epoch"), "must not appear more than once" };
-        yield return new object[] { "revocation", "UAID manifest revocation.audit.nonce", UaidManifestRevocationUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "revocation", "UAID manifest revocation", UaidManifestRevocationUnknownExtensionDuplicateJson(), "unknown field" };
         yield return new object[] { "revocation", "epoch", RemoveTopLevelJsonField(UaidManifestRevocationJson("epoch", 122), "epoch"), "must not be null" };
-        yield return new object[] { "revocation", "epoch", UaidManifestRevocationJson("epoch", "122"), "integer" };
-        yield return new object[] { "revocation", "epoch", UaidManifestRevocationJson("epoch", -1L), "non-negative" };
-        yield return new object[] { "revocation", "reason", UaidManifestRevocationJson("reason", ""), "non-empty" };
+        yield return new object[] { "revocation", "epoch", UaidManifestRevocationJson("epoch", "122"), "unsigned integer" };
+        yield return new object[] { "revocation", "epoch", UaidManifestRevocationJson("epoch", -1L), "unsigned integer" };
         yield return new object[] { "lifecycle", "UAID manifest lifecycle", "null", "must not be null" };
         yield return new object[] { "lifecycle", "UAID manifest lifecycle", "[]", "object" };
         yield return new object[] { "lifecycle", "revocation", UaidManifestLifecycleDuplicatePropertyJson("revocation"), "must not appear more than once" };
-        yield return new object[] { "lifecycle", "UAID manifest lifecycle.audit.nonce", UaidManifestLifecycleUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "lifecycle", "activated_epoch", UaidManifestLifecycleJson("activated_epoch", "121"), "integer" };
-        yield return new object[] { "lifecycle", "expired_epoch", UaidManifestLifecycleJson("expired_epoch", -1L), "non-negative" };
+        yield return new object[] { "lifecycle", "UAID manifest lifecycle", UaidManifestLifecycleUnknownExtensionDuplicateJson(), "unknown field" };
+        yield return new object[] { "lifecycle", "activated_epoch", UaidManifestLifecycleJson("activated_epoch", "121"), "unsigned integer" };
+        yield return new object[] { "lifecycle", "expired_epoch", UaidManifestLifecycleJson("expired_epoch", -1L), "unsigned integer" };
         yield return new object[] { "lifecycle", "revocation", UaidManifestLifecycleJson("revocation", 1), "object" };
         yield return new object[] { "record", "UAID manifest record", "null", "must not be null" };
         yield return new object[] { "record", "UAID manifest record", "[]", "object" };
         yield return new object[] { "record", "manifest_hash", UaidManifestRecordDuplicatePropertyJson("manifest_hash"), "must not appear more than once" };
-        yield return new object[] { "record", "UAID manifest record.audit.nonce", UaidManifestRecordUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "record", "UAID manifest record", UaidManifestRecordUnknownExtensionDuplicateJson(), "unknown field" };
         yield return new object[] { "record", "manifest.version", UaidManifestRecordDuplicateManifestPropertyJson("version"), "must not appear more than once" };
         yield return new object[] { "record", "dataspace_id", RemoveTopLevelJsonField(UaidManifestRecordJson("dataspace_id", 42), "dataspace_id"), "must not be null" };
-        yield return new object[] { "record", "dataspace_id", UaidManifestRecordJson("dataspace_id", "42"), "integer" };
-        yield return new object[] { "record", "dataspace_id", UaidManifestRecordJson("dataspace_id", -1L), "non-negative" };
+        yield return new object[] { "record", "dataspace_id", UaidManifestRecordJson("dataspace_id", "42"), "unsigned integer" };
+        yield return new object[] { "record", "dataspace_id", UaidManifestRecordJson("dataspace_id", -1L), "unsigned integer" };
         yield return new object[] { "record", "manifest_hash", RemoveTopLevelJsonField(UaidManifestRecordJson("manifest_hash", UaidManifestHashHex), "manifest_hash"), "must not be null" };
         yield return new object[] { "record", "manifest_hash", UaidManifestRecordJson("manifest_hash", null), "must not be null" };
         yield return new object[] { "record", "manifest_hash", UaidManifestRecordJson("manifest_hash", UaidManifestHashHex.ToUpperInvariant()), "lowercase" };
         yield return new object[] { "record", "manifest_hash", UaidManifestRecordJson("manifest_hash", "deadbeef"), "32-byte hex string" };
         yield return new object[] { "record", "status", RemoveTopLevelJsonField(UaidManifestRecordJson("status", "Active"), "status"), "must not be null" };
         yield return new object[] { "record", "status", UaidManifestRecordJson("status", null), "must not be null" };
-        yield return new object[] { "record", "status", UaidManifestRecordJson("status", ""), "non-empty" };
+        yield return new object[] { "record", "status", UaidManifestRecordJson("status", ""), "unknown manifest status" };
         yield return new object[] { "record", "lifecycle", UaidManifestRecordJson("lifecycle", null), "must not be null" };
         yield return new object[] { "record", "lifecycle", UaidManifestRecordJson("lifecycle", 1), "object" };
         yield return new object[] { "record", "accounts", UaidManifestRecordJson("accounts", null), "must not be null" };
@@ -12188,16 +12327,16 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { "response", "UAID manifests response", "null", "must not be null" };
         yield return new object[] { "response", "UAID manifests response", "[]", "object" };
         yield return new object[] { "response", "manifests", UaidManifestsResponseDuplicatePropertyJson("manifests"), "must not appear more than once" };
-        yield return new object[] { "response", "UAID manifests response.audit.nonce", UaidManifestsResponseUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "response", "UAID manifests response.manifests[0].audit.nonce", UaidManifestsResponseRecordUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "response", "UAID manifests response.manifests[0].lifecycle.audit.nonce", UaidManifestsResponseLifecycleUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "response", "UAID manifests response.manifests[0].lifecycle.revocation.audit.nonce", UaidManifestsResponseRevocationUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "response", "UAID manifests response", UaidManifestsResponseUnknownExtensionDuplicateJson(), "unknown field" };
+        yield return new object[] { "response", "UAID manifests response.manifests[0]", UaidManifestsResponseRecordUnknownExtensionDuplicateJson(), "unknown field" };
+        yield return new object[] { "response", "UAID manifests response.manifests[0].lifecycle", UaidManifestsResponseLifecycleUnknownExtensionDuplicateJson(), "unknown field" };
+        yield return new object[] { "response", "UAID manifests response.manifests[0].lifecycle.revocation", UaidManifestsResponseRevocationUnknownExtensionDuplicateJson(), "unknown field" };
         yield return new object[] { "response", "uaid", RemoveTopLevelJsonField(UaidManifestsResponseJson("uaid", $"uaid:{uaidHex}"), "uaid"), "must not be null" };
         yield return new object[] { "response", "uaid", UaidManifestsResponseJson("uaid", null), "must not be null" };
         yield return new object[] { "response", "uaid", UaidManifestsResponseJson("uaid", $"UAID:{uaidHex.ToUpperInvariant()}"), "canonical" };
         yield return new object[] { "response", "total", RemoveTopLevelJsonField(UaidManifestsResponseJson("total", 1), "total"), "must not be null" };
-        yield return new object[] { "response", "total", UaidManifestsResponseJson("total", "1"), "integer" };
-        yield return new object[] { "response", "total", UaidManifestsResponseJson("total", -1L), "non-negative" };
+        yield return new object[] { "response", "total", UaidManifestsResponseJson("total", "1"), "unsigned integer" };
+        yield return new object[] { "response", "total", UaidManifestsResponseJson("total", -1L), "unsigned integer" };
         yield return new object[] { "response", "manifests", UaidManifestsResponseJson("manifests", 1), "array" };
         yield return new object[] { "response", "manifests[0]", UaidManifestsResponseJson("manifests[0]", null), "must not be null" };
         yield return new object[] { "response", "manifests[0].dataspace_id", RemoveFirstArrayItemObjectJsonField(UaidManifestsResponseJson("manifests[0].dataspace_id", 42), "manifests", "dataspace_id"), "must not be null" };
@@ -12219,14 +12358,13 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public void RawUaidManifestRecordPreservesArbitraryManifestPayload()
+    public void RawUaidManifestRecordRejectsArbitraryManifestPayload()
     {
-        var response = JsonSerializer.Deserialize<ToriiUaidManifestRecord>(
-            UaidManifestRecordJson("manifest", new JsonArray(1, "two", new JsonObject { ["deep"] = true })));
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiUaidManifestRecord>(
+            UaidManifestRecordJson("manifest", new JsonArray(1, "two", new JsonObject { ["deep"] = true }))));
 
-        Assert.NotNull(response);
-        Assert.Equal("two", response!.Manifest![1]!.GetValue<string>());
-        Assert.True(response.Manifest![2]!["deep"]!.GetValue<bool>());
+        Assert.Contains("manifest", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("object", error.Message);
     }
 
     [Fact]
@@ -12339,34 +12477,21 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
     public static IEnumerable<object?[]> InvalidDirectUaidResponseMetadata()
     {
-        yield return new object?[] { "portfolio-totals", "Accounts", -1L };
         yield return new object?[] { "portfolio-asset", "AssetId", "" };
         yield return new object?[] { "portfolio-asset", "AssetDefinitionId", "rose\u0001#wonderland" };
         yield return new object?[] { "portfolio-asset", "Quantity", "01" };
         yield return new object?[] { "portfolio-account", "AccountId", "merchant@sora" };
-        yield return new object?[] { "portfolio-account", "Label", "" };
         yield return new object?[] { "portfolio-account", "Assets[0].Quantity", "01" };
-        yield return new object?[] { "portfolio-dataspace", "DataspaceId", -1L };
-        yield return new object?[] { "portfolio-dataspace", "DataspaceAlias", " universal" };
         yield return new object?[] { "portfolio-dataspace", "Accounts[0].AccountId", "merchant@sora" };
         yield return new object?[] { "portfolio-response", "Uaid", "UAID:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF" };
-        yield return new object?[] { "portfolio-response", "Totals.Accounts", -1L };
         yield return new object?[] { "portfolio-response", "Dataspaces[0].Accounts[0].AccountId", "merchant@sora" };
         yield return new object?[] { "bindings-dataspace", "Accounts[0]", "merchant@sora" };
         yield return new object?[] { "bindings-response", "Uaid", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" };
         yield return new object?[] { "bindings-response", "Dataspaces[0].Accounts[0]", "merchant@sora" };
-        yield return new object?[] { "manifest-revocation", "Epoch", -1L };
-        yield return new object?[] { "manifest-revocation", "Reason", "" };
-        yield return new object?[] { "manifest-lifecycle", "ActivatedEpoch", -1L };
-        yield return new object?[] { "manifest-lifecycle", "Revocation.Epoch", -1L };
-        yield return new object?[] { "manifest-record", "DataspaceId", -1L };
-        yield return new object?[] { "manifest-record", "DataspaceAlias", " payments" };
         yield return new object?[] { "manifest-record", "ManifestHash", "0x" + UaidManifestHashHex };
-        yield return new object?[] { "manifest-record", "Status", "" };
-        yield return new object?[] { "manifest-record", "Lifecycle.Revocation.Epoch", -1L };
+        yield return new object?[] { "manifest-record", "Status", (ToriiUaidManifestStatus)0 };
         yield return new object?[] { "manifest-record", "Accounts[0]", "merchant@sora" };
         yield return new object?[] { "manifests-response", "Uaid", "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdee" };
-        yield return new object?[] { "manifests-response", "Total", -1L };
         yield return new object?[] { "manifests-response", "Manifests[0].ManifestHash", UaidManifestHashHex.ToUpperInvariant() };
     }
 
@@ -12388,11 +12513,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         const string uaidHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         var invalidValues = new (string? Value, string ExpectedMessage)[]
         {
-            (null, "null or whitespace"),
-            ("", "null or whitespace"),
+            (null, "non-empty string"),
+            ("", "non-empty string"),
+            (uaidHex, "canonical"),
+            ($"UAID:{uaidHex}", "canonical"),
+            ($"uaid:{uaidHex.ToUpperInvariant()}", "canonical"),
             ($" {uaidHex}", "whitespace"),
             ($"{uaidHex} ", "whitespace"),
-            ($"uaid: {uaidHex}", "whitespace"),
+            ($"uaid: {uaidHex}", "canonical"),
             ($"uaid:{uaidHex}\u0001", "control characters"),
         };
 
@@ -12425,11 +12553,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData("", "null or whitespace")]
+    [InlineData("", "non-empty")]
     [InlineData(" asset", "whitespace")]
     [InlineData("asset ", "whitespace")]
     [InlineData("asset id", "whitespace")]
     [InlineData("asset\u0001", "control characters")]
+    [InlineData("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "canonical public asset id")]
     public async Task GetUaidPortfolioAsyncRejectsNonExactAssetIdFilterBeforeDispatch(
         string assetId,
         string expectedMessage)
@@ -12450,7 +12579,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task SubmitTransactionAsyncRejectsEmptyNoritoPayloadBeforeDispatch()
+    public async Task SubmitTransactionAsyncRejectsEmptyVersionedPayloadBeforeDispatch()
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("empty transaction reached HTTP dispatch"));
@@ -12459,8 +12588,28 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.SubmitTransactionAsync(ReadOnlyMemory<byte>.Empty, cancellationToken: TestContext.Current.CancellationToken));
 
-        Assert.Equal("noritoBytes", error.ParamName);
+        Assert.Equal("versionedNoritoBytes", error.ParamName);
         Assert.Contains("must not be empty", error.Message);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Theory]
+    [InlineData("01")]
+    [InlineData("02FF")]
+    [InlineData("8A00")]
+    public async Task SubmitTransactionAsyncRejectsNonV1WireBeforeDispatch(string wireHex)
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("non-V1 transaction reached HTTP dispatch"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.SubmitTransactionAsync(
+                Convert.FromHexString(wireHex),
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal("versionedNoritoBytes", error.ParamName);
+        Assert.Contains("canonical V1 versioned wire", error.Message);
         Assert.Null(handler.LastRequest);
     }
 
@@ -12472,32 +12621,136 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Assert.Equal("/v1/pipeline/transactions/status", request.RequestUri!.AbsolutePath);
             Assert.Equal(transactionHash, QueryParameter(request.RequestUri.Query, "hash"));
-            Assert.Equal("local", QueryParameter(request.RequestUri.Query, "scope"));
+            Assert.Equal("global", QueryParameter(request.RequestUri.Query, "scope"));
+            Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
 
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("""
+            return JsonResponse("""
                 {
                   "hash": "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
                   "status": { "kind": "Applied", "block_height": 9 },
-                  "scope": "auto",
+                  "scope": "global",
                   "resolved_from": "state"
                 }
-                """),
-            };
+                """);
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var status = await client.GetPipelineTransactionStatusAsync(
-            "0X" + transactionHash.ToUpperInvariant(),
-            "LOCAL", cancellationToken: TestContext.Current.CancellationToken);
+            transactionHash,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(status);
         Assert.Equal(PipelineTransactionState.Applied, status!.State);
         Assert.Equal(transactionHash, status.HashHex);
         Assert.Equal((ulong)9, status.BlockHeight);
-        Assert.Equal("auto", status.Scope);
+        Assert.Equal("global", status.Scope);
         Assert.Equal("state", status.ResolvedFrom);
+        Assert.True(status.IsSuccess);
+        Assert.True(status.IsTerminal);
+    }
+
+    [Fact]
+    public async Task GetPipelineTransactionStatusAsyncAcceptsExactLocalScope()
+    {
+        const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
+        using var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal("local", QueryParameter(request.RequestUri!.Query, "scope"));
+            return JsonResponse($$"""
+                {
+                  "hash": "{{transactionHash}}",
+                  "status": { "kind": "Queued" },
+                  "scope": "local",
+                  "resolved_from": "queue"
+                }
+                """);
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var status = await client.GetPipelineTransactionStatusAsync(
+            transactionHash,
+            "local",
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(status);
+        Assert.Equal("local", status!.Scope);
+        Assert.Equal(PipelineTransactionState.Queued, status.State);
+        Assert.False(status.IsTerminal);
+        Assert.False(status.IsSuccess);
+    }
+
+    [Theory]
+    [InlineData("Applied")]
+    [InlineData("Rejected")]
+    [InlineData("Expired")]
+    public async Task GetPipelineTransactionStatusAsyncKeepsCachedTerminalHintsPending(string kind)
+    {
+        const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
+        using var handler = new RecordingHandler(_ => JsonResponse($$"""
+                {
+                  "hash": "{{transactionHash}}",
+                  "status": { "kind": "{{kind}}", "block_height": 9 },
+                  "scope": "global",
+                  "resolved_from": "cache"
+                }
+                """));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var status = await client.GetPipelineTransactionStatusAsync(
+            transactionHash,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotNull(status);
+        Assert.False(status!.IsTerminal);
+        Assert.False(status.IsSuccess);
+        Assert.False(status.IsFailure);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Accepted)]
+    [InlineData(HttpStatusCode.NoContent)]
+    public async Task GetPipelineTransactionStatusAsyncRejectsNonContractSuccessCodes(
+        HttpStatusCode statusCode)
+    {
+        const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent("{}"),
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ToriiApiException>(() =>
+            client.GetPipelineTransactionStatusAsync(
+                transactionHash,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(statusCode, error.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("text/plain")]
+    [InlineData("application/x-norito")]
+    public async Task GetPipelineTransactionStatusAsyncRejectsNonJsonContentType(
+        string? mediaType)
+    {
+        const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
+        using var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
+            HttpContent content = mediaType is null
+                ? new ByteArrayContent("{}"u8.ToArray())
+                : new StringContent("{}", Encoding.UTF8, mediaType);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<JsonException>(() =>
+            client.GetPipelineTransactionStatusAsync(
+                transactionHash,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("application/json media type", error.Message);
     }
 
     [Fact]
@@ -12545,17 +12798,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     public async Task GetPipelineTransactionStatusAsyncRejectsDuplicateJsonResponseKeys()
     {
         const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent($$"""
+        using var handler = new RecordingHandler(_ => JsonResponse($$"""
                 {
                   "hash": "{{transactionHash}}",
                   "status": { "kind": "Applied", "kind": "Rejected" },
                   "scope": "global",
                   "resolved_from": "state"
                 }
-                """),
-        });
+                """));
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
@@ -12569,9 +12819,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     public async Task GetPipelineTransactionStatusAsyncRejectsRetiredSensitiveFields()
     {
         const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("""
+        using var handler = new RecordingHandler(_ => JsonResponse("""
                 {
                   "hash": "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
                   "status": { "kind": "Rejected", "rejection_reason": "secret" },
@@ -12582,8 +12830,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                   "scope": "global",
                   "resolved_from": "state"
                 }
-                """),
-        });
+                """));
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var error = await Assert.ThrowsAsync<JsonException>(() =>
@@ -12595,17 +12842,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     public async Task GetPipelineTransactionStatusAsyncRejectsUnknownStatusKinds()
     {
         const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("""
+        using var handler = new RecordingHandler(_ => JsonResponse("""
                 {
                   "hash": "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
                   "status": { "kind": "Finalizing", "block_height": 42 },
                   "scope": "global",
                   "resolved_from": "state"
                 }
-                """),
-        });
+                """));
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var error = await Assert.ThrowsAsync<JsonException>(() =>
@@ -12704,12 +12948,38 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             $$"""
             {
               "hash": "{{transactionHash}}",
+              "status": { "kind": "Applied", "block_height": 0 },
+              "scope": "global",
+              "resolved_from": "state"
+            }
+            """,
+            "positive",
+        };
+        yield return new object[]
+        {
+            "status.block_height",
+            $$"""
+            {
+              "hash": "{{transactionHash}}",
               "status": { "kind": "Applied", "block_height": null },
               "scope": "global",
               "resolved_from": "state"
             }
             """,
             "must not be null",
+        };
+        yield return new object[]
+        {
+            "status.block_height",
+            $$"""
+            {
+              "hash": "{{transactionHash}}",
+              "status": { "kind": "Applied" },
+              "scope": "global",
+              "resolved_from": "state"
+            }
+            """,
+            "required for state-resolved Applied",
         };
         yield return new object[]
         {
@@ -12726,6 +12996,45 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
         yield return new object[]
         {
+            "hash",
+            $$"""
+            {
+              "hash": "{{transactionHash.ToUpperInvariant()}}",
+              "status": { "kind": "Applied" },
+              "scope": "global",
+              "resolved_from": "state"
+            }
+            """,
+            "canonical typed form",
+        };
+        yield return new object[]
+        {
+            "hash",
+            $$"""
+            {
+              "hash": "0x{{transactionHash}}",
+              "status": { "kind": "Applied" },
+              "scope": "global",
+              "resolved_from": "state"
+            }
+            """,
+            "canonical typed form",
+        };
+        yield return new object[]
+        {
+            "hash",
+            $$"""
+            {
+              "hash": "{{transactionHash[..^1]}}c",
+              "status": { "kind": "Committed" },
+              "scope": "global",
+              "resolved_from": "cache"
+            }
+            """,
+            "canonical typed form",
+        };
+        yield return new object[]
+        {
             "scope",
             $$"""
             {
@@ -12735,7 +13044,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
               "resolved_from": "state"
             }
             """,
-            "local, auto, or global",
+            "exactly local or global",
         };
         yield return new object[]
         {
@@ -12760,10 +13069,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         string expectedMessage)
     {
         const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(json),
-        });
+        using var handler = new RecordingHandler(_ => JsonResponse(json));
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
@@ -12782,8 +13088,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     [InlineData("da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b ", "whitespace")]
     [InlineData("0x da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b", "whitespace")]
     [InlineData("da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b\u0001", "control characters")]
-    [InlineData("abc123", "32-byte hex string")]
-    [InlineData("gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg", "32-byte hex string")]
+    [InlineData("0xda01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b", "canonical typed form")]
+    [InlineData("DA01F3A369D10E6AD78F241C86F4FE2D5481FF13ACE97E6FB5DB5C30240BDB3B", "canonical typed form")]
+    [InlineData("abc123", "canonical typed form")]
+    [InlineData("gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg", "canonical typed form")]
+    [InlineData("da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3c", "canonical typed form")]
     public async Task GetPipelineTransactionStatusAsyncRejectsMalformedHashesBeforeDispatch(
         string? transactionHash,
         string expectedMessage)
@@ -12806,7 +13115,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     [InlineData("auto ", "whitespace")]
     [InlineData("local scope", "whitespace")]
     [InlineData("auto\u0001", "control characters")]
-    [InlineData("remote", "`auto`, `local`, or `global`")]
+    [InlineData("auto", "exactly `local` or `global`")]
+    [InlineData("AUTO", "exactly `local` or `global`")]
+    [InlineData("LOCAL", "exactly `local` or `global`")]
+    [InlineData("GLOBAL", "exactly `local` or `global`")]
+    [InlineData("remote", "exactly `local` or `global`")]
     public async Task GetPipelineTransactionStatusAsyncRejectsMalformedScopesBeforeDispatch(
         string scope,
         string expectedMessage)
@@ -12827,17 +13140,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     [Fact]
     public async Task GetPipelineTransactionStatusAsyncRejectsMalformedResponseHash()
     {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("""
+        using var handler = new RecordingHandler(_ => JsonResponse("""
                 {
                   "hash": " da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b",
                   "status": { "kind": "Applied" },
                   "scope": "global",
                   "resolved_from": "state"
                 }
-                """),
-        });
+                """));
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
@@ -12896,49 +13206,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal(OnboardingFixtureAuthority, receipt.Body.Authority);
         Assert.Equal(SharedOnboardingReceiptNetworkId, receipt.Body.NetworkId);
         Assert.Equal(OnboardingFixtureAccountId, receipt.Body.Request.AccountId);
-    }
-
-    [Fact]
-    public async Task ApplyAccountOnboardingAsyncPostsOnlyPinnedReceipt()
-    {
-        var receipt = SharedOnboardingReceipt();
-        using var handler = new RecordingHandler(request =>
-        {
-            using var payload = ReadBodyAsJson(request);
-            Assert.Equal("/v1/accounts/onboard", request.RequestUri!.AbsolutePath);
-            Assert.Equal(HttpMethod.Post, request.Method);
-            Assert.Equal(["receipt"], payload.RootElement.EnumerateObject().Select(static item => item.Name));
-            Assert.Equal(
-                receipt.PlanHash,
-                payload.RootElement.GetProperty("receipt").GetProperty("plan_hash").GetString());
-            Assert.DoesNotContain(AccountOnboardingToken, request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
-
-            return new HttpResponseMessage(HttpStatusCode.Accepted)
-            {
-                Content = new StringContent($$"""
-                    {
-                      "account_id": "{{OnboardingFixtureAccountId}}",
-                      "alias": "{{OnboardingFixtureAlias}}",
-                      "tx_hash_hex": "{{ToriiTransactionHashHex}}",
-                      "status": "Queued",
-                      "disposition": { "kind": "create", "value": null }
-                    }
-                    """),
-            };
-        });
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var response = await client.ApplyAccountOnboardingAsync(
-            receipt,
-            AccountOnboardingToken,
-            OnboardingFixtureAuthority,
-            SharedOnboardingReceiptNetworkId,
-            SharedOnboardingBodyEncoder,
-            cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(OnboardingFixtureAccountId, response.AccountId);
-        Assert.Equal(OnboardingFixtureAlias, response.Alias);
-        Assert.Equal("Queued", response.Status);
     }
 
     [Fact]
@@ -13038,8 +13305,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                          SharedOnboardingReceiptNetworkId,
                          SharedOnboardingBodyEncoder,
                          cancellationToken: TestContext.Current.CancellationToken),
-                     () => client.ApplyAccountOnboardingAsync(
+                     () => client.PrepareAccountOnboardingAsync(
+                         receipt.Body.Request,
                          receipt,
+                         ValidPreparedMutationBinding(
+                             ToriiAccountOnboardingPreparedTransactionV1.OperationV1),
                          onboardingToken!,
                          OnboardingFixtureAuthority,
                          SharedOnboardingReceiptNetworkId,
@@ -13127,7 +13397,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Content = new StringContent("""
                 {
-                  "algorithm": "scrypt-leading-zero-bits-v2",
+                  "algorithm": "scrypt-leading-zero-bits-v1",
                   "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
                   "chain_discriminant": 753,
                   "difficulty_bits": 10,
@@ -13145,7 +13415,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var puzzle = await client.GetAccountFaucetPuzzleAsync(cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal("scrypt-leading-zero-bits-v2", puzzle.Algorithm);
+        Assert.Equal("scrypt-leading-zero-bits-v1", puzzle.Algorithm);
         Assert.Equal(OnboardingFixtureNetworkId, puzzle.NetworkId);
         Assert.Equal((ushort)753, puzzle.ChainDiscriminant);
         Assert.Equal((byte)10, puzzle.DifficultyBits);
@@ -13159,7 +13429,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object?[] { "algorithm", null, "must not be null" };
         yield return new object[] { "algorithm", " " + ToriiAccountFaucetPow.Algorithm, "surrounding whitespace" };
         yield return new object[] { "algorithm", ToriiAccountFaucetPow.Algorithm + "\u0001", "control characters" };
-        yield return new object[] { "algorithm", "scrypt-leading-zero-bits-v1", ToriiAccountFaucetPow.Algorithm };
+        yield return new object[] { "algorithm", "scrypt-leading-zero-bits-v2", ToriiAccountFaucetPow.Algorithm };
         yield return new object?[] { "network_id", null, "canonical NetworkId string" };
         yield return new object[] { "network_id", AlternateNetworkId.ToLowerInvariant(), "canonical checksummed NetworkId" };
         yield return new object[] { "difficulty_bits", (byte)0, "positive" };
@@ -13299,7 +13569,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[]
         {
             "algorithm",
-            "{\"algorithm\":\"scrypt-leading-zero-bits-v2\",\"algorithm\":\"scrypt-leading-zero-bits-v2\"}",
+            "{\"algorithm\":\"scrypt-leading-zero-bits-v1\",\"algorithm\":\"scrypt-leading-zero-bits-v1\"}",
             "must not appear more than once",
         };
         yield return new object[] { "account faucet puzzle.audit.nonce", AccountFaucetPuzzleUnknownExtensionDuplicateJson(), "must not appear more than once" };
@@ -13387,10 +13657,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 MaxAttempts = 200,
             }, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal("0000000000000010", solution.NonceHex);
-        Assert.Equal("003c190dfc175767ae397f1631cce0a2b0c5d3aec781abab7f319a8f3c149665", solution.DigestHex);
-        Assert.Equal(10, solution.LeadingZeroBits);
-        Assert.Equal(17, solution.Attempts);
+        Assert.Equal("000000000000008f", solution.NonceHex);
+        Assert.Equal("00131aaf07fbd1946655b49ba9ec69c43e153c60ffab73b49b8f04de4de02694", solution.DigestHex);
+        Assert.Equal(11, solution.LeadingZeroBits);
+        Assert.Equal(144, solution.Attempts);
     }
 
     [Fact]
@@ -13410,7 +13680,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             "control characters");
         Assert.Throws<NotSupportedException>(() => ToriiAccountFaucetPow.Solve(
             CanonicalAccountId,
-            DeterministicFaucetPuzzleWithPrivateAlgorithm(difficultyBits: 1, algorithm: "scrypt-leading-zero-bits-v1"),
+            DeterministicFaucetPuzzleWithPrivateAlgorithm(difficultyBits: 1, algorithm: "scrypt-leading-zero-bits-v2"),
             cancellationToken: TestContext.Current.CancellationToken));
         AssertRejectsFaucetPowInput(
             () => ToriiAccountFaucetPow.Solve(" " + CanonicalAccountId, DeterministicFaucetPuzzle(
@@ -13454,114 +13724,35 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Contains("UInt64.MaxValue", error.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task ClaimAccountFaucetAsyncPostsPowFieldsAndDeserializesQueuedResponse()
-    {
-        using var handler = new RecordingHandler(request =>
-        {
-            var payload = ReadBodyAsJson(request);
-            Assert.Equal("/v1/accounts/faucet", request.RequestUri!.AbsolutePath);
-            Assert.Equal(CanonicalAccountId, payload.RootElement.GetProperty("account_id").GetString());
-            Assert.Equal<ulong>(68, payload.RootElement.GetProperty("pow_anchor_height").GetUInt64());
-            Assert.Equal("abcdef", payload.RootElement.GetProperty("pow_nonce_hex").GetString());
-
-            return new HttpResponseMessage(HttpStatusCode.Accepted)
-            {
-                Content = new StringContent($$"""
-                    {
-                      "account_id": "{{CanonicalAccountId}}",
-                      "asset_definition_id": "rose#wonderland",
-                      "asset_id": "rose#wonderland#{{CanonicalAccountId}}",
-                      "amount": "100",
-                      "tx_hash_hex": "{{ToriiTransactionHashHex}}",
-                      "status": "QUEUED"
-                    }
-                    """),
-            };
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.ClaimAccountFaucetAsync(new ToriiAccountFaucetRequest
-        {
-            AccountId = CanonicalAccountId,
-            PowAnchorHeight = 68,
-            PowNonceHex = "abcdef",
-        }, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal("rose#wonderland", response.AssetDefinitionId);
-        Assert.Equal(CanonicalAccountId, response.AccountId);
-        Assert.Equal($"rose#wonderland#{CanonicalAccountId}", response.AssetId);
-        Assert.Equal("100", response.Amount);
-        Assert.Equal(ToriiTransactionHashHex, response.TransactionHashHex);
-        Assert.Equal("QUEUED", response.Status);
-    }
-
-    [Fact]
-    public async Task ClaimAccountFaucetAsyncPreservesPuzzleNetworkDiscriminant()
-    {
-        const ushort tairaDiscriminant = 369;
-        var accountId = AccountAddress.Parse(CanonicalAccountId)
-            .ToI105(tairaDiscriminant);
-        using var handler = new RecordingHandler(request =>
-        {
-            var payload = ReadBodyAsJson(request);
-            Assert.Equal(accountId, payload.RootElement.GetProperty("account_id").GetString());
-            return JsonResponse($$"""
-                {
-                  "account_id": "{{accountId}}",
-                  "asset_definition_id": "rose#wonderland",
-                  "asset_id": "rose#wonderland#{{accountId}}",
-                  "amount": "100",
-                  "tx_hash_hex": "{{ToriiTransactionHashHex}}",
-                  "status": "QUEUED"
-                }
-                """, HttpStatusCode.Accepted);
-        });
-        using var client = new ToriiClient(
-            new Uri("https://torii.example"),
-            new HttpClient(handler));
-
-        var response = await client.ClaimAccountFaucetAsync(
-            new ToriiAccountFaucetRequest
-            {
-                AccountId = accountId,
-                PowAnchorHeight = 68,
-                PowNonceHex = "00",
-            },
-            cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(accountId, response.AccountId);
-    }
-
     public static IEnumerable<object[]> InvalidAccountFaucetClaimRequests()
     {
         yield return new object[]
         {
-            new ToriiAccountFaucetRequest { AccountId = string.Empty },
+            new ToriiAccountFaucetClaimV1 { AccountId = string.Empty },
             "AccountId",
             "null or whitespace",
         };
         yield return new object[]
         {
-            new ToriiAccountFaucetRequest { AccountId = " " + CanonicalAccountId },
+            new ToriiAccountFaucetClaimV1 { AccountId = " " + CanonicalAccountId },
             "AccountId",
             "whitespace",
         };
         yield return new object[]
         {
-            new ToriiAccountFaucetRequest { AccountId = CanonicalAccountId + "\u0001" },
+            new ToriiAccountFaucetClaimV1 { AccountId = CanonicalAccountId + "\u0001" },
             "AccountId",
             "control characters",
         };
         yield return new object[]
         {
-            new ToriiAccountFaucetRequest { AccountId = "merchant@sora" },
+            new ToriiAccountFaucetClaimV1 { AccountId = "merchant@sora" },
             "AccountId",
             "canonical I105",
         };
         yield return new object[]
         {
-            new ToriiAccountFaucetRequest
+            new ToriiAccountFaucetClaimV1
             {
                 AccountId = CanonicalAccountId,
                 PowAnchorHeight = 68,
@@ -13571,7 +13762,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
         yield return new object[]
         {
-            new ToriiAccountFaucetRequest
+            new ToriiAccountFaucetClaimV1
             {
                 AccountId = CanonicalAccountId,
                 PowNonceHex = "00",
@@ -13581,7 +13772,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
         yield return new object[]
         {
-            new ToriiAccountFaucetRequest
+            new ToriiAccountFaucetClaimV1
             {
                 AccountId = CanonicalAccountId,
                 PowAnchorHeight = 0,
@@ -13592,7 +13783,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
         yield return new object[]
         {
-            new ToriiAccountFaucetRequest
+            new ToriiAccountFaucetClaimV1
             {
                 AccountId = CanonicalAccountId,
                 PowAnchorHeight = 68,
@@ -13603,7 +13794,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
         yield return new object[]
         {
-            new ToriiAccountFaucetRequest
+            new ToriiAccountFaucetClaimV1
             {
                 AccountId = CanonicalAccountId,
                 PowAnchorHeight = 68,
@@ -13614,7 +13805,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
         yield return new object[]
         {
-            new ToriiAccountFaucetRequest
+            new ToriiAccountFaucetClaimV1
             {
                 AccountId = CanonicalAccountId,
                 PowAnchorHeight = 68,
@@ -13625,7 +13816,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
         yield return new object[]
         {
-            new ToriiAccountFaucetRequest
+            new ToriiAccountFaucetClaimV1
             {
                 AccountId = CanonicalAccountId,
                 PowAnchorHeight = 68,
@@ -13636,7 +13827,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
         yield return new object[]
         {
-            new ToriiAccountFaucetRequest
+            new ToriiAccountFaucetClaimV1
             {
                 AccountId = CanonicalAccountId,
                 PowAnchorHeight = 68,
@@ -13649,8 +13840,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
     [Theory]
     [MemberData(nameof(InvalidAccountFaucetClaimRequests))]
-    public async Task ClaimAccountFaucetAsyncRejectsMalformedPowFieldsBeforeDispatch(
-        ToriiAccountFaucetRequest request,
+    public async Task PrepareAccountFaucetAsyncRejectsMalformedPowFieldsBeforeDispatch(
+        ToriiAccountFaucetClaimV1 request,
         string expectedParamName,
         string expectedMessage)
     {
@@ -13659,7 +13850,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.ClaimAccountFaucetAsync(request, cancellationToken: TestContext.Current.CancellationToken));
+            client.PrepareAccountFaucetAsync(
+                request,
+                ValidPreparedMutationBinding(ToriiAccountFaucetPreparedTransactionV1.OperationV1),
+                OnboardingFixtureNetworkId,
+                cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(expectedParamName, error.ParamName);
         Assert.Contains(expectedMessage, error.Message);
@@ -13717,7 +13912,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 Content = new StringContent("""
                     {
-                      "algorithm": "scrypt-leading-zero-bits-v2",
+                      "algorithm": "scrypt-leading-zero-bits-v1",
                       "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
                       "chain_discriminant": 753,
                       "difficulty_bits": 8,
@@ -13736,73 +13931,21 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
         var solution = await client.SolveAccountFaucetAsync(CanonicalAccountId, new ToriiAccountFaucetSolveOptions { MaxAttempts = 200 }, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal("0000000000000010", solution.NonceHex);
+        Assert.Equal("000000000000008f", solution.NonceHex);
         Assert.Equal(CanonicalAccountId, solution.AccountId);
         Assert.Equal((ulong)68, solution.AnchorHeight);
-    }
-
-    [Fact]
-    public async Task ClaimAccountFaucetAsyncWithAccountIdSolvesPuzzleBeforePosting()
-    {
-        var requestCount = 0;
-        using var handler = new RecordingHandler(request =>
-        {
-            requestCount++;
-            if (request.Method == HttpMethod.Get)
+        Assert.Equal(
+            new ToriiAccountFaucetClaimV1
             {
-                Assert.Equal("/v1/accounts/faucet/puzzle", request.RequestUri!.AbsolutePath);
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent("""
-                        {
-                          "algorithm": "scrypt-leading-zero-bits-v2",
-                          "network_id": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
-                          "chain_discriminant": 753,
-                          "difficulty_bits": 8,
-                          "anchor_height": 68,
-                          "anchor_block_hash_hex": "d5c0016a6345e8ea379da42aab1fdc16ba82756e19e0b63c48c14735e8caf7ef",
-                          "challenge_salt_hex": null,
-                          "scrypt_log_n": 4,
-                          "scrypt_r": 1,
-                          "scrypt_p": 1,
-                          "max_anchor_age_blocks": 6
-                        }
-                        """),
-                };
-            }
-
-            var payload = ReadBodyAsJson(request);
-            Assert.Equal("/v1/accounts/faucet", request.RequestUri!.AbsolutePath);
-            Assert.Equal(CanonicalAccountId, payload.RootElement.GetProperty("account_id").GetString());
-            Assert.Equal("0000000000000010", payload.RootElement.GetProperty("pow_nonce_hex").GetString());
-            Assert.Equal<ulong>(68, payload.RootElement.GetProperty("pow_anchor_height").GetUInt64());
-
-            return new HttpResponseMessage(HttpStatusCode.Accepted)
-            {
-                Content = new StringContent($$"""
-                    {
-                      "account_id": "{{CanonicalAccountId}}",
-                      "asset_definition_id": "rose#wonderland",
-                      "asset_id": "rose#wonderland#{{CanonicalAccountId}}",
-                      "amount": "100",
-                      "tx_hash_hex": "{{ToriiTransactionHashHex}}",
-                      "status": "QUEUED"
-                    }
-                    """),
-            };
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.ClaimAccountFaucetAsync(CanonicalAccountId, new ToriiAccountFaucetSolveOptions { MaxAttempts = 200 }, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(2, requestCount);
-        Assert.Equal(ToriiTransactionHashHex, response.TransactionHashHex);
-        Assert.Equal("QUEUED", response.Status);
+                AccountId = CanonicalAccountId,
+                PowAnchorHeight = 68,
+                PowNonceHex = "000000000000008f",
+            },
+            solution.ToClaim());
     }
 
     public static IEnumerable<object[]> InvalidToriiTransactionHashResponses()
     {
-        yield return new object[] { "account-faucet", "tx_hash_hex", ToriiTransactionHashHex + " ", "surrounding whitespace" };
         yield return new object[] { "contract-call", "tx_hash_hex", ToriiTransactionHashHex[..32] + " " + ToriiTransactionHashHex[32..], "whitespace" };
         yield return new object[] { "multisig-propose", "tx_hash_hex", ToriiTransactionHashHex + "\u0001", "control characters" };
         yield return new object[] { "multisig-contract-propose", "tx_hash_hex", new string('c', 63), "32-byte hex string" };
@@ -13834,129 +13977,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.NotNull(handler.LastRequest);
     }
 
-    public static IEnumerable<object[]> InvalidOnboardingRequiredStringResponses()
+    public static IEnumerable<object?[]> InvalidFaucetPuzzleMetadata()
     {
-        yield return new object[] { "account-faucet", "account_id", OnboardingTransactionHashResponseJson("account-faucet", "account_id", null), "must not be null" };
-        yield return new object[] { "account-faucet", "account_id", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("account-faucet", "account_id", FaucetAccountId), "account_id"), "must not be null" };
-        yield return new object[] { "account-faucet", "account_id", OnboardingTransactionHashResponseJson("account-faucet", "account_id", "merchant@sora"), "canonical I105" };
-        yield return new object[] { "account-faucet", "account_id", OnboardingTransactionHashResponseJson("account-faucet", "account_id", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "canonical I105" };
-        yield return new object[] { "account-faucet", "account_id", OnboardingTransactionHashResponseJson("account-faucet", "account_id", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ"), "canonical I105" };
-        yield return new object[] { "account-faucet", "asset_definition_id", OnboardingTransactionHashResponseJson("account-faucet", "asset_definition_id", null), "must not be null" };
-        yield return new object[] { "account-faucet", "asset_definition_id", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("account-faucet", "asset_definition_id", "rose#wonderland"), "asset_definition_id"), "must not be null" };
-        yield return new object[] { "account-faucet", "asset_id", OnboardingTransactionHashResponseJson("account-faucet", "asset_id", null), "must not be null" };
-        yield return new object[] { "account-faucet", "asset_id", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("account-faucet", "asset_id", $"rose#wonderland#{FaucetAccountId}"), "asset_id"), "must not be null" };
-        yield return new object[] { "account-faucet", "asset_id", OnboardingTransactionHashResponseJson("account-faucet", "asset_id", $"rose#wonderland#{FaucetAccountId} "), "surrounding whitespace" };
-        yield return new object[] { "account-faucet", "amount", OnboardingTransactionHashResponseJson("account-faucet", "amount", null), "must not be null" };
-        yield return new object[] { "account-faucet", "amount", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("account-faucet", "amount", "100"), "amount"), "must not be null" };
-        yield return new object[] { "account-faucet", "amount", OnboardingTransactionHashResponseJson("account-faucet", "amount", ""), "non-empty" };
-        yield return new object[] { "account-faucet", "status", OnboardingTransactionHashResponseJson("account-faucet", "status", null), "must not be null" };
-        yield return new object[] { "account-faucet", "status", RemoveTopLevelJsonField(OnboardingTransactionHashResponseJson("account-faucet", "status", "QUEUED"), "status"), "must not be null" };
-        yield return new object[] { "account-faucet", "status", OnboardingTransactionHashResponseJson("account-faucet", "status", "QUEUE D"), "whitespace" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidOnboardingRequiredStringResponses))]
-    public async Task OnboardingResponsesRejectMalformedRequiredStrings(
-        string operation,
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(json),
-        });
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            InvokeToriiTransactionHashResponseOperationAsync(client, operation));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.NotNull(handler.LastRequest);
-    }
-
-    public static IEnumerable<object[]> InvalidRawOnboardingTransactionHashResponses()
-    {
-        yield return new object[]
-        {
-            "account-faucet",
-            "tx_hash_hex",
-            OnboardingTransactionHashResponseJson("account-faucet", "tx_hash_hex", ToriiTransactionHashHex.ToUpperInvariant()),
-            "lowercase",
-        };
-        yield return new object[]
-        {
-            "account-faucet",
-            "account faucet response.audit.nonce",
-            OnboardingTransactionHashUnknownExtensionDuplicateJson("account-faucet"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "account-faucet",
-            "amount",
-            OnboardingTransactionHashResponseJson("account-faucet", "amount", 100),
-            "string",
-        };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawOnboardingTransactionHashResponses))]
-    public void RawOnboardingTransactionHashResponsesRejectMalformedPayloads(
-        string operation,
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() =>
-            DeserializeRawOnboardingTransactionHashResponse(operation, json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidOnboardingRequiredStringResponses))]
-    public void RawOnboardingResponsesRejectMalformedRequiredStrings(
-        string operation,
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() =>
-            DeserializeRawOnboardingTransactionHashResponse(operation, json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Theory]
-    [InlineData("account-faucet")]
-    public void RawOnboardingTransactionHashResponsesAllowEmptyOrNullTransactionHash(string operation)
-    {
-        var emptyResponse = DeserializeRawOnboardingTransactionHashResponse(
-            operation,
-            OnboardingTransactionHashResponseJson(operation, "tx_hash_hex", string.Empty));
-        var nullResponse = DeserializeRawOnboardingTransactionHashResponse(
-            operation,
-            OnboardingTransactionHashResponseJson(operation, "tx_hash_hex", null));
-
-        Assert.NotNull(emptyResponse);
-        Assert.NotNull(nullResponse);
-    }
-
-    public static IEnumerable<object?[]> InvalidDirectOnboardingFaucetMetadata()
-    {
-        yield return new object?[] { "account-faucet", "AccountId", "merchant@sora" };
-        yield return new object?[] { "account-faucet", "AssetDefinitionId", "rose #wonderland" };
-        yield return new object?[] { "account-faucet", "AssetId", "rose#wonderland #holder" };
-        yield return new object?[] { "account-faucet", "Amount", "100 coins" };
-        yield return new object?[] { "account-faucet", "TransactionHashHex", ToriiTransactionHashHex.ToUpperInvariant() };
-        yield return new object?[] { "account-faucet", "Status", "" };
-
         yield return new object?[] { "faucet-puzzle", "Algorithm", " " + ToriiAccountFaucetPow.Algorithm };
-        yield return new object?[] { "faucet-puzzle", "Algorithm", "scrypt-leading-zero-bits-v1" };
+        yield return new object?[] { "faucet-puzzle", "Algorithm", "scrypt-leading-zero-bits-v2" };
         yield return new object?[] { "faucet-puzzle", "DifficultyBits", (byte)0 };
         yield return new object?[] { "faucet-puzzle", "AnchorHeight", 0UL };
         yield return new object?[] { "faucet-puzzle", "AnchorBlockHashHex", "0x" + ContractCodeHashHex };
@@ -13968,31 +13992,16 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [MemberData(nameof(InvalidDirectOnboardingFaucetMetadata))]
-    public void OnboardingFaucetDtosRejectMalformedDirectMetadata(
+    [MemberData(nameof(InvalidFaucetPuzzleMetadata))]
+    public void FaucetPuzzleDtosRejectMalformedDirectMetadata(
         string operation,
         string propertyName,
         object? value)
     {
         var error = Assert.ThrowsAny<ArgumentException>(() =>
-            SetOnboardingFaucetDirectMetadata(operation, propertyName, value));
+            SetFaucetPuzzleDirectMetadata(operation, propertyName, value));
 
         Assert.Equal(propertyName, error.ParamName);
-    }
-
-    [Theory]
-    [InlineData("account-faucet", "merchant@sora")]
-    [InlineData("account-faucet", "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")]
-    [InlineData("account-faucet", "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ")]
-    public void RawOnboardingTransactionHashResponseWriteRejectsNoncanonicalAccountId(
-        string operation,
-        string accountId)
-    {
-        var error = Assert.Throws<JsonException>(() =>
-            SerializeRawOnboardingTransactionHashResponse(operation, accountId));
-
-        Assert.Contains("account_id", error.Message);
-        Assert.Contains("canonical I105", error.Message);
     }
 
     [Fact]
@@ -18123,10 +18132,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 _ => throw new InvalidOperationException("Unexpected route."),
             };
 
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(body),
-            };
+            return JsonResponse(body);
         });
 
         using var client = CreateRuntimeAuthenticatedClient(handler);
@@ -19395,34 +19401,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
     }
 
-    private static void SetOnboardingFaucetDirectMetadata(string operation, string propertyName, object? value)
+    private static void SetFaucetPuzzleDirectMetadata(string operation, string propertyName, object? value)
     {
         object? constructed = (operation, propertyName) switch
         {
-            ("account-faucet", "AccountId") => ValidAccountFaucetResponse() with
-            {
-                AccountId = RequiredStringValue(value),
-            },
-            ("account-faucet", "AssetDefinitionId") => ValidAccountFaucetResponse() with
-            {
-                AssetDefinitionId = RequiredStringValue(value),
-            },
-            ("account-faucet", "AssetId") => ValidAccountFaucetResponse() with
-            {
-                AssetId = RequiredStringValue(value),
-            },
-            ("account-faucet", "Amount") => ValidAccountFaucetResponse() with
-            {
-                Amount = RequiredStringValue(value),
-            },
-            ("account-faucet", "TransactionHashHex") => ValidAccountFaucetResponse() with
-            {
-                TransactionHashHex = RequiredStringValue(value),
-            },
-            ("account-faucet", "Status") => ValidAccountFaucetResponse() with
-            {
-                Status = RequiredStringValue(value),
-            },
             ("faucet-puzzle", "Algorithm") => DeterministicFaucetPuzzle(8) with
             {
                 Algorithm = RequiredStringValue(value),
@@ -19462,22 +19444,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             _ => throw new ArgumentOutOfRangeException(
                 nameof(propertyName),
                 propertyName,
-                "Unknown onboarding/faucet direct metadata field."),
+                "Unknown faucet puzzle metadata field."),
         };
         GC.KeepAlive(constructed);
-    }
-
-    private static ToriiAccountFaucetResponse ValidAccountFaucetResponse()
-    {
-        return new ToriiAccountFaucetResponse
-        {
-            AccountId = FaucetAccountId,
-            AssetDefinitionId = "rose#wonderland",
-            AssetId = $"rose#wonderland#{FaucetAccountId}",
-            Amount = "100",
-            TransactionHashHex = ToriiTransactionHashHex,
-            Status = "QUEUED",
-        };
     }
 
     private static void SetMultisigResponseDirectMetadata(string operation, string propertyName, object? value)
@@ -21425,6 +21394,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 RelayTlsSpkiSha256Hex = RequiredStringValue(value),
             },
+            ("profile", "RelayMldsa65PublicKeyHex") => ValidVpnProfile() with
+            {
+                RelayMldsa65PublicKeyHex = RequiredStringValue(value),
+            },
             ("tx-instruction", "WireId") => new ToriiVpnTxInstruction
             {
                 WireId = RequiredStringValue(value),
@@ -21447,6 +21420,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 AccountId = RequiredStringValue(value),
             },
+            ("quote", "RelayMldsa65PublicKeyHex") => ValidVpnQuote() with
+            {
+                RelayMldsa65PublicKeyHex = RequiredStringValue(value),
+            },
             ("quote", "MeteringPublicKeyHex") => ValidVpnQuote() with
             {
                 MeteringPublicKeyHex = RequiredStringValue(value),
@@ -21462,6 +21439,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ("session", "ConnectedAtMilliseconds") => ValidVpnSession() with
             {
                 ConnectedAtMilliseconds = RequiredUInt64Value(value),
+            },
+            ("session", "RelayMldsa65PublicKeyHex") => ValidVpnSession() with
+            {
+                RelayMldsa65PublicKeyHex = RequiredStringValue(value),
             },
             ("session", "RoutePushes[0]") => ValidVpnSession() with
             {
@@ -21540,11 +21521,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         object? constructed = (operation, propertyName) switch
         {
-            ("portfolio-totals", "Accounts") => new ToriiUaidPortfolioTotals
-            {
-                Accounts = RequiredInt64Value(value),
-                Positions = 3,
-            },
             ("portfolio-asset", "AssetId") => UaidPortfolioAssetObject() with
             {
                 AssetId = RequiredStringValue(value),
@@ -21569,10 +21545,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 Assets = [UaidPortfolioAssetWithPrivateField("quantity", RequiredStringValue(value))],
             },
-            ("portfolio-dataspace", "DataspaceId") => UaidPortfolioDataspaceObject() with
-            {
-                DataspaceId = RequiredInt64Value(value),
-            },
             ("portfolio-dataspace", "DataspaceAlias") => UaidPortfolioDataspaceObject() with
             {
                 DataspaceAlias = RequiredStringValue(value),
@@ -21584,10 +21556,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ("portfolio-response", "Uaid") => UaidPortfolioResponseObject() with
             {
                 Uaid = RequiredStringValue(value),
-            },
-            ("portfolio-response", "Totals.Accounts") => UaidPortfolioResponseObject() with
-            {
-                Totals = UaidPortfolioTotalsWithPrivateField("accounts", RequiredInt64Value(value)),
             },
             ("portfolio-response", "Dataspaces[0].Accounts[0].AccountId") => UaidPortfolioResponseObject() with
             {
@@ -21607,25 +21575,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 Dataspaces = [UaidBindingsDataspaceWithPrivateField("accounts", new[] { RequiredStringValue(value) })],
             },
-            ("manifest-revocation", "Epoch") => UaidManifestRevocationObject() with
-            {
-                Epoch = RequiredInt64Value(value),
-            },
             ("manifest-revocation", "Reason") => UaidManifestRevocationObject() with
             {
                 Reason = RequiredStringValue(value),
-            },
-            ("manifest-lifecycle", "ActivatedEpoch") => UaidManifestLifecycleObject() with
-            {
-                ActivatedEpoch = RequiredInt64Value(value),
-            },
-            ("manifest-lifecycle", "Revocation.Epoch") => UaidManifestLifecycleObject() with
-            {
-                Revocation = UaidManifestRevocationWithPrivateField("epoch", RequiredInt64Value(value)),
-            },
-            ("manifest-record", "DataspaceId") => UaidManifestRecordObject() with
-            {
-                DataspaceId = RequiredInt64Value(value),
             },
             ("manifest-record", "DataspaceAlias") => UaidManifestRecordObject() with
             {
@@ -21637,13 +21589,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             },
             ("manifest-record", "Status") => UaidManifestRecordObject() with
             {
-                Status = RequiredStringValue(value),
-            },
-            ("manifest-record", "Lifecycle.Revocation.Epoch") => UaidManifestRecordObject() with
-            {
-                Lifecycle = UaidManifestLifecycleWithPrivateField(
-                    "revocation",
-                    UaidManifestRevocationWithPrivateField("epoch", RequiredInt64Value(value))),
+                Status = (ToriiUaidManifestStatus)value!,
             },
             ("manifest-record", "Accounts[0]") => UaidManifestRecordObject() with
             {
@@ -21652,10 +21598,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ("manifests-response", "Uaid") => UaidManifestsResponseObject() with
             {
                 Uaid = RequiredStringValue(value),
-            },
-            ("manifests-response", "Total") => UaidManifestsResponseObject() with
-            {
-                Total = RequiredInt64Value(value),
             },
             ("manifests-response", "Manifests[0].ManifestHash") => UaidManifestsResponseObject() with
             {
@@ -23573,8 +23515,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         const string uaid = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         var asset = new JsonObject
         {
-            ["asset_id"] = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-            ["asset_definition_id"] = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            ["asset_id"] = UaidPortfolioAssetId,
+            ["asset_definition_id"] = UaidPortfolioAssetDefinitionId,
             ["quantity"] = "500",
         };
         var assets = new JsonArray(asset);
@@ -23594,8 +23536,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var dataspaces = new JsonArray(dataspace);
         var totals = new JsonObject
         {
-            ["accounts"] = 2,
-            ["positions"] = 3,
+            ["accounts"] = 1,
+            ["positions"] = 1,
         };
         var response = new JsonObject
         {
@@ -23667,7 +23609,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     private static string UaidBindingsResponseJson(string field, object? value)
     {
         const string uaid = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        var accounts = new JsonArray(UaidBindingsMerchantAccountId, UaidBindingsIssuerAccountId);
+        var accounts = new JsonArray(UaidBindingsMerchantAccountId);
         var dataspace = new JsonObject
         {
             ["dataspace_id"] = 42,
@@ -23731,14 +23673,16 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["dataspace_id"] = 42,
             ["dataspace_alias"] = "payments",
             ["manifest_hash"] = UaidManifestHashHex,
-            ["status"] = "Active",
+            ["status"] = "Revoked",
             ["lifecycle"] = lifecycle,
             ["accounts"] = accounts,
             ["manifest"] = new JsonObject
             {
-                ["version"] = "V1",
+                ["version"] = 1,
                 ["uaid"] = uaid,
                 ["dataspace"] = 42,
+                ["issued_ms"] = 1710000000000,
+                ["activation_epoch"] = 120,
                 ["entries"] = new JsonArray(),
             },
         };
@@ -23747,6 +23691,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             ["uaid"] = uaid,
             ["total"] = 1,
+            ["has_more"] = false,
+            ["count_mode"] = "exact",
             ["manifests"] = manifests,
         };
 
@@ -23757,6 +23703,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 break;
             case "total":
                 response["total"] = JsonValueForUaid(value);
+                break;
+            case "has_more":
+                response["has_more"] = JsonValueForUaid(value);
+                break;
+            case "count_mode":
+                response["count_mode"] = JsonValueForUaid(value);
                 break;
             case "manifests":
                 response["manifests"] = JsonValueForUaid(value);
@@ -23817,6 +23769,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             null => null,
             JsonNode node => node,
             string text => JsonValue.Create(text),
+            ulong number => JsonValue.Create(number),
+            uint number => JsonValue.Create(number),
             long number => JsonValue.Create(number),
             int number => JsonValue.Create(number),
             bool boolean => JsonValue.Create(boolean),
@@ -23874,15 +23828,15 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return new ToriiUaidPortfolioAsset
         {
-            AssetId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-            AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            AssetId = UaidPortfolioAssetId,
+            AssetDefinitionId = UaidPortfolioAssetDefinitionId,
             Quantity = "500",
         };
     }
 
     private static ToriiUaidPortfolioTotals UaidPortfolioTotalsWithPrivateField(string fieldName, object? value)
     {
-        var totals = new ToriiUaidPortfolioTotals { Accounts = 2, Positions = 3 };
+        var totals = new ToriiUaidPortfolioTotals { Accounts = 1, Positions = 1 };
         SetPrivateField(totals, fieldName, value);
         return totals;
     }
@@ -23961,7 +23915,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return new ToriiUaidPortfolioResponse
         {
             Uaid = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            Totals = new ToriiUaidPortfolioTotals { Accounts = 2, Positions = 3 },
+            Totals = new ToriiUaidPortfolioTotals { Accounts = 1, Positions = 1 },
             Dataspaces = [UaidPortfolioDataspaceObject()],
         };
     }
@@ -23972,7 +23926,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             DataspaceId = 42,
             DataspaceAlias = "payments",
-            Accounts = [UaidBindingsMerchantAccountId, UaidBindingsIssuerAccountId],
+            Accounts = [UaidBindingsMerchantAccountId],
         };
     }
 
@@ -24007,12 +23961,16 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             DataspaceId = 42,
             DataspaceAlias = "payments",
             ManifestHash = UaidManifestHashHex,
-            Status = "Active",
+            Status = ToriiUaidManifestStatus.Revoked,
             Lifecycle = UaidManifestLifecycleObject(),
             Accounts = [UaidManifestAccountId],
             Manifest = new JsonObject
             {
-                ["version"] = "V1",
+                ["version"] = 1,
+                ["uaid"] = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                ["dataspace"] = 42,
+                ["issued_ms"] = 1710000000000,
+                ["activation_epoch"] = 120,
                 ["entries"] = new JsonArray(),
             },
         };
@@ -24024,6 +23982,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Uaid = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             Total = 1,
+            HasMore = false,
+            CountMode = ToriiUaidManifestCountMode.Exact,
             Manifests = [UaidManifestRecordObject()],
         };
     }
@@ -24032,8 +23992,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         var totals = new JsonObject
         {
-            ["accounts"] = 2,
-            ["positions"] = 3,
+            ["accounts"] = 1,
+            ["positions"] = 1,
         };
 
         totals[field] = JsonValueForUaid(value);
@@ -24067,8 +24027,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return new JsonObject
         {
-            ["asset_id"] = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-            ["asset_definition_id"] = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            ["asset_id"] = UaidPortfolioAssetId,
+            ["asset_definition_id"] = UaidPortfolioAssetDefinitionId,
             ["quantity"] = "500",
         };
     }
@@ -24077,8 +24037,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return $$"""
             {
-              "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+              "asset_id": "{{UaidPortfolioAssetId}}",
+              "asset_definition_id": "{{UaidPortfolioAssetDefinitionId}}",
               "{{propertyName}}": "500",
               "{{propertyName}}": "600"
             }
@@ -24203,7 +24163,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     private static string UaidPortfolioResponseTotalsUnknownExtensionDuplicateJson()
     {
         var json = UaidPortfolioResponseJson("totals.accounts", 2);
-        return JsonWithIgnoredAuditDuplicateAfter(json, "\"positions\":3", "UAID portfolio response totals");
+        return JsonWithIgnoredAuditDuplicateAfter(json, "\"positions\":1", "UAID portfolio response totals");
     }
 
     private static string UaidPortfolioResponseAssetUnknownExtensionDuplicateJson()
@@ -24214,7 +24174,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
     private static string UaidBindingsDataspaceJson(string field, object? value)
     {
-        var accounts = new JsonArray(UaidBindingsMerchantAccountId, UaidBindingsIssuerAccountId);
+        var accounts = new JsonArray(UaidBindingsMerchantAccountId);
         var dataspace = new JsonObject
         {
             ["dataspace_id"] = 42,
@@ -24336,8 +24296,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
               "activated_epoch": 121,
               "expired_epoch": 240,
-              "{{propertyName}}": { "epoch": 122 },
-              "{{propertyName}}": { "epoch": 123 }
+              "{{propertyName}}": { "epoch": 122, "reason": null },
+              "{{propertyName}}": { "epoch": 123, "reason": null }
             }
             """;
     }
@@ -24355,12 +24315,16 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["dataspace_id"] = 42,
             ["dataspace_alias"] = "payments",
             ["manifest_hash"] = UaidManifestHashHex,
-            ["status"] = "Active",
+            ["status"] = "Revoked",
             ["lifecycle"] = UaidManifestLifecycleJsonObject(),
             ["accounts"] = accounts,
             ["manifest"] = new JsonObject
             {
-                ["version"] = "V1",
+                ["version"] = 1,
+                ["uaid"] = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                ["dataspace"] = 42,
+                ["issued_ms"] = 1710000000000,
+                ["activation_epoch"] = 120,
                 ["entries"] = new JsonArray(),
             },
         };
@@ -24448,7 +24412,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var json = UaidManifestsResponseJson("total", 1);
         return JsonWithIgnoredAuditDuplicateAfter(
             json,
-            "\"status\":\"Active\"",
+            "\"status\":\"Revoked\"",
             "UAID manifests response record");
     }
 
@@ -27790,12 +27754,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return operation switch
         {
-            "account-faucet" => client.ClaimAccountFaucetAsync(new ToriiAccountFaucetRequest
-            {
-                AccountId = CanonicalAccountId,
-                PowAnchorHeight = 68,
-                PowNonceHex = "00",
-            }),
             "contract-call" => client.CallContractAsync(ValidContractCallRequest()),
             "multisig-propose" => client.ProposeMultisigAsync(ValidMultisigProposeRequest()),
             "multisig-contract-propose" => client.ProposeMultisigContractCallAsync(ValidMultisigContractCallProposeRequest()),
@@ -27828,87 +27786,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["entrypoint"] = "main",
             ["operation_receipt"] = ContractCallOperationReceiptJsonObject(),
         }.ToJsonString();
-    }
-
-    private static string OnboardingTransactionHashResponseJson(
-        string operation,
-        string field,
-        object? value)
-    {
-        var response = operation switch
-        {
-            "account-faucet" => new JsonObject
-            {
-                ["account_id"] = FaucetAccountId,
-                ["asset_definition_id"] = "rose#wonderland",
-                ["asset_id"] = $"rose#wonderland#{FaucetAccountId}",
-                ["amount"] = "100",
-                ["tx_hash_hex"] = ToriiTransactionHashHex,
-                ["status"] = "QUEUED",
-            },
-            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown onboarding response operation."),
-        };
-
-        response[field] = JsonValueForOnboardingTransactionHash(value);
-        return response.ToJsonString();
-    }
-
-    private static string OnboardingTransactionHashDuplicatePropertyJson(
-        string operation,
-        string propertyName)
-    {
-        return operation switch
-        {
-            "account-faucet" => $$"""
-                {
-                  "account_id": "{{FaucetAccountId}}",
-                  "asset_definition_id": "rose#wonderland",
-                  "asset_id": "rose#wonderland#{{FaucetAccountId}}",
-                  "amount": "100",
-                  "{{propertyName}}": "{{ToriiTransactionHashHex}}",
-                  "{{propertyName}}": "{{ToriiTransactionHashHex}}",
-                  "status": "QUEUED"
-                }
-                """,
-            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown onboarding response operation."),
-        };
-    }
-
-    private static string OnboardingTransactionHashUnknownExtensionDuplicateJson(string operation)
-    {
-        return JsonWithIgnoredAuditDuplicate(OnboardingTransactionHashResponseJson(operation, "status", "QUEUED"));
-    }
-
-    private static JsonNode? JsonValueForOnboardingTransactionHash(object? value)
-    {
-        return value switch
-        {
-            null => null,
-            string text => JsonValue.Create(text),
-            int number => JsonValue.Create(number),
-            long number => JsonValue.Create(number),
-            ulong number => JsonValue.Create(number),
-            bool boolean => JsonValue.Create(boolean),
-            _ => throw new ArgumentOutOfRangeException(nameof(value), value, "Unsupported onboarding response JSON value."),
-        };
-    }
-
-    private static object? DeserializeRawOnboardingTransactionHashResponse(string operation, string json)
-    {
-        return operation switch
-        {
-            "account-faucet" => JsonSerializer.Deserialize<ToriiAccountFaucetResponse>(json),
-            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown onboarding response operation."),
-        };
-    }
-
-    private static string SerializeRawOnboardingTransactionHashResponse(string operation, string accountId)
-    {
-        return operation switch
-        {
-            "account-faucet" => SerializeWithPrivateField(ValidAccountFaucetResponse(), "accountId", accountId),
-            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown onboarding response operation."),
-        };
     }
 
     private static string MultisigResponseJson(string field, object? value)
@@ -28179,6 +28056,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     private static string VpnResponseJson(string operation, string field, string value)
     {
         var relayTlsSpkiSha256Hex = VpnSpkiSha256Hex;
+        var relayMldsa65PublicKeyHex = VpnRelayMldsa65PublicKeyHex;
         var quoteId = VpnQuoteIdHex;
         var quoteLeaseIdHex = VpnQuoteIdHex;
         var quoteSessionIdHex = VpnQuoteSessionIdHex;
@@ -28194,6 +28072,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             case (_, "relay_tls_spki_sha256_hex"):
                 relayTlsSpkiSha256Hex = value;
+                break;
+            case (_, "relay_mldsa65_public_key_hex"):
+                relayMldsa65PublicKeyHex = value;
                 break;
             case ("quote", "quote_id"):
                 quoteId = value;
@@ -28244,7 +28125,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
         return operation switch
         {
-            "profile" => VpnProfileResponseJsonObject(relayTlsSpkiSha256Hex).ToJsonString(),
+            "profile" => VpnProfileResponseJsonObject(
+                relayTlsSpkiSha256Hex,
+                relayMldsa65PublicKeyHex).ToJsonString(),
             "quote" => new JsonObject
             {
                 ["quote_id"] = quoteId,
@@ -28269,6 +28152,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 ["flow_label_bits"] = 24,
                 ["padding_budget_ms"] = 80,
                 ["relay_id_hex"] = VpnRelayIdHex,
+                ["relay_mldsa65_public_key_hex"] = relayMldsa65PublicKeyHex,
                 ["descriptor_commit_hex"] = VpnDescriptorCommitHex,
                 ["tls_server_name"] = "vpn.sora.org",
                 ["relay_tls_spki_sha256_hex"] = relayTlsSpkiSha256Hex,
@@ -28282,7 +28166,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 quoteId,
                 paymentTxHash,
                 relayTlsSpkiSha256Hex,
-                helperTicketHex),
+                helperTicketHex,
+                relayMldsa65PublicKeyHex),
             "receipt-submit" => VpnReceiptResponseJson(
                 sessionId,
                 quoteId,
@@ -28308,17 +28193,21 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         string quoteId,
         string paymentTxHash,
         string relayTlsSpkiSha256Hex,
-        string helperTicketHex)
+        string helperTicketHex,
+        string? relayMldsa65PublicKeyHex = null)
     {
         return VpnSessionResponseJsonObject(
             sessionId,
             quoteId,
             paymentTxHash,
             relayTlsSpkiSha256Hex,
-            helperTicketHex).ToJsonString();
+            helperTicketHex,
+            relayMldsa65PublicKeyHex).ToJsonString();
     }
 
-    private static JsonObject VpnProfileResponseJsonObject(string relayTlsSpkiSha256Hex)
+    private static JsonObject VpnProfileResponseJsonObject(
+        string relayTlsSpkiSha256Hex,
+        string? relayMldsa65PublicKeyHex = null)
     {
         return new JsonObject
         {
@@ -28341,6 +28230,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["flow_label_bits"] = 24,
             ["padding_budget_ms"] = 80,
             ["relay_id_hex"] = VpnRelayIdHex,
+            ["relay_mldsa65_public_key_hex"] =
+                relayMldsa65PublicKeyHex ?? VpnRelayMldsa65PublicKeyHex,
             ["descriptor_commit_hex"] = VpnDescriptorCommitHex,
             ["tls_server_name"] = "vpn.sora.org",
             ["relay_tls_spki_sha256_hex"] = relayTlsSpkiSha256Hex,
@@ -28354,7 +28245,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         string quoteId,
         string paymentTxHash,
         string relayTlsSpkiSha256Hex,
-        string helperTicketHex)
+        string helperTicketHex,
+        string? relayMldsa65PublicKeyHex = null)
     {
         return new JsonObject
         {
@@ -28376,6 +28268,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["flow_label_bits"] = 24,
             ["padding_budget_ms"] = 80,
             ["relay_id_hex"] = VpnRelayIdHex,
+            ["relay_mldsa65_public_key_hex"] =
+                relayMldsa65PublicKeyHex ?? VpnRelayMldsa65PublicKeyHex,
             ["descriptor_commit_hex"] = VpnDescriptorCommitHex,
             ["tls_server_name"] = "vpn.sora.org",
             ["relay_tls_spki_sha256_hex"] = relayTlsSpkiSha256Hex,
@@ -28485,6 +28379,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             FlowLabelBits = 24,
             PaddingBudgetMilliseconds = 80,
             RelayIdHex = VpnRelayIdHex,
+            RelayMldsa65PublicKeyHex = VpnRelayMldsa65PublicKeyHex,
             DescriptorCommitHex = VpnDescriptorCommitHex,
             TlsServerName = "vpn.sora.org",
             RelayTlsSpkiSha256Hex = VpnSpkiSha256Hex,

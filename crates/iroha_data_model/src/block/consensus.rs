@@ -3257,7 +3257,10 @@ pub struct SumeragiProposalGateStatus {
     #[norito(default)]
     pub last_successful_proposal_age_ms: u64,
 }
-/// Cohesive `NPoS`-only operator diagnostics.
+/// Current `NPoS` schedule and PRF context for operator diagnostics.
+///
+/// Per-epoch penalty membership is exposed separately by the authoritative
+/// VRF epoch-report route rather than duplicated as process-local counters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
@@ -3274,14 +3277,6 @@ pub struct SumeragiNposDiagnostics {
     pub prf_height: u64,
     /// View associated with the recorded PRF context.
     pub prf_view: u64,
-    /// Latest epoch index for which VRF penalties were recorded.
-    pub vrf_penalty_epoch: u64,
-    /// Validators that committed without revealing in the latest epoch snapshot.
-    pub vrf_committed_no_reveal_total: u64,
-    /// Validators that neither committed nor revealed in the latest epoch snapshot.
-    pub vrf_no_participation_total: u64,
-    /// Validators that revealed after the reveal window in the latest epoch snapshot.
-    pub vrf_late_reveals_total: u64,
 }
 impl SumeragiNposDiagnostics {
     /// Validate cross-field invariants that scalar wire types cannot express.

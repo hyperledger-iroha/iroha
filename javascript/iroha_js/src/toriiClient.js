@@ -57,7 +57,6 @@ import {
 } from "./validationError.js";
 import {
   assertNonBlankString,
-  normalizeStatusSet,
   normalizeTransactionStatusScope,
   readHeaderValue,
 } from "./toriiClientPrimitives.js";
@@ -130,7 +129,11 @@ import {
   parliamentTleReleaseContextReadPathV1,
 } from "./parliamentApiV1.js";
 import { createSubscriptionResponseNormalizers } from "./subscriptionResponses.js";
-import { requestSoracloudAppInfraStatus } from "./soracloud.js";
+import {
+  decodeExactSoracloudJsonResponse,
+  normalizeSoracloudMutationDraftResponse,
+  requestSoracloudAppInfraStatus,
+} from "./soracloud.js";
 import {
   normalizeCanonicalApplicationPostOptions,
   rejectPrecomputedCanonicalHeaders,
@@ -159,7 +162,6 @@ import {
   noritoEncodeSorafsBillingAcknowledgementProofV1,
   noritoEncodeMultisigProposeRequest,
   noritoEncodeTransactionPayloadBatch,
-  validateSorafsReplicationOrderPayloadV1,
   validateNoritoFrame,
 } from "./norito.js";
 import {
@@ -227,9 +229,8 @@ const JSON_REQUEST_HEADERS = Object.freeze({
   Accept: APPLICATION_JSON,
 });
 const PROPOSE_DEPLOY_CONTRACT_WIRE_ID =
-  "iroha_data_model::isi::governance::ProposeDeployContract";
+  "iroha.instruction.v1::governance::ProposeDeployContract";
 
-const DEFAULT_FAILURE_STATUSES = ["Rejected", "Expired"];
 const AUTHORITATIVE_PIPELINE_STATUS_KINDS = new Set([
   "Queued",
   "Approved",
@@ -439,16 +440,11 @@ const TX_STATUS_POLL_OPTION_KEYS = new Set([
   "intervalMs",
   "timeoutMs",
   "maxAttempts",
-  "failureStatuses",
   "onStatus",
 ]);
 const GET_METRICS_OPTION_KEYS = new Set(["asText", "signal"]);
 const CONNECT_APP_LIST_OPTION_KEYS = new Set(["limit", "cursor", "signal"]);
-const GET_TX_STATUS_OPTION_KEYS = new Set([
-  "allowShortHash",
-  "signal",
-  "scope",
-]);
+const GET_TX_STATUS_OPTION_KEYS = new Set(["signal", "scope"]);
 const IVM_PROVE_WAIT_OPTION_KEYS = new Set([
   "signal",
   "intervalMs",
@@ -563,6 +559,7 @@ const EVIDENCE_BASE_FIELDS = Object.freeze([
 
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
 const KAIGI_EVENT_KIND_VALUES = new Set(["registration", "health"]);
+const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS = 500;
 
 function ownDataMethod(target, name) {
   if (target === null || (typeof target !== "object" && typeof target !== "function")) {
@@ -793,67 +790,20 @@ function copyArrayBufferBytes(buffer, byteOffset, byteLength) {
 }
 
 const KAIGI_CALL_EVENT_KIND_VALUES = new Set(["roster_updated", "ended"]);
-const SORAFS_REPLICATION_STATUS_VALUES = new Set([
-  "pending",
-  "completed",
-  "expired",
-  "cancelled",
-]);
+const SORAFS_REPLICATION_STATUS_VALUES = new Set(["pending", "completed", "expired"]);
 const SORAFS_PIN_STATUS_VALUES = new Set(["pending", "approved", "retired"]);
 const SORAFS_PIN_LIST_MAX_ITEMS = 256;
 const SORAFS_PIN_LIST_MIN_PAGE_BYTES = 1024;
 const SORAFS_PIN_LIST_MAX_PAGE_BYTES = 256 * 1024;
-const SORAFS_ALIAS_LIST_DEFAULT_ITEMS = 50;
-const SORAFS_ALIAS_LIST_MAX_ITEMS = 500;
-const SORAFS_ALIAS_PROOF_MAX_BYTES = 1024 * 1024;
-const SORAFS_ALIAS_LINEAGE_MAX_DEPTH = 64;
-const SORAFS_ALIAS_RFC3339_MAX_UNIX_SECONDS = 253_402_300_799;
-const SORAFS_ALIAS_CACHE_STATUS_VALUES = new Set([
-  "fresh",
-  "fresh-rotate",
-  "refresh",
-  "refresh-rotate",
-  "expired",
-  "hard-expired",
-  "lineage-invalid",
-  "governance-refused",
-  "successor-refused",
-  "refresh-successor",
-  "refresh-governance",
-  "pending-successor",
-]);
-const SORAFS_ALIAS_CACHE_DECISION_VALUES = new Set(["serve", "hold", "refuse"]);
-const SORAFS_ALIAS_MANIFEST_STATUS_VALUES = new Set([
-  "pending",
-  "approved",
-  "retired",
-]);
-const SORAFS_ALIAS_CACHE_REASON_VALUES = new Set([
-  "ApprovedSuccessor",
-  "ApprovedSuccessorGrace",
-  "ApprovedSuccessorPending",
-  "ExpiredTTL",
-  "GovernanceFrozen",
-  "GovernanceGrace",
-  "GovernanceRevoked",
-  "GovernanceRotated",
-  "HardExpired",
-  "LineageCycleDetected",
-  "LineageDepthExceeded",
-  "ManifestMissing",
-  "MissingTimestamp",
-  "PendingSuccessor",
-  "RefreshWindow",
-  "RotationDue",
-  "SuccessorForkResolved",
-]);
-const SORAFS_ALIAS_LINEAGE_ANOMALY_VALUES = new Set([
-  "ManifestMissing",
-  "LineageDepthExceeded",
-  "LineageCycleDetected",
-  "SuccessorForkResolved",
-]);
 const UAID_MANIFEST_STATUS_VALUES = new Set(["Pending", "Active", "Expired", "Revoked"]);
+const UAID_MANIFEST_FILTER_VALUES = new Set(["active", "inactive", "all"]);
+const UAID_MANIFEST_COUNT_MODE_VALUES = new Set(["bounded", "exact"]);
+const UAID_MANIFEST_ROLE_VALUES = new Set(["Initiator", "Participant"]);
+const UAID_MANIFEST_ALLOWANCE_WINDOW_VALUES = new Set([
+  "PerSlot",
+  "PerMinute",
+  "PerDay",
+]);
 const SUBSCRIPTION_STATUS_VALUES = new Set([
   "active",
   "paused",
@@ -1319,7 +1269,7 @@ export function decodePdpCommitmentHeader(headers) {
 
 /**
  * Torii HTTP client for typed queries, transaction submission, status
- * inspection, event streams, and attachments.
+ * inspection, event streams, attachments, and prover reports.
  *
  * Request and response validation follows the canonical Norito-backed data
  * model exposed by this package.
@@ -3184,7 +3134,7 @@ export class ToriiClient {
    * Persist each page's `promotedCheckpoint` yourself when crash-durable
    * promotion is required; this convenience method promotes only in memory.
    */
-  async catchUpValidationFeeCurrentPolicyProof(binding, options = {}) {
+  async catchUpValidationFeeCurrentPolicyProof(binding, options) {
     const normalizedBinding = normalizeValidationFeeLedgerBindingV1(binding);
     const normalizedOptions = ensureRecord(
       options,
@@ -3573,7 +3523,7 @@ export class ToriiClient {
     if (!payload) {
       throw new Error("sorafs alias list endpoint returned no payload");
     }
-    return normalizeSorafsAliasListResponse(payload, params);
+    return normalizeSorafsAliasListResponse(payload);
   }
 
   /**
@@ -3700,7 +3650,7 @@ export class ToriiClient {
 
   /**
    * List SoraFS replication orders with attestation metadata (`GET /v1/sorafs/replication`).
-   * @param {{status?: "pending"|"completed"|"expired"|"cancelled", manifestDigestHex?: string, limit?: number, offset?: number, signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
+   * @param {{status?: "pending"|"completed"|"expired", manifestDigestHex?: string, limit?: number, offset?: number, signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<SorafsReplicationListResponse>}
    */
   async listSorafsReplicationOrders(options) {
@@ -4659,25 +4609,26 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch one chain-authoritative SoraFS pin manifest at finalized state
-   * (`GET /v1/sorafs/pin/{digest}`).
-   * @param {string} digestHex Exact non-zero lowercase manifest digest.
-   * @param {SorafsPinManifestOptions} [options]
-   * @returns {Promise<SorafsPinManifestFinalizedRecordV1 | null>}
+   * Fetch a SoraFS pin manifest (`GET /v1/sorafs/pin/{digest}`) with alias proof enforcement.
+   * @param {string} digestHex Manifest digest (hex string).
+   * @param {{ headers?: Record<string, string>, signal?: AbortSignal }} [options]
+   * @returns {Promise<Record<string, unknown> | null>}
    */
   async getSorafsPinManifest(digestHex, options = {}) {
-    const normalized = requireNonZeroLowerHex32String(digestHex, "digestHex");
+    const normalized = requireHexString(digestHex, "digestHex");
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
       options,
       "getSorafsPinManifest",
     );
-    const params = buildSorafsPinManifestParams(rest);
+    const headers = {
+      Accept: APPLICATION_JSON,
+      ...(rest.headers ?? {}),
+    };
     const response = await this._request(
       "GET",
       `/v1/sorafs/pin/${normalized}`,
       {
-        headers: JSON_ACCEPT_HEADERS,
-        params,
+        headers,
         signal,
       },
     );
@@ -4685,14 +4636,22 @@ export class ToriiClient {
     if (response.status === 404) {
       return null;
     }
-    const payload = await this._maybeJson(response);
+    this._enforceSorafsAliasPolicy(response);
+    return this._maybeJson(response);
+  }
+
+  /**
+   * Fetch a SoraFS pin manifest with typed output.
+   * @param {string} digestHex
+   * @param {{ headers?: Record<string, string>, signal?: AbortSignal }} [options]
+   * @returns {Promise<SorafsPinManifestResponse>}
+   */
+  async getSorafsPinManifestTyped(digestHex, options = {}) {
+    const payload = await this.getSorafsPinManifest(digestHex, options);
     if (!payload) {
-      throw new Error("sorafs pin manifest endpoint returned no payload");
+      throw new Error("sorafs pin manifest endpoint returned 404");
     }
-    return normalizeSorafsPinManifestFinalizedRecord(payload, {
-      requestParams: params,
-      expectedDigestHex: normalized,
-    });
+    return normalizeSorafsPinManifestResponse(payload);
   }
 
   /**
@@ -5441,7 +5400,7 @@ export class ToriiClient {
     if (!payload) {
       throw new Error("uaid portfolio endpoint returned no payload");
     }
-    return normalizeUaidPortfolioResponse(payload);
+    return normalizeUaidPortfolioResponse(payload, canonicalUaid);
   }
 
   /**
@@ -5466,13 +5425,13 @@ export class ToriiClient {
     if (!payload) {
       throw new Error("uaid bindings endpoint returned no payload");
     }
-    return normalizeUaidBindingsResponse(payload);
+    return normalizeUaidBindingsResponse(payload, canonicalUaid);
   }
 
   /**
    * Fetch Space Directory manifests for a UAID (`GET /v1/space-directory/uaids/{uaid}/manifests`).
    * @param {string} uaid
-   * @param {{dataspaceId?: number, signal?: AbortSignal}} [options]
+   * @param {{dataspaceId?: number, status?: "active" | "inactive" | "all", limit?: number, offset?: number, countMode?: "bounded" | "exact", signal?: AbortSignal}} [options]
    * @returns {Promise<UaidManifestsResponse>}
    */
   async getUaidManifests(uaid, options = {}) {
@@ -5481,13 +5440,45 @@ export class ToriiClient {
       options,
       "getUaidManifests",
     );
-    assertSupportedOptionKeys(rest, new Set(["dataspaceId"]), "getUaidManifests options");
+    assertSupportedOptionKeys(
+      rest,
+      new Set(["dataspaceId", "status", "limit", "offset", "countMode"]),
+      "getUaidManifests options",
+    );
     const params = {};
-    if (rest.dataspaceId !== undefined && rest.dataspaceId !== null) {
-      params.dataspace = ToriiClient._normalizeUnsignedInteger(
+    if (rest.dataspaceId !== undefined) {
+      params.dataspace = requireExactJsonUnsignedInteger(
         rest.dataspaceId,
         "getUaidManifests.dataspaceId",
         { allowZero: true },
+      );
+    }
+    if (rest.status !== undefined) {
+      params.status = requireExactEnumString(
+        rest.status,
+        UAID_MANIFEST_FILTER_VALUES,
+        "getUaidManifests.status",
+      );
+    }
+    if (rest.limit !== undefined) {
+      params.limit = requireExactJsonUnsignedInteger(
+        rest.limit,
+        "getUaidManifests.limit",
+        { allowZero: false },
+      );
+    }
+    if (rest.offset !== undefined) {
+      params.offset = requireExactJsonUnsignedInteger(
+        rest.offset,
+        "getUaidManifests.offset",
+        { allowZero: true },
+      );
+    }
+    if (rest.countMode !== undefined) {
+      params.count_mode = requireExactEnumString(
+        rest.countMode,
+        UAID_MANIFEST_COUNT_MODE_VALUES,
+        "getUaidManifests.countMode",
       );
     }
     const response = await this._request(
@@ -5504,7 +5495,7 @@ export class ToriiClient {
     if (!payload) {
       throw new Error("uaid manifests endpoint returned no payload");
     }
-    return normalizeUaidManifestsResponse(payload);
+    return normalizeUaidManifestsResponse(payload, canonicalUaid);
   }
 
   /**
@@ -5770,7 +5761,6 @@ export class ToriiClient {
    * Query pipeline status for a transaction hash (hex encoded).
    * @param {string} hashHex
    * @param {{
-   *   allowShortHash?: boolean,
    *   signal?: AbortSignal,
    *   scope?: "local" | "global",
    * }} [options]
@@ -5786,18 +5776,6 @@ export class ToriiClient {
       GET_TX_STATUS_OPTION_KEYS,
       "getTransactionStatus options",
     );
-    if (
-      optionRecord.allowShortHash !== undefined &&
-      optionRecord.allowShortHash !== null &&
-      typeof optionRecord.allowShortHash !== "boolean"
-    ) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        "getTransactionStatus options.allowShortHash must be a boolean when provided",
-        "getTransactionStatus.options.allowShortHash",
-      );
-    }
-    const allowShortHash = optionRecord.allowShortHash === true;
     const scope = normalizeTransactionStatusScope(
       optionRecord.scope,
       "getTransactionStatus options.scope",
@@ -5806,10 +5784,9 @@ export class ToriiClient {
       optionRecord,
       "getTransactionStatus",
     );
-    const normalizedHash = normalizeHashLike32(
+    const normalizedHash = requireCanonicalTransactionHashString(
       hashHex,
       "getTransactionStatus.hashHex",
-      { allowShort: allowShortHash },
     );
     return this._fetchTransactionStatus(normalizedHash, { signal, scope });
   }
@@ -5832,30 +5809,13 @@ export class ToriiClient {
       );
       return null;
     }
-    await this._expectStatus(response, [200, 202, 204], { signal });
-    if (response.status === 204) {
-      cancelResponseBodyBestEffort(
-        response,
-        "discarding empty transaction status response body",
-      );
-      return null;
-    }
+    await this._expectStatus(response, [200], { signal });
     const payload = await this._maybeBoundedJson(
       response,
       PIPELINE_STATUS_JSON_MAX_BYTES,
       "transaction status response",
       { signal },
     );
-    if (!payload) {
-      return null;
-    }
-    if (
-      typeof payload === "object" &&
-      payload !== null &&
-      Object.keys(payload).length === 0
-    ) {
-      return null;
-    }
     return assertPipelineTransactionStatusMatchesHash(
       normalizePipelineTransactionStatus(payload),
       normalizedHash,
@@ -5864,9 +5824,9 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch transaction pipeline status and normalise the payload.
+   * Fetch transaction pipeline status and normalise the diagnostic payload.
    * @param {string} hashHex
-   * @returns {Promise<ToriiPipelineStatus | null>}
+   * @returns {Promise<ToriiPipelineTransactionStatus | null>}
    */
   async getTransactionStatusTyped(hashHex, options = {}) {
     const payload = await this.getTransactionStatus(hashHex, options);
@@ -5877,22 +5837,21 @@ export class ToriiClient {
   }
 
   /**
-   * Poll pipeline status until the transaction reaches a terminal state.
+   * Poll until global chain state reports exact state-resolved Applied finality.
    * @param {string} hashHex
    * @param {{
    *   signal?: AbortSignal,
    *   intervalMs?: number,
    *   timeoutMs?: number | null,
    *   maxAttempts?: number | null,
-   *   failureStatuses?: Iterable<string>,
    *   onStatus?: (status: string | null, payload: any, attempt: number) => (void | Promise<void>)
    * }} [options]
   * @returns {Promise<any>}
-  * @throws {TransactionStatusError} when the transaction reports a failure status.
+  * @throws {TransactionStatusError} when the transaction reports Rejected or Expired.
   * @throws {TransactionTimeoutError} when timeout or max attempts elapse.
   */
   async waitForTransactionStatus(hashHex, options = {}) {
-    const normalizedHash = normalizeHashLike32(
+    const normalizedHash = requireCanonicalTransactionHashString(
       hashHex,
       "waitForTransactionStatus.hashHex",
     );
@@ -5901,7 +5860,6 @@ export class ToriiClient {
       timeoutMs,
       maxAttempts,
       signal,
-      failureSet,
       onStatus,
     } = ToriiClient._normalizeTransactionStatusPollOptions(
       options,
@@ -5947,25 +5905,15 @@ export class ToriiClient {
         ) {
           return lastPayload;
         }
-        const isCanonicalTerminalFailure =
-          status === "Rejected" || status === "Expired";
-        const isStateTerminalFailure =
-          isCanonicalTerminalFailure &&
-          statusResolution?.resolvedFrom === "state";
-        const isConfiguredStateFailure =
-          failureSet.has(status) &&
-          statusResolution?.resolvedFrom === "state";
-        if (
-          isStateTerminalFailure ||
-          isConfiguredStateFailure
-        ) {
+        const isFixedFailure = status === "Rejected" || status === "Expired";
+        if (isFixedFailure) {
           throw new TransactionStatusError(normalizedHash, status, lastPayload);
         }
       }
 
       if (maxAttempts !== null && attempts >= maxAttempts) {
         throw new TransactionTimeoutError(
-          `Transaction ${normalizedHash} did not reach a terminal status after ${attempts} attempts`,
+          `Transaction ${normalizedHash} did not reach state-resolved Applied finality after ${attempts} attempts`,
           normalizedHash,
           attempts,
           lastPayload,
@@ -5974,7 +5922,7 @@ export class ToriiClient {
 
       if (hasTimeout && Date.now() >= deadline) {
         throw new TransactionTimeoutError(
-          `Transaction ${normalizedHash} did not reach a terminal status within ${timeoutBudgetMs}ms`,
+          `Transaction ${normalizedHash} did not reach state-resolved Applied finality within ${timeoutBudgetMs}ms`,
           normalizedHash,
           attempts,
           lastPayload,
@@ -5988,28 +5936,24 @@ export class ToriiClient {
   }
 
   /**
-   * Poll transaction pipeline status until it reaches a terminal state and normalise the payload.
+   * Poll until exact state-resolved Applied finality and normalise the payload.
    * @param {string} hashHex
    * @param {TransactionStatusPollOptions} [options]
-   * @returns {Promise<ToriiPipelineStatus | null>}
+   * @returns {Promise<ToriiAppliedTransactionStatus>}
    */
   async waitForTransactionStatusTyped(hashHex, options = {}) {
     const payload = await this.waitForTransactionStatus(hashHex, options);
-    if (!payload) {
-      return null;
-    }
     return normalizePipelineStatusPayload(payload);
   }
 
   /**
-   * Submit a transaction payload and await its terminal pipeline status.
+   * Submit a transaction payload and await exact state-resolved Applied finality.
    * @param {ArrayBufferView | ArrayBuffer | Buffer} payload
    * @param {{
    *   hashHex: string,
    *   intervalMs?: number,
    *   timeoutMs?: number | null,
    *   maxAttempts?: number | null,
-   *   failureStatuses?: Iterable<string>,
    *   onStatus?: (status: string | null, payload: any, attempt: number) => (void | Promise<void>)
    * }} options
    * @returns {Promise<any>}
@@ -6020,8 +5964,8 @@ export class ToriiClient {
       "submitTransactionAndWait options",
     );
     const { hashHex, ...pollOptions } = record;
-    const normalizedHash = normalizeHashLike32(
-      requireHexString(hashHex, "options.hashHex"),
+    const normalizedHash = requireCanonicalTransactionHashString(
+      hashHex,
       "options.hashHex",
     );
     ToriiClient._normalizeTransactionStatusPollOptions(
@@ -6033,16 +5977,13 @@ export class ToriiClient {
   }
 
   /**
-   * Submit a transaction payload and await its terminal pipeline status (normalised structure).
+   * Submit a transaction payload and await exact Applied finality (normalised structure).
    * @param {ArrayBufferView | ArrayBuffer | Buffer} payload
    * @param {SubmitTransactionAndWaitOptions} options
-   * @returns {Promise<ToriiPipelineStatus | null>}
+   * @returns {Promise<ToriiAppliedTransactionStatus>}
    */
   async submitTransactionAndWaitTyped(payload, options) {
     const status = await this.submitTransactionAndWait(payload, options);
-    if (!status) {
-      return null;
-    }
     return normalizePipelineStatusPayload(status);
   }
 
@@ -6247,13 +6188,13 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch Torii status snapshot (`GET /v1/status`) with typed governance breakdown.
+   * Fetch Torii status snapshot (`GET /status`) with typed governance breakdown.
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiStatusSnapshot>}
    */
   async getStatusSnapshot(options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getStatusSnapshot");
-    const response = await this._request("GET", "/v1/status", {
+    const response = await this._request("GET", "/status", {
       headers: JSON_ACCEPT_HEADERS,
       signal,
     });
@@ -6327,7 +6268,13 @@ export class ToriiClient {
       canonicalAuth,
     });
     await this._expectStatus(response, [200]);
-    return this._maybeJson(response);
+    const payload = await decodeExactSoracloudJsonResponse(
+      this,
+      response,
+      context,
+      signal,
+    );
+    return normalizeSoracloudMutationDraftResponse(payload);
   }
 
   /**
@@ -8410,7 +8357,24 @@ export class ToriiClient {
    */
   async listKaigiCallSignals(callId, options = {}) {
     const normalizedCallId = requireNonEmptyString(callId, "callId");
-    const { signal, params } = buildKaigiCallSignalsQuery(options);
+    const {
+      signal,
+      params,
+      canonicalAuth: requestedCanonicalAuth,
+    } = buildKaigiCallSignalsQuery(options);
+    const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
+      requestedCanonicalAuth === undefined
+        ? this._canonicalRequestAuth
+        : requestedCanonicalAuth,
+      "listKaigiCallSignals.canonicalAuth",
+    );
+    if (!canonicalAuth) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "listKaigiCallSignals canonicalAuth is required when the client has no canonicalRequestAuth",
+        "listKaigiCallSignals.canonicalAuth",
+      );
+    }
     const response = await this._request(
       "GET",
       `/v1/kaigi/calls/${encodeURIComponent(normalizedCallId)}/signals`,
@@ -8418,6 +8382,7 @@ export class ToriiClient {
         headers: JSON_ACCEPT_HEADERS,
         params,
         signal,
+        canonicalAuth,
       },
     );
     await this._expectStatus(response, [200]);
@@ -8449,10 +8414,7 @@ export class ToriiClient {
     );
     return (async function* mapEvents() {
       for await (const event of iterator) {
-        let data = event.data;
-        if (data && typeof data === "object") {
-          data = normalizeKaigiCallEventData(data);
-        }
+        const data = normalizeKaigiCallEventData(event.data);
         yield {
           ...event,
           data,
@@ -8543,16 +8505,58 @@ export class ToriiClient {
     });
     return (async function* mapEvents() {
       for await (const event of iterator) {
-        let data = event.data;
-        if (data && typeof data === "object") {
-          data = normalizeKaigiRelayEventData(data);
-        }
+        const data = normalizeKaigiRelayEventData(event.data);
         yield {
           ...event,
           data,
         };
       }
     })();
+  }
+
+  /**
+   * List prover reports with optional filters.
+   * @param {Record<string, unknown>} filters
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ReadonlyArray<ToriiProverReport>>}
+   * @throws When the server projection omits report fields (e.g. `ids_only=true`).
+   */
+  async listProverReports(filters = {}, options = {}) {
+    const normalizedFilters = ToriiClient._encodeProverFilters(filters);
+    const { signal } = normalizeSignalOnlyOption(options, "listProverReports");
+    const response = await this._request("GET", "/v1/zk/prover/reports", {
+      params: normalizedFilters,
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    return normalizeProverReportList(payload, normalizedFilters, "prover reports response");
+  }
+
+  /**
+   * Iterate prover reports with offset-based pagination and typed projections.
+   * @param {ToriiProverReportFilters} [filters]
+   * @param {PaginationIteratorOptions & {signal?: AbortSignal}} [options]
+   * @returns {AsyncGenerator<ToriiProverReport | string | ToriiProverReportMessageSummary, void, unknown>}
+   */
+  iterateProverReports(filters = {}, options = {}) {
+    const fetchPage = async (pageOptions = {}) => {
+      const { signal, ...rest } = pageOptions ?? {};
+      const pageFilters = { ...filters, ...rest };
+      const result = await this.listProverReports(pageFilters, { signal });
+      if (result.kind === "ids") {
+        return { items: result.ids ?? [] };
+      }
+      if (result.kind === "messages") {
+        return { items: result.messages ?? [] };
+      }
+      return { items: result.reports ?? [] };
+    };
+    return this._iterateOffsetIterable(
+      fetchPage,
+      options,
+      PROVER_REPORT_ITERATOR_OPTION_KEYS,
+    );
   }
 
   /**
@@ -9964,6 +9968,43 @@ export class ToriiClient {
   }
 
   /**
+   * Fetch a single prover report.
+   * @param {string} reportId
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiProverReport>}
+   */
+  async getProverReport(reportId, options = {}) {
+    const normalizedId = requireNonEmptyString(reportId, "reportId");
+    const { signal } = normalizeSignalOnlyOption(options, "getProverReport");
+    const response = await this._request(
+      "GET",
+      `/v1/zk/prover/reports/${encodeURIComponent(normalizedId)}`,
+      { signal },
+    );
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("prover report response missing JSON body");
+    }
+    return normalizeProverReportRecord(payload, "prover report response");
+  }
+
+  /**
+   * Delete a prover report by id.
+   * @param {string} reportId
+   */
+  async deleteProverReport(reportId, options = {}) {
+    const normalizedId = requireNonEmptyString(reportId, "reportId");
+    const { signal } = normalizeSignalOnlyOption(options, "deleteProverReport");
+    const response = await this._request(
+      "DELETE",
+      `/v1/zk/prover/reports/${encodeURIComponent(normalizedId)}`,
+      { signal },
+    );
+    await this._expectStatus(response, [204, 404]);
+  }
+
+  /**
    * Submit an ISO 20022 pacs.008 message (`POST /v1/iso20022/pacs008`).
    * @param {ArrayBufferView | ArrayBuffer | Buffer | string} message XML payload
    * @param {{contentType?: string, profile?: string, signal?: AbortSignal}} [options]
@@ -10041,6 +10082,7 @@ export class ToriiClient {
       "pollIntervalMs",
       "maxAttempts",
       "resolveOnAcceptedWithoutTransaction",
+      "resolveOnAccepted",
       "onPoll",
       "signal",
       "retryProfile",
@@ -10070,15 +10112,35 @@ export class ToriiClient {
         : ToriiClient._normalizeUnsignedInteger(resolvedOptions.maxAttempts, "wait.maxAttempts", {
             allowZero: false,
           });
-    const resolveOnAcceptedWithoutTransaction =
-      resolvedOptions.resolveOnAcceptedWithoutTransaction ?? false;
-    if (typeof resolveOnAcceptedWithoutTransaction !== "boolean") {
+    const resolveAlias = resolvedOptions.resolveOnAccepted;
+    const resolveCanonical = resolvedOptions.resolveOnAcceptedWithoutTransaction;
+    if (resolveCanonical !== undefined && typeof resolveCanonical !== "boolean") {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
         "wait.resolveOnAcceptedWithoutTransaction must be a boolean",
         `${optionPath}.resolveOnAcceptedWithoutTransaction`,
       );
     }
+    if (resolveAlias !== undefined && typeof resolveAlias !== "boolean") {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "wait.resolveOnAccepted must be a boolean",
+        `${optionPath}.resolveOnAccepted`,
+      );
+    }
+    if (
+      resolveCanonical !== undefined &&
+      resolveAlias !== undefined &&
+      resolveCanonical !== resolveAlias
+    ) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "wait.resolveOnAccepted and wait.resolveOnAcceptedWithoutTransaction must match when both are provided",
+        `${optionPath}.resolveOnAccepted`,
+      );
+    }
+    const resolveOnAccepted =
+      resolveCanonical !== undefined ? resolveCanonical : resolveAlias ?? false;
     let retryProfile;
     if (resolvedOptions.retryProfile !== undefined && resolvedOptions.retryProfile !== null) {
       retryProfile = requireNonEmptyString(
@@ -10124,12 +10186,7 @@ export class ToriiClient {
         // eslint-disable-next-line no-await-in-loop
         await onPoll({ attempt, status: lastStatus });
       }
-      if (
-        ToriiClient._isIsoStatusTerminal(
-          lastStatus,
-          resolveOnAcceptedWithoutTransaction,
-        )
-      ) {
+      if (ToriiClient._isIsoStatusTerminal(lastStatus, resolveOnAccepted)) {
         return lastStatus;
       }
       if (attempt < maxAttempts) {
@@ -10295,6 +10352,29 @@ export class ToriiClient {
     return kind === "pacs.009"
       ? this.submitIsoPacs009(xml, submissionOptions)
       : this.submitIsoPacs008(xml, submissionOptions);
+  }
+
+  /**
+   * Count prover reports with optional filters.
+   * @param {Record<string, unknown>} filters
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<number>}
+   */
+  async countProverReports(filters = {}, options = {}) {
+    const normalizedFilters = ToriiClient._encodeProverFilters(filters);
+    const { signal } = normalizeSignalOnlyOption(options, "countProverReports");
+    const response = await this._request("GET", "/v1/zk/prover/reports/count", {
+      params: normalizedFilters,
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload || typeof payload.count === "undefined") {
+      throw new Error("invalid prover count payload");
+    }
+    return ToriiClient._normalizeUnsignedInteger(payload.count, "prover count", {
+      allowZero: true,
+    });
   }
 
   async _request(method, path, options = {}) {
@@ -11121,6 +11201,56 @@ export class ToriiClient {
       }
     }
     return this._extractRejectCodeFromDetails(bodyJson?.details);
+  }
+
+  static _encodeProverFilters(filters) {
+    if (filters === undefined || filters === null) {
+      return {};
+    }
+    const record = ToriiClient._requirePlainObject(filters, "prover filters");
+    const params = {};
+    for (const [rawKey, rawValue] of Object.entries(record)) {
+      if (rawValue === undefined || rawValue === null) {
+        continue;
+      }
+      const entry = PROVER_FILTER_ALIAS_MAP.get(rawKey);
+      if (!entry) {
+        throw createValidationError(
+          ValidationErrorCode.INVALID_OBJECT,
+          `unknown prover filter '${rawKey}'`,
+          `proverFilters.${rawKey}`,
+        );
+      }
+      const { key, spec } = entry;
+      if (spec.type === "boolean") {
+        const flag = normalizeProverFilterBoolean(rawValue, `proverFilters.${rawKey}`);
+        if (flag) {
+          params[key] = true;
+        }
+        continue;
+      }
+      if (spec.type === "string") {
+        params[key] = normalizeProverFilterString(rawValue, `proverFilters.${rawKey}`);
+        continue;
+      }
+      if (spec.type === "integer") {
+        params[key] = ToriiClient._normalizeUnsignedInteger(
+          rawValue,
+          `proverFilters.${rawKey}`,
+          { allowZero: Boolean(spec.allowZero) },
+        );
+        continue;
+      }
+      if (spec.type === "enum") {
+        params[key] = normalizeProverFilterEnum(
+          rawValue,
+          `proverFilters.${rawKey}`,
+          spec.values,
+        );
+        continue;
+      }
+    }
+    return params;
   }
 
   async _submitSorafsOrderbookTransaction(path, route, signedTransaction, options, context) {
@@ -12469,7 +12599,6 @@ export class ToriiClient {
         intervalMs: DEFAULT_TX_STATUS_POLL_INTERVAL_MS,
         timeoutMs: DEFAULT_TX_STATUS_TIMEOUT_MS,
         maxAttempts: null,
-        failureSet: normalizeStatusSet(undefined, DEFAULT_FAILURE_STATUSES),
         onStatus: null,
       };
     }
@@ -12518,23 +12647,11 @@ export class ToriiClient {
       }
       onStatus = record.onStatus;
     }
-    const failureSet = normalizeStatusSet(
-      record.failureStatuses,
-      DEFAULT_FAILURE_STATUSES,
-    );
-    if (failureSet.has("Applied")) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context}.failureStatuses cannot classify Applied as failure`,
-        `${context}.failureStatuses`,
-      );
-    }
     return {
       signal,
       intervalMs,
       timeoutMs,
       maxAttempts,
-      failureSet,
       onStatus,
     };
   }
@@ -16504,7 +16621,7 @@ function normalizeVpnSessionCreateRequest(input) {
       record.quoteId ?? record.quote_id,
       "createVpnSession request.quoteId",
     ),
-    payment_tx_hash: normalizeHex32String(
+    payment_tx_hash: requireCanonicalTransactionHashString(
       record.paymentTxHash ?? record.payment_tx_hash,
       "createVpnSession request.paymentTxHash",
     ),
@@ -16692,7 +16809,7 @@ function normalizeVpnSessionResponse(payload, context = "vpn session response") 
       record.payment_reference ?? "",
       `${context}.payment_reference`,
     ),
-    paymentTxHash: requireExactLowerHex32String(
+    paymentTxHash: requireCanonicalTransactionHashString(
       record.payment_tx_hash,
       `${context}.payment_tx_hash`,
     ),
@@ -16805,7 +16922,7 @@ function normalizeVpnReceiptResponse(payload, context = "vpn receipt response") 
       `${context}.receipt_source`,
     ),
     quoteId: requireExactLowerHex32String(record.quote_id, `${context}.quote_id`),
-    paymentTxHash: requireExactLowerHex32String(
+    paymentTxHash: requireCanonicalTransactionHashString(
       record.payment_tx_hash,
       `${context}.payment_tx_hash`,
     ),
@@ -17911,26 +18028,15 @@ function requireUnsignedIntegerArray(value, context) {
 
 function normalizeUaidLiteral(value, context = "uaid") {
   const literal = requireExactNonEmptyString(value, context);
-  let hexPortion;
-  if (literal.slice(0, 5).toLowerCase() === "uaid:") {
-    hexPortion = literal.slice(5);
-  } else {
-    hexPortion = literal;
-  }
-  if (hexPortion.trim() !== hexPortion) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must not contain surrounding whitespace`,
-      context,
+  if (!/^uaid:[0-9a-f]{64}$/u.test(literal)) {
+    throw new TypeError(
+      `${context} must be an exact canonical uaid:<64 lowercase hex> literal`,
     );
   }
-  if (hexPortion.length !== 64 || !/^[0-9a-fA-F]+$/.test(hexPortion)) {
-    throw new TypeError(`${context} must contain 64 hex characters`);
-  }
-  if (!/[13579bdf]$/i.test(hexPortion)) {
+  if (!/[13579bdf]$/u.test(literal)) {
     throw new TypeError(`${context} must have least significant bit set to 1`);
   }
-  return `uaid:${hexPortion.toLowerCase()}`;
+  return literal;
 }
 
 function normalizeUaidPortfolioOptions(options, context = "getUaidPortfolio") {
@@ -17941,179 +18047,447 @@ function normalizeUaidPortfolioOptions(options, context = "getUaidPortfolio") {
   assertSupportedOptionKeys(record, new Set(["signal", "assetId"]), `${context} options`);
   const { signal } = normalizeSignalOption(record, context);
   let assetId;
-  if (record.assetId !== undefined && record.assetId !== null) {
-    assetId = ToriiClient._normalizeAssetId(record.assetId, `${context}.assetId`);
+  if (record.assetId !== undefined) {
+    assetId = requireExactAssetHoldingId(record.assetId, `${context}.assetId`);
   }
   return { signal, assetId };
 }
 
-function normalizeUaidPortfolioResponse(payload) {
-  const record = ensureRecord(payload, "uaid portfolio response");
+function requireExactUaidRecord(
+  value,
+  requiredFields,
+  optionalFields,
+  context,
+) {
+  const record = ensureRecord(value, context);
+  const required = new Set(requiredFields);
+  const allowed = new Set([...requiredFields, ...optionalFields]);
+  const missing = [...required].filter(
+    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  );
+  const unexpected = Reflect.ownKeys(record).filter(
+    (field) => typeof field !== "string" || !allowed.has(field),
+  );
+  if (missing.length > 0 || unexpected.length > 0) {
+    const details = [];
+    if (missing.length > 0) details.push(`missing ${missing.join(", ")}`);
+    if (unexpected.length > 0) {
+      details.push(`unexpected ${unexpected.map(String).sort().join(", ")}`);
+    }
+    throw new TypeError(
+      `${context} must use the exact server fields (${details.join("; ")})`,
+    );
+  }
+  return record;
+}
+
+function requireExactEnumString(value, allowed, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  if (!allowed.has(literal)) {
+    throw new TypeError(
+      `${context} must be one of ${Array.from(allowed).join(", ")}`,
+    );
+  }
+  return literal;
+}
+
+function requireJsonNullableString(value, context) {
+  if (value === null) return null;
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a string or null`);
+  }
+  return value;
+}
+
+function requireExactNullableUnsignedInteger(value, context) {
+  return value === null
+    ? null
+    : requireExactJsonUnsignedInteger(value, context, { allowZero: true });
+}
+
+function requireExactAssetHoldingId(value, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  const canonical = normalizeAssetHoldingId(literal, context);
+  if (canonical !== literal) {
+    throw new TypeError(`${context} must be an exact canonical asset holding id`);
+  }
+  const parts = literal.split("#");
+  if (parts.length === 3) {
+    const match = /^dataspace:(0|[1-9][0-9]*)$/u.exec(parts[2]);
+    if (match === null) {
+      throw new TypeError(`${context} must use a canonical dataspace scope`);
+    }
+  }
+  return literal;
+}
+
+function requireExactAssetDefinitionId(value, context) {
+  const literal = requireExactNonEmptyString(value, context);
+  const canonical = normalizeAssetDefinitionId(literal, context);
+  if (canonical !== literal) {
+    throw new TypeError(`${context} must be an exact canonical asset definition id`);
+  }
+  return literal;
+}
+
+function requireCanonicalUaidManifestName(value, context) {
+  const name = requireExactNonEmptyString(value, context);
+  if (
+    Buffer.byteLength(name, "utf8") > 255 ||
+    /[\p{Cc}\p{White_Space}@#$]/u.test(name) ||
+    /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(name) ||
+    name.normalize("NFC") !== name
+  ) {
+    throw new TypeError(`${context} must be a canonical Iroha Name`);
+  }
+  return name;
+}
+
+function requireExactAccountArray(value, context) {
+  return requireDenseArray(value, context).map((entry, index) =>
+    requireExactAccountId(entry, `${context}[${index}]`),
+  );
+}
+
+function normalizeUaidPortfolioResponse(payload, expectedUaid) {
+  const record = requireExactUaidRecord(
+    payload,
+    ["uaid", "totals", "dataspaces"],
+    [],
+    "uaid portfolio response",
+  );
   const uaid = normalizeUaidLiteral(record.uaid, "uaid portfolio response.uaid");
-  const totalsRecord = ensureRecord(
-    record.totals ?? {},
+  if (expectedUaid !== undefined && uaid !== expectedUaid) {
+    throw new TypeError("uaid portfolio response.uaid does not match the requested UAID");
+  }
+  const totalsRecord = requireExactUaidRecord(
+    record.totals,
+    ["accounts", "positions"],
+    [],
     "uaid portfolio response.totals",
   );
   const totals = {
-    accounts: ToriiClient._normalizeUnsignedInteger(
-      totalsRecord.accounts ?? 0,
+    accounts: requireExactJsonUnsignedInteger(
+      totalsRecord.accounts,
       "uaid portfolio response.totals.accounts",
       { allowZero: true },
     ),
-    positions: ToriiClient._normalizeUnsignedInteger(
-      totalsRecord.positions ?? 0,
+    positions: requireExactJsonUnsignedInteger(
+      totalsRecord.positions,
       "uaid portfolio response.totals.positions",
       { allowZero: true },
     ),
   };
-  const dataspacesValue = record.dataspaces ?? [];
-  if (!Array.isArray(dataspacesValue)) {
-    throw new TypeError("uaid portfolio response.dataspaces must be an array");
-  }
+  const dataspacesValue = requireDenseArray(
+    record.dataspaces,
+    "uaid portfolio response.dataspaces",
+  );
   const dataspaces = dataspacesValue.map((entry, index) =>
     normalizeUaidPortfolioDataspace(
       entry,
       `uaid portfolio response.dataspaces[${index}]`,
     ),
   );
+  const accounts = new Set();
+  let positions = 0;
+  for (const dataspace of dataspaces) {
+    for (const account of dataspace.accounts) {
+      accounts.add(account.account_id);
+      positions += account.assets.length;
+    }
+  }
+  if (accounts.size > 1) {
+    throw new TypeError(
+      "uaid portfolio response must contain at most one universal account",
+    );
+  }
+  if (totals.accounts !== accounts.size || totals.positions !== positions) {
+    throw new TypeError("uaid portfolio response.totals do not match the portfolio tree");
+  }
   return { uaid, totals, dataspaces };
 }
 
 function normalizeUaidPortfolioDataspace(value, context) {
-  const record = ensureRecord(value, context);
-  const accountsValue = record.accounts ?? [];
-  if (!Array.isArray(accountsValue)) {
-    throw new TypeError(`${context}.accounts must be an array`);
-  }
+  const record = requireExactUaidRecord(
+    value,
+    ["dataspace_id", "dataspace_alias", "accounts"],
+    [],
+    context,
+  );
+  const dataspaceId = requireExactJsonUnsignedInteger(
+    record.dataspace_id,
+    `${context}.dataspace_id`,
+    { allowZero: true },
+  );
+  const accountsValue = requireDenseArray(record.accounts, `${context}.accounts`);
   return {
-    dataspace_id: ToriiClient._normalizeUnsignedInteger(
-      record.dataspace_id,
-      `${context}.dataspace_id`,
-      { allowZero: true },
+    dataspace_id: dataspaceId,
+    dataspace_alias: requireJsonNullableString(
+      record.dataspace_alias,
+      `${context}.dataspace_alias`,
     ),
-    dataspace_alias: optionalString(record.dataspace_alias, `${context}.dataspace_alias`),
     accounts: accountsValue.map((entry, index) =>
-      normalizeUaidPortfolioAccount(entry, `${context}.accounts[${index}]`),
+      normalizeUaidPortfolioAccount(
+        entry,
+        dataspaceId,
+        `${context}.accounts[${index}]`,
+      ),
     ),
   };
 }
 
-function normalizeUaidPortfolioAccount(value, context) {
-  const record = ensureRecord(value, context);
-  const assetsValue = record.assets ?? [];
-  if (!Array.isArray(assetsValue)) {
-    throw new TypeError(`${context}.assets must be an array`);
+function normalizeUaidPortfolioAccount(value, dataspaceId, context) {
+  const record = requireExactUaidRecord(
+    value,
+    ["account_id", "label", "assets"],
+    [],
+    context,
+  );
+  const accountId = requireExactAccountId(record.account_id, `${context}.account_id`);
+  const assetsValue = requireDenseArray(record.assets, `${context}.assets`);
+  return {
+    account_id: accountId,
+    label: requireJsonNullableString(record.label, `${context}.label`),
+    assets: assetsValue.map((entry, index) =>
+      normalizeUaidPortfolioAsset(
+        entry,
+        accountId,
+        dataspaceId,
+        `${context}.assets[${index}]`,
+      ),
+    ),
+  };
+}
+
+function normalizeUaidPortfolioAsset(value, accountId, dataspaceId, context) {
+  const record = requireExactUaidRecord(
+    value,
+    ["asset_id", "asset_definition_id", "quantity"],
+    [],
+    context,
+  );
+  const assetId = requireExactAssetHoldingId(record.asset_id, `${context}.asset_id`);
+  const assetDefinitionId = requireExactAssetDefinitionId(
+    record.asset_definition_id,
+    `${context}.asset_definition_id`,
+  );
+  const [holdingDefinitionId, holdingAccountId, scope] = assetId.split("#");
+  if (holdingDefinitionId !== assetDefinitionId || holdingAccountId !== accountId) {
+    throw new TypeError(`${context}.asset_id does not match its account and definition`);
+  }
+  if (scope !== undefined) {
+    const scopeId = BigInt(scope.slice("dataspace:".length));
+    if (scopeId !== BigInt(dataspaceId)) {
+      throw new TypeError(`${context}.asset_id dataspace scope does not match its row`);
+    }
   }
   return {
-    account_id: ToriiClient._normalizeAccountId(record.account_id, `${context}.account_id`),
-    label: optionalString(record.label, `${context}.label`),
-    assets: assetsValue.map((entry, index) =>
-      normalizeUaidPortfolioAsset(entry, `${context}.assets[${index}]`),
-    ),
-  };
-}
-
-function normalizeUaidPortfolioAsset(value, context) {
-  const record = ensureRecord(value, context);
-  return {
-    asset_id: ToriiClient._normalizeAssetId(record.asset_id, `${context}.asset_id`),
-    asset_definition_id: requireNonEmptyString(
-      record.asset_definition_id,
-      `${context}.asset_definition_id`,
-    ),
+    asset_id: assetId,
+    asset_definition_id: assetDefinitionId,
     quantity: requireCanonicalQuantity(record.quantity, `${context}.quantity`),
   };
 }
 
-function normalizeUaidBindingsResponse(payload) {
-  const record = ensureRecord(payload, "uaid bindings response");
+function normalizeUaidBindingsResponse(payload, expectedUaid) {
+  const record = requireExactUaidRecord(
+    payload,
+    ["uaid", "dataspaces"],
+    [],
+    "uaid bindings response",
+  );
   const uaid = normalizeUaidLiteral(record.uaid, "uaid bindings response.uaid");
-  const dataspacesValue = record.dataspaces ?? [];
-  if (!Array.isArray(dataspacesValue)) {
-    throw new TypeError("uaid bindings response.dataspaces must be an array");
+  if (expectedUaid !== undefined && uaid !== expectedUaid) {
+    throw new TypeError("uaid bindings response.uaid does not match the requested UAID");
   }
+  const dataspacesValue = requireDenseArray(
+    record.dataspaces,
+    "uaid bindings response.dataspaces",
+  );
   const dataspaces = dataspacesValue.map((entry, index) =>
     normalizeUaidBindingsDataspace(
       entry,
       `uaid bindings response.dataspaces[${index}]`,
     ),
   );
+  const uniqueAccounts = new Set(dataspaces.flatMap((entry) => entry.accounts));
+  if (uniqueAccounts.size > 1) {
+    throw new TypeError(
+      "uaid bindings response must contain at most one universal account",
+    );
+  }
   return { uaid, dataspaces };
 }
 
 function normalizeUaidBindingsDataspace(value, context) {
-  const record = ensureRecord(value, context);
+  const record = requireExactUaidRecord(
+    value,
+    ["dataspace_id", "dataspace_alias", "accounts"],
+    [],
+    context,
+  );
+  const accounts = requireExactAccountArray(record.accounts, `${context}.accounts`);
+  if (accounts.length > 1) {
+    throw new TypeError(`${context}.accounts must contain at most one universal account`);
+  }
   return {
-    dataspace_id: ToriiClient._normalizeUnsignedInteger(
+    dataspace_id: requireExactJsonUnsignedInteger(
       record.dataspace_id,
       `${context}.dataspace_id`,
       { allowZero: true },
     ),
-    dataspace_alias: optionalString(record.dataspace_alias, `${context}.dataspace_alias`),
-    accounts: requireStringArray(record.accounts ?? [], `${context}.accounts`),
+    dataspace_alias: requireJsonNullableString(
+      record.dataspace_alias,
+      `${context}.dataspace_alias`,
+    ),
+    accounts,
   };
 }
 
-function normalizeUaidManifestsResponse(payload) {
-  const record = ensureRecord(payload, "uaid manifests response");
+function normalizeUaidManifestsResponse(payload, expectedUaid) {
+  const record = requireExactUaidRecord(
+    payload,
+    ["uaid", "total", "has_more", "count_mode", "manifests"],
+    [],
+    "uaid manifests response",
+  );
   const uaid = normalizeUaidLiteral(record.uaid, "uaid manifests response.uaid");
-  const manifestsValue = record.manifests ?? [];
-  if (!Array.isArray(manifestsValue)) {
-    throw new TypeError("uaid manifests response.manifests must be an array");
+  if (expectedUaid !== undefined && uaid !== expectedUaid) {
+    throw new TypeError("uaid manifests response.uaid does not match the requested UAID");
   }
+  const total = requireExactJsonUnsignedInteger(
+    record.total,
+    "uaid manifests response.total",
+    { allowZero: true },
+  );
+  if (typeof record.has_more !== "boolean") {
+    throw new TypeError("uaid manifests response.has_more must be a boolean");
+  }
+  const countMode = requireExactEnumString(
+    record.count_mode,
+    UAID_MANIFEST_COUNT_MODE_VALUES,
+    "uaid manifests response.count_mode",
+  );
+  const manifestsValue = requireDenseArray(
+    record.manifests,
+    "uaid manifests response.manifests",
+  );
   const manifests = manifestsValue.map((entry, index) =>
     normalizeUaidManifestRecord(
       entry,
+      uaid,
       `uaid manifests response.manifests[${index}]`,
     ),
   );
-  return { uaid, manifests };
-}
-
-function normalizeUaidManifestRecord(value, context) {
-  const record = ensureRecord(value, context);
-  const status = requireNonEmptyString(record.status, `${context}.status`);
-  if (!UAID_MANIFEST_STATUS_VALUES.has(status)) {
-    throw new TypeError(
-      `${context}.status must be one of ${Array.from(UAID_MANIFEST_STATUS_VALUES).join(", ")}`,
-    );
+  if (total < manifests.length) {
+    throw new TypeError("uaid manifests response.total cannot be smaller than the page");
   }
   return {
-    dataspace_id: ToriiClient._normalizeUnsignedInteger(
-      record.dataspace_id,
-      `${context}.dataspace_id`,
-      { allowZero: true },
+    uaid,
+    total,
+    has_more: record.has_more,
+    count_mode: countMode,
+    manifests,
+  };
+}
+
+function normalizeUaidManifestRecord(value, expectedUaid, context) {
+  const record = requireExactUaidRecord(
+    value,
+    [
+      "dataspace_id",
+      "dataspace_alias",
+      "manifest_hash",
+      "status",
+      "lifecycle",
+      "accounts",
+      "manifest",
+    ],
+    [],
+    context,
+  );
+  const status = requireExactEnumString(
+    record.status,
+    UAID_MANIFEST_STATUS_VALUES,
+    `${context}.status`,
+  );
+  const dataspaceId = requireExactJsonUnsignedInteger(
+    record.dataspace_id,
+    `${context}.dataspace_id`,
+    { allowZero: true },
+  );
+  const lifecycle = normalizeUaidManifestLifecycle(
+    record.lifecycle,
+    `${context}.lifecycle`,
+  );
+  const derivedStatus = lifecycle.revocation !== null
+    ? "Revoked"
+    : lifecycle.expired_epoch !== null
+      ? "Expired"
+      : lifecycle.activated_epoch !== null
+        ? "Active"
+        : "Pending";
+  if (status !== derivedStatus) {
+    throw new TypeError(`${context}.status does not match its lifecycle`);
+  }
+  const accounts = requireExactAccountArray(record.accounts, `${context}.accounts`);
+  if (accounts.length > 1) {
+    throw new TypeError(`${context}.accounts must contain at most one universal account`);
+  }
+  const manifest = normalizeUaidManifest(record.manifest, `${context}.manifest`);
+  if (manifest.uaid !== expectedUaid || manifest.dataspace !== dataspaceId) {
+    throw new TypeError(`${context}.manifest identity does not match its row`);
+  }
+  return {
+    dataspace_id: dataspaceId,
+    dataspace_alias: requireJsonNullableString(
+      record.dataspace_alias,
+      `${context}.dataspace_alias`,
     ),
-    dataspace_alias: optionalString(record.dataspace_alias, `${context}.dataspace_alias`),
-    manifest_hash: normalizeHex32String(
+    manifest_hash: requireExactLowerHex32String(
       record.manifest_hash,
       `${context}.manifest_hash`,
     ),
     status,
-    lifecycle: normalizeUaidManifestLifecycle(record.lifecycle, `${context}.lifecycle`),
-    accounts: requireStringArray(record.accounts ?? [], `${context}.accounts`),
-    manifest: normalizeUaidManifest(record.manifest, `${context}.manifest`),
+    lifecycle,
+    accounts,
+    manifest,
   };
 }
 
 function normalizeUaidManifestLifecycle(value, context) {
-  const record = ensureRecord(value ?? {}, context);
-  const activated = coerceOptionalInt(
+  const record = requireExactUaidRecord(
+    value,
+    ["activated_epoch", "expired_epoch", "revocation"],
+    [],
+    context,
+  );
+  const activated = requireExactNullableUnsignedInteger(
     record.activated_epoch,
     `${context}.activated_epoch`,
   );
-  const expired = coerceOptionalInt(record.expired_epoch, `${context}.expired_epoch`);
-  const revocationValue = record.revocation ?? null;
+  const expired = requireExactNullableUnsignedInteger(
+    record.expired_epoch,
+    `${context}.expired_epoch`,
+  );
+  const revocationValue = record.revocation;
   let revocation = null;
-  if (revocationValue !== null && revocationValue !== undefined) {
-    const rev = ensureRecord(revocationValue, `${context}.revocation`);
+  if (revocationValue !== null) {
+    const rev = requireExactUaidRecord(
+      revocationValue,
+      ["epoch", "reason"],
+      [],
+      `${context}.revocation`,
+    );
     revocation = {
-      epoch: ToriiClient._normalizeUnsignedInteger(
+      epoch: requireExactJsonUnsignedInteger(
         rev.epoch,
         `${context}.revocation.epoch`,
         { allowZero: true },
       ),
-      reason: optionalString(rev.reason, `${context}.revocation.reason`),
+      reason: requireJsonNullableString(
+        rev.reason,
+        `${context}.revocation.reason`,
+      ),
     };
   }
   return {
@@ -18124,49 +18498,211 @@ function normalizeUaidManifestLifecycle(value, context) {
 }
 
 function normalizeUaidManifest(value, context) {
-  const record = ensureRecord(value, context);
-  const entriesValue = record.entries ?? [];
-  if (!Array.isArray(entriesValue)) {
-    throw new TypeError(`${context}.entries must be an array`);
+  const record = requireExactUaidRecord(
+    value,
+    ["version", "uaid", "dataspace", "issued_ms", "activation_epoch", "entries"],
+    ["expiry_epoch"],
+    context,
+  );
+  if (record.version !== 1) {
+    throw new TypeError(`${context}.version must be the unsigned integer 1`);
   }
-  return {
-    version: requireNonEmptyString(record.version, `${context}.version`),
+  const normalized = {
+    version: 1,
     uaid: normalizeUaidLiteral(record.uaid, `${context}.uaid`),
-    dataspace: ToriiClient._normalizeUnsignedInteger(
+    dataspace: requireExactJsonUnsignedInteger(
       record.dataspace,
       `${context}.dataspace`,
       { allowZero: true },
     ),
-    issued_ms: ToriiClient._normalizeUnsignedInteger(
+    issued_ms: requireExactJsonUnsignedInteger(
       record.issued_ms,
       `${context}.issued_ms`,
       { allowZero: true },
     ),
-    activation_epoch: ToriiClient._normalizeUnsignedInteger(
+    activation_epoch: requireExactJsonUnsignedInteger(
       record.activation_epoch,
       `${context}.activation_epoch`,
       { allowZero: true },
     ),
-    expiry_epoch: coerceOptionalInt(record.expiry_epoch, `${context}.expiry_epoch`),
-    entries: entriesValue.map((entry, index) =>
+    entries: requireDenseArray(record.entries, `${context}.entries`).map((entry, index) =>
       normalizeUaidManifestEntry(entry, `${context}.entries[${index}]`),
     ),
   };
+  if (Object.prototype.hasOwnProperty.call(record, "expiry_epoch")) {
+    if (record.expiry_epoch === null) {
+      throw new TypeError(`${context}.expiry_epoch must be omitted instead of null`);
+    }
+    normalized.expiry_epoch = requireExactJsonUnsignedInteger(
+      record.expiry_epoch,
+      `${context}.expiry_epoch`,
+      { allowZero: true },
+    );
+  }
+  return normalized;
 }
 
 function normalizeUaidManifestEntry(value, context) {
-  const record = ensureRecord(value, context);
-  if (!isPlainObject(record.scope)) {
-    throw new TypeError(`${context}.scope must be an object`);
-  }
-  if (!isPlainObject(record.effect)) {
-    throw new TypeError(`${context}.effect must be an object`);
-  }
-  return {
-    scope: record.scope,
-    effect: record.effect,
-    notes: optionalString(record.notes, `${context}.notes`),
+  const record = requireExactUaidRecord(
+    value,
+    ["scope", "effect"],
+    ["notes"],
+    context,
+  );
+  const normalized = {
+    scope: normalizeUaidManifestScope(record.scope, `${context}.scope`),
+    effect: normalizeUaidManifestEffect(record.effect, `${context}.effect`),
   };
+  if (Object.prototype.hasOwnProperty.call(record, "notes")) {
+    if (record.notes === null) {
+      throw new TypeError(`${context}.notes must be omitted instead of null`);
+    }
+    if (typeof record.notes !== "string") {
+      throw new TypeError(`${context}.notes must be a string`);
+    }
+    normalized.notes = record.notes;
+  }
+  return normalized;
+}
+
+function normalizeUaidManifestScope(value, context) {
+  const record = requireExactUaidRecord(
+    value,
+    [],
+    ["dataspace", "program", "method", "asset", "role"],
+    context,
+  );
+  const normalized = {};
+  for (const field of ["dataspace", "program", "method", "asset", "role"]) {
+    if (!Object.prototype.hasOwnProperty.call(record, field)) continue;
+    const fieldContext = `${context}.${field}`;
+    if (record[field] === null) {
+      throw new TypeError(`${fieldContext} must be omitted instead of null`);
+    }
+    if (field === "dataspace") {
+      normalized[field] = requireExactJsonUnsignedInteger(record[field], fieldContext, {
+        allowZero: true,
+      });
+    } else if (field === "program" || field === "method") {
+      normalized[field] = requireCanonicalUaidManifestName(record[field], fieldContext);
+    } else if (field === "asset") {
+      normalized[field] = requireExactAssetDefinitionId(record[field], fieldContext);
+    } else {
+      normalized[field] = requireExactEnumString(
+        record[field],
+        UAID_MANIFEST_ROLE_VALUES,
+        fieldContext,
+      );
+    }
+  }
+  return normalized;
+}
+
+function normalizeUaidManifestEffect(value, context) {
+  const record = requireExactUaidRecord(value, [], ["Allow", "Deny"], context);
+  const decisions = Object.keys(record);
+  if (decisions.length !== 1) {
+    throw new TypeError(`${context} must contain exactly one Allow or Deny decision`);
+  }
+  if (decisions[0] === "Allow") {
+    const allowance = requireExactUaidRecord(
+      record.Allow,
+      ["window"],
+      ["max_amount"],
+      `${context}.Allow`,
+    );
+    const normalized = {
+      window: requireExactEnumString(
+        allowance.window,
+        UAID_MANIFEST_ALLOWANCE_WINDOW_VALUES,
+        `${context}.Allow.window`,
+      ),
+    };
+    if (Object.prototype.hasOwnProperty.call(allowance, "max_amount")) {
+      if (allowance.max_amount === null) {
+        throw new TypeError(`${context}.Allow.max_amount must be omitted instead of null`);
+      }
+      normalized.max_amount = requireCanonicalQuantity(
+        allowance.max_amount,
+        `${context}.Allow.max_amount`,
+      );
+    }
+    return { Allow: normalized };
+  }
+  const denial = requireExactUaidRecord(
+    record.Deny,
+    [],
+    ["reason"],
+    `${context}.Deny`,
+  );
+  const normalized = {};
+  if (Object.prototype.hasOwnProperty.call(denial, "reason")) {
+    if (denial.reason === null) {
+      throw new TypeError(`${context}.Deny.reason must be omitted instead of null`);
+    }
+    if (typeof denial.reason !== "string") {
+      throw new TypeError(`${context}.Deny.reason must be a string`);
+    }
+    normalized.reason = denial.reason;
+  }
+  return { Deny: normalized };
+}
+
+function normalizeProverFilterBoolean(value, name) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (value === 1) {
+      return true;
+    }
+    if (value === 0) {
+      return false;
+    }
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true" || normalized === "1" || normalized === "yes") {
+      return true;
+    }
+    if (normalized === "false" || normalized === "0" || normalized === "no") {
+      return false;
+    }
+  }
+  throw new TypeError(`${name} must be a boolean`);
+}
+
+function normalizeProverFilterString(value, name) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${name} must be a string`);
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new TypeError(`${name} must be a non-empty string`);
+  }
+  return trimmed;
+}
+
+function normalizeProverFilterEnum(value, name, allowed) {
+  const normalized = normalizeProverFilterString(value, name).toLowerCase();
+  if (!allowed.includes(normalized)) {
+    throw new TypeError(`${name} must be one of: ${allowed.join(", ")}`);
+  }
+  return normalized;
+}
+
+function isTruthyFilter(filters, key) {
+  if (!filters || typeof filters !== "object") {
+    return false;
+  }
+  if (key in filters) {
+    return Boolean(filters[key]);
+  }
+  const camelKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+  if (camelKey in filters) {
+    return Boolean(filters[camelKey]);
+  }
+  return false;
 }
 
 function extractExtraFields(record, recognizedKeys) {
@@ -18251,6 +18787,42 @@ function monotonicTimestamp() {
   }
   return Date.now();
 }
+
+const PROVER_FILTER_DEFINITIONS = {
+  ok_only: { type: "boolean", aliases: ["okOnly"] },
+  failed_only: { type: "boolean", aliases: ["failedOnly"] },
+  errors_only: { type: "boolean", aliases: ["errorsOnly"] },
+  ids_only: { type: "boolean", aliases: ["idsOnly"] },
+  messages_only: { type: "boolean", aliases: ["messagesOnly"] },
+  latest: { type: "boolean", aliases: ["latest"] },
+  content_type: { type: "string", aliases: ["contentType"] },
+  has_tag: { type: "string", aliases: ["hasTag"] },
+  id: { type: "string", aliases: ["id"] },
+  limit: { type: "integer", aliases: ["limit"], allowZero: false },
+  offset: { type: "integer", aliases: ["offset"], allowZero: true },
+  since_ms: { type: "integer", aliases: ["sinceMs"], allowZero: true },
+  before_ms: { type: "integer", aliases: ["beforeMs"], allowZero: true },
+  order: { type: "enum", aliases: ["order"], values: ["asc", "desc"] },
+};
+
+const PROVER_FILTER_ALIAS_MAP = (() => {
+  const map = new Map();
+  for (const [key, spec] of Object.entries(PROVER_FILTER_DEFINITIONS)) {
+    map.set(key, { key, spec });
+    const aliases = Array.isArray(spec.aliases) ? spec.aliases : [];
+    for (const alias of aliases) {
+      map.set(alias, { key, spec });
+    }
+  }
+  return map;
+})();
+const PROVER_REPORT_ITERATOR_OPTION_KEYS = (() => {
+  const keys = new Set(["pageSize", "maxItems", "limit", "offset", "signal"]);
+  for (const key of PROVER_FILTER_ALIAS_MAP.keys()) {
+    keys.add(key);
+  }
+  return keys;
+})();
 
 async function* readBodyChunks(body) {
   if (!body) {
@@ -18740,6 +19312,18 @@ function requireExactJsonUnsignedInteger(value, name, options = {}) {
 
 function requireExactLowerHex32String(value, name) {
   return requireExactLowerHexBytesString(value, name, 32);
+}
+
+function requireCanonicalTransactionHashString(value, name) {
+  const literal = requireExactLowerHex32String(value, name);
+  if (!/[13579bdf]$/u.test(literal)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must carry the canonical Iroha hash marker`,
+      name,
+    );
+  }
+  return literal;
 }
 
 function requireNonZeroLowerHex32String(value, name) {
@@ -20859,90 +21443,7 @@ function cloneJsonValueInternal(value, path, state, depth) {
 
 function normalizeSpaceDirectoryManifestPayload(input, context) {
   const manifest = cloneJsonValue(input, context);
-  const normalized = {};
-  const versionRaw = manifest.version ?? manifest.Version;
-  const version = requireNonEmptyString(
-    versionRaw,
-    `${context}.version`,
-  ).trim();
-  if (!version) {
-    throw new TypeError(`${context}.version must be a non-empty string`);
-  }
-  normalized.version = version;
-  const uaidLiteral =
-    manifest.uaid ?? manifest.uaid_literal ?? manifest.uaidLiteral;
-  normalized.uaid = normalizeUaidLiteral(uaidLiteral, `${context}.uaid`);
-  const dataspaceRaw =
-    manifest.dataspace ?? manifest.dataspace_id ?? manifest.dataspaceId;
-  normalized.dataspace = ToriiClient._normalizeUnsignedInteger(
-    dataspaceRaw,
-    `${context}.dataspace`,
-  );
-  const issuedMs = normalizeOptionalUnsignedInteger(
-    manifest.issued_ms ?? manifest.issuedMs,
-    `${context}.issued_ms`,
-  );
-  if (issuedMs !== undefined) {
-    normalized.issued_ms = issuedMs;
-  }
-  const activationEpoch = normalizeOptionalUnsignedInteger(
-    manifest.activation_epoch ?? manifest.activationEpoch,
-    `${context}.activation_epoch`,
-  );
-  if (activationEpoch !== undefined) {
-    normalized.activation_epoch = activationEpoch;
-  }
-  const expiryEpoch = normalizeOptionalUnsignedInteger(
-    manifest.expiry_epoch ?? manifest.expiryEpoch,
-    `${context}.expiry_epoch`,
-  );
-  if (expiryEpoch !== undefined) {
-    normalized.expiry_epoch = expiryEpoch;
-  }
-  if (manifest.accounts !== undefined && manifest.accounts !== null) {
-    normalized.accounts = requireStringArray(
-      manifest.accounts,
-      `${context}.accounts`,
-    ).map((account, index) =>
-      ToriiClient._normalizeAccountId(account, `${context}.accounts[${index}]`),
-    );
-  }
-  const entriesRaw = manifest.entries ?? manifest.Entries;
-  if (!Array.isArray(entriesRaw) || entriesRaw.length === 0) {
-    throw new TypeError(`${context}.entries must be a non-empty array`);
-  }
-  normalized.entries = entriesRaw.map((entry, index) => {
-    const record = ensureRecord(entry, `${context}.entries[${index}]`);
-    if (
-      record.effect === undefined ||
-      record.effect === null ||
-      typeof record.effect !== "object"
-    ) {
-      throw new TypeError(
-        `${context}.entries[${index}].effect must be an object`,
-      );
-    }
-    if (
-      record.scope !== undefined &&
-      record.scope !== null &&
-      !isPlainObject(record.scope)
-    ) {
-      throw new TypeError(
-        `${context}.entries[${index}].scope must be an object when present`,
-      );
-    }
-    if (
-      record.notes !== undefined &&
-      record.notes !== null &&
-      typeof record.notes !== "string"
-    ) {
-      throw new TypeError(
-        `${context}.entries[${index}].notes must be a string when present`,
-      );
-    }
-    return record;
-  });
-  return normalized;
+  return normalizeUaidManifest(manifest, context);
 }
 
 function normalizeOptionalUnsignedInteger(value, context) {
@@ -20976,63 +21477,81 @@ function normalizeRegisterContractCodeRequest(input) {
 }
 
 function normalizePublishSpaceDirectoryManifestRequest(input) {
-  const record = ensureRecord(input, "publishSpaceDirectoryManifest request");
-  if (record.manifest === undefined || record.manifest === null) {
-    throw new TypeError("publishSpaceDirectoryManifest.manifest is required");
-  }
-  const credentials = normalizeSecretFreeAuthority(
-    record,
-    "publishSpaceDirectoryManifest",
+  const candidate = ensureRecord(input, "publishSpaceDirectoryManifest request");
+  rejectPrivateKeyFields(candidate, "publishSpaceDirectoryManifest");
+  const record = requireExactUaidRecord(
+    candidate,
+    ["authority", "manifest"],
+    ["reason"],
+    "publishSpaceDirectoryManifest request",
   );
   const manifest = normalizeSpaceDirectoryManifestPayload(
     record.manifest,
     "publishSpaceDirectoryManifest.manifest",
   );
   const payload = {
-    ...credentials,
+    authority: requireExactAccountId(
+      record.authority,
+      "publishSpaceDirectoryManifest.authority",
+    ),
     manifest,
   };
-  const reason = optionalString(
-    record.reason,
-    "publishSpaceDirectoryManifest.reason",
-  );
-  if (reason !== null) {
-    payload.reason = reason;
+  if (Object.prototype.hasOwnProperty.call(record, "reason")) {
+    if (record.reason === null) {
+      throw new TypeError(
+        "publishSpaceDirectoryManifest.reason must be omitted instead of null",
+      );
+    }
+    if (typeof record.reason !== "string") {
+      throw new TypeError("publishSpaceDirectoryManifest.reason must be a string");
+    }
+    payload.reason = record.reason;
   }
   return payload;
 }
 
 function normalizeRevokeSpaceDirectoryManifestRequest(input) {
-  const record = ensureRecord(input, "revokeSpaceDirectoryManifest request");
-  const credentials = normalizeSecretFreeAuthority(
-    record,
-    "revokeSpaceDirectoryManifest",
+  const candidate = ensureRecord(input, "revokeSpaceDirectoryManifest request");
+  rejectPrivateKeyFields(candidate, "revokeSpaceDirectoryManifest");
+  const record = requireExactUaidRecord(
+    candidate,
+    ["authority", "uaid", "dataspaceId", "revokedEpoch"],
+    ["reason"],
+    "revokeSpaceDirectoryManifest request",
   );
   const uaid = normalizeUaidLiteral(
     record.uaid,
     "revokeSpaceDirectoryManifest.uaid",
   );
-  const dataspace = ToriiClient._normalizeUnsignedInteger(
-    record.dataspace ?? record.dataspaceId,
+  const dataspace = requireExactJsonUnsignedInteger(
+    record.dataspaceId,
     "revokeSpaceDirectoryManifest.dataspace",
+    { allowZero: true },
   );
-  const revokedEpoch = ToriiClient._normalizeUnsignedInteger(
-    record.revoked_epoch ?? record.revokedEpoch,
+  const revokedEpoch = requireExactJsonUnsignedInteger(
+    record.revokedEpoch,
     "revokeSpaceDirectoryManifest.revokedEpoch",
     { allowZero: true },
   );
   const payload = {
-    ...credentials,
+    authority: requireExactAccountId(
+      record.authority,
+      "revokeSpaceDirectoryManifest.authority",
+    ),
     uaid,
     dataspace,
     revoked_epoch: revokedEpoch,
   };
-  const reason = optionalString(
-    record.reason,
-    "revokeSpaceDirectoryManifest.reason",
-  );
-  if (reason !== null) {
-    payload.reason = reason;
+  if (Object.prototype.hasOwnProperty.call(record, "reason")) {
+    if (record.reason === null) {
+      throw new TypeError(
+        "revokeSpaceDirectoryManifest.reason must be omitted instead of null",
+      );
+    }
+    if (typeof record.reason !== "string") {
+      throw new TypeError("revokeSpaceDirectoryManifest.reason must be a string");
+    }
+    payload.reason = record.reason;
   }
   return payload;
 }
@@ -21198,6 +21717,8 @@ const {
   normalizeQuantityInput,
   normalizeRequiredBase64Payload,
   normalizeUint64DecimalString,
+  requireExactLowerHex32String,
+  requireCanonicalTransactionHashString,
   requireExactNonEmptyString,
   requireExactTokenString,
   requireGovernanceSelectorString,
@@ -21327,7 +21848,13 @@ function normalizeContractOperationReceipt(payload, context) {
     contract_address: optionalString(receipt.contract_address, `${context}.contract_address`),
     code_hash_hex: optionalHash(receipt.code_hash_hex, `${context}.code_hash_hex`),
     abi_hash_hex: optionalHash(receipt.abi_hash_hex, `${context}.abi_hash_hex`),
-    tx_hash_hex: optionalHash(receipt.tx_hash_hex, `${context}.tx_hash_hex`),
+    tx_hash_hex:
+      receipt.tx_hash_hex === undefined || receipt.tx_hash_hex === null
+        ? null
+        : requireCanonicalTransactionHashString(
+            receipt.tx_hash_hex,
+            `${context}.tx_hash_hex`,
+          ),
     entrypoint: optionalString(receipt.entrypoint, `${context}.entrypoint`),
     entrypoint_hash_hex: optionalHash(
       receipt.entrypoint_hash_hex,
@@ -21405,8 +21932,20 @@ function normalizeContractCallResponse(payload) {
       `${context}.contract_address`,
     );
   }
-  normalized.tx_hash_hex = requireOptionalExactLowerHex32String(record.tx_hash_hex, `${context}.tx_hash_hex`);
-  normalized.entrypoint_hash_hex = requireOptionalExactLowerHex32String(record.entrypoint_hash_hex, `${context}.entrypoint_hash_hex`);
+  normalized.tx_hash_hex =
+    record.tx_hash_hex === undefined || record.tx_hash_hex === null
+      ? null
+      : requireCanonicalTransactionHashString(
+          record.tx_hash_hex,
+          `${context}.tx_hash_hex`,
+        );
+  normalized.entrypoint_hash_hex =
+    record.entrypoint_hash_hex === undefined || record.entrypoint_hash_hex === null
+      ? null
+      : requireCanonicalTransactionHashString(
+          record.entrypoint_hash_hex,
+          `${context}.entrypoint_hash_hex`,
+        );
   normalized.entrypoint =
     record.entrypoint === undefined || record.entrypoint === null
       ? null
@@ -22412,14 +22951,20 @@ function normalizeMultisigContractCallResponse(
       record.instructions_hash,
       `${context}.instructions_hash`,
     ),
-    tx_hash_hex: requireOptionalExactLowerHex32String(
-      record.tx_hash_hex,
-      `${context}.tx_hash_hex`,
-    ),
-    executed_tx_hash_hex: requireOptionalExactLowerHex32String(
-      record.executed_tx_hash_hex,
-      `${context}.executed_tx_hash_hex`,
-    ),
+    tx_hash_hex:
+      record.tx_hash_hex === undefined || record.tx_hash_hex === null
+        ? null
+        : requireCanonicalTransactionHashString(
+            record.tx_hash_hex,
+            `${context}.tx_hash_hex`,
+          ),
+    executed_tx_hash_hex:
+      record.executed_tx_hash_hex === undefined || record.executed_tx_hash_hex === null
+        ? null
+        : requireCanonicalTransactionHashString(
+            record.executed_tx_hash_hex,
+            `${context}.executed_tx_hash_hex`,
+          ),
     creation_time_ms:
       record.creation_time_ms === undefined || record.creation_time_ms === null
         ? null
@@ -22428,10 +22973,6 @@ function normalizeMultisigContractCallResponse(
             `${context}.creation_time_ms`,
             { allowZero: true },
           ),
-    fee_payment: normalizeFeePaymentIntentValue(
-      record.fee_payment,
-      `${context}.fee_payment`,
-    ),
     transaction_payload_b64: normalizeOptionalExactBase64Payload(
       record.transaction_payload_b64,
       `${context}.transaction_payload_b64`,
@@ -24992,13 +25533,13 @@ function buildSorafsAliasListParams(options = {}) {
   );
   const params = {};
   if (record.namespace !== undefined && record.namespace !== null) {
-    params.namespace = requireExactSorafsAliasSegment(
+    params.namespace = requireNonEmptyString(
       record.namespace,
       "sorafsAliasList.namespace",
     );
   }
   if (record.manifestDigestHex !== undefined && record.manifestDigestHex !== null) {
-    params.manifest_digest = requireNonZeroLowerHex32String(
+    params.manifest_digest = normalizeHex32String(
       record.manifestDigestHex,
       "sorafsAliasList.manifestDigestHex",
     );
@@ -25007,14 +25548,14 @@ function buildSorafsAliasListParams(options = {}) {
     params.limit = ToriiClient._normalizeUnsignedInteger(
       record.limit,
       "sorafsAliasList.limit",
-      { allowZero: false, max: SORAFS_ALIAS_LIST_MAX_ITEMS },
+      { allowZero: false },
     );
   }
   if (record.offset !== undefined && record.offset !== null) {
     params.offset = ToriiClient._normalizeUnsignedInteger(
       record.offset,
       "sorafsAliasList.offset",
-      { allowZero: true, max: 0xffff_ffff },
+      { allowZero: true },
     );
   }
   return Object.keys(params).length === 0 ? undefined : params;
@@ -25036,7 +25577,7 @@ function buildSorafsPinListParams(options = {}) {
   );
   const params = {};
   if (record.status !== undefined && record.status !== null) {
-    const status = requireExactNonEmptyString(
+    const status = requireNonEmptyString(
       record.status,
       "sorafsPinList.status",
     );
@@ -25101,40 +25642,6 @@ function buildSorafsPinListParams(options = {}) {
   return Object.keys(params).length === 0 ? undefined : params;
 }
 
-function buildSorafsPinManifestParams(options = {}) {
-  const record = ensureRecord(options, "getSorafsPinManifest options");
-  assertSupportedOptionKeys(
-    record,
-    new Set(["expectedFinalizedHeight", "expectedFinalizedBlockHashHex"]),
-    "getSorafsPinManifest options",
-  );
-  const hasExpectedHeight =
-    record.expectedFinalizedHeight !== undefined &&
-    record.expectedFinalizedHeight !== null;
-  const hasExpectedBlockHash =
-    record.expectedFinalizedBlockHashHex !== undefined &&
-    record.expectedFinalizedBlockHashHex !== null;
-  if (hasExpectedHeight !== hasExpectedBlockHash) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      "sorafsPinManifest.expectedFinalizedHeight and sorafsPinManifest.expectedFinalizedBlockHashHex must be supplied together",
-      "sorafsPinManifest.expectedFinalizedHeight",
-    );
-  }
-  if (!hasExpectedHeight) return undefined;
-  return {
-    expected_finalized_height: ToriiClient._normalizeUnsignedInteger(
-      record.expectedFinalizedHeight,
-      "sorafsPinManifest.expectedFinalizedHeight",
-      { allowZero: false },
-    ),
-    expected_finalized_block_hash_hex: requireNonZeroLowerHex32String(
-      record.expectedFinalizedBlockHashHex,
-      "sorafsPinManifest.expectedFinalizedBlockHashHex",
-    ),
-  };
-}
-
 function buildSorafsReplicationListParams(options = {}) {
   const record = ensureRecord(options, "listSorafsReplicationOrders options");
   assertSupportedOptionKeys(
@@ -25144,21 +25651,21 @@ function buildSorafsReplicationListParams(options = {}) {
   );
   const params = {};
   if (record.status !== undefined && record.status !== null) {
-    const status = requireExactNonEmptyString(
+    const normalized = requireNonEmptyString(
       record.status,
       "sorafsReplicationList.status",
-    );
-    if (!SORAFS_REPLICATION_STATUS_VALUES.has(status)) {
+    ).toLowerCase();
+    if (!SORAFS_REPLICATION_STATUS_VALUES.has(normalized)) {
       throw createValidationError(
         ValidationErrorCode.INVALID_STRING,
-        "sorafsReplicationList.status must be exactly pending, completed, expired, or cancelled",
+        "sorafsReplicationList.status must be pending, completed, or expired",
         "sorafsReplicationList.status",
       );
     }
-    params.status = status;
+    params.status = normalized;
   }
   if (record.manifestDigestHex !== undefined && record.manifestDigestHex !== null) {
-    params.manifest_digest = requireNonZeroLowerHex32String(
+    params.manifest_digest = normalizeHex32String(
       record.manifestDigestHex,
       "sorafsReplicationList.manifestDigestHex",
     );
@@ -25167,14 +25674,14 @@ function buildSorafsReplicationListParams(options = {}) {
     params.limit = ToriiClient._normalizeUnsignedInteger(
       record.limit,
       "sorafsReplicationList.limit",
-      { allowZero: false, max: 500 },
+      { allowZero: false },
     );
   }
   if (record.offset !== undefined && record.offset !== null) {
     params.offset = ToriiClient._normalizeUnsignedInteger(
       record.offset,
       "sorafsReplicationList.offset",
-      { allowZero: true, max: 0xffff_ffff },
+      { allowZero: true },
     );
   }
   return Object.keys(params).length === 0 ? undefined : params;
@@ -27072,7 +27579,7 @@ function normalizeSorafsPinFinalizedCursor(payload, context) {
     throw new TypeError(`${context}.block_hash must be non-zero`);
   }
   return {
-    height: requireExactJsonUnsignedInteger(record.height, `${context}.height`, {
+    height: ToriiClient._normalizeUnsignedInteger(record.height, `${context}.height`, {
       allowZero: false,
     }),
     block_hash: blockHash,
@@ -27087,13 +27594,15 @@ function normalizeSorafsPinResourceUsage(payload, context) {
     context,
   );
   return {
-    manifest_count: requireExactJsonUnsignedInteger(
+    manifest_count: ToriiClient._normalizeUnsignedInteger(
       record.manifest_count,
       `${context}.manifest_count`,
+      { allowZero: true },
     ),
-    content_bytes: requireExactJsonUnsignedInteger(
+    content_bytes: ToriiClient._normalizeUnsignedInteger(
       record.content_bytes,
       `${context}.content_bytes`,
+      { allowZero: true },
     ),
   };
 }
@@ -27108,40 +27617,10 @@ function normalizeSorafsPinManifestSummary(payload, context) {
       "content_length",
       "retention_epoch",
       "status",
-      "approved_epoch",
     ],
     ["successor_of"],
     context,
   );
-  const submittedEpoch = requireExactJsonUnsignedInteger(
-    record.submitted_epoch,
-    `${context}.submitted_epoch`,
-  );
-  const retentionEpoch = requireExactJsonUnsignedInteger(
-    record.retention_epoch,
-    `${context}.retention_epoch`,
-  );
-  const status = normalizeSorafsPinNativeStatus(record.status, `${context}.status`);
-  const approvedEpoch =
-    record.approved_epoch === null
-      ? null
-      : requireExactJsonUnsignedInteger(
-          record.approved_epoch,
-          `${context}.approved_epoch`,
-        );
-  if (
-    retentionEpoch <= submittedEpoch ||
-    (status.status === "Pending" && approvedEpoch !== null) ||
-    (status.status === "Approved" && approvedEpoch !== status.value) ||
-    (status.status !== "Pending" && status.value < submittedEpoch) ||
-    (status.status === "Retired" && approvedEpoch !== null && approvedEpoch > status.value) ||
-    (approvedEpoch !== null &&
-      (approvedEpoch < submittedEpoch || approvedEpoch >= retentionEpoch))
-  ) {
-    throw new TypeError(
-      `${context}.approved_epoch does not exactly match the retained pin lifecycle`,
-    );
-  }
   return {
     digest: normalizeExactJsonByteArray(record.digest, `${context}.digest`, {
       exactLength: 32,
@@ -27150,14 +27629,22 @@ function normalizeSorafsPinManifestSummary(payload, context) {
       record.submitted_by,
       `${context}.submitted_by`,
     ),
-    submitted_epoch: submittedEpoch,
-    content_length: requireExactJsonUnsignedInteger(
+    submitted_epoch: ToriiClient._normalizeUnsignedInteger(
+      record.submitted_epoch,
+      `${context}.submitted_epoch`,
+      { allowZero: true },
+    ),
+    content_length: ToriiClient._normalizeUnsignedInteger(
       record.content_length,
       `${context}.content_length`,
+      { allowZero: true },
     ),
-    retention_epoch: retentionEpoch,
-    status,
-    approved_epoch: approvedEpoch,
+    retention_epoch: ToriiClient._normalizeUnsignedInteger(
+      record.retention_epoch,
+      `${context}.retention_epoch`,
+      { allowZero: true },
+    ),
+    status: normalizeSorafsPinNativeStatus(record.status, `${context}.status`),
     successor_of:
       record.successor_of === undefined || record.successor_of === null
         ? null
@@ -27185,7 +27672,9 @@ function normalizeSorafsPinNativeStatus(payload, context) {
   }
   return {
     status: record.status,
-    value: requireExactJsonUnsignedInteger(record.value, `${context}.value`),
+    value: ToriiClient._normalizeUnsignedInteger(record.value, `${context}.value`, {
+      allowZero: true,
+    }),
   };
 }
 
@@ -27211,1684 +27700,396 @@ function exactJsonBytesToLowerHex(bytes) {
   return Buffer.from(bytes).toString("hex");
 }
 
-function normalizeSorafsPinManifestFinalizedRecord(
+function normalizeSorafsPinManifestResponse(
   payload,
-  { requestParams = undefined, expectedDigestHex },
   context = "sorafs pin manifest response",
 ) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["finalized_cursor", "manifest"],
-    [],
-    context,
-  );
-  const finalizedCursor = normalizeSorafsPinFinalizedCursor(
-    record.finalized_cursor,
-    `${context}.finalized_cursor`,
-  );
-  const manifest = normalizeSorafsPinManifestRecord(
-    record.manifest,
-    `${context}.manifest`,
-  );
-  if (exactJsonBytesToLowerHex(manifest.digest) !== expectedDigestHex) {
-    throw new TypeError(`${context}.manifest.digest does not match the requested digest`);
-  }
-  if (
-    requestParams?.expected_finalized_height !== undefined &&
-    finalizedCursor.height !== requestParams.expected_finalized_height
-  ) {
-    throw new TypeError(`${context}.finalized_cursor.height does not match the request anchor`);
-  }
-  if (
-    requestParams?.expected_finalized_block_hash_hex !== undefined &&
-    exactJsonBytesToLowerHex(finalizedCursor.block_hash) !==
-      requestParams.expected_finalized_block_hash_hex
-  ) {
-    throw new TypeError(
-      `${context}.finalized_cursor.block_hash does not match the request anchor`,
-    );
-  }
-  return { finalized_cursor: finalizedCursor, manifest };
-}
-
-function normalizeSorafsPinManifestRecord(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    [
-      "digest",
-      "root_cid",
-      "chunker",
-      "chunk_digest_sha3_256",
-      "por_root",
-      "content_length",
-      "policy",
-      "submitted_by",
-      "submitted_epoch",
-      "approved_epoch",
-      "alias",
-      "metadata",
-      "status",
-      "council_envelope_digest",
-    ],
-    ["successor_of", "retirement_reason", "pin_fee_payment"],
-    context,
-  );
-  const submittedEpoch = requireExactJsonUnsignedInteger(
-    record.submitted_epoch,
-    `${context}.submitted_epoch`,
-  );
-  const policy = normalizeSorafsPinPolicy(record.policy, `${context}.policy`);
-  if (policy.retention_epoch <= submittedEpoch) {
-    throw new TypeError(`${context}.policy.retention_epoch must follow submitted_epoch`);
-  }
-  const status = normalizeSorafsPinNativeStatus(record.status, `${context}.status`);
-  const approvedEpoch = record.approved_epoch === null
-    ? null
-    : requireExactJsonUnsignedInteger(record.approved_epoch, `${context}.approved_epoch`);
-  const councilEnvelopeDigest = record.council_envelope_digest === null
-    ? null
-    : normalizeExactJsonByteArray(
-        record.council_envelope_digest,
-        `${context}.council_envelope_digest`,
-        { exactLength: 32 },
-      );
-  const hasRetirementReason = Object.prototype.hasOwnProperty.call(
-    record,
-    "retirement_reason",
-  );
-  if (hasRetirementReason && typeof record.retirement_reason !== "string") {
-    throw new TypeError(`${context}.retirement_reason must be a string`);
-  }
-  validateSorafsPinManifestLifecycle(
-    {
-      submittedEpoch,
-      retentionEpoch: policy.retention_epoch,
-      approvedEpoch,
-      status,
-      councilEnvelopeDigest,
-      hasRetirementReason,
-    },
-    context,
-  );
-  const submittedBy = ToriiClient._requireAccountId(
-    record.submitted_by,
-    `${context}.submitted_by`,
-  );
-  const normalized = {
-    digest: normalizeExactJsonByteArray(record.digest, `${context}.digest`, {
-      exactLength: 32,
-    }),
-    root_cid: normalizeSorafsPinManifestRootCid(record.root_cid, `${context}.root_cid`),
-    chunker: normalizeSorafsPinChunkerHandle(record.chunker, `${context}.chunker`),
-    chunk_digest_sha3_256: normalizeExactJsonByteArray(
-      record.chunk_digest_sha3_256,
-      `${context}.chunk_digest_sha3_256`,
-      { exactLength: 32 },
-    ),
-    por_root: normalizeExactJsonByteArray(record.por_root, `${context}.por_root`, {
-      exactLength: 32,
-    }),
-    content_length: requireExactJsonUnsignedInteger(
-      record.content_length,
-      `${context}.content_length`,
-    ),
-    policy,
-    submitted_by: submittedBy,
-    submitted_epoch: submittedEpoch,
-    approved_epoch: approvedEpoch,
-    alias: record.alias === null
-      ? null
-      : normalizeSorafsPinManifestAlias(record.alias, `${context}.alias`),
-    metadata: cloneJsonValue(
-      ensureRecord(record.metadata, `${context}.metadata`),
-      `${context}.metadata`,
-    ),
-    status,
-    council_envelope_digest: councilEnvelopeDigest,
-  };
-  if (Object.prototype.hasOwnProperty.call(record, "successor_of")) {
-    normalized.successor_of = normalizeExactJsonByteArray(
-      record.successor_of,
-      `${context}.successor_of`,
-      { exactLength: 32 },
-    );
-  }
-  if (hasRetirementReason) {
-    normalized.retirement_reason = record.retirement_reason;
-  }
-  if (Object.prototype.hasOwnProperty.call(record, "pin_fee_payment")) {
-    normalized.pin_fee_payment = normalizeSorafsPinFeePayment(
-      record.pin_fee_payment,
-      submittedBy,
-      `${context}.pin_fee_payment`,
-    );
-  }
-  return normalized;
-}
-
-function normalizeSorafsPinManifestRootCid(value, context) {
-  const bytes = normalizeExactJsonByteArray(value, context, { exactLength: 36 });
-  if (
-    bytes[0] !== 1 ||
-    bytes[1] !== 0x71 ||
-    bytes[2] !== 0x1f ||
-    bytes[3] !== 32 ||
-    exactJsonBytesAreZero(bytes.subarray(4))
-  ) {
-    throw new TypeError(
-      `${context} must be canonical CIDv1/dag-cbor/BLAKE3-256 bytes`,
-    );
-  }
-  return bytes;
-}
-
-function normalizeSorafsPinChunkerHandle(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["profile_id", "namespace", "name", "semver", "multihash_code"],
-    [],
-    context,
-  );
-  const profileId = requireExactJsonUnsignedInteger(record.profile_id, `${context}.profile_id`);
-  if (profileId > 0xffff_ffff) {
-    throw new RangeError(`${context}.profile_id exceeds uint32`);
-  }
-  return {
-    profile_id: profileId,
-    namespace: requireExactNonEmptyString(record.namespace, `${context}.namespace`),
-    name: requireExactNonEmptyString(record.name, `${context}.name`),
-    semver: requireExactNonEmptyString(record.semver, `${context}.semver`),
-    multihash_code: requireExactJsonUnsignedInteger(
-      record.multihash_code,
-      `${context}.multihash_code`,
-    ),
-  };
-}
-
-function normalizeSorafsPinPolicy(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["min_replicas", "storage_class", "retention_epoch"],
-    [],
-    context,
-  );
-  const minReplicas = requireExactJsonUnsignedInteger(
-    record.min_replicas,
-    `${context}.min_replicas`,
-  );
-  if (minReplicas > 0xffff) {
-    throw new RangeError(`${context}.min_replicas exceeds uint16`);
-  }
-  const storageClass = requireExactSorafsPinObjectFields(
-    ensureRecord(record.storage_class ?? {}, `${context}.storage_class`),
-    ["type", "value"],
-    [],
-    `${context}.storage_class`,
-  );
-  if (!new Set(["Hot", "Warm", "Cold"]).has(storageClass.type)) {
-    throw new TypeError(`${context}.storage_class.type must be Hot, Warm, or Cold`);
-  }
-  if (storageClass.value !== null) {
-    throw new TypeError(`${context}.storage_class.value must be null`);
-  }
-  return {
-    min_replicas: minReplicas,
-    storage_class: { type: storageClass.type, value: null },
-    retention_epoch: requireExactJsonUnsignedInteger(
-      record.retention_epoch,
-      `${context}.retention_epoch`,
-    ),
-  };
-}
-
-function normalizeSorafsPinManifestAlias(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["name", "namespace", "proof"],
-    [],
-    context,
-  );
-  return {
-    name: requireExactNonEmptyString(record.name, `${context}.name`),
-    namespace: requireExactNonEmptyString(record.namespace, `${context}.namespace`),
-    proof: normalizeExactSorafsStandardBase64(record.proof, `${context}.proof`),
-  };
-}
-
-function normalizeSorafsPinFeePayment(payload, expectedPayer, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["paid_by", "fee_asset_id", "treasury_account_id", "amount"],
-    [],
-    context,
-  );
-  const paidBy = ToriiClient._requireAccountId(record.paid_by, `${context}.paid_by`);
-  if (paidBy !== expectedPayer) {
-    throw new TypeError(`${context}.paid_by must equal the manifest submitter`);
-  }
-  return {
-    paid_by: paidBy,
-    fee_asset_id: requireExactNonEmptyString(record.fee_asset_id, `${context}.fee_asset_id`),
-    treasury_account_id: ToriiClient._requireAccountId(
-      record.treasury_account_id,
-      `${context}.treasury_account_id`,
-    ),
-    amount: requireCanonicalQuantity(record.amount, `${context}.amount`),
-  };
-}
-
-function validateSorafsPinManifestLifecycle(lifecycle, context) {
-  const {
-    submittedEpoch,
-    retentionEpoch,
-    approvedEpoch,
-    status,
-    councilEnvelopeDigest,
-    hasRetirementReason,
-  } = lifecycle;
-  const approvalIsValid = approvedEpoch === null ||
-    (approvedEpoch >= submittedEpoch && approvedEpoch < retentionEpoch);
-  const valid = status.status === "Pending"
-    ? approvedEpoch === null && councilEnvelopeDigest === null && !hasRetirementReason
-    : status.status === "Approved"
-      ? approvalIsValid && approvedEpoch === status.value && !hasRetirementReason
-      : status.value >= submittedEpoch &&
-        approvalIsValid &&
-        (approvedEpoch === null || approvedEpoch <= status.value) &&
-        (approvedEpoch !== null || councilEnvelopeDigest === null);
-  if (!valid) {
-    throw new TypeError(`${context} does not exactly retain its pin lifecycle history`);
-  }
-}
-
-function normalizeSorafsAliasListResponse(
-  payload,
-  requestParams,
-  context = "sorafs alias list response",
-) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["attestation", "total_count", "returned_count", "offset", "limit", "aliases"],
-    [],
-    context,
-  );
+  const record = ensureRecord(payload ?? {}, context);
   const aliasesValue = record.aliases;
   if (!Array.isArray(aliasesValue)) {
     throw new TypeError(`${context}.aliases must be an array`);
   }
-  if (aliasesValue.length > SORAFS_ALIAS_LIST_MAX_ITEMS) {
-    throw new RangeError(
-      `${context}.aliases exceeds the ${SORAFS_ALIAS_LIST_MAX_ITEMS}-item limit`,
-    );
-  }
-  const totalCount = requireExactJsonUnsignedInteger(
-    record.total_count,
-    `${context}.total_count`,
-  );
-  const returnedCount = requireExactJsonUnsignedInteger(
-    record.returned_count,
-    `${context}.returned_count`,
-  );
-  if (returnedCount > SORAFS_ALIAS_LIST_MAX_ITEMS) {
-    throw new RangeError(
-      `${context}.returned_count exceeds ${SORAFS_ALIAS_LIST_MAX_ITEMS}`,
-    );
-  }
-  const offset = requireExactJsonUnsignedInteger(record.offset, `${context}.offset`);
-  if (offset > 0xffff_ffff) {
-    throw new RangeError(`${context}.offset exceeds uint32`);
-  }
-  const limit = requireExactJsonUnsignedInteger(record.limit, `${context}.limit`, {
-    allowZero: false,
-  });
-  if (limit > SORAFS_ALIAS_LIST_MAX_ITEMS) {
-    throw new RangeError(
-      `${context}.limit must be at most ${SORAFS_ALIAS_LIST_MAX_ITEMS}`,
-    );
-  }
-  const aliases = aliasesValue.map((entry, index) =>
-    normalizeSorafsAliasRecord(entry, `${context}.aliases[${index}]`),
-  );
-  const available = offset >= totalCount ? 0 : totalCount - offset;
-  if (
-    offset > totalCount ||
-    returnedCount !== aliases.length ||
-    returnedCount !== Math.min(limit, available)
-  ) {
-    throw new TypeError(`${context} pagination counts are inconsistent`);
-  }
-  const requestedLimit = requestParams?.limit ?? SORAFS_ALIAS_LIST_DEFAULT_ITEMS;
-  const requestedOffset = requestParams?.offset ?? 0;
-  if (
-    limit !== requestedLimit ||
-    offset !== Math.min(requestedOffset, totalCount)
-  ) {
-    throw new TypeError(`${context} pagination does not match the request`);
-  }
-  for (let index = 0; index < aliases.length; index += 1) {
-    const alias = aliases[index];
-    if (
-      requestParams?.namespace !== undefined &&
-      alias.namespace !== requestParams.namespace
-    ) {
-      throw new TypeError(`${context}.aliases violates the requested namespace filter`);
-    }
-    if (
-      requestParams?.manifest_digest !== undefined &&
-      alias.manifest_digest_hex !== requestParams.manifest_digest
-    ) {
-      throw new TypeError(`${context}.aliases violates the requested manifest digest filter`);
-    }
-    if (index > 0) {
-      const previous = aliases[index - 1];
-      if (
-        previous.namespace > alias.namespace ||
-        (previous.namespace === alias.namespace && previous.name >= alias.name)
-      ) {
-        throw new TypeError(`${context}.aliases must be strictly ordered by namespace and name`);
-      }
-    }
+  const ordersValue = record.replication_orders;
+  if (!Array.isArray(ordersValue)) {
+    throw new TypeError(`${context}.replication_orders must be an array`);
   }
   return {
-    attestation: normalizeSorafsRegistryAttestation(
-      record.attestation,
-      `${context}.attestation`,
+    attestation: optionalRecord(record.attestation, `${context}.attestation`),
+    manifest: normalizeSorafsManifestRecord(record.manifest, `${context}.manifest`),
+    aliases: aliasesValue.map((entry, index) =>
+      normalizeSorafsAliasRecord(entry, `${context}.aliases[${index}]`),
     ),
-    total_count: totalCount,
-    returned_count: returnedCount,
-    offset,
-    limit,
-    aliases,
+    replication_orders: ordersValue.map((entry, index) =>
+      normalizeSorafsReplicationOrderRecord(
+        entry,
+        `${context}.replication_orders[${index}]`,
+      ),
+    ),
   };
 }
 
-function requireExactSorafsAliasSegment(value, context) {
-  const literal = requireExactNonEmptyString(value, context);
-  if (literal.length > 128 || !/^[a-z0-9._-]+$/u.test(literal)) {
-    throw new TypeError(
-      `${context} must contain 1..=128 lowercase ASCII letters, digits, '.', '-', or '_'`,
-    );
-  }
-  return literal;
+function normalizeSorafsManifestRecord(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    digest_hex: normalizeHex32String(record.digest_hex, `${context}.digest_hex`),
+    chunker: normalizeSorafsChunkerHandle(record.chunker, `${context}.chunker`),
+    chunk_digest_sha3_256_hex: normalizeHex32String(
+      record.chunk_digest_sha3_256_hex,
+      `${context}.chunk_digest_sha3_256_hex`,
+    ),
+    pin_policy: optionalRecord(record.pin_policy, `${context}.pin_policy`) ?? {},
+    submitted_by: ToriiClient._requireAccountId(record.submitted_by, `${context}.submitted_by`),
+    submitted_epoch: ToriiClient._normalizeUnsignedInteger(
+      record.submitted_epoch,
+      `${context}.submitted_epoch`,
+      { allowZero: true },
+    ),
+    status: normalizeSorafsManifestStatus(record.status, `${context}.status`),
+    metadata: optionalRecord(record.metadata, `${context}.metadata`) ?? {},
+    alias:
+      record.alias === undefined || record.alias === null
+        ? null
+        : normalizeSorafsManifestAlias(record.alias, `${context}.alias`),
+    successor_of_hex:
+      record.successor_of_hex === undefined || record.successor_of_hex === null
+        ? null
+        : normalizeHex32String(record.successor_of_hex, `${context}.successor_of_hex`),
+    status_timestamp_unix: optionalNumber(
+      record.status_timestamp_unix,
+      `${context}.status_timestamp_unix`,
+    ),
+    governance_refs: Array.isArray(record.governance_refs)
+      ? record.governance_refs.map((entry, index) =>
+          normalizeSorafsGovernanceReference(entry, `${context}.governance_refs[${index}]`),
+        )
+      : [],
+    council_envelope_digest_hex:
+      record.council_envelope_digest_hex === undefined || record.council_envelope_digest_hex === null
+        ? null
+        : normalizeHex32String(
+            record.council_envelope_digest_hex,
+            `${context}.council_envelope_digest_hex`,
+          ),
+    lineage:
+      record.lineage === undefined || record.lineage === null
+        ? null
+        : normalizeSorafsLineage(record.lineage, `${context}.lineage`),
+  };
 }
 
-function requireExactSorafsAliasAccountId(value, context) {
-  const literal = requireExactNonEmptyString(value, context);
-  const canonical = ToriiClient._requireAccountId(literal, context);
-  if (canonical !== literal) {
-    throw new TypeError(`${context} must be an exact canonical I105 account id`);
-  }
-  return literal;
+function normalizeSorafsChunkerHandle(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    profile_id: ToriiClient._normalizeUnsignedInteger(record.profile_id, `${context}.profile_id`, {
+      allowZero: false,
+    }),
+    namespace: requireNonEmptyString(record.namespace, `${context}.namespace`),
+    name: requireNonEmptyString(record.name, `${context}.name`),
+    semver: requireNonEmptyString(record.semver, `${context}.semver`),
+    multihash_code: ToriiClient._normalizeUnsignedInteger(
+      record.multihash_code,
+      `${context}.multihash_code`,
+      { allowZero: true },
+    ),
+  };
 }
 
-function requireExactSorafsAliasEnum(value, allowedValues, context) {
-  const literal = requireExactNonEmptyString(value, context);
-  if (!allowedValues.has(literal)) {
-    throw new TypeError(`${context} has an unsupported first-release value`);
+function normalizeSorafsManifestStatus(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  const rawState = requireNonEmptyString(record.state, `${context}.state`);
+  const state = rawState.toLowerCase();
+  if (!SORAFS_PIN_STATUS_VALUES.has(state)) {
+    throw new TypeError(`${context}.state must be pending, approved, or retired`);
   }
-  return literal;
-}
-
-function normalizeSorafsAliasClosedStringArray(
-  payload,
-  allowedValues,
-  context,
-  maxItems,
-  options = {},
-) {
-  if (!Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  if (payload.length > maxItems) {
-    throw new RangeError(`${context} exceeds the ${maxItems}-item limit`);
-  }
-  const normalized = [];
-  const seen = new Set();
-  for (let index = 0; index < payload.length; index += 1) {
-    const literal = requireExactSorafsAliasEnum(
-      payload[index],
-      allowedValues,
-      `${context}[${index}]`,
-    );
-    if (seen.has(literal)) {
-      throw new TypeError(`${context} must not contain duplicate values`);
-    }
-    if (
-      options.sorted === true &&
-      normalized.length > 0 &&
-      normalized[normalized.length - 1] >= literal
-    ) {
-      throw new TypeError(`${context} must be strictly sorted`);
-    }
-    seen.add(literal);
-    normalized.push(literal);
-  }
-  return normalized;
-}
-
-function normalizeSorafsAliasSortedUniqueStrings(payload, context) {
-  if (!Array.isArray(payload)) {
-    throw new TypeError(`${context} must be an array`);
-  }
-  const normalized = [];
-  for (let index = 0; index < payload.length; index += 1) {
-    const literal = requireExactNonEmptyString(payload[index], `${context}[${index}]`);
-    if (normalized.length > 0 && normalized[normalized.length - 1] >= literal) {
-      throw new TypeError(`${context} must contain unique strings in strict sorted order`);
-    }
-    normalized.push(literal);
-  }
-  return normalized;
-}
-
-function sorafsAliasRfc3339Timestamp(unixSeconds) {
-  if (unixSeconds > SORAFS_ALIAS_RFC3339_MAX_UNIX_SECONDS) return null;
-  return new Date(unixSeconds * 1000).toISOString().replace(".000Z", "Z");
-}
-
-function normalizeSorafsAliasTimestampPair(
-  timestampValue,
-  unixValue,
-  context,
-) {
-  const unix = unixValue === null
-    ? null
-    : requireExactJsonUnsignedInteger(unixValue, `${context}_unix`);
-  const expectedTimestamp = unix === null ? null : sorafsAliasRfc3339Timestamp(unix);
-  if (timestampValue !== expectedTimestamp) {
-    throw new TypeError(`${context} must exactly represent ${context}_unix as RFC 3339`);
-  }
-  return { timestamp: timestampValue, unix };
-}
-
-function sorafsAliasStringArraysEqual(left, right) {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-function normalizeSorafsAliasManifestStatus(payload, context) {
-  const candidate = ensureRecord(payload ?? {}, context);
-  const state = requireExactSorafsAliasEnum(
-    candidate.state,
-    SORAFS_ALIAS_MANIFEST_STATUS_VALUES,
-    `${context}.state`,
-  );
-  const fields = state === "pending" ? ["state"] : ["state", "epoch"];
-  const record = requireExactSorafsPinObjectFields(candidate, fields, [], context);
-  if (state === "pending") return { state };
   return {
     state,
-    epoch: requireExactJsonUnsignedInteger(record.epoch, `${context}.epoch`),
+    epoch:
+      record.epoch === undefined || record.epoch === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(record.epoch, `${context}.epoch`, {
+            allowZero: true,
+          }),
   };
 }
 
-function normalizeSorafsAliasLineageSuccessor(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["digest_hex", "status", "approved_epoch", "approved_at", "status_timestamp_unix"],
-    [],
-    context,
-  );
-  const status = normalizeSorafsAliasManifestStatus(record.status, `${context}.status`);
-  const approvedEpoch = record.approved_epoch === null
-    ? null
-    : requireExactJsonUnsignedInteger(record.approved_epoch, `${context}.approved_epoch`);
-  const statusTimestamp = normalizeSorafsAliasTimestampPair(
-    record.approved_at,
-    record.status_timestamp_unix,
-    `${context}.approved_at`,
-  );
-  const lifecycleIsValid = status.state === "pending"
-    ? approvedEpoch === null
-    : status.state === "approved"
-      ? approvedEpoch === status.epoch
-      : approvedEpoch === null || approvedEpoch <= status.epoch;
-  if (!lifecycleIsValid) {
-    throw new TypeError(`${context} has inconsistent status and retained approval epoch`);
+function normalizeSorafsManifestAlias(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    namespace: requireNonEmptyString(record.namespace, `${context}.namespace`),
+    name: requireNonEmptyString(record.name, `${context}.name`),
+    proof_b64: requireNonEmptyString(record.proof_b64, `${context}.proof_b64`),
+  };
+}
+
+function normalizeSorafsGovernanceReference(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  const targetsValue = optionalRecord(record.targets, `${context}.targets`) ?? {};
+  return {
+    cid: optionalString(record.cid, `${context}.cid`),
+    kind: requireNonEmptyString(record.kind, `${context}.kind`),
+    effective_at: optionalString(record.effective_at, `${context}.effective_at`),
+    effective_at_unix: optionalNumber(record.effective_at_unix, `${context}.effective_at_unix`),
+    targets: {
+      alias: optionalString(targetsValue.alias, `${context}.targets.alias`),
+      pin_digest_hex:
+        targetsValue.pin_digest_hex === undefined || targetsValue.pin_digest_hex === null
+          ? null
+          : normalizeHex32String(targetsValue.pin_digest_hex, `${context}.targets.pin_digest_hex`),
+    },
+    signers: optionalStringArray(record.signers, `${context}.signers`) ?? [],
+  };
+}
+
+function normalizeSorafsLineage(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  if (record.is_head === undefined || typeof record.is_head !== "boolean") {
+    throw new TypeError(`${context}.is_head must be a boolean`);
   }
   return {
-    digest_hex: requireNonZeroLowerHex32String(record.digest_hex, `${context}.digest_hex`),
-    status,
-    approved_epoch: approvedEpoch,
-    approved_at: statusTimestamp.timestamp,
-    status_timestamp_unix: statusTimestamp.unix,
+    successor_of_hex:
+      record.successor_of_hex === undefined || record.successor_of_hex === null
+        ? null
+        : normalizeHex32String(record.successor_of_hex, `${context}.successor_of_hex`),
+    head_hex: normalizeHex32String(record.head_hex, `${context}.head_hex`),
+    depth_to_head: ToriiClient._normalizeUnsignedInteger(
+      record.depth_to_head,
+      `${context}.depth_to_head`,
+      { allowZero: true },
+    ),
+    is_head: record.is_head,
+    superseded_by:
+      record.superseded_by === undefined || record.superseded_by === null
+        ? null
+        : normalizeSorafsLineageSuccessor(record.superseded_by, `${context}.superseded_by`),
+    immediate_successor:
+      record.immediate_successor === undefined || record.immediate_successor === null
+        ? null
+        : normalizeSorafsLineageSuccessor(record.immediate_successor, `${context}.immediate_successor`),
+    anomalies: optionalStringArray(record.anomalies, `${context}.anomalies`) ?? [],
   };
 }
 
-function normalizeNullableSorafsAliasLineageSuccessor(payload, context) {
-  return payload === null ? null : normalizeSorafsAliasLineageSuccessor(payload, context);
-}
-
-function normalizeSorafsAliasLineage(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    [
-      "successor_of_hex",
-      "head_hex",
-      "depth_to_head",
-      "is_head",
-      "superseded_by",
-      "immediate_successor",
-      "anomalies",
-    ],
-    [],
-    context,
-  );
-  const depthToHead = requireExactJsonUnsignedInteger(
-    record.depth_to_head,
-    `${context}.depth_to_head`,
-  );
-  if (depthToHead > SORAFS_ALIAS_LINEAGE_MAX_DEPTH) {
-    throw new RangeError(
-      `${context}.depth_to_head exceeds ${SORAFS_ALIAS_LINEAGE_MAX_DEPTH}`,
-    );
-  }
-  const isHead = requireExactBoolean(record.is_head, `${context}.is_head`);
-  const supersededBy = normalizeNullableSorafsAliasLineageSuccessor(
-    record.superseded_by,
-    `${context}.superseded_by`,
-  );
-  const immediateSuccessor = normalizeNullableSorafsAliasLineageSuccessor(
-    record.immediate_successor,
-    `${context}.immediate_successor`,
-  );
-  if (isHead !== (immediateSuccessor === null)) {
-    throw new TypeError(`${context}.is_head must exactly reflect immediate_successor`);
-  }
-  if (
-    (immediateSuccessor === null && depthToHead !== 0) ||
-    (immediateSuccessor !== null && depthToHead === 0)
-  ) {
-    throw new TypeError(`${context}.depth_to_head conflicts with immediate_successor`);
-  }
-  if (supersededBy !== null && supersededBy.approved_epoch === null) {
-    throw new TypeError(`${context}.superseded_by must retain an approval epoch`);
-  }
+function normalizeSorafsLineageSuccessor(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
   return {
-    successor_of_hex: record.successor_of_hex === null
-      ? null
-      : requireNonZeroLowerHex32String(
-        record.successor_of_hex,
-        `${context}.successor_of_hex`,
-      ),
-    head_hex: requireNonZeroLowerHex32String(record.head_hex, `${context}.head_hex`),
-    depth_to_head: depthToHead,
-    is_head: isHead,
-    superseded_by: supersededBy,
-    immediate_successor: immediateSuccessor,
-    anomalies: normalizeSorafsAliasClosedStringArray(
-      record.anomalies,
-      SORAFS_ALIAS_LINEAGE_ANOMALY_VALUES,
-      `${context}.anomalies`,
-      SORAFS_ALIAS_LINEAGE_ANOMALY_VALUES.size,
+    digest_hex: normalizeHex32String(record.digest_hex, `${context}.digest_hex`),
+    status: normalizeSorafsManifestStatus(record.status, `${context}.status`),
+    approved_epoch:
+      record.approved_epoch === undefined || record.approved_epoch === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(record.approved_epoch, `${context}.approved_epoch`, {
+            allowZero: true,
+          }),
+    approved_at: optionalString(record.approved_at, `${context}.approved_at`),
+    status_timestamp_unix: optionalNumber(
+      record.status_timestamp_unix,
+      `${context}.status_timestamp_unix`,
     ),
   };
 }
 
-function normalizeSorafsAliasGovernanceFlags(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["revoked", "frozen", "rotated"],
-    [],
-    context,
-  );
-  return {
-    revoked: requireExactBoolean(record.revoked, `${context}.revoked`),
-    frozen: requireExactBoolean(record.frozen, `${context}.frozen`),
-    rotated: requireExactBoolean(record.rotated, `${context}.rotated`),
-  };
-}
-
-function normalizeSorafsAliasGovernanceAssessment(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["ref_ids", "revoked", "frozen", "rotated", "flags", "effective_at_unix", "effective_at"],
-    [],
-    context,
-  );
-  const revoked = requireExactBoolean(record.revoked, `${context}.revoked`);
-  const frozen = requireExactBoolean(record.frozen, `${context}.frozen`);
-  const rotated = requireExactBoolean(record.rotated, `${context}.rotated`);
-  const flags = normalizeSorafsAliasGovernanceFlags(record.flags, `${context}.flags`);
-  if (
-    flags.revoked !== revoked ||
-    flags.frozen !== frozen ||
-    flags.rotated !== rotated
-  ) {
-    throw new TypeError(`${context}.flags must duplicate the governance booleans`);
-  }
-  const effectiveAt = normalizeSorafsAliasTimestampPair(
-    record.effective_at,
-    record.effective_at_unix,
-    `${context}.effective_at`,
-  );
-  if (!revoked && !frozen && !rotated && effectiveAt.unix !== null) {
-    throw new TypeError(`${context}.effective_at_unix requires an active governance flag`);
-  }
-  return {
-    ref_ids: normalizeSorafsAliasSortedUniqueStrings(record.ref_ids, `${context}.ref_ids`),
-    revoked,
-    frozen,
-    rotated,
-    flags,
-    effective_at_unix: effectiveAt.unix,
-    effective_at: effectiveAt.timestamp,
-  };
-}
-
-function normalizeSorafsAliasSuccessorAssessment(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["exists", "head_hex", "approved", "approved_at", "approved_at_unix", "depth_to_head", "anomalies"],
-    [],
-    context,
-  );
-  const approved = requireExactBoolean(record.approved, `${context}.approved`);
-  const approvedAt = normalizeSorafsAliasTimestampPair(
-    record.approved_at,
-    record.approved_at_unix,
-    `${context}.approved_at`,
-  );
-  if (!approved && approvedAt.unix !== null) {
-    throw new TypeError(`${context}.approved_at_unix requires an approved successor`);
-  }
-  const depthToHead = requireExactJsonUnsignedInteger(
-    record.depth_to_head,
-    `${context}.depth_to_head`,
-  );
-  if (depthToHead > SORAFS_ALIAS_LINEAGE_MAX_DEPTH) {
-    throw new RangeError(
-      `${context}.depth_to_head exceeds ${SORAFS_ALIAS_LINEAGE_MAX_DEPTH}`,
-    );
-  }
-  return {
-    exists: requireExactBoolean(record.exists, `${context}.exists`),
-    head_hex: requireNonZeroLowerHex32String(record.head_hex, `${context}.head_hex`),
-    approved,
-    approved_at: approvedAt.timestamp,
-    approved_at_unix: approvedAt.unix,
-    depth_to_head: depthToHead,
-    anomalies: normalizeSorafsAliasClosedStringArray(
-      record.anomalies,
-      SORAFS_ALIAS_LINEAGE_ANOMALY_VALUES,
-      `${context}.anomalies`,
-      SORAFS_ALIAS_LINEAGE_ANOMALY_VALUES.size,
-    ),
-  };
-}
-
-function normalizeSorafsAliasCacheEvaluation(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    [
-      "decision",
-      "reasons",
-      "ttl_expires_at",
-      "ttl_expires_at_unix",
-      "serve_until",
-      "serve_until_unix",
-      "successor",
-      "governance",
-      "policy_successor_grace_secs",
-      "policy_governance_grace_secs",
-    ],
-    [],
-    context,
-  );
-  const ttlExpiresAt = normalizeSorafsAliasTimestampPair(
-    record.ttl_expires_at,
-    record.ttl_expires_at_unix,
-    `${context}.ttl_expires_at`,
-  );
-  if (ttlExpiresAt.unix === null) {
-    throw new TypeError(`${context}.ttl_expires_at_unix must not be null`);
-  }
-  const serveUntil = normalizeSorafsAliasTimestampPair(
-    record.serve_until,
-    record.serve_until_unix,
-    `${context}.serve_until`,
-  );
-  return {
-    decision: requireExactSorafsAliasEnum(
-      record.decision,
-      SORAFS_ALIAS_CACHE_DECISION_VALUES,
-      `${context}.decision`,
-    ),
-    reasons: normalizeSorafsAliasClosedStringArray(
-      record.reasons,
-      SORAFS_ALIAS_CACHE_REASON_VALUES,
-      `${context}.reasons`,
-      SORAFS_ALIAS_CACHE_REASON_VALUES.size,
-      { sorted: true },
-    ),
-    ttl_expires_at: ttlExpiresAt.timestamp,
-    ttl_expires_at_unix: ttlExpiresAt.unix,
-    serve_until: serveUntil.timestamp,
-    serve_until_unix: serveUntil.unix,
-    successor: normalizeSorafsAliasSuccessorAssessment(
-      record.successor,
-      `${context}.successor`,
-    ),
-    governance: normalizeSorafsAliasGovernanceAssessment(
-      record.governance,
-      `${context}.governance`,
-    ),
-    policy_successor_grace_secs: requireExactJsonUnsignedInteger(
-      record.policy_successor_grace_secs,
-      `${context}.policy_successor_grace_secs`,
-    ),
-    policy_governance_grace_secs: requireExactJsonUnsignedInteger(
-      record.policy_governance_grace_secs,
-      `${context}.policy_governance_grace_secs`,
-    ),
-  };
-}
-
-function expectedSorafsAliasCacheStatus(
-  baseStatus,
-  rotationDue,
-  decision,
-  reasons,
+function normalizeSorafsAliasListResponse(
+  payload,
+  context = "sorafs alias list response",
 ) {
-  if (decision === "refuse") {
-    if (reasons.includes("LineageCycleDetected")) return "lineage-invalid";
-    if (reasons.some((reason) => reason.startsWith("Governance"))) {
-      return "governance-refused";
-    }
-    if (reasons.some((reason) => reason.startsWith("ApprovedSuccessor"))) {
-      return "successor-refused";
-    }
-  } else if (decision === "hold") {
-    if (reasons.includes("ApprovedSuccessorGrace")) return "refresh-successor";
-    if (reasons.includes("GovernanceGrace")) return "refresh-governance";
-    if (reasons.includes("PendingSuccessor")) return "pending-successor";
+  const record = ensureRecord(payload ?? {}, context);
+  const aliasesValue = record.aliases;
+  if (!Array.isArray(aliasesValue)) {
+    throw new TypeError(`${context}.aliases must be an array`);
   }
-  if (rotationDue && (baseStatus === "fresh" || baseStatus === "refresh")) {
-    return `${baseStatus}-rotate`;
-  }
-  return baseStatus;
+  return {
+    attestation: optionalRecord(record.attestation, `${context}.attestation`),
+    total_count: ToriiClient._normalizeUnsignedInteger(
+      record.total_count,
+      `${context}.total_count`,
+      { allowZero: true },
+    ),
+    returned_count: ToriiClient._normalizeUnsignedInteger(
+      record.returned_count,
+      `${context}.returned_count`,
+      { allowZero: true },
+    ),
+    offset: ToriiClient._normalizeUnsignedInteger(record.offset, `${context}.offset`, {
+      allowZero: true,
+    }),
+    limit: ToriiClient._normalizeUnsignedInteger(record.limit, `${context}.limit`, {
+      allowZero: false,
+    }),
+    aliases: aliasesValue.map((entry, index) =>
+      normalizeSorafsAliasRecord(entry, `${context}.aliases[${index}]`),
+    ),
+  };
 }
 
 function normalizeSorafsAliasRecord(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    [
-      "alias",
-      "namespace",
-      "name",
-      "manifest_digest_hex",
-      "bound_by",
-      "bound_epoch",
-      "expiry_epoch",
-      "proof_b64",
-      "cache_state",
-      "status_label",
-      "lineage",
-      "cache_rotation_due",
-      "cache_age_seconds",
-      "proof_generated_at_unix",
-      "proof_expires_at_unix",
-      "policy_positive_ttl_secs",
-      "policy_refresh_window_secs",
-      "policy_hard_expiry_secs",
-      "policy_rotation_max_age_secs",
-      "policy_successor_grace_secs",
-      "policy_governance_grace_secs",
-      "cache_evaluation",
-      "cache_decision",
-      "cache_reasons",
-    ],
-    ["proof_expires_in_seconds"],
-    context,
-  );
-  const namespace = requireExactSorafsAliasSegment(record.namespace, `${context}.namespace`);
-  const name = requireExactSorafsAliasSegment(record.name, `${context}.name`);
-  const alias = requireExactNonEmptyString(record.alias, `${context}.alias`);
-  if (alias !== `${namespace}/${name}`) {
-    throw new TypeError(`${context}.alias must exactly equal namespace/name`);
-  }
-  const manifestDigestHex = requireNonZeroLowerHex32String(
-    record.manifest_digest_hex,
-    `${context}.manifest_digest_hex`,
-  );
-  const boundEpoch = requireExactJsonUnsignedInteger(
-    record.bound_epoch,
-    `${context}.bound_epoch`,
-  );
-  const expiryEpoch = requireExactJsonUnsignedInteger(
-    record.expiry_epoch,
-    `${context}.expiry_epoch`,
-  );
-  if (expiryEpoch < boundEpoch) {
-    throw new TypeError(`${context}.expiry_epoch must not precede bound_epoch`);
-  }
-  const cacheState = requireExactSorafsAliasEnum(
-    record.cache_state,
-    SORAFS_ALIAS_CACHE_STATUS_VALUES,
-    `${context}.cache_state`,
-  );
-  const statusLabel = requireExactSorafsAliasEnum(
-    record.status_label,
-    SORAFS_ALIAS_CACHE_STATUS_VALUES,
-    `${context}.status_label`,
-  );
-  if (cacheState !== statusLabel) {
-    throw new TypeError(`${context}.cache_state must equal status_label`);
-  }
-  const lineage = normalizeSorafsAliasLineage(record.lineage, `${context}.lineage`);
-  if (lineage.is_head && lineage.head_hex !== manifestDigestHex) {
-    throw new TypeError(`${context}.lineage.head_hex must equal the current head manifest`);
-  }
-  const cacheRotationDue = requireExactBoolean(
-    record.cache_rotation_due,
-    `${context}.cache_rotation_due`,
-  );
-  const cacheAgeSeconds = requireExactJsonUnsignedInteger(
-    record.cache_age_seconds,
-    `${context}.cache_age_seconds`,
-  );
-  const proofGeneratedAtUnix = requireExactJsonUnsignedInteger(
-    record.proof_generated_at_unix,
-    `${context}.proof_generated_at_unix`,
-    { allowZero: false },
-  );
-  const proofExpiresAtUnix = requireExactJsonUnsignedInteger(
-    record.proof_expires_at_unix,
-    `${context}.proof_expires_at_unix`,
-    { allowZero: false },
-  );
-  if (proofExpiresAtUnix <= proofGeneratedAtUnix) {
-    throw new TypeError(
-      `${context}.proof_expires_at_unix must be greater than proof_generated_at_unix`,
-    );
-  }
-  const hasProofExpiresIn = Object.prototype.hasOwnProperty.call(
-    record,
-    "proof_expires_in_seconds",
-  );
-  const proofExpiresInSeconds = hasProofExpiresIn
-    ? requireExactJsonUnsignedInteger(
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    alias: requireNonEmptyString(record.alias, `${context}.alias`),
+    namespace: requireNonEmptyString(record.namespace, `${context}.namespace`),
+    name: requireNonEmptyString(record.name, `${context}.name`),
+    manifest_digest_hex: normalizeHex32String(
+      record.manifest_digest_hex,
+      `${context}.manifest_digest_hex`,
+    ),
+    bound_by: ToriiClient._requireAccountId(record.bound_by, `${context}.bound_by`),
+    bound_epoch: ToriiClient._normalizeUnsignedInteger(
+      record.bound_epoch,
+      `${context}.bound_epoch`,
+      { allowZero: true },
+    ),
+    expiry_epoch: ToriiClient._normalizeUnsignedInteger(
+      record.expiry_epoch,
+      `${context}.expiry_epoch`,
+      { allowZero: true },
+    ),
+    proof_b64: requireNonEmptyString(record.proof_b64, `${context}.proof_b64`),
+    cache_state: optionalString(record.cache_state, `${context}.cache_state`),
+    status_label: optionalString(record.status_label, `${context}.status_label`),
+    cache_rotation_due: optionalBoolean(
+      record.cache_rotation_due,
+      `${context}.cache_rotation_due`,
+    ),
+    cache_age_seconds: optionalNumber(record.cache_age_seconds, `${context}.cache_age_seconds`),
+    proof_generated_at_unix: optionalNumber(
+      record.proof_generated_at_unix,
+      `${context}.proof_generated_at_unix`,
+    ),
+    proof_expires_at_unix: optionalNumber(
+      record.proof_expires_at_unix,
+      `${context}.proof_expires_at_unix`,
+    ),
+    proof_expires_in_seconds: optionalNumber(
       record.proof_expires_in_seconds,
       `${context}.proof_expires_in_seconds`,
-      { allowZero: false },
-    )
-    : undefined;
-  if (proofExpiresInSeconds !== undefined) {
-    if (proofExpiresInSeconds > proofExpiresAtUnix) {
-      throw new TypeError(`${context}.proof_expires_in_seconds exceeds the proof expiry`);
-    }
-    const inferredNow = proofExpiresAtUnix - proofExpiresInSeconds;
-    const expectedAge = Math.max(inferredNow - proofGeneratedAtUnix, 0);
-    if (cacheAgeSeconds !== expectedAge) {
-      throw new TypeError(`${context}.cache_age_seconds conflicts with proof expiry metadata`);
-    }
-  } else if (cacheAgeSeconds < proofExpiresAtUnix - proofGeneratedAtUnix) {
-    throw new TypeError(`${context}.cache_age_seconds conflicts with an expired proof`);
-  }
-  const policyPositiveTtlSecs = requireExactJsonUnsignedInteger(
-    record.policy_positive_ttl_secs,
-    `${context}.policy_positive_ttl_secs`,
-  );
-  const policyRefreshWindowSecs = requireExactJsonUnsignedInteger(
-    record.policy_refresh_window_secs,
-    `${context}.policy_refresh_window_secs`,
-  );
-  const policyHardExpirySecs = requireExactJsonUnsignedInteger(
-    record.policy_hard_expiry_secs,
-    `${context}.policy_hard_expiry_secs`,
-  );
-  const policyRotationMaxAgeSecs = requireExactJsonUnsignedInteger(
-    record.policy_rotation_max_age_secs,
-    `${context}.policy_rotation_max_age_secs`,
-  );
-  const policySuccessorGraceSecs = requireExactJsonUnsignedInteger(
-    record.policy_successor_grace_secs,
-    `${context}.policy_successor_grace_secs`,
-  );
-  const policyGovernanceGraceSecs = requireExactJsonUnsignedInteger(
-    record.policy_governance_grace_secs,
-    `${context}.policy_governance_grace_secs`,
-  );
-  if (cacheRotationDue !== (cacheAgeSeconds >= policyRotationMaxAgeSecs)) {
-    throw new TypeError(`${context}.cache_rotation_due conflicts with the rotation policy`);
-  }
-  const cacheDecision = requireExactSorafsAliasEnum(
-    record.cache_decision,
-    SORAFS_ALIAS_CACHE_DECISION_VALUES,
-    `${context}.cache_decision`,
-  );
-  const cacheReasons = normalizeSorafsAliasClosedStringArray(
-    record.cache_reasons,
-    SORAFS_ALIAS_CACHE_REASON_VALUES,
-    `${context}.cache_reasons`,
-    SORAFS_ALIAS_CACHE_REASON_VALUES.size,
-    { sorted: true },
-  );
-  if ((cacheDecision === "serve") !== (cacheReasons.length === 0)) {
-    throw new TypeError(`${context}.cache_decision conflicts with cache_reasons`);
-  }
-  const cacheEvaluation = normalizeSorafsAliasCacheEvaluation(
-    record.cache_evaluation,
-    `${context}.cache_evaluation`,
-  );
-  if (
-    cacheEvaluation.decision !== cacheDecision ||
-    !sorafsAliasStringArraysEqual(cacheEvaluation.reasons, cacheReasons)
-  ) {
-    throw new TypeError(
-      `${context}.cache_decision and cache_reasons must equal cache_evaluation`,
-    );
-  }
-  if (
-    cacheEvaluation.ttl_expires_at_unix !== proofExpiresAtUnix ||
-    cacheEvaluation.policy_successor_grace_secs !== policySuccessorGraceSecs ||
-    cacheEvaluation.policy_governance_grace_secs !== policyGovernanceGraceSecs
-  ) {
-    throw new TypeError(`${context}.cache_evaluation must duplicate the proof and policy values`);
-  }
-  const successor = cacheEvaluation.successor;
-  const approvedSuccessor = lineage.superseded_by;
-  if (
-    successor.exists !== (lineage.immediate_successor !== null) ||
-    successor.head_hex !== lineage.head_hex ||
-    successor.approved !== (approvedSuccessor !== null) ||
-    successor.depth_to_head !== lineage.depth_to_head ||
-    !sorafsAliasStringArraysEqual(successor.anomalies, lineage.anomalies) ||
-    successor.approved_at !== (approvedSuccessor?.approved_at ?? null) ||
-    successor.approved_at_unix !== (approvedSuccessor?.status_timestamp_unix ?? null)
-  ) {
-    throw new TypeError(`${context}.cache_evaluation.successor must equal lineage`);
-  }
-  const proofIsHardExpired = proofExpiresInSeconds === undefined ||
-    cacheAgeSeconds >= policyHardExpirySecs;
-  const refreshThreshold = Math.max(
-    policyPositiveTtlSecs - policyRefreshWindowSecs,
-    0,
-  );
-  const baseStatus = proofIsHardExpired
-    ? "hard-expired"
-    : cacheAgeSeconds >= policyPositiveTtlSecs
-      ? "expired"
-      : cacheAgeSeconds >= refreshThreshold
-        ? "refresh"
-        : "fresh";
-  const expectedStatus = expectedSorafsAliasCacheStatus(
-    baseStatus,
-    cacheRotationDue,
-    cacheDecision,
-    cacheReasons,
-  );
-  if (statusLabel !== expectedStatus) {
-    throw new TypeError(`${context}.status_label conflicts with cache evaluation`);
-  }
-  const normalized = {
-    alias,
-    namespace,
-    name,
-    manifest_digest_hex: manifestDigestHex,
-    bound_by: requireExactSorafsAliasAccountId(record.bound_by, `${context}.bound_by`),
-    bound_epoch: boundEpoch,
-    expiry_epoch: expiryEpoch,
-    proof_b64: normalizeExactSorafsStandardBase64(record.proof_b64, `${context}.proof_b64`, {
-      maxBytes: SORAFS_ALIAS_PROOF_MAX_BYTES,
-    }),
-    cache_state: cacheState,
-    status_label: statusLabel,
-    lineage,
-    cache_rotation_due: cacheRotationDue,
-    cache_age_seconds: cacheAgeSeconds,
-    proof_generated_at_unix: proofGeneratedAtUnix,
-    proof_expires_at_unix: proofExpiresAtUnix,
-    policy_positive_ttl_secs: policyPositiveTtlSecs,
-    policy_refresh_window_secs: policyRefreshWindowSecs,
-    policy_hard_expiry_secs: policyHardExpirySecs,
-    policy_rotation_max_age_secs: policyRotationMaxAgeSecs,
-    policy_successor_grace_secs: policySuccessorGraceSecs,
-    policy_governance_grace_secs: policyGovernanceGraceSecs,
-    cache_evaluation: cacheEvaluation,
-    cache_decision: cacheDecision,
-    cache_reasons: cacheReasons,
+    ),
+    policy_positive_ttl_secs: optionalNumber(
+      record.policy_positive_ttl_secs,
+      `${context}.policy_positive_ttl_secs`,
+    ),
+    policy_refresh_window_secs: optionalNumber(
+      record.policy_refresh_window_secs,
+      `${context}.policy_refresh_window_secs`,
+    ),
+    policy_hard_expiry_secs: optionalNumber(
+      record.policy_hard_expiry_secs,
+      `${context}.policy_hard_expiry_secs`,
+    ),
+    policy_rotation_max_age_secs: optionalNumber(
+      record.policy_rotation_max_age_secs,
+      `${context}.policy_rotation_max_age_secs`,
+    ),
+    policy_successor_grace_secs: optionalNumber(
+      record.policy_successor_grace_secs,
+      `${context}.policy_successor_grace_secs`,
+    ),
+    policy_governance_grace_secs: optionalNumber(
+      record.policy_governance_grace_secs,
+      `${context}.policy_governance_grace_secs`,
+    ),
+    cache_evaluation: optionalRecord(record.cache_evaluation, `${context}.cache_evaluation`),
+    cache_decision: optionalString(record.cache_decision, `${context}.cache_decision`),
+    cache_reasons: optionalStringArray(record.cache_reasons, `${context}.cache_reasons`),
+    lineage: optionalRecord(record.lineage, `${context}.lineage`),
   };
-  if (proofExpiresInSeconds !== undefined) {
-    normalized.proof_expires_in_seconds = proofExpiresInSeconds;
-  }
-  return normalized;
 }
 
 function normalizeSorafsReplicationListResponse(
   payload,
   context = "sorafs replication list response",
 ) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    [
-      "attestation",
-      "total_count",
-      "returned_count",
-      "offset",
-      "limit",
-      "replication_orders",
-    ],
-    [],
-    context,
-  );
+  const record = ensureRecord(payload ?? {}, context);
   const ordersValue = record.replication_orders;
   if (!Array.isArray(ordersValue)) {
     throw new TypeError(`${context}.replication_orders must be an array`);
   }
-  if (ordersValue.length > 500) {
-    throw new RangeError(`${context}.replication_orders exceeds the 500-item limit`);
-  }
-  const totalCount = requireExactJsonUnsignedInteger(
-    record.total_count,
-    `${context}.total_count`,
-  );
-  const returnedCount = requireExactJsonUnsignedInteger(
-    record.returned_count,
-    `${context}.returned_count`,
-  );
-  const offset = requireExactJsonUnsignedInteger(record.offset, `${context}.offset`);
-  if (offset > 0xffff_ffff) {
-    throw new RangeError(`${context}.offset exceeds uint32`);
-  }
-  const limit = requireExactJsonUnsignedInteger(record.limit, `${context}.limit`, {
-    allowZero: false,
-  });
-  if (limit > 500) {
-    throw new RangeError(`${context}.limit must be at most 500`);
-  }
-  const replicationOrders = ordersValue.map((entry, index) =>
-    normalizeSorafsReplicationOrderRecord(entry, `${context}.replication_orders[${index}]`),
-  );
-  if (
-    returnedCount !== replicationOrders.length ||
-    returnedCount > limit ||
-    returnedCount > (offset >= totalCount ? 0 : totalCount - offset)
-  ) {
-    throw new TypeError(`${context} pagination counts are inconsistent`);
-  }
   return {
-    attestation: normalizeSorafsRegistryAttestation(
-      record.attestation,
-      `${context}.attestation`,
+    attestation: optionalRecord(record.attestation, `${context}.attestation`),
+    total_count: ToriiClient._normalizeUnsignedInteger(
+      record.total_count,
+      `${context}.total_count`,
+      { allowZero: true },
     ),
-    total_count: totalCount,
-    returned_count: returnedCount,
-    offset,
-    limit,
-    replication_orders: replicationOrders,
-  };
-}
-
-function normalizeSorafsRegistryAttestation(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["block_height", "block_hash_hex", "chain_id"],
-    [],
-    context,
-  );
-  const blockHeight = requireExactJsonUnsignedInteger(
-    record.block_height,
-    `${context}.block_height`,
-  );
-  const blockHashHex = record.block_hash_hex === null
-    ? null
-    : requireExactLowerHex32String(record.block_hash_hex, `${context}.block_hash_hex`);
-  if ((blockHeight === 0) !== (blockHashHex === null)) {
-    throw new TypeError(`${context}.block_hash_hex must be null exactly at height zero`);
-  }
-  return {
-    block_height: blockHeight,
-    block_hash_hex: blockHashHex,
-    chain_id: requireExactNonEmptyString(record.chain_id, `${context}.chain_id`),
+    returned_count: ToriiClient._normalizeUnsignedInteger(
+      record.returned_count,
+      `${context}.returned_count`,
+      { allowZero: true },
+    ),
+    offset: ToriiClient._normalizeUnsignedInteger(record.offset, `${context}.offset`, {
+      allowZero: true,
+    }),
+    limit: ToriiClient._normalizeUnsignedInteger(record.limit, `${context}.limit`, {
+      allowZero: false,
+    }),
+    replication_orders: ordersValue.map((entry, index) =>
+      normalizeSorafsReplicationOrderRecord(entry, `${context}.replication_orders[${index}]`),
+    ),
   };
 }
 
 function normalizeSorafsReplicationOrderRecord(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    [
-      "order_id_hex",
-      "manifest_digest_hex",
-      "issued_by",
-      "issued_epoch",
-      "deadline_epoch",
-      "status",
-      "canonical_order_b64",
-      "assignment_revision",
-      "order",
-      "provider_completions",
-      "providers",
-    ],
-    [],
-    context,
-  );
-  const orderIdHex = requireNonZeroLowerHex32String(
-    record.order_id_hex,
-    `${context}.order_id_hex`,
-  );
-  const manifestDigestHex = requireNonZeroLowerHex32String(
-    record.manifest_digest_hex,
-    `${context}.manifest_digest_hex`,
-  );
-  const issuedEpoch = requireExactJsonUnsignedInteger(
-    record.issued_epoch,
-    `${context}.issued_epoch`,
-  );
-  const deadlineEpoch = requireExactJsonUnsignedInteger(
-    record.deadline_epoch,
-    `${context}.deadline_epoch`,
-    { allowZero: false },
-  );
-  if (deadlineEpoch <= issuedEpoch) {
-    throw new TypeError(`${context}.deadline_epoch must be later than issued_epoch`);
-  }
-  const assignmentRevision = requireExactJsonUnsignedInteger(
-    record.assignment_revision,
-    `${context}.assignment_revision`,
-    { allowZero: false },
-  );
-  const status = normalizeSorafsReplicationStatus(record.status, `${context}.status`);
-  const canonicalOrderB64 = normalizeExactSorafsStandardBase64(
-    record.canonical_order_b64,
-    `${context}.canonical_order_b64`,
-    { maxBytes: 256 * 1024 },
-  );
-  const canonicalOrderSummary = validateSorafsReplicationOrderPayloadV1(
-    Buffer.from(canonicalOrderB64, "base64"),
-    orderIdHex,
-  );
-  const order = normalizeSorafsReplicationCanonicalOrder(record.order, `${context}.order`);
-  if (
-    order.order_id_hex !== orderIdHex ||
-    order.manifest_digest_hex !== manifestDigestHex ||
-    order.issued_at !== issuedEpoch ||
-    order.deadline_at !== deadlineEpoch ||
-    canonicalOrderSummary.manifestCidBase64 !== order.manifest_cid_b64 ||
-    canonicalOrderSummary.manifestDigestHex !== order.manifest_digest_hex ||
-    canonicalOrderSummary.chunkingProfile !== order.chunking_profile ||
-    canonicalOrderSummary.targetReplicas !== order.target_replicas ||
-    canonicalOrderSummary.issuedAt !== String(order.issued_at) ||
-    canonicalOrderSummary.deadlineAt !== String(order.deadline_at) ||
-    canonicalOrderSummary.assignments.length !== order.assignments.length ||
-    canonicalOrderSummary.assignments.some(
-      (assignment, index) =>
-        assignment.providerIdHex !== order.assignments[index].provider_id_hex ||
-        assignment.sliceGiB !== String(order.assignments[index].slice_gib) ||
-        assignment.lane !== order.assignments[index].lane,
-    ) ||
-    canonicalOrderSummary.sla.ingestDeadlineSecs !== order.sla.ingest_deadline_secs ||
-    canonicalOrderSummary.sla.minAvailabilityPercentMilli !==
-      order.sla.min_availability_percent_milli ||
-    canonicalOrderSummary.sla.minPorSuccessPercentMilli !==
-      order.sla.min_por_success_percent_milli ||
-    canonicalOrderSummary.metadata.length !== order.metadata.length ||
-    canonicalOrderSummary.metadata.some(
-      (entry, index) =>
-        entry.key !== order.metadata[index].key || entry.value !== order.metadata[index].value,
-    )
-  ) {
-    throw new TypeError(
-      `${context}.order does not exactly match its canonical bytes and ledger record`,
-    );
-  }
-  if (!Array.isArray(record.providers) || record.providers.length === 0) {
-    throw new TypeError(`${context}.providers must be a non-empty array`);
-  }
-  const providers = record.providers.map((provider, index) =>
-    requireNonZeroLowerHex32String(provider, `${context}.providers[${index}]`),
-  );
-  const assignedProviders = order.assignments.map((assignment) => assignment.provider_id_hex);
-  if (
-    new Set(providers).size !== providers.length ||
-    providers.length !== assignedProviders.length ||
-    providers.some((provider, index) => provider !== assignedProviders[index])
-  ) {
-    throw new TypeError(`${context}.providers must exactly match the canonical assignments`);
-  }
-  if (!Array.isArray(record.provider_completions)) {
-    throw new TypeError(`${context}.provider_completions must be an array`);
-  }
-  if (record.provider_completions.length > order.target_replicas) {
-    throw new TypeError(`${context}.provider_completions exceeds target_replicas`);
-  }
-  const providerCompletions = record.provider_completions.map((entry, index) =>
-    normalizeSorafsReplicationCompletion(
-      entry,
-      `${context}.provider_completions[${index}]`,
-      {
-        assignedProviders,
-        assignmentRevision,
-        issuedEpoch,
-        deadlineEpoch,
-      },
-    ),
-  );
-  const completedProviders = new Set();
-  let previousCompletionEpoch = null;
-  for (const completion of providerCompletions) {
-    if (completedProviders.has(completion.provider_hex)) {
-      throw new TypeError(`${context}.provider_completions contains a duplicate provider`);
-    }
-    if (
-      previousCompletionEpoch !== null &&
-      completion.completion_epoch < previousCompletionEpoch
-    ) {
-      throw new TypeError(`${context}.provider_completions must be epoch-ordered`);
-    }
-    completedProviders.add(completion.provider_hex);
-    previousCompletionEpoch = completion.completion_epoch;
-  }
-  const isComplete = providerCompletions.length === order.target_replicas;
-  if (
-    (status.state === "completed" &&
-      (!isComplete || status.epoch !== previousCompletionEpoch)) ||
-    (status.state !== "completed" && isComplete) ||
-    (status.state === "expired" && status.epoch <= deadlineEpoch) ||
-    (status.state === "cancelled" &&
-      (status.epoch < issuedEpoch || status.epoch > deadlineEpoch))
-  ) {
-    throw new TypeError(`${context}.status conflicts with its retained completion lifecycle`);
+  const record = ensureRecord(payload ?? {}, context);
+  const receiptsValue = record.receipts ?? [];
+  if (!Array.isArray(receiptsValue)) {
+    throw new TypeError(`${context}.receipts must be an array`);
   }
   return {
-    order_id_hex: orderIdHex,
-    manifest_digest_hex: manifestDigestHex,
+    order_id_hex: normalizeHex32String(record.order_id_hex, `${context}.order_id_hex`),
+    manifest_digest_hex: normalizeHex32String(
+      record.manifest_digest_hex,
+      `${context}.manifest_digest_hex`,
+    ),
     issued_by: ToriiClient._requireAccountId(record.issued_by, `${context}.issued_by`),
-    issued_epoch: issuedEpoch,
-    deadline_epoch: deadlineEpoch,
-    status,
-    canonical_order_b64: canonicalOrderB64,
-    assignment_revision: assignmentRevision,
-    order,
-    provider_completions: providerCompletions,
-    providers,
+    issued_epoch: ToriiClient._normalizeUnsignedInteger(
+      record.issued_epoch,
+      `${context}.issued_epoch`,
+      { allowZero: true },
+    ),
+    deadline_epoch: ToriiClient._normalizeUnsignedInteger(
+      record.deadline_epoch,
+      `${context}.deadline_epoch`,
+      { allowZero: true },
+    ),
+    status: normalizeSorafsReplicationStatus(record.status, `${context}.status`),
+    canonical_order_b64: requireNonEmptyString(
+      record.canonical_order_b64,
+      `${context}.canonical_order_b64`,
+    ),
+    order: optionalRecord(record.order, `${context}.order`) ?? {},
+    receipts: receiptsValue.map((entry, index) =>
+      normalizeSorafsReplicationReceipt(entry, `${context}.receipts[${index}]`),
+    ),
+    providers: requireStringArray(record.providers ?? [], `${context}.providers`),
   };
 }
 
 function normalizeSorafsReplicationStatus(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
-  const state = requireExactNonEmptyString(record.state, `${context}.state`);
-  if (!SORAFS_REPLICATION_STATUS_VALUES.has(state)) {
-    throw new TypeError(
-      `${context}.state must be pending, completed, expired, or cancelled`,
-    );
-  }
-  requireExactSorafsPinObjectFields(
-    record,
-    state === "pending" ? ["state"] : ["state", "epoch"],
-    [],
-    context,
-  );
-  return state === "pending"
-    ? { state: "pending" }
-    : {
-        state,
-        epoch: requireExactJsonUnsignedInteger(record.epoch, `${context}.epoch`),
-      };
-}
-
-function normalizeSorafsReplicationCompletion(payload, context, expected) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    [
-      "provider_hex",
-      "completed_by",
-      "completion_epoch",
-      "assignment_revision",
-      "completion_authority",
-      "finalized_anchor",
-    ],
-    [],
-    context,
-  );
-  const providerHex = requireNonZeroLowerHex32String(
-    record.provider_hex,
-    `${context}.provider_hex`,
-  );
-  if (!expected.assignedProviders.includes(providerHex)) {
-    throw new TypeError(`${context}.provider_hex is not assigned by the canonical order`);
-  }
-  const completedBy = ToriiClient._requireAccountId(
-    record.completed_by,
-    `${context}.completed_by`,
-  );
-  const completionEpoch = requireExactJsonUnsignedInteger(
-    record.completion_epoch,
-    `${context}.completion_epoch`,
-  );
-  if (completionEpoch < expected.issuedEpoch || completionEpoch > expected.deadlineEpoch) {
-    throw new TypeError(`${context}.completion_epoch is outside the order epoch window`);
-  }
-  const assignmentRevision = requireExactJsonUnsignedInteger(
-    record.assignment_revision,
-    `${context}.assignment_revision`,
-    { allowZero: false },
-  );
-  if (assignmentRevision !== expected.assignmentRevision) {
-    throw new TypeError(`${context}.assignment_revision does not match the order`);
-  }
-  const completionAuthority = normalizeSorafsProviderIngestCompletionAuthority(
-    record.completion_authority,
-    `${context}.completion_authority`,
-  );
-  if (completionAuthority.provider_owner !== completedBy) {
-    throw new TypeError(`${context}.completed_by must equal completion_authority.provider_owner`);
-  }
   return {
-    provider_hex: providerHex,
-    completed_by: completedBy,
-    completion_epoch: completionEpoch,
-    assignment_revision: assignmentRevision,
-    completion_authority: completionAuthority,
-    finalized_anchor: normalizeSorafsProviderIngestFinalizedAnchor(
-      record.finalized_anchor,
-      `${context}.finalized_anchor`,
-    ),
+    state: requireNonEmptyString(record.state, `${context}.state`),
+    epoch:
+      record.epoch === undefined || record.epoch === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(record.epoch, `${context}.epoch`, {
+            allowZero: true,
+          }),
   };
 }
 
-function normalizeExactSorafsStandardBase64(value, context, options = {}) {
-  const literal = requireExactNonEmptyString(value, context);
-  let decoded;
-  try {
-    decoded = strictDecodeBase64(literal);
-  } catch (error) {
-    throw new TypeError(`${context} must be canonical standard-base64`, { cause: error });
-  }
-  if (Buffer.from(decoded).toString("base64") !== literal) {
-    throw new TypeError(`${context} must be canonical standard-base64`);
-  }
-  if (options.exactBytes !== undefined && decoded.byteLength !== options.exactBytes) {
-    throw new TypeError(`${context} must encode exactly ${options.exactBytes} bytes`);
-  }
-  if (options.maxBytes !== undefined && decoded.byteLength > options.maxBytes) {
-    throw new TypeError(`${context} exceeds its ${options.maxBytes}-byte limit`);
-  }
-  return literal;
-}
-
-function normalizeSorafsReplicationCanonicalOrder(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    [
-      "version",
-      "order_id_hex",
-      "manifest_cid_b64",
-      "manifest_digest_hex",
-      "chunking_profile",
-      "target_replicas",
-      "assignments",
-      "issued_at",
-      "deadline_at",
-      "sla",
-      "metadata",
-    ],
-    [],
-    context,
-  );
-  if (record.version !== 1) {
-    throw new TypeError(`${context}.version must be 1`);
-  }
-  const targetReplicas = requireExactJsonUnsignedInteger(
-    record.target_replicas,
-    `${context}.target_replicas`,
-    { allowZero: false },
-  );
-  if (targetReplicas > 1024) {
-    throw new RangeError(`${context}.target_replicas must be at most 1024`);
-  }
-  if (
-    !Array.isArray(record.assignments) ||
-    record.assignments.length === 0 ||
-    record.assignments.length > 1024 ||
-    targetReplicas > record.assignments.length
-  ) {
-    throw new TypeError(
-      `${context}.assignments must contain 1..=1024 entries and satisfy target_replicas`,
-    );
-  }
-  const assignments = record.assignments.map((entry, index) =>
-    normalizeSorafsReplicationAssignment(entry, `${context}.assignments[${index}]`),
-  );
-  const assignedProviders = assignments.map((assignment) => assignment.provider_id_hex);
-  if (
-    assignedProviders.some(
-      (provider, index) => index > 0 && assignedProviders[index - 1] >= provider,
-    )
-  ) {
-    throw new TypeError(`${context}.assignments must be strictly provider-ordered`);
-  }
-  if (!Array.isArray(record.metadata) || record.metadata.length > 64) {
-    throw new TypeError(`${context}.metadata must be an array of at most 64 entries`);
-  }
-  const metadata = record.metadata.map((entry, index) =>
-    normalizeSorafsReplicationMetadataEntry(entry, `${context}.metadata[${index}]`),
-  );
-  const metadataKeys = new Set();
-  let metadataBytes = 0;
-  for (const entry of metadata) {
-    if (metadataKeys.has(entry.key)) {
-      throw new TypeError(`${context}.metadata contains a duplicate key`);
-    }
-    metadataKeys.add(entry.key);
-    metadataBytes += Buffer.byteLength(entry.key) + Buffer.byteLength(entry.value);
-  }
-  if (metadataBytes > 64 * 1024) {
-    throw new RangeError(`${context}.metadata exceeds the 65536-byte limit`);
-  }
-  const issuedAt = requireExactJsonUnsignedInteger(record.issued_at, `${context}.issued_at`);
-  const deadlineAt = requireExactJsonUnsignedInteger(
-    record.deadline_at,
-    `${context}.deadline_at`,
-    { allowZero: false },
-  );
-  if (deadlineAt <= issuedAt) {
-    throw new TypeError(`${context}.deadline_at must be later than issued_at`);
-  }
-  const chunkingProfile = requireExactNonEmptyString(
-    record.chunking_profile,
-    `${context}.chunking_profile`,
-  );
-  if (chunkingProfile.length > 128) {
-    throw new RangeError(`${context}.chunking_profile must be at most 128 characters`);
-  }
-  const sla = normalizeSorafsReplicationSla(record.sla, `${context}.sla`);
-  if (sla.ingest_deadline_secs > deadlineAt - issuedAt) {
-    throw new TypeError(`${context}.sla.ingest_deadline_secs exceeds the order window`);
-  }
+function normalizeSorafsReplicationReceipt(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
   return {
-    version: 1,
-    order_id_hex: requireNonZeroLowerHex32String(
-      record.order_id_hex,
-      `${context}.order_id_hex`,
-    ),
-    manifest_cid_b64: normalizeSorafsReplicationManifestCidBase64(
-      record.manifest_cid_b64,
-      `${context}.manifest_cid_b64`,
-    ),
-    manifest_digest_hex: requireNonZeroLowerHex32String(
-      record.manifest_digest_hex,
-      `${context}.manifest_digest_hex`,
-    ),
-    chunking_profile: chunkingProfile,
-    target_replicas: targetReplicas,
-    assignments,
-    issued_at: issuedAt,
-    deadline_at: deadlineAt,
-    sla,
-    metadata,
-  };
-}
-
-function normalizeSorafsReplicationManifestCidBase64(value, context) {
-  const literal = normalizeExactSorafsStandardBase64(value, context, { exactBytes: 36 });
-  const bytes = Buffer.from(literal, "base64");
-  if (
-    bytes[0] !== 1 ||
-    bytes[1] !== 0x71 ||
-    bytes[2] !== 0x1f ||
-    bytes[3] !== 32 ||
-    bytes.subarray(4).every((byte) => byte === 0)
-  ) {
-    throw new TypeError(
-      `${context} must encode canonical CIDv1/dag-cbor/BLAKE3-256 bytes`,
-    );
-  }
-  return literal;
-}
-
-function normalizeSorafsReplicationAssignment(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["provider_id_hex", "slice_gib", "lane"],
-    [],
-    context,
-  );
-  let lane = null;
-  if (record.lane !== null) {
-    lane = requireExactNonEmptyString(record.lane, `${context}.lane`);
-    if (lane.length > 64 || !/^[a-z0-9._-]+$/u.test(lane)) {
-      throw new TypeError(`${context}.lane must be a canonical lane label`);
-    }
-  }
-  return {
-    provider_id_hex: requireNonZeroLowerHex32String(
-      record.provider_id_hex,
-      `${context}.provider_id_hex`,
-    ),
-    slice_gib: requireExactJsonUnsignedInteger(record.slice_gib, `${context}.slice_gib`, {
-      allowZero: false,
+    provider_hex: normalizeHex32String(record.provider_hex, `${context}.provider_hex`),
+    status: requireNonEmptyString(record.status, `${context}.status`),
+    timestamp: ToriiClient._normalizeUnsignedInteger(record.timestamp, `${context}.timestamp`, {
+      allowZero: true,
     }),
-    lane,
-  };
-}
-
-function normalizeSorafsReplicationSla(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    [
-      "ingest_deadline_secs",
-      "min_availability_percent_milli",
-      "min_por_success_percent_milli",
-    ],
-    [],
-    context,
-  );
-  const minAvailability = requireExactJsonUnsignedInteger(
-    record.min_availability_percent_milli,
-    `${context}.min_availability_percent_milli`,
-    { allowZero: false },
-  );
-  const minPorSuccess = requireExactJsonUnsignedInteger(
-    record.min_por_success_percent_milli,
-    `${context}.min_por_success_percent_milli`,
-    { allowZero: false },
-  );
-  if (minAvailability > 100_000 || minPorSuccess > 100_000) {
-    throw new RangeError(`${context} percentage thresholds must be at most 100000`);
-  }
-  const ingestDeadline = requireExactJsonUnsignedInteger(
-    record.ingest_deadline_secs,
-    `${context}.ingest_deadline_secs`,
-    { allowZero: false },
-  );
-  if (ingestDeadline > 0xffff_ffff) {
-    throw new RangeError(`${context}.ingest_deadline_secs exceeds uint32`);
-  }
-  return {
-    ingest_deadline_secs: ingestDeadline,
-    min_availability_percent_milli: minAvailability,
-    min_por_success_percent_milli: minPorSuccess,
-  };
-}
-
-function normalizeSorafsReplicationMetadataEntry(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["key", "value"],
-    [],
-    context,
-  );
-  const key = requireExactNonEmptyString(record.key, `${context}.key`);
-  const value = requireExactNonEmptyString(record.value, `${context}.value`);
-  if (key.length > 128 || !/^[a-z0-9._-]+$/u.test(key)) {
-    throw new TypeError(`${context}.key must be a canonical metadata key`);
-  }
-  if (Buffer.byteLength(value) > 4096 || /\p{Cc}/u.test(value)) {
-    throw new RangeError(`${context}.value must be canonical and at most 4096 bytes`);
-  }
-  return { key, value };
-}
-
-function normalizeSorafsProviderIngestCompletionAuthority(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["provider_owner", "signer_policy"],
-    [],
-    context,
-  );
-  return {
-    provider_owner: ToriiClient._requireAccountId(
-      record.provider_owner,
-      `${context}.provider_owner`,
-    ),
-    signer_policy: normalizeSorafsProviderIngestSignerPolicy(
-      record.signer_policy,
-      `${context}.signer_policy`,
-    ),
-  };
-}
-
-function normalizeSorafsProviderIngestSignerPolicy(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["policy_id_hex", "revision", "predecessor_digest_hex", "policy_digest_hex"],
-    [],
-    context,
-  );
-  const revision = requireExactJsonUnsignedInteger(record.revision, `${context}.revision`, {
-    allowZero: false,
-  });
-  const predecessorDigestHex =
-    record.predecessor_digest_hex === null
-      ? null
-      : requireNonZeroLowerHex32String(
-          record.predecessor_digest_hex,
-          `${context}.predecessor_digest_hex`,
-        );
-  if ((revision === 1) !== (predecessorDigestHex === null)) {
-    throw new TypeError(
-      `${context}.predecessor_digest_hex must be null exactly for revision one`,
-    );
-  }
-  return {
-    policy_id_hex: requireNonZeroLowerHex32String(
-      record.policy_id_hex,
-      `${context}.policy_id_hex`,
-    ),
-    revision,
-    predecessor_digest_hex: predecessorDigestHex,
-    policy_digest_hex: requireNonZeroLowerHex32String(
-      record.policy_digest_hex,
-      `${context}.policy_digest_hex`,
-    ),
-  };
-}
-
-function normalizeSorafsProviderIngestFinalizedAnchor(payload, context) {
-  const record = requireExactSorafsPinObjectFields(
-    ensureRecord(payload ?? {}, context),
-    ["height", "block_hash_hex"],
-    [],
-    context,
-  );
-  return {
-    height: requireExactJsonUnsignedInteger(record.height, `${context}.height`, {
-      allowZero: false,
-    }),
-    block_hash_hex: requireNonZeroLowerHex32String(
-      record.block_hash_hex,
-      `${context}.block_hash_hex`,
-    ),
+    por_sample_digest_hex:
+      record.por_sample_digest_hex === undefined || record.por_sample_digest_hex === null
+        ? null
+        : normalizeHex32String(
+            record.por_sample_digest_hex,
+            `${context}.por_sample_digest_hex`,
+          ),
   };
 }
 
@@ -28907,7 +28108,10 @@ function normalizeSorafsPinRegisterResponse(
   }
   return {
     status: "submitted",
-    tx_hash_hex: normalizeHex32String(record.tx_hash_hex, `${context}.tx_hash_hex`),
+    tx_hash_hex: requireCanonicalTransactionHashString(
+      record.tx_hash_hex,
+      `${context}.tx_hash_hex`,
+    ),
     manifest_digest_hex: normalizeHex32String(
       record.manifest_digest_hex,
       `${context}.manifest_digest_hex`,
@@ -28925,14 +28129,14 @@ function normalizePipelineTransactionStatus(
     new Set(["hash", "status", "scope", "resolved_from"]),
     context,
   );
-  const hash = normalizeHex32String(record.hash, `${context}.hash`);
+  const hash = requireCanonicalTransactionHashString(record.hash, `${context}.hash`);
   const statusRecord = ensureRecord(record.status, `${context}.status`);
   assertSupportedOptionKeys(
     statusRecord,
     new Set(["kind", "block_height"]),
     `${context}.status`,
   );
-  const statusKind = requireNonEmptyString(
+  const statusKind = requireExactNonEmptyString(
     statusRecord.kind,
     `${context}.status.kind`,
   );
@@ -28943,15 +28147,15 @@ function normalizePipelineTransactionStatus(
       `${context}.status.kind`,
     );
   }
-  const scope = requireNonEmptyString(record.scope, `${context}.scope`);
-  if (!["local", "auto", "global"].includes(scope)) {
+  const scope = requireExactNonEmptyString(record.scope, `${context}.scope`);
+  if (!["local", "global"].includes(scope)) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
       `${context}.scope is unsupported`,
       `${context}.scope`,
     );
   }
-  const resolvedFrom = requireNonEmptyString(
+  const resolvedFrom = requireExactNonEmptyString(
     record.resolved_from,
     `${context}.resolved_from`,
   );
@@ -28964,7 +28168,7 @@ function normalizePipelineTransactionStatus(
   }
   const normalizedStatus = { kind: statusKind };
   if (statusRecord.block_height !== undefined) {
-    normalizedStatus.block_height = ToriiClient._normalizeUnsignedInteger(
+    normalizedStatus.block_height = requireExactJsonUnsignedInteger(
       statusRecord.block_height,
       `${context}.status.block_height`,
       { allowZero: false },
@@ -28980,15 +28184,11 @@ function normalizePipelineTransactionStatus(
 
 function assertPipelineTransactionStatusMatchesHash(payload, expectedHash, context) {
   const record = ensureRecord(payload, context);
-  const observedHash = normalizeHex32String(
+  const observedHash = requireCanonicalTransactionHashString(
     record.hash,
     `${context}.hash`,
   );
-  const matches =
-    expectedHash.length === 64
-      ? observedHash === expectedHash
-      : observedHash.startsWith(expectedHash);
-  if (!matches) {
+  if (observedHash !== expectedHash) {
     throw createValidationError(
       ValidationErrorCode.INVALID_HEX,
       `${context}.hash does not match requested transaction ${expectedHash}`,
@@ -29004,7 +28204,10 @@ function classifyPipelineTransactionStatusResolution(
   context,
 ) {
   const record = ensureRecord(payload, context);
-  const observedHash = normalizeHex32String(record.hash, `${context}.hash`);
+  const observedHash = requireCanonicalTransactionHashString(
+    record.hash,
+    `${context}.hash`,
+  );
   if (observedHash !== expectedHash) {
     throw createValidationError(
       ValidationErrorCode.INVALID_HEX,
@@ -29057,23 +28260,22 @@ function classifyPipelineTransactionStatusResolution(
         `${context}.status`,
       );
     }
-    if (resolvedFrom !== "cache" && resolvedFrom !== "state") {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context} Applied status must be cache- or state-resolved`,
-        `${context}.resolved_from`,
-      );
-    }
-  } else if (kind === "Rejected" || kind === "Expired") {
-    if (resolvedFrom !== "cache" && resolvedFrom !== "state") {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${context} terminal failure must be cache- or state-resolved`,
-        `${context}.resolved_from`,
-      );
-    }
   }
   return { kind, resolvedFrom };
+}
+
+function requirePipelinePreflightUnsigned(
+  mapping,
+  key,
+  context,
+  { positive = false } = {},
+) {
+  const record = ensureRecord(mapping, context);
+  const numeric = requireNonNegativeIntegerLike(record[key], `${context}.${key}`);
+  if (positive && numeric === 0) {
+    throw new RangeError(`${context}.${key} must be positive`);
+  }
+  return numeric;
 }
 
 function normalizePipelinePreflight(payload, context = "pipeline preflight response") {
@@ -29103,90 +28305,130 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
   const queue = ensureRecord(record.queue, `${context}.queue`);
   const fees = ensureRecord(record.fees, `${context}.fees`);
   const normalized = {
-    schema_version: coerceNestedInt(record, "schema_version", context),
-    chain_height: coerceNestedInt(record, "chain_height", context),
+    schema_version: requirePipelinePreflightUnsigned(
+      record,
+      "schema_version",
+      context,
+      { positive: true },
+    ),
+    chain_height: requirePipelinePreflightUnsigned(record, "chain_height", context),
     sumeragi: {
-      block_time_ms: coerceNestedInt(sumeragi, "block_time_ms", `${context}.sumeragi`),
-      commit_time_ms: coerceNestedInt(sumeragi, "commit_time_ms", `${context}.sumeragi`),
-      stall_threshold_ms: coerceNestedInt(
+      block_time_ms: requirePipelinePreflightUnsigned(
+        sumeragi,
+        "block_time_ms",
+        `${context}.sumeragi`,
+      ),
+      commit_time_ms: requirePipelinePreflightUnsigned(
+        sumeragi,
+        "commit_time_ms",
+        `${context}.sumeragi`,
+      ),
+      stall_threshold_ms: requirePipelinePreflightUnsigned(
         sumeragi,
         "stall_threshold_ms",
         `${context}.sumeragi`,
       ),
     },
     admission: {
-      max_signatures: coerceNestedInt(admission, "max_signatures", `${context}.admission`),
-      max_instructions: coerceNestedInt(admission, "max_instructions", `${context}.admission`),
-      max_tx_bytes: coerceNestedInt(admission, "max_tx_bytes", `${context}.admission`),
-      max_decompressed_bytes: coerceNestedInt(
+      max_signatures: requirePipelinePreflightUnsigned(
+        admission,
+        "max_signatures",
+        `${context}.admission`,
+      ),
+      max_instructions: requirePipelinePreflightUnsigned(
+        admission,
+        "max_instructions",
+        `${context}.admission`,
+      ),
+      max_tx_bytes: requirePipelinePreflightUnsigned(
+        admission,
+        "max_tx_bytes",
+        `${context}.admission`,
+      ),
+      max_decompressed_bytes: requirePipelinePreflightUnsigned(
         admission,
         "max_decompressed_bytes",
         `${context}.admission`,
       ),
-      max_metadata_depth: coerceNestedInt(
+      max_metadata_depth: requirePipelinePreflightUnsigned(
         admission,
         "max_metadata_depth",
         `${context}.admission`,
       ),
     },
     block: {
-      max_transactions: coerceNestedInt(block, "max_transactions", `${context}.block`),
+      max_transactions: requirePipelinePreflightUnsigned(
+        block,
+        "max_transactions",
+        `${context}.block`,
+      ),
     },
     pipeline: {
-      signature_batch_max_ed25519: coerceNestedInt(
+      signature_batch_max_ed25519: requirePipelinePreflightUnsigned(
         pipeline,
         "signature_batch_max_ed25519",
         `${context}.pipeline`,
       ),
-      signature_batch_max_secp256k1: coerceNestedInt(
+      signature_batch_max_secp256k1: requirePipelinePreflightUnsigned(
         pipeline,
         "signature_batch_max_secp256k1",
         `${context}.pipeline`,
       ),
-      signature_batch_max_pqc: coerceNestedInt(
+      signature_batch_max_pqc: requirePipelinePreflightUnsigned(
         pipeline,
         "signature_batch_max_pqc",
         `${context}.pipeline`,
       ),
-      signature_batch_max_bls: coerceNestedInt(
+      signature_batch_max_bls: requirePipelinePreflightUnsigned(
         pipeline,
         "signature_batch_max_bls",
         `${context}.pipeline`,
       ),
-      overlay_max_instructions: coerceNestedInt(
+      overlay_max_instructions: requirePipelinePreflightUnsigned(
         pipeline,
         "overlay_max_instructions",
         `${context}.pipeline`,
       ),
-      ivm_max_decoded_instructions: coerceNestedInt(
+      ivm_max_cycles_upper_bound: requirePipelinePreflightUnsigned(
+        pipeline,
+        "ivm_max_cycles_upper_bound",
+        `${context}.pipeline`,
+        { positive: true },
+      ),
+      ivm_admission_cycle_limit: requirePipelinePreflightUnsigned(
+        pipeline,
+        "ivm_admission_cycle_limit",
+        `${context}.pipeline`,
+        { positive: true },
+      ),
+      ivm_max_decoded_instructions: requirePipelinePreflightUnsigned(
         pipeline,
         "ivm_max_decoded_instructions",
         `${context}.pipeline`,
       ),
     },
     queue: {
-      size: coerceNestedInt(queue, "size", `${context}.queue`),
-      queued: coerceNestedInt(queue, "queued", `${context}.queue`),
-      inflight: coerceNestedInt(queue, "inflight", `${context}.queue`),
+      size: requirePipelinePreflightUnsigned(queue, "size", `${context}.queue`),
+      queued: requirePipelinePreflightUnsigned(queue, "queued", `${context}.queue`),
+      inflight: requirePipelinePreflightUnsigned(queue, "inflight", `${context}.queue`),
     },
     fees: {
       fee_asset_id:
         fees.fee_asset_id === undefined || fees.fee_asset_id === null
           ? ""
           : String(fees.fee_asset_id),
-      fee_sink_account_id:
-        fees.fee_sink_account_id === undefined || fees.fee_sink_account_id === null
-          ? ""
-          : String(fees.fee_sink_account_id),
+      fee_sink_account_id: requireExactAccountId(
+        fees.fee_sink_account_id,
+        `${context}.fees.fee_sink_account_id`,
+      ),
       base_fee: fees.base_fee,
       per_byte_fee: fees.per_byte_fee,
       per_instruction_fee: fees.per_instruction_fee,
       per_gas_unit_fee: fees.per_gas_unit_fee,
-      sponsor_vault_custody_account_id:
-        fees.sponsor_vault_custody_account_id === undefined ||
-        fees.sponsor_vault_custody_account_id === null
-          ? ""
-          : String(fees.sponsor_vault_custody_account_id),
+      sponsor_vault_custody_account_id: requireExactAccountId(
+        fees.sponsor_vault_custody_account_id,
+        `${context}.fees.sponsor_vault_custody_account_id`,
+      ),
       settlement_mode:
         fees.settlement_mode === undefined || fees.settlement_mode === null
           ? ""
@@ -29194,7 +28436,11 @@ function normalizePipelinePreflight(payload, context = "pipeline preflight respo
       successful_claim_fee_exempt_authorities: parseStringArray(
         fees.successful_claim_fee_exempt_authorities,
         `${context}.fees.successful_claim_fee_exempt_authorities`,
-      ),
+      ).map((authority, index) =>
+        requireExactAccountId(
+          authority,
+          `${context}.fees.successful_claim_fee_exempt_authorities[${index}]`,
+        )),
     },
     raw: Object.freeze({ ...record }),
   };
@@ -30351,13 +29597,21 @@ function requireFiniteNumber(value, context) {
 
 function normalizeKaigiRelaySummaryList(payload) {
   const record = ensureRecord(payload ?? {}, "kaigi relay summary response");
-  const rawItems = Array.isArray(record.items) ? record.items : [];
+  const rawItems = requireDenseArray(
+    record.items,
+    "kaigi relay summary response.items",
+  );
+  if (rawItems.length > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS) {
+    throw new RangeError(
+      `kaigi relay summary response.items must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`,
+    );
+  }
   const items = rawItems.map((entry, index) =>
     normalizeKaigiRelaySummary(entry, `kaigi relay summary response.items[${index}]`),
   );
   return {
     total: ToriiClient._normalizeUnsignedInteger(
-      record.total ?? items.length ?? 0,
+      record.total,
       "kaigiRelay.total",
       { allowZero: true },
     ),
@@ -30369,18 +29623,18 @@ function normalizeKaigiRelaySummary(payload, context) {
   const record = ensureRecord(payload, context);
   const relayId = requireNonEmptyString(record.relay_id, `${context}.relay_id`);
   const domain = requireNonEmptyString(record.domain, `${context}.domain`);
-  const bandwidthClass = ToriiClient._normalizeUnsignedInteger(
-    record.bandwidth_class ?? 0,
+  const bandwidthClass = normalizeKaigiBandwidthClass(
+    record.bandwidth_class,
     `${context}.bandwidth_class`,
-    { allowZero: true },
   );
+  const hpkeFingerprintContext = `${context}.hpke_fingerprint_hex`;
   const hpkeFingerprint = normalizeHex32String(
-    record.hpke_fingerprint_hex,
-    `${context}.hpke_fingerprint_hex`,
+    requireExactNonEmptyString(record.hpke_fingerprint_hex, hpkeFingerprintContext),
+    hpkeFingerprintContext,
   );
   let status = null;
   if (record.status !== undefined && record.status !== null) {
-    const value = String(record.status).toLowerCase();
+    const value = requireNonEmptyString(record.status, `${context}.status`).toLowerCase();
     if (!KAIGI_HEALTH_STATUS_VALUES.has(value)) {
       throw new TypeError(`${context}.status must be healthy, degraded, or unavailable`);
     }
@@ -30404,12 +29658,23 @@ function normalizeKaigiRelaySummary(payload, context) {
   };
 }
 
+function normalizeKaigiBandwidthClass(value, context) {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new TypeError(`${context} must be an integer`);
+  }
+  if (value < 1 || value > 0xff) {
+    throw new RangeError(`${context} must be between 1 and 255`);
+  }
+  return value;
+}
+
 function normalizeKaigiRelayDetail(payload) {
   const record = ensureRecord(payload ?? {}, "kaigi relay detail");
   const relaySummary = normalizeKaigiRelaySummary(record.relay, "kaigi relay detail.relay");
-  const hpkePublicKey = requireNonEmptyString(
-    record.hpke_public_key_b64,
-    "kaigi relay detail.hpke_public_key_b64",
+  const hpkePublicKeyContext = "kaigi relay detail.hpke_public_key_b64";
+  const hpkePublicKey = normalizeRequiredExactBase64Payload(
+    requireExactNonEmptyString(record.hpke_public_key_b64, hpkePublicKeyContext),
+    hpkePublicKeyContext,
   );
   let reportedCall = null;
   if (record.reported_call !== undefined && record.reported_call !== null) {
@@ -30434,7 +29699,10 @@ function normalizeKaigiRelayDetail(payload) {
   }
   let notes = null;
   if (record.notes !== undefined && record.notes !== null) {
-    notes = String(record.notes);
+    if (typeof record.notes !== "string") {
+      throw new TypeError("kaigi relay detail.notes must be a string");
+    }
+    notes = record.notes;
   }
   let metrics = null;
   if (record.metrics !== undefined && record.metrics !== null) {
@@ -30458,22 +29726,22 @@ function normalizeKaigiRelayDomainMetrics(payload, context) {
       `${context}.domain`,
     ),
     registrations_total: ToriiClient._normalizeUnsignedInteger(
-      record.registrations_total ?? 0,
+      record.registrations_total,
       `${context}.registrations_total`,
       { allowZero: true },
     ),
     manifest_updates_total: ToriiClient._normalizeUnsignedInteger(
-      record.manifest_updates_total ?? 0,
+      record.manifest_updates_total,
       `${context}.manifest_updates_total`,
       { allowZero: true },
     ),
     failovers_total: ToriiClient._normalizeUnsignedInteger(
-      record.failovers_total ?? 0,
+      record.failovers_total,
       `${context}.failovers_total`,
       { allowZero: true },
     ),
     health_reports_total: ToriiClient._normalizeUnsignedInteger(
-      record.health_reports_total ?? 0,
+      record.health_reports_total,
       `${context}.health_reports_total`,
       { allowZero: true },
     ),
@@ -30482,38 +29750,46 @@ function normalizeKaigiRelayDomainMetrics(payload, context) {
 
 function normalizeKaigiRelayHealthSnapshot(payload) {
   const record = ensureRecord(payload ?? {}, "kaigi relay health snapshot");
-  const rawDomains = Array.isArray(record.domains) ? record.domains : [];
+  const rawDomains = requireDenseArray(
+    record.domains,
+    "kaigi relay health snapshot.domains",
+  );
+  if (rawDomains.length > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS) {
+    throw new RangeError(
+      `kaigi relay health snapshot.domains must not exceed ${KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS} entries`,
+    );
+  }
   const domains = rawDomains.map((entry, index) =>
     normalizeKaigiRelayDomainMetrics(entry, `kaigi relay health snapshot.domains[${index}]`),
   );
   return {
     healthy_total: ToriiClient._normalizeUnsignedInteger(
-      record.healthy_total ?? 0,
+      record.healthy_total,
       "kaigi relay health snapshot.healthy_total",
       { allowZero: true },
     ),
     degraded_total: ToriiClient._normalizeUnsignedInteger(
-      record.degraded_total ?? 0,
+      record.degraded_total,
       "kaigi relay health snapshot.degraded_total",
       { allowZero: true },
     ),
     unavailable_total: ToriiClient._normalizeUnsignedInteger(
-      record.unavailable_total ?? 0,
+      record.unavailable_total,
       "kaigi relay health snapshot.unavailable_total",
       { allowZero: true },
     ),
     reports_total: ToriiClient._normalizeUnsignedInteger(
-      record.reports_total ?? 0,
+      record.reports_total,
       "kaigi relay health snapshot.reports_total",
       { allowZero: true },
     ),
     registrations_total: ToriiClient._normalizeUnsignedInteger(
-      record.registrations_total ?? 0,
+      record.registrations_total,
       "kaigi relay health snapshot.registrations_total",
       { allowZero: true },
     ),
     failovers_total: ToriiClient._normalizeUnsignedInteger(
-      record.failovers_total ?? 0,
+      record.failovers_total,
       "kaigi relay health snapshot.failovers_total",
       { allowZero: true },
     ),
@@ -30682,20 +29958,20 @@ function normalizeKaigiCallSignal(payload, context) {
             `${context}.participant_account_id`,
           ),
     created_at_ms: ToriiClient._normalizeUnsignedInteger(
-      record.created_at_ms ?? 0,
+      record.created_at_ms,
       `${context}.created_at_ms`,
       { allowZero: true },
     ),
-    metadata: ensureRecord(record.metadata ?? {}, `${context}.metadata`),
+    metadata: ensureRecord(record.metadata, `${context}.metadata`),
   };
 }
 
 function normalizeKaigiCallSignalsList(payload) {
   const record = ensureRecord(payload ?? {}, "kaigi call signals");
-  const rawItems = Array.isArray(record.items) ? record.items : [];
+  const rawItems = requireDenseArray(record.items, "kaigi call signals.items");
   return {
     total: ToriiClient._normalizeUnsignedInteger(
-      record.total ?? rawItems.length,
+      record.total,
       "kaigi call signals.total",
       { allowZero: true },
     ),
@@ -30718,7 +29994,7 @@ function normalizeKaigiCallEventData(payload) {
       call,
       status: requireNonEmptyString(record.status, "kaigi call event.status").toLowerCase(),
       ended_at_ms: ToriiClient._normalizeUnsignedInteger(
-        record.ended_at_ms ?? 0,
+        record.ended_at_ms,
         "kaigi call event.ended_at_ms",
         { allowZero: true },
       ),
@@ -30736,12 +30012,12 @@ function normalizeKaigiCallEventData(payload) {
       "kaigi call event.participant_count",
     ),
     commitment_count: ToriiClient._normalizeUnsignedInteger(
-      record.commitment_count ?? 0,
+      record.commitment_count,
       "kaigi call event.commitment_count",
       { allowZero: true },
     ),
     nullifier_count: ToriiClient._normalizeUnsignedInteger(
-      record.nullifier_count ?? 0,
+      record.nullifier_count,
       "kaigi call event.nullifier_count",
       { allowZero: true },
     ),
@@ -30774,10 +30050,9 @@ function normalizeKaigiRelayEventData(payload) {
       kind,
       domain,
       relay_id: relayId,
-      bandwidth_class: ToriiClient._normalizeUnsignedInteger(
-        record.bandwidth_class ?? 0,
+      bandwidth_class: normalizeKaigiBandwidthClass(
+        record.bandwidth_class,
         "kaigi relay event.bandwidth_class",
-        { allowZero: true },
       ),
       hpke_fingerprint_hex: normalizeHex32String(
         record.hpke_fingerprint_hex,
@@ -30807,7 +30082,7 @@ function normalizeKaigiRelayEventData(payload) {
     relay_id: relayId,
     status: statusValue,
     reported_at_ms: ToriiClient._normalizeUnsignedInteger(
-      record.reported_at_ms ?? 0,
+      record.reported_at_ms,
       "kaigi relay event.reported_at_ms",
       { allowZero: true },
     ),
@@ -30867,7 +30142,14 @@ function buildKaigiCallSignalsQuery(options = {}) {
   if (normalizedOptions) {
     assertSupportedOptionKeys(
       normalizedOptions,
-      new Set(["afterTimestampMs", "after_timestamp_ms", "limit", "offset", "signal"]),
+      new Set([
+        "afterTimestampMs",
+        "after_timestamp_ms",
+        "limit",
+        "offset",
+        "signal",
+        "canonicalAuth",
+      ]),
       "kaigi call signals options",
     );
   }
@@ -30899,7 +30181,11 @@ function buildKaigiCallSignalsQuery(options = {}) {
       { allowZero: true },
     );
   }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
+  return {
+    signal,
+    params: Object.keys(params).length === 0 ? undefined : params,
+    canonicalAuth: source.canonicalAuth,
+  };
 }
 
 function buildKaigiCallEventParams(options = {}) {
@@ -32046,6 +31332,107 @@ function decodeVerifyingKeyDraftBase64(
   return decoded;
 }
 
+function normalizeProverReportList(payload, filters, context) {
+  if (payload == null) {
+    return { kind: "reports", reports: [] };
+  }
+  if (!Array.isArray(payload)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  if (payload.length === 0) {
+    return { kind: "reports", reports: [] };
+  }
+  const idsOnlyRequested = isTruthyFilter(filters, "ids_only");
+  const messagesOnlyRequested = isTruthyFilter(filters, "messages_only");
+  const first = payload[0];
+  if (typeof first === "string") {
+    if (!idsOnlyRequested) {
+      throw new Error(
+        "Torii returned id-only prover report projection; pass { ids_only: true } to listProverReports to consume this payload",
+      );
+    }
+    payload.forEach((value, index) =>
+      requireNonEmptyString(value, `${context}[${index}]`),
+    );
+    return { kind: "ids", ids: payload.slice() };
+  }
+  if (
+    isPlainObject(first) &&
+    Object.keys(first).every((key) => key === "id" || key === "error")
+  ) {
+    if (!messagesOnlyRequested) {
+      throw new Error(
+        "Torii returned message-only prover report projection; pass { messages_only: true } to listProverReports to consume this payload",
+      );
+    }
+    const messages = payload.map((entry, index) => {
+      const record = ensureRecord(entry, `${context}[${index}]`);
+      return {
+        id: requireNonEmptyString(record.id, `${context}[${index}].id`),
+        error:
+          record.error === undefined || record.error === null
+            ? null
+            : requireNonEmptyString(record.error, `${context}[${index}].error`),
+      };
+    });
+    return { kind: "messages", messages };
+  }
+  return {
+    kind: "reports",
+    reports: payload.map((entry, index) =>
+      normalizeProverReportRecord(entry, `${context}[${index}]`),
+    ),
+  };
+}
+
+function normalizeProverReportRecord(value, context) {
+  const record = ensureRecord(value, context);
+  const id = requireNonEmptyString(record.id, `${context}.id`);
+  const ok = requireBooleanLike(record.ok, `${context}.ok`);
+  const error =
+    record.error === undefined || record.error === null
+      ? null
+      : requireNonEmptyString(record.error, `${context}.error`);
+  const contentType = requireNonEmptyString(
+    record.content_type,
+    `${context}.content_type`,
+  );
+  const size = ToriiClient._normalizeUnsignedInteger(record.size, `${context}.size`, {
+    allowZero: true,
+  });
+  const createdMs = ToriiClient._normalizeUnsignedInteger(
+    record.created_ms,
+    `${context}.created_ms`,
+    { allowZero: true },
+  );
+  const processedMs = ToriiClient._normalizeUnsignedInteger(
+    record.processed_ms,
+    `${context}.processed_ms`,
+    { allowZero: true },
+  );
+  const latencyMs = ToriiClient._normalizeUnsignedInteger(
+    record.latency_ms ?? 0,
+    `${context}.latency_ms`,
+    { allowZero: true },
+  );
+  const zkTags = record.zk1_tags;
+  const normalizedTags =
+    zkTags === undefined || zkTags === null
+      ? null
+      : parseStringArray(zkTags, `${context}.zk1_tags`);
+  return {
+    id,
+    ok,
+    error,
+    content_type: contentType,
+    size,
+    created_ms: createdMs,
+    processed_ms: processedMs,
+    latency_ms: latencyMs,
+    zk1_tags: normalizedTags,
+  };
+}
+
 function normalizeSumeragiEvidenceListResponse(payload) {
   const record = ensureRecord(payload, "sumeragi evidence response");
   const rawItems = record.items;
@@ -32587,7 +31974,10 @@ function normalizeContractEventListItem(value, context) {
     { allowZero: false },
   );
   const provenance = requireNonEmptyString(record.provenance, `${context}.provenance`);
-  const txHashHex = requireNonEmptyString(record.tx_hash_hex, `${context}.tx_hash_hex`);
+  const txHashHex = requireCanonicalTransactionHashString(
+    record.tx_hash_hex,
+    `${context}.tx_hash_hex`,
+  );
   const blockHeight = ToriiClient._normalizeUnsignedInteger(
     record.block_height,
     `${context}.block_height`,
@@ -34239,19 +33629,13 @@ function identifierCanonicalExactString(value, context) {
   ]);
 }
 
-function identifierCanonicalByteElements(bytes, lengthContext) {
-  const payload = Buffer.from(bytes);
-  const encoded = Buffer.allocUnsafe(8 + payload.length * 2);
-  identifierCanonicalU64(payload.length, lengthContext).copy(encoded, 0);
-  for (let index = 0; index < payload.length; index += 1) {
-    encoded[8 + index * 2] = 1;
-    encoded[9 + index * 2] = payload[index];
-  }
-  return encoded;
-}
-
 function identifierCanonicalByteVec(bytes) {
-  return identifierCanonicalByteElements(bytes, "byteVec.length");
+  const payload = Buffer.from(bytes);
+  const parts = [identifierCanonicalU64(payload.length, "byteVec.length")];
+  for (const byte of payload) {
+    parts.push(identifierCanonicalCompactLength(1), Buffer.from([byte]));
+  }
+  return Buffer.concat(parts);
 }
 
 function identifierCanonicalRawByteVec(bytes) {
@@ -34384,7 +33768,12 @@ function identifierAlgorithmTagForCurveId(curve, context) {
 }
 
 function identifierCanonicalConstVecU8(bytes) {
-  return identifierCanonicalByteElements(bytes, "ConstVec<u8>.length");
+  const payload = Buffer.from(bytes);
+  const parts = [identifierCanonicalU64(payload.length, "ConstVec<u8>.length")];
+  for (const byte of payload) {
+    parts.push(identifierCanonicalSizedField(Buffer.from([byte])));
+  }
+  return Buffer.concat(parts);
 }
 
 function identifierPublicKeyPayload(controller, context) {

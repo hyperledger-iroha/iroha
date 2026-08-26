@@ -10,8 +10,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
+import stat
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -40,6 +43,13 @@ class SampleConfig:
     metadata_json: Optional[Path]
 
 
+@dataclass
+class BundlePlan:
+    config_path: Path
+    config: SampleConfig
+    outputs: Dict[str, Path]
+
+
 def load_config(path: Path) -> SampleConfig:
     raw = json.loads(path.read_text())
     base = path.parent
@@ -48,9 +58,9 @@ def load_config(path: Path) -> SampleConfig:
     segment = raw.get("segment", {})
     ingest = raw.get("ingest", {})
 
-    payload = base / raw["payload"]
+    payload = (base / raw["payload"]).resolve(strict=False)
     metadata = raw.get("extra_metadata")
-    metadata_path = base / metadata if metadata else None
+    metadata_path = (base / metadata).resolve(strict=False) if metadata else None
 
     resolution = track.get("resolution")
     audio_layout = track.get("audio_layout")
@@ -94,6 +104,126 @@ def default_outputs(out_dir: Path, payload: Path) -> Dict[str, Path]:
         "indexes": out_dir / f"{stem}.indexes.json",
         "ingest_metadata": out_dir / f"{stem}.ingest.json",
     }
+
+
+def _paths_alias(left: Path, right: Path) -> bool:
+    left = left.resolve(strict=False)
+    right = right.resolve(strict=False)
+    if left == right:
+        return True
+    try:
+        return left.exists() and right.exists() and os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
+def _normalize_output_path(path: Path) -> Path:
+    """Resolve existing parent aliases while preserving the final path component."""
+
+    return path.parent.resolve(strict=False) / path.name
+
+
+def plan_bundles(
+    config_paths: List[Path], out_dir: Path, summary_json: Optional[Path]
+) -> List[BundlePlan]:
+    """Load and preflight every bundle before the first external write."""
+
+    out_dir = out_dir.resolve(strict=False)
+    plans: List[BundlePlan] = []
+    inputs: List[tuple[str, Path]] = []
+    for config_path in config_paths:
+        config_path = config_path.resolve(strict=False)
+        config = load_config(config_path)
+        if not config.payload.is_file():
+            raise ValueError(f"payload is not a regular file: {config.payload}")
+        inputs.extend(
+            [
+                (f"config {config_path}", config_path),
+                (f"payload for {config_path}", config.payload),
+            ]
+        )
+        if config.metadata_json is not None:
+            if not config.metadata_json.is_file():
+                raise ValueError(
+                    f"extra metadata is not a regular file: {config.metadata_json}"
+                )
+            inputs.append((f"extra metadata for {config_path}", config.metadata_json))
+        plans.append(
+            BundlePlan(
+                config_path=config_path,
+                config=config,
+                outputs=default_outputs(out_dir, config.payload),
+            )
+        )
+
+    outputs: List[tuple[str, Path]] = []
+    for plan in plans:
+        for kind, path in plan.outputs.items():
+            label = f"{kind} output for {plan.config_path}"
+            if path.is_symlink() or (path.exists() and not path.is_file()):
+                raise ValueError(
+                    f"{label} must be a regular file or absent: {path}"
+                )
+            for previous_label, previous_path in outputs:
+                if _paths_alias(path, previous_path):
+                    raise ValueError(
+                        f"{label} aliases {previous_label}: {path.resolve(strict=False)}"
+                    )
+            for input_label, input_path in inputs:
+                if _paths_alias(path, input_path):
+                    raise ValueError(
+                        f"{label} aliases {input_label}: {path.resolve(strict=False)}"
+                    )
+            outputs.append((label, path))
+
+    if summary_json is not None:
+        summary_json = _normalize_output_path(summary_json)
+        for label, path in [*inputs, *outputs]:
+            if _paths_alias(summary_json, path):
+                raise ValueError(
+                    f"summary JSON aliases {label}: {summary_json}"
+                )
+        if summary_json.is_symlink() or (
+            summary_json.exists() and not summary_json.is_file()
+        ):
+            raise ValueError(
+                f"summary JSON must be a regular file or absent: {summary_json}"
+            )
+    return plans
+
+
+def write_summary_json(path: Path, summaries: List[Dict[str, object]]) -> None:
+    """Atomically publish the aggregate summary without following a target symlink."""
+
+    path = _normalize_output_path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError(f"summary JSON must be a regular file or absent: {path}")
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.tmp-"
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            json.dump(summaries, output, indent=2)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
+        os.chmod(temporary_path, mode)
+        os.replace(temporary_path, path)
+        try:
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+        except OSError:
+            directory_fd = None
+        if directory_fd is not None:
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def build_command(
@@ -203,18 +333,28 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    config_paths = args.config or [Path(__file__).with_name("sample_config.json")]
+    config_paths = [
+        path.resolve(strict=False)
+        for path in (args.config or [Path(__file__).with_name("sample_config.json")])
+    ]
     out_dir = args.out_dir.resolve()
+    summary_json = (
+        _normalize_output_path(args.summary_json)
+        if args.summary_json is not None
+        else None
+    )
+    plans = plan_bundles(config_paths, out_dir, summary_json)
     out_dir.mkdir(parents=True, exist_ok=True)
     summaries: List[Dict[str, object]] = []
 
-    for index, path in enumerate(config_paths, start=1):
-        config = load_config(path.resolve())
-        outputs = default_outputs(out_dir, config.payload)
+    for index, plan in enumerate(plans, start=1):
+        path = plan.config_path
+        config = plan.config
+        outputs = plan.outputs
         command = build_command(args.taikai_car, config, outputs)
 
         if args.print_command:
-            print(f"[{index}/{len(config_paths)}] " + " ".join(command))
+            print(f"[{index}/{len(plans)}] " + shlex.join(command))
 
         result = subprocess.run(command, check=False, capture_output=True, text=True)
         if result.returncode != 0:
@@ -232,10 +372,9 @@ def main() -> None:
         print(f"Taikai sample bundle complete for {path}:")
         print(json.dumps(summary, indent=2))
 
-    if args.summary_json:
-        args.summary_json.parent.mkdir(parents=True, exist_ok=True)
-        args.summary_json.write_text(json.dumps(summaries, indent=2))
-        print(f"Wrote summary JSON to {args.summary_json}")
+    if summary_json is not None:
+        write_summary_json(summary_json, summaries)
+        print(f"Wrote summary JSON to {summary_json}")
 
 
 if __name__ == "__main__":

@@ -4414,6 +4414,34 @@ fn derive_struct_json_deserialize(
                     });
                 }
             }
+            let field_loop = if arms.is_empty() && container_attrs.deny_unknown_fields {
+                quote! {
+                    if !parser.try_consume_char(b'}')? {
+                        parser.skip_ws();
+                        let key = parser.parse_key()?;
+                        return Err(norito::json::Error::unknown_field(key.as_str()));
+                    }
+                }
+            } else {
+                quote! {
+                    if !parser.try_consume_char(b'}')? {
+                        loop {
+                            parser.skip_ws();
+                            let key = parser.parse_key()?;
+                            match key.as_str() {
+                                #( #arms, )*
+                                #unknown_field_arm
+                            }
+                            parser.skip_ws();
+                            if parser.try_consume_char(b',')? {
+                                continue;
+                            }
+                            parser.expect(b'}')?;
+                            break;
+                        }
+                    }
+                }
+            };
             let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
             let result = quote! {
                 impl #impl_generics norito::json::JsonDeserialize for #ident #ty_generics #where_clause {
@@ -4424,22 +4452,7 @@ fn derive_struct_json_deserialize(
                         parser.expect(b'{')?;
                         parser.skip_ws();
                         #(#inits)*
-                        if !parser.try_consume_char(b'}')? {
-                            loop {
-                                parser.skip_ws();
-                                let key = parser.parse_key()?;
-                                match key.as_str() {
-                                    #( #arms ),*,
-                                    #unknown_field_arm
-                                }
-                                parser.skip_ws();
-                                if parser.try_consume_char(b',')? {
-                                    continue;
-                                }
-                                parser.expect(b'}')?;
-                                break;
-                            }
-                        }
+                        #field_loop
                         Ok(Self { #( #finals ),* })
                     }
                 }

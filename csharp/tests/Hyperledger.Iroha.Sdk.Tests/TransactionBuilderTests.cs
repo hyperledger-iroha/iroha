@@ -298,18 +298,18 @@ public sealed class TransactionBuilderTests
             .SetNonce(17)
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
-        var expectedNoritoBytes = envelope.NoritoBytes;
+        var expectedVersionedNoritoBytes = envelope.VersionedNoritoBytes;
         var expectedSignedTransactionBytes = envelope.SignedTransactionBytes;
         var expectedPayloadBytes = envelope.PayloadBytes;
         var expectedTransactionHash = envelope.TransactionHash;
         var expectedTransactionHashHex = envelope.TransactionHashHex;
 
-        MutateFirstByte(envelope.NoritoBytes);
+        MutateFirstByte(envelope.VersionedNoritoBytes);
         MutateFirstByte(envelope.SignedTransactionBytes);
         MutateFirstByte(envelope.PayloadBytes);
         MutateFirstByte(envelope.TransactionHash);
 
-        Assert.Equal(expectedNoritoBytes, envelope.NoritoBytes);
+        Assert.Equal(expectedVersionedNoritoBytes, envelope.VersionedNoritoBytes);
         Assert.Equal(expectedSignedTransactionBytes, envelope.SignedTransactionBytes);
         Assert.Equal(expectedPayloadBytes, envelope.PayloadBytes);
         Assert.Equal(expectedTransactionHash, envelope.TransactionHash);
@@ -324,27 +324,29 @@ public sealed class TransactionBuilderTests
         var constructorSignedTransactionBytes = BuildSignedTransactionBytes(
             constructorSignatureBytes,
             constructorPayloadBytes);
-        var constructorNoritoBytes = constructorSignedTransactionBytes.ToArray();
+        var constructorVersionedNoritoBytes = VersionSignedTransactionBytes(
+            constructorSignedTransactionBytes);
         var constructorTransactionHash = ComputeTransactionHash(constructorPayloadBytes);
+        var expectedConstructorVersionedNoritoBytes = constructorVersionedNoritoBytes.ToArray();
         var expectedConstructorSignedTransactionBytes = constructorSignedTransactionBytes.ToArray();
         var expectedConstructorPayloadBytes = constructorPayloadBytes.ToArray();
         var expectedConstructorTransactionHash = constructorTransactionHash.ToArray();
         var direct = new SignedTransactionEnvelope(
-            constructorNoritoBytes,
+            constructorVersionedNoritoBytes,
             constructorSignedTransactionBytes,
             constructorPayloadBytes,
             constructorTransactionHash);
 
-        MutateFirstByte(constructorNoritoBytes);
+        MutateFirstByte(constructorVersionedNoritoBytes);
         MutateFirstByte(constructorSignedTransactionBytes);
         MutateFirstByte(constructorPayloadBytes);
         MutateFirstByte(constructorTransactionHash);
-        MutateFirstByte(direct.NoritoBytes);
+        MutateFirstByte(direct.VersionedNoritoBytes);
         MutateFirstByte(direct.SignedTransactionBytes);
         MutateFirstByte(direct.PayloadBytes);
         MutateFirstByte(direct.TransactionHash);
 
-        Assert.Equal(expectedConstructorSignedTransactionBytes, direct.NoritoBytes);
+        Assert.Equal(expectedConstructorVersionedNoritoBytes, direct.VersionedNoritoBytes);
         Assert.Equal(expectedConstructorSignedTransactionBytes, direct.SignedTransactionBytes);
         Assert.Equal(expectedConstructorPayloadBytes, direct.PayloadBytes);
         Assert.Equal(expectedConstructorTransactionHash, direct.TransactionHash);
@@ -384,7 +386,7 @@ public sealed class TransactionBuilderTests
         AssertArgumentException(
             "signedTransactionBytes",
             () => new SignedTransactionEnvelope(
-                obsolete,
+                VersionSignedTransactionBytes(obsolete),
                 obsolete,
                 envelope.PayloadBytes,
                 envelope.TransactionHash));
@@ -401,12 +403,12 @@ public sealed class TransactionBuilderTests
         var transactionHash = ComputeTransactionHash(payloadBytes);
 
         var first = new SignedTransactionEnvelope(
-            firstSigned,
+            VersionSignedTransactionBytes(firstSigned),
             firstSigned,
             payloadBytes,
             transactionHash);
         var second = new SignedTransactionEnvelope(
-            secondSigned,
+            VersionSignedTransactionBytes(secondSigned),
             secondSigned,
             payloadBytes,
             transactionHash);
@@ -421,42 +423,53 @@ public sealed class TransactionBuilderTests
         var signatureBytes = Enumerable.Repeat((byte)0x08, Ed25519Signer.SignatureLength).ToArray();
         var payloadBytes = new byte[] { 0x07 };
         var signedTransactionBytes = BuildSignedTransactionBytes(signatureBytes, payloadBytes);
-        var noritoBytes = signedTransactionBytes.ToArray();
+        var versionedNoritoBytes = VersionSignedTransactionBytes(signedTransactionBytes);
         var transactionHash = ComputeTransactionHash(payloadBytes);
         var malformedSignedTransactionBytes = new byte[] { 0x04, 0x05, 0x06 };
 
         AssertArgumentException(
-            "noritoBytes",
+            "versionedNoritoBytes",
             () => new SignedTransactionEnvelope([], signedTransactionBytes, payloadBytes, transactionHash));
         AssertArgumentException(
             "signedTransactionBytes",
             () => new SignedTransactionEnvelope([0x01], [], payloadBytes, transactionHash));
         AssertArgumentException(
             "payloadBytes",
-            () => new SignedTransactionEnvelope(noritoBytes, signedTransactionBytes, [], transactionHash));
+            () => new SignedTransactionEnvelope(versionedNoritoBytes, signedTransactionBytes, [], transactionHash));
         AssertArgumentException(
             "transactionHash",
-            () => new SignedTransactionEnvelope(noritoBytes, signedTransactionBytes, payloadBytes, transactionHash[..^1]));
+            () => new SignedTransactionEnvelope(versionedNoritoBytes, signedTransactionBytes, payloadBytes, transactionHash[..^1]));
         AssertArgumentException(
-            "noritoBytes",
-            () => new SignedTransactionEnvelope([0x04, 0xff, 0x06], signedTransactionBytes, payloadBytes, transactionHash));
+            "versionedNoritoBytes",
+            () => new SignedTransactionEnvelope(
+                [0x02, .. signedTransactionBytes],
+                signedTransactionBytes,
+                payloadBytes,
+                transactionHash));
+        AssertArgumentException(
+            "versionedNoritoBytes",
+            () => new SignedTransactionEnvelope(
+                [0x01, 0xff, 0x06],
+                signedTransactionBytes,
+                payloadBytes,
+                transactionHash));
         AssertArgumentException(
             "signedTransactionBytes",
             () => new SignedTransactionEnvelope(
-                malformedSignedTransactionBytes,
+                VersionSignedTransactionBytes(malformedSignedTransactionBytes),
                 malformedSignedTransactionBytes,
                 payloadBytes,
                 ComputeTransactionHash(payloadBytes)));
         AssertArgumentException(
             "payloadBytes",
-            () => new SignedTransactionEnvelope(noritoBytes, signedTransactionBytes, [0x08], transactionHash));
+            () => new SignedTransactionEnvelope(versionedNoritoBytes, signedTransactionBytes, [0x08], transactionHash));
         AssertArgumentException(
             "signedTransactionBytes",
             () =>
             {
                 var withLegacyOuterAttachment = BuildLegacySignedTransactionBytes(signatureBytes, payloadBytes);
                 _ = new SignedTransactionEnvelope(
-                    withLegacyOuterAttachment,
+                    VersionSignedTransactionBytes(withLegacyOuterAttachment),
                     withLegacyOuterAttachment,
                     payloadBytes,
                     ComputeTransactionHash(payloadBytes));
@@ -467,7 +480,7 @@ public sealed class TransactionBuilderTests
             {
                 var withTrailingField = signedTransactionBytes.Concat(new byte[8]).ToArray();
                 _ = new SignedTransactionEnvelope(
-                    withTrailingField,
+                    VersionSignedTransactionBytes(withTrailingField),
                     withTrailingField,
                     payloadBytes,
                     ComputeTransactionHash(payloadBytes));
@@ -478,7 +491,11 @@ public sealed class TransactionBuilderTests
             {
                 var mismatchedHash = transactionHash.ToArray();
                 mismatchedHash[0] ^= 0xff;
-                _ = new SignedTransactionEnvelope(noritoBytes, signedTransactionBytes, payloadBytes, mismatchedHash);
+                _ = new SignedTransactionEnvelope(
+                    versionedNoritoBytes,
+                    signedTransactionBytes,
+                    payloadBytes,
+                    mismatchedHash);
             });
     }
 
@@ -998,7 +1015,7 @@ public sealed class TransactionBuilderTests
     }
 
     [Fact]
-    public async Task LedgerClientSubmitAndWaitPollsUntilTerminalState()
+    public async Task LedgerClientSubmitAndWaitPollsUntilAuthoritativeFinality()
     {
         var transaction = new TransactionBuilder(
             FixtureNetworkId,
@@ -1025,7 +1042,7 @@ public sealed class TransactionBuilderTests
                 };
             }
 
-            if (request.RequestUri!.AbsolutePath == "/transaction")
+            if (request.RequestUri!.AbsolutePath == "/v1/pipeline/transactions")
             {
                 return new HttpResponseMessage(HttpStatusCode.Accepted)
                 {
@@ -1034,13 +1051,47 @@ public sealed class TransactionBuilderTests
             }
 
             statusPollCount++;
+            Assert.Contains("scope=global", request.RequestUri.Query, StringComparison.Ordinal);
+            Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
             var body = statusPollCount switch
             {
                 1 => $$"""
                     {
                       "hash": "{{transactionHashHex}}",
                       "status": { "kind": "Queued" },
-                      "scope": "auto",
+                      "scope": "global",
+                      "resolved_from": "queue"
+                    }
+                    """,
+                2 => $$"""
+                    {
+                      "hash": "{{transactionHashHex}}",
+                      "status": { "kind": "Committed" },
+                      "scope": "global",
+                      "resolved_from": "cache"
+                    }
+                    """,
+                3 => $$"""
+                    {
+                      "hash": "{{transactionHashHex}}",
+                      "status": { "kind": "Applied", "block_height": 10 },
+                      "scope": "global",
+                      "resolved_from": "cache"
+                    }
+                    """,
+                4 => $$"""
+                    {
+                      "hash": "{{transactionHashHex}}",
+                      "status": { "kind": "Rejected" },
+                      "scope": "global",
+                      "resolved_from": "cache"
+                    }
+                    """,
+                5 => $$"""
+                    {
+                      "hash": "{{transactionHashHex}}",
+                      "status": { "kind": "Expired" },
+                      "scope": "global",
                       "resolved_from": "queue"
                     }
                     """,
@@ -1048,7 +1099,7 @@ public sealed class TransactionBuilderTests
                     {
                       "hash": "{{transactionHashHex}}",
                       "status": { "kind": "Applied", "block_height": 11 },
-                      "scope": "auto",
+                      "scope": "global",
                       "resolved_from": "state"
                     }
                     """,
@@ -1056,7 +1107,7 @@ public sealed class TransactionBuilderTests
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(body),
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
             };
         });
 
@@ -1069,7 +1120,8 @@ public sealed class TransactionBuilderTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     FixtureAccountId,
                     Convert.FromHexString(FixtureSeedHex)),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
         var status = await client.Ledger.SubmitAndWaitAsync(
             transaction,
             new PipelineSubmitOptions
@@ -1081,6 +1133,62 @@ public sealed class TransactionBuilderTests
         Assert.Equal(PipelineTransactionState.Applied, status.State);
         Assert.Equal((ulong)11, status.BlockHeight);
         Assert.True(status.IsTerminal);
+        Assert.True(status.IsSuccess);
+        Assert.Equal(6, statusPollCount);
+    }
+
+    [Fact]
+    public void PipelineSubmitOptionsDoesNotExposeFinalityPolicy()
+    {
+        var properties = typeof(PipelineSubmitOptions)
+            .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .Select(static property => property.Name)
+            .ToArray();
+
+        Assert.DoesNotContain("Scope", properties);
+        Assert.DoesNotContain("SuccessStates", properties);
+        Assert.DoesNotContain("FailureStates", properties);
+        Assert.Equal(["PollInterval", "Timeout"], properties.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task LedgerClientWaitFailsOnlyOnAuthoritativeRejectedOrExpired()
+    {
+        const string transactionHash = "da01f3a369d10e6ad78f241c86f4fe2d5481ff13ace97e6fb5db5c30240bdb3b";
+        foreach (var kind in new[] { "Rejected", "Expired" })
+        {
+            using var handler = new RecordingHandler(request =>
+            {
+                Assert.Contains("scope=global", request.RequestUri!.Query, StringComparison.Ordinal);
+                Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent($$"""
+                        {
+                          "hash": "{{transactionHash}}",
+                          "status": { "kind": "{{kind}}" },
+                          "scope": "global",
+                          "resolved_from": "state"
+                        }
+                        """, Encoding.UTF8, "application/json"),
+                };
+            });
+            using var client = new IrohaClient(
+                new Uri("https://torii.example"),
+                new HttpClient(handler));
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                client.Ledger.WaitForAsync(
+                    transactionHash,
+                    new PipelineSubmitOptions
+                    {
+                        PollInterval = TimeSpan.FromMilliseconds(1),
+                        Timeout = TimeSpan.FromSeconds(1),
+                    },
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains(kind, error.Message, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
@@ -1568,7 +1676,8 @@ public sealed class TransactionBuilderTests
 
     private static void AssertSignedEnvelopeStructure(SignedTransactionEnvelope envelope, byte[] privateKeySeed)
     {
-        Assert.Equal(envelope.SignedTransactionBytes, envelope.NoritoBytes);
+        Assert.Equal(1, envelope.VersionedNoritoBytes[0]);
+        Assert.Equal(envelope.SignedTransactionBytes, envelope.VersionedNoritoBytes[1..]);
         Assert.Equal(ComputeTransactionHash(envelope.PayloadBytes), envelope.TransactionHash);
 
         var signatureField = ReadField(envelope.SignedTransactionBytes, out var offsetAfterSignature);
@@ -1630,6 +1739,14 @@ public sealed class TransactionBuilderTests
         signedTransaction.WriteField(payloadBytes);
         signedTransaction.WriteField(multisig ?? [0]);
         return signedTransaction.ToArray();
+    }
+
+    private static byte[] VersionSignedTransactionBytes(byte[] signedTransactionBytes)
+    {
+        var versioned = new byte[signedTransactionBytes.Length + 1];
+        versioned[0] = 1;
+        signedTransactionBytes.CopyTo(versioned.AsSpan(1));
+        return versioned;
     }
 
     private static byte[] BuildLegacySignedTransactionBytes(

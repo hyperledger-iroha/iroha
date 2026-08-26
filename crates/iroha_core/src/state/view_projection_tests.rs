@@ -562,7 +562,6 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
             config_exports: Vec::new(),
             capabilities: iroha_data_model::soracloud::SoraCapabilityPolicyV1 {
                 network: iroha_data_model::soracloud::SoraNetworkPolicyV1::Isolated,
-                allow_wallet_signing: false,
                 allow_state_writes: false,
                 allow_model_inference: false,
                 allow_model_training: false,
@@ -572,7 +571,7 @@ fn soracloud_runtime_records_are_visible_through_world_view() {
                 memory_bytes: std::num::NonZeroU64::new(16 * 1024 * 1024).expect("nonzero"),
                 ephemeral_storage_bytes: std::num::NonZeroU64::new(16 * 1024 * 1024)
                     .expect("nonzero"),
-                max_open_files: std::num::NonZeroU32::new(256).expect("nonzero"),
+                max_open_files_per_process: std::num::NonZeroU32::new(256).expect("nonzero"),
                 max_tasks: std::num::NonZeroU16::new(16).expect("nonzero"),
             },
             lifecycle: iroha_data_model::soracloud::SoraLifecycleHooksV1 {

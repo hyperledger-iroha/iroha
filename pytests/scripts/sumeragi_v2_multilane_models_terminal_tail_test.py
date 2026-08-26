@@ -20,13 +20,13 @@ def test_inflight_contract_rejects_reservation_bootstrap_without_operation_schem
     path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
     replace_once(
         path,
-        "            RESERVATION_JOURNAL_OPERATION_SCHEMA_V6,\n",
+        "            RESERVATION_JOURNAL_OPERATION_SCHEMA_V1,\n",
         "",
     )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
         "bootstrap_frame" in error
-        and "RESERVATION_JOURNAL_OPERATION_SCHEMA_V6" in error
+        and "RESERVATION_JOURNAL_OPERATION_SCHEMA_V1" in error
         for error in errors
     ), errors
 
@@ -205,15 +205,15 @@ def test_inflight_contract_rejects_reservation_journal_prune_variant_reintroduct
     path = tmp_path / "crates/iroha_core/src/queue/reservation_journal.rs"
     replace_once(
         path,
-        "    ForgetCommit(LaneQueueReservationKeyV2),\n"
+        "    ForgetCommit(LaneQueueReservationKeyV1),\n"
         "    /// Durably claim an exact FIFO-ordered live reservation set for release.",
-        "    ForgetCommit(LaneQueueReservationKeyV2),\n"
+        "    ForgetCommit(LaneQueueReservationKeyV1),\n"
         "    Prune { lane_id: LaneId, lane_incarnation: Hash },\n"
         "    /// Durably claim an exact FIFO-ordered live reservation set for release.",
     )
     errors = validate_fixture(tmp_path, module, contract)
     assert any(
-        "LaneQueueReservationJournalFrameV6" in error
+        "LaneQueueReservationJournalFrameV1" in error
         and "forbidden source-bound token 'Prune'" in error
         for error in errors
     ), errors

@@ -41,7 +41,6 @@ use iroha_crypto::{
     HashOf, HybridPublicKey, HybridSuite,
     soranet::{
         blinding::canonical_cache_key,
-        certificate::CertificateValidationPhase,
         directory::{
             GuardDirectorySnapshotV2, compute_snapshot_digest, read_guard_directory_snapshot_file,
         },
@@ -125,8 +124,9 @@ use sorafs_orchestrator::{
     AnonymityPolicy, PolicyOverride, TransportPolicy, WriteModeHint,
     incentives::{RelayRewardEngine, RewardConfig},
     prelude::{
-        GatewayFetchConfig, GatewayProviderInput, GuardCacheKey, GuardRetention, GuardSelector,
-        GuardSet, PayoutServiceError, RelayDirectory, RewardLedgerError,
+        BrowserExtensionManifest, GUARD_CACHE_MAX_BYTES_V1, GatewayFetchConfig,
+        GatewayProviderInput, GuardCacheKey, GuardRetention, GuardSelector, GuardSet,
+        PayoutServiceError, RelayDirectory, RewardLedgerError,
     },
     treasury::{
         AdjustmentKind, AdjustmentRequest, DisputeId, DisputeResolution, DisputeStatus,
@@ -4077,11 +4077,19 @@ pub struct FetchArgs {
     #[arg(long = "anonymity-policy-override", value_name = "POLICY")]
     pub anonymity_policy_override: Option<String>,
     /// Path to the persisted guard cache (Norito-encoded guard set).
-    #[arg(long = "guard-cache", value_name = "PATH")]
+    #[arg(
+        long = "guard-cache",
+        value_name = "PATH",
+        requires_all = ["guard_cache_key_file", "guard_directory"]
+    )]
     pub guard_cache: Option<PathBuf>,
-    /// Optional 32-byte hex key used to tag guard caches when persisting to disk.
-    #[arg(long = "guard-cache-key", value_name = "HEX")]
-    pub guard_cache_key: Option<String>,
+    /// Owner-private file containing the exact 32 raw bytes used to authenticate the guard cache.
+    #[arg(
+        long = "guard-cache-key-file",
+        value_name = "PATH",
+        requires = "guard_cache"
+    )]
+    pub guard_cache_key_file: Option<PathBuf>,
     /// Path to a Norito guard directory snapshot used to refresh guard selections.
     #[arg(long = "guard-directory", value_name = "PATH")]
     pub guard_directory: Option<PathBuf>,
@@ -4196,6 +4204,16 @@ fn insert_summary_telemetry_region(summary: &mut norito::json::Map, label: Optio
         summary.insert("telemetry_region".into(), norito::json::Value::from(value));
     }
 }
+fn public_local_proxy_manifest_value(manifest: &BrowserExtensionManifest) -> norito::json::Value {
+    let mut public_manifest = manifest.clone();
+    public_manifest.client_capability_hex = None;
+    let mut value = norito::json::to_value(&public_manifest)
+        .expect("local proxy manifest should serialise to JSON");
+    if let norito::json::Value::Object(fields) = &mut value {
+        fields.remove("client_capability_hex");
+    }
+    value
+}
 impl Run for FetchArgs {
     #[allow(clippy::too_many_lines)]
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -4215,13 +4233,21 @@ impl Run for FetchArgs {
                 "--guard-directory requires --guard-directory-digest from an independent trusted source"
             ));
         }
-        let guard_cache_key = match self.guard_cache_key.as_deref() {
-            Some(hex) => Some(
-                GuardCacheKey::from_hex(hex)
-                    .map_err(|err| eyre!("invalid --guard-cache-key value `{hex}`: {err}"))?,
-            ),
-            None => None,
-        };
+        if self.guard_cache.is_some() != self.guard_cache_key_file.is_some() {
+            return Err(eyre!(
+                "--guard-cache and --guard-cache-key-file must be supplied together"
+            ));
+        }
+        if self.guard_cache.is_some() && self.guard_directory.is_none() {
+            return Err(eyre!(
+                "--guard-cache requires --guard-directory and its independently trusted --guard-directory-digest; cached guard state is not a freshness trust anchor"
+            ));
+        }
+        let guard_cache_key = self
+            .guard_cache_key_file
+            .as_deref()
+            .map(load_guard_cache_key_file)
+            .transpose()?;
         let manifest_inputs = resolve_manifest_inputs(context, &self)?;
         let ManifestInputs {
             manifest_path,
@@ -4414,7 +4440,9 @@ impl Run for FetchArgs {
             .with_retention(retention);
             let now_unix = u64::try_from(now_unix).unwrap_or(0);
             let policy = anonymity_policy.unwrap_or(AnonymityPolicy::GuardPq);
-            let selected = selector.select(&directory, guard_set.as_ref(), now_unix, policy);
+            let selected = selector
+                .select(&directory, guard_set.as_ref(), now_unix, policy)
+                .wrap_err("guard directory is not active at the selection timestamp")?;
             guard_set = Some(selected);
             guard_updated = true;
             Some(directory)
@@ -4676,9 +4704,10 @@ impl Run for FetchArgs {
             norito::json::Value::Array(chunk_receipts_json),
         );
         if let Some(manifest) = &session.local_proxy_manifest {
-            let manifest_json = norito::json::to_value(manifest)
-                .expect("local proxy manifest should serialise to JSON");
-            summary.insert("local_proxy_manifest".into(), manifest_json);
+            summary.insert(
+                "local_proxy_manifest".into(),
+                public_local_proxy_manifest_value(manifest),
+            );
         }
         if let Some(budget) = self.retry_budget {
             summary.insert(
@@ -5010,30 +5039,83 @@ fn cli_scoreboard_metadata(input: &ScoreboardMetadataInput) -> Value {
     );
     Value::Object(metadata)
 }
-fn load_guard_set(path: &Path, key: Option<&GuardCacheKey>) -> Result<Option<GuardSet>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = fs::read(path)
-        .wrap_err_with(|| format!("failed to read guard cache from `{}`", path.display()))?;
-    if bytes.is_empty() {
-        return Ok(None);
-    }
-    let guard_set = key
-        .map_or_else(
-            || GuardSet::decode(&bytes),
-            |key| GuardSet::decode_with_key(&bytes, Some(key)),
+fn load_guard_cache_key_file(path: &Path) -> Result<GuardCacheKey> {
+    let bytes = read_owner_private_handshake_file(
+        path,
+        GuardCacheKey::LENGTH,
+        Some(GuardCacheKey::LENGTH),
+        "guard cache authentication key",
+    )?;
+    let mut key_bytes = [0_u8; GuardCacheKey::LENGTH];
+    key_bytes.copy_from_slice(bytes.as_slice());
+    let key = GuardCacheKey::from_bytes(key_bytes);
+    key_bytes.zeroize();
+    key.map_err(|error| {
+        eyre!(
+            "invalid guard cache authentication key file `{}`: {error}",
+            path.display()
         )
-        .map_err(|err| {
-            eyre!(
-                "failed to decode guard cache from `{}`: {err}",
-                path.display()
-            )
-        })?;
+    })
+}
+fn load_guard_set(path: &Path, key: Option<&GuardCacheKey>) -> Result<Option<GuardSet>> {
+    let key = key.ok_or_else(|| eyre!("guard cache authentication key is required"))?;
+    let named_metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .wrap_err_with(|| format!("failed to inspect guard cache `{}`", path.display()));
+        }
+    };
+    if named_metadata.file_type().is_symlink() {
+        return Err(eyre!(
+            "guard cache `{}` must be a direct owner-private file",
+            path.display()
+        ));
+    }
+    let direct_path = canonical_guard_cache_path(path, false)?;
+    let bytes = read_owner_private_handshake_file(
+        &direct_path,
+        GUARD_CACHE_MAX_BYTES_V1,
+        None,
+        "guard cache",
+    )?;
+    let guard_set = GuardSet::decode_authenticated(&bytes, key).map_err(|err| {
+        eyre!(
+            "failed to decode guard cache from `{}`: {err}",
+            path.display()
+        )
+    })?;
     Ok(Some(guard_set))
 }
 fn persist_guard_set(path: &Path, guard_set: &GuardSet, key: Option<&GuardCacheKey>) -> Result<()> {
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+    let key = key.ok_or_else(|| eyre!("guard cache authentication key is required"))?;
+    let payload = guard_set
+        .encode_authenticated(key)
+        .map_err(|err| eyre!("failed to encode guard cache: {err}"))?;
+    if payload.is_empty() || payload.len() > GUARD_CACHE_MAX_BYTES_V1 {
+        return Err(eyre!(
+            "encoded guard cache must contain between 1 and {GUARD_CACHE_MAX_BYTES_V1} bytes"
+        ));
+    }
+    persist_owner_private_guard_cache(path, &payload)
+}
+#[cfg(unix)]
+fn canonical_guard_cache_path(path: &Path, create_parent: bool) -> Result<PathBuf> {
+    let file_name = match path.components().next_back() {
+        Some(std::path::Component::Normal(file_name)) => file_name,
+        _ => {
+            return Err(eyre!(
+                "guard cache path `{}` must name a regular file",
+                path.display()
+            ));
+        }
+    };
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if create_parent {
         fs::create_dir_all(parent).wrap_err_with(|| {
             format!(
                 "failed to create guard cache directory `{}`",
@@ -5041,15 +5123,224 @@ fn persist_guard_set(path: &Path, guard_set: &GuardSet, key: Option<&GuardCacheK
             )
         })?;
     }
-    let payload = key
-        .map_or_else(
-            || guard_set.encode(),
-            |key| guard_set.encode_with_key(Some(key)),
+    let canonical_parent = fs::canonicalize(parent).wrap_err_with(|| {
+        format!(
+            "failed to canonicalize guard cache directory `{}`",
+            parent.display()
         )
-        .map_err(|err| eyre!("failed to encode guard cache: {err}"))?;
-    fs::write(path, payload)
-        .wrap_err_with(|| format!("failed to write guard cache to `{}`", path.display()))?;
+    })?;
+    validate_guard_cache_parent_chain(&canonical_parent)?;
+    Ok(canonical_parent.join(file_name))
+}
+#[cfg(not(unix))]
+fn canonical_guard_cache_path(path: &Path, _create_parent: bool) -> Result<PathBuf> {
+    Err(eyre!(
+        "guard cache `{}` is unsupported because this platform does not expose the required owner/mode/link custody checks",
+        path.display()
+    ))
+}
+#[cfg(unix)]
+fn validate_guard_cache_parent_chain(parent: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let effective_uid = rustix::process::geteuid().as_raw();
+    let mut ancestors = parent
+        .ancestors()
+        .map(Path::to_path_buf)
+        .collect::<Vec<_>>();
+    ancestors.reverse();
+    let mut metadata = Vec::with_capacity(ancestors.len());
+    for ancestor in &ancestors {
+        let observed = fs::symlink_metadata(ancestor).wrap_err_with(|| {
+            format!(
+                "failed to inspect guard cache directory ancestor `{}`",
+                ancestor.display()
+            )
+        })?;
+        if observed.file_type().is_symlink() || !observed.is_dir() {
+            return Err(eyre!(
+                "guard cache directory ancestor `{}` must be a direct directory",
+                ancestor.display()
+            ));
+        }
+        if observed.uid() != 0 && observed.uid() != effective_uid {
+            return Err(eyre!(
+                "guard cache directory ancestor `{}` must be owned by root or effective UID {effective_uid}",
+                ancestor.display()
+            ));
+        }
+        metadata.push(observed);
+    }
+    for (index, observed) in metadata.iter().enumerate() {
+        if observed.mode() & 0o022 == 0 {
+            continue;
+        }
+        let protected_sticky_boundary = observed.uid() == 0
+            && observed.mode() & 0o1000 != 0
+            && metadata
+                .get(index + 1)
+                .is_some_and(|child| child.uid() == effective_uid && child.mode() & 0o022 == 0);
+        if !protected_sticky_boundary {
+            return Err(eyre!(
+                "guard cache directory ancestor `{}` is writable by another principal",
+                ancestors[index].display()
+            ));
+        }
+    }
+    let parent_metadata = metadata
+        .last()
+        .ok_or_else(|| eyre!("guard cache path has no parent directory metadata"))?;
+    if parent_metadata.uid() != effective_uid || parent_metadata.mode() & 0o022 != 0 {
+        return Err(eyre!(
+            "guard cache directory `{}` must be owned by effective UID {effective_uid} and not be group/world writable",
+            parent.display()
+        ));
+    }
     Ok(())
+}
+#[cfg(unix)]
+fn validate_guard_cache_destination(metadata: &fs::Metadata, path: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o077 != 0
+        || metadata.nlink() != 1
+    {
+        return Err(eyre!(
+            "guard cache `{}` must be an owner-private regular non-symlink file with exactly one link",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+#[cfg(unix)]
+fn same_guard_cache_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.uid() == right.uid()
+        && left.mode() == right.mode()
+        && left.nlink() == 1
+        && right.nlink() == 1
+        && left.len() == right.len()
+}
+#[cfg(unix)]
+fn persist_owner_private_guard_cache(path: &Path, payload: &[u8]) -> Result<()> {
+    let direct_path = canonical_guard_cache_path(path, true)?;
+    match fs::symlink_metadata(&direct_path) {
+        Ok(metadata) => validate_guard_cache_destination(&metadata, &direct_path)?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).wrap_err_with(|| {
+                format!(
+                    "failed to inspect existing guard cache `{}`",
+                    direct_path.display()
+                )
+            });
+        }
+    }
+
+    let parent = direct_path
+        .parent()
+        .ok_or_else(|| eyre!("guard cache path has no parent directory"))?;
+    let mut nonce = [0_u8; 16];
+    OsRng
+        .try_fill_bytes(&mut nonce)
+        .map_err(|error| eyre!("failed to generate guard cache staging name: {error}"))?;
+    let staging_path = parent.join(format!(".guard-cache-{}.tmp", hex::encode(nonce)));
+    nonce.zeroize();
+    let descriptor = rustix::fs::open(
+        &staging_path,
+        rustix::fs::OFlags::WRONLY
+            | rustix::fs::OFlags::CREATE
+            | rustix::fs::OFlags::EXCL
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )
+    .wrap_err_with(|| {
+        format!(
+            "failed to create owner-private guard cache staging file `{}`",
+            staging_path.display()
+        )
+    })?;
+    let mut staging = fs::File::from(descriptor);
+    let write_result = (|| -> Result<()> {
+        rustix::fs::fchmod(&staging, rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR)
+            .wrap_err_with(|| {
+                format!(
+                    "failed to enforce owner-private guard cache staging permissions `{}`",
+                    staging_path.display()
+                )
+            })?;
+        let created_metadata = staging.metadata().wrap_err_with(|| {
+            format!(
+                "failed to inspect guard cache staging file `{}`",
+                staging_path.display()
+            )
+        })?;
+        validate_guard_cache_destination(&created_metadata, &staging_path)?;
+        staging.write_all(payload).wrap_err_with(|| {
+            format!(
+                "failed to write guard cache staging file `{}`",
+                staging_path.display()
+            )
+        })?;
+        staging.sync_all().wrap_err_with(|| {
+            format!(
+                "failed to sync guard cache staging file `{}`",
+                staging_path.display()
+            )
+        })?;
+        let staged_metadata = staging.metadata().wrap_err_with(|| {
+            format!(
+                "failed to re-inspect guard cache staging file `{}`",
+                staging_path.display()
+            )
+        })?;
+        validate_guard_cache_destination(&staged_metadata, &staging_path)?;
+        if staged_metadata.len() != u64::try_from(payload.len()).unwrap_or(u64::MAX) {
+            return Err(eyre!(
+                "guard cache staging file `{}` changed while it was written",
+                staging_path.display()
+            ));
+        }
+        fs::rename(&staging_path, &direct_path).wrap_err_with(|| {
+            format!(
+                "failed to atomically replace guard cache `{}`",
+                direct_path.display()
+            )
+        })?;
+        let published_metadata = fs::symlink_metadata(&direct_path).wrap_err_with(|| {
+            format!(
+                "failed to inspect published guard cache `{}`",
+                direct_path.display()
+            )
+        })?;
+        validate_guard_cache_destination(&published_metadata, &direct_path)?;
+        if !same_guard_cache_file_identity(&staged_metadata, &published_metadata) {
+            return Err(eyre!(
+                "published guard cache `{}` does not match the staged file",
+                direct_path.display()
+            ));
+        }
+        Ok(())
+    })();
+    if write_result.is_err() {
+        drop(staging);
+        let _ = fs::remove_file(&staging_path);
+    }
+    write_result
+}
+#[cfg(not(unix))]
+fn persist_owner_private_guard_cache(path: &Path, _payload: &[u8]) -> Result<()> {
+    Err(eyre!(
+        "guard cache `{}` is unsupported because this platform does not expose the required owner/mode/link custody checks",
+        path.display()
+    ))
 }
 fn load_guard_directory(
     path: &Path,
@@ -5075,15 +5366,13 @@ struct GuardDirectorySummary {
     published_at_unix: Option<i64>,
     valid_after_unix: Option<i64>,
     valid_until_unix: Option<i64>,
-    validation_phase: Option<&'static str>,
     issuer_count: usize,
     relay_count: usize,
     entry_guards: usize,
     entry_guards_pq: usize,
     entry_guard_pq_ratio: f64,
     exit_relays: usize,
-    dual_signed_relays: usize,
-    pq_certificate_relays: usize,
+    pq_handshake_relays: usize,
     snapshot_size_bytes: usize,
 }
 impl GuardDirectorySummary {
@@ -5097,8 +5386,7 @@ impl GuardDirectorySummary {
         let mut entry_guards = 0usize;
         let mut pq_entry_guards = 0usize;
         let mut exit_relays = 0usize;
-        let mut dual_signed = 0usize;
-        let mut pq_cert_relays = 0usize;
+        let mut pq_handshake_relays = 0usize;
         for descriptor in directory.entries() {
             if descriptor.is_entry_guard() {
                 entry_guards += 1;
@@ -5109,15 +5397,8 @@ impl GuardDirectorySummary {
             if descriptor.roles.exit() {
                 exit_relays += 1;
             }
-            if let Some(metadata) = descriptor.certificate_metadata() {
-                if metadata.has_dual_signatures {
-                    dual_signed += 1;
-                }
-                if metadata.has_pq_key {
-                    pq_cert_relays += 1;
-                }
-            } else if descriptor.is_pq_capable() {
-                pq_cert_relays += 1;
+            if descriptor.is_pq_capable() {
+                pq_handshake_relays += 1;
             }
         }
         #[allow(clippy::cast_precision_loss)]
@@ -5138,15 +5419,13 @@ impl GuardDirectorySummary {
             published_at_unix: directory.published_at(),
             valid_after_unix: directory.valid_after(),
             valid_until_unix: directory.valid_until(),
-            validation_phase: directory.validation_phase().map(validation_phase_label),
             issuer_count: snapshot.issuers.len(),
             relay_count: directory.entries().len(),
             entry_guards,
             entry_guards_pq: pq_entry_guards,
             entry_guard_pq_ratio: pq_ratio,
             exit_relays,
-            dual_signed_relays: dual_signed,
-            pq_certificate_relays: pq_cert_relays,
+            pq_handshake_relays,
             snapshot_size_bytes,
         }
     }
@@ -5199,13 +5478,6 @@ fn parse_snapshot_digest_hex(value: &str) -> Result<[u8; 32]> {
     let mut digest = [0u8; 32];
     digest.copy_from_slice(&decoded);
     Ok(digest)
-}
-fn validation_phase_label(phase: CertificateValidationPhase) -> &'static str {
-    match phase {
-        CertificateValidationPhase::Phase1AllowSingle => "phase1_allow_single",
-        CertificateValidationPhase::Phase2PreferDual => "phase2_prefer_dual",
-        CertificateValidationPhase::Phase3RequireDual => "phase3_require_dual",
-    }
 }
 fn write_guard_directory_snapshot(path: &Path, bytes: &[u8], overwrite: bool) -> Result<()> {
     if path.exists() && !overwrite {
@@ -16717,15 +16989,17 @@ mod tests {
         Algorithm, PublicKey,
         soranet::{
             certificate::{
-                CapabilityToggle, KemRotationModeV1, KemRotationPolicyV1, RelayCapabilityFlagsV1,
-                RelayCertificateV2, RelayEndpointV2, RelayRolesV2,
+                CapabilityToggle, RelayCapabilityFlagsV1, RelayCertificateV2, RelayEndpointV2,
+                RelayRolesV2,
             },
             directory::{
                 GuardDirectoryIssuerV1, GuardDirectoryRelayEntryV2, GuardDirectorySnapshotV2,
                 compute_issuer_fingerprint,
             },
             handshake::HandshakeSuite,
-            token::{self, AdmissionTokenVerifier},
+            token::{
+                self, AdmissionTokenVerifier, InMemoryTokenStore, TokenStore, TokenStoreLimits,
+            },
         },
     };
     use iroha_data_model::{
@@ -16751,21 +17025,217 @@ mod tests {
     };
     use sorafs_orchestrator::soranet::EndpointTag;
     use sorafs_orchestrator::{incentives::RewardConfig, treasury::ExpectedLedgerTransfer};
-    use soranet_pq::{
-        MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair,
-    };
+    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use std::{
         fmt::{self, Display},
         fs,
         io::Write,
         path::Path,
         str::FromStr,
+        sync::{Arc, Mutex},
         time::{Duration, SystemTime},
     };
     use tempfile::{NamedTempFile, TempDir};
     use url::Url;
     include!("sorafs_nonce_rng_tests.rs");
     test_items! {
+        fn persisted_guard_cache_requires_a_key_and_enforces_the_file_bound() {
+            let temporary = TempDir::new().expect("temporary directory");
+            let cache = temporary.path().join("guards.norito");
+            let missing_key = load_guard_set(&cache, None)
+                .expect_err("configured cache without a key must fail closed");
+            assert!(missing_key.to_string().contains("authentication key is required"));
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+
+                fs::write(&cache, vec![0_u8; GUARD_CACHE_MAX_BYTES_V1 + 1])
+                    .expect("write oversized guard cache");
+                fs::set_permissions(&cache, fs::Permissions::from_mode(0o600))
+                    .expect("make oversized cache owner-private");
+                let key =
+                    GuardCacheKey::from_bytes([0x6D; 32]).expect("non-zero guard cache key");
+                let oversized = load_guard_set(&cache, Some(&key))
+                    .expect_err("oversized guard cache must fail before decode");
+                assert!(oversized.to_string().contains("must contain between 1 and"));
+            }
+
+            let unsigned_write = persist_guard_set(&cache, &GuardSet::new(Vec::new()), None)
+                .expect_err("unsigned guard cache persistence must be unavailable");
+            assert!(
+                unsigned_write
+                    .to_string()
+                    .contains("authentication key is required")
+            );
+        }
+
+        fn guard_cache_cli_requires_a_current_directory() {
+            use clap::Parser as _;
+
+            #[allow(dead_code)]
+            #[derive(clap::Parser, Debug)]
+            struct Parser {
+                #[command(flatten)]
+                fetch: FetchArgs,
+            }
+
+            let error = Parser::try_parse_from([
+                "sorafs-fetch-test",
+                "--manifest",
+                "manifest.to",
+                "--plan",
+                "plan.json",
+                "--manifest-id",
+                "00",
+                "--gateway-provider",
+                "name=relay",
+                "--guard-cache",
+                "guards.norito",
+                "--guard-cache-key-file",
+                "guard-cache.key",
+            ])
+            .expect_err("a persisted guard cache without a current directory must be rejected");
+            assert!(error.to_string().contains("--guard-directory"));
+
+            let raw_key = "11".repeat(32);
+            let raw_error = Parser::try_parse_from([
+                "sorafs-fetch-test",
+                "--manifest",
+                "manifest.to",
+                "--plan",
+                "plan.json",
+                "--manifest-id",
+                "00",
+                "--gateway-provider",
+                "name=relay",
+                "--guard-cache-key",
+                raw_key.as_str(),
+            ])
+            .expect_err("raw guard-cache key material must not be accepted on argv");
+            assert!(raw_error.to_string().contains("--guard-cache-key"));
+        }
+
+        #[cfg(unix)]
+        fn guard_cache_key_file_is_exact_raw_and_owner_private() {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let temporary = TempDir::new().expect("temporary directory");
+            let key_path = temporary.path().join("guard-cache.key");
+            fs::write(&key_path, [0x6D; GuardCacheKey::LENGTH]).expect("write raw key");
+            fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))
+                .expect("make raw key owner-private");
+            let loaded = load_guard_cache_key_file(&key_path).expect("load raw key");
+            let guards = GuardSet::new(Vec::new());
+            let encoded = guards
+                .encode_authenticated(&loaded)
+                .expect("authenticate cache with loaded key");
+            let expected = GuardCacheKey::from_bytes([0x6D; GuardCacheKey::LENGTH])
+                .expect("fixture key");
+            GuardSet::decode_authenticated(&encoded, &expected)
+                .expect("loaded key must contain the exact raw bytes");
+
+            fs::write(&key_path, "6d".repeat(GuardCacheKey::LENGTH))
+                .expect("replace with argv-style hex text");
+            assert!(load_guard_cache_key_file(&key_path).is_err());
+            fs::write(&key_path, [0x6D; GuardCacheKey::LENGTH]).expect("restore raw key");
+            fs::set_permissions(&key_path, fs::Permissions::from_mode(0o644))
+                .expect("make key permissive");
+            assert!(load_guard_cache_key_file(&key_path).is_err());
+        }
+
+        fn ordinary_proxy_manifest_summary_never_serialises_the_client_capability() {
+            let secret = "11".repeat(32);
+            let manifest_json = format!(
+                r#"{{"version":2,"authority":"127.0.0.1:9443","certificate_pem":"test","client_capability_hex":"{secret}"}}"#
+            );
+            let manifest: BrowserExtensionManifest = norito::json::from_str(&manifest_json)
+                .expect("decode proxy manifest with bootstrap capability");
+            let public = public_local_proxy_manifest_value(&manifest);
+            let rendered = norito::json::to_json_pretty(&public)
+                .expect("render public local-proxy manifest summary");
+            assert!(!rendered.contains(&secret));
+            assert!(!rendered.contains("client_capability_hex"));
+        }
+
+        #[cfg(unix)]
+        fn authenticated_guard_cache_is_owner_private_and_atomically_replaceable() {
+            use std::os::unix::fs::MetadataExt as _;
+
+            let temporary = TempDir::new().expect("temporary directory");
+            let cache = temporary.path().join("guards.norito");
+            let key = GuardCacheKey::from_bytes([0x6D; 32]).expect("non-zero guard cache key");
+            let guards = GuardSet::new(Vec::new());
+
+            persist_guard_set(&cache, &guards, Some(&key)).expect("persist authenticated cache");
+            persist_guard_set(&cache, &guards, Some(&key))
+                .expect("atomically replace authenticated cache");
+            let metadata = fs::symlink_metadata(&cache).expect("inspect persisted cache");
+            assert!(metadata.is_file());
+            assert_eq!(metadata.mode() & 0o077, 0);
+            assert_eq!(metadata.nlink(), 1);
+            let loaded = load_guard_set(&cache, Some(&key))
+                .expect("load authenticated cache")
+                .expect("cache exists");
+            assert!(loaded.guards().is_empty());
+            let names = fs::read_dir(temporary.path())
+                .expect("list cache directory")
+                .map(|entry| entry.expect("directory entry").file_name())
+                .collect::<Vec<_>>();
+            assert_eq!(names, [std::ffi::OsString::from("guards.norito")]);
+        }
+
+        #[cfg(unix)]
+        fn guard_cache_rejects_symlink_hardlink_and_permissive_custody() {
+            use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+            let temporary = TempDir::new().expect("temporary directory");
+            let key = GuardCacheKey::from_bytes([0x6D; 32]).expect("non-zero guard cache key");
+            let guards = GuardSet::new(Vec::new());
+            let target = temporary.path().join("target.norito");
+            fs::write(&target, b"unchanged").expect("write symlink target");
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o600))
+                .expect("make target owner-private");
+            let link = temporary.path().join("link.norito");
+            symlink(&target, &link).expect("create cache symlink");
+            let error = persist_guard_set(&link, &guards, Some(&key))
+                .expect_err("cache symlink must fail closed");
+            assert!(error.to_string().contains("owner-private"));
+            assert_eq!(fs::read(&target).expect("read target"), b"unchanged");
+            let error = load_guard_set(&link, Some(&key))
+                .expect_err("cache symlink load must fail closed");
+            assert!(error.to_string().contains("direct owner-private"));
+
+            let hardlink = temporary.path().join("hardlink.norito");
+            fs::hard_link(&target, &hardlink).expect("create cache hardlink");
+            let error = load_guard_set(&target, Some(&key))
+                .expect_err("multiply linked cache must fail closed");
+            assert!(error.to_string().contains("exactly one link"));
+
+            fs::remove_file(&hardlink).expect("remove hardlink");
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o644))
+                .expect("make target permissive");
+            let error = persist_guard_set(&target, &guards, Some(&key))
+                .expect_err("permissive cache must fail closed");
+            assert!(error.to_string().contains("owner-private"));
+        }
+
+        #[cfg(unix)]
+        fn guard_cache_rejects_writable_parent_directory() {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let temporary = TempDir::new().expect("temporary directory");
+            fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o777))
+                .expect("make cache parent permissive");
+            let cache = temporary.path().join("guards.norito");
+            let key = GuardCacheKey::from_bytes([0x6D; 32]).expect("non-zero guard cache key");
+            let error = persist_guard_set(&cache, &GuardSet::new(Vec::new()), Some(&key))
+                .expect_err("writable cache parent must fail closed");
+            assert!(error.to_string().contains("writable by another principal"));
+            fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))
+                .expect("restore cache parent custody");
+        }
+
         fn hedging_billing_subcommands_parse_all_read_and_ack_routes() {
             use clap::Parser as _;
             #[derive(clap::Parser)]
@@ -17307,11 +17777,14 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         assert_compact! { root.get("lifecycle_projection").is_some(); "full projection should be embedded" };
     }
     }
-    fn sample_guard_directory_snapshot_bytes() -> Vec<u8> {
+    fn sample_guard_directory_signing_key() -> SigningKey {
         let mut rng = StdRng::seed_from_u64(0x5EED);
         let mut ed_seed = [0u8; 32];
         rng.fill_bytes(&mut ed_seed);
-        let signing_key = SigningKey::from_bytes(&ed_seed);
+        SigningKey::from_bytes(&ed_seed)
+    }
+    fn sample_guard_directory_snapshot_bytes() -> Vec<u8> {
+        let signing_key = sample_guard_directory_signing_key();
         let ed_public = Ed25519VerifyingKey::from(&signing_key).to_bytes();
         let mldsa_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
             .expect("ML-DSA keypair generation should succeed");
@@ -17319,7 +17792,6 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         let fingerprint = compute_issuer_fingerprint(&ed_public, &mldsa_public)
             .expect("sample issuer fingerprint should compute");
         let directory_hash = [0xAB; 32];
-        let preferred_kem_suite = MlKemSuite::MlKem1024;
         let certificate = RelayCertificateV2 {
             relay_id: ed_public,
             identity_ed25519: ed_public,
@@ -17346,13 +17818,6 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
                 CapabilityToggle::Enabled,
                 CapabilityToggle::Disabled,
             ),
-            kem_policy: KemRotationPolicyV1 {
-                mode: KemRotationModeV1::Static,
-                preferred_suite: preferred_kem_suite.kem_id(),
-                fallback_suite: None,
-                rotation_interval_hours: 0,
-                grace_period_hours: 0,
-            },
             handshake_suites: vec![
                 HandshakeSuite::Nk3PqForwardSecure,
                 HandshakeSuite::Nk2Hybrid,
@@ -17362,7 +17827,6 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             valid_until: 1_734_086_400,
             directory_hash,
             issuer_fingerprint: fingerprint,
-            pq_kem_public: vec![0x55; preferred_kem_suite.public_key_len()],
         };
         let published_at = certificate.published_at;
         let valid_after = certificate.valid_after;
@@ -17376,14 +17840,15 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             published_at_unix: published_at,
             valid_after_unix: valid_after,
             valid_until_unix: valid_until,
-            validation_phase: 3,
             issuers: vec![GuardDirectoryIssuerV1 {
                 fingerprint,
                 ed25519_public: ed_public,
                 mldsa65_public: mldsa_public,
             }],
             relays: vec![GuardDirectoryRelayEntryV2 {
-                certificate: bundle.to_cbor(),
+                certificate: bundle
+                    .try_to_cbor()
+                    .expect("sample relay bundle should encode"),
             }],
         };
         to_bytes(&snapshot).expect("encode snapshot")
@@ -17877,11 +18342,17 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         let mut artifacts = args
             .issue_with_rng(&mut ctx, &mut rng, default_now)
             .expect("issue token");
+        let replay_limits = TokenStoreLimits::new(4, Duration::from_secs(1_800))
+            .expect("fixture replay limits");
+        let replay_store: Arc<Mutex<dyn TokenStore + Send>> = Arc::new(Mutex::new(
+            InMemoryTokenStore::new(replay_limits).expect("fixture replay store"),
+        ));
         let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
             Duration::from_secs(900),
             Duration::from_secs(5),
+            replay_store,
         )
         .expect("generated verifier key must match ML-DSA-44");
         let verify_now = SystemTime::UNIX_EPOCH
@@ -18364,7 +18835,9 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         let entries = directory.entries();
         assert_eq!(entries.len(), 1);
         let descriptor = &entries[0];
-        assert_eq!(descriptor.relay_id, [0x11; 32]);
+        let expected_relay_id =
+            Ed25519VerifyingKey::from(&sample_guard_directory_signing_key()).to_bytes();
+        assert_eq!(descriptor.relay_id, expected_relay_id);
         assert!(descriptor.is_pq_capable());
         assert!(descriptor.certificate().is_some());
         assert_eq_compact! { descriptor.certificate_validity() => directory.valid_after().zip(directory.valid_until()) };

@@ -4,22 +4,22 @@ EXTENDS Naturals, FiniteSets
 (***************************************************************************
 Finite safety kernel for the first-release, in-flight lane carrier path.
 
-The accepted schema V2 carried by the Rust `LaneExecutablePayloadV1`
+The accepted schema V1 carried by the Rust `LaneExecutablePayloadV1`
 container is represented by `payloadBinding`. A validator is mapped to
 `BindingA` only where authenticated custody of the selected FIFO-ordered
-conjunction of exact `QueuePlanAdmissionBindingV2` preimages is established.
+conjunction of exact `QueuePlanAdmissionBindingV1` preimages is established.
 The production projection is the canonical reservation-group hash covering
 every complete key in that order. Init establishes that custody for the
 selected producer; it deliberately does not assert knowledge by every
 validator.
 
-QueuePlan journal V4 has individual Put records, not a batch-Put frame.
-`SelectQueuePlanV4Conjunction` therefore observes that every exact claim in
+QueuePlan journal V1 has individual Put records, not a batch-Put frame.
+`SelectQueuePlanV1Conjunction` therefore observes that every exact claim in
 the selected batch is already live in one content-bound replay snapshot.  It
 does not stand for a nonexistent journal append.  The forward durable order
 is
 
- selected QueuePlan V4 claim conjunction -> reservation journal V5 fsync ->
+ selected QueuePlan V1 claim conjunction -> reservation journal V1 fsync ->
  Kura Active -> execution-input durability -> READY authorization -> local
  READY signature -> durable READY QC -> lane commit -> atomic WSV carrier
  application.
@@ -155,8 +155,8 @@ Init ==
         crashed |-> {},
         producerAlive |-> TRUE]
   /\ history =
-       [everQueuePlanV4 |-> FALSE,
-        everReservationV5 |-> FALSE,
+       [everQueuePlanV1 |-> FALSE,
+        everReservationV1 |-> FALSE,
         everInputDurable |-> {},
         everReadyAuthorized |-> {},
         readySigned |-> {},
@@ -181,24 +181,24 @@ Init ==
         fifoRestored |-> FALSE]
 
 (***************************************************************************
-One abstract observation over the selected content-bound V4 replay snapshot.
-Every selected transaction already owns an individual durable V4 Put record.
+One abstract observation over the selected content-bound V1 replay snapshot.
+Every selected transaction already owns an individual durable V1 Put record.
 ***************************************************************************)
-SelectQueuePlanV4Conjunction ==
+SelectQueuePlanV1Conjunction ==
   /\ queue.plan = "Absent"
   /\ queue' =
        [queue EXCEPT
           !.plan = "SelectedConjunction",
           !.selectedCount = SelectedBatchSize]
-  /\ history' = [history EXCEPT !.everQueuePlanV4 = TRUE]
+  /\ history' = [history EXCEPT !.everQueuePlanV1 = TRUE]
   /\ UNCHANGED <<ownership, payloadBinding, carrier, session, decision, release>>
 
-FsyncReservationV5 ==
+FsyncReservationV1 ==
   /\ queue.reservation = "Absent"
   /\ (queue.plan = "SelectedConjunction"
       \/ Mode = "ReservationBeforeSelectedQueuePlan")
   /\ queue' = [queue EXCEPT !.reservation = "Live"]
-  /\ history' = [history EXCEPT !.everReservationV5 = TRUE]
+  /\ history' = [history EXCEPT !.everReservationV1 = TRUE]
   /\ UNCHANGED <<ownership, payloadBinding, carrier, session, decision, release>>
 
 ActivateKura(p) ==
@@ -219,7 +219,7 @@ FanoutFromProducer(p) ==
   /\ p \in Validators \ {Producer}
   /\ session.producerAlive
   /\ Producer \in session.bodies
-  /\ history.everReservationV5
+  /\ history.everReservationV1
   /\ p \notin session.crashed
   /\ session' = [session EXCEPT !.bodies = @ \union {p}]
   /\ UNCHANGED <<ownership, payloadBinding, queue, carrier, history, decision,
@@ -304,7 +304,7 @@ Recover(p) ==
                  release>>
 
 (***************************************************************************
-Reservation snapshot replay reconstructs process-local indexes from V5 bytes
+Reservation snapshot replay reconstructs process-local indexes from V1 bytes
 that are already represented by the abstract durable owner. It is therefore
 a named stutter, not a second reservation acquisition.
 ***************************************************************************)
@@ -314,10 +314,8 @@ RecoverReservationSnapshot ==
 (***************************************************************************
 Direct abort/orphan release is a real journal action outside the ordered
 four-stage lane release. It ends with ordinary FIFO ownership and may not
-masquerade as a Commit cleanup or ordered-release transition. The retired
-lane-wide removal tag is absent from the current V5 operation schema; its old
-bootstrap claim and operation bytes fail closed instead of entering this
-relation.
+masquerade as a Commit cleanup or ordered-release transition. The V1 operation
+inventory contains no lane-wide removal action.
 ***************************************************************************)
 ReleaseReservationDirect ==
   /\ queue.plan = "SelectedConjunction"
@@ -547,8 +545,8 @@ ConflictingPayloadBindingMutation ==
   /\ UNCHANGED <<ownership, queue, carrier, session, history, decision, release>>
 
 Next ==
-  \/ SelectQueuePlanV4Conjunction
-  \/ FsyncReservationV5
+  \/ SelectQueuePlanV1Conjunction
+  \/ FsyncReservationV1
   \/ \E p \in Validators: ActivateKura(p)
   \/ \E p \in Validators \ {Producer}: FanoutFromProducer(p)
   \/ \E source \in Validators, target \in Validators:
@@ -596,8 +594,8 @@ FirstReleaseTypeInvariant ==
         crashed: SUBSET Validators,
         producerAlive: BOOLEAN]
   /\ history \in
-       [everQueuePlanV4: BOOLEAN,
-        everReservationV5: BOOLEAN,
+       [everQueuePlanV1: BOOLEAN,
+        everReservationV1: BOOLEAN,
         everInputDurable: SUBSET Validators,
         everReadyAuthorized: SUBSET Validators,
         readySigned: SUBSET Validators,
@@ -631,11 +629,11 @@ MLValidatorCarrierOwnership ==
   /\ \A p \in Validators \ {Producer}:
        ownership[p] = "ReplicatedCarrier"
 
-MLSelectedQueuePlanV4ConjunctionBeforeReservationV5 ==
+MLSelectedQueuePlanV1ConjunctionBeforeReservationV1 ==
   queue.reservation # "Absent" => queue.plan # "Absent"
 
-MLReservationV5BeforeKuraActive ==
-  carrier.kuraActive # {} => history.everReservationV5
+MLReservationV1BeforeKuraActive ==
+  carrier.kuraActive # {} => history.everReservationV1
 
 MLKuraActiveBeforeExecutionInput ==
   carrier.inputDurable \subseteq carrier.kuraActive
@@ -651,8 +649,8 @@ MLLocalSignaturesBeforeDurableReadyQc ==
     Cardinality(history.readySigned) >= ReadyQuorum
 
 MLCrashDurableFactsRecoverable ==
-  /\ history.everQueuePlanV4 => queue.plan # "Absent"
-  /\ history.everReservationV5 => queue.reservation # "Absent"
+  /\ history.everQueuePlanV1 => queue.plan # "Absent"
+  /\ history.everReservationV1 => queue.reservation # "Absent"
   /\ history.everInputDurable \subseteq carrier.inputDurable
   /\ history.everReadyQcDurable => carrier.readyQcDurable
   /\ history.pendingHighWater <= release.pendingPrefix
@@ -756,7 +754,7 @@ MLReleaseStageOrder ==
   /\ queue.reservation = "DirectReleased" =>
        release.fifoRestored
 
-MLQueuePlanV4SelectedConjunctionBound4096 ==
+MLQueuePlanV1SelectedConjunctionBound4096 ==
   /\ queue.selectedCount <= 4096
   /\ queue.plan # "Absent" => queue.selectedCount > 0
 
@@ -764,8 +762,8 @@ InFlightFirstReleaseSafetyInvariant ==
   /\ FirstReleaseTypeInvariant
   /\ MLPayloadSchemaV2CarriesExactAdmissionPreimage
   /\ MLValidatorCarrierOwnership
-  /\ MLSelectedQueuePlanV4ConjunctionBeforeReservationV5
-  /\ MLReservationV5BeforeKuraActive
+  /\ MLSelectedQueuePlanV1ConjunctionBeforeReservationV1
+  /\ MLReservationV1BeforeKuraActive
   /\ MLKuraActiveBeforeExecutionInput
   /\ MLExecutionInputBeforeReadyAuthorization
   /\ MLReadyAuthorizationBeforeLocalSignature
@@ -778,7 +776,7 @@ InFlightFirstReleaseSafetyInvariant ==
   /\ MLPostCarrierCommitCleanupOrder
   /\ MLReleasePrefixesRecoverable
   /\ MLReleaseStageOrder
-  /\ MLQueuePlanV4SelectedConjunctionBound4096
+  /\ MLQueuePlanV1SelectedConjunctionBound4096
 
 InFlightFirstReleaseSpec == Init /\ [][Next]_vars
 

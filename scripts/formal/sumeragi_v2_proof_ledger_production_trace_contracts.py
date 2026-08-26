@@ -6,8 +6,8 @@
 # arm of the shared composed transition kernel. Multiple concrete production
 # call sites may refine one action, but they cannot mint a second mapping.
 PRODUCTION_TRACE_EXTRACTION_ACTION_WITNESS_MAPPINGS = (
-    ("SelectQueuePlanV4Conjunction", "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4", 1),
-    ("FsyncReservationV5", "IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5", 2),
+    ("SelectQueuePlanV1Conjunction", "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1", 1),
+    ("FsyncReservationV1", "IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V1", 2),
     ("ActivateKura", "IN_FLIGHT_FIRST_RELEASE_ACTION_ACTIVATE_KURA", 3),
     ("FanoutFromProducer", "IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER", 4),
     ("ServeLateBody", "IN_FLIGHT_FIRST_RELEASE_ACTION_SERVE_LATE_BODY", 5),
@@ -240,12 +240,12 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
         "impl": "Queue",
         "symbol": "reserve_transactions_for_lane_bounded",
         "model_actions": (
-            "SelectQueuePlanV4Conjunction",
-            "FsyncReservationV5",
+            "SelectQueuePlanV1Conjunction",
+            "FsyncReservationV1",
         ),
         "action_tags": (
-            "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4",
-            "IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V1",
         ),
         "checked_transition_count": 2,
         "additional_tokens": (
@@ -447,7 +447,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "impl": None,
                 "symbol": "sign_lifecycle_cursor",
                 "required_tokens": (
-                    "AutonomousLifecycleCursorUnsignedV2::new",
+                    "AutonomousLifecycleCursorUnsignedV1::new",
                     "previous_cursor_hash",
                     "signing_preimage",
                     "Signature::try_new",
@@ -455,7 +455,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                     "unsigned.finalize(signature, validator_set)",
                 ),
                 "ordered_tokens": (
-                    "AutonomousLifecycleCursorUnsignedV2::new",
+                    "AutonomousLifecycleCursorUnsignedV1::new",
                     "signing_preimage()",
                     "Signature::try_new",
                     "<[u8; 96]>::try_from",
@@ -489,13 +489,13 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "required_tokens": (
                 "owner_generation < current_generation",
                 "check_production_in_flight_first_release_crash_transition",
-                "AutonomousLifecycleCursorPhaseV2::crashed",
+                "AutonomousLifecycleCursorPhaseV1::crashed",
                 "compare_and_swap_phase",
             ),
             "ordered_tokens": (
                 "if owner_generation < current_generation",
                 "check_production_in_flight_first_release_crash_transition",
-                "AutonomousLifecycleCursorPhaseV2::crashed(",
+                "AutonomousLifecycleCursorPhaseV1::crashed(",
             ),
         },
         "commit_sink": {
@@ -562,7 +562,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "impl": None,
                 "symbol": "sign_lifecycle_cursor",
                 "required_tokens": (
-                    "AutonomousLifecycleCursorUnsignedV2::new",
+                    "AutonomousLifecycleCursorUnsignedV1::new",
                     "previous_cursor_hash",
                     "signing_preimage",
                     "Signature::try_new",
@@ -570,7 +570,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                     "unsigned.finalize(signature, validator_set)",
                 ),
                 "ordered_tokens": (
-                    "AutonomousLifecycleCursorUnsignedV2::new",
+                    "AutonomousLifecycleCursorUnsignedV1::new",
                     "signing_preimage()",
                     "Signature::try_new",
                     "<[u8; 96]>::try_from",
@@ -602,15 +602,15 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "impl": None,
             "symbol": "recover_one_attempt",
             "required_tokens": (
-                "AutonomousLifecycleCursorPhaseKindV2::Crashed",
+                "AutonomousLifecycleCursorPhaseKindV1::Crashed",
                 "check_production_in_flight_first_release_recover_transition",
-                "AutonomousLifecycleCursorPhaseV2::prepared(current_generation, recover)",
+                "AutonomousLifecycleCursorPhaseV1::prepared(current_generation, recover)",
                 "compare_and_swap_phase",
             ),
             "ordered_tokens": (
-                "AutonomousLifecycleCursorPhaseKindV2::Crashed =>",
+                "AutonomousLifecycleCursorPhaseKindV1::Crashed =>",
                 "check_production_in_flight_first_release_recover_transition",
-                "let phase = AutonomousLifecycleCursorPhaseV2::prepared(current_generation, recover).map_err(|reason| lifecycle_error(\"\", reason))?; let _ = compare_and_swap_phase(kura, key_pair, local_peer, payload, read, phase)",
+                "let phase = AutonomousLifecycleCursorPhaseV1::prepared(current_generation, recover).map_err(|reason| lifecycle_error(\"\", reason))?; let _ = compare_and_swap_phase(kura, key_pair, local_peer, payload, read, phase)",
             ),
         },
         "commit_sink": {
@@ -1014,7 +1014,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                 "impl": None,
                 "symbol": "sign_lifecycle_cursor",
                 "required_tokens": (
-                    "AutonomousLifecycleCursorUnsignedV2::new",
+                    "AutonomousLifecycleCursorUnsignedV1::new",
                     "previous_cursor_hash",
                     "signing_preimage",
                     "Signature::try_new",
@@ -1022,7 +1022,7 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
                     "unsigned.finalize(signature, validator_set)",
                 ),
                 "ordered_tokens": (
-                    "AutonomousLifecycleCursorUnsignedV2::new",
+                    "AutonomousLifecycleCursorUnsignedV1::new",
                     "signing_preimage()",
                     "Signature::try_new",
                     "<[u8; 96]>::try_from",
@@ -1054,17 +1054,17 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
             "impl": None,
             "symbol": "recover_one_attempt",
             "required_tokens": (
-                "AutonomousLifecycleCursorPhaseKindV2::Live",
+                "AutonomousLifecycleCursorPhaseKindV1::Live",
                 "before.session.bodies & local_actor",
                 "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition",
-                "AutonomousLifecycleCursorPhaseV2::prepared(current_generation, rehydrate)",
+                "AutonomousLifecycleCursorPhaseV1::prepared(current_generation, rehydrate)",
                 "compare_and_swap_phase",
             ),
             "ordered_tokens": (
-                "AutonomousLifecycleCursorPhaseKindV2::Live =>",
+                "AutonomousLifecycleCursorPhaseKindV1::Live =>",
                 "before.session.bodies & local_actor != 0",
                 "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(",
-                "let phase = AutonomousLifecycleCursorPhaseV2::prepared(current_generation, rehydrate).map_err(|reason| { lifecycle_error(\"\", reason) })?; let _ = compare_and_swap_phase(kura, key_pair, local_peer, payload, read, phase)",
+                "let phase = AutonomousLifecycleCursorPhaseV1::prepared(current_generation, rehydrate).map_err(|reason| { lifecycle_error(\"\", reason) })?; let _ = compare_and_swap_phase(kura, key_pair, local_peer, payload, read, phase)",
             ),
         },
         "commit_sink": {
@@ -2332,7 +2332,7 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
         "impl": "IndexedReservationReplayState",
         "symbol": "check_in_flight_transition",
         "required_tokens": (
-            "LaneQueueReservationJournalFrameV6::Snapshot",
+            "LaneQueueReservationJournalFrameV1::Snapshot",
             "candidate.transition_snapshot",
             "IN_FLIGHT_RESERVATION_ACTION_RECOVER_SNAPSHOT",
             "retain_in_flight_owner_transition",
@@ -2569,7 +2569,7 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
         "impl": "AutonomousLifecycleBootstrapRecoveryAuthority",
         "symbol": "live_cursor",
         "required_tokens": (
-            "AutonomousLifecycleCursorV2",
+            "AutonomousLifecycleCursorV1",
             "self.bootstrap.body.live_activate",
         ),
     },
@@ -2743,7 +2743,7 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
         "impl": None,
         "symbol": "sign_lifecycle_cursor",
         "required_tokens": (
-            "AutonomousLifecycleCursorUnsignedV2::new",
+            "AutonomousLifecycleCursorUnsignedV1::new",
             "previous_cursor_hash",
             "signing_preimage",
             "Signature::try_new",
@@ -2751,7 +2751,7 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
             "unsigned.finalize(signature, validator_set)",
         ),
         "ordered_tokens": (
-            "AutonomousLifecycleCursorUnsignedV2::new",
+            "AutonomousLifecycleCursorUnsignedV1::new",
             "signing_preimage()",
             "Signature::try_new",
             "<[u8; 96]>::try_from",
@@ -2787,20 +2787,20 @@ PRODUCTION_SNAPSHOT_RECOVERY_BRIDGE_BINDINGS = (
             "check_production_in_flight_first_release_crash_transition",
             "check_production_in_flight_first_release_recover_transition",
             "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition",
-            "AutonomousLifecycleCursorPhaseV2::crashed",
-            "AutonomousLifecycleCursorPhaseV2::prepared",
-            "AutonomousLifecycleCursorPhaseV2::live",
+            "AutonomousLifecycleCursorPhaseV1::crashed",
+            "AutonomousLifecycleCursorPhaseV1::prepared",
+            "AutonomousLifecycleCursorPhaseV1::live",
             "compare_and_swap_phase",
             "for _ in 0..8",
         ),
         "ordered_tokens": (
             "read_autonomous_lifecycle_cursor(payload, binding, process_generation)",
             "check_production_in_flight_first_release_crash_transition(",
-            "AutonomousLifecycleCursorPhaseV2::crashed(",
+            "AutonomousLifecycleCursorPhaseV1::crashed(",
             "check_production_in_flight_first_release_recover_transition(",
-            "AutonomousLifecycleCursorPhaseV2::prepared(current_generation, recover)",
+            "AutonomousLifecycleCursorPhaseV1::prepared(current_generation, recover)",
             "check_production_in_flight_first_release_rehydrate_local_kura_custody_transition(",
-            "AutonomousLifecycleCursorPhaseV2::prepared(current_generation, rehydrate)",
+            "AutonomousLifecycleCursorPhaseV1::prepared(current_generation, rehydrate)",
         ),
     },
     {
@@ -3983,8 +3983,8 @@ def _production_trace_extraction_source_snapshot(
             "state.session.ready_authorized",
             "state.session.crashed",
             "state.session.producer_alive",
-            "state.history.ever_queue_plan_v4",
-            "state.history.ever_reservation_v5",
+            "state.history.ever_queue_plan_v1",
+            "state.history.ever_reservation_v1",
             "state.history.ever_execution_input_durable",
             "state.history.ever_ready_authorized",
             "state.history.ready_signed",

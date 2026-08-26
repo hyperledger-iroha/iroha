@@ -1399,7 +1399,6 @@ fn fhe_execution_policy_validate_for_param_set_rejects_adversarial_linkage() {
     ));
     let mut proposed_param_set = sample_fhe_param_set();
     proposed_param_set.lifecycle = FheParamLifecycleV1::Proposed;
-    proposed_param_set.deprecation_height = None;
     proposed_param_set.withdraw_height = None;
     let error = policy
         .validate_for_param_set(&proposed_param_set)
@@ -1982,7 +1981,6 @@ fn sample_governed_fhe_material_for_lifecycle(
         max_multiplicative_depth: NonZeroU16::new(1).expect("nonzero"),
         lifecycle: FheParamLifecycleV1::Active,
         activation_height: Some(1),
-        deprecation_height: None,
         withdraw_height: None,
         parameter_digest: iroha_crypto::fhe_bfv::registered_bfv_parameter_digest(&params)
             .expect("registered parameter digest"),
@@ -2037,6 +2035,95 @@ fn sample_governed_fhe_material_for_lifecycle(
         .computed_material_digest()
         .expect("compute governed material digest");
     material
+}
+#[test]
+fn fhe_param_set_norito_rejects_retired_deprecation_layout() {
+    #[derive(Clone, Copy, Encode)]
+    enum RetiredFheParamLifecycleV1 {
+        Proposed,
+        Active,
+        Deprecated,
+        Withdrawn,
+    }
+    #[derive(Encode)]
+    struct RetiredFheParamSetV1 {
+        schema_version: u16,
+        param_set: Name,
+        version: NonZeroU32,
+        backend: String,
+        scheme: FheSchemeV1,
+        ciphertext_modulus_bits: Vec<NonZeroU16>,
+        plaintext_modulus_bits: NonZeroU16,
+        polynomial_modulus_degree: NonZeroU32,
+        slot_count: NonZeroU32,
+        security_level_bits: NonZeroU16,
+        max_multiplicative_depth: NonZeroU16,
+        lifecycle: RetiredFheParamLifecycleV1,
+        activation_height: Option<u64>,
+        deprecation_height: Option<u64>,
+        withdraw_height: Option<u64>,
+        parameter_digest: Hash,
+        rns_modulus_chain_digest: Hash,
+        key_switch_decomposition_chain_digest: Hash,
+    }
+
+    for (label, lifecycle, activation_height, deprecation_height, withdraw_height) in [
+        (
+            "proposed",
+            RetiredFheParamLifecycleV1::Proposed,
+            None,
+            None,
+            None,
+        ),
+        (
+            "active",
+            RetiredFheParamLifecycleV1::Active,
+            Some(10_000),
+            None,
+            Some(40_000),
+        ),
+        (
+            "deprecated",
+            RetiredFheParamLifecycleV1::Deprecated,
+            Some(10_000),
+            Some(20_000),
+            Some(40_000),
+        ),
+        (
+            "withdrawn",
+            RetiredFheParamLifecycleV1::Withdrawn,
+            Some(10_000),
+            Some(20_000),
+            Some(40_000),
+        ),
+    ] {
+        let canonical = sample_fhe_param_set();
+        let retired = RetiredFheParamSetV1 {
+            schema_version: canonical.schema_version,
+            param_set: canonical.param_set,
+            version: canonical.version,
+            backend: canonical.backend,
+            scheme: canonical.scheme,
+            ciphertext_modulus_bits: canonical.ciphertext_modulus_bits,
+            plaintext_modulus_bits: canonical.plaintext_modulus_bits,
+            polynomial_modulus_degree: canonical.polynomial_modulus_degree,
+            slot_count: canonical.slot_count,
+            security_level_bits: canonical.security_level_bits,
+            max_multiplicative_depth: canonical.max_multiplicative_depth,
+            lifecycle,
+            activation_height,
+            deprecation_height,
+            withdraw_height,
+            parameter_digest: canonical.parameter_digest,
+            rns_modulus_chain_digest: canonical.rns_modulus_chain_digest,
+            key_switch_decomposition_chain_digest: canonical.key_switch_decomposition_chain_digest,
+        };
+        let bytes = retired.encode();
+        assert!(
+            FheParamSetV1::decode_all(&mut bytes.as_slice()).is_err(),
+            "first-release FHE parameter sets must reject the retired {label} deprecation layout"
+        );
+    }
 }
 #[cfg(feature = "json")]
 #[test]
@@ -2119,7 +2206,6 @@ fn fhe_canonical_model_v1_json_is_closed_and_requires_explicit_keys() {
     let mut param_set = sample_fhe_param_set();
     param_set.ciphertext_modulus_bits.clear();
     param_set.activation_height = None;
-    param_set.deprecation_height = None;
     param_set.withdraw_height = None;
     let mut refresh_transcript = sample_bfv_refresh_transcript();
     refresh_transcript.rotation_transcripts.clear();
@@ -2198,6 +2284,23 @@ fn fhe_canonical_model_v1_json_is_closed_and_requires_explicit_keys() {
         container,
         service,
     };
+
+    let mut retired_param_set =
+        norito::json::to_value(&param_set).expect("serialize FHE parameter set");
+    retired_param_set
+        .as_object_mut()
+        .expect("FHE parameter-set JSON object")
+        .insert("deprecation_height".to_owned(), norito::json!(20_000));
+    norito::json::from_value::<FheParamSetV1>(retired_param_set)
+        .expect_err("retired FHE deprecation_height must be rejected");
+
+    let mut retired_lifecycle = norito::json::to_value(&FheParamLifecycleV1::Active)
+        .expect("serialize FHE parameter lifecycle");
+    *retired_lifecycle
+        .get_mut("lifecycle")
+        .expect("FHE lifecycle discriminator") = norito::json!("Deprecated");
+    norito::json::from_value::<FheParamLifecycleV1>(retired_lifecycle)
+        .expect_err("retired FHE Deprecated lifecycle must be rejected");
 
     assert_unknown_rejected!(FheSchemeV1::Bfv, FheSchemeV1, "FHE scheme");
     assert_unknown_rejected!(
@@ -2374,10 +2477,9 @@ fn fhe_canonical_model_v1_json_is_closed_and_requires_explicit_keys() {
         [
             "ciphertext_modulus_bits",
             "activation_height",
-            "deprecation_height",
             "withdraw_height",
         ],
-        ["activation_height", "deprecation_height", "withdraw_height"],
+        ["activation_height", "withdraw_height"],
         "FHE parameter set"
     );
     assert_required_fields!(

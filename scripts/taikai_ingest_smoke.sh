@@ -3,13 +3,65 @@ set -euo pipefail
 
 abs_path() {
   local input="$1"
-  if [[ "$input" = /* ]]; then
-    printf '%s\n' "$input"
-  else
-    local dir
-    dir="$(cd "$(dirname "$input")" && pwd)"
-    printf '%s/%s\n' "$dir" "$(basename "$input")"
+  python3 - <<'PY' "$input"
+import pathlib, sys
+
+print(pathlib.Path(sys.argv[1]).resolve(strict=False))
+PY
+}
+
+validate_fixture_label() {
+  local label="$1"
+  local fixture="$2"
+  if [[ ! "$label" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+    echo "error: fixture $fixture has unsafe label '$label'; expected 1-128 portable filename characters" >&2
+    return 1
   fi
+  printf '%s\n' "$label"
+}
+
+prepare_run_dir() {
+  local run_dir="$1"
+  local protected_executable="$2"
+  local marker="$run_dir/.taikai_ingest_smoke_owned_v1"
+  local marker_value="taikai-ingest-smoke-owned-v1"
+  local name path
+  local generated=(
+    payload.bin
+    cli_args.nul
+    bundle_stdout.txt
+    segment.car
+    segment.norito
+    segment.indexes.json
+    segment.ingest.json
+  )
+
+  if [[ -L "$run_dir" || ( -e "$run_dir" && ! -d "$run_dir" ) ]]; then
+    echo "error: refusing unsafe Taikai smoke run directory $run_dir" >&2
+    return 1
+  fi
+  if [[ -d "$run_dir" ]]; then
+    if [[ -L "$marker" || ! -f "$marker" || "$(<"$marker")" != "$marker_value" ]]; then
+      echo "error: refusing to reuse unowned Taikai smoke run directory $run_dir" >&2
+      return 1
+    fi
+  else
+    mkdir -- "$run_dir"
+    printf '%s\n' "$marker_value" > "$marker"
+  fi
+
+  for name in "${generated[@]}"; do
+    path="$run_dir/$name"
+    if [[ -e "$path" && "$path" -ef "$protected_executable" ]]; then
+      echo "error: refusing to remove generated path $path because it aliases the taikai_car executable" >&2
+      return 1
+    fi
+    if [[ -d "$path" && ! -L "$path" ]]; then
+      echo "error: refusing to remove unexpected directory $path" >&2
+      return 1
+    fi
+    rm -f -- "$path"
+  done
 }
 
 usage() {
@@ -83,22 +135,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-WORKSPACE="$(abs_path "$WORKSPACE")"
-FIXTURE_DIR="$(abs_path "${FIXTURES_OVERRIDE:-$WORKSPACE/fixtures/taikai/segments}")"
-OUT_DIR="$(abs_path "${OUT_OVERRIDE:-$WORKSPACE/artifacts/taikai/ingest_smoke}")"
-TAIKAI_CAR_BIN="$(abs_path "${CAR_OVERRIDE:-$WORKSPACE/target/debug/taikai_car}")"
-
 if ! command -v python3 >/dev/null 2>&1; then
   echo "error: python3 is required for fixture parsing" >&2
   exit 1
 fi
+
+WORKSPACE="$(abs_path "$WORKSPACE")"
+FIXTURE_DIR="$(abs_path "${FIXTURES_OVERRIDE:-$WORKSPACE/fixtures/taikai/segments}")"
+OUT_DIR="$(abs_path "${OUT_OVERRIDE:-$WORKSPACE/artifacts/taikai/ingest_smoke}")"
+TAIKAI_CAR_BIN="$(abs_path "${CAR_OVERRIDE:-$WORKSPACE/target/debug/taikai_car}")"
 
 ensure_taikai_car() {
   if [[ -x "$TAIKAI_CAR_BIN" ]]; then
     return
   fi
   echo "building taikai_car under $WORKSPACE..."
-  (cd "$WORKSPACE" && cargo build -p sorafs_car --features cli,dev-tools --bin taikai_car)
+  (cd "$WORKSPACE" && cargo build --locked -p sorafs_car --features cli,dev-tools --bin taikai_car)
   if [[ ! -x "$TAIKAI_CAR_BIN" ]]; then
     echo "error: taikai_car binary not found at $TAIKAI_CAR_BIN after build" >&2
     exit 1
@@ -127,6 +179,7 @@ echo "Running Taikai ingest smoke harness with $(basename "$TAIKAI_CAR_BIN")"
 echo "Fixtures: $FIXTURE_DIR"
 echo "Output:   $OUT_DIR"
 
+seen_labels=$'\n'
 for fixture in "${fixtures[@]}"; do
   label="$(python3 - <<'PY' "$fixture"
 import json, sys, pathlib
@@ -135,12 +188,19 @@ data = json.loads(path.read_text())
 label = data.get("label") or path.stem
 print(label)
 PY
-)"
+  )"
+  label="$(validate_fixture_label "$label" "$fixture")"
+  case "$seen_labels" in
+    *$'\n'"$label"$'\n'*)
+      echo "error: duplicate Taikai fixture label '$label' in $fixture" >&2
+      exit 1
+      ;;
+  esac
+  seen_labels+="$label"$'\n'
   run_dir="$OUT_DIR/$label"
-  rm -rf "$run_dir"
-  mkdir -p "$run_dir"
+  prepare_run_dir "$run_dir" "$TAIKAI_CAR_BIN"
   payload_path="$run_dir/payload.bin"
-  args_file="$run_dir/cli_args.txt"
+  args_file="$run_dir/cli_args.nul"
   stdout_path="$run_dir/bundle_stdout.txt"
   car_out="$run_dir/segment.car"
   envelope_out="$run_dir/segment.norito"
@@ -148,7 +208,7 @@ PY
   ingest_out="$run_dir/segment.ingest.json"
 
   python3 - <<'PY' "$fixture" "$payload_path" "$args_file" "$car_out" "$envelope_out" "$indexes_out" "$ingest_out"
-import json, sys, pathlib
+import json, os, sys, pathlib
 
 fixture_path = pathlib.Path(sys.argv[1])
 payload_path = pathlib.Path(sys.argv[2])
@@ -206,12 +266,13 @@ if args_cfg.get("extra_metadata"):
         metadata_path = (fixture_path.parent / metadata_path).resolve()
     cli.extend(["--metadata-json", str(metadata_path)])
 
-args_path.write_text("\n".join(cli))
+if any("\0" in value for value in cli):
+    raise SystemExit("fixture arguments must not contain NUL bytes")
+args_path.write_bytes(b"".join(os.fsencode(value) + b"\0" for value in cli))
 PY
 
   cli_args=()
-  while IFS= read -r arg || [[ -n "$arg" ]]; do
-    [[ -z "$arg" ]] && continue
+  while IFS= read -r -d '' arg; do
     cli_args+=("$arg")
   done < "$args_file"
   echo "→ Bundling fixture ${label}"
@@ -271,6 +332,11 @@ if "chunk_count" in expected:
     expect_equal("chunk_count", stdout_metrics.get("chunk_count"), expected["chunk_count"])
 if "cid_multibase" in expected:
     expect_equal("cid_multibase (stdout)", stdout_metrics.get("cid_multibase"), expected["cid_multibase"])
+
+for artifact_name in ("segment.car", "segment.norito"):
+    artifact_path = run_dir / artifact_name
+    if not artifact_path.is_file() or artifact_path.stat().st_size == 0:
+        errors.append(f"{artifact_name} missing or empty")
 
 indexes_path = run_dir / "segment.indexes.json"
 if indexes_path.exists():

@@ -156,10 +156,11 @@ impl ToriiHarness {
             OnlinePeersProvider::new(peers_rx),
             telemetry,
             telemetry_enabled,
-        );
+        )
+        .with_local_peer_id(local_peer_id.clone());
         #[cfg(not(feature = "telemetry"))]
         let torii = {
-            let _ = (local_peer_id, telemetry_enabled, state_telemetry_enabled);
+            let _ = (telemetry_enabled, state_telemetry_enabled);
             Torii::new(
                 chain_id,
                 network_id,
@@ -173,6 +174,7 @@ impl ToriiHarness {
                 cfg.common.key_pair.clone(),
                 OnlinePeersProvider::new(peers_rx),
             )
+            .with_local_peer_id(local_peer_id.clone())
         };
         Self {
             torii,

@@ -51,11 +51,11 @@ fn lane_reservation_scope_accepts_only_the_canonical_single_lane() {
         Err(LaneQueueReservationError::InactiveRoute)
     ));
 }
-fn reservation_key_fixture() -> LaneQueueReservationKeyV2 {
+fn reservation_key_fixture() -> LaneQueueReservationKeyV1 {
     let route = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(7));
     let entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new(b"reservation-key-entrypoint"));
-    LaneQueueReservationKeyV2 {
-        version: LaneQueueReservationKeyV2::VERSION,
+    LaneQueueReservationKeyV1 {
+        version: LaneQueueReservationKeyV1::VERSION,
         entrypoint_hash,
         queue_plan_admission_binding_hash: Hash::new(
             b"reservation-key-queue-plan-admission-binding",
@@ -80,7 +80,7 @@ fn lane_reservation_key_current_layout_roundtrips() {
     let key_digest = key.digest();
     let framed = norito::encode_canonical(&key).expect("encode current reservation key");
     assert_eq!(
-        norito::decode_canonical::<LaneQueueReservationKeyV2>(&framed)
+        norito::decode_canonical::<LaneQueueReservationKeyV1>(&framed)
             .expect("decode current reservation key"),
         key
     );
@@ -94,7 +94,7 @@ fn lane_reservation_key_current_layout_roundtrips() {
             "reservation identity must ignore the caller's ambient Norito layout"
         );
     }
-    for malformed_version in [0, LaneQueueReservationKeyV2::VERSION + 1] {
+    for malformed_version in [0, LaneQueueReservationKeyV1::VERSION + 1] {
         let mut malformed = key;
         malformed.version = malformed_version;
         assert_eq!(
@@ -108,7 +108,7 @@ fn lane_reservation_key_current_layout_roundtrips() {
 fn lane_reservation_key_rejects_pre_release_duplicate_identity_layout() {
     #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
     #[norito(deny_unknown_fields)]
-    struct PreReleaseLaneQueueReservationKeyV2 {
+    struct PreReleaseLaneQueueReservationKeyV1 {
         version: u16,
         signed_transaction_hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -126,7 +126,7 @@ fn lane_reservation_key_rejects_pre_release_duplicate_identity_layout() {
     }
 
     let key = reservation_key_fixture();
-    let pre_release = PreReleaseLaneQueueReservationKeyV2 {
+    let pre_release = PreReleaseLaneQueueReservationKeyV1 {
         version: key.version,
         signed_transaction_hash: HashOf::from_untyped_unchecked(Hash::from(key.entrypoint_hash)),
         entrypoint_hash: key.entrypoint_hash,
@@ -145,7 +145,7 @@ fn lane_reservation_key_rejects_pre_release_duplicate_identity_layout() {
     let pre_release_framed =
         norito::encode_canonical(&pre_release).expect("encode pre-release reservation key");
     assert!(
-        norito::decode_canonical::<LaneQueueReservationKeyV2>(&pre_release_framed).is_err(),
+        norito::decode_canonical::<LaneQueueReservationKeyV1>(&pre_release_framed).is_err(),
         "the duplicate-identity pre-release layout must fail closed"
     );
 }
@@ -181,17 +181,17 @@ fn payload_free_diagnostic_reservation_record(
     lane_block_height: u64,
     fifo_ordinal: u64,
     group_seed: &[u8],
-) -> LaneQueueReservationRecordV5 {
+) -> LaneQueueReservationRecordV1 {
     let ordinal = fifo_ordinal.to_be_bytes();
     let entrypoint_hash = HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
         b"payload-free-diagnostic-entrypoint",
         &ordinal,
     ]));
     let routing_plan = RoutingPlan::single(route);
-    LaneQueueReservationRecordV5 {
+    LaneQueueReservationRecordV1 {
         version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION,
-        key: LaneQueueReservationKeyV2 {
-            version: LaneQueueReservationKeyV2::VERSION,
+        key: LaneQueueReservationKeyV1 {
+            version: LaneQueueReservationKeyV1::VERSION,
             entrypoint_hash,
             queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
                 b"payload-free-diagnostic-admission",
@@ -215,7 +215,7 @@ fn payload_free_diagnostic_reservation_record(
             ]),
         },
         enqueue_timestamp_ms: fifo_ordinal,
-        fifo_order: LaneQueueFifoOrderV5::new(fifo_ordinal)
+        fifo_order: LaneQueueFifoOrderV1::new(fifo_ordinal)
             .expect("diagnostic FIFO ordinal is positive"),
     }
 }
@@ -227,7 +227,7 @@ fn push_globally_bound_lane_reservation_candidate(
     state: &State,
     dir: &tempfile::TempDir,
     transaction: AcceptedTransaction<'static>,
-) -> crate::torii_proxy::QueuePlanAdmissionBindingV2 {
+) -> crate::torii_proxy::QueuePlanAdmissionBindingV1 {
     if queue.plan_journal.lock().is_none() {
         queue
             .install_plan_journal(test_lane_reservation_plan_path(dir), 1024 * 1024, true)
@@ -236,7 +236,7 @@ fn push_globally_bound_lane_reservation_candidate(
     admit_globally_certified_reservation_transaction_for_test(queue, state, transaction)
 }
 fn prepared_canonical_cleanup_group(
-    ordered_keys: Vec<LaneQueueReservationKeyV2>,
+    ordered_keys: Vec<LaneQueueReservationKeyV1>,
 ) -> PreparedLaneQueueCarrierCleanupGroup {
     let group_binding = lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())
         .expect("bind prepared canonical cleanup group");
@@ -251,7 +251,7 @@ fn reserve_two_canonical_cleanup_carrier_groups(
     state: &State,
     dir: &tempfile::TempDir,
     time_source: &TimeSource,
-) -> [LaneQueueReservationKeyV2; 2] {
+) -> [LaneQueueReservationKeyV1; 2] {
     for _ in 0..2 {
         push_globally_bound_lane_reservation_candidate(
             queue,
@@ -283,7 +283,7 @@ fn persist_unreconciled_commit_barrier(
     transaction: AcceptedTransaction<'static>,
     owner_seed: &[u8],
     proposal_seed: &[u8],
-) -> LaneQueueReservationKeyV2 {
+) -> LaneQueueReservationKeyV1 {
     push_globally_bound_lane_reservation_candidate(queue, state, dir, transaction);
     let key = *queue
         .reserve_transactions_for_lane(

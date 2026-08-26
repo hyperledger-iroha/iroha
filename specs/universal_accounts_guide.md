@@ -24,23 +24,33 @@ publish` run.
 - Space Directory maintains a `World::uaid_dataspaces` map that ties each UAID
   to the dataspace accounts referenced by active manifests. Torii reuses that
   map for the `/portfolio` and `/uaids/*` APIs.
-- Sponsored alias onboarding is a two-step, token-authenticated flow.
+- Sponsored alias onboarding is an explicit three-stage, token-authenticated flow.
   `POST /v1/accounts/onboard/plan` accepts the typed account/alias intent and
-  returns a stateless plan receipt without mutating state. The caller then sends
-  that receipt to `POST /v1/accounts/onboard`; Torii revalidates it and uses the
-  configured onboarding signer to submit one atomic transaction containing
-  `EnsureAlias::Account` plus only the explicitly allowed ancillary onboarding
-  instructions. The credential token is supplied in an authentication header
-  from a protected token file, never in the URL, command line, plan, or HTTP
-  body; private keys never cross HTTP. An exact repeat returns `Unchanged`,
-  repairable derived state is repaired without reacquiring the lease, and drift
-  returns a structured 409. This is the sole server-signing exception; operator
-  setup plans are verified, signed locally, and submitted through the ordinary
-  transaction endpoint.
-- All SDKs expose helpers for canonicalising UAID literals (e.g.,
-  `UaidLiteral` in the Android SDK). The helpers accept raw 64-hex digests
-  (LSB=1) or `uaid:<hex>` literals and re-use the same Norito codecs so the
-  digest cannot drift across languages.
+  returns a stateless plan receipt without mutating state. The caller sends that
+  receipt and one immutable public-reset binding to
+  `POST /v1/accounts/onboard/prepare`, verifies the authority/network trust pins,
+  receipt hash, exact signed transaction wire, fee intent, metadata, and outer
+  server signature, and persists the authenticated envelope before explicitly
+  submitting those same bytes to `POST /v1/accounts/onboard`. An authenticated
+  `ProofRequired` result is nonterminal, has no transaction, and is never
+  submitted. Every prepare or reopen instead sends exactly one closed request
+  to `POST /v1/accounts/onboarding/current-state`; only one snapshot-bound
+  response proving the exact account exists and exact alias targets it may be
+  classified as applied. An absent or conflicting observation remains
+  nonterminal. V1 request and receipt JSON is closed and field-exact: callers
+  send `permissions: []` when no permissions are requested and encode absent
+  pricing, quote, instruction-index, and owner-auto-renew slots as explicit
+  `null`; omitting any of those fields is invalid. The
+  credential token is supplied in an authentication header from a protected
+  token file, never in the URL, command line, plan, or HTTP body; private keys
+  never cross HTTP. Repairable derived state is repaired without reacquiring the
+  lease, and drift returns a structured 409. This is the sole server-signing
+  exception; operator setup plans are verified, signed locally, and submitted
+  through the ordinary transaction endpoint.
+- All SDKs expose helpers for validating UAID literals (e.g., `UaidLiteral` in
+  the Android SDK). They accept only exact lower-case `uaid:<64-hex>` values,
+  enforce the LSB marker, and re-use the same Norito codecs so the digest cannot
+  drift across languages.
 
 ## 1.1 Hidden identifier policies
 
@@ -262,10 +272,9 @@ There are three supported ways to obtain a UAID:
    print(f"uaid:{digest.hex()}")
    ```
 
-Always store the literal in lower case and normalise whitespace before hashing.
-CLI helpers such as `iroha app space-directory manifest scaffold` and the
-Android `UaidLiteral` parser apply the same trimming and low-bit rules so
-governance reviews can cross-check values without ad hoc scripts.
+Always emit the exact lower-case `uaid:<64-hex>` literal. Whitespace, a missing
+prefix, an upper-case prefix or digest, and a hash without the low bit are all
+rejected by first-release CLI, SDK, and Torii parsers.
 
 ## 3. Inspecting UAID holdings and manifests
 
@@ -371,27 +380,27 @@ When cloning these fixtures, update:
 4. Allowance windows (`PerSlot`, `PerMinute`, `PerDay`) and optional
    `max_amount` caps so SDKs enforce the same limits as the host.
 
-## 6. Migration notes for SDK consumers
+## 6. Current SDK contract
 
-Existing SDK integrations that referenced per-domain account IDs must migrate to
-the UAID-centric surfaces described above. Use this checklist during upgrades:
+The first-release SDK surface has one account model; it does not expose a legacy
+domain-scoped account identity or migration overload.
 
-  account ids. For Rust/JS/Swift/Android this means upgrading to the latest
-  workspace crates or regenerating Norito bindings.
-- **API calls:** Replace domain-scoped portfolio queries with
-  `GET /v1/accounts/{uaid}/portfolio` and the manifest/bindings endpoints.
+- **Identity:** Construct `AccountId` from its public key only. Domain and
+  dataspace context belongs to alias leases, routing, and domain-owned state,
+  never to the canonical account identifier or address bytes.
+- **API calls:** Query a UAID portfolio through
+  `GET /v1/accounts/{uaid}/portfolio` and use the manifest/bindings endpoints.
   `GET /v1/accounts/{uaid}/portfolio` accepts an optional `asset_id` query
   parameter when wallets only need a single asset instance. Client helpers such
   as `ToriiClient.getUaidPortfolio` (JS) and the Android
-  `SpaceDirectoryClient` already wrap these routes; prefer them over bespoke
-  HTTP code.
-- **Caching & telemetry:** Cache entries by UAID + dataspace instead of raw
-  account ids, and emit telemetry showing the UAID literal so operations can
+  `SpaceDirectoryClient` wrap these routes.
+- **Caching & telemetry:** Key contextual caches by UAID plus dataspace and emit
+  telemetry showing the UAID literal so operations can
   line up logs with Space Directory evidence.
-- **Error handling:** New endpoints return the strict UAID parsing errors
+- **Error handling:** Endpoints return the strict UAID parsing errors
   documented in `specs/torii/portfolio_api.md`; surface those codes
   verbatim so support teams can triage issues without repro steps.
-- **Testing:** Wire the fixtures mentioned above (plus your own UAID manifests)
+- **Testing:** Wire the fixtures mentioned above plus your own UAID manifests
   into SDK test suites to prove Norito round-trips and manifest evaluations
   match the host implementation.
 

@@ -25,7 +25,7 @@
 //! target inventory, report, and evidence archive.  No such external audit
 //! artifact is asserted or embedded by this module.
 
-use core::fmt;
+use core::{fmt, marker::PhantomData};
 use std::{collections::HashSet, vec::Vec};
 
 use blst::{blst_fp, blst_fp12};
@@ -930,13 +930,30 @@ struct TimedOvnSchnorrPopV1 {
     response: ScalarBytes,
 }
 
+/// Provenance marker for objects whose cryptographic proofs were verified directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimedOvnProofVerifiedV1;
+
+/// Provenance marker for shape-checked objects reconstructed from committed consensus caches.
+///
+/// This marker deliberately does not imply that the reconstructed object's proof equations were
+/// replayed. Consensus code may use it only after its state-admission boundary has established
+/// that the exact cached bytes were proof-verified when originally committed and that snapshot
+/// restoration fully replays those proofs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimedOvnCommittedCacheV1;
+
 /// Three independent target-group registration keys and proofs for one participant.
+///
+/// The default provenance parameter is [`TimedOvnProofVerifiedV1`]. Committed consensus cache
+/// reconstruction uses the distinct [`TimedOvnCommittedRegistrationCacheV1`] alias instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TimedOvnRegistrationV1 {
+pub struct TimedOvnRegistrationV1<Provenance = TimedOvnProofVerifiedV1> {
     session_digest: [u8; 32],
     participant_hash: [u8; 32],
     public_keys: [GtBytes; TIMED_OVN_CHOICE_COUNT_V1],
     proofs: [TimedOvnSchnorrPopV1; TIMED_OVN_CHOICE_COUNT_V1],
+    provenance: PhantomData<Provenance>,
 }
 
 impl TimedOvnRegistrationV1 {
@@ -947,6 +964,12 @@ impl TimedOvnRegistrationV1 {
     /// Returns [`TimedOvnError`] for a malformed encoding, wrong session,
     /// noncanonical/identity target element, scalar, or failed proof.
     pub fn from_bytes(session: &TimedOvnSessionV1, bytes: &[u8]) -> Result<Self, TimedOvnError> {
+        let registration = Self::decode_shape(session, bytes)?;
+        registration.verify(session)?;
+        Ok(registration)
+    }
+
+    fn decode_shape(session: &TimedOvnSessionV1, bytes: &[u8]) -> Result<Self, TimedOvnError> {
         if bytes.len() != REGISTRATION_WIRE_BYTES_V1 {
             return Err(TimedOvnError::InvalidEncoding);
         }
@@ -982,9 +1005,67 @@ impl TimedOvnRegistrationV1 {
                 commitment: commitments[option],
                 response: responses[option],
             }),
+            provenance: PhantomData,
         };
-        registration.verify(session)?;
+        registration.validate_cached_shape(session)?;
         Ok(registration)
+    }
+}
+
+/// Shape-checked registration reconstructed from an exact committed record.
+///
+/// Unlike [`TimedOvnRegistrationV1`], this type does not claim that its three proof-of-possession
+/// equations were replayed. It cannot be converted to the proof-verified type without performing
+/// full verification through [`TimedOvnRegistrationV1::from_bytes`].
+///
+/// ```compile_fail
+/// use iroha_crypto::timed_ovn::{
+///     TimedOvnCommittedRegistrationCacheV1, TimedOvnRegistrationV1,
+/// };
+///
+/// fn require_verified(_: TimedOvnRegistrationV1) {}
+/// fn cannot_promote(cache: TimedOvnCommittedRegistrationCacheV1) {
+///     require_verified(cache);
+/// }
+/// ```
+pub type TimedOvnCommittedRegistrationCacheV1 = TimedOvnRegistrationV1<TimedOvnCommittedCacheV1>;
+
+impl TimedOvnCommittedRegistrationCacheV1 {
+    /// Decode the canonical shape of a registration already admitted by committed consensus state.
+    ///
+    /// The exact wire width, session binding, group encodings, and scalars are checked, but the
+    /// three proof-of-possession equations are deliberately not replayed. Callers must keep this
+    /// cache-provenance type distinct from [`TimedOvnRegistrationV1`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimedOvnError`] for malformed, noncanonical, or cross-session cached material.
+    pub fn from_committed_record(
+        session: &TimedOvnSessionV1,
+        bytes: &[u8],
+    ) -> Result<Self, TimedOvnError> {
+        let decoded = TimedOvnRegistrationV1::decode_shape(session, bytes)?;
+        Ok(Self {
+            session_digest: decoded.session_digest,
+            participant_hash: decoded.participant_hash,
+            public_keys: decoded.public_keys,
+            proofs: decoded.proofs,
+            provenance: PhantomData,
+        })
+    }
+}
+
+impl<Provenance> TimedOvnRegistrationV1<Provenance> {
+    fn validate_cached_shape(&self, session: &TimedOvnSessionV1) -> Result<(), TimedOvnError> {
+        if self.session_digest != session.digest() || is_zero(&self.participant_hash) {
+            return Err(TimedOvnError::BindingMismatch);
+        }
+        for option in 0..TIMED_OVN_CHOICE_COUNT_V1 {
+            GtElement::from_bytes(&self.public_keys[option], false)?;
+            GtElement::from_bytes(&self.proofs[option].commitment, false)?;
+            decode_scalar(&self.proofs[option].response)?;
+        }
+        Ok(())
     }
 
     /// Encode the canonical fixed-width registration.
@@ -1124,6 +1205,7 @@ impl TimedOvnRegistrationSecretV1 {
             participant_hash,
             public_keys,
             proofs,
+            provenance: PhantomData,
         };
         registration.verify(session)?;
         Ok((secret, registration))
@@ -1141,11 +1223,14 @@ impl TimedOvnRegistrationSecretV1 {
     }
 }
 
-/// Canonically ordered, proof-validated timed-OVN registration roster.
+/// Canonically ordered timed-OVN registration roster with type-level validation provenance.
+///
+/// The default provenance is proof-verified. Committed cache reconstruction returns
+/// [`TimedOvnCommittedRosterCacheV1`] and cannot be mistaken for this default type.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TimedOvnRosterV1 {
+pub struct TimedOvnRosterV1<Provenance = TimedOvnProofVerifiedV1> {
     session: TimedOvnSessionV1,
-    registrations: Vec<TimedOvnRegistrationV1>,
+    registrations: Vec<TimedOvnRegistrationV1<Provenance>>,
     roster_root: [u8; 32],
 }
 
@@ -1160,6 +1245,39 @@ impl TimedOvnRosterV1 {
         session: TimedOvnSessionV1,
         registrations: Vec<TimedOvnRegistrationV1>,
     ) -> Result<Self, TimedOvnError> {
+        Self::new_inner(session, registrations, true)
+    }
+}
+
+/// Canonical roster reconstructed from shape-checked committed registration records.
+///
+/// This type preserves cache provenance and never presents its registrations as proof-verified.
+pub type TimedOvnCommittedRosterCacheV1 = TimedOvnRosterV1<TimedOvnCommittedCacheV1>;
+
+impl TimedOvnCommittedRosterCacheV1 {
+    /// Rebuild a roster from shape-checked records admitted by committed consensus state.
+    ///
+    /// Ordering, uniqueness, canonical public material, and the exact roster root are recomputed,
+    /// but proof equations are not repeated. Snapshot restoration must independently rebuild the
+    /// same roster through [`TimedOvnRosterV1::new`] before accepting persisted state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimedOvnError`] for malformed, duplicate, reordered, or cross-session material.
+    pub fn from_committed_records(
+        session: TimedOvnSessionV1,
+        registrations: Vec<TimedOvnCommittedRegistrationCacheV1>,
+    ) -> Result<Self, TimedOvnError> {
+        Self::new_inner(session, registrations, false)
+    }
+}
+
+impl<Provenance> TimedOvnRosterV1<Provenance> {
+    fn new_inner(
+        session: TimedOvnSessionV1,
+        registrations: Vec<TimedOvnRegistrationV1<Provenance>>,
+        verify_proofs: bool,
+    ) -> Result<Self, TimedOvnError> {
         if registrations.is_empty() || registrations.len() > TIMED_OVN_MAX_PARTICIPANTS_V1 {
             return Err(TimedOvnError::InvalidRosterSize);
         }
@@ -1168,7 +1286,10 @@ impl TimedOvnRosterV1 {
         let mut public_keys =
             HashSet::with_capacity(registrations.len() * TIMED_OVN_CHOICE_COUNT_V1);
         for registration in &registrations {
-            registration.verify(&session)?;
+            registration.validate_cached_shape(&session)?;
+            if verify_proofs {
+                registration.verify(&session)?;
+            }
             if let Some(previous) = previous_participant {
                 if registration.participant_hash == previous {
                     return Err(TimedOvnError::DuplicateParticipant);
@@ -1207,9 +1328,9 @@ impl TimedOvnRosterV1 {
         &self.roster_root
     }
 
-    /// Return the ordered validated registrations.
+    /// Return the ordered registrations carrying this roster's validation provenance.
     #[must_use]
-    pub fn registrations(&self) -> &[TimedOvnRegistrationV1] {
+    pub fn registrations(&self) -> &[TimedOvnRegistrationV1<Provenance>] {
         &self.registrations
     }
 
@@ -1222,7 +1343,10 @@ impl TimedOvnRosterV1 {
     pub fn prospective_survivor_root(
         &self,
         survivor_ids: &[[u8; 32]],
-    ) -> Result<[u8; 32], TimedOvnError> {
+    ) -> Result<[u8; 32], TimedOvnError>
+    where
+        Provenance: Clone,
+    {
         let registrations = select_survivors(self, survivor_ids)?;
         Ok(survivor_root(
             &self.session,
@@ -1232,16 +1356,17 @@ impl TimedOvnRosterV1 {
     }
 }
 
-/// Frozen survivor corpus, future release identity, and pairing release term.
+/// Frozen survivor corpus, future release identity, pairing release term, and validation provenance.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TimedOvnSurvivorRosterV1 {
+pub struct TimedOvnSurvivorRosterV1<Provenance = TimedOvnProofVerifiedV1> {
     session: TimedOvnSessionV1,
     roster_root: [u8; 32],
     survivor_root: [u8; 32],
     identity_digest: [u8; 32],
     release_identity: TleReleaseIdentityV1,
     release_term: GtBytes,
-    registrations: Vec<TimedOvnRegistrationV1>,
+    registrations: Vec<TimedOvnRegistrationV1<Provenance>>,
+    masking_keys: Vec<TimedOvnMaskingKeysV1>,
 }
 
 impl TimedOvnSurvivorRosterV1 {
@@ -1259,6 +1384,42 @@ impl TimedOvnSurvivorRosterV1 {
         survivor_ids: &[[u8; 32]],
         release_identity: TleReleaseIdentityV1,
     ) -> Result<Self, TimedOvnError> {
+        Self::new_inner(roster, survivor_ids, release_identity)
+    }
+}
+
+/// Frozen survivor roster reconstructed from a committed registration cache.
+///
+/// This type exposes deterministic roots and masking keys while preserving that the underlying
+/// registration proof equations were not replayed on the committed-cache path.
+pub type TimedOvnCommittedSurvivorRosterCacheV1 =
+    TimedOvnSurvivorRosterV1<TimedOvnCommittedCacheV1>;
+
+impl TimedOvnCommittedSurvivorRosterCacheV1 {
+    /// Freeze a committed-cache roster against its exact threshold release identity.
+    ///
+    /// Pairwise masks, survivor ordering, release bindings, and group encodings are checked. The
+    /// registration proof equations retain committed-cache provenance and are not replayed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimedOvnError`] for a reordered/unknown survivor, mismatched future identity,
+    /// malformed release term, or identity masking key.
+    pub fn from_committed_roster(
+        roster: &TimedOvnCommittedRosterCacheV1,
+        survivor_ids: &[[u8; 32]],
+        release_identity: TleReleaseIdentityV1,
+    ) -> Result<Self, TimedOvnError> {
+        Self::new_inner(roster, survivor_ids, release_identity)
+    }
+}
+
+impl<Provenance: Clone> TimedOvnSurvivorRosterV1<Provenance> {
+    fn new_inner(
+        roster: &TimedOvnRosterV1<Provenance>,
+        survivor_ids: &[[u8; 32]],
+        release_identity: TleReleaseIdentityV1,
+    ) -> Result<Self, TimedOvnError> {
         let registrations = select_survivors(roster, survivor_ids)?;
         let survivor_root = survivor_root(&roster.session, &roster.roster_root, &registrations);
         roster
@@ -1271,7 +1432,14 @@ impl TimedOvnSurvivorRosterV1 {
         let identity_point = hash_message_to_g1::<TleReleasePurpose>(&release_message);
         let master_point = decode_nonidentity_g2(roster.session.tle_master_public_key.as_bytes())?;
         let release_term = pairing_gt(&identity_point, &master_point)?.to_bytes();
-        let survivors = Self {
+        let masking_keys = derive_all_masking_keys_v1(
+            &roster.session,
+            &roster.roster_root,
+            &survivor_root,
+            &identity_digest,
+            &registrations,
+        )?;
+        Ok(Self {
             session: roster.session,
             roster_root: roster.roster_root,
             survivor_root,
@@ -1279,11 +1447,8 @@ impl TimedOvnSurvivorRosterV1 {
             release_identity,
             release_term,
             registrations,
-        };
-        for registration in &survivors.registrations {
-            survivors.masking_keys(&registration.participant_hash)?;
-        }
-        Ok(survivors)
+            masking_keys,
+        })
     }
 
     /// Return the original registration-roster root.
@@ -1306,7 +1471,7 @@ impl TimedOvnSurvivorRosterV1 {
 
     /// Return the ordered frozen survivor registrations.
     #[must_use]
-    pub fn registrations(&self) -> &[TimedOvnRegistrationV1] {
+    pub fn registrations(&self) -> &[TimedOvnRegistrationV1<Provenance>] {
         &self.registrations
     }
 
@@ -1316,7 +1481,7 @@ impl TimedOvnSurvivorRosterV1 {
         &self.release_term
     }
 
-    /// Derive the three survivor-root-bound pairwise OVN masks for one seat.
+    /// Return the cached three survivor-root-bound pairwise OVN masks for one seat.
     ///
     /// # Errors
     ///
@@ -1332,39 +1497,97 @@ impl TimedOvnSurvivorRosterV1 {
                 registration.participant_hash
             })
             .map_err(|_| TimedOvnError::UnknownParticipant)?;
-        let mut points = [[0_u8; TIMED_OVN_GT_BYTES_V1]; TIMED_OVN_CHOICE_COUNT_V1];
-        for option in 0..TIMED_OVN_CHOICE_COUNT_V1 {
-            let mut mask = GtElement::identity();
-            for registration in &self.registrations[..index] {
-                mask = mask.multiply(GtElement::from_bytes(
-                    &registration.public_keys[option],
-                    false,
-                )?);
-            }
-            for registration in &self.registrations[index + 1..] {
-                mask = mask.multiply(
-                    GtElement::from_bytes(&registration.public_keys[option], false)?.inverse(),
-                );
-            }
+        self.masking_keys
+            .get(index)
+            .cloned()
+            .ok_or(TimedOvnError::UnknownParticipant)
+    }
+
+    /// Return every replay-derived masking-key point array in survivor order.
+    #[must_use]
+    pub fn masking_key_points(&self) -> Vec<[GtBytes; TIMED_OVN_CHOICE_COUNT_V1]> {
+        self.masking_keys.iter().map(|keys| keys.points).collect()
+    }
+
+    fn verification_common(&self) -> Result<TimedOvnBallotVerificationCommonV1, TimedOvnError> {
+        TimedOvnBallotVerificationCommonV1::new(
+            self.session,
+            self.roster_root,
+            self.survivor_root,
+            self.release_identity,
+        )
+    }
+
+    fn verification_context_at(
+        &self,
+        index: usize,
+    ) -> Result<TimedOvnBallotVerificationContextV1, TimedOvnError> {
+        let registration = self
+            .registrations
+            .get(index)
+            .ok_or(TimedOvnError::UnknownParticipant)?;
+        let masks = self
+            .masking_keys
+            .get(index)
+            .ok_or(TimedOvnError::UnknownParticipant)?;
+        self.verification_common()?.bind_registration(
+            u16::try_from(index).map_err(|_| TimedOvnError::InvalidRosterSize)?,
+            registration,
+            masks.points,
+        )
+    }
+
+    fn registration_at(&self, index: usize) -> Option<&TimedOvnRegistrationV1<Provenance>> {
+        self.registrations.get(index)
+    }
+}
+
+fn derive_all_masking_keys_v1<Provenance>(
+    session: &TimedOvnSessionV1,
+    roster_root: &[u8; 32],
+    survivor_root: &[u8; 32],
+    identity_digest: &[u8; 32],
+    registrations: &[TimedOvnRegistrationV1<Provenance>],
+) -> Result<Vec<TimedOvnMaskingKeysV1>, TimedOvnError> {
+    let count = registrations.len();
+    let mut point_rows = vec![[[0_u8; TIMED_OVN_GT_BYTES_V1]; TIMED_OVN_CHOICE_COUNT_V1]; count];
+    for option in 0..TIMED_OVN_CHOICE_COUNT_V1 {
+        let public_keys = registrations
+            .iter()
+            .map(|registration| GtElement::from_bytes(&registration.public_keys[option], false))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut prefix = vec![GtElement::identity(); count.saturating_add(1)];
+        for index in 0..count {
+            prefix[index + 1] = prefix[index].multiply(public_keys[index]);
+        }
+        let mut suffix = vec![GtElement::identity(); count.saturating_add(1)];
+        for index in (0..count).rev() {
+            suffix[index] = public_keys[index].multiply(suffix[index + 1]);
+        }
+        for index in 0..count {
+            let mask = prefix[index].multiply(suffix[index + 1].inverse());
             if mask.is_identity() {
                 return Err(TimedOvnError::IdentityElement);
             }
-            points[option] = mask.to_bytes();
+            point_rows[index][option] = mask.to_bytes();
         }
-        Ok(TimedOvnMaskingKeysV1 {
-            session_digest: self.session.digest(),
-            roster_root: self.roster_root,
-            survivor_root: self.survivor_root,
-            identity_digest: self.identity_digest,
-            participant_hash: *participant_hash,
-            index: u16::try_from(index).map_err(|_| TimedOvnError::InvalidRosterSize)?,
-            points,
+    }
+    registrations
+        .iter()
+        .zip(point_rows)
+        .enumerate()
+        .map(|(index, (registration, points))| {
+            Ok(TimedOvnMaskingKeysV1 {
+                session_digest: session.digest(),
+                roster_root: *roster_root,
+                survivor_root: *survivor_root,
+                identity_digest: *identity_digest,
+                participant_hash: registration.participant_hash,
+                index: u16::try_from(index).map_err(|_| TimedOvnError::InvalidRosterSize)?,
+                points,
+            })
         })
-    }
-
-    fn registration_at(&self, index: usize) -> Option<&TimedOvnRegistrationV1> {
-        self.registrations.get(index)
-    }
+        .collect()
 }
 
 /// Three pairwise-cancelling target-group masks bound to one frozen seat.
@@ -1391,6 +1614,127 @@ impl TimedOvnMaskingKeysV1 {
     pub const fn points(&self) -> &[GtBytes; TIMED_OVN_CHOICE_COUNT_V1] {
         &self.points
     }
+}
+
+/// Replay-derived common public bindings used to verify bounded ballot chunks.
+///
+/// Construction recomputes the future identity digest and intrinsic release term. A caller can
+/// then bind one committed registration and its snapshot-checked masking-key cache without
+/// rebuilding or re-verifying the complete registration corpus.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimedOvnBallotVerificationCommonV1 {
+    session: TimedOvnSessionV1,
+    roster_root: [u8; 32],
+    survivor_root: [u8; 32],
+    identity_digest: [u8; 32],
+    release_identity: TleReleaseIdentityV1,
+    release_term: GtBytes,
+}
+
+impl TimedOvnBallotVerificationCommonV1 {
+    /// Rebuild common verification bindings for one frozen survivor corpus.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimedOvnError`] for a mismatched future identity, inert root, or invalid release
+    /// pairing term.
+    pub fn new(
+        session: TimedOvnSessionV1,
+        roster_root: [u8; 32],
+        survivor_root: [u8; 32],
+        release_identity: TleReleaseIdentityV1,
+    ) -> Result<Self, TimedOvnError> {
+        if is_zero(&roster_root) || is_zero(&survivor_root) {
+            return Err(TimedOvnError::ZeroBinding);
+        }
+        session.validate_release_identity(&release_identity, &survivor_root)?;
+        let release_message = release_identity
+            .release_message()
+            .map_err(|_| TimedOvnError::InvalidReleaseIdentity)?;
+        let identity_digest = Sha256::digest(&release_message).into();
+        let identity_point = hash_message_to_g1::<TleReleasePurpose>(&release_message);
+        let master_point = decode_nonidentity_g2(session.tle_master_public_key.as_bytes())?;
+        let release_term = pairing_gt(&identity_point, &master_point)?.to_bytes();
+        Ok(Self {
+            session,
+            roster_root,
+            survivor_root,
+            identity_digest,
+            release_identity,
+            release_term,
+        })
+    }
+
+    /// Bind one survivor registration and its replay-derived masking-key points.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimedOvnError`] when the registration, index, or cached points are malformed or
+    /// differ from the common frozen bindings.
+    pub fn bind_registration<Provenance>(
+        &self,
+        index: u16,
+        registration: &TimedOvnRegistrationV1<Provenance>,
+        mask_points: [GtBytes; TIMED_OVN_CHOICE_COUNT_V1],
+    ) -> Result<TimedOvnBallotVerificationContextV1, TimedOvnError> {
+        registration.validate_cached_shape(&self.session)?;
+        for point in &mask_points {
+            GtElement::from_bytes(point, false)?;
+        }
+        Ok(TimedOvnBallotVerificationContextV1 {
+            common: self.clone(),
+            participant_hash: registration.participant_hash,
+            index,
+            public_keys: registration.public_keys,
+            mask_points,
+        })
+    }
+
+    /// Return the immutable session digest.
+    #[must_use]
+    pub fn session_digest(&self) -> [u8; 32] {
+        self.session.digest()
+    }
+
+    /// Return the registration-roster root.
+    #[must_use]
+    pub const fn roster_root(&self) -> [u8; 32] {
+        self.roster_root
+    }
+
+    /// Return the frozen survivor root.
+    #[must_use]
+    pub const fn survivor_root(&self) -> [u8; 32] {
+        self.survivor_root
+    }
+
+    /// Return the exact future-identity digest.
+    #[must_use]
+    pub const fn identity_digest(&self) -> [u8; 32] {
+        self.identity_digest
+    }
+
+    /// Return the intrinsic release term.
+    #[must_use]
+    pub const fn release_term(&self) -> GtBytes {
+        self.release_term
+    }
+
+    /// Borrow the exact typed future release identity.
+    #[must_use]
+    pub const fn release_identity(&self) -> &TleReleaseIdentityV1 {
+        &self.release_identity
+    }
+}
+
+/// One survivor-specific public context for generalized OR-proof verification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimedOvnBallotVerificationContextV1 {
+    common: TimedOvnBallotVerificationCommonV1,
+    participant_hash: [u8; 32],
+    index: u16,
+    public_keys: [GtBytes; TIMED_OVN_CHOICE_COUNT_V1],
+    mask_points: [GtBytes; TIMED_OVN_CHOICE_COUNT_V1],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1425,6 +1769,27 @@ impl TimedOvnMaskedBallotV1 {
         survivors: &TimedOvnSurvivorRosterV1,
         bytes: &[u8],
     ) -> Result<Self, TimedOvnError> {
+        let ballot = Self::parse_bytes(bytes)?;
+        ballot.verify(survivors)?;
+        Ok(ballot)
+    }
+
+    /// Decode and verify one ballot against a snapshot-checked survivor context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimedOvnError`] for malformed encodings, wrong cached bindings, duplicate
+    /// ephemerals, or an invalid generalized OR proof.
+    pub fn from_bytes_with_context(
+        context: &TimedOvnBallotVerificationContextV1,
+        bytes: &[u8],
+    ) -> Result<Self, TimedOvnError> {
+        let ballot = Self::parse_bytes(bytes)?;
+        ballot.verify_with_context(context)?;
+        Ok(ballot)
+    }
+
+    fn parse_bytes(bytes: &[u8]) -> Result<Self, TimedOvnError> {
         if bytes.len() != BALLOT_WIRE_BYTES_V1 {
             return Err(TimedOvnError::InvalidEncoding);
         }
@@ -1476,7 +1841,7 @@ impl TimedOvnMaskedBallotV1 {
         if cursor != bytes.len() {
             return Err(TimedOvnError::InvalidEncoding);
         }
-        let ballot = Self {
+        Ok(Self {
             session_digest,
             roster_root,
             survivor_root,
@@ -1490,9 +1855,7 @@ impl TimedOvnMaskedBallotV1 {
                 responses_x,
                 responses_r,
             },
-        };
-        ballot.verify(survivors)?;
-        Ok(ballot)
+        })
     }
 
     /// Encode the canonical fixed-width ballot and one-hot proof.
@@ -1560,32 +1923,28 @@ impl TimedOvnMaskedBallotV1 {
     /// element or scalar, duplicate ephemeral, or invalid proof equation.
     pub fn verify(&self, survivors: &TimedOvnSurvivorRosterV1) -> Result<(), TimedOvnError> {
         let index = usize::from(self.index);
-        let registration = survivors
-            .registration_at(index)
-            .filter(|registration| registration.participant_hash == self.participant_hash)
-            .ok_or(TimedOvnError::BindingMismatch)?;
-        if self.session_digest != survivors.session.digest()
-            || self.roster_root != survivors.roster_root
-            || self.survivor_root != survivors.survivor_root
-            || self.identity_digest != survivors.identity_digest
+        let context = survivors.verification_context_at(index)?;
+        self.verify_with_context(&context)
+    }
+
+    fn verify_with_context(
+        &self,
+        context: &TimedOvnBallotVerificationContextV1,
+    ) -> Result<(), TimedOvnError> {
+        if self.session_digest != context.common.session.digest()
+            || self.roster_root != context.common.roster_root
+            || self.survivor_root != context.common.survivor_root
+            || self.identity_digest != context.common.identity_digest
+            || self.participant_hash != context.participant_hash
+            || self.index != context.index
         {
             return Err(TimedOvnError::BindingMismatch);
         }
-        let masks = survivors.masking_keys(&self.participant_hash)?;
-        if masks.index != self.index
-            || masks.session_digest != self.session_digest
-            || masks.roster_root != self.roster_root
-            || masks.survivor_root != self.survivor_root
-            || masks.identity_digest != self.identity_digest
-            || masks.participant_hash != self.participant_hash
-        {
-            return Err(TimedOvnError::BindingMismatch);
-        }
-        let public_keys = decode_gt_array(&registration.public_keys, false)?;
-        let mask_points = decode_gt_array(&masks.points, false)?;
+        let public_keys = decode_gt_array(&context.public_keys, false)?;
+        let mask_points = decode_gt_array(&context.mask_points, false)?;
         let ballot_points = decode_gt_array(&self.c, false)?;
         let ephemerals = decode_g2_array(&self.u)?;
-        let release_term = GtElement::from_bytes(&survivors.release_term, false)?;
+        let release_term = GtElement::from_bytes(&context.common.release_term, false)?;
         let mut unique_u = HashSet::with_capacity(TIMED_OVN_CHOICE_COUNT_V1);
         for ephemeral in self.u {
             if !unique_u.insert(ephemeral) {
@@ -1606,11 +1965,15 @@ impl TimedOvnMaskedBallotV1 {
             &responses_r,
         )?;
         let expected = ballot_challenge(
-            survivors,
+            &context.common.session,
+            &context.common.roster_root,
+            &context.common.survivor_root,
+            &context.common.identity_digest,
+            &context.common.release_term,
             &self.participant_hash,
             self.index,
-            &registration.public_keys,
-            &masks.points,
+            &context.public_keys,
+            &context.mask_points,
             &self.u,
             &self.c,
             &commitments,
@@ -1750,7 +2113,11 @@ impl TimedOvnRegistrationSecretV1 {
         }
         commitments.validate_nonidentity()?;
         let challenge = ballot_challenge(
-            survivors,
+            &survivors.session,
+            &survivors.roster_root,
+            &survivors.survivor_root,
+            &survivors.identity_digest,
+            &survivors.release_term,
             &self.participant_hash,
             masks.index,
             &registration.public_keys,
@@ -1914,7 +2281,11 @@ fn pop_challenge(
 
 #[allow(clippy::too_many_arguments)]
 fn ballot_challenge(
-    survivors: &TimedOvnSurvivorRosterV1,
+    session: &TimedOvnSessionV1,
+    roster_root: &[u8; 32],
+    survivor_root: &[u8; 32],
+    identity_digest: &[u8; 32],
+    release_term: &GtBytes,
     participant_hash: &[u8; 32],
     index: u16,
     public_keys: &[GtBytes; TIMED_OVN_CHOICE_COUNT_V1],
@@ -1927,11 +2298,11 @@ fn ballot_challenge(
     let mut hasher = Sha256::new();
     hasher.update(BALLOT_CHALLENGE_DOMAIN_V1);
     hasher.update(TIMED_OVN_PROTOCOL_VERSION_V1.to_be_bytes());
-    hasher.update(survivors.session.canonical_bytes());
-    hasher.update(survivors.roster_root);
-    hasher.update(survivors.survivor_root);
-    hasher.update(survivors.identity_digest);
-    hasher.update(survivors.release_term);
+    hasher.update(session.canonical_bytes());
+    hasher.update(roster_root);
+    hasher.update(survivor_root);
+    hasher.update(identity_digest);
+    hasher.update(release_term);
     hasher.update(participant_hash);
     hasher.update(index.to_be_bytes());
     for option in 0..TIMED_OVN_CHOICE_COUNT_V1 {
@@ -1964,12 +2335,13 @@ fn scalar_from_transcript(hasher: Sha256) -> Result<Scalar, TimedOvnError> {
     Err(TimedOvnError::ScalarDerivation)
 }
 
-/// Public timed aggregate constructed from the exact frozen ballot corpus.
+/// Public timed aggregate carrying type-level ballot-validation provenance.
 ///
-/// The type has no public constructor or decoder: callers must retain/replay
-/// the accepted ballots and use [`aggregate_timed_ovn_ballots_v1`].
+/// The default provenance is returned only by [`aggregate_timed_ovn_ballots_v1`] after replaying
+/// every ballot proof. Core's rolling accumulator instead returns the distinct
+/// [`TimedOvnCommittedAggregateCacheV1`] type for bounded live transitions.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TimedOvnAggregateV1 {
+pub struct TimedOvnAggregateV1<Provenance = TimedOvnProofVerifiedV1> {
     session_digest: [u8; 32],
     roster_root: [u8; 32],
     survivor_root: [u8; 32],
@@ -1977,9 +2349,64 @@ pub struct TimedOvnAggregateV1 {
     accepted_ballots: u16,
     aggregate_u: [G2Bytes; TIMED_OVN_CHOICE_COUNT_V1],
     aggregate_c: [GtBytes; TIMED_OVN_CHOICE_COUNT_V1],
+    provenance: PhantomData<Provenance>,
 }
 
-impl TimedOvnAggregateV1 {
+/// Shape-checked rolling aggregate reconstructed from committed consensus state.
+///
+/// This type does not claim that individual ballot proofs were replayed. It can be opened only
+/// through methods whose receiver retains committed-cache provenance, while snapshot restoration
+/// must independently rebuild a [`TimedOvnAggregateV1`] from every exact ballot record.
+///
+/// ```compile_fail
+/// use iroha_crypto::timed_ovn::{TimedOvnAggregateV1, TimedOvnCommittedAggregateCacheV1};
+///
+/// fn require_verified(_: TimedOvnAggregateV1) {}
+/// fn cannot_promote(cache: TimedOvnCommittedAggregateCacheV1) {
+///     require_verified(cache);
+/// }
+/// ```
+pub type TimedOvnCommittedAggregateCacheV1 = TimedOvnAggregateV1<TimedOvnCommittedCacheV1>;
+
+impl TimedOvnCommittedAggregateCacheV1 {
+    /// Reconstruct a rolling aggregate admitted from proof-verified ballot chunks.
+    ///
+    /// This validates every public binding and canonical aggregate element but does not replay
+    /// individual ballot proofs. Persisted snapshot admission must independently rebuild the same
+    /// aggregate from the exact ballot records.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimedOvnError`] for an invalid count, binding, or aggregate encoding.
+    pub fn from_committed_accumulator(
+        common: &TimedOvnBallotVerificationCommonV1,
+        accepted_ballots: u16,
+        aggregate_u: [G2Bytes; TIMED_OVN_CHOICE_COUNT_V1],
+        aggregate_c: [GtBytes; TIMED_OVN_CHOICE_COUNT_V1],
+    ) -> Result<Self, TimedOvnError> {
+        if accepted_ballots == 0 || usize::from(accepted_ballots) > TIMED_OVN_MAX_PARTICIPANTS_V1 {
+            return Err(TimedOvnError::InvalidRosterSize);
+        }
+        for encoded in &aggregate_u {
+            decode_g2(encoded, true)?;
+        }
+        for encoded in &aggregate_c {
+            GtElement::from_bytes(encoded, true)?;
+        }
+        Ok(Self {
+            session_digest: common.session_digest(),
+            roster_root: common.roster_root,
+            survivor_root: common.survivor_root,
+            identity_digest: common.identity_digest,
+            accepted_ballots,
+            aggregate_u,
+            aggregate_c,
+            provenance: PhantomData,
+        })
+    }
+}
+
+impl<Provenance> TimedOvnAggregateV1<Provenance> {
     /// Open only the exact aggregate and bounded-decode Aye/Nay/Abstain counts.
     ///
     /// No individual decrypted ballot component is returned or made available.
@@ -1994,18 +2421,33 @@ impl TimedOvnAggregateV1 {
         survivors: &TimedOvnSurvivorRosterV1,
         identity_secret: &TleIdentitySecretKeyV1,
     ) -> Result<TimedOvnTallyV1, TimedOvnError> {
-        if self.session_digest != survivors.session.digest()
-            || self.roster_root != survivors.roster_root
-            || self.survivor_root != survivors.survivor_root
-            || self.identity_digest != survivors.identity_digest
-            || usize::from(self.accepted_ballots) != survivors.registrations.len()
+        let common = survivors.verification_common()?;
+        self.open_and_tally_with_common(&common, survivors.registrations.len(), identity_secret)
+    }
+
+    /// Open a snapshot-checked rolling aggregate without replaying its individual ballots.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TimedOvnError`] for any binding, release, cancellation, or tally failure.
+    pub fn open_and_tally_with_common(
+        &self,
+        common: &TimedOvnBallotVerificationCommonV1,
+        expected_ballots: usize,
+        identity_secret: &TleIdentitySecretKeyV1,
+    ) -> Result<TimedOvnTallyV1, TimedOvnError> {
+        if self.session_digest != common.session_digest()
+            || self.roster_root != common.roster_root
+            || self.survivor_root != common.survivor_root
+            || self.identity_digest != common.identity_digest
+            || usize::from(self.accepted_ballots) != expected_ballots
         {
             return Err(TimedOvnError::BindingMismatch);
         }
         let secret_point = identity_secret
             .pairing_secret_point(
-                &survivors.session.tle_master_public_key,
-                &survivors.release_identity,
+                &common.session.tle_master_public_key,
+                &common.release_identity,
             )
             .map_err(|_| TimedOvnError::ReleaseFailed)?;
         let generator = target_generator()?;
@@ -2057,6 +2499,41 @@ impl TimedOvnAggregateV1 {
     pub const fn aggregate_commitments(&self) -> &[GtBytes; TIMED_OVN_CHOICE_COUNT_V1] {
         &self.aggregate_c
     }
+}
+
+/// Fold one already proof-verified ballot into a replay-checkable rolling public aggregate.
+///
+/// The caller must have obtained `ballot` through [`TimedOvnMaskedBallotV1::from_bytes`] or
+/// [`TimedOvnMaskedBallotV1::from_bytes_with_context`] and must separately enforce exact survivor
+/// order and cross-ballot ephemeral uniqueness. This helper validates all aggregate encodings and
+/// performs only the deterministic public group fold.
+///
+/// # Errors
+///
+/// Returns [`TimedOvnError`] for malformed aggregate or ballot group elements.
+pub fn fold_verified_timed_ovn_ballot_v1(
+    aggregate_u: &[G2Bytes; TIMED_OVN_CHOICE_COUNT_V1],
+    aggregate_c: &[GtBytes; TIMED_OVN_CHOICE_COUNT_V1],
+    ballot: &TimedOvnMaskedBallotV1,
+) -> Result<
+    (
+        [G2Bytes; TIMED_OVN_CHOICE_COUNT_V1],
+        [GtBytes; TIMED_OVN_CHOICE_COUNT_V1],
+    ),
+    TimedOvnError,
+> {
+    let mut folded_u = [[0_u8; TIMED_OVN_G2_BYTES_V1]; TIMED_OVN_CHOICE_COUNT_V1];
+    let mut folded_c = [[0_u8; TIMED_OVN_GT_BYTES_V1]; TIMED_OVN_CHOICE_COUNT_V1];
+    for option in 0..TIMED_OVN_CHOICE_COUNT_V1 {
+        folded_u[option] = (G2Projective::from(decode_g2(&aggregate_u[option], true)?)
+            + G2Projective::from(decode_nonidentity_g2(&ballot.u[option])?))
+        .to_affine()
+        .to_compressed();
+        folded_c[option] = GtElement::from_bytes(&aggregate_c[option], true)?
+            .multiply(GtElement::from_bytes(&ballot.c[option], false)?)
+            .to_bytes();
+    }
+    Ok((folded_u, folded_c))
 }
 
 /// Decoded timed-OVN Aye/Nay/Abstain counts.
@@ -2124,6 +2601,7 @@ pub fn aggregate_timed_ovn_ballots_v1(
             .map_err(|_| TimedOvnError::InvalidRosterSize)?,
         aggregate_u: encoded_u,
         aggregate_c: encoded_c,
+        provenance: PhantomData,
     })
 }
 
@@ -2141,10 +2619,10 @@ fn bounded_discrete_log(target: GtElement, generator: GtElement, max: u16) -> Op
     None
 }
 
-fn select_survivors(
-    roster: &TimedOvnRosterV1,
+fn select_survivors<Provenance: Clone>(
+    roster: &TimedOvnRosterV1<Provenance>,
     survivor_ids: &[[u8; 32]],
-) -> Result<Vec<TimedOvnRegistrationV1>, TimedOvnError> {
+) -> Result<Vec<TimedOvnRegistrationV1<Provenance>>, TimedOvnError> {
     if survivor_ids.is_empty() || survivor_ids.len() > roster.registrations.len() {
         return Err(TimedOvnError::InvalidRosterSize);
     }
@@ -2170,7 +2648,10 @@ fn select_survivors(
     Ok(registrations)
 }
 
-fn roster_root(session: &TimedOvnSessionV1, registrations: &[TimedOvnRegistrationV1]) -> [u8; 32] {
+fn roster_root<Provenance>(
+    session: &TimedOvnSessionV1,
+    registrations: &[TimedOvnRegistrationV1<Provenance>],
+) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(ROSTER_ROOT_DOMAIN_V1);
     hasher.update(TIMED_OVN_PROTOCOL_VERSION_V1.to_be_bytes());
@@ -2182,10 +2663,10 @@ fn roster_root(session: &TimedOvnSessionV1, registrations: &[TimedOvnRegistratio
     hasher.finalize().into()
 }
 
-fn survivor_root(
+fn survivor_root<Provenance>(
     session: &TimedOvnSessionV1,
     roster_root: &[u8; 32],
-    registrations: &[TimedOvnRegistrationV1],
+    registrations: &[TimedOvnRegistrationV1<Provenance>],
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(SURVIVOR_ROOT_DOMAIN_V1);
@@ -2577,6 +3058,45 @@ mod tests {
             TimedOvnRegistrationV1::from_bytes(fixture.roster.session(), &encoded_registration,),
             Ok(registration.clone())
         );
+        let cached_registration = TimedOvnCommittedRegistrationCacheV1::from_committed_record(
+            fixture.roster.session(),
+            &encoded_registration,
+        )
+        .expect("committed registration cache");
+        assert_eq!(cached_registration.to_bytes(), encoded_registration);
+        let cached_registrations = fixture
+            .roster
+            .registrations()
+            .iter()
+            .map(|registration| {
+                TimedOvnCommittedRegistrationCacheV1::from_committed_record(
+                    fixture.roster.session(),
+                    &registration.to_bytes(),
+                )
+                .expect("committed registration cache")
+            })
+            .collect();
+        let cached_roster = TimedOvnCommittedRosterCacheV1::from_committed_records(
+            *fixture.roster.session(),
+            cached_registrations,
+        )
+        .expect("committed roster");
+        assert_eq!(cached_roster.roster_root(), fixture.roster.roster_root());
+        let cached_survivors = TimedOvnCommittedSurvivorRosterCacheV1::from_committed_roster(
+            &cached_roster,
+            &fixture
+                .roster
+                .registrations()
+                .iter()
+                .map(|registration| *registration.participant_hash())
+                .collect::<Vec<_>>(),
+            fixture.survivors.release_identity,
+        )
+        .expect("committed survivor cache");
+        assert_eq!(
+            cached_survivors.masking_key_points(),
+            fixture.survivors.masking_key_points()
+        );
         let mut trailing = encoded_registration.clone();
         trailing.push(0);
         assert_eq!(
@@ -2589,6 +3109,14 @@ mod tests {
         assert_eq!(encoded_ballot.len(), BALLOT_WIRE_BYTES_V1);
         assert_eq!(
             TimedOvnMaskedBallotV1::from_bytes(&fixture.survivors, &encoded_ballot),
+            Ok(ballot.clone())
+        );
+        let context = fixture
+            .survivors
+            .verification_context_at(0)
+            .expect("cached ballot context");
+        assert_eq!(
+            TimedOvnMaskedBallotV1::from_bytes_with_context(&context, &encoded_ballot),
             Ok(ballot)
         );
         assert_eq!(
@@ -2601,6 +3129,29 @@ mod tests {
     }
 
     #[test]
+    fn committed_registration_cache_cannot_claim_invalid_proof_verification() {
+        let fixture = fixture(12);
+        let mut encoded = fixture.roster.registrations()[0].to_bytes();
+        let first_response = encoded.len() - TIMED_OVN_CHOICE_COUNT_V1 * TIMED_OVN_SCALAR_BYTES_V1;
+        encoded[first_response..first_response + TIMED_OVN_SCALAR_BYTES_V1]
+            .copy_from_slice(&Scalar::from(1_u64).to_bytes_be());
+
+        assert_eq!(
+            TimedOvnRegistrationV1::from_bytes(fixture.roster.session(), &encoded),
+            Err(TimedOvnError::InvalidProofOfPossession)
+        );
+        let cache = TimedOvnCommittedRegistrationCacheV1::from_committed_record(
+            fixture.roster.session(),
+            &encoded,
+        )
+        .expect("canonical shape remains cacheable");
+        assert_eq!(
+            cache.verify(fixture.roster.session()),
+            Err(TimedOvnError::InvalidProofOfPossession)
+        );
+    }
+
+    #[test]
     fn folded_tle_term_opens_only_the_exact_aggregate() {
         let fixture = fixture(13);
         let ballots = cast_fixture_ballots(&fixture, 14);
@@ -2609,6 +3160,41 @@ mod tests {
         assert_eq!(aggregate.accepted_ballots(), 3);
         assert_eq!(
             aggregate.open_and_tally(&fixture.survivors, &fixture.identity_secret),
+            Ok(TimedOvnTallyV1 {
+                aye: 1,
+                nay: 1,
+                abstain: 1,
+            })
+        );
+
+        let common = fixture
+            .survivors
+            .verification_common()
+            .expect("common verification bindings");
+        let mut folded_u = *ballots[0].ephemerals();
+        let mut folded_c = *ballots[0].commitments();
+        for ballot in &ballots[1..] {
+            (folded_u, folded_c) = fold_verified_timed_ovn_ballot_v1(&folded_u, &folded_c, ballot)
+                .expect("fold verified ballot");
+        }
+        let cached_aggregate = TimedOvnCommittedAggregateCacheV1::from_committed_accumulator(
+            &common, 3, folded_u, folded_c,
+        )
+        .expect("committed aggregate");
+        assert_eq!(
+            cached_aggregate.accepted_ballots(),
+            aggregate.accepted_ballots()
+        );
+        assert_eq!(
+            cached_aggregate.aggregate_ephemerals(),
+            aggregate.aggregate_ephemerals()
+        );
+        assert_eq!(
+            cached_aggregate.aggregate_commitments(),
+            aggregate.aggregate_commitments()
+        );
+        assert_eq!(
+            cached_aggregate.open_and_tally_with_common(&common, 3, &fixture.identity_secret),
             Ok(TimedOvnTallyV1 {
                 aye: 1,
                 nay: 1,

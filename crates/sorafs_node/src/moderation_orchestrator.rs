@@ -3,7 +3,7 @@
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature as IrohaSignature};
 use iroha_data_model::{
-    account::{AccountId, ParsedAccountId},
+    account::AccountId,
     block::BlockHeader,
     events::data::sorafs::SorafsModerationLedgerEventKind,
     isi::{
@@ -8712,12 +8712,12 @@ fn canonical_account(
     let parsed = AccountId::parse_encoded(value).map_err(|error| {
         ModerationOrchestratorError::InvalidAction(format!("invalid {field}: {error}"))
     })?;
-    if parsed.canonical() != value {
+    if parsed.to_string() != value {
         return Err(ModerationOrchestratorError::InvalidAction(format!(
             "{field} is not canonical"
         )));
     }
-    Ok(ParsedAccountId::into_account_id(parsed))
+    Ok(parsed)
 }
 fn validate_scope(case_id: &str, round_id: &str) -> Result<(), ModerationOrchestratorError> {
     if !is_canonical_moderation_identifier_v1(case_id)

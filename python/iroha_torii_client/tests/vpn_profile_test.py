@@ -18,6 +18,7 @@ from iroha_torii_client import ToriiClient  # noqa: E402
 
 VPN_OPERATOR = "vpn-operator@paynet"
 VPN_RELAY_ID_HEX = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX = "55" * 1_952
 
 
 class StubResponse(requests.Response):
@@ -84,6 +85,7 @@ class RecordingSession(requests.Session):
 def _vpn_trust_fields() -> Dict[str, str]:
     return {
         "relay_id_hex": VPN_RELAY_ID_HEX,
+        "relay_mldsa65_public_key_hex": VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX,
         "descriptor_commit_hex": "cd" * 32,
         "tls_server_name": "relay.example",
         "relay_tls_spki_sha256_hex": "ab" * 32,
@@ -126,6 +128,7 @@ def test_vpn_profile_deserializes_native_lease_fields() -> None:
     assert profile.lease_fee == "100.25"
     assert profile.operator_account_id == VPN_OPERATOR
     assert profile.route_pushes == ["0.0.0.0/0"]
+    assert profile.relay_mldsa65_public_key_hex == VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX
     assert session.calls[0]["url"] == "https://node.test/v1/vpn/profile"
     assert session.calls[0]["headers"] == {"Accept": "application/json"}
     assert session.calls[0]["allow_redirects"] is False
@@ -147,6 +150,7 @@ def test_unavailable_vpn_profile_accepts_only_the_explicit_empty_trust_tuple() -
     for field in (
         "relay_endpoint",
         "relay_id_hex",
+        "relay_mldsa65_public_key_hex",
         "descriptor_commit_hex",
         "tls_server_name",
         "relay_tls_spki_sha256_hex",
@@ -160,12 +164,18 @@ def test_unavailable_vpn_profile_accepts_only_the_explicit_empty_trust_tuple() -
     assert profile.available is False
     assert profile.relay_endpoint == ""
     assert profile.relay_id_hex == ""
+    assert profile.relay_mldsa65_public_key_hex == ""
 
 
 @pytest.mark.parametrize(
     ("field", "value"),
     [
         ("relay_id_hex", "00" * 32),
+        ("relay_mldsa65_public_key_hex", ""),
+        ("relay_mldsa65_public_key_hex", "55" * 1_951),
+        ("relay_mldsa65_public_key_hex", "AA" * 1_952),
+        ("relay_mldsa65_public_key_hex", "55" * 1_951 + "5\n"),
+        ("relay_mldsa65_public_key_hex", "00" * 1_952),
         ("descriptor_commit_hex", "00" * 32),
         ("descriptor_commit_hex", "0x" + "cd" * 32),
         ("tls_server_name", "Relay.Example"),

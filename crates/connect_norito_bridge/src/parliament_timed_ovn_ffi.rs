@@ -786,6 +786,12 @@ mod tests {
                 Some(frozen.survivor_participant_hashes().to_vec()),
                 Some(*frozen.release_identity()),
             ),
+            TimedOvnLifecycleStateV1::CorpusOpen(open) => (
+                36,
+                ParliamentTimedOvnCastingPhaseV1::SurvivorsFrozen,
+                Some(open.frozen().survivor_participant_hashes().to_vec()),
+                Some(*open.frozen().release_identity()),
+            ),
             TimedOvnLifecycleStateV1::Sealed(_) | TimedOvnLifecycleStateV1::Released(_) => {
                 panic!("test context must remain cast-capable")
             }
@@ -1234,6 +1240,21 @@ mod tests {
         assert_eq!(
             call_ballot_ffi(&frozen_context, &voters[0].1, &[99; 32], 0),
             Err(BridgeError::ParliamentTimedOvn.code())
+        );
+        let corpus_open = lifecycle
+            .clone()
+            .seal_ballots(vec![ballot_records[0].clone()], &tle)
+            .expect("admit first ballot chunk");
+        let corpus_open_context = casting_context(&corpus_open, &tle);
+        assert_eq!(
+            ballot_record_from_seed(
+                &corpus_open_context,
+                &voters[1].1,
+                &voters[1].2,
+                TimedOvnChoiceV1::Nay,
+            )
+            .expect("masked ballot from corpus-open context"),
+            ballot_records[1]
         );
         let TimedOvnLifecycleStateV1::SurvivorsFrozen(frozen) = &lifecycle else {
             panic!("expected frozen survivor state")

@@ -406,6 +406,27 @@ def test_proposal_kind_rejects_unknown_and_retired_shapes(payload: object) -> No
         GovernanceProposalKind.from_payload(payload)
 
 
+def test_attempt_proposal_u64_numbers_obey_the_exact_json_boundary() -> None:
+    maximum = (1 << 53) - 1
+    runtime = copy.deepcopy(_variants()[1][1])
+    runtime["manifest"]["start_height"] = maximum - 1  # type: ignore[index]
+    runtime["manifest"]["end_height"] = maximum  # type: ignore[index]
+    GovernanceProposalKind.from_payload({"kind": "RuntimeUpgrade", "payload": runtime})
+
+    runtime["manifest"]["end_height"] = maximum + 1  # type: ignore[index]
+    with pytest.raises(TypeError, match="9007199254740991"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "RuntimeUpgrade", "payload": runtime}
+        )
+
+    musubi = copy.deepcopy(_variants()[5][1])
+    musubi["value"]["target"]["home_dataspace"] = maximum + 1  # type: ignore[index]
+    with pytest.raises(TypeError, match="9007199254740991"):
+        GovernanceProposalKind.from_payload(
+            {"kind": "MusubiRegistryGovernance", "payload": musubi}
+        )
+
+
 def test_closed_nested_action_tags_reject_unknown_values() -> None:
     variants = _variants()
     sccp = copy.deepcopy(variants[2][1])

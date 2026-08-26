@@ -155,6 +155,17 @@ fi
 
 cp -R scripts/contract_tooling "$WORK_DIR/contract_tooling"
 (
+  cd "$WORK_DIR/contract_tooling"
+  "$NPM_BIN" ci --ignore-scripts --no-audit --no-fund --loglevel=error
+  "$NPM_BIN" audit --omit=dev --audit-level=low
+)
+NODE_PATH="$WORK_DIR/contract_tooling/node_modules" \
+SCCP_TVM_STATIC_ONLY=1 \
+  "$NODE_BIN" scripts/contract_tvm_smoke.mjs \
+    "$RUNTIME_MANIFEST" \
+    fixtures/sccp/native_transfer_event_v1.json
+
+(
   cd "$WORK_DIR/contract_tooling/evm-runtime"
   "$NPM_BIN" ci --ignore-scripts --no-audit --no-fund --loglevel=error
   "$NPM_BIN" audit --omit=dev --audit-level=low
@@ -172,4 +183,4 @@ SCCP_CONTRACT_ARTIFACT_LOCK="$RUNTIME_ARTIFACT_LOCK" \
 
 echo "Pinned Solidity $PINNED_SOLC_BUILD compile and runtime smoke passed."
 echo "Authenticated EVM and TRON compiler/artifact smoke passed."
-echo "No EVM execution is accepted as TVM evidence; the separate real-TRE gate is mandatory."
+echo "No EVM execution is accepted as TVM evidence; run the explicit real-TRE phase for release evidence."

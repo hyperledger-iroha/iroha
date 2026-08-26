@@ -937,7 +937,10 @@ async fn mcp_writer_prefix_policy_lists_only_curated_iroha_tools() {
     for required in [
         "iroha.accounts.query",
         "iroha.contracts.call_and_wait",
-        "iroha.accounts.onboard",
+        "iroha.accounts.onboard.prepare",
+        "iroha.accounts.onboard.submit",
+        "iroha.accounts.faucet.prepare",
+        "iroha.accounts.faucet.submit",
         "iroha.transactions.submit_and_wait",
     ] {
         assert!(
@@ -2812,10 +2815,21 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         names.iter().any(|name| name == "iroha.accounts.query"),
         "expected agent-friendly account query MCP tool"
     );
-    assert!(
-        names.iter().any(|name| name == "iroha.accounts.onboard"),
-        "expected agent-friendly account onboarding MCP tool"
-    );
+    for required in [
+        "iroha.accounts.onboard.prepare",
+        "iroha.accounts.onboard.submit",
+        "iroha.accounts.faucet.prepare",
+        "iroha.accounts.faucet.submit",
+    ] {
+        assert!(
+            names.iter().any(|name| name == required),
+            "expected explicit prepared-transaction MCP tool `{required}`"
+        );
+    }
+    assert!(names.iter().all(|name| !matches!(
+        name.as_str(),
+        "iroha.accounts.onboard" | "iroha.accounts.faucet"
+    )));
     assert!(
         names
             .iter()
@@ -3842,7 +3856,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_query_accepts_flat_envelope
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_accounts_onboard_accepts_shortcuts() {
+async fn mcp_jsonrpc_tools_call_rejects_retired_one_shot_onboarding_tool() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     enable_writer_mcp(&mut cfg);
@@ -3867,7 +3881,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_onboard_accepts_shortcuts()
     assert_eq!(status, StatusCode::OK);
     assert!(
         tool_is_error(&call),
-        "onboarding alias should produce MCP tool error when onboarding is unavailable"
+        "retired one-shot onboarding tool must be rejected"
     );
     let structured = structured_content(&call);
     assert!(
@@ -3875,7 +3889,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_accounts_onboard_accepts_shortcuts()
             .get("status")
             .and_then(Value::as_u64)
             .is_some_and(|status| status >= 400),
-        "expected onboarding alias dispatch to return a route error status"
+        "expected retired onboarding tool to return an MCP error status"
     );
 }
 #[tokio::test]

@@ -165,7 +165,6 @@ pub fn run_gar_controller(options: GarControllerOptions) -> Result<GarController
     let parsed: GarControllerConfig = json::from_reader(reader)
         .wrap_err_with(|| format!("failed to parse controller config at {}", config.display()))?;
     let operator: AccountId = AccountId::parse_encoded(&parsed.operator)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| eyre!("invalid operator account `{}`: {err}", parsed.operator))?;
     let now_unix = now_unix.unwrap_or_else(current_unix);
     fs::create_dir_all(&output_dir).wrap_err_with(|| {

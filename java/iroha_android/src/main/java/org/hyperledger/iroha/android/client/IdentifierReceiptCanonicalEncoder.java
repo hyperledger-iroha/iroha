@@ -5,6 +5,7 @@ import java.util.Locale;
 import java.util.Objects;
 import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
+import org.hyperledger.iroha.android.nexus.UaidLiteral;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
@@ -37,7 +38,10 @@ public final class IdentifierReceiptCanonicalEncoder {
     encodeSizedField(
         writer,
         PassthroughBytesAdapter.INSTANCE,
-        encodeOpaqueHash(payload.uaid(), "uaid:", "payload.uaid"));
+        encodeOpaqueHash(
+            UaidLiteral.canonicalize(payload.uaid(), "payload.uaid"),
+            "uaid:",
+            "payload.uaid"));
     encodeSizedField(
         writer,
         PassthroughBytesAdapter.INSTANCE,
@@ -66,9 +70,11 @@ public final class IdentifierReceiptCanonicalEncoder {
     final String receiptHash =
         hashHex(decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.receipt_hash"));
     final String uaid =
-        decodeOpaqueHash(
-            decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.uaid"),
-            "uaid:",
+        UaidLiteral.canonicalize(
+            decodeOpaqueHash(
+                decodeSizedField(decoder, PassthroughBytesAdapter.INSTANCE, "payload.uaid"),
+                "uaid:",
+                "payload.uaid"),
             "payload.uaid");
     final String accountId =
         TransferWirePayloadEncoder.decodeAccountIdPayload(

@@ -680,7 +680,7 @@ fn canonical_account_bytes(account: &AccountId) -> Result<Vec<u8>, Response> {
             "canonical_account_encoding_unavailable",
         )
     })?;
-    if parsed.canonical() != literal || parsed.account_id().subject_id() != account.subject_id() {
+    if parsed.to_string() != literal || parsed.subject_id() != account.subject_id() {
         return Err(fixed_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "canonical_account_encoding_unavailable",

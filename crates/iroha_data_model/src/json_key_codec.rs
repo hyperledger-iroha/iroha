@@ -37,15 +37,18 @@ macro_rules! impl_nested_json_key_codec {
 impl_id_key_codec!(
     crate::asset::AssetDefinitionId,
     crate::asset::AssetId,
-    crate::governance::types::GovernanceAttemptId,
-    crate::governance::types::BallotAttemptId,
-    crate::governance::types::TleKeySessionId,
     crate::nft::NftId,
     crate::role::RoleId,
     crate::trigger::TriggerId,
     crate::oracle::FeedId,
     crate::proof::ProofId,
     crate::isi::settlement::SettlementId,
+);
+#[cfg(feature = "governance")]
+impl_id_key_codec!(
+    crate::governance::types::GovernanceAttemptId,
+    crate::governance::types::BallotAttemptId,
+    crate::governance::types::TleKeySessionId,
 );
 // Musubi uses structural, versioned keys whose complete typed JSON form is
 // embedded into the surrounding storage object's string key. This avoids
@@ -129,7 +132,6 @@ impl JsonKeyCodec for crate::account::AccountId {
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         crate::account::AccountId::parse_encoded(encoded)
-            .map(crate::account::ParsedAccountId::into_account_id)
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }

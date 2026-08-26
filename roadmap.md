@@ -5,6 +5,20 @@ Last updated: 2026-08-26
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Digital-signature release qualification
+
+- Run the mixed-torsion Ed25519 regression with and without `ecc-batch`, followed
+  by the full workspace test and strict all-target Clippy matrices from one
+  settled candidate. The unrelated `iroha_crypto` SoraNet test-target
+  compilation failures have been repaired.
+- Complete the deferred review of Swift, offline, and specialized attestation
+  signature consumers. Kotlin/Java deterministic Ed25519 exports and Android
+  per-key hardware-policy enforcement are hardened; qualify the latter on real
+  TEE and StrongBox devices, including older API behavior. Separately reconcile
+  the operator `allow_node_key` documentation with its effective key set and
+  the validator-roster length helper with the proof-of-possession-filtered
+  roster.
+
 ## Iroha crypto first-release closure
 
 - Add a production-source closure job for the minimal, application, consensus, node, and
@@ -67,7 +81,8 @@ Completed history lives in [`status.md`](./status.md).
 - Keep merge and autonomous production unavailable in emergency Fast mode. If operators later need
   those write paths before a Strict restart, first add an atomically published merge-log
   count/length/tip marker and durable latest-route summary; Fast must never recover that authority
-  by decoding every historical frame.
+  by decoding every historical frame. Read-only Fast startup must not require the deferred merge
+  log or inspect auxiliary recovery artifacts; it leaves them untouched for Strict.
 - Add large-history startup benchmarks that separately report marker preflight, hash-journal
   binding, five-artifact metadata binding, bounded-manifest authentication, exact-tip validation,
   minimal-State construction, merge metadata, Sumeragi replay planning, and recursive disk
@@ -129,11 +144,12 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Generated HF isolated execution
 
-- Route generated Hugging Face execution through the authenticated Inrou
-  namespace/cgroup/resource corridor before enabling any local-execution
-  surface or advertising model-host readiness. Until that path is qualified,
-  keep host-local Python execution, probing, and warmth heartbeats
-  hard-rejected; authenticated imports remain inert storage.
+- Keep generated Hugging Face imports storage-only in V1. Any future execution
+  feature must be a new signed and pinned Inrou guest admitted through the fixed
+  authenticated PortableVM corridor. Never restore the retired host Python
+  runner, provider credential or bridge, generated-HF Torii proxy, broker
+  operation, warmth heartbeat, compatibility decoder, or host-local execution
+  path.
 
 ## Merged-candidate compile recovery
 
@@ -273,6 +289,31 @@ Completed history lives in [`status.md`](./status.md).
   one profile change. Do not treat the existing arbitrary account witness or a
   copied NIZK as bearer authorization. Usage proofs and host-signed lifecycle
   operations are separate and remain valid.
+- Replace the Kaigi call-signal endpoint's authenticated full-history scan with
+  a bounded committed projection keyed by fully qualified call id. Give its
+  pagination cursor a stable canonical tie-breaker such as transaction hash or
+  `(block height, transaction offset)` so later backdated metadata cannot shift
+  an already issued page boundary. Keep the current account-signed
+  expensive-compute admission until that index is deployed.
+- Finish non-Rust Kaigi parity against one Rust-generated eight-instruction
+  Norito fixture set. Wire the Kotlin/Java typed templates into canonical
+  `WirePayload` encoding and expose relay-health wherever the other seven
+  mutations exist; add all eight typed builders plus the authenticated signal
+  query to Swift and Python instead of treating argument maps as submit-ready
+  wires.
+- Add a typed, authorized retirement/migration path for stale Kaigi relay
+  descriptors and feedback after account-ID rekey. Current admission safely
+  keeps exact metadata-key/embedded-ID binding and resolves governance through
+  the active successor's domain-qualified primary alias, preserves only typed
+  `AccountIdRekey` continuity after lease expiry or reassignment, pins retained
+  descriptor or feedback state to that domain, rejects aliasless account rekeys
+  that would strand native dependencies, and blocks destructive account/domain
+  teardown while those dependencies remain. Corrupt key/payload identity rows
+  fail closed, but the implementation deliberately does not silently rewrite or
+  delete historical descriptor keys. Add explicit retirement/archive semantics
+  before relaxing those guards. Supporting aliasless relays would likewise
+  require a signed home-domain field or a protected relay-to-home index; do not
+  restore global allowlist discovery.
 - Decide whether the currently unreachable
   `halo2/ipa/poly-open` backend belongs in the closed first-release registry.
 - Run the focused native-STARK and FASTPQ regressions, then the full workspace
@@ -283,40 +324,37 @@ Completed history lives in [`status.md`](./status.md).
 
 ## Inrou V1 release qualification
 
-- Keep `inrou.enabled` opt-in and false by default. An enabled node has exactly
-  one non-configurable PortableVM V1 path; capability publication and local
-  hosting remain unavailable unless the same startup invocation passes the
-  static runtime-closure checks and the artifact-free Linux/KVM startup-boundary
-  probe for the production machine type and host CPU, private namespaces,
-  cgroup-v2, locked identity, filesystem custody, anonymous QMP, QEMU user
-  networking, the private loopback connector, and the owner firewall. Treat
-  guest boot, the workload bridge, placements, and the public route as separate
-  real-canary qualification, not as facts established by the startup probe.
-- Qualify the mandatory private mount/network/IPC/UTS/PID/cgroup launcher and
-  its authenticated bounded supervisor-listener bridge with malicious
-  guest-root tests. Prove that the minimal root exposes no host `/run`, broad
-  `/sys`, unrelated proc state, pathname/abstract Unix socket, descriptor,
-  DNS/proxy, external-interface, TCG, or alternate-backend escape.
-- Archive same-revision CPU, memory, swap, pids, and I/O cgroup evidence and
-  bounded launch/teardown results. Code-path admission is not physical release
-  qualification.
-- Qualify the four locked `iroha-inrou-0` through `iroha-inrou-3` identities,
-  files-only NSS and subid policy,
-  `/dev/kvm` custody, pinned ext4 V1 write-lease mount/reuse/recovery and disk
-  reclaim, anonymous QMP, bounded teardown, and fail-secure stale-firewall
-  workflow on a same-revision four-validator Linux/AArch64 deployment. Archive
-  operator-approved stale-chain cleanup and lease-capable local-filesystem
-  evidence with the canary.
-- Before a public Taira reset, freeze one signed immutable source and artifact
-  closure, supply an external exact four-host service/state inventory and
-  runtime-only key custody, and use an authenticated replay-safe public executor.
-  `scripts/taira_public_reset.py` must remain an O_RDONLY inventory/handoff
-  validator whose `apply` path is barred; it grants no authorization and is not
-  a deployment controller. Qualify the identical closure on the disposable
-  four-validator corridor first, then deploy it with the missing compiled,
-  authenticated executor and require exact four-peer height/hash convergence,
-  same-revision doctor/write canaries, four distinct Inrou replica receipts,
-  bounded restart proof, and controlled edge cutover.
+- Settle and freeze one immutable candidate, then run the remaining focused
+  onboarding/Torii integration tests, strict workspace test and all-target
+  Clippy matrices, stale retired-symbol/domain scans, and deterministic release
+  build. Regenerate the byte-identical OpenAPI mirrors from that candidate and
+  attach clean authorized signed provenance; dirty-tree development artifacts
+  are not release evidence.
+- On a same-revision Linux/AArch64/KVM host, run the privileged real-guest smoke
+  and adversarially qualify the private mount/network/IPC/UTS/PID/cgroup
+  launcher and authenticated bounded bridge. Archive kernel-observed CPU,
+  memory, swap, pids, I/O, tmpfs, identity, SSH, listener, launch, teardown,
+  and escape-negative evidence.
+- Run the mandatory disposable four-validator Taira corridor with the exact
+  four locked Inrou identities, files-only NSS/subid policy, `/dev/kvm` custody,
+  pinned ext4 V1 write-lease mount/reuse/recovery and disk reclaim, anonymous
+  QMP, fail-secure firewall cleanup, converged finality, and four-replica guest
+  workload canary. The current macOS/arm64 host
+  cannot supply this Linux/KVM evidence; static/mock orchestration tests are not
+  a substitute.
+- Restore authorized public reachability and runtime custody: the HTTPS probe on
+  port 443 currently times out, SSH authentication is unavailable, and
+  owner-private reset/canary inputs are absent. Before remote cleanup or
+  mutation, provide the exact four-validator inventory, explicit runtime-only
+  authorization, SSH and canary inputs, and the trusted compiled
+  dispatcher/reset guard on the admitted host.
+- With those gates satisfied, build the same-revision `iroha` evidence binary
+  using `--profile release`, run only `iroha taira public-reset preflight` and
+  `iroha taira public-reset apply`, and archive cleanup and reset evidence. Then
+  require four-peer convergence, all six exact child outcomes, same-revision
+  doctor evidence, four distinct Inrou receipts, bounded restart proof, guest
+  workload qualification, and controlled edge cutover before calling public
+  Taira ready.
 
 ## SoraNet first-release security qualification
 
@@ -1657,17 +1695,37 @@ source validation.
   outputs; do not add SDK-local generators, generic exporter binaries,
   compatibility commands, or migration adapters.
 
-## Taira development networks
+## Public Taira node onboarding
+
+- Treat Taira as the persistent public testnet. Provide one supported node-init
+  flow: `iroha taira join --data-dir <owner-only-directory>`.
+  The command must discover the canonical bootstrap URL by default, consume a
+  signed public bootstrap manifest, generate local node keys, write and validate
+  the complete runtime configuration, and start the node with sensible
+  first-release defaults as a permissionless observer. Validator activation is
+  a subsequent on-chain transition through the existing staking registration
+  and peer lifecycle after synchronization; do not introduce an operator-issued
+  admission-token format or a second bootstrap path. Generated keys remain
+  runtime-only. Joining must not require running the disposable four-validator
+  or Inrou canary corridors.
+- Publish the current public Torii/MCP roots, genesis trust anchor, seed peers,
+  permissionless observer policy, validator staking/peer activation
+  requirements, and upgrade procedure as one versioned bootstrap bundle. Fail
+  closed on an expired, unsigned, or
+  network-mismatched bundle. Do not expose a matrix of raw genesis, peer, or
+  network-ID flags on the public join path; custom networks use their own
+  explicit tooling. Keep ordinary observer setup to the single command above.
+
+## Disposable Taira-compatible development networks
 
 - Keep the disposable Taira path one command and four peers:
-  `python3 scripts/taira_devnet.py up`. It must generate fresh keys, canonical
-  Taira chain identity, NPoS Nexus configuration, validate all four daemon
-  configs with the current binaries, start only its owned cohort, and require
-  readiness, typed `Applied` status for its signed transaction, converged
-  advancing heights, semantic MCP initialization, bounded live diagnostics,
-  and post-smoke stability before returning success. Keep the exact
-  per-subcommand CLI preflight ahead of cohort replacement, and reject invalid
-  or non-finite deadlines before any mutation.
+  `python3 scripts/taira_devnet.py up --inrou-canary-dir <owner-only-workspace>`.
+  It must generate fresh keys, canonical Taira chain identity, NPoS Nexus
+  configuration, validate all four daemon configs with the current binaries,
+  start only its owned cohort, and require readiness, typed `Applied` status
+  for its signed transaction, converged advancing heights, semantic MCP
+  initialization, and the exact four-replica guest workload canary before
+  returning success. There is no startup-only success mode.
 - `up` must build the fixed `local-release` toolchain for the exact native
   Linux/AArch64 Rust target from the `optimizations` worktree. Observe the HEAD,
   tracked diff, and non-ignored untracked entries before and after the run, while
@@ -1677,18 +1735,22 @@ source validation.
   or mutable outputs. Keep immutable source provenance in the separate release
   corridor.
 - Keep `check` read-only and `down` scoped to the marked disposable directory.
-  `check` reports configured capacity and current cohort health only; it must
-  not claim to requalify KVM, source/binary identity, signed finality, or Inrou
-  routes.
+  `check` reports configured capacity and current cohort health and must require
+  the owner-only exact V1 guest qualification record emitted by `up`. It must
+  not claim to repeat KVM, source/binary identity, signed finality, or the
+  mutating Inrou deployment.
 - Once peer shutdown is proven, `down` must destroy every generated peer,
   operator, and onboarding signer plus the onboarding token.
   Do not restore release authorities, source-seal handoffs, publication
   receipts, LaunchAgents, systemd validator units, predecessor rollback, or
   24-hour soak requirements to this path.
 - Treat public Taira product-surface qualification as a separate operator
-  activity. The compiled `iroha taira doctor` and `iroha taira write-canary`
-  commands remain available for an explicitly configured public deployment,
-  not as disposable-local deployment gates.
+  activity. The compiled `iroha taira doctor` remains the standalone read-only
+  diagnostic; the broad doctor is opt-in for disposable networks.
+  `write-canary` and `inrou-canary` are low-level coordinator primitives, not
+  one-shot operator flows: each invocation selects exactly one child and one
+  prepare, retained-envelope submit, or read-only recovery action. Authorized
+  public mutation must use the compiled `public-reset` coordinator.
 
 ## ZK-ACE JavaScript signed-transaction parity
 
@@ -1873,25 +1935,17 @@ artifacts remain dirty and unsigned. Exact-five replay is source- and
 receipt-bound to the protected schema-v3 OpenAPI Node closure, but immutable
 candidate execution remains unclaimed.
 
-The in-flight carrier formal corpus is now bound to the versions that
-production actually accepts: schema V2 in the `LaneExecutablePayloadV1`
-container, QueuePlan journal V4, and reservation journal V5. Schema 5 of the
-multilane binding ledger keeps this as the
-`inflight_first_release_layout_contract`, with the explicit
-`composed_state_action_relation_with_source_bound_trace_extraction` claim, and source-binds
-the exact payload, reservation, queue-order, Kura persistence/recovery, runner,
-and release-receipt consumers. The schema-5 structural/source-binding checker
-passes on the mutable tree. The exact 864-test production inventory, 522-test
-G-UNIT source inventory, 12 fail-closed layout tests, two receipt parser tests,
-and 12 Apalache-runner contract controls still require a final source-bound
-rerun. The ledger retains the
-distinct fifth layout-only Apalache result after the four refinement rows. The
-G-UNIT inventory has 523 TSV lines and SHA-256
-`e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`.
-The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
-again and passes all 15 focused tests. No TLC or Apalache engine execution is
-claimed by those static checks, and formal correspondence between concrete
-Rust executions and the source-bound transition partition remains open.
+The first-release in-flight persistence corridor accepts only schema V1:
+`LaneExecutablePayloadV1` version 1, QueuePlan journal V1, and reservation
+journal V1, with contiguous zero-based tags. V2, V4, and V5 readers, rewrite
+fixtures, migrations, and dual decoders are retired and must fail closed. The
+formal/source-bound layout manifests, hashes, inventories, and immutable receipt
+must be regenerated from the final V1 candidate; the former schema-5 counts and
+hashes are not evidence for this hard cut. The current structural checker is
+blocked by the separately owned Kura include-inventory mismatch between
+`02a_unauthenticated_preflight.rs` and
+`02a_fresh_single_lane_preflight.rs` across 74 bindings, so no green
+current-source structural or TLC/Apalache engine result is claimed.
 
 The remaining work is evidence-driven and must stay in order:
 
@@ -16502,8 +16556,8 @@ excluded from the first release.
   before advertised fingerprint comparison;
   relay directory build and snapshot rotation now propagate those
   fingerprint-computation errors with issuer context before signing or
-  publishing a snapshot, and guard-pinning fixtures derive ML-KEM public-key
-  lengths from the advertised suite instead of stale constants;
+  publishing a snapshot, and guard-pinning fixtures carry no static relay KEM
+  material;
   snapshots also reject empty issuer or relay sets before trust-map construction
   or relay certificate verification, and guard-directory expected-hash config
   parsing is now fallible before snapshot hash comparison. SoraNet
@@ -16639,18 +16693,16 @@ excluded from the first release.
   detached-signature lengths plus all-zero Ed25519/ML-DSA signature
   placeholders before backend verification, and local SRCv2 issuance reuses
   certificate-payload admission plus ML-DSA-65 issuer
-  secret-key length preflight before signing bundles. Phase 2 SRCv2 rollout
-  accepts Ed25519-only relay certificates while Phase 3 remains the
-  dual-signature gate. SoraNet SRCv2 certificate decode now rejects negative
-  publication/validity Unix-second fields, unknown ML-KEM suite ids and
-  key-material length drift for ML-DSA-65 identity keys and advertised ML-KEM
-  relay public keys, rejects malformed/noncanonical/weak Ed25519 identity
-  public keys, rejects all-zero ML-DSA identity and all-zero or noncanonical
-  ML-KEM relay public-key material, rejects ML-DSA-65 detached signature length
+  secret-key length preflight before signing bundles. First-release SRCv2
+  admission unconditionally requires both Ed25519 and ML-DSA signatures.
+  SoraNet SRCv2 certificate decode now rejects negative
+  publication/validity Unix-second fields and key-material length drift for
+  ML-DSA-65 identity keys, rejects malformed/noncanonical/weak Ed25519 identity
+  public keys, rejects all-zero ML-DSA identity material, rejects ML-DSA-65 detached signature length
   drift and all-zero Ed25519/ML-DSA signature fields, and its canonical CBOR
   parser rejects trailing certificate/bundle data
   plus non-shortest integer/length encodings and duplicate nested
-  bundle/signature/endpoint/KEM-policy fields, with byte/text/exact payload
+  bundle/signature/endpoint fields, with byte/text/exact payload
   reads routed through checked cursor helpers. SRCv2 validity-duration accessors
   now use checked signed timestamp subtraction, expose a checked route for
   callers, and fail closed to `Duration::ZERO` for directly constructed inverted
@@ -16663,9 +16715,9 @@ excluded from the first release.
   published after the snapshot.
   SRCv2 role/capability bitmask decode now rejects unsupported bits
   instead of masking them away, and validity windows fail closed when inverted
-  or published after expiry. KEM rotation policies now reject static
-  fallback/rotation/grace metadata, staged policies without fallbacks, rolling
-  policies without nonzero cadence, and preferred/fallback suite equality.
+  or published after expiry. The first-release 17-field SRCv2 map rejects the
+  retired static relay KEM key and KEM-rotation metadata; PQ capability is
+  derived from its authenticated NK2/NK3 handshake suites.
   Handshake-suite preference lists must be non-empty and duplicate-free, and
   endpoint URL lists must be non-empty and duplicate-free with non-empty,
   whitespace/control-free URL strings. Endpoint tags, when present, must also

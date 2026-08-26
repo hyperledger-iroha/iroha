@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import org.hyperledger.iroha.sdk.nexus.UaidLiteral
+
 private const val ACTION = "ExpireSpaceDirectoryManifest"
 
 /** Typed representation of an `ExpireSpaceDirectoryManifest` instruction. */
@@ -10,7 +12,7 @@ class ExpireSpaceDirectoryManifestInstruction(
 ) : InstructionTemplate {
 
     init {
-        require(uaid.isNotBlank()) { "uaid must not be blank" }
+        UaidLiteral.canonicalize(uaid, "uaid")
     }
 
     override val kind: InstructionKind = InstructionKind.CUSTOM

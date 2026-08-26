@@ -4,14 +4,15 @@ use iroha_crypto::{
     Algorithm, KeyPair,
     soranet::handshake::{
         DEFAULT_CLIENT_CAPABILITIES, DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_RELAY_CAPABILITIES,
-        DEFAULT_TLS_SERVER_NAME, HandshakeSuite, RuntimeParams, SORANET_QUIC_ALPN,
-        SimulationParams, build_client_hello, client_handle_relay_hello, simulate_handshake,
-        simulation_report_json,
+        DEFAULT_TLS_SERVER_NAME, HandshakeSuite, RelayAuthenticationSignerV1, RuntimeParams,
+        SORANET_QUIC_ALPN, SimulationParams, build_client_hello, client_handle_relay_hello,
+        simulate_handshake, simulation_report_json,
     },
 };
 use libfuzzer_sys::fuzz_target;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
+use std::sync::Arc;
 #[derive(Debug, Arbitrary)]
 struct ByteMutation {
     index: u8,
@@ -99,8 +100,11 @@ fn apply_mutations(buf: &mut [u8], mutations: &[ByteMutation]) {
 fn seed_rng(seed_bytes: &[u8; 32]) -> ChaCha20Rng {
     ChaCha20Rng::from_seed(*seed_bytes)
 }
-fn seeded_keypair(seed: &[u8; 32]) -> Option<KeyPair> {
-    KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519).ok()
+fn seeded_keypair(seed: &[u8; 32]) -> Option<RelayAuthenticationSignerV1> {
+    let ed25519 = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519).ok()?;
+    let mldsa65_seed = seed.map(|byte| byte ^ 0xA5);
+    let mldsa65 = KeyPair::try_from_seed(mldsa65_seed.to_vec(), Algorithm::MlDsa).ok()?;
+    RelayAuthenticationSignerV1::try_new(Arc::new(ed25519), Arc::new(mldsa65), [0xB7; 32]).ok()
 }
 fn run_simulation(case: &FuzzInput) {
     let mut client_caps = DEFAULT_CLIENT_CAPABILITIES.to_vec();
@@ -184,7 +188,7 @@ fn run_runtime_handshake(case: &FuzzInput) {
     let _ = client_handle_relay_hello(
         client_state,
         &relay_message,
-        relay_keys.public_key(),
+        &relay_keys.verifier(),
         &runtime,
     );
 }
@@ -205,6 +209,6 @@ mod tests {
         let keypair = seeded_keypair(&seed).expect("derive fuzz fixture key");
         let expected = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
             .expect("derive fuzz fixture key");
-        assert_eq!(keypair.public_key(), expected.public_key());
+        assert_eq!(keypair.ed25519_public_key(), expected.public_key());
     }
 }

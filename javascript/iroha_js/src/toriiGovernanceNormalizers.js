@@ -35,6 +35,8 @@ export function createToriiGovernanceNormalizers({
   normalizeQuantityInput,
   normalizeRequiredBase64Payload,
   normalizeUint64DecimalString,
+  requireExactLowerHex32String,
+  requireCanonicalTransactionHashString,
   requireExactNonEmptyString,
   requireExactTokenString,
   requireGovernanceSelectorString,
@@ -515,7 +517,7 @@ export function createToriiGovernanceNormalizers({
     return {
       proposal: ensureRecord(record.proposal, `${context}.proposal`),
       authority: requireNonEmptyString(record.authority, `${context}.authority`),
-      submitted_tx_hash_hex: normalizeHex32String(
+      submitted_tx_hash_hex: requireCanonicalTransactionHashString(
         record.submitted_tx_hash_hex,
         `${context}.submitted_tx_hash_hex`,
       ),

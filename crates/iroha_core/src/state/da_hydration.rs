@@ -115,15 +115,6 @@ impl State {
         result
     }
 
-    #[cfg(all(test, feature = "sumeragi-main-loop-tests"))]
-    pub(crate) fn set_da_indexes_hydration_result_for_test(
-        &self,
-        result: Option<Result<(), DaIndexHydrationError>>,
-    ) {
-        let _hydration_guard = self.da_index_hydration_fence.lock();
-        *self.da_indexes_hydrated.write() = result;
-    }
-
     /// Force a rebuild of DA indexes from the Kura block log, truncating at `target_height` when provided.
     pub(crate) fn rewind_da_indexes_to_height(
         &self,

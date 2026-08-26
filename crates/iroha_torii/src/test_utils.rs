@@ -675,11 +675,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
             quic_datagram_send_buffer_bytes: defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES
                 .get(),
-            tls_enabled: false,
-            tls_fallback_to_plain: false,
-            tls_listen_address: None,
-            tls_inbound_only: false,
-            prefer_ws_fallback: false,
             p2p_queue_cap_high: nonzero!(128usize),
             p2p_queue_cap_low: nonzero!(512usize),
             p2p_post_queue_cap: nonzero!(128usize),
@@ -743,7 +738,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             max_frame_bytes_peer_gossip: 64 * 1024,
             max_frame_bytes_health: 32 * 1024,
             max_frame_bytes_other: 128 * 1024,
-            tls_only_v1_3: true,
             quic_max_idle_timeout: None,
         },
         genesis: A::Genesis {
@@ -804,8 +798,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_INFLIGHT,
             soracloud_mutation_max_body_bytes:
                 iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES,
-            soracloud_upload_max_body_bytes:
-                iroha_config::parameters::defaults::torii::SORACLOUD_UPLOAD_MAX_BODY_BYTES,
             proof_api: iroha_config::parameters::actual::ProofApi {
                 rate_per_minute: defaults::torii::PROOF_RATE_PER_MIN
                     .and_then(std::num::NonZeroU32::new),
@@ -1334,7 +1326,6 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 .expect("valid default SoraFS pin fee asset id"),
             sorafs_pin_fee_treasury_account:
                 AccountId::parse_encoded(&defaults::governance::sorafs_pin_fee::treasury_account())
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .expect("valid default SoraFS pin fee treasury account"),
             alias_teu_minimum: defaults::governance::alias_teu_minimum(),
             alias_frontier_telemetry: defaults::governance::alias_frontier_telemetry(),

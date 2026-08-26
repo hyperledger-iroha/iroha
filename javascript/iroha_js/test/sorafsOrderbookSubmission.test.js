@@ -11,15 +11,15 @@ import { NetworkId } from "../src/networkId.js";
 const BASE_URL = "https://torii.example";
 const SIGNER = "ed0120ABCDEF";
 const IDENTITY = Object.freeze({
-  entrypointHash: "aa".repeat(32),
-  signedTransactionHash: "aa".repeat(32),
+  entrypointHash: "ab".repeat(32),
+  signedTransactionHash: "ab".repeat(32),
 });
 const NETWORK_ID = NetworkId.parse(
   "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
 );
 
 function receiptJson() {
-  const body = "AA".repeat(32);
+  const body = "AB".repeat(32);
   let crc = 0xffff;
   for (const byte of Buffer.from(`hash:${body}`, "ascii")) {
     crc ^= byte << 8;
@@ -351,6 +351,29 @@ test("orderbook submit fails before HTTP without its signer and strict native ve
       expectedReceiptSigner: SIGNER,
     }),
     /missing inspectSorafsOrderbookSubmissionForDiscriminantV1/u,
+  );
+  assert.equal(fetches, 0);
+});
+
+test("orderbook submit rejects an unmarked transaction identity before HTTP", async () => {
+  let fetches = 0;
+  const evenHash = "aa".repeat(32);
+  const native = nativeBinding({
+    inspectSorafsOrderbookSubmissionForDiscriminantV1() {
+      return {
+        entrypointHash: evenHash,
+        signedTransactionHash: evenHash,
+      };
+    },
+  });
+  await assert.rejects(
+    client(async () => {
+      fetches += 1;
+      return acceptedResponse();
+    }, native).submitSorafsOrderbookOrder(Buffer.of(1), {
+      expectedReceiptSigner: SIGNER,
+    }),
+    /canonical lowercase 32-byte Iroha hash/u,
   );
   assert.equal(fetches, 0);
 });

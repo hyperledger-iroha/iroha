@@ -11,6 +11,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
 import kotlin.test.assertTrue
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingCurrentStateV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanReceiptV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingPlanRequestV1
+import org.hyperledger.iroha.sdk.alias.AccountOnboardingProofRequiredPrepareResponseV1
+import org.hyperledger.iroha.sdk.alias.TairaPublicResetMutationBindingV1
 import org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
@@ -126,6 +131,17 @@ class SumeragiHttpTransportContractTest {
         }
 
         val defaultClient = object : IrohaClient {
+            override fun verifyAccountOnboardingCurrentState(
+                proofRequired: AccountOnboardingProofRequiredPrepareResponseV1,
+                request: AccountOnboardingPlanRequestV1,
+                receipt: AccountOnboardingPlanReceiptV1,
+                binding: TairaPublicResetMutationBindingV1,
+                expectedAuthority: String,
+                expectedNetworkId: NetworkId,
+                canonicalAuth: ToriiCanonicalRequestAuth,
+            ): CompletableFuture<AccountOnboardingCurrentStateV1> =
+                throw AssertionError("account onboarding is not used by this interface-default test")
+
             override fun submitTransaction(
                 transaction: SignedTransaction,
             ): CompletableFuture<ClientResponse> = CompletableFuture.completedFuture(

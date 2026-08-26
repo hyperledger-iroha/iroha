@@ -5,7 +5,7 @@
                 #[test]
                 fn drive_run() {
                     let target = "run";
-                    let _next = test::invoke_kotoage(target, Json::parse("{\"count\": 7}"));
+                    let _next = test::invoke_kotoage(target, Json::parse("{\"count\":7}"));
                 }
             }
             

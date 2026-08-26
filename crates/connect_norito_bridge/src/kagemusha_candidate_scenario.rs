@@ -338,10 +338,10 @@ fn parse_canonical_account_id_for_chain(
     let _chain_discriminant = ChainDiscriminantGuard::enter(account_chain_discriminant);
     let parsed = AccountId::parse_encoded(account_text)
         .map_err(|_| "redemption account is not a typed AccountId".to_owned())?;
-    if parsed.canonical() != account_text {
+    if parsed.to_string() != account_text {
         return Err("redemption account is not in canonical AccountId spelling".to_owned());
     }
-    Ok(parsed.into_account_id())
+    Ok(parsed)
 }
 pub(super) fn scenario_inventory_sha256(
     files: &BTreeMap<String, Vec<u8>>,

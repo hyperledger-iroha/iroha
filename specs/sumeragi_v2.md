@@ -20,11 +20,10 @@ their nullable `highest_qc` slot, using `null` for `None`; those objects and
 shortened layout which omits the slot is not accepted.
 
 The live `BlockMessage` wire enum contains only canonical `V2` messages, the independent lane-local
-message family, and authenticated Kura replica adverts. Its retained numeric gaps are reserved,
-not compatibility slots: every former global-v1 block-message discriminant fails typed decode and
-the pre-allocation ingress classifier. The former `NetworkMessage::SumeragiControlFlow` evidence
-tag likewise fails before ingress. There is no archive decoder on the live network type and no
-fabricated message used to turn a malformed frame into an infallible decode result.
+message family, and authenticated Kura replica adverts. Its variants use the contiguous
+first-release discriminants `0..=10`; tag `11` is the first unknown value. There is no archive
+decoder on the live network type and no fabricated message used to turn a malformed frame into an
+infallible decode result.
 
 The durable `Evidence` model is likewise current-only: it contains one
 `SumeragiV2EquivocationEvidence` value with the frozen height context,
@@ -1016,8 +1015,10 @@ still empty.
 It contains the reducer's protocol and build/configuration fingerprints, restart flag, frozen
 height context, height, view, phase, leader, QC/TC references, body and persistence state, commit
 frontier, and bounded liveness state. `GET /v1/sumeragi/status/sse` streams the same authoritative
-shape. Lane sidecars, queue pressure, Native application evidence, and autonomous execution stages
-do not appear on either status surface.
+shape. All current status fields are mandatory in JSON. Semantically absent QC/TC, persistence,
+commit-frontier, outbound-intent, queue-age, and liveness evidence is represented by explicit
+`null`, never an omitted compatibility field. Lane sidecars, queue pressure, Native application
+evidence, and autonomous execution stages do not appear on either status surface.
 
 `GET /v1/sumeragi/diagnostics` returns the non-authoritative
 `SumeragiDiagnosticsStatus`. It includes pipeline and queue pressure, lane

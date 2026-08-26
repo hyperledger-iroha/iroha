@@ -10,12 +10,25 @@ fn uaid_bindings_query_leaves_query_string_empty() {
     assert_eq!(request.uri().query(), None);
 }
 #[test]
-fn canonicalize_uaid_literal_is_case_insensitive() {
-    let suffix = "ABCDEF01".repeat(8);
-    let literal = format!("UAID:{suffix}");
-    let canonical =
-        canonicalize_uaid_literal(&literal, "tests.uaid").expect("canonicalize literal");
-    assert_eq!(canonical, format!("uaid:{}", suffix.to_ascii_lowercase()));
+fn canonicalize_uaid_literal_accepts_only_exact_current_form() {
+    let suffix = "abcdef01".repeat(8);
+    let literal = format!("uaid:{suffix}");
+    assert_eq!(
+        canonicalize_uaid_literal(&literal, "tests.uaid").expect("canonical UAID literal"),
+        literal
+    );
+    for noncanonical in [
+        suffix.clone(),
+        format!("UAID:{suffix}"),
+        format!("uaid:{}", suffix.to_uppercase()),
+        format!(" {literal}"),
+        format!("{literal} "),
+    ] {
+        assert!(
+            canonicalize_uaid_literal(&noncanonical, "tests.uaid").is_err(),
+            "noncanonical UAID must reject: {noncanonical:?}"
+        );
+    }
 }
 #[test]
 fn canonicalize_uaid_literal_rejects_invalid_lsb() {
@@ -23,7 +36,7 @@ fn canonicalize_uaid_literal_rejects_invalid_lsb() {
     let err = canonicalize_uaid_literal(&literal, "tests.uaid")
         .expect_err("invalid UAID should be rejected");
     assert!(
-        err.to_string().contains("LSB set to 1"),
+        err.to_string().contains("exact canonical"),
         "unexpected error: {err}"
     );
 }

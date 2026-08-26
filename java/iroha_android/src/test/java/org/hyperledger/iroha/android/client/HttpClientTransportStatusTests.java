@@ -26,6 +26,7 @@ public final class HttpClientTransportStatusTests {
 
   public static void main(final String[] args) {
     pipelineSuccessStatusIsNotConfigurable();
+    pipelineFailureClassificationIsFixed();
     waitForTransactionStatusWaitsThroughCommitUntilApplied();
     waitForTransactionStatusTreatsNotFoundAsPending();
     waitForTransactionStatusIgnoresNoritoBodyOnNotFound();
@@ -42,11 +43,13 @@ public final class HttpClientTransportStatusTests {
     waitForTransactionStatusSaturatesOverflowingDeadline();
     waitForTransactionStatusFailsOnInvalidPayload();
     waitForTransactionStatusRejectsNonAuthoritativeTerminalPayloads();
-    waitForTransactionStatusAcceptsQueuedHttpResponseCode();
+    waitForTransactionStatusTreatsNonStateTerminalHintsAsPending();
+    waitForTransactionStatusRejectsHttp202And204();
     waitForTransactionStatusRejectsNoritoWhenJsonWasRequested();
     waitForTransactionStatusRejectsNonCanonicalRequestHashes();
     submitTransactionProvidesCanonicalHashForPolling();
     submitTransactionPrefersAuthoritativeReceiptHashHeaderForPolling();
+    submitTransactionRejectsNonCanonicalReceiptHashHeaders();
     System.out.println("[IrohaAndroid] HTTP client status tests passed.");
   }
 
@@ -59,6 +62,54 @@ public final class HttpClientTransportStatusTests {
         PipelineStatusOptions.Builder.class.getMethods()) {
       assert !"successStatuses".equals(method.getName())
           : "success status builder override must not be exposed";
+    }
+  }
+
+  private static void pipelineFailureClassificationIsFixed() {
+    for (final Runnable builder :
+        List.<Runnable>of(
+            () -> PipelineStatusOptions.builder().intervalMillis(-1L),
+            () -> PipelineStatusOptions.builder().timeoutMillis(-1L))) {
+      try {
+        builder.run();
+        throw new AssertionError("negative polling bounds must be rejected, not clamped");
+      } catch (final IllegalArgumentException expected) {
+        // Expected.
+      }
+    }
+    for (final java.lang.reflect.Method method : PipelineStatusOptions.class.getMethods()) {
+      assert !"failureStatuses".equals(method.getName())
+          : "failure status override must not be exposed";
+    }
+    for (final java.lang.reflect.Method method :
+        PipelineStatusOptions.Builder.class.getMethods()) {
+      assert !"failureStatuses".equals(method.getName())
+          : "failure status builder override must not be exposed";
+    }
+
+    for (final String kind : List.of("Rejected", "Expired")) {
+      final String hash = canonicalHash("abd");
+      final HttpClientTransport transport =
+          HttpClientTransport.withExecutor(
+              request ->
+                  CompletableFuture.completedFuture(
+                      newResponse(200, statusPayload(hash, kind))),
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("http://localhost:8080"))
+                  .build());
+      try {
+        transport
+            .waitForTransactionStatus(
+                hash,
+                PipelineStatusOptions.builder().intervalMillis(0L).maxAttempts(1).build())
+            .join();
+      } catch (final RuntimeException expected) {
+        final Throwable cause = expected.getCause() != null ? expected.getCause() : expected;
+        assert cause instanceof TransactionStatusException
+            : "Canonical " + kind + " must remain a failure";
+        continue;
+      }
+      throw new AssertionError("Canonical " + kind + " was suppressed");
     }
   }
 
@@ -630,12 +681,10 @@ public final class HttpClientTransportStatusTests {
         List.of(
             statusPayload(canonicalHash("bad0"), "Applied"),
             statusPayload(hash, "Applied", "local", "state", 7),
-            statusPayload(hash, "Applied", "global", "cache", 7),
             statusPayload(hash, "Applied", "global", "state", null),
             statusPayload(hash, "Applied", "global", "state", 0),
             statusPayload(hash, "Applied", "global", "state", -1),
-            statusPayload(hash, "Applied", "global", "state", 1.5),
-            statusPayload(hash, "Rejected", "global", "cache", null));
+            statusPayload(hash, "Applied", "global", "state", 1.5));
 
     for (final byte[] payload : invalidPayloads) {
       final HttpClientTransport transport =
@@ -657,23 +706,61 @@ public final class HttpClientTransportStatusTests {
     }
   }
 
-  private static void waitForTransactionStatusAcceptsQueuedHttpResponseCode() {
-    final String hash = canonicalHash("202");
-    final SequencedExecutor executor =
-        new SequencedExecutor(
-            newResponse(202, statusPayload(hash, "Queued")),
-            newResponse(200, statusPayload(hash, "Applied")));
-    final HttpClientTransport transport =
-        HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
-    final Map<String, Object> payload =
+  private static void waitForTransactionStatusTreatsNonStateTerminalHintsAsPending() {
+    final String hash = canonicalHash("f11e");
+    final List<byte[]> hints =
+        List.of(
+            statusPayload(hash, "Applied", "global", "cache", 7),
+            statusPayload(hash, "Rejected", "global", "cache", null),
+            statusPayload(hash, "Expired", "global", "queue", null));
+
+    for (final byte[] payload : hints) {
+      final HttpClientTransport transport =
+          HttpClientTransport.withExecutor(
+              request -> CompletableFuture.completedFuture(newResponse(200, payload)),
+              ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
+      try {
+        transport
+            .waitForTransactionStatus(
+                hash,
+                PipelineStatusOptions.builder()
+                    .intervalMillis(0L)
+                    .maxAttempts(1)
+                    .timeoutMillis(null)
+                    .build())
+            .join();
+      } catch (final RuntimeException expected) {
+        final Throwable cause = expected.getCause() != null ? expected.getCause() : expected;
+        assert cause instanceof TransactionTimeoutException
+            : "Non-state terminal hints must remain pending";
+        continue;
+      }
+      throw new AssertionError("Expected non-state terminal hint to remain pending");
+    }
+  }
+
+  private static void waitForTransactionStatusRejectsHttp202And204() {
+    final String hash = canonicalHash("57a7");
+    for (final int statusCode : List.of(202, 204)) {
+      final HttpClientTransport transport =
+          HttpClientTransport.withExecutor(
+              request -> CompletableFuture.completedFuture(newResponse(statusCode, new byte[0])),
+              ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
+      try {
         transport
             .waitForTransactionStatus(
                 hash, PipelineStatusOptions.builder().intervalMillis(0L).build())
             .join();
-    assert "Applied".equals(PipelineStatusExtractor.extractStatusKind(payload).orElse(null))
-        : "HTTP 202 queued responses must remain pending until authoritative application";
+      } catch (final RuntimeException expected) {
+        final Throwable cause = expected.getCause() != null ? expected.getCause() : expected;
+        assert cause instanceof TransactionStatusHttpException
+            : "Expected non-contract success code to fail closed";
+        assert ((TransactionStatusHttpException) cause).statusCode() == statusCode
+            : "Expected exact rejected status code";
+        continue;
+      }
+      throw new AssertionError("Expected HTTP " + statusCode + " status rejection");
+    }
   }
 
   private static void waitForTransactionStatusRejectsNoritoWhenJsonWasRequested() {
@@ -701,7 +788,13 @@ public final class HttpClientTransportStatusTests {
   private static void waitForTransactionStatusRejectsNonCanonicalRequestHashes() {
     final String hash = canonicalHash("abcd");
     for (final String invalid :
-        List.of(hash.toUpperCase(java.util.Locale.ROOT), " " + hash, hash + " ", "0x" + hash)) {
+        List.of(
+            hash.toUpperCase(java.util.Locale.ROOT),
+            " " + hash,
+            hash + " ",
+            "0x" + hash,
+            hash.substring(0, hash.length() - 2),
+            hash.substring(0, hash.length() - 1) + "0")) {
       final AtomicInteger dispatches = new AtomicInteger();
       final HttpClientTransport transport =
           HttpClientTransport.withExecutor(
@@ -745,7 +838,7 @@ public final class HttpClientTransportStatusTests {
     assert "Applied".equals(PipelineStatusExtractor.extractStatusKind(payload).orElse(null))
         : "Expected Applied status after polling";
     assert executor.observedExpectedHash()
-        : "Status polling must include canonical hash and scope=auto in request URI";
+        : "Status polling must include canonical hash and scope=global in request URI";
   }
 
   private static void submitTransactionPrefersAuthoritativeReceiptHashHeaderForPolling() {
@@ -754,7 +847,7 @@ public final class HttpClientTransportStatusTests {
     final String authoritativeHash =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     final TrackingExecutor executor =
-        new TrackingExecutor(authoritativeHash, authoritativeHash.toUpperCase(java.util.Locale.ROOT));
+        new TrackingExecutor(authoritativeHash, authoritativeHash);
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             executor,
@@ -779,18 +872,49 @@ public final class HttpClientTransportStatusTests {
         : "Status polling must use the authoritative receipt hash";
   }
 
+  private static void submitTransactionRejectsNonCanonicalReceiptHashHeaders() {
+    final SignedTransaction transaction = sampleTransaction((byte) 0x12);
+    final String localHash = SignedTransactionHasher.hashHex(transaction);
+    for (final String header :
+        List.of(
+            localHash.toUpperCase(java.util.Locale.ROOT),
+            " " + localHash,
+            localHash + " ",
+            "0x" + localHash,
+            localHash.substring(0, localHash.length() - 2),
+            localHash.substring(0, localHash.length() - 1) + "0")) {
+      final HttpClientTransport transport =
+          HttpClientTransport.withExecutor(
+              new TrackingExecutor(localHash, header),
+              ClientConfig.builder()
+                  .setBaseUri(URI.create("http://localhost:8080"))
+                  .setRequestTimeout(Duration.ofSeconds(1))
+                  .build());
+      try {
+        transport.submitTransaction(transaction).join();
+      } catch (final RuntimeException expected) {
+        final Throwable cause = expected.getCause() == null ? expected : expected.getCause();
+        assert cause instanceof IllegalStateException
+            : "Non-canonical receipt hash must fail closed: " + header;
+        continue;
+      }
+      throw new AssertionError("Expected non-canonical receipt hash rejection: " + header);
+    }
+  }
+
   private static TransportResponse newResponse(final int status, final byte[] body) {
     return new TransportResponse(status, body, "", Map.of());
   }
 
   private static String canonicalHash(final String prefix) {
-    if (prefix == null || !prefix.matches("[0-9a-f]+") || prefix.length() > 64) {
+    if (prefix == null || !prefix.matches("[0-9a-f]+") || prefix.length() > 63) {
       throw new IllegalArgumentException("canonical hash prefix must be lowercase hexadecimal");
     }
     final StringBuilder hash = new StringBuilder(prefix);
-    while (hash.length() < 64) {
+    while (hash.length() < 63) {
       hash.append('0');
     }
+    hash.append('1');
     return hash.toString();
   }
 
@@ -930,9 +1054,7 @@ public final class HttpClientTransportStatusTests {
       }
       if ("GET".equals(request.method())) {
         final String query = request.uri().getQuery();
-        if (query != null
-            && query.contains("hash=" + expectedHash)
-            && query.contains("scope=auto")) {
+        if (("hash=" + expectedHash + "&scope=global").equals(query)) {
           observedExpectedHash = true;
         }
         final int count = pollCount.getAndIncrement();

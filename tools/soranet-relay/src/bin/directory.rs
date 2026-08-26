@@ -17,6 +17,7 @@ use std::{
     fs,
     io::{Error as IoError, ErrorKind, Write as _},
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 #[derive(Parser, Debug)]
 #[command(
@@ -41,16 +42,23 @@ enum Command {
         #[arg(long)]
         overwrite: bool,
     },
-    /// Rotate issuer material for an existing snapshot and reissue certificates.
+    /// Authenticate an active snapshot, rotate issuer material, and reissue certificates.
     Rotate {
         #[arg(long)]
         snapshot: PathBuf,
+        /// Independently trusted digest of the exact source snapshot (64 lowercase hex characters).
+        #[arg(long, value_name = "LOWERCASE_HEX")]
+        expected_snapshot_digest: String,
+        /// Unix second at which to authenticate the source; defaults to the current time.
+        #[arg(long, value_name = "UNIX_SECONDS")]
+        at_unix: Option<i64>,
         #[arg(long)]
         out: PathBuf,
         #[arg(long)]
         overwrite: bool,
+        /// New owner-private directory in which all generated issuer keys are published.
         #[arg(long)]
-        keys_out: Option<PathBuf>,
+        keys_out: PathBuf,
     },
     /// Inspect a snapshot and print its metadata.
     Inspect {
@@ -94,10 +102,19 @@ fn run() -> Result<(), String> {
         } => command_build(&config, &out, guard_proofs_dir.as_deref(), overwrite),
         Command::Rotate {
             snapshot,
+            expected_snapshot_digest,
+            at_unix,
             out,
             overwrite,
             keys_out,
-        } => command_rotate(&snapshot, &out, overwrite, keys_out.as_deref()),
+        } => command_rotate(
+            &snapshot,
+            &expected_snapshot_digest,
+            at_unix,
+            &out,
+            overwrite,
+            &keys_out,
+        ),
         Command::Inspect { snapshot } => command_inspect(&snapshot),
         Command::VerifyProof { proof, snapshot } => {
             command_verify_proof(&proof, snapshot.as_deref())
@@ -139,26 +156,45 @@ fn command_build(
 }
 fn command_rotate(
     snapshot_path: &Path,
+    expected_snapshot_digest_hex: &str,
+    at_unix: Option<i64>,
     out: &Path,
     overwrite: bool,
-    keys_out: Option<&Path>,
+    keys_out: &Path,
 ) -> Result<(), String> {
+    let expected_snapshot_digest = parse_expected_snapshot_digest(expected_snapshot_digest_hex)?;
+    let at_unix = match at_unix {
+        Some(value) if value >= 0 => value,
+        Some(value) => {
+            return Err(format!(
+                "--at-unix must be a non-negative Unix second (got {value})"
+            ));
+        }
+        None => current_unix_seconds()?,
+    };
     let bytes = read_guard_directory_snapshot_file(snapshot_path).map_err(|err| {
         format!(
             "failed to read snapshot `{}`: {err}",
             snapshot_path.display()
         )
     })?;
-    let rotation =
-        rotate_snapshot_with_os_rng(&bytes).map_err(|err| rotate_error(snapshot_path, err))?;
+    let rotation = rotate_snapshot_with_os_rng(&bytes, expected_snapshot_digest, at_unix)
+        .map_err(|err| rotate_error(snapshot_path, err))?;
     let encoded = rotation
         .bundle
         .snapshot
         .to_bytes()
         .map_err(|err| format!("failed to encode rotated snapshot: {err}"))?;
-    write_output(out, &encoded, overwrite).map_err(|err| {
+    let staged_snapshot = stage_output(out, &encoded, overwrite).map_err(|err| {
         format!(
-            "failed to write rotated snapshot to `{}`: {err}",
+            "failed to stage rotated snapshot for `{}`: {err}",
+            out.display()
+        )
+    })?;
+    publish_rotation_artifacts(staged_snapshot, keys_out, &rotation.keys).map_err(|err| {
+        format!(
+            "failed to publish rotation key bundle `{}` before snapshot `{}`: {err}",
+            keys_out.display(),
             out.display()
         )
     })?;
@@ -168,16 +204,35 @@ fn command_rotate(
         hex::encode(compute_snapshot_digest(&encoded))
     );
     print_metadata(&rotation.bundle.metadata);
-    if let Some(dir) = keys_out {
-        store_rotation_keys(dir, &rotation.keys).map_err(|err| {
-            format!(
-                "failed to write rotation keys to `{}`: {err}",
-                dir.display()
-            )
-        })?;
-        println!("Issuer key material written to {}", dir.display());
-    }
+    println!("Issuer key material written to {}", keys_out.display());
     Ok(())
+}
+fn parse_expected_snapshot_digest(value: &str) -> Result<[u8; 32], String> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(
+            "--expected-snapshot-digest must be exactly 64 lowercase hexadecimal characters"
+                .to_string(),
+        );
+    }
+    let mut digest = [0_u8; 32];
+    hex::decode_to_slice(value, &mut digest)
+        .map_err(|err| format!("failed to decode --expected-snapshot-digest as 32 bytes: {err}"))?;
+    if digest.iter().all(|byte| *byte == 0) {
+        return Err("--expected-snapshot-digest must not be all zero".to_string());
+    }
+    Ok(digest)
+}
+fn current_unix_seconds() -> Result<i64, String> {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| format!("system clock is before the Unix epoch: {err}"))?
+        .as_secs();
+    i64::try_from(seconds)
+        .map_err(|_| "current Unix timestamp exceeds the supported i64 range".to_string())
 }
 fn command_inspect(snapshot_path: &Path) -> Result<(), String> {
     let bytes = read_guard_directory_snapshot_file(snapshot_path).map_err(|err| {
@@ -313,10 +368,56 @@ fn rotate_error(path: &Path, err: DirectoryRotateError) -> String {
             "failed to decode guard directory `{}`: {source}",
             path.display()
         ),
+        DirectoryRotateError::Authentication { source } => format!(
+            "failed to authenticate source guard directory `{}`: {source}",
+            path.display()
+        ),
         other => other.to_string(),
     }
 }
-fn write_output(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), IoError> {
+struct StagedOutput {
+    file: tempfile::NamedTempFile,
+    destination: PathBuf,
+    parent: PathBuf,
+    overwrite: bool,
+}
+struct PublishedOutput {
+    file: fs::File,
+    parent: PathBuf,
+}
+impl PublishedOutput {
+    fn sync(self) -> Result<(), IoError> {
+        self.file.sync_all()?;
+        #[cfg(unix)]
+        fs::File::open(self.parent)?.sync_all()?;
+        Ok(())
+    }
+}
+impl StagedOutput {
+    fn persist(self) -> Result<PublishedOutput, IoError> {
+        let Self {
+            file,
+            destination,
+            parent,
+            overwrite,
+        } = self;
+        let persisted = if overwrite {
+            file.persist(&destination)
+        } else {
+            file.persist_noclobber(&destination)
+        }
+        .map_err(|error| error.error)?;
+        Ok(PublishedOutput {
+            file: persisted,
+            parent,
+        })
+    }
+
+    fn publish(self) -> Result<(), IoError> {
+        self.persist()?.sync()
+    }
+}
+fn stage_output(path: &Path, bytes: &[u8], overwrite: bool) -> Result<StagedOutput, IoError> {
     let file_name = path.file_name().ok_or_else(|| {
         IoError::new(
             ErrorKind::InvalidInput,
@@ -330,6 +431,23 @@ fn write_output(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), IoErro
     fs::create_dir_all(parent)?;
     let parent = fs::canonicalize(parent)?;
     let destination = parent.join(file_name);
+    match fs::symlink_metadata(&destination) {
+        Ok(_) if !overwrite => {
+            return Err(IoError::new(
+                ErrorKind::AlreadyExists,
+                format!("output `{}` already exists", destination.display()),
+            ));
+        }
+        Ok(metadata) if metadata.is_dir() => {
+            return Err(IoError::new(
+                ErrorKind::InvalidInput,
+                format!("output `{}` must not be a directory", destination.display()),
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
 
     let mut staged = tempfile::NamedTempFile::new_in(&parent)?;
     staged.write_all(bytes)?;
@@ -342,18 +460,58 @@ fn write_output(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), IoErro
             .as_file()
             .set_permissions(fs::Permissions::from_mode(0o644))?;
     }
-    let persisted = if overwrite {
-        staged.persist(&destination)
-    } else {
-        staged.persist_noclobber(&destination)
-    }
-    .map_err(|error| error.error)?;
-    persisted.sync_all()?;
+    Ok(StagedOutput {
+        file: staged,
+        destination,
+        parent,
+        overwrite,
+    })
+}
+fn write_output(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), IoError> {
+    stage_output(path, bytes, overwrite)?.publish()
+}
+fn publish_rotation_artifacts(
+    staged_snapshot: StagedOutput,
+    keys_out: &Path,
+    keys: &RotationKeys,
+) -> Result<(), IoError> {
+    // Publish the complete key directory first. A snapshot is unusable if its
+    // newly generated issuer secrets were not durably persisted.
+    let published_keys = store_rotation_keys(keys_out, keys)?;
+    let published_snapshot = match staged_snapshot.persist() {
+        Ok(published) => published,
+        Err(snapshot_error) => {
+            let rollback = remove_published_rotation_keys(&published_keys);
+            return match rollback {
+                Ok(()) => Err(snapshot_error),
+                Err(rollback_error) => Err(IoError::new(
+                    snapshot_error.kind(),
+                    format!(
+                        "snapshot publication failed: {snapshot_error}; rotation-key rollback failed: {rollback_error}"
+                    ),
+                )),
+            };
+        }
+    };
+    // Once the namespace update succeeds, retain the already durable keys even
+    // if a subsequent file/directory sync reports an error. Removing them here
+    // could leave a visible snapshot whose issuer secrets were destroyed.
+    published_snapshot.sync()
+}
+fn remove_published_rotation_keys(dir: &Path) -> Result<(), IoError> {
+    validate_rotation_key_directory(dir)?;
+    let parent = dir.parent().ok_or_else(|| {
+        IoError::new(
+            ErrorKind::InvalidInput,
+            "rotation key output path has no parent",
+        )
+    })?;
+    fs::remove_dir_all(dir)?;
     #[cfg(unix)]
     fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
-fn store_rotation_keys(dir: &Path, keys: &RotationKeys) -> Result<(), IoError> {
+fn store_rotation_keys(dir: &Path, keys: &RotationKeys) -> Result<PathBuf, IoError> {
     let absolute = if dir.is_absolute() {
         dir.to_path_buf()
     } else {
@@ -456,7 +614,7 @@ fn store_rotation_keys(dir: &Path, keys: &RotationKeys) -> Result<(), IoError> {
     fs::rename(staging.path(), &destination)?;
     validate_rotation_key_directory(&destination)?;
     fs::File::open(&parent_path)?.sync_all()?;
-    Ok(())
+    Ok(destination)
 }
 
 struct SecretBytes(Vec<u8>);
@@ -467,8 +625,9 @@ impl SecretBytes {
     }
 
     fn clear(&mut self) {
-        self.0.fill(0);
-        std::hint::black_box(self.0.as_mut_slice());
+        self.0.resize(self.0.capacity(), 0);
+        zeroize::Zeroize::zeroize(self.0.as_mut_slice());
+        self.0.clear();
     }
 }
 
@@ -643,17 +802,11 @@ fn print_metadata(metadata: &DirectoryMetadata) {
         "validity: published={} valid_after={} valid_until={}",
         metadata.published_at_unix, metadata.valid_after_unix, metadata.valid_until_unix
     );
-    println!("validation_phase: {:?}", metadata.validation_phase);
     println!("issuers ({}):", metadata.issuers.len());
     for issuer in &metadata.issuers {
         let label = issuer.label.as_deref().unwrap_or("-");
-        let mode = if issuer.has_mldsa {
-            "dual-signature"
-        } else {
-            "ed25519-only"
-        };
         println!(
-            "  - {label}: fingerprint={}, ed25519={}, mode={mode}",
+            "  - {label}: fingerprint={}, ed25519={}",
             issuer.fingerprint_hex, issuer.ed25519_hex
         );
     }
@@ -693,15 +846,12 @@ fn print_metadata(metadata: &DirectoryMetadata) {
                 proof.directory_hash_hex, proof.descriptor_commit_hex, proof.issuer_fingerprint_hex
             );
             println!(
-                "    pq_kem={} guard={} reputation={} bandwidth={}",
-                proof.pq_kem_public_hex,
-                proof.guard_weight,
-                proof.reputation_weight,
-                proof.bandwidth_bytes_per_sec
+                "    guard={} reputation={} bandwidth={}",
+                proof.guard_weight, proof.reputation_weight, proof.bandwidth_bytes_per_sec
             );
             println!(
-                "    validity: {} -> {} phase={}",
-                proof.valid_after_unix, proof.valid_until_unix, proof.validation_phase
+                "    validity: {} -> {}",
+                proof.valid_after_unix, proof.valid_until_unix
             );
         }
     }
@@ -722,6 +872,51 @@ mod tests {
     }
 
     #[test]
+    fn rotate_requires_an_independently_supplied_source_digest() {
+        let error = Args::try_parse_from([
+            "soranet-directory",
+            "rotate",
+            "--snapshot",
+            "source.norito",
+            "--out",
+            "rotated.norito",
+            "--keys-out",
+            "issuer-keys",
+        ])
+        .expect_err("rotation without an expected source digest must be rejected");
+        assert!(error.to_string().contains("--expected-snapshot-digest"));
+    }
+
+    #[test]
+    fn rotate_requires_a_key_output_directory() {
+        let digest = "11".repeat(32);
+        let error = Args::try_parse_from([
+            "soranet-directory",
+            "rotate",
+            "--snapshot",
+            "source.norito",
+            "--expected-snapshot-digest",
+            digest.as_str(),
+            "--out",
+            "rotated.norito",
+        ])
+        .expect_err("rotation without durable key output must be rejected");
+        assert!(error.to_string().contains("--keys-out"));
+    }
+
+    #[test]
+    fn expected_snapshot_digest_parser_is_canonical_and_nonzero() {
+        let expected = [0xabu8; 32];
+        assert_eq!(
+            parse_expected_snapshot_digest(&hex::encode(expected)).expect("canonical digest"),
+            expected
+        );
+        assert!(parse_expected_snapshot_digest(&"AB".repeat(32)).is_err());
+        assert!(parse_expected_snapshot_digest(&"00".repeat(32)).is_err());
+        assert!(parse_expected_snapshot_digest("abcd").is_err());
+    }
+
+    #[test]
     fn secret_hex_temporary_is_wiped_explicitly() {
         let mut encoded = encode_secret_hex_line(&[0xab, 0xcd]).expect("encode secret");
         assert_eq!(encoded.expose(), b"abcd\n");
@@ -737,6 +932,41 @@ mod tests {
         let error = store_rotation_keys(&output, &test_rotation_keys())
             .expect_err("existing key output must not be replaced");
         assert_eq!(error.kind(), ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn rotation_key_failure_leaves_snapshot_unpublished() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let snapshot = temporary.path().join("rotated.norito");
+        let staged = stage_output(&snapshot, b"rotated snapshot", false)
+            .expect("stage snapshot without publishing it");
+        let keys_out = temporary.path().join("issuer-keys");
+        fs::create_dir(&keys_out).expect("create conflicting key destination");
+
+        let error = publish_rotation_artifacts(staged, &keys_out, &test_rotation_keys())
+            .expect_err("key publication failure must abort snapshot publication");
+        assert_eq!(error.kind(), ErrorKind::AlreadyExists);
+        assert!(!snapshot.exists());
+        assert!(keys_out.is_dir());
+    }
+
+    #[test]
+    fn snapshot_publication_race_rolls_back_new_key_bundle() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let snapshot = temporary.path().join("rotated.norito");
+        let staged = stage_output(&snapshot, b"rotated snapshot", false)
+            .expect("stage snapshot without publishing it");
+        fs::write(&snapshot, b"racing publisher").expect("race snapshot destination");
+        let keys_out = temporary.path().join("issuer-keys");
+
+        let error = publish_rotation_artifacts(staged, &keys_out, &test_rotation_keys())
+            .expect_err("snapshot publication race must roll back generated keys");
+        assert_eq!(error.kind(), ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read(&snapshot).expect("read racing destination"),
+            b"racing publisher"
+        );
+        assert!(!keys_out.exists());
     }
 
     #[test]

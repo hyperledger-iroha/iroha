@@ -59,8 +59,6 @@ if [ -n "${IROHA_INROU_PORTABLE_INITRD_IMAGE:-}" ] && [ ! -f "${IROHA_INROU_PORT
   exit 1
 fi
 
-export IROHA_RUN_IGNORED=1
-export IROHA_INROU_PORTABLE=1
 export CARGO_TARGET_DIR
 
 cd "$ROOT_DIR"

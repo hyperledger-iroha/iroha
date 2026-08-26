@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -14,8 +15,6 @@ internal static class ToriiUaidJson
             throw new JsonException($"{context} must not be null.");
         }
 
-        ValidateNonNegativeInt64(response.Accounts, $"{context}.accounts");
-        ValidateNonNegativeInt64(response.Positions, $"{context}.positions");
     }
 
     internal static void ValidateUaidPortfolioAsset(ToriiUaidPortfolioAsset? response, string context)
@@ -25,8 +24,23 @@ internal static class ToriiUaidJson
             throw new JsonException($"{context} must not be null.");
         }
 
-        RequireExactNonEmptyText(response.AssetId, $"{context}.asset_id");
-        RequireExactNonEmptyText(response.AssetDefinitionId, $"{context}.asset_definition_id");
+        ToriiUaidDirectMetadata.CanonicalAssetIdParts asset;
+        string definition;
+        try
+        {
+            asset = ToriiUaidDirectMetadata.RequireCanonicalAssetId(response.AssetId, $"{context}.asset_id");
+            definition = ToriiUaidDirectMetadata.RequireCanonicalAssetDefinitionId(
+                response.AssetDefinitionId,
+                $"{context}.asset_definition_id");
+        }
+        catch (ArgumentException error)
+        {
+            throw new JsonException(error.Message, error);
+        }
+        if (!string.Equals(asset.AssetDefinitionId, definition, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{context}.asset_id must match {context}.asset_definition_id.");
+        }
         ValidateCanonicalQuantityText(response.Quantity, $"{context}.quantity");
     }
 
@@ -38,7 +52,6 @@ internal static class ToriiUaidJson
         }
 
         RequireCanonicalAccountId(response.AccountId, $"{context}.account_id");
-        RequireOptionalExactNonEmptyText(response.Label, $"{context}.label");
         ValidateItems(response.Assets, $"{context}.assets", ValidateUaidPortfolioAsset);
     }
 
@@ -49,9 +62,32 @@ internal static class ToriiUaidJson
             throw new JsonException($"{context} must not be null.");
         }
 
-        ValidateNonNegativeInt64(response.DataspaceId, $"{context}.dataspace_id");
-        RequireOptionalExactNonEmptyText(response.DataspaceAlias, $"{context}.dataspace_alias");
         ValidateItems(response.Accounts, $"{context}.accounts", ValidateUaidPortfolioAccount);
+        for (var accountIndex = 0; accountIndex < response.Accounts.Count; accountIndex++)
+        {
+            var account = response.Accounts[accountIndex];
+            for (var assetIndex = 0; assetIndex < account.Assets.Count; assetIndex++)
+            {
+                var asset = account.Assets[assetIndex];
+                ToriiUaidDirectMetadata.CanonicalAssetIdParts parts;
+                try
+                {
+                    parts = ToriiUaidDirectMetadata.RequireCanonicalAssetId(
+                        asset.AssetId,
+                        $"{context}.accounts[{accountIndex}].assets[{assetIndex}].asset_id");
+                }
+                catch (ArgumentException error)
+                {
+                    throw new JsonException(error.Message, error);
+                }
+                if (!string.Equals(parts.AccountId, account.AccountId, StringComparison.Ordinal)
+                    || (parts.DataspaceId.HasValue && parts.DataspaceId.Value != response.DataspaceId))
+                {
+                    throw new JsonException(
+                        $"{context}.accounts[{accountIndex}].assets[{assetIndex}].asset_id must match its account and dataspace.");
+                }
+            }
+        }
     }
 
     internal static void ValidateUaidPortfolioResponse(ToriiUaidPortfolioResponse response, string context)
@@ -61,6 +97,31 @@ internal static class ToriiUaidJson
         ValidateCanonicalUaidLiteral(response.Uaid, $"{context}.uaid");
         ValidateUaidPortfolioTotals(response.Totals, $"{context}.totals");
         ValidateItems(response.Dataspaces, $"{context}.dataspaces", ValidateUaidPortfolioDataspace);
+        var accounts = new HashSet<string>(StringComparer.Ordinal);
+        ulong positions = 0;
+        foreach (var dataspace in response.Dataspaces)
+        {
+            foreach (var account in dataspace.Accounts)
+            {
+                accounts.Add(account.AccountId);
+                try
+                {
+                    positions = checked(positions + (ulong)account.Assets.Count);
+                }
+                catch (OverflowException exception)
+                {
+                    throw new JsonException($"{context} position count overflows UInt64.", exception);
+                }
+            }
+        }
+        if (accounts.Count > 1)
+        {
+            throw new JsonException($"{context} must contain at most one universal account.");
+        }
+        if (response.Totals.Accounts != (ulong)accounts.Count || response.Totals.Positions != positions)
+        {
+            throw new JsonException($"{context}.totals must match the portfolio tree.");
+        }
     }
 
     internal static void ValidateUaidBindingsDataspace(ToriiUaidBindingsDataspace? response, string context)
@@ -70,9 +131,11 @@ internal static class ToriiUaidJson
             throw new JsonException($"{context} must not be null.");
         }
 
-        ValidateNonNegativeInt64(response.DataspaceId, $"{context}.dataspace_id");
-        RequireOptionalExactNonEmptyText(response.DataspaceAlias, $"{context}.dataspace_alias");
         ValidateCanonicalAccountIdList(response.Accounts, $"{context}.accounts");
+        if (response.Accounts.Count > 1)
+        {
+            throw new JsonException($"{context}.accounts must contain at most one universal account.");
+        }
     }
 
     internal static void ValidateUaidBindingsResponse(ToriiUaidBindingsResponse response, string context)
@@ -81,6 +144,13 @@ internal static class ToriiUaidJson
 
         ValidateCanonicalUaidLiteral(response.Uaid, $"{context}.uaid");
         ValidateItems(response.Dataspaces, $"{context}.dataspaces", ValidateUaidBindingsDataspace);
+        var accounts = response.Dataspaces
+            .SelectMany(static dataspace => dataspace.Accounts)
+            .ToHashSet(StringComparer.Ordinal);
+        if (accounts.Count > 1)
+        {
+            throw new JsonException($"{context} must contain at most one universal account.");
+        }
     }
 
     internal static void ValidateUaidManifestRevocation(ToriiUaidManifestRevocation? response, string context)
@@ -90,8 +160,6 @@ internal static class ToriiUaidJson
             throw new JsonException($"{context} must not be null.");
         }
 
-        ValidateNonNegativeInt64(response.Epoch, $"{context}.epoch");
-        RequireOptionalExactNonEmptyText(response.Reason, $"{context}.reason");
     }
 
     internal static void ValidateUaidManifestLifecycle(ToriiUaidManifestLifecycle? response, string context)
@@ -101,8 +169,6 @@ internal static class ToriiUaidJson
             throw new JsonException($"{context} must not be null.");
         }
 
-        ValidateOptionalNonNegativeInt64(response.ActivatedEpoch, $"{context}.activated_epoch");
-        ValidateOptionalNonNegativeInt64(response.ExpiredEpoch, $"{context}.expired_epoch");
         if (response.Revocation is not null)
         {
             ValidateUaidManifestRevocation(response.Revocation, $"{context}.revocation");
@@ -116,12 +182,31 @@ internal static class ToriiUaidJson
             throw new JsonException($"{context} must not be null.");
         }
 
-        ValidateNonNegativeInt64(response.DataspaceId, $"{context}.dataspace_id");
-        RequireOptionalExactNonEmptyText(response.DataspaceAlias, $"{context}.dataspace_alias");
         ToriiSseEventJson.RequireExactSizedHex(response.ManifestHash, $"{context}.manifest_hash", 32);
-        RequireExactNonEmptyText(response.Status, $"{context}.status");
+        ValidateManifestStatus(response.Status, $"{context}.status");
         ValidateUaidManifestLifecycle(response.Lifecycle, $"{context}.lifecycle");
+        var derivedStatus = response.Lifecycle.Revocation is not null
+            ? ToriiUaidManifestStatus.Revoked
+            : response.Lifecycle.ExpiredEpoch.HasValue
+                ? ToriiUaidManifestStatus.Expired
+                : response.Lifecycle.ActivatedEpoch.HasValue
+                    ? ToriiUaidManifestStatus.Active
+                    : ToriiUaidManifestStatus.Pending;
+        if (response.Status != derivedStatus)
+        {
+            throw new JsonException($"{context}.status must match {context}.lifecycle.");
+        }
         ValidateCanonicalAccountIdList(response.Accounts, $"{context}.accounts");
+        if (response.Accounts.Count > 1)
+        {
+            throw new JsonException($"{context}.accounts must contain at most one universal account.");
+        }
+        ValidateAssetPermissionManifest(response.Manifest, $"{context}.manifest");
+        var manifest = response.Manifest.AsObject();
+        if (RequireJsonUInt64(manifest, "dataspace", $"{context}.manifest") != response.DataspaceId)
+        {
+            throw new JsonException($"{context}.manifest.dataspace must match {context}.dataspace_id.");
+        }
     }
 
     internal static void ValidateUaidManifestsResponse(ToriiUaidManifestsResponse response, string context)
@@ -129,8 +214,139 @@ internal static class ToriiUaidJson
         ArgumentNullException.ThrowIfNull(response);
 
         ValidateCanonicalUaidLiteral(response.Uaid, $"{context}.uaid");
-        ValidateNonNegativeInt64(response.Total, $"{context}.total");
+        ValidateManifestCountMode(response.CountMode, $"{context}.count_mode");
         ValidateItems(response.Manifests, $"{context}.manifests", ValidateUaidManifestRecord);
+        if (response.Total < (ulong)response.Manifests.Count)
+        {
+            throw new JsonException($"{context}.total cannot be smaller than the page.");
+        }
+        for (var index = 0; index < response.Manifests.Count; index++)
+        {
+            var manifestUaid = response.Manifests[index].Manifest["uaid"]!.GetValue<string>();
+            if (!string.Equals(manifestUaid, response.Uaid, StringComparison.Ordinal))
+            {
+                throw new JsonException($"{context}.manifests[{index}].manifest.uaid must match {context}.uaid.");
+            }
+        }
+    }
+
+    internal static void ValidateAssetPermissionManifest(JsonNode? value, string context)
+    {
+        var manifest = RequireJsonObject(value, context);
+        RequireJsonFields(
+            manifest,
+            context,
+            ["version", "uaid", "dataspace", "issued_ms", "activation_epoch", "entries"],
+            ["expiry_epoch"]);
+
+        if (RequireJsonUInt64(manifest, "version", context) != 1)
+        {
+            throw new JsonException($"{context}.version must be numeric V1 value 1.");
+        }
+        ValidateCanonicalUaidLiteral(RequireJsonString(manifest, "uaid", context), $"{context}.uaid");
+        _ = RequireJsonUInt64(manifest, "dataspace", context);
+        _ = RequireJsonUInt64(manifest, "issued_ms", context);
+        _ = RequireJsonUInt64(manifest, "activation_epoch", context);
+        if (manifest.TryGetPropertyValue("expiry_epoch", out var expiry))
+        {
+            if (expiry is null)
+            {
+                throw new JsonException($"{context}.expiry_epoch must be omitted instead of null.");
+            }
+            _ = RequireJsonUInt64(expiry, $"{context}.expiry_epoch");
+        }
+
+        var entries = RequireJsonArray(manifest["entries"], $"{context}.entries");
+        for (var index = 0; index < entries.Count; index++)
+        {
+            ValidateManifestEntry(entries[index], $"{context}.entries[{index}]");
+        }
+    }
+
+    private static void ValidateManifestEntry(JsonNode? value, string context)
+    {
+        var entry = RequireJsonObject(value, context);
+        RequireJsonFields(entry, context, ["scope", "effect"], ["notes"]);
+        ValidateManifestScope(entry["scope"], $"{context}.scope");
+        ValidateManifestEffect(entry["effect"], $"{context}.effect");
+        ValidateOmittedOptionalString(entry, "notes", context, validateCanonicalName: false);
+    }
+
+    private static void ValidateManifestScope(JsonNode? value, string context)
+    {
+        var scope = RequireJsonObject(value, context);
+        RequireJsonFields(scope, context, [], ["dataspace", "program", "method", "asset", "role"]);
+        if (scope.TryGetPropertyValue("dataspace", out var dataspace))
+        {
+            RejectNullOptional(dataspace, $"{context}.dataspace");
+            _ = RequireJsonUInt64(dataspace!, $"{context}.dataspace");
+        }
+        ValidateOmittedOptionalString(scope, "program", context, validateCanonicalName: true);
+        ValidateOmittedOptionalString(scope, "method", context, validateCanonicalName: true);
+        if (scope.TryGetPropertyValue("asset", out var asset))
+        {
+            RejectNullOptional(asset, $"{context}.asset");
+            var literal = RequireJsonString(asset!, $"{context}.asset");
+            try
+            {
+                _ = ToriiUaidDirectMetadata.RequireCanonicalAssetDefinitionId(
+                    literal,
+                    $"{context}.asset");
+            }
+            catch (ArgumentException error)
+            {
+                throw new JsonException(error.Message, error);
+            }
+        }
+        if (scope.TryGetPropertyValue("role", out var role))
+        {
+            RejectNullOptional(role, $"{context}.role");
+            var text = RequireJsonString(role!, $"{context}.role");
+            if (text is not ("Initiator" or "Participant"))
+            {
+                throw new JsonException($"{context}.role must be Initiator or Participant.");
+            }
+        }
+    }
+
+    private static void ValidateManifestEffect(JsonNode? value, string context)
+    {
+        var effect = RequireJsonObject(value, context);
+        if (effect.Count != 1)
+        {
+            throw new JsonException($"{context} must contain exactly one of Allow or Deny.");
+        }
+        var decision = effect.First();
+        switch (decision.Key)
+        {
+            case "Allow":
+            {
+                var allowance = RequireJsonObject(decision.Value, $"{context}.Allow");
+                RequireJsonFields(allowance, $"{context}.Allow", ["window"], ["max_amount"]);
+                var window = RequireJsonString(allowance, "window", $"{context}.Allow");
+                if (window is not ("PerSlot" or "PerMinute" or "PerDay"))
+                {
+                    throw new JsonException($"{context}.Allow.window contains an unsupported allowance window.");
+                }
+                if (allowance.TryGetPropertyValue("max_amount", out var maxAmount))
+                {
+                    RejectNullOptional(maxAmount, $"{context}.Allow.max_amount");
+                    ValidateCanonicalQuantityText(
+                        RequireJsonString(maxAmount!, $"{context}.Allow.max_amount"),
+                        $"{context}.Allow.max_amount");
+                }
+                break;
+            }
+            case "Deny":
+            {
+                var deny = RequireJsonObject(decision.Value, $"{context}.Deny");
+                RequireJsonFields(deny, $"{context}.Deny", [], ["reason"]);
+                ValidateOmittedOptionalString(deny, "reason", $"{context}.Deny", validateCanonicalName: false);
+                break;
+            }
+            default:
+                throw new JsonException($"{context} contains unknown decision `{decision.Key}`.");
+        }
     }
 
     internal static ToriiUaidPortfolioTotals ReadUaidPortfolioTotals(ref Utf8JsonReader reader, string context)
@@ -146,8 +362,8 @@ internal static class ToriiUaidJson
         }
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        long? accounts = null;
-        long? positions = null;
+        ulong? accounts = null;
+        ulong? positions = null;
 
         while (reader.Read())
         {
@@ -161,6 +377,7 @@ internal static class ToriiUaidJson
                     },
                     context);
                 ValidateUaidPortfolioTotals(response, context);
+                RequireExactFields(seen, context, "accounts", "positions");
                 return response;
             }
 
@@ -179,14 +396,13 @@ internal static class ToriiUaidJson
             switch (propertyName)
             {
                 case "accounts":
-                    accounts = ReadInt64(ref reader, $"{context}.accounts");
+                    accounts = ReadUInt64(ref reader, $"{context}.accounts");
                     break;
                 case "positions":
-                    positions = ReadInt64(ref reader, $"{context}.positions");
+                    positions = ReadUInt64(ref reader, $"{context}.positions");
                     break;
                 default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
+                    throw new JsonException($"{context} contains unknown field `{propertyName}`.");
             }
         }
 
@@ -223,6 +439,7 @@ internal static class ToriiUaidJson
                     },
                     context);
                 ValidateUaidPortfolioAsset(response, context);
+                RequireExactFields(seen, context, "asset_id", "asset_definition_id", "quantity");
                 return response;
             }
 
@@ -250,8 +467,7 @@ internal static class ToriiUaidJson
                     quantity = ReadOptionalString(ref reader, $"{context}.quantity");
                     break;
                 default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
+                    throw new JsonException($"{context} contains unknown field `{propertyName}`.");
             }
         }
 
@@ -288,6 +504,7 @@ internal static class ToriiUaidJson
                     },
                     context);
                 ValidateUaidPortfolioAccount(response, context);
+                RequireExactFields(seen, context, "account_id", "label", "assets");
                 return response;
             }
 
@@ -315,8 +532,7 @@ internal static class ToriiUaidJson
                     assets = ReadItems(ref reader, $"{context}.assets", ReadUaidPortfolioAsset);
                     break;
                 default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
+                    throw new JsonException($"{context} contains unknown field `{propertyName}`.");
             }
         }
 
@@ -336,7 +552,7 @@ internal static class ToriiUaidJson
         }
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        long? dataspaceId = null;
+        ulong? dataspaceId = null;
         string? dataspaceAlias = null;
         List<ToriiUaidPortfolioAccount>? accounts = null;
 
@@ -353,6 +569,7 @@ internal static class ToriiUaidJson
                     },
                     context);
                 ValidateUaidPortfolioDataspace(response, context);
+                RequireExactFields(seen, context, "dataspace_id", "dataspace_alias", "accounts");
                 return response;
             }
 
@@ -371,7 +588,7 @@ internal static class ToriiUaidJson
             switch (propertyName)
             {
                 case "dataspace_id":
-                    dataspaceId = ReadInt64(ref reader, $"{context}.dataspace_id");
+                    dataspaceId = ReadUInt64(ref reader, $"{context}.dataspace_id");
                     break;
                 case "dataspace_alias":
                     dataspaceAlias = ReadOptionalString(ref reader, $"{context}.dataspace_alias");
@@ -380,8 +597,7 @@ internal static class ToriiUaidJson
                     accounts = ReadItems(ref reader, $"{context}.accounts", ReadUaidPortfolioAccount);
                     break;
                 default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
+                    throw new JsonException($"{context} contains unknown field `{propertyName}`.");
             }
         }
 
@@ -418,6 +634,7 @@ internal static class ToriiUaidJson
                     },
                     context);
                 ValidateUaidPortfolioResponse(response, context);
+                RequireExactFields(seen, context, "uaid", "totals", "dataspaces");
                 return response;
             }
 
@@ -445,8 +662,7 @@ internal static class ToriiUaidJson
                     dataspaces = ReadItems(ref reader, $"{context}.dataspaces", ReadUaidPortfolioDataspace);
                     break;
                 default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
+                    throw new JsonException($"{context} contains unknown field `{propertyName}`.");
             }
         }
 
@@ -466,7 +682,7 @@ internal static class ToriiUaidJson
         }
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        long? dataspaceId = null;
+        ulong? dataspaceId = null;
         string? dataspaceAlias = null;
         List<string>? accounts = null;
 
@@ -483,6 +699,7 @@ internal static class ToriiUaidJson
                     },
                     context);
                 ValidateUaidBindingsDataspace(response, context);
+                RequireExactFields(seen, context, "dataspace_id", "dataspace_alias", "accounts");
                 return response;
             }
 
@@ -501,7 +718,7 @@ internal static class ToriiUaidJson
             switch (propertyName)
             {
                 case "dataspace_id":
-                    dataspaceId = ReadInt64(ref reader, $"{context}.dataspace_id");
+                    dataspaceId = ReadUInt64(ref reader, $"{context}.dataspace_id");
                     break;
                 case "dataspace_alias":
                     dataspaceAlias = ReadOptionalString(ref reader, $"{context}.dataspace_alias");
@@ -510,8 +727,7 @@ internal static class ToriiUaidJson
                     accounts = ReadStringList(ref reader, $"{context}.accounts");
                     break;
                 default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
+                    throw new JsonException($"{context} contains unknown field `{propertyName}`.");
             }
         }
 
@@ -546,6 +762,7 @@ internal static class ToriiUaidJson
                     },
                     context);
                 ValidateUaidBindingsResponse(response, context);
+                RequireExactFields(seen, context, "uaid", "dataspaces");
                 return response;
             }
 
@@ -570,8 +787,7 @@ internal static class ToriiUaidJson
                     dataspaces = ReadItems(ref reader, $"{context}.dataspaces", ReadUaidBindingsDataspace);
                     break;
                 default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
+                    throw new JsonException($"{context} contains unknown field `{propertyName}`.");
             }
         }
 
@@ -591,7 +807,7 @@ internal static class ToriiUaidJson
         }
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        long? epoch = null;
+        ulong? epoch = null;
         string? reason = null;
 
         while (reader.Read())
@@ -606,6 +822,7 @@ internal static class ToriiUaidJson
                     },
                     context);
                 ValidateUaidManifestRevocation(response, context);
+                RequireExactFields(seen, context, "epoch", "reason");
                 return response;
             }
 
@@ -624,14 +841,13 @@ internal static class ToriiUaidJson
             switch (propertyName)
             {
                 case "epoch":
-                    epoch = ReadInt64(ref reader, $"{context}.epoch");
+                    epoch = ReadUInt64(ref reader, $"{context}.epoch");
                     break;
                 case "reason":
                     reason = ReadOptionalString(ref reader, $"{context}.reason");
                     break;
                 default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
+                    throw new JsonException($"{context} contains unknown field `{propertyName}`.");
             }
         }
 
@@ -651,8 +867,8 @@ internal static class ToriiUaidJson
         }
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        long? activatedEpoch = null;
-        long? expiredEpoch = null;
+        ulong? activatedEpoch = null;
+        ulong? expiredEpoch = null;
         ToriiUaidManifestRevocation? revocation = null;
 
         while (reader.Read())
@@ -668,6 +884,7 @@ internal static class ToriiUaidJson
                     },
                     context);
                 ValidateUaidManifestLifecycle(response, context);
+                RequireExactFields(seen, context, "activated_epoch", "expired_epoch", "revocation");
                 return response;
             }
 
@@ -686,17 +903,16 @@ internal static class ToriiUaidJson
             switch (propertyName)
             {
                 case "activated_epoch":
-                    activatedEpoch = ReadNullableInt64(ref reader, $"{context}.activated_epoch");
+                    activatedEpoch = ReadNullableUInt64(ref reader, $"{context}.activated_epoch");
                     break;
                 case "expired_epoch":
-                    expiredEpoch = ReadNullableInt64(ref reader, $"{context}.expired_epoch");
+                    expiredEpoch = ReadNullableUInt64(ref reader, $"{context}.expired_epoch");
                     break;
                 case "revocation":
                     revocation = ReadNullableItem(ref reader, $"{context}.revocation", ReadUaidManifestRevocation);
                     break;
                 default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
+                    throw new JsonException($"{context} contains unknown field `{propertyName}`.");
             }
         }
 
@@ -716,10 +932,10 @@ internal static class ToriiUaidJson
         }
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        long? dataspaceId = null;
+        ulong? dataspaceId = null;
         string? dataspaceAlias = null;
         string? manifestHash = null;
-        string? status = null;
+        ToriiUaidManifestStatus? status = null;
         ToriiUaidManifestLifecycle? lifecycle = null;
         List<string>? accounts = null;
         JsonNode? manifest = null;
@@ -734,13 +950,23 @@ internal static class ToriiUaidJson
                         DataspaceId = RequireCounter(dataspaceId, context, "dataspace_id"),
                         DataspaceAlias = dataspaceAlias,
                         ManifestHash = RequireString(manifestHash, $"{context}.manifest_hash"),
-                        Status = RequireString(status, $"{context}.status"),
+                        Status = RequireManifestStatus(status, $"{context}.status"),
                         Lifecycle = lifecycle!,
                         Accounts = RequireList(accounts, context, "accounts"),
-                        Manifest = manifest,
+                        Manifest = RequireNode(manifest, $"{context}.manifest"),
                     },
                     context);
                 ValidateUaidManifestRecord(response, context);
+                RequireExactFields(
+                    seen,
+                    context,
+                    "dataspace_id",
+                    "dataspace_alias",
+                    "manifest_hash",
+                    "status",
+                    "lifecycle",
+                    "accounts",
+                    "manifest");
                 return response;
             }
 
@@ -759,7 +985,7 @@ internal static class ToriiUaidJson
             switch (propertyName)
             {
                 case "dataspace_id":
-                    dataspaceId = ReadInt64(ref reader, $"{context}.dataspace_id");
+                    dataspaceId = ReadUInt64(ref reader, $"{context}.dataspace_id");
                     break;
                 case "dataspace_alias":
                     dataspaceAlias = ReadOptionalString(ref reader, $"{context}.dataspace_alias");
@@ -768,7 +994,7 @@ internal static class ToriiUaidJson
                     manifestHash = ReadOptionalString(ref reader, $"{context}.manifest_hash");
                     break;
                 case "status":
-                    status = ReadOptionalString(ref reader, $"{context}.status");
+                    status = ReadManifestStatus(ref reader, $"{context}.status");
                     break;
                 case "lifecycle":
                     lifecycle = ReadNullableItem(ref reader, $"{context}.lifecycle", ReadUaidManifestLifecycle);
@@ -780,8 +1006,7 @@ internal static class ToriiUaidJson
                     manifest = ToriiIdentifierJson.ReadOptionalNode(ref reader, $"{context}.manifest");
                     break;
                 default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
+                    throw new JsonException($"{context} contains unknown field `{propertyName}`.");
             }
         }
 
@@ -802,7 +1027,9 @@ internal static class ToriiUaidJson
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         string? uaid = null;
-        long? total = null;
+        ulong? total = null;
+        bool? hasMore = null;
+        ToriiUaidManifestCountMode? countMode = null;
         List<ToriiUaidManifestRecord>? manifests = null;
 
         while (reader.Read())
@@ -814,10 +1041,13 @@ internal static class ToriiUaidJson
                     {
                         Uaid = RequireString(uaid, $"{context}.uaid"),
                         Total = RequireTotal(total, context),
+                        HasMore = RequireBoolean(hasMore, $"{context}.has_more"),
+                        CountMode = RequireManifestCountMode(countMode, $"{context}.count_mode"),
                         Manifests = RequireList(manifests, context, "manifests"),
                     },
                     context);
                 ValidateUaidManifestsResponse(response, context);
+                RequireExactFields(seen, context, "uaid", "total", "has_more", "count_mode", "manifests");
                 return response;
             }
 
@@ -839,14 +1069,19 @@ internal static class ToriiUaidJson
                     uaid = ReadOptionalString(ref reader, $"{context}.uaid");
                     break;
                 case "total":
-                    total = ReadInt64(ref reader, $"{context}.total");
+                    total = ReadUInt64(ref reader, $"{context}.total");
+                    break;
+                case "has_more":
+                    hasMore = ReadBoolean(ref reader, $"{context}.has_more");
+                    break;
+                case "count_mode":
+                    countMode = ReadManifestCountMode(ref reader, $"{context}.count_mode");
                     break;
                 case "manifests":
                     manifests = ReadItems(ref reader, $"{context}.manifests", ReadUaidManifestRecord);
                     break;
                 default:
-                    ToriiIdentifierJson.SkipRejectingDuplicateProperties(ref reader, $"{context}.{propertyName}");
-                    break;
+                    throw new JsonException($"{context} contains unknown field `{propertyName}`.");
             }
         }
 
@@ -1020,19 +1255,12 @@ internal static class ToriiUaidJson
         writer.WriteNumber("dataspace_id", response.DataspaceId);
         ToriiVpnJson.WriteNullableString(writer, "dataspace_alias", response.DataspaceAlias);
         writer.WriteString("manifest_hash", response.ManifestHash);
-        writer.WriteString("status", response.Status);
+        writer.WriteString("status", FormatManifestStatus(response.Status));
         writer.WritePropertyName("lifecycle");
         WriteUaidManifestLifecycle(writer, response.Lifecycle, $"{context}.lifecycle");
         WriteStringList(writer, "accounts", response.Accounts);
         writer.WritePropertyName("manifest");
-        if (response.Manifest is null)
-        {
-            writer.WriteNullValue();
-        }
-        else
-        {
-            response.Manifest.WriteTo(writer);
-        }
+        response.Manifest.WriteTo(writer);
         writer.WriteEndObject();
     }
 
@@ -1046,6 +1274,8 @@ internal static class ToriiUaidJson
         writer.WriteStartObject();
         writer.WriteString("uaid", response.Uaid);
         writer.WriteNumber("total", response.Total);
+        writer.WriteBoolean("has_more", response.HasMore);
+        writer.WriteString("count_mode", FormatManifestCountMode(response.CountMode));
         writer.WritePropertyName("manifests");
         writer.WriteStartArray();
         for (var index = 0; index < response.Manifests.Count; index++)
@@ -1109,6 +1339,8 @@ internal static class ToriiUaidJson
             nameof(ToriiUaidManifestRecord.Lifecycle) => "lifecycle",
             nameof(ToriiUaidManifestRecord.Manifest) => "manifest",
             nameof(ToriiUaidManifestsResponse.Total) => "total",
+            nameof(ToriiUaidManifestsResponse.HasMore) => "has_more",
+            nameof(ToriiUaidManifestsResponse.CountMode) => "count_mode",
             nameof(ToriiUaidManifestsResponse.Manifests) => "manifests",
             _ => paramName,
         };
@@ -1157,6 +1389,188 @@ internal static class ToriiUaidJson
         }
 
         return suffix[..(dot + 1)] + MapDirectMetadataField(suffix[(dot + 1)..]);
+    }
+
+    private static void RequireExactFields(HashSet<string> seen, string context, params string[] fields)
+    {
+        foreach (var field in fields)
+        {
+            if (!seen.Contains(field))
+            {
+                throw new JsonException($"{context}.{field} must be present.");
+            }
+        }
+    }
+
+    private static JsonObject RequireJsonObject(JsonNode? value, string context)
+    {
+        return value as JsonObject
+            ?? throw new JsonException($"{context} must be a non-null object.");
+    }
+
+    private static JsonArray RequireJsonArray(JsonNode? value, string context)
+    {
+        return value as JsonArray
+            ?? throw new JsonException($"{context} must be a non-null array.");
+    }
+
+    private static void RequireJsonFields(
+        JsonObject value,
+        string context,
+        IReadOnlyCollection<string> required,
+        IReadOnlyCollection<string> optional)
+    {
+        foreach (var property in value)
+        {
+            if (!required.Contains(property.Key) && !optional.Contains(property.Key))
+            {
+                throw new JsonException($"{context} contains unknown field `{property.Key}`.");
+            }
+        }
+        foreach (var field in required)
+        {
+            if (!value.ContainsKey(field))
+            {
+                throw new JsonException($"{context}.{field} must be present.");
+            }
+            if (value[field] is null)
+            {
+                throw new JsonException($"{context}.{field} must not be null.");
+            }
+        }
+    }
+
+    private static ulong RequireJsonUInt64(JsonObject value, string propertyName, string context)
+    {
+        return RequireJsonUInt64(value[propertyName], $"{context}.{propertyName}");
+    }
+
+    internal static ulong RequireJsonUInt64(JsonNode? value, string context)
+    {
+        if (value is not JsonValue scalar)
+        {
+            throw new JsonException($"{context} must be an unsigned integer.");
+        }
+
+        if (scalar.TryGetValue<ulong>(out var unsigned64))
+        {
+            return unsigned64;
+        }
+        if (scalar.TryGetValue<uint>(out var unsigned32))
+        {
+            return unsigned32;
+        }
+        if (scalar.TryGetValue<ushort>(out var unsigned16))
+        {
+            return unsigned16;
+        }
+        if (scalar.TryGetValue<byte>(out var unsigned8))
+        {
+            return unsigned8;
+        }
+        if (scalar.TryGetValue<long>(out var signed64) && signed64 >= 0)
+        {
+            return (ulong)signed64;
+        }
+        if (scalar.TryGetValue<int>(out var signed32) && signed32 >= 0)
+        {
+            return (uint)signed32;
+        }
+        if (scalar.TryGetValue<short>(out var signed16) && signed16 >= 0)
+        {
+            return (ushort)signed16;
+        }
+        if (scalar.TryGetValue<sbyte>(out var signed8) && signed8 >= 0)
+        {
+            return (byte)signed8;
+        }
+
+        throw new JsonException($"{context} must be an unsigned integer.");
+    }
+
+    private static string RequireJsonString(JsonObject value, string propertyName, string context)
+    {
+        return RequireJsonString(value[propertyName], $"{context}.{propertyName}");
+    }
+
+    private static string RequireJsonString(JsonNode? value, string context)
+    {
+        if (value is not JsonValue scalar || !scalar.TryGetValue<string>(out var text))
+        {
+            throw new JsonException($"{context} must be a string.");
+        }
+        return text;
+    }
+
+    private static void RejectNullOptional(JsonNode? value, string context)
+    {
+        if (value is null)
+        {
+            throw new JsonException($"{context} must be omitted instead of null.");
+        }
+    }
+
+    private static void ValidateOmittedOptionalString(
+        JsonObject value,
+        string propertyName,
+        string context,
+        bool validateCanonicalName)
+    {
+        if (!value.TryGetPropertyValue(propertyName, out var node))
+        {
+            return;
+        }
+        RejectNullOptional(node, $"{context}.{propertyName}");
+        var text = RequireJsonString(node!, $"{context}.{propertyName}");
+        if (validateCanonicalName
+            && (text.Length == 0
+                || !string.Equals(text.Trim(), text, StringComparison.Ordinal)
+                || text.Any(char.IsControl)
+                || !string.Equals(text.Normalize(NormalizationForm.FormC), text, StringComparison.Ordinal)))
+        {
+            throw new JsonException($"{context}.{propertyName} must use exact canonical NFC spelling.");
+        }
+    }
+
+    private static void ValidateManifestStatus(ToriiUaidManifestStatus value, string context)
+    {
+        if (value is not (ToriiUaidManifestStatus.Active
+            or ToriiUaidManifestStatus.Pending
+            or ToriiUaidManifestStatus.Expired
+            or ToriiUaidManifestStatus.Revoked))
+        {
+            throw new JsonException($"{context} contains an unknown manifest status.");
+        }
+    }
+
+    private static void ValidateManifestCountMode(ToriiUaidManifestCountMode value, string context)
+    {
+        if (value is not (ToriiUaidManifestCountMode.Exact or ToriiUaidManifestCountMode.Bounded))
+        {
+            throw new JsonException($"{context} must be exact or bounded.");
+        }
+    }
+
+    private static string FormatManifestStatus(ToriiUaidManifestStatus value)
+    {
+        return value switch
+        {
+            ToriiUaidManifestStatus.Active => "Active",
+            ToriiUaidManifestStatus.Pending => "Pending",
+            ToriiUaidManifestStatus.Expired => "Expired",
+            ToriiUaidManifestStatus.Revoked => "Revoked",
+            _ => throw new JsonException("Unknown UAID manifest status."),
+        };
+    }
+
+    private static string FormatManifestCountMode(ToriiUaidManifestCountMode value)
+    {
+        return value switch
+        {
+            ToriiUaidManifestCountMode.Exact => "exact",
+            ToriiUaidManifestCountMode.Bounded => "bounded",
+            _ => throw new JsonException("Unknown UAID manifest count mode."),
+        };
     }
 
     private delegate T ReadItem<T>(ref Utf8JsonReader reader, string context);
@@ -1283,22 +1697,58 @@ internal static class ToriiUaidJson
         return ToriiAccountFaucetJson.ReadOptionalString(ref reader, field);
     }
 
-    private static long ReadInt64(ref Utf8JsonReader reader, string field)
+    private static bool ReadBoolean(ref Utf8JsonReader reader, string field)
     {
-        if (reader.TokenType != JsonTokenType.Number || !reader.TryGetInt64(out var value))
+        return reader.TokenType switch
         {
-            throw new JsonException($"{field} must be an integer.");
+            JsonTokenType.True => true,
+            JsonTokenType.False => false,
+            _ => throw new JsonException($"{field} must be a boolean."),
+        };
+    }
+
+    private static ToriiUaidManifestStatus ReadManifestStatus(ref Utf8JsonReader reader, string field)
+    {
+        var value = ReadOptionalString(ref reader, field)
+            ?? throw new JsonException($"{field} must not be null.");
+        return value switch
+        {
+            "Active" => ToriiUaidManifestStatus.Active,
+            "Pending" => ToriiUaidManifestStatus.Pending,
+            "Expired" => ToriiUaidManifestStatus.Expired,
+            "Revoked" => ToriiUaidManifestStatus.Revoked,
+            _ => throw new JsonException($"{field} contains an unknown manifest status."),
+        };
+    }
+
+    private static ToriiUaidManifestCountMode ReadManifestCountMode(ref Utf8JsonReader reader, string field)
+    {
+        var value = ReadOptionalString(ref reader, field)
+            ?? throw new JsonException($"{field} must not be null.");
+        return value switch
+        {
+            "exact" => ToriiUaidManifestCountMode.Exact,
+            "bounded" => ToriiUaidManifestCountMode.Bounded,
+            _ => throw new JsonException($"{field} must be exact or bounded."),
+        };
+    }
+
+    private static ulong ReadUInt64(ref Utf8JsonReader reader, string field)
+    {
+        if (reader.TokenType != JsonTokenType.Number || !reader.TryGetUInt64(out var value))
+        {
+            throw new JsonException($"{field} must be an unsigned integer.");
         }
 
         return value;
     }
 
-    private static long? ReadNullableInt64(ref Utf8JsonReader reader, string field)
+    private static ulong? ReadNullableUInt64(ref Utf8JsonReader reader, string field)
     {
-        return reader.TokenType == JsonTokenType.Null ? null : ReadInt64(ref reader, field);
+        return reader.TokenType == JsonTokenType.Null ? null : ReadUInt64(ref reader, field);
     }
 
-    private static long RequireTotal(long? value, string context)
+    private static ulong RequireTotal(ulong? value, string context)
     {
         if (!value.HasValue)
         {
@@ -1308,7 +1758,7 @@ internal static class ToriiUaidJson
         return value.Value;
     }
 
-    private static long RequireCounter(long? value, string context, string propertyName)
+    private static ulong RequireCounter(ulong? value, string context, string propertyName)
     {
         if (!value.HasValue)
         {
@@ -1326,6 +1776,30 @@ internal static class ToriiUaidJson
         }
 
         return value;
+    }
+
+    private static JsonNode RequireNode(JsonNode? value, string field)
+    {
+        return value ?? throw new JsonException($"{field} must not be null.");
+    }
+
+    private static bool RequireBoolean(bool? value, string field)
+    {
+        return value ?? throw new JsonException($"{field} must not be null.");
+    }
+
+    private static ToriiUaidManifestStatus RequireManifestStatus(
+        ToriiUaidManifestStatus? value,
+        string field)
+    {
+        return value ?? throw new JsonException($"{field} must not be null.");
+    }
+
+    private static ToriiUaidManifestCountMode RequireManifestCountMode(
+        ToriiUaidManifestCountMode? value,
+        string field)
+    {
+        return value ?? throw new JsonException($"{field} must not be null.");
     }
 
     private static IReadOnlyList<T> RequireList<T>(IReadOnlyList<T>? values, string context, string propertyName)
@@ -1381,22 +1855,6 @@ internal static class ToriiUaidJson
         _ = ToriiQuantityJson.RequireCanonicalQuantity(value, field);
     }
 
-    private static void ValidateOptionalNonNegativeInt64(long? value, string field)
-    {
-        if (value is long integer)
-        {
-            ValidateNonNegativeInt64(integer, field);
-        }
-    }
-
-    private static void ValidateNonNegativeInt64(long value, string field)
-    {
-        if (value < 0)
-        {
-            throw new JsonException($"{field} must be non-negative.");
-        }
-    }
-
     private static bool IsLowercaseHex(ReadOnlySpan<char> value)
     {
         foreach (var character in value)
@@ -1436,9 +1894,9 @@ internal static class ToriiUaidJson
         writer.WriteEndArray();
     }
 
-    private static void WriteNullableNumber(Utf8JsonWriter writer, string propertyName, long? value)
+    private static void WriteNullableNumber(Utf8JsonWriter writer, string propertyName, ulong? value)
     {
-        if (value is long integer)
+        if (value is ulong integer)
         {
             writer.WriteNumber(propertyName, integer);
         }

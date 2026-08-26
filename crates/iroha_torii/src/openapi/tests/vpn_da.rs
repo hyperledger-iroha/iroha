@@ -1,7 +1,7 @@
 const OPENAPI_STATIC_CONTRACT_ASSET_VERSION: &str = "IROHA_STATIC_CONTRACT_ROWS_V1";
-const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 113_970;
+const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 114_226;
 const OPENAPI_STATIC_CONTRACT_ASSET_SHA256: &str =
-    "dcd0c781c5843879984134ee728a02cda4aabc9d82dc52bbce9efb31da0485be";
+    "465b0aff19f513d054ed75d716bc638712dfa21887c093116d597e7a2c98d5bb";
 const OPENAPI_STATIC_CONTRACT_ASSET: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/src/openapi/tests/openapi_static_contracts_v1.txt"
@@ -277,6 +277,39 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
             Some(pattern),
             "{schema_name}.{field} must continue accepting mixed-case prefixed input"
         );
+    }
+    let profile_mldsa = schemas
+        .get("VpnProfileResponse")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("properties"))
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get("relay_mldsa65_public_key_hex"))
+        .and_then(Value::as_object)
+        .expect("VPN profile ML-DSA-65 trust schema");
+    assert_eq!(
+        profile_mldsa.get("pattern").and_then(Value::as_str),
+        Some("^(?:|[0-9a-f]{3904})$")
+    );
+    assert_eq!(
+        profile_mldsa.get("maxLength").and_then(Value::as_u64),
+        Some(3904)
+    );
+    for schema_name in ["VpnQuoteResponse", "VpnSessionResponse"] {
+        let mldsa = schemas
+            .get(schema_name)
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("relay_mldsa65_public_key_hex"))
+            .and_then(Value::as_object)
+            .expect("VPN ML-DSA-65 trust schema");
+        assert_eq!(
+            mldsa.get("pattern").and_then(Value::as_str),
+            Some("^[0-9a-f]{3904}$"),
+            "{schema_name} must advertise canonical ML-DSA-65 public-key hex"
+        );
+        assert_eq!(mldsa.get("minLength").and_then(Value::as_u64), Some(3904));
+        assert_eq!(mldsa.get("maxLength").and_then(Value::as_u64), Some(3904));
     }
     let helper_ticket = schemas
         .get("VpnSessionResponse")
@@ -1131,6 +1164,43 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
 }
 
 #[test]
+fn governance_digest_and_parliament_phase_schemas_are_exact() {
+    let document = canonical_document();
+    let schemas = component_schemas(&document);
+    let digest = schemas
+        .get("GovernanceProposalHex32V1")
+        .and_then(Value::as_object)
+        .expect("GovernanceProposalHex32V1 schema");
+    assert_eq!(digest.get("type").and_then(Value::as_str), Some("string"));
+    assert_eq!(digest.get("minLength").and_then(Value::as_u64), Some(64));
+    assert_eq!(digest.get("maxLength").and_then(Value::as_u64), Some(64));
+    assert_eq!(
+        digest.get("pattern").and_then(Value::as_str),
+        Some(GOVERNANCE_LOWER_HEX32_PATTERN)
+    );
+
+    assert_strict_object_schema(
+        schemas,
+        "GovernanceParliamentAdvanceBodyPhasePayloadV1",
+        &["body_instance_id", "target"],
+        &[],
+    );
+    let properties = component_properties(schemas, "GovernanceParliamentAdvanceBodyPhasePayloadV1");
+    assert_eq!(
+        properties["body_instance_id"]["$ref"].as_str(),
+        Some("#/components/schemas/GovernanceParliamentDigest32V1")
+    );
+    assert_eq!(
+        properties["target"]["$ref"].as_str(),
+        Some("#/components/schemas/GovernanceParliamentDeliberationPhaseV1")
+    );
+    assert!(
+        !schemas.contains_key("GovernanceParliamentBallotRequestV1"),
+        "retired parliament ballot request alias must not mask the phase-transition payload"
+    );
+}
+
+#[test]
 fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
     let document = generate_spec();
     let paths = document
@@ -1346,6 +1416,7 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
         "GovernanceParliamentTimedOvnCastingContextResponseV1",
         "GovernanceParliamentTimedOvnCastingProofRequestV1",
         "GovernanceParliamentTimedOvnCastingProofResponseV1",
+        "GovernanceParliamentTimedOvnProgressV1",
         "GovernanceParliamentTimedOvnSessionV1",
         "GovernanceParliamentTimedOvnReleaseIdentityV1",
         "GovernanceParliamentTleReleaseContextResponseV1",
@@ -1673,12 +1744,12 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
         (
             "DeployContractProposalDraftResponseV1",
             "DeployContractProposalInstructionDraftV1",
-            "iroha_data_model::isi::governance::ProposeDeployContract",
+            "iroha.instruction.v1::governance::ProposeDeployContract",
         ),
         (
             "SccpRouteGovernanceProposalDraftResponseV1",
             "SccpRouteGovernanceProposalInstructionDraftV1",
-            "iroha_data_model::isi::governance::ProposeSccpRouteGovernance",
+            "iroha.instruction.v1::governance::ProposeSccpRouteGovernance",
         ),
     ] {
         let properties = schemas
@@ -1820,6 +1891,36 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             Some(exact_bytes)
         );
     }
+    let ballot_chunk = schemas
+        .get("GovernanceParliamentFreezeTimedOvnCorpusPayloadV1")
+        .and_then(Value::as_object)
+        .and_then(|schema| schema.get("properties"))
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get("ballot_records"))
+        .and_then(Value::as_object)
+        .expect("timed-OVN ballot chunk schema");
+    assert_eq!(
+        ballot_chunk.get("minItems").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        ballot_chunk.get("maxItems").and_then(Value::as_u64),
+        Some(
+            u64::try_from(
+                iroha_data_model::isi::governance::PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1,
+            )
+            .expect("timed-OVN ballot chunk bound fits u64"),
+        )
+    );
+    assert!(
+        ballot_chunk
+            .get("description")
+            .and_then(Value::as_str)
+            .is_some_and(|description| {
+                description.contains("contiguous") && description.contains("complete corpus")
+            }),
+        "timed-OVN ballot chunk schema must distinguish append and full-corpus bounds"
+    );
     assert_eq!(
         schemas
             .get("GovernanceParliamentFramedPayloadHexV1")
@@ -1874,6 +1975,31 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             "public_finding_deadline_height",
             "no_result_kind",
             "no_result_height",
+            "timed_ovn_progress",
+        ])
+    );
+    let progress_schema = schemas
+        .get("GovernanceParliamentTimedOvnProgressV1")
+        .and_then(Value::as_object)
+        .expect("typed timed-OVN progress projection");
+    assert_eq!(
+        progress_schema.get("additionalProperties"),
+        Some(&Value::Bool(false))
+    );
+    let progress_fields = progress_schema
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("timed-OVN progress fields")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        progress_fields,
+        std::collections::BTreeSet::from([
+            "ballot_attempt_id",
+            "status",
+            "frozen_survivor_count",
+            "accepted_ballot_prefix_count",
         ])
     );
     assert_eq!(

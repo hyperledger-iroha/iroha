@@ -1094,12 +1094,12 @@ fn canonical_remote_account(value: &str, field: &str) -> Result<AccountId> {
     let parsed = AccountId::parse_encoded(value).map_err(|error| Error::InvalidAxtBinding {
         details: format!("remote-spend {field} account is not canonical I105: {error}"),
     })?;
-    if parsed.canonical() != value {
+    if parsed.to_string() != value {
         return Err(Error::InvalidAxtBinding {
             details: format!("remote-spend {field} account must use canonical I105 text"),
         });
     }
-    Ok(parsed.into_account_id())
+    Ok(parsed)
 }
 fn axt_statement_digest(
     envelope: &AxtProofEnvelope,

@@ -2,7 +2,7 @@
 use crate::{
     json_macros::{JsonDeserialize, JsonSerialize},
     kura::LaneReadyAuthorization,
-    queue::{LaneQueueReservationKeyV2, RouteLegRole, RoutingPlan},
+    queue::{LaneQueueReservationKeyV1, RouteLegRole, RoutingPlan},
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, PrivateKey, PublicKey, Signature};
@@ -87,7 +87,7 @@ const AUTONOMOUS_LANE_PAYLOAD_DECODE_LIMITS: norito::DecodeLimits = norito::Deco
 ///
 /// Version two removes the advisory global block hint from both authenticated
 /// preimages. Version one and unknown versions fail closed.
-pub(crate) const LANE_EXECUTABLE_PAYLOAD_VERSION_V2: u8 = 2;
+pub(crate) const LANE_EXECUTABLE_PAYLOAD_VERSION_V1: u8 = 1;
 /// Return the unique height-rotated author for an autonomous lane block.
 ///
 /// Autonomous authorship is independent of the global carrier view. A zero
@@ -131,7 +131,7 @@ pub struct LaneExecutablePayloadV1 {
     pub entrypoints: Vec<TransactionEntrypoint>,
     /// Exact queue reservation identities in entrypoint order. Every payload
     /// binds one reservation per entrypoint.
-    pub reservation_keys: Vec<LaneQueueReservationKeyV2>,
+    pub reservation_keys: Vec<LaneQueueReservationKeyV1>,
     /// Full coordinator/participant routing plans in entrypoint order.
     pub routing_plans: Vec<RoutingPlan>,
     /// Native AMX certificates aligned exactly with entrypoints and routing plans.
@@ -169,7 +169,7 @@ struct LaneExecutablePayloadPreimage {
     min_quorum: u32,
     qc_mode_tag: String,
     entrypoints: Vec<TransactionEntrypoint>,
-    reservation_keys: Vec<LaneQueueReservationKeyV2>,
+    reservation_keys: Vec<LaneQueueReservationKeyV1>,
     routing_plans: Vec<RoutingPlan>,
     native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
 }
@@ -739,7 +739,7 @@ impl LaneExecutablePayloadV1 {
         epoch: u64,
         origin_proposal: LaneBlockProposalV1,
         entrypoints: Vec<TransactionEntrypoint>,
-        reservation_keys: Vec<LaneQueueReservationKeyV2>,
+        reservation_keys: Vec<LaneQueueReservationKeyV1>,
         routing_plans: Vec<RoutingPlan>,
         native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
         producer: PeerId,
@@ -752,7 +752,7 @@ impl LaneExecutablePayloadV1 {
             .map(|entrypoint| Hash::from(entrypoint.hash()))
             .collect::<Vec<_>>();
         let mut payload = Self {
-            version: LANE_EXECUTABLE_PAYLOAD_VERSION_V2,
+            version: LANE_EXECUTABLE_PAYLOAD_VERSION_V1,
             network_id,
             epoch,
             origin_proposal,
@@ -1430,11 +1430,11 @@ pub(crate) fn compute_lane_executable_payload_hash(
     epoch: u64,
     origin_proposal: &LaneBlockProposalV1,
     entrypoints: &[TransactionEntrypoint],
-    reservation_keys: &[LaneQueueReservationKeyV2],
+    reservation_keys: &[LaneQueueReservationKeyV1],
     routing_plans: &[RoutingPlan],
     native_amx_receipts: &[Option<NativeAmxReceipt>],
 ) -> Result<Hash, LaneAutonomousArtifactError> {
-    if version != LANE_EXECUTABLE_PAYLOAD_VERSION_V2 {
+    if version != LANE_EXECUTABLE_PAYLOAD_VERSION_V1 {
         return Err(LaneAutonomousArtifactError::UnsupportedVersion);
     }
     let descriptor = &origin_proposal.descriptor;
@@ -1475,14 +1475,14 @@ fn validate_lane_executable_payload_body(
     origin_proposal: &LaneBlockProposalV1,
     entrypoint_hashes: &[Hash],
     entrypoints: &[TransactionEntrypoint],
-    reservation_keys: &[LaneQueueReservationKeyV2],
+    reservation_keys: &[LaneQueueReservationKeyV1],
     routing_plans: &[RoutingPlan],
     native_amx_receipts: &[Option<NativeAmxReceipt>],
     payload_hash: Hash,
     expected_network_id: NetworkId,
     expected_epoch: u64,
 ) -> Result<(), LaneAutonomousArtifactError> {
-    if version != LANE_EXECUTABLE_PAYLOAD_VERSION_V2 {
+    if version != LANE_EXECUTABLE_PAYLOAD_VERSION_V1 {
         return Err(LaneAutonomousArtifactError::UnsupportedVersion);
     }
     if network_id != expected_network_id || epoch != expected_epoch {
@@ -6057,8 +6057,8 @@ mod tests {
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
         ));
-        let reservation = LaneQueueReservationKeyV2 {
-            version: LaneQueueReservationKeyV2::VERSION,
+        let reservation = LaneQueueReservationKeyV1 {
+            version: LaneQueueReservationKeyV1::VERSION,
             entrypoint_hash: entrypoint.hash(),
             queue_plan_admission_binding_hash: Hash::new(
                 b"lane-consensus-queue-plan-admission-binding",
@@ -6096,7 +6096,7 @@ mod tests {
             checked_bls_keypair(73),
         ];
         let (network_id, epoch, payload) = autonomous_payload_fixture(&keypairs);
-        assert_eq!(payload.version, LANE_EXECUTABLE_PAYLOAD_VERSION_V2);
+        assert_eq!(payload.version, LANE_EXECUTABLE_PAYLOAD_VERSION_V1);
         let mut hint_free = payload.clone();
         hint_free.origin_proposal.payload_block_hint = None;
         hint_free
@@ -6147,7 +6147,7 @@ mod tests {
             Err(LaneAutonomousArtifactError::UnsupportedVersion)
         );
         let mut unknown = payload;
-        unknown.version = LANE_EXECUTABLE_PAYLOAD_VERSION_V2 + 1;
+        unknown.version = LANE_EXECUTABLE_PAYLOAD_VERSION_V1 + 1;
         assert_eq!(
             unknown.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::UnsupportedVersion)
@@ -6916,7 +6916,7 @@ mod tests {
         );
         let mut unsupported_reservation_version = payload.clone();
         unsupported_reservation_version.reservation_keys[0].version =
-            LaneQueueReservationKeyV2::VERSION + 1;
+            LaneQueueReservationKeyV1::VERSION + 1;
         assert_eq!(
             unsupported_reservation_version.validate(network_id, epoch),
             Err(LaneAutonomousArtifactError::ReservationMismatch)

@@ -11,6 +11,7 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -43,6 +44,9 @@ public final class ParliamentApiV1 {
   public static final int MAX_TIMED_OVN_CASTING_ARCHIVE_BYTES = 4 * 1024 * 1024;
   public static final int MAX_TIMED_OVN_CASTING_PROOF_RESPONSE_BYTES = 8 * 1024 * 1024;
   public static final int TIMED_OVN_REGISTRATION_RECORD_BYTES = 3_624;
+  public static final int TIMED_OVN_BALLOT_RECORD_BYTES = 2_858;
+  /** Maximum records appended by one transition; the complete corpus may contain 1,000. */
+  public static final int TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS = 32;
   public static final int MAX_TIMED_OVN_CORPUS_ENTRIES = 1_000;
   public static final String PUBLIC_TRANSITION_DIGEST_DOMAIN =
       "iroha.governance.parliament.lifecycle_transition.digest.v1";
@@ -131,7 +135,8 @@ public final class ParliamentApiV1 {
           "public_finding_phase_blocks",
           "public_finding_deadline_height",
           "no_result_kind",
-          "no_result_height");
+          "no_result_height",
+          "timed_ovn_progress");
 
   private static final long U32_MAX = 4_294_967_295L;
   private static final Pattern ID = Pattern.compile("[0-9a-f]{64}");
@@ -244,8 +249,8 @@ public final class ParliamentApiV1 {
           "z_u");
   private static final Set<String> ATTEMPT_FIELDS =
       setOf("id", "proposal_content_id", "sequence", "risk_tier", "stage", "status");
-  private static final Set<String> BODIES =
-      setOf(
+  private static final List<String> BODY_ORDER =
+      listOf(
           "rules-committee",
           "agenda-council",
           "interest-panel",
@@ -256,6 +261,7 @@ public final class ParliamentApiV1 {
           "oversight-committee",
           "policy-jury",
           "confirmation-jury");
+  private static final Set<String> BODIES = new LinkedHashSet<>(BODY_ORDER);
   private static final Set<String> PRIVATE_BODIES =
       setOf("policy-jury", "confirmation-jury");
   private static final Set<String> BODY_STATUSES =
@@ -268,6 +274,22 @@ public final class ParliamentApiV1 {
           "Approved",
           "Rejected",
           "NoQuorum",
+          "NoResult",
+          "Superseded");
+  private static final Set<String> TIMED_OVN_PROGRESS_FIELDS =
+      setOf(
+          "ballot_attempt_id",
+          "status",
+          "frozen_survivor_count",
+          "accepted_ballot_prefix_count");
+  private static final Set<String> TIMED_OVN_BALLOT_STATUSES =
+      setOf(
+          "Registration",
+          "SurvivorFreeze",
+          "TimedCommitment",
+          "AwaitingRelease",
+          "Opening",
+          "Finalized",
           "NoResult",
           "Superseded");
   private static final Set<String> DELIBERATION_PHASES =
@@ -429,6 +451,7 @@ public final class ParliamentApiV1 {
     public final String publicFindingDeadlineHeight;
     public final String noResultKind;
     public final String noResultHeight;
+    public final TimedOvnProgressProjection timedOvnProgress;
 
     private BodyStateProjection(
         final String body,
@@ -439,7 +462,8 @@ public final class ParliamentApiV1 {
         final String publicFindingPhaseBlocks,
         final String publicFindingDeadlineHeight,
         final String noResultKind,
-        final String noResultHeight) {
+        final String noResultHeight,
+        final TimedOvnProgressProjection timedOvnProgress) {
       this.body = body;
       this.bodyInstanceId = bodyInstanceId;
       this.status = status;
@@ -449,6 +473,26 @@ public final class ParliamentApiV1 {
       this.publicFindingDeadlineHeight = publicFindingDeadlineHeight;
       this.noResultKind = noResultKind;
       this.noResultHeight = noResultHeight;
+      this.timedOvnProgress = timedOvnProgress;
+    }
+  }
+
+  /** Aggregate-only active-ballot state and next contiguous corpus offset. */
+  public static final class TimedOvnProgressProjection {
+    public final String ballotAttemptId;
+    public final String status;
+    public final Integer frozenSurvivorCount;
+    public final Integer acceptedBallotPrefixCount;
+
+    private TimedOvnProgressProjection(
+        final String ballotAttemptId,
+        final String status,
+        final Integer frozenSurvivorCount,
+        final Integer acceptedBallotPrefixCount) {
+      this.ballotAttemptId = ballotAttemptId;
+      this.status = status;
+      this.frozenSurvivorCount = frozenSurvivorCount;
+      this.acceptedBallotPrefixCount = acceptedBallotPrefixCount;
     }
   }
 
@@ -798,11 +842,45 @@ public final class ParliamentApiV1 {
               ? "Parliament transition payload is required"
               : "unit Parliament transition must not carry a payload");
     }
+    if (layout.jsonPayloadRequired) {
+      validateTransitionPayload(
+          layout.jsonTag, objectValue(transition.get("payload"), layout.jsonTag + " payload"));
+    }
     final Map<String, Object> request = new LinkedHashMap<>();
     request.put("version", VERSION);
     request.put("governance_attempt_id", canonicalId(governanceAttemptId));
     request.put("transition", transition);
     return encode(request);
+  }
+
+  private static void validateTransitionPayload(
+      final String tag, final Map<String, Object> payload) {
+    if (!tag.equals("FreezeTimedOvnCorpus")) return;
+    if (!payload.keySet().equals(setOf("ballot_attempt_id", "ballot_records"))) {
+      throw new IllegalArgumentException(
+          tag + " payload contains unknown, aliased, or missing fields");
+    }
+    if (!(payload.get("ballot_attempt_id") instanceof String ballotAttemptId)) {
+      throw new IllegalArgumentException(tag + ".ballot_attempt_id must be text");
+    }
+    canonicalId(ballotAttemptId);
+    if (!(payload.get("ballot_records") instanceof List<?> records)) {
+      throw new IllegalArgumentException(tag + ".ballot_records must be an array");
+    }
+    if (records.isEmpty() || records.size() > TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS) {
+      throw new IllegalArgumentException(
+          tag
+              + ".ballot_records must contain one through "
+              + TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS
+              + " records");
+    }
+    for (int index = 0; index < records.size(); index++) {
+      fixedBytes(
+          records.get(index),
+          TIMED_OVN_BALLOT_RECORD_BYTES,
+          tag + ".ballot_records[" + index + "]",
+          false);
+    }
   }
 
   /** Strictly admit an attempt draft bound to caller-derived identifiers. */
@@ -874,9 +952,9 @@ public final class ParliamentApiV1 {
     if (!attemptId.equals(canonicalId(expectedGovernanceAttemptId))) {
       throw new IllegalArgumentException("attempt.id differs from the requested canonical id");
     }
-    id(attempt, "proposal_content_id");
-    u32(attempt.get("sequence"), "attempt.sequence");
-    taggedUnitIn(
+    final String proposalContentId = id(attempt, "proposal_content_id");
+    final String attemptSequence = u32(attempt.get("sequence"), "attempt.sequence");
+    final String riskTier = taggedUnitIn(
         attempt.get("risk_tier"),
         "tier",
         setOf("Routine", "Standard", "Constitutional", "Emergency"),
@@ -905,14 +983,25 @@ public final class ParliamentApiV1 {
         setOf("Active", "Certified", "Rejected", "Enacted", "Superseded", "ExecutionFailed"),
         "attempt.status");
     final String height = unsignedInteger(root.get("current_height"), "current_height");
-    unsignedInteger(root.get("policy_version"), "policy_version");
+    final String policyVersion = unsignedInteger(root.get("policy_version"), "policy_version");
+    if (new BigInteger(policyVersion).signum() <= 0) {
+      throw new IllegalArgumentException("policy_version must be positive");
+    }
     optionalUnsignedInteger(root.get("terminal_height"), "terminal_height");
     optionalByteArray32(root.get("execution_failure_root"), "execution_failure_root");
     final List<String> requiredBodies = validateRequiredBodies(root.get("required_bodies"));
     final List<BodyStateProjection> bodyStates =
         validateBodyStates(root.get("body_states"), requiredBodies);
     final List<PublicFindingCertificateBinding> publicFindings =
-        validateCertificate(root.get("certificate"), attemptId);
+        validateCertificate(
+            root.get("certificate"),
+            attemptId,
+            proposalContentId,
+            attemptSequence,
+            riskTier,
+            policyVersion,
+            requiredBodies,
+            bodyStates);
     final String stateHex = canonicalHex(root.get("state_payload_hex"), "state_payload_hex", false);
     if (stateHex.length() / 2 > MAX_STATE_BYTES) {
       throw new IllegalArgumentException("state_payload_hex exceeds its bound");
@@ -1353,6 +1442,7 @@ public final class ParliamentApiV1 {
           "required_bodies must contain one through ten entries");
     }
     final List<String> bodies = new ArrayList<>(entries.size());
+    int previousBodyIndex = -1;
     for (int index = 0; index < entries.size(); index++) {
       final String context = "required_bodies[" + index + "]";
       final Map<String, Object> entry =
@@ -1362,6 +1452,12 @@ public final class ParliamentApiV1 {
           || bodies.contains(body)) {
         throw new IllegalArgumentException(context + ".body is unknown or duplicated");
       }
+      final int bodyIndex = BODY_ORDER.indexOf(body);
+      if (bodyIndex <= previousBodyIndex) {
+        throw new IllegalArgumentException(
+            "required_bodies must use strict canonical body order");
+      }
+      previousBodyIndex = bodyIndex;
       final String mode =
           taggedUnitIn(
               entry.get("decision_mode"),
@@ -1480,6 +1576,16 @@ public final class ParliamentApiV1 {
         throw new IllegalArgumentException(
             context + " no-result facts do not match its lifecycle and decision protocol");
       }
+      final TimedOvnProgressProjection timedOvnProgress =
+          entry.get("timed_ovn_progress") == null
+              ? null
+              : validateTimedOvnProgress(
+                  entry.get("timed_ovn_progress"), context + ".timed_ovn_progress");
+      if (timedOvnProgress != null
+          && (!PRIVATE_BODIES.contains(body) || bodyInstanceId == null)) {
+        throw new IllegalArgumentException(
+            context + ".timed_ovn_progress requires an active private body");
+      }
       result.add(
           new BodyStateProjection(
               body,
@@ -1490,13 +1596,70 @@ public final class ParliamentApiV1 {
               phaseBlocks,
               deadline,
               noResultKind,
-              noResultHeight));
+              noResultHeight,
+              timedOvnProgress));
     }
     return result;
   }
 
+  private static TimedOvnProgressProjection validateTimedOvnProgress(
+      final Object value, final String context) {
+    final Map<String, Object> progress =
+        exactObject(value, TIMED_OVN_PROGRESS_FIELDS, context);
+    final String ballotAttemptId = id(progress, "ballot_attempt_id");
+    final String status =
+        taggedUnitIn(
+            progress.get("status"),
+            "status",
+            TIMED_OVN_BALLOT_STATUSES,
+            context + ".status");
+    final Object survivorsValue = progress.get("frozen_survivor_count");
+    final Object prefixValue = progress.get("accepted_ballot_prefix_count");
+    if ((survivorsValue == null) != (prefixValue == null)) {
+      throw new IllegalArgumentException(
+          context + " survivor and prefix counts must appear together");
+    }
+    Integer survivors = null;
+    Integer prefix = null;
+    if (survivorsValue == null) {
+      if (!setOf("Registration", "SurvivorFreeze", "NoResult", "Superseded")
+          .contains(status)) {
+        throw new IllegalArgumentException(
+            context + " must expose counts after survivor freeze");
+      }
+    } else {
+      survivors =
+          u32Int(
+              survivorsValue,
+              context + ".frozen_survivor_count",
+              1,
+              MAX_TIMED_OVN_CORPUS_ENTRIES);
+      prefix =
+          u32Int(
+              prefixValue,
+              context + ".accepted_ballot_prefix_count",
+              0,
+              survivors);
+      if ((status.equals("Registration") || status.equals("SurvivorFreeze"))
+          || (status.equals("TimedCommitment") && prefix >= survivors)
+          || (setOf("AwaitingRelease", "Opening", "Finalized").contains(status)
+              && !prefix.equals(survivors))) {
+        throw new IllegalArgumentException(
+            context + " counts do not match the ballot lifecycle phase");
+      }
+    }
+    return new TimedOvnProgressProjection(ballotAttemptId, status, survivors, prefix);
+  }
+
   private static List<PublicFindingCertificateBinding> validateCertificate(
-      final Object value, final String expectedAttemptId) {
+      final Object value,
+      final String expectedAttemptId,
+      final String expectedProposalContentId,
+      final String expectedAttemptSequence,
+      final String expectedRiskTier,
+      final String expectedPolicyVersion,
+      final List<String> requiredBodies,
+      final List<BodyStateProjection> bodyStates) {
     if (value == null) {
       return listOf();
     }
@@ -1515,22 +1678,65 @@ public final class ParliamentApiV1 {
                 "certified_at_height",
                 "enact_at_height"),
             "certificate");
-    id(certificate, "proposal_content_id");
+    if (!id(certificate, "proposal_content_id").equals(expectedProposalContentId)) {
+      throw new IllegalArgumentException(
+          "certificate.proposal_content_id differs from attempt.proposal_content_id");
+    }
     if (!id(certificate, "governance_attempt_id").equals(expectedAttemptId)) {
       throw new IllegalArgumentException(
           "certificate.governance_attempt_id differs from attempt.id");
     }
-    u32(certificate.get("governance_attempt_sequence"), "certificate.governance_attempt_sequence");
+    if (!u32(
+            certificate.get("governance_attempt_sequence"),
+            "certificate.governance_attempt_sequence")
+        .equals(expectedAttemptSequence)) {
+      throw new IllegalArgumentException(
+          "certificate.governance_attempt_sequence differs from attempt.sequence");
+    }
+    if (!taggedUnitIn(
+            certificate.get("risk_tier"),
+            "tier",
+            setOf("Routine", "Standard", "Constitutional", "Emergency"),
+            "certificate.risk_tier")
+        .equals(expectedRiskTier)) {
+      throw new IllegalArgumentException(
+          "certificate.risk_tier differs from attempt.risk_tier");
+    }
     byteArray32(certificate.get("effect_preimage_hash"), "certificate.effect_preimage_hash");
-    unsignedInteger(certificate.get("policy_version"), "certificate.policy_version");
-    unsignedInteger(certificate.get("certified_at_height"), "certificate.certified_at_height");
-    unsignedInteger(certificate.get("enact_at_height"), "certificate.enact_at_height");
+    final String policyVersion =
+        unsignedInteger(certificate.get("policy_version"), "certificate.policy_version");
+    if (new BigInteger(policyVersion).signum() <= 0
+        || !policyVersion.equals(expectedPolicyVersion)) {
+      throw new IllegalArgumentException(
+          "certificate.policy_version differs from the attempt projection");
+    }
+    validateExpectedHead(certificate.get("expected_head"), "certificate.expected_head");
+    final BigInteger certifiedAtHeight =
+        new BigInteger(
+            unsignedInteger(
+                certificate.get("certified_at_height"), "certificate.certified_at_height"));
+    final BigInteger enactAtHeight =
+        new BigInteger(
+            unsignedInteger(certificate.get("enact_at_height"), "certificate.enact_at_height"));
+    if (certifiedAtHeight.signum() <= 0 || enactAtHeight.compareTo(certifiedAtHeight) <= 0) {
+      throw new IllegalArgumentException(
+          "certificate enact_at_height must follow certified_at_height");
+    }
     if (!(certificate.get("body_bindings") instanceof List<?> bindings)
+        || bindings.size() != requiredBodies.size()
         || bindings.isEmpty()
         || bindings.size() > 10) {
       throw new IllegalArgumentException(
-          "certificate.body_bindings must contain one through ten entries");
+          "certificate.body_bindings must exactly match required_bodies");
     }
+    final Set<String> seenBodyInstanceIds = new HashSet<>();
+    final Set<String> seenElectionAttemptIds = new HashSet<>();
+    final Set<String> seenSortitionRequestIds = new HashSet<>();
+    final Set<String> seenBallotAttemptIds = new HashSet<>();
+    final Set<String> seenTleSessionIds = new HashSet<>();
+    final Set<String> seenReleasePulseIds = new HashSet<>();
+    final Set<String> seenReleaseSlots = new HashSet<>();
+    final Set<String> sortitionPulseIds = new HashSet<>();
     final List<PublicFindingCertificateBinding> findings = new ArrayList<>();
     for (int index = 0; index < bindings.size(); index++) {
       final String context = "certificate.body_bindings[" + index + "]";
@@ -1539,28 +1745,92 @@ public final class ParliamentApiV1 {
               bindings.get(index),
               new HashSet<>(CERTIFICATE_BODY_BINDING_NORITO_FIELDS),
               context);
-      if (!(binding.get("body") instanceof String body) || !BODIES.contains(body)) {
-        throw new IllegalArgumentException(context + ".body is unknown");
+      if (!(binding.get("body") instanceof String body)
+          || !body.equals(requiredBodies.get(index))) {
+        throw new IllegalArgumentException(
+            context + ".body differs from required_bodies order");
       }
-      final int seats = u32Int(binding.get("original_seats"), context + ".original_seats", 1, 1000);
-      for (final String field :
-          listOf(
-              "body_instance_id",
-              "election_attempt_id",
-              "sortition_request_id",
-              "beacon_session_id",
-              "beacon_pulse_id")) {
-        id(binding, field);
+      final int seats =
+          u32Int(
+              binding.get("original_seats"),
+              context + ".original_seats",
+              1,
+              MAX_TIMED_OVN_CORPUS_ENTRIES);
+      final String bodyInstanceId = id(binding, "body_instance_id");
+      if (!bodyInstanceId.equals(bodyStates.get(index).bodyInstanceId)) {
+        throw new IllegalArgumentException(
+            context + ".body_instance_id differs from body_states");
       }
+      final String electionAttemptId = id(binding, "election_attempt_id");
+      final String sortitionRequestId = id(binding, "sortition_request_id");
+      final String beaconSessionId = id(binding, "beacon_session_id");
+      final String beaconPulseId = id(binding, "beacon_pulse_id");
+      if (!seenBodyInstanceIds.add(bodyInstanceId)) {
+        throw new IllegalArgumentException(
+            "certificate.body_bindings reuses body_instance_id");
+      }
+      if (!seenElectionAttemptIds.add(electionAttemptId)) {
+        throw new IllegalArgumentException(
+            "certificate.body_bindings reuses election_attempt_id");
+      }
+      if (!seenSortitionRequestIds.add(sortitionRequestId)) {
+        throw new IllegalArgumentException(
+            "certificate.body_bindings reuses sortition_request_id");
+      }
+      sortitionPulseIds.add(beaconPulseId);
       for (final String field : listOf("roster_root", "assignment_root", "result_root")) {
         byteArray32(binding.get(field), context + "." + field);
       }
-      unsignedInteger(binding.get("result_height"), context + ".result_height");
+      u32(binding.get("election_attempt_sequence"), context + ".election_attempt_sequence");
+      final BigInteger resultHeight =
+          new BigInteger(
+              unsignedInteger(binding.get("result_height"), context + ".result_height"));
+      validateCertificateSortitionRequest(
+          binding.get("sortition_request"),
+          expectedAttemptId,
+          body,
+          electionAttemptId,
+          sortitionRequestId,
+          beaconSessionId,
+          resultHeight,
+          certifiedAtHeight,
+          context + ".sortition_request");
       if (PRIVATE_BODIES.contains(body)) {
         if (binding.get("public_finding") != null || binding.get("ballot") == null) {
           throw new IllegalArgumentException(context + " private jury must carry ballot only");
         }
+        final CertificateBallotFacts ballot =
+            validateCertificateBallot(
+                binding.get("ballot"), seats, resultHeight, context + ".ballot");
+        final TimedOvnProgressProjection progress = bodyStates.get(index).timedOvnProgress;
+        if (progress == null
+            || !progress.status.equals("Finalized")
+            || !progress.ballotAttemptId.equals(ballot.ballotAttemptId)
+            || !progress.frozenSurvivorCount.equals(ballot.acceptedBallots)
+            || !progress.acceptedBallotPrefixCount.equals(ballot.acceptedBallots)) {
+          throw new IllegalArgumentException(
+              context + ".ballot differs from timed_ovn_progress");
+        }
+        if (!seenBallotAttemptIds.add(ballot.ballotAttemptId)) {
+          throw new IllegalArgumentException(
+              "certificate.body_bindings reuses ballot_attempt_id");
+        }
+        if (!seenTleSessionIds.add(ballot.tleSessionId)) {
+          throw new IllegalArgumentException("certificate.body_bindings reuses tle_session_id");
+        }
+        if (!seenReleasePulseIds.add(ballot.releasePulseId)) {
+          throw new IllegalArgumentException(
+              "certificate.body_bindings reuses release_pulse_id");
+        }
+        if (!seenReleaseSlots.add(ballot.releaseSlot)) {
+          throw new IllegalArgumentException(
+              "certificate.body_bindings reuses a TLE release slot");
+        }
       } else {
+        if (bodyStates.get(index).timedOvnProgress != null) {
+          throw new IllegalArgumentException(
+              context + " public body exposes timed_ovn_progress");
+        }
         if (binding.get("public_finding") == null || binding.get("ballot") != null) {
           throw new IllegalArgumentException(
               context + " public body must carry public_finding only");
@@ -1570,7 +1840,276 @@ public final class ParliamentApiV1 {
                 binding.get("public_finding"), seats, context + ".public_finding"));
       }
     }
+    for (final String releasePulseId : seenReleasePulseIds) {
+      if (sortitionPulseIds.contains(releasePulseId)) {
+        throw new IllegalArgumentException(
+            "certificate reuses a sortition pulse for ballot release");
+      }
+    }
     return findings;
+  }
+
+  /** Direct bindings are checked here; Norito-derived content identifiers and roots stay opaque. */
+  private static void validateCertificateSortitionRequest(
+      final Object value,
+      final String governanceAttemptId,
+      final String body,
+      final String electionAttemptId,
+      final String sortitionRequestId,
+      final String beaconSessionId,
+      final BigInteger resultHeight,
+      final BigInteger certifiedAtHeight,
+      final String context) {
+    final Map<String, Object> request =
+        exactObject(
+            value,
+            setOf(
+                "id",
+                "governance_attempt_id",
+                "body_election_attempt_id",
+                "body",
+                "candidate_root",
+                "candidate_count",
+                "target_seats",
+                "request_height",
+                "pulse_height",
+                "beacon_session_id"),
+            context);
+    if (!id(request, "id").equals(sortitionRequestId)
+        || !id(request, "governance_attempt_id").equals(governanceAttemptId)
+        || !id(request, "body_election_attempt_id").equals(electionAttemptId)
+        || !body.equals(request.get("body"))
+        || !id(request, "beacon_session_id").equals(beaconSessionId)) {
+      throw new IllegalArgumentException(
+          context + " differs from its repeated certificate bindings");
+    }
+    byteArray32(request.get("candidate_root"), context + ".candidate_root");
+    u32Int(
+        request.get("candidate_count"),
+        context + ".candidate_count",
+        1,
+        MAX_TIMED_OVN_CORPUS_ENTRIES);
+    u32Int(
+        request.get("target_seats"),
+        context + ".target_seats",
+        1,
+        MAX_TIMED_OVN_CORPUS_ENTRIES);
+    final BigInteger requestHeight =
+        new BigInteger(unsignedInteger(request.get("request_height"), context + ".request_height"));
+    final BigInteger pulseHeight =
+        new BigInteger(unsignedInteger(request.get("pulse_height"), context + ".pulse_height"));
+    if (requestHeight.signum() <= 0
+        || pulseHeight.compareTo(requestHeight) <= 0
+        || resultHeight.compareTo(pulseHeight) <= 0
+        || resultHeight.compareTo(certifiedAtHeight) > 0) {
+      throw new IllegalArgumentException(
+          context + " violates the sortition/result lifecycle");
+    }
+  }
+
+  private static final class CertificateBallotFacts {
+    private final String ballotAttemptId;
+    private final String tleSessionId;
+    private final String releasePulseId;
+    private final String releaseSlot;
+    private final Integer acceptedBallots;
+
+    private CertificateBallotFacts(
+        final String ballotAttemptId,
+        final String tleSessionId,
+        final String releasePulseId,
+        final String releaseSlot,
+        final Integer acceptedBallots) {
+      this.ballotAttemptId = ballotAttemptId;
+      this.tleSessionId = tleSessionId;
+      this.releasePulseId = releasePulseId;
+      this.releaseSlot = releaseSlot;
+      this.acceptedBallots = acceptedBallots;
+    }
+  }
+
+  private static CertificateBallotFacts validateCertificateBallot(
+      final Object value,
+      final int originalSeats,
+      final BigInteger resultHeight,
+      final String context) {
+    final Map<String, Object> ballot =
+        exactObject(
+            value,
+            setOf(
+                "ballot_attempt_id",
+                "ballot_attempt_sequence",
+                "tle_session_id",
+                "tle_key_session_id",
+                "registration_root",
+                "dropout_root",
+                "survivor_root",
+                "corpus_root",
+                "no_recovery_root",
+                "timed_commitment_root",
+                "release_beacon_session_id",
+                "registered_at_height",
+                "registration_close_height",
+                "survivor_freeze_height",
+                "commitment_close_height",
+                "registration_closed_at_height",
+                "survivors_frozen_at_height",
+                "commitment_closed_at_height",
+                "max_ballot_retries",
+                "max_corpus_entries",
+                "release_height",
+                "opening_deadline_height",
+                "release_pulse_id",
+                "opening_height",
+                "opening_root",
+                "tally",
+                "outcome"),
+            context);
+    final String ballotAttemptId = id(ballot, "ballot_attempt_id");
+    final String tleSessionId = id(ballot, "tle_session_id");
+    id(ballot, "tle_key_session_id");
+    final String releaseBeaconSessionId = id(ballot, "release_beacon_session_id");
+    final String releasePulseId = id(ballot, "release_pulse_id");
+    for (final String field :
+        listOf(
+            "registration_root",
+            "dropout_root",
+            "survivor_root",
+            "corpus_root",
+            "no_recovery_root",
+            "timed_commitment_root",
+            "opening_root")) {
+      byteArray32(ballot.get(field), context + "." + field);
+    }
+    final int sequence =
+        u32Int(ballot.get("ballot_attempt_sequence"), context + ".ballot_attempt_sequence", 0, 16);
+    final int maxRetries =
+        u32Int(ballot.get("max_ballot_retries"), context + ".max_ballot_retries", 0, 16);
+    if (sequence > maxRetries) {
+      throw new IllegalArgumentException(
+          context + ".ballot_attempt_sequence exceeds max_ballot_retries");
+    }
+    final int maxCorpusEntries =
+        u32Int(
+            ballot.get("max_corpus_entries"),
+            context + ".max_corpus_entries",
+            1,
+            MAX_TIMED_OVN_CORPUS_ENTRIES);
+    final BigInteger registered = certificateHeight(ballot, "registered_at_height", context);
+    final BigInteger registrationClose =
+        certificateHeight(ballot, "registration_close_height", context);
+    final BigInteger survivorFreeze =
+        certificateHeight(ballot, "survivor_freeze_height", context);
+    final BigInteger commitmentClose =
+        certificateHeight(ballot, "commitment_close_height", context);
+    final BigInteger registrationClosed =
+        certificateHeight(ballot, "registration_closed_at_height", context);
+    final BigInteger survivorsFrozen =
+        certificateHeight(ballot, "survivors_frozen_at_height", context);
+    final BigInteger commitmentClosed =
+        certificateHeight(ballot, "commitment_closed_at_height", context);
+    final BigInteger release = certificateHeight(ballot, "release_height", context);
+    final BigInteger openingDeadline =
+        certificateHeight(ballot, "opening_deadline_height", context);
+    final BigInteger opening = certificateHeight(ballot, "opening_height", context);
+    final BigInteger maxCorpus = BigInteger.valueOf(maxCorpusEntries);
+    final BigInteger requiredCommitmentBlocks =
+        BigInteger.valueOf(
+            (maxCorpusEntries + TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS - 1L)
+                / TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS);
+    if (registered.signum() <= 0
+        || registrationClose.compareTo(registered) <= 0
+        || maxCorpusEntries < originalSeats
+        || registrationClose.subtract(registered).compareTo(maxCorpus.add(BigInteger.ONE)) < 0
+        || survivorFreeze.compareTo(registrationClose) <= 0
+        || survivorFreeze.subtract(registrationClose).compareTo(maxCorpus) < 0
+        || commitmentClose.compareTo(survivorFreeze) <= 0
+        || commitmentClose.subtract(survivorFreeze).compareTo(requiredCommitmentBlocks) < 0
+        || release.compareTo(commitmentClose) <= 0
+        || openingDeadline.compareTo(release) <= 0
+        || !registrationClosed.equals(registrationClose)
+        || !survivorsFrozen.equals(survivorFreeze)
+        || commitmentClosed.compareTo(survivorFreeze) <= 0
+        || commitmentClosed.compareTo(commitmentClose) > 0
+        || opening.compareTo(release) < 0
+        || opening.compareTo(openingDeadline) > 0
+        || resultHeight.compareTo(opening) < 0
+        || resultHeight.compareTo(openingDeadline) > 0) {
+      throw new IllegalArgumentException(context + " violates the frozen ballot lifecycle");
+    }
+    final Map<String, Object> tally =
+        exactObject(
+            ballot.get("tally"),
+            setOf("original_seats", "accepted_ballots", "aye", "nay", "abstain"),
+            context + ".tally");
+    final int tallySeats =
+        u32Int(
+            tally.get("original_seats"),
+            context + ".tally.original_seats",
+            1,
+            MAX_TIMED_OVN_CORPUS_ENTRIES);
+    final int accepted =
+        u32Int(
+            tally.get("accepted_ballots"),
+            context + ".tally.accepted_ballots",
+            0,
+            MAX_TIMED_OVN_CORPUS_ENTRIES);
+    final BigInteger aye = new BigInteger(u32(tally.get("aye"), context + ".tally.aye"));
+    final BigInteger nay = new BigInteger(u32(tally.get("nay"), context + ".tally.nay"));
+    final BigInteger abstain =
+        new BigInteger(u32(tally.get("abstain"), context + ".tally.abstain"));
+    if (tallySeats != originalSeats
+        || accepted > maxCorpusEntries
+        || accepted > originalSeats
+        || !aye.add(nay).add(abstain).equals(BigInteger.valueOf(accepted))) {
+      throw new IllegalArgumentException(
+          context + ".tally violates immutable bounds or count conservation");
+    }
+    final int quorum = (2 * originalSeats + 2) / 3;
+    final String outcome =
+        taggedUnitIn(
+            ballot.get("outcome"),
+            "outcome",
+            setOf("Approved", "Rejected", "NoQuorum", "NoResult"),
+            context + ".outcome");
+    final String expectedOutcome =
+        accepted < quorum ? "NoQuorum" : aye.compareTo(nay) > 0 ? "Approved" : "Rejected";
+    if (!outcome.equals(expectedOutcome) || !outcome.equals("Approved")) {
+      throw new IllegalArgumentException(
+          context + " must contain the deterministic approving aggregate outcome");
+    }
+    return new CertificateBallotFacts(
+        ballotAttemptId,
+        tleSessionId,
+        releasePulseId,
+        releaseBeaconSessionId + ":" + release,
+        accepted);
+  }
+
+  private static BigInteger certificateHeight(
+      final Map<String, Object> ballot, final String field, final String context) {
+    return new BigInteger(unsignedInteger(ballot.get(field), context + "." + field));
+  }
+
+  private static void validateExpectedHead(final Object value, final String context) {
+    final Map<String, Object> root =
+        exactObject(value, setOf("state", "head"), context);
+    if ("Absent".equals(root.get("state"))) {
+      final Map<String, Object> head =
+          exactObject(root.get("head"), setOf("subject_id"), context + ".head");
+      byteArray32(head.get("subject_id"), context + ".head.subject_id");
+    } else if ("Present".equals(root.get("state"))) {
+      final Map<String, Object> head =
+          exactObject(
+              root.get("head"),
+              setOf("subject_id", "version", "head_root"),
+              context + ".head");
+      byteArray32(head.get("subject_id"), context + ".head.subject_id");
+      unsignedInteger(head.get("version"), context + ".head.version");
+      byteArray32(head.get("head_root"), context + ".head.head_root");
+    } else {
+      throw new IllegalArgumentException(context + ".state is unknown");
+    }
   }
 
   private static PublicFindingCertificateBinding validatePublicFinding(
@@ -1599,12 +2138,22 @@ public final class ParliamentApiV1 {
       assignments.add(identifier);
       previous = identifier;
     }
-    if (assignments.isEmpty() || assignments.size() > 1000) {
+    if (assignments.isEmpty() || assignments.size() > MAX_TIMED_OVN_CORPUS_ENTRIES) {
       throw new IllegalArgumentException(
           context + ".endorsing_assignments must contain one through 1000 identifiers");
     }
-    final int endorsements = u32Int(finding.get("endorsements"), context + ".endorsements", 1, 1000);
-    final int quorum = u32Int(finding.get("quorum"), context + ".quorum", 1, 1000);
+    final int endorsements =
+        u32Int(
+            finding.get("endorsements"),
+            context + ".endorsements",
+            1,
+            MAX_TIMED_OVN_CORPUS_ENTRIES);
+    final int quorum =
+        u32Int(
+            finding.get("quorum"),
+            context + ".quorum",
+            1,
+            MAX_TIMED_OVN_CORPUS_ENTRIES);
     final int expectedQuorum = (2 * originalSeats + 2) / 3;
     if (assignments.size() != endorsements || endorsements != quorum || quorum != expectedQuorum) {
       throw new IllegalArgumentException(

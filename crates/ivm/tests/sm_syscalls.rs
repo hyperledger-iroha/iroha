@@ -9,7 +9,6 @@ const TEST_CALLER_ID: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwu
 fn test_caller_account() -> AccountId {
     AccountId::parse_encoded(TEST_CALLER_ID)
         .expect("test account literal must be valid canonical AccountId")
-        .into_account_id()
 }
 mod common;
 use common::{assemble, payload_for_type};

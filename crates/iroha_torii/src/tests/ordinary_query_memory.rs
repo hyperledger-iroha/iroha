@@ -664,7 +664,7 @@ mod ordinary_query_memory_tests {
         }
         panic!("detached blocking worker did not release its reservation");
     }
-    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[cfg(feature = "connect")]
     #[tokio::test]
     async fn proxy_snapshot_and_rebuilt_body_keep_ordinary_weight() {
         let pool = QueryWeightedMemoryPool::with_max_permits(16, 16).expect("proxy test pool");

@@ -226,6 +226,23 @@ def _identifier_prefixed_hash_payload(raw: Any, prefix: str, context: str) -> by
     return _identifier_compact_length(len(digest)) + digest
 
 
+def _identifier_uaid_payload(raw: Any, context: str) -> bytes:
+    value = _require_exact_non_empty_string(raw, context)
+    prefix = "uaid:"
+    body = value[len(prefix) :] if value.startswith(prefix) else ""
+    if (
+        len(body) != 64
+        or any(character not in "0123456789abcdef" for character in body)
+    ):
+        raise ValueError(
+            f"{context} must be an exact canonical uaid:<64 lowercase hex> literal"
+        )
+    if int(body[-1], 16) % 2 == 0:
+        raise ValueError(f"{context} must have least significant bit set to 1")
+    digest = bytes.fromhex(body)
+    return _identifier_compact_length(len(digest)) + digest
+
+
 def _identifier_execution_payload(execution: Any) -> bytes:
     record = _require_mapping(execution, "payload.execution")
     return b"".join(
@@ -537,7 +554,7 @@ def encode_identifier_resolution_receipt_payload(
                 _identifier_hash_bytes(record.get("receipt_hash"), "payload.receipt_hash")
             ),
             _identifier_sized_field(
-                _identifier_prefixed_hash_payload(record.get("uaid"), "uaid:", "payload.uaid")
+                _identifier_uaid_payload(record.get("uaid"), "payload.uaid")
             ),
             _identifier_sized_field(
                 _identifier_account_id_payload(record.get("account_id"), decode_i105)

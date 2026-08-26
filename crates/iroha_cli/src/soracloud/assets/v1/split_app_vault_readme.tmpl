@@ -16,18 +16,20 @@ deploy still use the IVM bytecode emitted by `./build.sh`.
 ## Local verification
 
 ```bash
-./build.sh
-./verify-build.sh
+KOTO_BIN=/absolute/path/to/koto KOTO_BIN_SHA256=<lowercase-sha256> ./build.sh
+KOTO_BIN=/absolute/path/to/koto KOTO_BIN_SHA256=<lowercase-sha256> ./verify-build.sh
 ```
 
 `verify-build.sh` recompiles `contract/vault_api.ko` with `koto build` and
 checks that both the bytecode and emitted contract manifest match the committed
-build outputs.
+build outputs. `KOTO_BIN` must be an absolute, non-symlinked same-revision
+binary and `KOTO_BIN_SHA256` must match it; neither script searches `PATH` or
+compiles source fallback.
 
 Build:
 
 ```bash
-./build.sh
+KOTO_BIN=/absolute/path/to/koto KOTO_BIN_SHA256=<lowercase-sha256> ./build.sh
 ```
 
 The build emits `build/vault-api.to`, and the generated app manifest references

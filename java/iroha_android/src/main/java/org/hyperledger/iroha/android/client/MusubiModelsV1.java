@@ -4444,8 +4444,8 @@ public final class MusubiModelsV1 {
     final AccountAddress leftAddress;
     final AccountAddress rightAddress;
     try {
-      leftAddress = AccountAddress.parseEncodedIgnoringCurveSupport(left, null).address;
-      rightAddress = AccountAddress.parseEncodedIgnoringCurveSupport(right, null).address;
+      leftAddress = AccountAddress.parseEncodedIgnoringCurveSupport(left, null);
+      rightAddress = AccountAddress.parseEncodedIgnoringCurveSupport(right, null);
     } catch (final AccountAddress.AccountAddressException error) {
       throw new IllegalArgumentException("maintainer account must be canonical I105", error);
     }

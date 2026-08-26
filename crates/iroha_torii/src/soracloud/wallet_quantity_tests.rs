@@ -9,6 +9,7 @@ fn wallet_quantity_boundary_preserves_subnano_and_wide_values() {
     for amount in [sub_nano, overwide] {
         let payload = AgentWalletSpendPayload {
             apartment_name: "ops_agent".to_owned(),
+            request_id: "wallet-quantity-boundary-1".to_owned(),
             asset_definition: "asset".to_owned(),
             amount: amount.clone(),
         };
@@ -16,6 +17,7 @@ fn wallet_quantity_boundary_preserves_subnano_and_wide_values() {
             .expect("encode exact quantity payload");
         let expected = norito::to_bytes(&(
             payload.apartment_name.as_str(),
+            payload.request_id.as_str(),
             payload.asset_definition.as_str(),
             amount,
         ))
@@ -32,7 +34,7 @@ fn wallet_quantity_boundary_preserves_subnano_and_wide_values() {
     }
     for amount in ["-1", "+1", "01", "1.0", "0.00000000000000000000000000001"] {
         let raw = format!(
-            "{{\"apartment_name\":\"ops_agent\",\"asset_definition\":\"asset\",\"amount\":\"{amount}\"}}"
+            "{{\"apartment_name\":\"ops_agent\",\"request_id\":\"wallet-hostile-quantity-1\",\"asset_definition\":\"asset\",\"amount\":\"{amount}\"}}"
         );
         assert!(
             norito::json::from_str::<AgentWalletSpendPayload>(&raw).is_err(),
@@ -40,12 +42,19 @@ fn wallet_quantity_boundary_preserves_subnano_and_wide_values() {
         );
     }
     for hostile in [
-        r#"{"apartment_name":"ops_agent","asset_definition":"asset","amount":1}"#,
-        r#"{"apartment_name":"ops_agent","asset_definition":"asset","amount_nanos":1}"#,
+        r#"{"apartment_name":"ops_agent","request_id":"wallet-hostile-quantity-1","asset_definition":"asset","amount":1}"#,
+        r#"{"apartment_name":"ops_agent","request_id":"wallet-hostile-quantity-1","asset_definition":"asset","amount_nanos":1}"#,
     ] {
         assert!(
             norito::json::from_str::<AgentWalletSpendPayload>(hostile).is_err(),
             "accepted noncanonical or retired wallet payload `{hostile}`"
         );
     }
+    assert!(
+        norito::json::from_str::<AgentWalletSpendPayload>(
+            r#"{"apartment_name":"ops_agent","asset_definition":"asset","amount":"1"}"#,
+        )
+        .is_err(),
+        "accepted retired three-field wallet payload without request_id"
+    );
 }

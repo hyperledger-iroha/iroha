@@ -12,9 +12,8 @@ fn parse_trigger_decl_with_structured_data_filters_for_core_families() {
     let trigger = "wake".to_string();
     let role = "auditor".to_string();
     let asset = {
-        let account_id = iroha_data_model::account::AccountId::parse_encoded(&account)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("account");
+        let account_id =
+            iroha_data_model::account::AccountId::parse_encoded(&account).expect("account");
         let definition_id: iroha_data_model::asset::AssetDefinitionId =
             asset_definition.parse().expect("asset definition");
         iroha_data_model::asset::AssetId::new(definition_id, account_id).canonical_literal()

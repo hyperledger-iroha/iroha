@@ -13,7 +13,7 @@ def test_pin_register_posts_only_versioned_signed_transaction() -> None:
     signed_transaction = b"\x01signed-pin-transaction"
     response = {
         "status": "submitted",
-        "tx_hash_hex": "a" * 64,
+        "tx_hash_hex": "b" * 64,
         "manifest_digest_hex": "b" * 64,
     }
     session = RecordingSession(StubResponse(202, response))
@@ -37,7 +37,7 @@ def test_pin_register_posts_only_versioned_signed_transaction() -> None:
 def test_pin_register_rejects_pre_finality_fee_claim() -> None:
     response = {
         "status": "submitted",
-        "tx_hash_hex": "a" * 64,
+        "tx_hash_hex": "b" * 64,
         "manifest_digest_hex": "b" * 64,
         "pin_fee": "1",
     }
@@ -48,6 +48,24 @@ def test_pin_register_rejects_pre_finality_fee_claim() -> None:
     )
 
     with pytest.raises(TypeError, match="must contain only"):
+        client.register_sorafs_pin_manifest(
+            SimpleNamespace(signed_transaction_versioned=b"\x01signed")
+        )
+
+
+def test_pin_register_rejects_transaction_hash_without_iroha_marker() -> None:
+    response = {
+        "status": "submitted",
+        "tx_hash_hex": "a" * 64,
+        "manifest_digest_hex": "b" * 64,
+    }
+    client = ToriiClient(
+        "http://torii.example",
+        session=RecordingSession(StubResponse(202, response)),
+        max_retries=0,
+    )
+
+    with pytest.raises(ValueError, match="exact lowercase marked"):
         client.register_sorafs_pin_manifest(
             SimpleNamespace(signed_transaction_versioned=b"\x01signed")
         )

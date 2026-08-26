@@ -17,7 +17,7 @@ scheduling and automated off-chain pacemaking remain future work.
 ## Data Model
 
 ### Feed configuration (`FeedConfig`)
-- `feed_id: FeedId` — normalized name (UTS‑46/NFC enforced by `Name`).
+- `feed_id: FeedId` — exact canonical name (NFC spelling is validated by `Name`; alternate spellings are rejected).
 - `feed_config_version: u32` — monotonic per feed.
 - `providers: Vec<OracleId>` — validator-bound oracle keys eligible for draws.
 - `connector_id/version: string/u32` — off-chain connector pinned to the feed.

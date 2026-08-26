@@ -57,7 +57,7 @@ fn build_app() -> (axum::Router, AccountId, AccountId, KeyPair) {
     let relay = Account::new(relay_id.clone()).build(&owner_id);
     let registration = KaigiRelayRegistration {
         relay_id: relay_id.clone(),
-        hpke_public_key: vec![0xAA, 0xBB, 0xCC],
+        hpke_public_key: vec![0xAA, 0xBB],
         bandwidth_class: 5,
     };
     let feedback = KaigiRelayFeedback {
@@ -196,6 +196,11 @@ async fn kaigi_endpoints_report_metadata() {
         summary["items"][0]["relay_id"].as_str().unwrap(),
         relay_literal
     );
+    assert_eq!(
+        summary["items"][0]["hpke_fingerprint_hex"].as_str(),
+        Some("b9a7b866cdb0df5d6eacf2c0f43ab30a7940cf259b1beaaa954bb79d89fab58f")
+    );
+    assert_eq!(summary["items"][0]["status"].as_str(), Some("healthy"));
     // Detail endpoint
     let detail_path = format!("/v1/kaigi/relays/{relay_literal}");
     let detail_resp = get_kaigi(&app, &operator_key_pair, detail_path, None).await;
@@ -209,7 +214,8 @@ async fn kaigi_endpoints_report_metadata() {
             .len(),
         64
     );
-    assert_eq!(detail["hpke_public_key_b64"].as_str().unwrap(), "qrvM");
+    assert_eq!(detail["relay"]["status"].as_str(), Some("healthy"));
+    assert_eq!(detail["hpke_public_key_b64"].as_str().unwrap(), "qrs=");
     // Health snapshot
     let health_resp = get_kaigi(&app, &operator_key_pair, "/v1/kaigi/relays/health", None).await;
     assert_eq!(health_resp.status(), StatusCode::OK);
@@ -231,6 +237,7 @@ async fn kaigi_endpoints_emit_i105_literals() {
         summary["items"][0]["relay_id"].as_str(),
         Some(relay_literal.as_str())
     );
+    assert_eq!(summary["items"][0]["status"].as_str(), Some("healthy"));
     let detail_path = format!("/v1/kaigi/relays/{relay_literal}");
     let detail_resp = get_kaigi(&app, &operator_key_pair, detail_path, None).await;
     assert_eq!(detail_resp.status(), StatusCode::OK);
@@ -240,6 +247,7 @@ async fn kaigi_endpoints_emit_i105_literals() {
         detail["relay"]["relay_id"].as_str(),
         Some(relay_literal.as_str())
     );
+    assert_eq!(detail["relay"]["status"].as_str(), Some("healthy"));
     assert_eq!(detail["reported_by"].as_str(), Some(owner_literal.as_str()));
 }
 #[tokio::test]
@@ -264,6 +272,7 @@ async fn kaigi_endpoints_honor_json_accept_header() {
         summary["items"][0]["relay_id"].as_str(),
         Some(relay_literal.as_str())
     );
+    assert_eq!(summary["items"][0]["status"].as_str(), Some("healthy"));
     let detail_path = format!("/v1/kaigi/relays/{relay_literal}");
     let detail_resp = get_kaigi(
         &app,
@@ -339,7 +348,8 @@ async fn kaigi_endpoints_honor_norito_accept_header() {
         detail["relay"]["relay_id"].as_str(),
         Some(relay_literal.as_str())
     );
-    assert_eq!(detail["hpke_public_key_b64"].as_str(), Some("qrvM"));
+    assert_eq!(detail["relay"]["status"].as_str(), Some("healthy"));
+    assert_eq!(detail["hpke_public_key_b64"].as_str(), Some("qrs="));
     let health_resp = get_kaigi(
         &app,
         &operator_key_pair,

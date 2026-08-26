@@ -256,7 +256,6 @@ mod fault_injection_tests {
             authority: AccountId::parse_encoded(
                 "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
             )
-            .map(crate::account::ParsedAccountId::into_account_id)
             .expect("valid authority"),
         });
         let result = TransactionResult::new(Ok(DataTriggerSequence::default()));

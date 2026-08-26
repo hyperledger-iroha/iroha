@@ -8,8 +8,7 @@ fn gas_technical_account_matches_default_bootstrap_identity() {
         super::common::chain_discriminant(),
     );
     let parsed = AccountId::parse_encoded(pipeline::GAS_TECH_ACCOUNT_ID)
-        .expect("default gas technical account must be canonical I105")
-        .into_account_id();
+        .expect("default gas technical account must be canonical I105");
     assert_eq!(parsed, governance::bond_escrow_account_id());
 }
 #[test]
@@ -18,8 +17,7 @@ fn sponsor_vault_custody_account_is_canonical_and_dedicated() {
         super::common::chain_discriminant(),
     );
     let parsed = AccountId::parse_encoded(fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID)
-        .expect("default sponsor vault custody account must be canonical I105")
-        .into_account_id();
+        .expect("default sponsor vault custody account must be canonical I105");
     assert_eq!(parsed, fees::sponsor_vault_custody_account_id());
     assert_ne!(parsed.to_string(), pipeline::GAS_TECH_ACCOUNT_ID);
 }

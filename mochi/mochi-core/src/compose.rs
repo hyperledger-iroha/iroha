@@ -410,7 +410,7 @@ impl TransactionPreview {
     pub fn encoded_hex(&self) -> &str {
         &self.encoded_hex
     }
-    /// Versioned Norito payload bytes ready to POST to `/transaction`.
+    /// Versioned Norito payload bytes ready to POST to `/v1/pipeline/transactions`.
     #[must_use]
     pub fn encoded_bytes(&self) -> Vec<u8> {
         self.signed.encode_versioned()
@@ -1268,12 +1268,10 @@ fn parse_asset_id(value: &str) -> Result<AssetId, ComposeError> {
     })
 }
 fn parse_account_id(value: &str) -> Result<AccountId, ComposeError> {
-    AccountId::parse_encoded(value)
-        .map(|parsed| parsed.into_account_id())
-        .map_err(|err| ComposeError::InvalidAccountId {
-            account: value.to_owned(),
-            reason: err.to_string(),
-        })
+    AccountId::parse_encoded(value).map_err(|err| ComposeError::InvalidAccountId {
+        account: value.to_owned(),
+        reason: err.to_string(),
+    })
 }
 fn parse_quantity(value: &str) -> Result<Quantity, ComposeError> {
     Quantity::from_str(value).map_err(|err| ComposeError::InvalidQuantity {

@@ -12,6 +12,7 @@ difficulty 6.
 | Burst soak | 6 | 190, 190, 190, 190, 190, 190 | 4 s remote cooldown | Tickets are minted and verified (`puzzle::mint_ticket`/`verify`) while staying within the 300 ms SLO. |
 | Slowloris penalty | 3 | 340, 340, 340 | 5 s slowloris penalty | Exceeding the SLO three times triggers the configured slowloris penalty and registers an active cooldown in relay metrics. |
 
-Across both phases the puzzle difficulty mirrors the PoW difficulty, ensuring
-that Argon2 tickets stay aligned with adaptive policy decisions even under
-volumetric DoS attempts.
+Across both phases the puzzle difficulty remains at the single configured PoW
+difficulty. The first-release schema has no adaptive enablement, so an external
+issuer and verifier cannot drift during volumetric DoS attempts. The retired
+`adaptive` key is rejected as unknown rather than retained as an inert schema.

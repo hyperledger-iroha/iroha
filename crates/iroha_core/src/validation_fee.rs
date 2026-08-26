@@ -15,6 +15,7 @@ use iroha_data_model::{
     ValidationFail,
     account::AccountId,
     asset::AssetDefinitionId,
+    governance::types::ProposalKind,
     isi::{
         InstructionBox, TransferAssetBatch, TransferBox,
         governance::{
@@ -62,6 +63,138 @@ const VALIDATION_FEE_CREDIT_LIFECYCLE_STATE_PREFIX: &str = "ValidationFeeCreditL
 pub(crate) const VALIDATION_FEE_PAYOUT_WRAPPER_ENTRYPOINT_PERMISSION: &str =
     "CanInvokeContractEntrypoint";
 pub(crate) const VALIDATION_FEE_POOL_SWAP_ENTRYPOINT: &str = "swap_exact_in_quote_public";
+
+fn retained_enacted_validation_fee_proposals<'a>(
+    state_transaction: &'a StateTransaction<'_, '_>,
+) -> impl Iterator<Item = ([u8; 32], &'a ProposalKind)> + 'a {
+    let world = &state_transaction.world;
+    world
+        .validation_fee_proposal_index
+        .iter()
+        .filter_map(move |((_, proposal_id), ())| {
+            let proposal = world.governance_proposals.get(proposal_id)?;
+            (proposal.status == crate::state::GovernanceProposalStatus::Enacted)
+                .then_some((*proposal_id, &proposal.kind))
+        })
+}
+
+/// Return the retained enacted validation-fee proposal that pins an account.
+///
+/// The retained proposal kinds, rather than the currently active policy projection, are the
+/// append-only authorization source. Consequently this guard also covers the mandatory activation
+/// delay before the first enabled policy can make account unregistration fail closed at admission.
+pub(crate) fn retained_enacted_validation_fee_account_reference(
+    state_transaction: &StateTransaction<'_, '_>,
+    account_id: &AccountId,
+) -> Option<([u8; 32], &'static str)> {
+    retained_enacted_validation_fee_proposals(state_transaction).find_map(
+        |(proposal_id, proposal_kind)| {
+            let payout_reference = |binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1| {
+                if &binding.treasury_account_id == account_id {
+                    Some("payout treasury")
+                } else if &binding.pool_vault_account_id == account_id {
+                    Some("payout pool vault")
+                } else if binding
+                    .recipients
+                    .iter()
+                    .any(|recipient| &recipient.account_id == account_id)
+                {
+                    Some("payout recipient")
+                } else {
+                    None
+                }
+            };
+            let reference_kind = match proposal_kind {
+                ProposalKind::ValidationFeePolicy(payload) => {
+                    if &payload.policy.treasury_account_id == account_id {
+                        Some("policy treasury")
+                    } else {
+                        payload
+                            .policy
+                            .treasury_payout_binding
+                            .as_ref()
+                            .and_then(payout_reference)
+                    }
+                }
+                ProposalKind::ValidationFeePayoutLifecycle(payload) => {
+                    payout_reference(&payload.payout_binding)
+                }
+                _ => None,
+            }?;
+            Some((proposal_id, reference_kind))
+        },
+    )
+}
+
+fn retained_enacted_validation_fee_asset_reference_matching(
+    state_transaction: &StateTransaction<'_, '_>,
+    mut matches: impl FnMut(&AssetDefinitionId) -> bool,
+) -> Option<([u8; 32], &'static str, AssetDefinitionId)> {
+    retained_enacted_validation_fee_proposals(state_transaction).find_map(
+        |(proposal_id, proposal_kind)| {
+            let matched = match proposal_kind {
+                ProposalKind::ValidationFeePolicy(payload) => {
+                    if matches(&payload.policy.ds_asset_id) {
+                        Some((
+                            "policy DS asset definition",
+                            payload.policy.ds_asset_id.clone(),
+                        ))
+                    } else if let Some(binding) = payload.policy.treasury_payout_binding.as_ref() {
+                        if matches(&binding.ds_asset_id) {
+                            Some(("payout DS asset definition", binding.ds_asset_id.clone()))
+                        } else if matches(&binding.xor_asset_id) {
+                            Some(("payout XOR asset definition", binding.xor_asset_id.clone()))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                ProposalKind::ValidationFeePayoutLifecycle(payload) => {
+                    let binding = &payload.payout_binding;
+                    if matches(&binding.ds_asset_id) {
+                        Some(("payout DS asset definition", binding.ds_asset_id.clone()))
+                    } else if matches(&binding.xor_asset_id) {
+                        Some(("payout XOR asset definition", binding.xor_asset_id.clone()))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }?;
+            Some((proposal_id, matched.0, matched.1))
+        },
+    )
+}
+
+/// Return the retained enacted validation-fee proposal that pins an asset definition.
+///
+/// Every enacted policy DS and payout-lifecycle DS/XOR definition remains referenced even before
+/// activation and after its balance drains.
+pub(crate) fn retained_enacted_validation_fee_asset_reference(
+    state_transaction: &StateTransaction<'_, '_>,
+    asset_definition_id: &AssetDefinitionId,
+) -> Option<([u8; 32], &'static str)> {
+    retained_enacted_validation_fee_asset_reference_matching(state_transaction, |candidate| {
+        candidate == asset_definition_id
+    })
+    .map(|(proposal_id, reference_kind, _)| (proposal_id, reference_kind))
+}
+
+/// Return one retained enacted validation-fee reference to any definition in `candidates`.
+///
+/// The typed proposal index is traversed once, so containing-domain teardown is `O(P + D)` rather
+/// than rescanning `P` retained validation-fee proposals for each of its `D` definitions.
+pub(crate) fn retained_enacted_validation_fee_asset_reference_in(
+    state_transaction: &StateTransaction<'_, '_>,
+    candidates: &std::collections::BTreeSet<AssetDefinitionId>,
+) -> Option<([u8; 32], &'static str, AssetDefinitionId)> {
+    retained_enacted_validation_fee_asset_reference_matching(state_transaction, |candidate| {
+        candidates.contains(candidate)
+    })
+}
+
 fn enacted_payout_binding_for_contract<'a>(
     state_transaction: &'a StateTransaction<'_, '_>,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -367,6 +500,10 @@ enum ValidationFeeAdmissionError {
     TreasuryPayoutRuntimeBindingMismatch {
         reason: &'static str,
     },
+    AmbiguousTreasuryPayoutRuntimeIdentity {
+        first_policy_hash_hex: String,
+        second_policy_hash_hex: String,
+    },
     TreasuryPayoutEffectPlanMismatch {
         reason: &'static str,
     },
@@ -611,6 +748,13 @@ impl fmt::Display for ValidationFeeAdmissionError {
             Self::TreasuryPayoutRuntimeBindingMismatch { reason } => write!(
                 f,
                 "TREASURY_PAYOUT runtime does not match the enacted lifecycle binding: {reason}"
+            ),
+            Self::AmbiguousTreasuryPayoutRuntimeIdentity {
+                first_policy_hash_hex,
+                second_policy_hash_hex,
+            } => write!(
+                f,
+                "TREASURY_PAYOUT scheduled runtime matches multiple retained lifecycle identities from policies {first_policy_hash_hex} and {second_policy_hash_hex}"
             ),
             Self::TreasuryPayoutEffectPlanMismatch { reason } => write!(
                 f,
@@ -1019,6 +1163,7 @@ pub(crate) fn enforce_deferred_instruction_list(
 pub(crate) struct OpaqueDeferredRuntimeOrigin<'a> {
     runtime_context: &'a crate::executor::ContractRuntimeExecutionContext,
     code_bytes: &'a [u8],
+    trigger_id: Option<&'a iroha_data_model::trigger::TriggerId>,
     scheduled_time_trigger: bool,
 }
 /// Whether validated opaque effects should be atomically applied or discarded
@@ -1036,6 +1181,7 @@ impl<'a> OpaqueDeferredRuntimeOrigin<'a> {
         Self {
             runtime_context,
             code_bytes,
+            trigger_id: None,
             scheduled_time_trigger: false,
         }
     }
@@ -1045,10 +1191,12 @@ impl<'a> OpaqueDeferredRuntimeOrigin<'a> {
         runtime_context: &'a crate::executor::ContractRuntimeExecutionContext,
         code_bytes: &'a [u8],
         event: &iroha_data_model::events::EventBox,
+        trigger_id: &'a iroha_data_model::trigger::TriggerId,
     ) -> Self {
         Self {
             runtime_context,
             code_bytes,
+            trigger_id: Some(trigger_id),
             scheduled_time_trigger: matches!(event, iroha_data_model::events::EventBox::Time(_)),
         }
     }
@@ -1056,10 +1204,12 @@ impl<'a> OpaqueDeferredRuntimeOrigin<'a> {
     fn scheduled_time_trigger(
         runtime_context: &'a crate::executor::ContractRuntimeExecutionContext,
         code_bytes: &'a [u8],
+        trigger_id: &'a iroha_data_model::trigger::TriggerId,
     ) -> Self {
         Self {
             runtime_context,
             code_bytes,
+            trigger_id: Some(trigger_id),
             scheduled_time_trigger: true,
         }
     }
@@ -1070,25 +1220,35 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
     state_transaction: &mut StateTransaction<'_, '_>,
     runtime_origin: Option<OpaqueDeferredRuntimeOrigin<'_>>,
 ) -> Result<OpaqueDeferredValidationOutcome, TransactionRejectionReason> {
-    let Some(policy) = active_policy(state_transaction)? else {
-        return Ok(OpaqueDeferredValidationOutcome::Apply);
-    };
-    let treasury_payout_binding = verified_opaque_treasury_payout_binding(
-        &policy,
+    let registry = validated_policy_registry(state_transaction)?;
+    let active_policy =
+        active_policy_from_validated_registry(registry.as_ref(), state_transaction)?;
+    let payout_lifecycle = resolve_retained_payout_lifecycle(
+        registry.as_ref(),
         state_transaction,
         runtime_origin.as_ref(),
     )
     .map_err(admission_rejection)?;
-    enforce_opaque_deferred_policy(
+    let (fee_asset_definition_id, treasury_payout_authority) =
+        if let Some(lifecycle) = payout_lifecycle.as_ref() {
+            (
+                lifecycle.binding.ds_asset_id.clone(),
+                Some(&lifecycle.binding.treasury_account_id),
+            )
+        } else if let Some(policy) = active_policy.as_ref() {
+            (
+                policy_fee_asset_definition_id(policy).map_err(admission_rejection)?,
+                None,
+            )
+        } else {
+            return Ok(OpaqueDeferredValidationOutcome::Apply);
+        };
+    enforce_opaque_deferred_fee_asset_policy(
         instruction_groups,
-        &policy,
-        treasury_payout_binding
-            .as_ref()
-            .map(|binding| &binding.treasury_account_id),
+        &fee_asset_definition_id,
+        treasury_payout_authority,
     )
     .map_err(admission_rejection)?;
-    let fee_asset_definition_id =
-        policy_fee_asset_definition_id(&policy).map_err(admission_rejection)?;
     let mut visited_proposals = std::collections::BTreeSet::new();
     let mut resolve = |approve: &iroha_executor_data_model::isi::multisig::MultisigApprove| {
         crate::smartcontracts::isi::multisig::live_proposal_instructions_for_approval(
@@ -1126,16 +1286,16 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
         )
         .map_err(admission_rejection)?;
     }
-    if let Some(binding) = treasury_payout_binding.as_ref() {
+    if let Some(lifecycle) = payout_lifecycle.as_ref() {
+        let binding = &lifecycle.binding;
         if ordered_instructions.is_empty() && instruction_groups.is_empty() {
             return Ok(OpaqueDeferredValidationOutcome::NoOp);
         }
-        let lifecycle_seal = policy_payout_lifecycle_seal(&policy).map_err(admission_rejection)?;
         let batch_credit = ValidationFeeCredit {
             treasury_account_id: binding.treasury_account_id.clone(),
-            lifecycle_seal,
+            lifecycle_seal: lifecycle.lifecycle_seal,
             fee_asset_definition_id,
-            asset_scale: policy.ds_scale,
+            asset_scale: lifecycle.ds_scale,
             amount: binding.batch_ds.clone(),
         };
         let available = read_validation_fee_credit_balance(state_transaction, &batch_credit)
@@ -1143,7 +1303,7 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
         let xor_scale = validation_fee_payout_xor_scale(state_transaction, binding)
             .map_err(admission_rejection)?;
         let Some(terms) =
-            validation_fee_payout_terms(&available, binding, policy.ds_scale, xor_scale)
+            validation_fee_payout_terms(&available, binding, lifecycle.ds_scale, xor_scale)
                 .map_err(admission_rejection)?
         else {
             return Ok(OpaqueDeferredValidationOutcome::NoOp);
@@ -1173,13 +1333,24 @@ fn enforce_opaque_deferred_policy(
     let allowed_treasury_payout_authority = treasury_payout_authority.filter(|authority| {
         treasury_payout_exemption_enabled(policy) && **authority == policy_treasury
     });
+    enforce_opaque_deferred_fee_asset_policy(
+        instruction_groups,
+        &fee_asset_definition_id,
+        allowed_treasury_payout_authority,
+    )
+}
+fn enforce_opaque_deferred_fee_asset_policy(
+    instruction_groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
+    fee_asset_definition_id: &AssetDefinitionId,
+    allowed_treasury_payout_authority: Option<&AccountId>,
+) -> Result<(), ValidationFeeAdmissionError> {
     for (authority, instructions) in instruction_groups {
         let allowed_treasury =
             allowed_treasury_payout_authority.filter(|treasury| authority == *treasury);
         reject_opaque_fee_asset_effects(
             authority,
             instructions,
-            &fee_asset_definition_id,
+            fee_asset_definition_id,
             allowed_treasury,
         )?;
     }
@@ -1711,6 +1882,13 @@ fn enforce_deferred_policy_with_credit(
 fn active_policy(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<Option<ValidationFeePolicyV1>, TransactionRejectionReason> {
+    let registry = validated_policy_registry(state_transaction)?;
+    active_policy_from_validated_registry(registry.as_ref(), state_transaction)
+}
+
+fn validated_policy_registry(
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<Option<ValidationFeePolicyRegistryV1>, TransactionRejectionReason> {
     let parameter_id = ValidationFeePolicyRegistryV1::parameter_id();
     let Some(custom) = state_transaction
         .world
@@ -1734,6 +1912,16 @@ fn active_policy(
         validate_registry_entry_governance(entry, state_transaction)
             .map_err(admission_rejection)?;
     }
+    Ok(Some(registry))
+}
+
+fn active_policy_from_validated_registry(
+    registry: Option<&ValidationFeePolicyRegistryV1>,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<Option<ValidationFeePolicyV1>, TransactionRejectionReason> {
+    let Some(registry) = registry else {
+        return Ok(None);
+    };
     let current_height = state_transaction.block_height();
     let Some(entry) = registry.scheduled_entry_at_height(current_height) else {
         // The initial Parliament policy is deliberately enacted well before
@@ -1931,19 +2119,33 @@ fn validate_treasury_payout_contract_subject(
             reason: "the active Parliament policy has no typed payout binding",
         },
     )?;
+    if binding.treasury_account_id != treasury {
+        return Err(
+            ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
+                reason: "the payout binding treasury differs from the policy treasury",
+            },
+        );
+    }
+    validate_treasury_payout_binding_contract_subject(binding, policy.ds_scale, state_transaction)
+}
+
+fn validate_treasury_payout_binding_contract_subject(
+    binding: &ValidationFeeTreasuryPayoutBindingV1,
+    ds_scale: u8,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), ValidationFeeAdmissionError> {
     let Some(record) = crate::smartcontracts::code::fetch_bound_contract_record(
         state_transaction,
         &binding.contract_address,
     ) else {
         return Err(
             ValidationFeeAdmissionError::TreasuryPayoutRequiresActiveContractSubject {
-                treasury_account_id: treasury.to_string(),
+                treasury_account_id: binding.treasury_account_id.to_string(),
             },
         );
     };
     if record.contract_address != binding.contract_address
-        || record.contract_subject != treasury
-        || binding.treasury_account_id != treasury
+        || record.contract_subject != binding.treasury_account_id
     {
         return Err(
             ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
@@ -1971,12 +2173,17 @@ fn validate_treasury_payout_contract_subject(
             },
         );
     }
-    let lifecycle_seal = policy_payout_lifecycle_seal(policy)?;
+    let lifecycle_seal = binding
+        .lifecycle_seal()
+        .map_err(|_| ValidationFeeAdmissionError::InvalidPayoutLifecycleSeal)?;
+    if lifecycle_seal == [0; 32] {
+        return Err(ValidationFeeAdmissionError::InvalidPayoutLifecycleSeal);
+    }
     let ds_credit = ValidationFeeCredit {
         treasury_account_id: binding.treasury_account_id.clone(),
         lifecycle_seal,
         fee_asset_definition_id: binding.ds_asset_id.clone(),
-        asset_scale: policy.ds_scale,
+        asset_scale: ds_scale,
         amount: binding.batch_ds.clone(),
     };
     validation_fee_credit_asset_spec(state_transaction, &ds_credit)?;
@@ -2012,44 +2219,151 @@ fn validate_treasury_payout_contract_subject(
     }
     Ok(())
 }
-fn verified_opaque_treasury_payout_binding(
-    policy: &ValidationFeePolicyV1,
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedPayoutLifecycle {
+    lifecycle_seal: [u8; 32],
+    binding: ValidationFeeTreasuryPayoutBindingV1,
+    ds_scale: u8,
+    policy_hash: [u8; 32],
+}
+
+fn scheduled_trigger_claims_payout_binding(
+    binding: &ValidationFeeTreasuryPayoutBindingV1,
     state_transaction: &StateTransaction<'_, '_>,
-    runtime_origin: Option<&OpaqueDeferredRuntimeOrigin<'_>>,
-) -> Result<Option<ValidationFeeTreasuryPayoutBindingV1>, ValidationFeeAdmissionError> {
-    if !treasury_payout_exemption_enabled(policy) {
-        return Ok(None);
-    }
-    let binding = policy.treasury_payout_binding.as_ref().ok_or(
-        ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
-            reason: "the active Parliament policy has no typed payout binding",
-        },
-    )?;
-    let Some(origin) = runtime_origin else {
-        return Ok(None);
+    origin: &OpaqueDeferredRuntimeOrigin<'_>,
+) -> bool {
+    let Some(trigger_id) = origin.trigger_id else {
+        return false;
     };
-    if !origin.scheduled_time_trigger
-        || origin.runtime_context.contract_address != binding.contract_address
-        || origin.runtime_context.contract_subject != binding.treasury_account_id
-        || origin.runtime_context.entrypoint != binding.entrypoint.as_ref()
-        || <[u8; 32]>::from(Sha256::digest(origin.code_bytes)) != binding.code_hash
-    {
-        return Ok(None);
+    let Some(action) = state_transaction
+        .world
+        .triggers
+        .time_triggers()
+        .get(trigger_id)
+    else {
+        return false;
+    };
+    let ExecutableRef::ContractCall(invocation) = action.executable() else {
+        return false;
+    };
+    let Some(active_code_hash) = state_transaction
+        .world
+        .contract_instances
+        .get(&binding.contract_address)
+    else {
+        return false;
+    };
+    origin.scheduled_time_trigger
+        && trigger_is_enabled(action.metadata())
+        && action.authority() == &binding.treasury_account_id
+        && invocation.contract_address == binding.contract_address
+        && invocation.expected_code_hash == *active_code_hash
+        && invocation.entrypoint == binding.entrypoint.as_ref()
+        && invocation.arguments.is_none()
+}
+
+fn runtime_origin_matches_payout_binding(
+    binding: &ValidationFeeTreasuryPayoutBindingV1,
+    state_transaction: &StateTransaction<'_, '_>,
+    origin: &OpaqueDeferredRuntimeOrigin<'_>,
+) -> bool {
+    if !runtime_origin_claims_payout_binding(binding, origin) {
+        return false;
     }
-    let Some(record) = crate::smartcontracts::code::fetch_bound_contract_record(
+    crate::smartcontracts::code::fetch_bound_contract_record(
         state_transaction,
         &binding.contract_address,
-    ) else {
+    )
+    .is_some_and(|record| {
+        record.contract_address == binding.contract_address
+            && record.contract_subject == binding.treasury_account_id
+            && <[u8; 32]>::from(Sha256::digest(&record.code_bytes)) == binding.code_hash
+            && record.code_bytes.as_slice() == origin.code_bytes
+    })
+}
+
+fn runtime_origin_claims_payout_binding(
+    binding: &ValidationFeeTreasuryPayoutBindingV1,
+    origin: &OpaqueDeferredRuntimeOrigin<'_>,
+) -> bool {
+    !(origin.runtime_context.contract_address != binding.contract_address
+        || origin.runtime_context.contract_subject != binding.treasury_account_id
+        || origin.runtime_context.entrypoint != binding.entrypoint.as_ref()
+        || <[u8; 32]>::from(Sha256::digest(origin.code_bytes)) != binding.code_hash)
+}
+
+fn resolve_retained_payout_lifecycle(
+    registry: Option<&ValidationFeePolicyRegistryV1>,
+    state_transaction: &StateTransaction<'_, '_>,
+    runtime_origin: Option<&OpaqueDeferredRuntimeOrigin<'_>>,
+) -> Result<Option<ResolvedPayoutLifecycle>, ValidationFeeAdmissionError> {
+    let (Some(registry), Some(origin)) = (registry, runtime_origin) else {
         return Ok(None);
     };
-    if record.contract_address != binding.contract_address
-        || record.contract_subject != binding.treasury_account_id
-        || <[u8; 32]>::from(Sha256::digest(&record.code_bytes)) != binding.code_hash
-        || record.code_bytes.as_slice() != origin.code_bytes
-    {
-        return Ok(None);
+    let mut retained_identity_claimed = false;
+    let mut resolved: Option<ResolvedPayoutLifecycle> = None;
+    let current_height = state_transaction.block_height();
+    for entry in &registry.registered_policies {
+        // An enacted policy scheduled for a later height has never owned a fee-credit lifecycle
+        // at the current state boundary. It must neither authorize its runtime early nor make an
+        // already-effective predecessor ambiguous before the scheduled cutover.
+        if entry.policy.effective_from_height > current_height {
+            continue;
+        }
+        let (Some(binding), Some(reference)) = (
+            entry.policy.treasury_payout_binding.as_ref(),
+            entry.payout_lifecycle.as_ref(),
+        ) else {
+            continue;
+        };
+        let trigger_matches =
+            scheduled_trigger_claims_payout_binding(binding, state_transaction, origin);
+        let runtime_claims = runtime_origin_claims_payout_binding(binding, origin);
+        if !trigger_matches && !runtime_claims {
+            continue;
+        }
+        retained_identity_claimed = true;
+        if !trigger_matches
+            || !runtime_origin_matches_payout_binding(binding, state_transaction, origin)
+        {
+            continue;
+        }
+        validate_treasury_payout_binding_contract_subject(
+            binding,
+            entry.policy.ds_scale,
+            state_transaction,
+        )?;
+        let candidate = ResolvedPayoutLifecycle {
+            lifecycle_seal: reference.lifecycle_seal,
+            binding: binding.clone(),
+            ds_scale: entry.policy.ds_scale,
+            policy_hash: entry.policy_hash,
+        };
+        if let Some(existing) = resolved.as_ref() {
+            if existing.lifecycle_seal == candidate.lifecycle_seal
+                && existing.binding == candidate.binding
+                && existing.ds_scale == candidate.ds_scale
+            {
+                continue;
+            }
+            return Err(
+                ValidationFeeAdmissionError::AmbiguousTreasuryPayoutRuntimeIdentity {
+                    first_policy_hash_hex: hex::encode(existing.policy_hash),
+                    second_policy_hash_hex: hex::encode(candidate.policy_hash),
+                },
+            );
+        }
+        resolved = Some(candidate);
     }
-    Ok(Some(binding.clone()))
+    if retained_identity_claimed && resolved.is_none() {
+        return Err(
+            ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
+                reason: "the scheduled trigger or executed runtime identity matches a retained payout lifecycle but the pair is not exact",
+            },
+        );
+    }
+    Ok(resolved)
 }
 fn validate_policy_network_id(
     policy: &ValidationFeePolicyV1,
@@ -3425,6 +3739,16 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::privacy::RegisterPrivacyZkAcePolicyV1,
         iroha_data_model::isi::privacy::RotatePrivacyZkAcePolicyV1,
         iroha_data_model::isi::privacy::RevokePrivacyZkAcePolicyV1,
+        // Kaigi only mutates domain metadata and emits diagnostic summaries;
+        // its billing fields do not move assets or change supply.
+        iroha_data_model::isi::kaigi::CreateKaigi,
+        iroha_data_model::isi::kaigi::JoinKaigi,
+        iroha_data_model::isi::kaigi::LeaveKaigi,
+        iroha_data_model::isi::kaigi::EndKaigi,
+        iroha_data_model::isi::kaigi::RecordKaigiUsage,
+        iroha_data_model::isi::kaigi::SetKaigiRelayManifest,
+        iroha_data_model::isi::kaigi::RegisterKaigiRelay,
+        iroha_data_model::isi::kaigi::ReportKaigiRelayHealth,
         SetKeyValueBox,
         RemoveKeyValueBox,
         iroha_data_model::isi::SetAssetKeyValue,
@@ -3702,7 +4026,10 @@ mod tests {
         asset::{AssetDefinitionId, AssetId},
         block::BlockHeader,
         domain::DomainId,
-        events::execute_trigger::ExecuteTriggerEventFilter,
+        events::{
+            execute_trigger::ExecuteTriggerEventFilter,
+            time::{ExecutionTime, Schedule, TimeEventFilter},
+        },
         governance::types::{
             BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, BodyInstanceId,
             GovernanceAttemptId, GovernanceCertificateId, GovernanceCertificateV1,
@@ -3785,6 +4112,9 @@ mod tests {
     }
     fn fee_asset() -> AssetDefinitionId {
         asset_definition("fee_token")
+    }
+    fn successor_fee_asset() -> AssetDefinitionId {
+        asset_definition("successor_fee_token")
     }
     fn validation_fee_test_network_id() -> iroha_data_model::NetworkId {
         iroha_data_model::NetworkId::from_genesis_hash(
@@ -3877,7 +4207,7 @@ mod tests {
             )
             .expect("test policy leaves the full activation delay");
         let base = enacted_at_height
-            .checked_sub(10)
+            .checked_sub(15)
             .expect("test policy leaves a complete Parliament certificate lifecycle");
         let root = |marker: u8| [marker; 32];
         let proposal_content_id = ProposalContentId::new(proposal_fingerprint);
@@ -3896,8 +4226,8 @@ mod tests {
             election_attempt_id,
             ParliamentBody::PolicyJury,
             root(1),
-            500,
-            500,
+            3,
+            3,
             base + 1,
             base + 2,
             beacon_session_id,
@@ -3911,7 +4241,7 @@ mod tests {
             BallotAttemptId::derive_v1(body_instance_id, ballot_attempt_sequence);
         let release_beacon_session_id = BeaconSessionId::new(root(7));
         let tle_key_session_id = TleKeySessionId::new(root(8));
-        let release_height = base + 7;
+        let release_height = base + 12;
         let tle_session_id = TleSessionId::derive_v1(
             ballot_attempt_id,
             tle_key_session_id,
@@ -3920,14 +4250,14 @@ mod tests {
         );
         let opening_root = root(16);
         let tally = ParliamentAggregateTallyV1 {
-            original_seats: 500,
-            accepted_ballots: 334,
-            aye: 200,
-            nay: 100,
-            abstain: 34,
+            original_seats: 3,
+            accepted_ballots: 3,
+            aye: 2,
+            nay: 1,
+            abstain: 0,
         };
         let outcome = ParliamentAggregateOutcomeV1::Approved;
-        let result_height = base + 8;
+        let result_height = base + 13;
         let result_root = parliament_ballot_result_root_v1(
             governance_attempt_id,
             body_instance_id,
@@ -3970,14 +4300,14 @@ mod tests {
                     timed_commitment_root: root(14),
                     release_beacon_session_id,
                     registered_at_height: base + 3,
-                    registration_close_height: base + 4,
-                    survivor_freeze_height: base + 5,
-                    commitment_close_height: base + 6,
-                    registration_closed_at_height: base + 4,
-                    survivors_frozen_at_height: base + 5,
-                    commitment_closed_at_height: base + 6,
+                    registration_close_height: base + 7,
+                    survivor_freeze_height: base + 10,
+                    commitment_close_height: base + 11,
+                    registration_closed_at_height: base + 7,
+                    survivors_frozen_at_height: base + 10,
+                    commitment_closed_at_height: base + 11,
                     max_ballot_retries: 3,
-                    max_corpus_entries: 1_000,
+                    max_corpus_entries: 3,
                     release_height,
                     opening_deadline_height: result_height,
                     release_pulse_id: BeaconPulseId::new(root(15)),
@@ -3994,7 +4324,7 @@ mod tests {
                 version: 1,
                 head_root: root(18),
             }),
-            certified_at_height: base + 9,
+            certified_at_height: base + 14,
             enact_at_height: enacted_at_height,
         };
         let governance_certificate_id = GovernanceCertificateId::derive_v1(&governance_certificate);
@@ -4208,10 +4538,185 @@ mod tests {
             None,
         )
         .build(deployer);
+        let successor_fee_definition = AssetDefinition::new(
+            successor_fee_asset(),
+            "successor_fee_token".to_owned(),
+            NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        )
+        .build(deployer);
         crate::state::World::with(
             [contract_domain, fee_domain],
             accounts,
-            [fee_definition, xor_definition],
+            [fee_definition, successor_fee_definition, xor_definition],
+        )
+    }
+    fn register_bound_payout_time_trigger(
+        state_tx: &mut StateTransaction<'_, '_>,
+        binding: &ValidationFeeTreasuryPayoutBindingV1,
+        expected_code_hash: Hash,
+        trigger_id: &str,
+    ) -> iroha_data_model::trigger::TriggerId {
+        let trigger_id: iroha_data_model::trigger::TriggerId =
+            trigger_id.parse().expect("payout trigger id");
+        let action = Action::new(
+            Executable::ContractCall(ContractInvocation {
+                contract_address: binding.contract_address.clone(),
+                expected_code_hash,
+                entrypoint: binding.entrypoint.to_string(),
+                arguments: None,
+            }),
+            Repeats::Indefinitely,
+            binding.treasury_account_id.clone(),
+            TimeEventFilter::new(ExecutionTime::Schedule(Schedule::starting_at(
+                std::time::Duration::from_millis(1),
+            ))),
+        )
+        .expect("bound payout trigger action");
+        let trigger = Trigger::new(trigger_id.clone(), action);
+        crate::smartcontracts::isi::triggers::isi::register_trigger_internal(
+            &binding.treasury_account_id,
+            state_tx,
+            trigger,
+            None,
+        )
+        .expect("register exact bound payout trigger");
+        trigger_id
+    }
+    struct BoundPayoutRuntimeFixture {
+        binding: ValidationFeeTreasuryPayoutBindingV1,
+        runtime: crate::executor::ContractRuntimeExecutionContext,
+        trigger_id: iroha_data_model::trigger::TriggerId,
+    }
+    fn with_validation_fee_payout_state_at_height(
+        height: u64,
+        test: impl FnOnce(&mut StateTransaction<'_, '_>, &AccountId, &[u8], Hash),
+    ) {
+        let deployer_key = key_pair(55);
+        let deployer = AccountId::new(deployer_key.public_key().clone());
+        let state = crate::state::State::new_with_chain_and_network_id_for_testing(
+            validation_fee_payout_world(&deployer),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            "generic-testnet".parse().expect("chain id"),
+            validation_fee_test_network_id(),
+        );
+        {
+            let mut hashes = state.block_hashes.block();
+            hashes.push_for_tests(block_hash([7; 32]));
+            hashes.commit_for_tests();
+        }
+        let header = BlockHeader::new(
+            std::num::NonZeroU64::new(height).expect("test height is non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut state_tx = block.transaction();
+        let deployment_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        crate::smartcontracts::Execute::execute(
+            iroha_data_model::isi::Grant::account_permission(
+                deployment_permission,
+                deployer.clone(),
+            ),
+            &deployer,
+            &mut state_tx,
+        )
+        .expect("grant contract lifecycle authority");
+        let (code, manifest) = minimal_bound_contract_artifact();
+        let code_hash = crate::smartcontracts::code::register_code_bytes(
+            &deployer,
+            code.clone(),
+            &mut state_tx,
+        )
+        .expect("register payout contract bytes");
+        crate::smartcontracts::code::register_manifest(
+            &deployer,
+            manifest.signed(&deployer_key),
+            &mut state_tx,
+        )
+        .expect("register payout contract manifest");
+        test(&mut state_tx, &deployer, &code, code_hash);
+    }
+    fn activate_bound_payout_runtime(
+        state_tx: &mut StateTransaction<'_, '_>,
+        deployer: &AccountId,
+        code: &[u8],
+        code_hash: Hash,
+        nonce: u64,
+        ds_asset_id: AssetDefinitionId,
+        trigger_id: &str,
+    ) -> BoundPayoutRuntimeFixture {
+        use iroha_data_model::{nexus::DataSpaceId, smart_contract::ContractAddress};
+        let contract_address = ContractAddress::derive(
+            &state_tx.network_id,
+            deployer,
+            nonce,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive payout contract address");
+        crate::smartcontracts::code::activate_instance(
+            deployer,
+            contract_address.clone(),
+            code_hash,
+            state_tx,
+        )
+        .expect("activate payout contract instance");
+        let mut binding = treasury_payout_binding(contract_address.clone(), code);
+        binding.ds_asset_id = ds_asset_id;
+        let trigger_id =
+            register_bound_payout_time_trigger(state_tx, &binding, code_hash, trigger_id);
+        let runtime = crate::executor::ContractRuntimeExecutionContext {
+            contract_address,
+            contract_subject: binding.treasury_account_id.clone(),
+            contract_alias: None,
+            entrypoint: binding.entrypoint.to_string(),
+        };
+        BoundPayoutRuntimeFixture {
+            binding,
+            runtime,
+            trigger_id,
+        }
+    }
+    fn lifecycle_credit(policy: &ValidationFeePolicyV1) -> ValidationFeeCredit {
+        let binding = policy
+            .treasury_payout_binding
+            .as_ref()
+            .expect("payout policy binding");
+        ValidationFeeCredit {
+            treasury_account_id: binding.treasury_account_id.clone(),
+            lifecycle_seal: binding.lifecycle_seal().expect("payout lifecycle seal"),
+            fee_asset_definition_id: binding.ds_asset_id.clone(),
+            asset_scale: policy.ds_scale,
+            amount: binding.batch_ds.clone(),
+        }
+    }
+    fn enforce_bound_payout_tick(
+        state_tx: &mut StateTransaction<'_, '_>,
+        fixture: &BoundPayoutRuntimeFixture,
+        code: &[u8],
+        instructions: Vec<InstructionBox>,
+    ) -> Result<OpaqueDeferredValidationOutcome, TransactionRejectionReason> {
+        let ordered = ordered_treasury_payout_plan(&fixture.binding, &instructions);
+        let groups = std::collections::BTreeMap::from([(
+            fixture.binding.treasury_account_id.clone(),
+            instructions,
+        )]);
+        enforce_opaque_deferred_instruction_groups(
+            &groups,
+            &ordered,
+            state_tx,
+            Some(OpaqueDeferredRuntimeOrigin::scheduled_time_trigger(
+                &fixture.runtime,
+                code,
+                &fixture.trigger_id,
+            )),
         )
     }
     fn install_active_bound_validation_fee_policy(
@@ -5104,6 +5609,103 @@ mod tests {
         let log: InstructionBox = Log::new(Level::INFO, "audit-only".to_owned()).into();
         enforce_policy(&tx(1, vec![log], Metadata::default()), &policy)
             .expect("audited no-DS-effect instruction should remain available");
+    }
+    #[test]
+    fn kaigi_instruction_surface_is_audited_as_no_ds_effect() {
+        use iroha_data_model::{
+            isi::kaigi::{
+                CreateKaigi, EndKaigi, JoinKaigi, LeaveKaigi, RecordKaigiUsage, RegisterKaigiRelay,
+                ReportKaigiRelayHealth, SetKaigiRelayManifest,
+            },
+            kaigi::{KaigiId, KaigiRelayHealthStatus, KaigiRelayRegistration, NewKaigi},
+        };
+
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let host = account(4);
+        let participant = account(5);
+        let relay = account(6);
+        let call_id = KaigiId::new(
+            DomainId::try_new("kaigi", "universal").expect("domain id"),
+            Name::from_str("validation-fee").expect("call name"),
+        );
+        let instructions: Vec<InstructionBox> = vec![
+            CreateKaigi {
+                call: NewKaigi::with_defaults(call_id.clone(), host),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .into(),
+            JoinKaigi {
+                call_id: call_id.clone(),
+                participant: participant.clone(),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .into(),
+            LeaveKaigi {
+                call_id: call_id.clone(),
+                participant,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .into(),
+            EndKaigi {
+                call_id: call_id.clone(),
+                ended_at_ms: None,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .into(),
+            RecordKaigiUsage {
+                call_id: call_id.clone(),
+                duration_ms: 1,
+                billed_gas: 0,
+                usage_commitment: None,
+                proof: None,
+            }
+            .into(),
+            SetKaigiRelayManifest {
+                call_id: call_id.clone(),
+                relay_manifest: None,
+            }
+            .into(),
+            RegisterKaigiRelay {
+                relay: KaigiRelayRegistration {
+                    relay_id: relay.clone(),
+                    hpke_public_key: vec![1],
+                    bandwidth_class: 1,
+                },
+            }
+            .into(),
+            ReportKaigiRelayHealth {
+                call_id,
+                relay_id: relay,
+                status: KaigiRelayHealthStatus::Healthy,
+                reported_at_ms: 0,
+                notes: None,
+            }
+            .into(),
+        ];
+
+        for instruction in &instructions {
+            assert_eq!(
+                native_instruction_ds_effect_disposition(instruction, &policy_fee_asset(&policy),),
+                NativeInstructionDsEffectDisposition::AuditedNoDsEffect,
+                "{} must remain classified while validation fees are active",
+                instruction.id()
+            );
+        }
+        enforce_policy(&tx(1, instructions, Metadata::default()), &policy)
+            .expect("Kaigi instructions must remain usable while validation fees are active");
     }
     #[test]
     fn active_policy_admits_publicly_bound_kagemusha_fee_asset_conversions() {
@@ -6488,6 +7090,12 @@ mod tests {
         )
         .expect("activate contract instance");
         let binding = treasury_payout_binding(contract_address.clone(), &code);
+        let payout_trigger_id = register_bound_payout_time_trigger(
+            &mut state_tx,
+            &binding,
+            code_hash,
+            "validation_fee_payout_tick",
+        );
         let treasury = binding.treasury_account_id.clone();
         let lifecycle_seal = binding
             .lifecycle_seal()
@@ -6560,7 +7168,9 @@ mod tests {
                 &[],
                 &mut state_tx,
                 Some(OpaqueDeferredRuntimeOrigin::scheduled_time_trigger(
-                    &runtime, &code,
+                    &runtime,
+                    &code,
+                    &payout_trigger_id,
                 )),
             )
             .expect("a bound pool may report no payout when no batch is available"),
@@ -6877,7 +7487,9 @@ mod tests {
                     &ordered,
                     &mut failed_trigger_transaction,
                     Some(OpaqueDeferredRuntimeOrigin::scheduled_time_trigger(
-                        &runtime, &code,
+                        &runtime,
+                        &code,
+                        &payout_trigger_id,
                     )),
                 )
                 .expect("matching runtime may stage an exactly credited payout"),
@@ -6928,13 +7540,15 @@ mod tests {
             Some(OpaqueDeferredRuntimeOrigin::scheduled_time_trigger(
                 &runtime,
                 &altered_code,
+                &payout_trigger_id,
             )),
         )
         .expect_err("altered runtime code must not receive the payout exception");
         assert!(
             matches!(error, TransactionRejectionReason::Validation(
                 ValidationFail::NotPermitted(ref message)
-            ) if message.contains("opaque deferred executable derived a policy fee-asset transfer")),
+            ) if message.contains("scheduled trigger or executed runtime identity matches")
+                && message.contains("pair is not exact")),
             "unexpected altered-code rejection: {error:?}",
         );
         let wrong_runtime = crate::executor::ContractRuntimeExecutionContext {
@@ -6951,6 +7565,7 @@ mod tests {
                 Some(OpaqueDeferredRuntimeOrigin::scheduled_time_trigger(
                     &wrong_runtime,
                     &code,
+                    &payout_trigger_id,
                 )),
             )
             .is_err(),
@@ -6962,7 +7577,9 @@ mod tests {
                 &ordered,
                 &mut successful_trigger_transaction,
                 Some(OpaqueDeferredRuntimeOrigin::scheduled_time_trigger(
-                    &runtime, &code,
+                    &runtime,
+                    &code,
+                    &payout_trigger_id,
                 )),
             )
             .expect("matching active contract runtime may make its direct treasury payout"),
@@ -6982,7 +7599,9 @@ mod tests {
                 &ordered,
                 &mut exhausted_credit_transaction,
                 Some(OpaqueDeferredRuntimeOrigin::scheduled_time_trigger(
-                    &runtime, &code,
+                    &runtime,
+                    &code,
+                    &payout_trigger_id,
                 )),
             )
             .expect("insufficient reserved credit is a legitimate atomic no-op"),
@@ -6994,7 +7613,9 @@ mod tests {
                 &[],
                 &mut exhausted_credit_transaction,
                 Some(OpaqueDeferredRuntimeOrigin::scheduled_time_trigger(
-                    &runtime, &code,
+                    &runtime,
+                    &code,
+                    &payout_trigger_id,
                 )),
             )
             .expect("an empty bound tick is a legitimate no-op"),
@@ -7043,7 +7664,9 @@ mod tests {
                 &zero_quote_ordered,
                 &mut exhausted_credit_transaction,
                 Some(OpaqueDeferredRuntimeOrigin::scheduled_time_trigger(
-                    &runtime, &code,
+                    &runtime,
+                    &code,
+                    &payout_trigger_id,
                 )),
             )
             .expect("a zero deterministic quote is an atomic no-op"),
@@ -7069,7 +7692,9 @@ mod tests {
                 &out_of_range_ordered,
                 &mut exhausted_credit_transaction,
                 Some(OpaqueDeferredRuntimeOrigin::scheduled_time_trigger(
-                    &runtime, &code,
+                    &runtime,
+                    &code,
+                    &payout_trigger_id,
                 )),
             )
             .expect("an out-of-range deterministic quote is an atomic no-op"),
@@ -7094,7 +7719,9 @@ mod tests {
                 &partial_ordered,
                 &mut exhausted_credit_transaction,
                 Some(OpaqueDeferredRuntimeOrigin::scheduled_time_trigger(
-                    &runtime, &code,
+                    &runtime,
+                    &code,
+                    &payout_trigger_id,
                 )),
             )
             .expect("a proportional partial-credit payout is valid"),
@@ -7122,7 +7749,9 @@ mod tests {
                 &ordered,
                 &mut exhausted_credit_transaction,
                 Some(OpaqueDeferredRuntimeOrigin::scheduled_time_trigger(
-                    &runtime, &code,
+                    &runtime,
+                    &code,
+                    &payout_trigger_id,
                 )),
             )
             .expect("an old lifecycle cannot consume successor credit"),
@@ -7159,6 +7788,424 @@ mod tests {
                 .get(&successor_asset_key)
                 .is_some(),
             "a drained first-release lifecycle must retain its immutable asset binding"
+        );
+    }
+    #[test]
+    fn disabled_successor_old_tick_debits_predecessor_lifecycle_credit() {
+        let height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
+        with_validation_fee_payout_state_at_height(
+            height,
+            |state_tx, deployer, code, code_hash| {
+                let predecessor = activate_bound_payout_runtime(
+                    state_tx,
+                    deployer,
+                    code,
+                    code_hash,
+                    0,
+                    fee_asset(),
+                    "predecessor_disabled_tick",
+                );
+                let first = policy_with_treasury_payout_lifecycle(predecessor.binding.clone());
+                let mut disabled = successor_policy(&first);
+                disabled.charging_mode = ValidationFeeChargingMode::Disabled;
+                disabled.fee = Quantity::zero();
+                disabled.exemption_classes.clear();
+                disabled.treasury_payout_binding = None;
+                install_policy_registry_fixture(
+                    &policy_registry(&[first.clone(), disabled]),
+                    state_tx,
+                );
+                let credit = lifecycle_credit(&first);
+                commit_validation_fee_credit(state_tx, Some(&credit))
+                    .expect("seed predecessor lifecycle credit");
+                assert_eq!(
+                    enforce_bound_payout_tick(
+                        state_tx,
+                        &predecessor,
+                        code,
+                        canonical_treasury_payout_plan(
+                            &predecessor.binding,
+                            Quantity::from(20_u64)
+                        ),
+                    )
+                    .expect("retained predecessor payout remains valid after Disabled cutover"),
+                    OpaqueDeferredValidationOutcome::Apply,
+                );
+                assert_eq!(
+                    read_validation_fee_credit_balance(state_tx, &credit)
+                        .expect("read drained predecessor credit"),
+                    Quantity::zero(),
+                );
+                assert_eq!(
+                    enforce_bound_payout_tick(
+                        state_tx,
+                        &predecessor,
+                        code,
+                        canonical_treasury_payout_plan(
+                            &predecessor.binding,
+                            Quantity::from(20_u64),
+                        ),
+                    )
+                    .expect("a retained lifecycle with zero credit is an atomic no-op"),
+                    OpaqueDeferredValidationOutcome::NoOp,
+                );
+            },
+        );
+    }
+    #[test]
+    fn different_asset_successor_keeps_predecessor_tick_credit_bound() {
+        let height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
+        with_validation_fee_payout_state_at_height(
+            height,
+            |state_tx, deployer, code, code_hash| {
+                let predecessor = activate_bound_payout_runtime(
+                    state_tx,
+                    deployer,
+                    code,
+                    code_hash,
+                    0,
+                    fee_asset(),
+                    "different_asset_predecessor_tick",
+                );
+                let successor = activate_bound_payout_runtime(
+                    state_tx,
+                    deployer,
+                    code,
+                    code_hash,
+                    1,
+                    successor_fee_asset(),
+                    "different_asset_successor_tick",
+                );
+                let first = policy_with_treasury_payout_lifecycle(predecessor.binding.clone());
+                let mut next = successor_policy(&first);
+                next.ds_asset_id = successor.binding.ds_asset_id.clone();
+                next.treasury_account_id = successor.binding.treasury_account_id.clone();
+                next.treasury_payout_binding = Some(successor.binding.clone());
+                install_policy_registry_fixture(
+                    &policy_registry(&[first.clone(), next.clone()]),
+                    state_tx,
+                );
+                let predecessor_credit = lifecycle_credit(&first);
+                let successor_credit = lifecycle_credit(&next);
+                commit_validation_fee_credit(state_tx, Some(&predecessor_credit))
+                    .expect("seed predecessor credit");
+                commit_validation_fee_credit(state_tx, Some(&successor_credit))
+                    .expect("seed successor credit");
+                assert_eq!(
+                    enforce_bound_payout_tick(
+                        state_tx,
+                        &predecessor,
+                        code,
+                        canonical_treasury_payout_plan(
+                            &predecessor.binding,
+                            Quantity::from(20_u64)
+                        ),
+                    )
+                    .expect("predecessor tick resolves independently of active successor asset"),
+                    OpaqueDeferredValidationOutcome::Apply,
+                );
+                assert_eq!(
+                    read_validation_fee_credit_balance(state_tx, &predecessor_credit)
+                        .expect("read predecessor credit"),
+                    Quantity::zero(),
+                );
+                assert_eq!(
+                    read_validation_fee_credit_balance(state_tx, &successor_credit)
+                        .expect("read isolated successor credit"),
+                    successor_credit.amount,
+                );
+            },
+        );
+    }
+    #[test]
+    fn same_asset_successor_does_not_strand_predecessor_credit() {
+        let height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
+        with_validation_fee_payout_state_at_height(
+            height,
+            |state_tx, deployer, code, code_hash| {
+                let predecessor = activate_bound_payout_runtime(
+                    state_tx,
+                    deployer,
+                    code,
+                    code_hash,
+                    0,
+                    fee_asset(),
+                    "same_asset_predecessor_tick",
+                );
+                let successor = activate_bound_payout_runtime(
+                    state_tx,
+                    deployer,
+                    code,
+                    code_hash,
+                    1,
+                    fee_asset(),
+                    "same_asset_successor_tick",
+                );
+                let first = policy_with_treasury_payout_lifecycle(predecessor.binding.clone());
+                let mut next = successor_policy(&first);
+                next.treasury_account_id = successor.binding.treasury_account_id.clone();
+                next.treasury_payout_binding = Some(successor.binding.clone());
+                install_policy_registry_fixture(
+                    &policy_registry(&[first.clone(), next.clone()]),
+                    state_tx,
+                );
+                let predecessor_credit = lifecycle_credit(&first);
+                let successor_credit = lifecycle_credit(&next);
+                commit_validation_fee_credit(state_tx, Some(&predecessor_credit))
+                    .expect("seed predecessor credit");
+                commit_validation_fee_credit(state_tx, Some(&successor_credit))
+                    .expect("seed successor credit");
+                assert_eq!(
+                    enforce_bound_payout_tick(
+                        state_tx,
+                        &predecessor,
+                        code,
+                        canonical_treasury_payout_plan(
+                            &predecessor.binding,
+                            Quantity::from(20_u64)
+                        ),
+                    )
+                    .expect("same-asset predecessor remains bound to its own lifecycle seal"),
+                    OpaqueDeferredValidationOutcome::Apply,
+                );
+                assert_eq!(
+                    read_validation_fee_credit_balance(state_tx, &predecessor_credit)
+                        .expect("read predecessor credit"),
+                    Quantity::zero(),
+                );
+                assert_eq!(
+                    read_validation_fee_credit_balance(state_tx, &successor_credit)
+                        .expect("read successor credit"),
+                    successor_credit.amount,
+                );
+            },
+        );
+    }
+    #[test]
+    fn predecessor_tick_cannot_spend_beyond_retained_credit_after_cutover() {
+        let height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
+        with_validation_fee_payout_state_at_height(
+            height,
+            |state_tx, deployer, code, code_hash| {
+                let predecessor = activate_bound_payout_runtime(
+                    state_tx,
+                    deployer,
+                    code,
+                    code_hash,
+                    0,
+                    fee_asset(),
+                    "bounded_predecessor_tick",
+                );
+                let first = policy_with_treasury_payout_lifecycle(predecessor.binding.clone());
+                let mut disabled = successor_policy(&first);
+                disabled.charging_mode = ValidationFeeChargingMode::Disabled;
+                disabled.fee = Quantity::zero();
+                disabled.exemption_classes.clear();
+                disabled.treasury_payout_binding = None;
+                install_policy_registry_fixture(
+                    &policy_registry(&[first.clone(), disabled]),
+                    state_tx,
+                );
+                let retained = lifecycle_credit(&first)
+                    .with_amount("3.33".parse().expect("partial retained predecessor credit"));
+                commit_validation_fee_credit(state_tx, Some(&retained))
+                    .expect("seed partial predecessor credit");
+                let error = enforce_bound_payout_tick(
+                    state_tx,
+                    &predecessor,
+                    code,
+                    canonical_treasury_payout_plan(&predecessor.binding, Quantity::from(20_u64)),
+                )
+                .expect_err("a full batch cannot spend beyond retained predecessor credit");
+                assert!(
+                    matches!(error, TransactionRejectionReason::Validation(
+                        ValidationFail::NotPermitted(ref message)
+                    ) if message.contains("effect plan") && message.contains("exact bound DS")),
+                    "unexpected over-credit rejection: {error:?}",
+                );
+                assert_eq!(
+                    read_validation_fee_credit_balance(state_tx, &retained)
+                        .expect("read unchanged partial predecessor credit"),
+                    retained.amount,
+                );
+            },
+        );
+    }
+    #[test]
+    fn future_payout_lifecycle_cannot_preempt_effective_predecessor() {
+        let height = TEST_POLICY_EFFECTIVE_HEIGHT + 50;
+        with_validation_fee_payout_state_at_height(
+            height,
+            |state_tx, deployer, code, code_hash| {
+                let runtime = activate_bound_payout_runtime(
+                    state_tx,
+                    deployer,
+                    code,
+                    code_hash,
+                    0,
+                    fee_asset(),
+                    "future_payout_cutover_tick",
+                );
+                let first = policy_with_treasury_payout_lifecycle(runtime.binding.clone());
+                let mut future_binding = runtime.binding.clone();
+                future_binding.pool_vault_account_id = account(7);
+                let mut future = successor_policy(&first);
+                future.treasury_payout_binding = Some(future_binding);
+                assert!(future.effective_from_height > height);
+                install_policy_registry_fixture(
+                    &policy_registry(&[first.clone(), future]),
+                    state_tx,
+                );
+                let predecessor_credit = lifecycle_credit(&first);
+                commit_validation_fee_credit(state_tx, Some(&predecessor_credit))
+                    .expect("seed effective predecessor credit");
+
+                assert_eq!(
+                    enforce_bound_payout_tick(
+                        state_tx,
+                        &runtime,
+                        code,
+                        canonical_treasury_payout_plan(&runtime.binding, Quantity::from(20_u64),),
+                    )
+                    .expect(
+                        "a future lifecycle must not authorize or make its predecessor ambiguous"
+                    ),
+                    OpaqueDeferredValidationOutcome::Apply,
+                );
+                assert_eq!(
+                    read_validation_fee_credit_balance(state_tx, &predecessor_credit)
+                        .expect("read drained predecessor credit"),
+                    Quantity::zero(),
+                );
+            },
+        );
+    }
+    #[test]
+    fn ambiguous_payout_runtime_identity_fails_closed() {
+        let height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
+        with_validation_fee_payout_state_at_height(
+            height,
+            |state_tx, deployer, code, code_hash| {
+                let runtime = activate_bound_payout_runtime(
+                    state_tx,
+                    deployer,
+                    code,
+                    code_hash,
+                    0,
+                    fee_asset(),
+                    "ambiguous_payout_tick",
+                );
+                let first = policy_with_treasury_payout_lifecycle(runtime.binding.clone());
+                let mut rebound_binding = runtime.binding.clone();
+                rebound_binding.pool_vault_account_id = account(7);
+                let mut next = successor_policy(&first);
+                next.treasury_payout_binding = Some(rebound_binding);
+                install_policy_registry_fixture(&policy_registry(&[first.clone(), next]), state_tx);
+                let credit = lifecycle_credit(&first);
+                commit_validation_fee_credit(state_tx, Some(&credit))
+                    .expect("seed unambiguous predecessor credit");
+                let error = enforce_bound_payout_tick(
+                    state_tx,
+                    &runtime,
+                    code,
+                    canonical_treasury_payout_plan(&runtime.binding, Quantity::from(20_u64)),
+                )
+                .expect_err("one scheduled runtime must not select between two lifecycle seals");
+                assert!(
+                    matches!(error, TransactionRejectionReason::Validation(
+                        ValidationFail::NotPermitted(ref message)
+                    ) if message.contains("matches multiple retained lifecycle identities")),
+                    "unexpected ambiguous-runtime rejection: {error:?}",
+                );
+                assert_eq!(
+                    read_validation_fee_credit_balance(state_tx, &credit)
+                        .expect("read unchanged credit after ambiguous runtime"),
+                    credit.amount,
+                );
+            },
+        );
+    }
+    #[test]
+    fn unrelated_trigger_still_applies_when_fee_policy_disabled() {
+        let height = TEST_POLICY_EFFECTIVE_HEIGHT + 100;
+        with_validation_fee_payout_state_at_height(
+            height,
+            |state_tx, deployer, code, code_hash| {
+                let predecessor = activate_bound_payout_runtime(
+                    state_tx,
+                    deployer,
+                    code,
+                    code_hash,
+                    0,
+                    fee_asset(),
+                    "disabled_predecessor_tick",
+                );
+                let unrelated = activate_bound_payout_runtime(
+                    state_tx,
+                    deployer,
+                    code,
+                    code_hash,
+                    1,
+                    fee_asset(),
+                    "disabled_unrelated_tick",
+                );
+                let first = policy_with_treasury_payout_lifecycle(predecessor.binding.clone());
+                let mut disabled = successor_policy(&first);
+                disabled.charging_mode = ValidationFeeChargingMode::Disabled;
+                disabled.fee = Quantity::zero();
+                disabled.exemption_classes.clear();
+                disabled.treasury_payout_binding = None;
+                install_policy_registry_fixture(
+                    &policy_registry(&[first.clone(), disabled]),
+                    state_tx,
+                );
+                let predecessor_credit = lifecycle_credit(&first);
+                commit_validation_fee_credit(state_tx, Some(&predecessor_credit))
+                    .expect("seed retained predecessor credit");
+                assert_eq!(
+                    enforce_bound_payout_tick(
+                        state_tx,
+                        &unrelated,
+                        code,
+                        canonical_treasury_payout_plan(&unrelated.binding, Quantity::from(20_u64)),
+                    )
+                    .expect("Disabled policy leaves unrelated scheduled runtimes generic"),
+                    OpaqueDeferredValidationOutcome::Apply,
+                );
+                let predecessor_plan =
+                    canonical_treasury_payout_plan(&predecessor.binding, Quantity::from(20_u64));
+                let predecessor_ordered =
+                    ordered_treasury_payout_plan(&predecessor.binding, &predecessor_plan);
+                let predecessor_groups = std::collections::BTreeMap::from([(
+                    predecessor.binding.treasury_account_id.clone(),
+                    predecessor_plan,
+                )]);
+                let error = enforce_opaque_deferred_instruction_groups(
+                    &predecessor_groups,
+                    &predecessor_ordered,
+                    state_tx,
+                    Some(OpaqueDeferredRuntimeOrigin::scheduled_time_trigger(
+                        &predecessor.runtime,
+                        code,
+                        &unrelated.trigger_id,
+                    )),
+                )
+                .expect_err(
+                    "a retained payout runtime paired with another trigger must fail closed",
+                );
+                assert!(
+                    matches!(error, TransactionRejectionReason::Validation(
+                        ValidationFail::NotPermitted(ref message)
+                    ) if message.contains("scheduled trigger or executed runtime identity matches")
+                        && message.contains("pair is not exact")),
+                    "unexpected cross-wired payout rejection: {error:?}",
+                );
+                assert_eq!(
+                    read_validation_fee_credit_balance(state_tx, &predecessor_credit)
+                        .expect("read untouched predecessor credit"),
+                    predecessor_credit.amount,
+                );
+            },
         );
     }
     #[test]

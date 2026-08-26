@@ -63,7 +63,7 @@ use crate::{
     queue::{
         LaneQueueReservationError, LaneQueueReservationGroupBindingV1,
         LaneQueueReservationGroupIdentityV1, LaneQueueReservationReconciliationGroupV1,
-        LaneQueueReservationReconciliationSnapshotV1, LaneQueueReservationReleaseBarrierV3,
+        LaneQueueReservationReconciliationSnapshotV1, LaneQueueReservationReleaseBarrierV1,
         LaneReservationStartupReconciliationReceipt, Queue, QueueLaneRetirementObserver,
         RoutingDecision, canonical_lane_queue_reservation_group_identity_projection,
         lane_queue_reservation_group_binding_from_ordered_keys,
@@ -402,7 +402,7 @@ pub(crate) struct LaneReservationReconciliationSummary {
 }
 struct AuthenticatedCommittedCanonicalCarrierGroup {
     reservation_group: LaneQueueReservationGroupBindingV1,
-    ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
+    ordered_keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
     application: AuthenticatedCarrierApplicationProjection,
 }
 struct AuthenticatedCommittedCanonicalCarrier {
@@ -3010,8 +3010,8 @@ fn authenticated_autonomous_carrier_application_projections(
                 producer_alive: true,
             },
             history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v4: true,
-                ever_reservation_v5: true,
+                ever_queue_plan_v1: true,
+                ever_reservation_v1: true,
                 ever_execution_input_durable: ready_signers,
                 ever_ready_authorized: ready_signers,
                 ready_signed: ready_signers,

@@ -3,16 +3,13 @@ import XCTest
 
 private final class StubPipelineClient: ToriiTransactionSubmitting {
     var submitted: [Data] = []
-    var submittedModes: [PipelineEndpointMode] = []
     var observedIdempotencyKeys: [String?] = []
     var result: Swift.Result<ToriiSubmitTransactionResponse?, Error> = .success(makeSubmitReceipt())
     var queuedResults: [Swift.Result<ToriiSubmitTransactionResponse?, Error>] = []
 
     func submitTransaction(data: Data,
-                           mode: PipelineEndpointMode,
                            idempotencyKey: String?) async throws -> ToriiSubmitTransactionResponse? {
         submitted.append(data)
-        submittedModes.append(mode)
         observedIdempotencyKeys.append(idempotencyKey)
         let nextResult = queuedResults.isEmpty ? result : queuedResults.removeFirst()
         switch nextResult {
@@ -26,7 +23,10 @@ private final class StubPipelineClient: ToriiTransactionSubmitting {
 
 private func makeSubmitReceipt() -> ToriiSubmitTransactionResponse {
     ToriiSubmitTransactionResponse(
-        payload: .init(entrypointHash: "abc", submittedAtMs: 1, submittedAtHeight: 2, signer: "signer"),
+        payload: .init(entrypointHash: String(repeating: "d", count: 64),
+                       submittedAtMs: 1,
+                       submittedAtHeight: 2,
+                       signer: "signer"),
         signature: "deadbeef"
     )
 }
@@ -35,7 +35,7 @@ private struct StubTransportError: Error {}
 
 private final class PipelineURLProtocol: URLProtocol {
     private static let lock = NSLock()
-    private static var statuses: [String] = []
+    private static var statuses: [(kind: String, resolvedFrom: String)] = []
     private static var submitStatusCode: Int = 202
     private static var submitBody: Data = PipelineURLProtocol.defaultSubmitBody
     private static var submitResponses: [(Int, Data)] = []
@@ -81,7 +81,16 @@ private final class PipelineURLProtocol: URLProtocol {
 
     static func configure(statuses: [String]) {
         lock.lock()
-        self.statuses = statuses
+        self.statuses = statuses.map { kind in
+            let terminal = ["Applied", "Rejected", "Expired"].contains(kind)
+            return (kind, terminal ? "state" : "cache")
+        }
+        lock.unlock()
+    }
+
+    static func configure(observations: [(kind: String, resolvedFrom: String)]) {
+        lock.lock()
+        statuses = observations
         lock.unlock()
     }
 
@@ -122,9 +131,14 @@ private final class PipelineURLProtocol: URLProtocol {
         lock.lock()
         defer { lock.unlock() }
         if statuses.isEmpty {
-            return makeStatusBody(hash: hash, kind: "Queued")
+            return makeStatusBody(hash: hash, kind: "Queued", resolvedFrom: "queue")
         }
-        return makeStatusBody(hash: hash, kind: statuses.removeFirst())
+        let observation = statuses.removeFirst()
+        return makeStatusBody(
+            hash: hash,
+            kind: observation.kind,
+            resolvedFrom: observation.resolvedFrom
+        )
     }
 
     private static func nextSubmitResponse() -> (Int, Data) {
@@ -136,19 +150,18 @@ private final class PipelineURLProtocol: URLProtocol {
         return (submitStatusCode, submitBody)
     }
 
-    private static func makeStatusBody(hash: String, kind: String) -> Data {
+    private static func makeStatusBody(hash: String, kind: String, resolvedFrom: String) -> Data {
         var status: [String: Any] = [
             "kind": kind
         ]
         if kind == "Applied" {
             status["block_height"] = 7
         }
-        let terminal = ["Applied", "Rejected", "Expired"].contains(kind)
         let payload: [String: Any] = [
             "hash": hash,
             "status": status,
             "scope": "global",
-            "resolved_from": terminal ? "state" : "cache"
+            "resolved_from": resolvedFrom
         ]
         return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
     }
@@ -156,7 +169,8 @@ private final class PipelineURLProtocol: URLProtocol {
     private static var defaultSubmitBody: Data {
         let body: [String: Any] = [
             "payload": [
-                "entrypoint_hash": "abc",
+                "entrypoint_hash": String(repeating: "d", count: 64),
+                "signed_transaction_hash": NSNull(),
                 "submitted_at_ms": 1,
                 "submitted_at_height": 2,
                 "signer": "signer"
@@ -298,7 +312,7 @@ final class TxBuilderTests: XCTestCase {
             line: line
         )
         XCTAssertEqual(domain.remaining(), 0, file: file, line: line)
-        for _ in 0..<8 {
+        for _ in 0..<9 {
             _ = try transaction.readCompactField()
         }
         XCTAssertEqual(transaction.remaining(), 0, file: file, line: line)
@@ -643,7 +657,7 @@ final class TxBuilderTests: XCTestCase {
                 networkId: Self.fixtureNetworkId,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
-                    blockHash: String(repeating: "01", count: 32)
+                    blockHash: NetworkId(bytes: Data(repeating: 0x01, count: 32)).literal
                 ),
                 resources: [
                     AliasPlanResourceV1(
@@ -750,7 +764,7 @@ final class TxBuilderTests: XCTestCase {
                 networkId: Self.fixtureNetworkId,
                 anchor: try AliasPlanAnchorV1(
                     blockHeight: 9,
-                    blockHash: String(repeating: "01", count: 32)
+                    blockHash: NetworkId(bytes: Data(repeating: 0x01, count: 32)).literal
                 ),
                 operation: .renewLease(renewal),
                 disposition: .apply,
@@ -1367,7 +1381,6 @@ final class TxBuilderTests: XCTestCase {
 
         XCTAssertEqual(stub.submitted.count, 1)
         XCTAssertEqual(stub.submitted.first, envelope.norito)
-        XCTAssertEqual(stub.submittedModes, [.pipeline])
     }
 
     func testBuildRegisterZkAssetProducesEnvelope() throws {
@@ -1461,7 +1474,6 @@ final class TxBuilderTests: XCTestCase {
             expectation.fulfill()
         }
         waitForExpectations(timeout: 1)
-        XCTAssertEqual(stub.submittedModes, [.pipeline])
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1481,7 +1493,6 @@ final class TxBuilderTests: XCTestCase {
         let envelope = try sdk.buildSignedTransfer(transfer: transfer, keypair: keypair)
         try await sdk.submit(envelope: envelope)
         XCTAssertEqual(stub.submitted.count, 1)
-        XCTAssertEqual(stub.submittedModes, [.pipeline])
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1509,7 +1520,6 @@ final class TxBuilderTests: XCTestCase {
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
-        XCTAssertEqual(Set(stub.submittedModes), [.pipeline])
     }
 
     func testSwiftTransferMatchesNativeBridge() throws {
@@ -1772,8 +1782,8 @@ final class TxBuilderTests: XCTestCase {
         let codeHash = Data(repeating: 0x11, count: 32)
         let abiHash = Data(repeating: 0x22, count: 32)
         let provenance = ToriiContractManifestProvenance(
-            signer: "ed25519:public",
-            signature: "ed25519:signature"
+            signer: Self.fixtureClaimAccountMultihash,
+            signature: Self.fixtureClaimSignatureHex
         )
         let request = try ProposeDeployContractRequest(networkId: Self.fixtureNetworkId,
                                                        authority: authority,
@@ -2221,10 +2231,13 @@ final class TxBuilderTests: XCTestCase {
             XCTFail("Expected pipeline failure")
         } catch let error as PipelineStatusError {
             switch error {
-            case .failure:
+            case .failure(let hash, let status, _):
+                XCTAssertEqual(status, "Rejected")
+                XCTAssertEqual(Data(hexString: hash)?.count, 32)
+                XCTAssertNotEqual(hash, Self.pipelineHash)
                 XCTAssertEqual(
                     error.localizedDescription,
-                    "Pipeline transaction \(Self.pipelineHash) failed with status Rejected."
+                    "Pipeline transaction \(hash) failed with status Rejected."
                 )
             default:
                 XCTFail("Unexpected error: \(error)")
@@ -2368,7 +2381,6 @@ final class TxBuilderTests: XCTestCase {
             // Expected: the second queued success must remain unused.
         }
         XCTAssertEqual(stub.submitted.count, 1)
-        XCTAssertEqual(stub.submittedModes, [.pipeline])
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2402,7 +2414,6 @@ final class TxBuilderTests: XCTestCase {
             XCTFail("Unexpected error: \(error)")
         }
         XCTAssertEqual(stub.submitted.count, 1)
-        XCTAssertEqual(stub.submittedModes, [.pipeline])
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2439,7 +2450,6 @@ final class TxBuilderTests: XCTestCase {
                 XCTFail("Unexpected error: \(error)")
             }
             XCTAssertEqual(stub.submitted.count, 1)
-            XCTAssertEqual(stub.submittedModes, [.pipeline])
         }
     }
 
@@ -2450,6 +2460,53 @@ final class TxBuilderTests: XCTestCase {
         let sdk = try makePipelineSDK()
         let status = try await sdk.pollPipelineStatus(hashHex: Self.pipelineHash)
         XCTAssertEqual(status.status.kind, "Applied")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testPollPipelineStatusTreatsCachedTerminalHintsAsPending() async throws {
+        for cachedKind in ["Applied", "Rejected", "Expired"] {
+            PipelineURLProtocol.reset()
+            PipelineURLProtocol.configure(observations: [
+                (cachedKind, "cache"),
+                ("Applied", "state"),
+            ])
+            let sdk = try makePipelineSDK()
+            let options = PipelineStatusPollOptions(
+                pollInterval: 0,
+                timeout: 1,
+                maxAttempts: 2
+            )
+            let status = try await sdk.pollPipelineStatus(
+                hashHex: Self.pipelineHash,
+                pollOptions: options
+            )
+            XCTAssertEqual(status.status.kind, "Applied", cachedKind)
+            XCTAssertEqual(status.resolvedFrom, "state", cachedKind)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testPollPipelineStatusRejectsInvalidTimingOptionsBeforeDispatch() async throws {
+        for options in [
+            PipelineStatusPollOptions(pollInterval: -0.1, timeout: 1),
+            PipelineStatusPollOptions(pollInterval: .infinity, timeout: 1),
+            PipelineStatusPollOptions(pollInterval: 0, timeout: -.infinity),
+            PipelineStatusPollOptions(pollInterval: 0, timeout: 1, maxAttempts: 0),
+        ] {
+            PipelineURLProtocol.reset()
+            let sdk = try makePipelineSDK()
+            do {
+                _ = try await sdk.pollPipelineStatus(
+                    hashHex: Self.pipelineHash,
+                    pollOptions: options
+                )
+                XCTFail("Expected invalid timing options")
+            } catch ToriiClientError.invalidPayload {
+                XCTAssertTrue(PipelineURLProtocol.drainObservedPaths().isEmpty)
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2480,6 +2537,19 @@ final class TxBuilderTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [PipelineURLProtocol.self]
         let session = URLSession(configuration: config)
-        return IrohaSDK(baseURL: URL(string: "https://example.test")!, session: session)
+        let keypair = try makeFixtureKeypair()
+        return IrohaSDK(
+            baseURL: URL(string: "https://example.test")!,
+            session: session,
+            localSigningContext: ToriiLocalSigningContext(
+                networkId: Self.fixtureNetworkId
+            ),
+            canonicalRequestAuth: ToriiCanonicalRequestAuth(
+                accountId: AccountId.make(publicKey: keypair.publicKey),
+                privateKey: keypair.privateKeyBytes,
+                timestampMs: Self.fixtureCreationTimeMs,
+                nonce: "tx-builder-pipeline"
+            )
+        )
     }
 }

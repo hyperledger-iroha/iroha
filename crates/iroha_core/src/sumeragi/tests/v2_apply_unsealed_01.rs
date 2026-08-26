@@ -838,8 +838,8 @@ v2_apply_test!(
                     producer_alive: true,
                 },
                 history: ProductionInFlightFirstReleaseHistoryProjection {
-                    ever_queue_plan_v4: true,
-                    ever_reservation_v5: true,
+                    ever_queue_plan_v1: true,
+                    ever_reservation_v1: true,
                     ever_execution_input_durable: 0b1011,
                     ever_ready_authorized: 0b1011,
                     ready_signed: 0b1011,
@@ -2030,7 +2030,7 @@ v2_apply_test!(strict_absence_releases_original_fifo_not_digest_order, {
         let admission_context = queue
             .plan_admission_context_with_state(fixture.state.as_ref(), &routing_plan)
             .expect("capture strict FIFO discriminator admission context");
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
             fixture.state.network_id_ref(),
             accepted.entrypoint(),
             &routing_plan,
@@ -2606,7 +2606,7 @@ v2_apply_test!(replayed_current_autonomous_group_reopens_startup_gate, {
     let admission_context = queue
         .plan_admission_context_with_state(fixture.state.as_ref(), &routing_plan)
         .expect("capture startup-gate probe admission context");
-    let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+    let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
         fixture.state.network_id_ref(),
         accepted.entrypoint(),
         &routing_plan,

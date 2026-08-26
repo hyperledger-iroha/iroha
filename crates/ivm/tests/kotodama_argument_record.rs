@@ -244,12 +244,7 @@ seiyaku RecursiveArgumentRecordRuntime {
         .expect("run entrypoint descriptor");
     let entry_pc = u64::try_from(parsed.prefix_len()).expect("prefix fits u64") + run.entry_pc;
     let payload = Json::from_str_norito(
-        r#"{
-            "request":{"count":"7","ready":true},
-            "pair":["11",true],
-            "maybe":{"some":"13"},
-            "outcome":{"ok":"17"}
-        }"#,
+        r#"{"maybe":{"some":"13"},"outcome":{"ok":"17"},"pair":["11",true],"request":{"count":"7","ready":true}}"#,
     )
     .expect("valid recursive boundary JSON");
     let key: Name = "trigger_event_json".parse().expect("public input key");

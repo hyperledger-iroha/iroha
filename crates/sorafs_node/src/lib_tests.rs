@@ -3898,7 +3898,6 @@ fn gar_enforcement_receipt_fixture(
         operator: iroha_data_model::account::AccountId::parse_encoded(
             "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         )
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .expect("account id"),
         reason: "Guardian freeze window".to_string(),
         notes: Some("Escalated during SFM-4c drill".to_string()),

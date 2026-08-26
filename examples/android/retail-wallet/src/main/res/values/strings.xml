@@ -7,8 +7,7 @@
     <string name="wallet_attestation_present">present</string>
     <string name="wallet_attestation_missing">not available</string>
     <string name="wallet_address_title">Account address preview</string>
-    <string name="wallet_address_default_note">Implicit default domain: %1$s (no suffix required when sharing I105).</string>
-    <string name="wallet_address_domain_note">Domain selector: %1$s</string>
+    <string name="wallet_address_canonical_note">Canonical universal account ID. Domain routing and aliases are handled separately.</string>
     <string name="wallet_address_i105_label">I105 address (prefix %1$d)</string>
     <string name="wallet_copy_i105">Copy I105</string>
     <string name="wallet_copy_i105_tooltip">Copy the canonical I105 account id (safe to share).</string>

@@ -150,9 +150,9 @@ including the reservation-journal primitive seam. The
 fixed-width composed transition relation is implemented and source-bound. The
 autonomous FIFO
 selector consumes checked
-`SelectQueuePlanV4Conjunction` and `FsyncReservationV5` projections derived
+`SelectQueuePlanV1Conjunction` and `FsyncReservationV1` projections derived
 from the canonical slot authority and complete ordered reservation-group
-identity. Queue then revalidates the live V4/V5 group and retains an exact
+identity. Queue then revalidates the live V1 group and retains an exact
 per-transaction transition fence while Kura recomputes the slot hashes from
 the frozen height context, checks `ActivateKura`, and persists the local
 producer payload. The first autonomous execution-input append revalidates a
@@ -217,14 +217,14 @@ actions, but no fresh immutable-candidate TLC, Apalache, TLAPS, Verus,
 trace-replay, mutation, or cross-tool receipt is recorded here.
 
 `SumeragiV2InFlightFirstRelease.tla` is a finite three-validator safety model
-for the accepted schema V2 carried by the production
+for the accepted schema V1 carried by the production
 `LaneExecutablePayloadV1` container and its exact
-`QueuePlanAdmissionBindingV2` preimage. It establishes authenticated custody
+`QueuePlanAdmissionBindingV1` preimage. It establishes authenticated custody
 for the selected producer without inferring knowledge by every validator, and
 uses the canonical strict 3-of-3 count quorum for its fixed cardinality. Its
 fixed and mutation configurations cover producer-selected versus
 replicated-carrier ownership; a selected-batch
-conjunction over individual QueuePlan journal V4 `Put` records; reservation journal V5,
+conjunction over individual QueuePlan journal V1 `Put` records; reservation journal V1,
 Kura Active, execution-input, READY authorization/signature/QC,
 and lane-commit ordering; volatile body loss; crash-prefix durable recovery;
 atomic WSV application; separate post-carrier reservation
@@ -247,13 +247,12 @@ fanout/late-body custody, lane commit, canonical WSV application, Commit
 cleanup, and ordered release. Its reverse
 terminal-owner projection distinguishes canonical-WSV Commit ownership from
 ordinary-FIFO ordered/direct release. Snapshot recovery maps to an abstract
-stutter, and direct release is an explicit named action. The retired lane-wide
-removal operation is absent from the schema-bound V5 journal, and its old
-bootstrap claim and operation bytes fail closed without compatibility replay.
+stutter, and direct release is an explicit named action. The schema-bound V1
+journal operation inventory contains no lane-wide removal action.
 The deterministic autonomous selection linearization point now derives its
 move-only authority from the canonical slot committee/author, revalidates the
 exact QueuePlan registry and FIFO selection, derives the complete ordered
-reservation-group identity, and consumes checked QueuePlan-selection and V5
+reservation-group identity, and consumes checked QueuePlan-selection and V1
 fsync projections at the journal append. The READY signature boundary consumes
 its Kura-minted move-only authority only after checking the exact proposal,
 availability body, height context, committee geometry, and reservation group.
@@ -287,7 +286,7 @@ close.
 The durable merge-source, canonical WSV commit, and post-carrier Queue cleanup
 consumers check their named projections against that same group identity. The
 pre-Kura reservation-batch direct-release linearization point separately
-consumes its composed projection after locked V4/V5, FIFO, group, and committee
+consumes its composed projection after locked V1, FIFO, group, and committee
 revalidation. The structural checker binds the remaining named production
 linearization points and fails closed when any action loses its checked
 producer or move-only consumer.
@@ -835,8 +834,8 @@ close `G-FORMAL`.
 **Closure:** Implemented.
 **Evidence:** Open.
 
-**Production map.** `QueuePlanAdmissionBindingV2` and
-`validate_queue_plan_admission_certificate_for_network_digest_v2` in
+**Production map.** `QueuePlanAdmissionBindingV1` and
+`validate_queue_plan_admission_certificate_for_network_digest_v1` in
 `crates/iroha_core/src/torii_proxy.rs` define the exact request, transaction,
 routing-plan, context, enqueue-time, and journal-record identity certified by
 the coordinator quorum. `persist_queue_plan_admission_certificate` and
@@ -949,7 +948,7 @@ formal action inventory; they do not claim a new TLC transition or close
 **Closure:** Implemented.
 **Evidence:** Open.
 
-**Production map.** `LaneQueueReservationKeyV2`,
+**Production map.** `LaneQueueReservationKeyV1`,
 `LaneQueueReservationStore`, `Queue::reserve_transactions_for_lane_bounded`,
 `Queue::retain_lane_reservation`, `Queue::release_lane_reservation`,
 `Queue::commit_lane_reservation`,
@@ -962,7 +961,7 @@ selection and calls `Queue::reserve_transactions_for_lane_bounded` before
 payload publication; losing and retired work use the exact release path.
 
 **Closure condition.** The deterministic lane leader selects a non-empty FIFO
-batch and fsyncs one exact ordered V5 batch of `LaneQueueReservationKeyV2`
+batch and fsyncs one exact ordered V1 batch of `LaneQueueReservationKeyV1`
 records before ownership leaves the ordinary queue. Selection binds active route/incarnation and
 canonical enqueue order, and requires the admission binding to be an exact
 immutable WSV registry match. No transaction can be visible to both owners or
@@ -1781,12 +1780,15 @@ for a grouped case; parity CI must fail.
 
 **Production map.** The signing guard V4, Native manifest V1, Native receipt
 and latest-index layouts, serviced-candidate V4 store, queue reservation
-journal/key, executable payload V2/envelope, lane QCs/NewView, merge entries,
+journal/key, executable payload V1/envelope, lane QCs/NewView, merge entries,
 application receipts, and diagnostics models all carry explicit versions or
 exact typed Norito layouts in their owning modules. The serviced-candidate
 store accepts V4 only. Unknown and retired layouts fail closed; the source tree
 contains no implicit legacy consensus decoder or production feature/environment
 compatibility switch for autonomous execution.
+The current Kura artifact and historical-recovery enums use contiguous
+zero-based Norito tags; exact-tag regressions freeze those layouts and unknown
+discriminants fail typed decode.
 `crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs` now generates
 the positive `quorum_certificate_merge_carrier` row and negative
 `execution_commitment_merge_carrier_wrong_version` and
@@ -2245,7 +2247,7 @@ marker must be classified here before release.
 These are current fail-closed policy, not hidden TODOs. Their negative tests
 remain required by the mapped rows.
 
-- QueuePlan, reservation journal V5/key V2/FIFO/release layouts, Native signing
+- QueuePlan and reservation journal V1 key/FIFO/release layouts, Native signing
   claims, lane executable/QC/NewView artifacts, merge entries, execution
   contexts, application evidence, and `KuraReplicaAdvertV1` reject retired,
   zero, or future versions. This is the coordinated clean break mapped to

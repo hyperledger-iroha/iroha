@@ -254,8 +254,8 @@ private fun sameSccpFeePayerAndGasBound(
 
 private fun sameCanonicalAccountId(left: String, right: String): Boolean = try {
     // AccountId wire identity is domainless and excludes its I105 display discriminant.
-    val leftBytes = AccountAddress.parseEncodedIgnoringCurveSupport(left, null).address.canonicalBytes
-    val rightBytes = AccountAddress.parseEncodedIgnoringCurveSupport(right, null).address.canonicalBytes
+    val leftBytes = AccountAddress.parseEncodedIgnoringCurveSupport(left, null).canonicalBytes
+    val rightBytes = AccountAddress.parseEncodedIgnoringCurveSupport(right, null).canonicalBytes
     leftBytes.contentEquals(rightBytes)
 } catch (ex: AccountAddressException) {
     throw IllegalArgumentException("transaction payload account must be canonical I105", ex)

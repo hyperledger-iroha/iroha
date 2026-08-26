@@ -1,23 +1,40 @@
 # Taira
 
-Taira's disposable testnet path is one command:
+Taira is SORA's persistent public testnet. The public Torii MCP endpoint is
+`https://taira.sora.org/v1/mcp`; public validators and observers join that
+shared network rather than creating a replacement cohort. The public-node join
+contract must consume one published, signed Taira bootstrap bundle (network
+identity, genesis anchor, seed peers, permissionless observer policy, on-chain
+validator activation policy, and upgrade policy) plus locally generated node
+keys. Runtime credentials and signing inputs stay outside the repository.
+Until that bundle and the single supported node-init command are shipped, do
+not present the local harness below as a public-network join procedure.
+
+The repository's disposable four-validator harness is a local qualification
+network. It is not the public Taira network and is not part of ordinary public
+node onboarding. Its path is one command with an explicit prepared Inrou guest
+workspace:
 
 ```bash
-python3 scripts/taira_devnet.py up
+python3 scripts/taira_devnet.py up \
+  --inrou-canary-dir /private/runtime/taira-inrou-canary
 ```
 
-It builds the current `kagami`, `iroha3d_taira`, and `iroha` binaries, replaces
+It builds the current `kagami`, `iroha3d_taira`, `iroha`, and `sorafs-node`
+binaries, replaces
 the previous script-owned bundle under `/var/lib/iroha-taira-devnet/` by
 default, generates exactly four fresh-key NPoS validators for the canonical
 Taira chain, validates every
 peer configuration, and overlays each peer with the sole first-release Inrou
-backend: one PortableVM with exact CPU, memory, storage, and egress budgets. It
+backend: one PortableVM with exact CPU, memory, writable-storage, and egress
+budgets plus a separate 10 GiB immutable guest-image materialization bound. It
 starts the peers and waits for all four nodes to become ready, which also proves
 that each daemon passed the artifact-free Inrou startup-boundary probe. That
 probe exercises the production machine type and host CPU under KVM, private
 namespaces, configured cgroup limits, anonymous QMP, QEMU user networking, the
-private loopback connector, and the owner firewall; it does not boot a guest or
-launch a workload. It then
+private loopback connector, and the owner firewall. The command then stages and
+preseeds the required guest, boots four isolated workload replicas, and proves
+their authoritative public route. It also
 submits one signed `iroha tx ping`, waits for its typed `Applied` status,
 requires all four committed heights to advance and converge, and checks that
 every generated MCP endpoint can initialize and list tools. The fixed
@@ -41,7 +58,8 @@ build-script inputs outside the worktree, the toolchain, and dependency caches
 are outside that observation. Exact source provenance belongs to the separate
 signed immutable release corridor.
 
-The default devnet is an Inrou startup-boundary qualification command. It fails before building
+`up` is an Inrou startup-boundary and guest-workload qualification command. It
+fails before building
 or replacing a cohort unless the host is Linux AArch64, the command starts as
 uid 0, and `/dev/kvm` exposes KVM API version 12. The daemon then remains the
 authority for the root-custodied runtime closure, locked service identities,
@@ -102,9 +120,16 @@ set explicitly, derives a stable UUID from the service revision, volume kind,
 storage class, and authoritative generation, and validates that exact
 superblock contract before publishing or reusing a disk.
 
-To prove a real guest launch, four placements, and the public route, prepare
-verified AArch64 assets, generate the exact deploy workspace with the
-same-revision compiled CLI, and pass that workspace to the devnet:
+Every successful run must prove a real guest launch, four placements, and the
+public route. Prepare verified AArch64 assets, generate the exact deploy
+workspace with the same-revision compiled CLI, and pass that workspace to the
+devnet:
+
+The asset preparer requires `gpgv` or `gpg` plus a trusted Debian archive or
+cloud-image keyring. Install `debian-archive-keyring`, set
+`DEBIAN_ARCHIVE_KEYRING`, or pass `--debian-keyring`; a missing
+`SHA512SUMS.sign` is fatal, and the archive must match both the authenticated
+Debian sums and the repository-pinned SHA512.
 
 ```bash
 TAIRA_RUST_TARGET="$(rustc -vV | sed -n 's/^host: //p')"
@@ -147,20 +172,36 @@ no-follow descriptors into an owner-only network-local snapshot, and makes the
 compiled stager consume only that snapshot. The final JSON reports the
 aggregate `inrou_canary_input_content_sha256` without exposing input paths.
 
-This opt-in path conditionally builds `sorafs-node`, invokes the compiled
+The mandatory path builds `sorafs-node`, invokes the compiled
 `iroha taira inrou-stage --mode deploy`, and verifies its exact owner-only
 stage. Before starting a validator, it preseeds both the service bundle and
 guest directory commitments into each of the four disjoint generated SoraFS
-roots. After signed finality and the four MCP checks, compiled
-`iroha taira inrou-canary --mode deploy` requires exactly four active host
-adverts, four hosted replicas, the canonical authoritative route, and four
-distinct routed replica identities. The final JSON reports a redacted
-`inrou_canary` outcome; it never reports the stage path or copies credentials
-into repository files. Without this option, that field is
-`{"status":"not_requested"}`. The default report uses
+roots. After signed finality and the four MCP checks, the coordinator executes
+three prepared Inrou children in order: `bundle-pin` (`inrou_bundle_pin`),
+`guest-pin` (`inrou_guest_pin`), then `service-mutation` (`inrou_canary`). Each
+invocation selects exactly one child and one of
+prepare, retained-envelope submit, or read-only recovery. The coordinator
+atomically persists the canonical authorization-bound envelope before one
+submit, never replaces first-wins bytes, and requires exact Applied predecessor
+evidence before preparing the next child. The final service mutation proves
+exactly four active host adverts, four hosted replicas, the canonical
+authoritative route, and four distinct routed replica identities. The final
+JSON reports a redacted `inrou_canary` outcome; it never reports the stage path
+or copies credentials into repository files. A successful report always sets
+`inrou_guest_workload_qualification` to `verified`; there is no startup-only
+success shape. It atomically publishes an owner-only exact-schema
+`inrou_guest_qualification.json` record inside the disposable network for
+subsequent read-only checks. That record binds the exact qualifying CLI path,
+digest and byte length plus the source revision and native target triple. The
+report also uses
 `configured_inrou_vm_capacity_per_peer` and
-`inrou_startup_boundary_qualified_peers`; those fields do not claim guest boot,
-the workload bridge, placements, or the public route.
+`inrou_startup_boundary_qualified_peers` for the separately proven startup
+boundary.
+
+Each of those four hosted replicas receives its own root and non-root lease
+disks. The canary does not share or multi-attach a disk between replica slots,
+and common filenames or matching guest paths are not evidence of shared
+storage.
 
 There is no external signed release ceremony, evidence archive, promotion
 state, 24-hour soak, host service installation, or predecessor rollback in
@@ -180,9 +221,19 @@ python3 scripts/taira_devnet.py check
 loopback ports, and the four exact PID/config pairs; unrelated services on the
 same ports cannot satisfy it. It reads the Torii base port from the generated
 `client.toml`, so an `up` started with a custom `--base-api-port` needs no
-repeated port argument. Its JSON reports configured peer/capacity values and
-current read-only health only: it does not requalify KVM, source or executable
-identity, signed writes, or the Inrou canary route.
+repeated port argument. It also requires and strictly validates the owner-only
+V1 guest qualification record, including the canonical four-replica canary
+receipt and input digest. It rehashes the retained input snapshot, requires the
+recorded `optimizations` revision and Linux/AArch64 target on every validator,
+rehashes and executes only the recorded qualifying CLI, revalidates the exact
+retained stage, and invokes one `iroha taira inrou-check --mode deploy`. The
+compiled check performs an account-signed status read, compares the live
+container and service manifest hashes with the stage, and observes all four
+route identities. The report labels the historical mutation result
+`inrou_stored_deploy_receipt` and the current result `inrou_live_check`; it
+never presents the stored receipt as fresh evidence. It remains read-only: it
+does not repeat KVM qualification, submit a ping, register an artifact, or
+submit a canary deployment.
 
 Stop it while retaining generated configs and logs:
 
@@ -198,13 +249,15 @@ Optionally run the broader read-only public-product route diagnostic after the
 standard signed smoke and four-peer MCP checks:
 
 ```bash
-python3 scripts/taira_devnet.py up --full-doctor
+python3 scripts/taira_devnet.py up \
+  --inrou-canary-dir /private/runtime/taira-inrou-canary \
+  --full-doctor
 ```
 
 `--full-doctor` runs the same-revision `iroha taira doctor` against the
-generated local endpoint. It is independent of `--inrou-canary-dir`; combine
-the two flags only when both broad route diagnostics and the real Inrou canary
-are part of the same run.
+generated local endpoint after the mandatory real Inrou canary. It adds the
+broad public-product route diagnostic; it does not replace any guest workload
+qualification step.
 
 The optional local diagnostic is not public-ingress qualification and is never
 a default devnet gate. Run the same-revision `iroha taira doctor` directly
@@ -231,32 +284,56 @@ attempts bounded teardown, keeps the bounded peer logs in place, and exits
 non-zero. If peer ownership or termination cannot be proved, it warns and
 retains the bundle for operator diagnosis instead of claiming cleanup.
 
-## Public reset inventory handoff
+## Public reset
 
-`scripts/taira_public_reset.py` is a local, strictly read-only inventory and
-operator-handoff validator. It validates an owner-private exact four-host
-inventory, source and artifact hashes, validator preflight attestations, and the
-edge-authority attestation, then emits redacted JSON. `preflight` and `confirm`
-do not grant deployment authority; `apply` always refuses after validation.
+The same-revision compiled CLI is the single public-reset path. Build the
+evidence binary with the release profile and admit the complete input closure
+locally before any host is contacted:
 
-The script opens no network connection, launches no transport or subprocess,
-writes or deletes no file, installs no artifact, stops no service, and does not
-reload edge ingress. It is not a deployment controller. Public Taira deployment
-remains outstanding until an external exact four-host Linux/AArch64/KVM
-inventory, runtime-only credentials, and a compiled authenticated replay-safe
-executor are available and the same artifact closure passes the disposable
-four-validator canary, public convergence/write/route checks, four distinct
-Inrou replica receipts, restart proof, and controlled edge cutover.
+```bash
+cargo build --locked --profile release -p iroha_cli --bin iroha
+target/release/iroha taira public-reset preflight \
+  --inventory /private/runtime/taira-public-reset/inventory.json \
+  --authorization /private/runtime/taira-public-reset/authorization.json \
+  --trusted-public-key /private/runtime/taira-public-reset/trusted-public-key.json \
+  --ssh-identity /private/runtime/taira-public-reset/id_ed25519 \
+  --known-hosts /private/runtime/taira-public-reset/known_hosts
+```
+
+`InventoryV1` must contain `canary_onboarding_request`; it is not optional and
+has no derived-at-runtime fallback. The value must be the exact canonical
+`AccountOnboardingPlanRequestV1`: version 1, the canonical domainless
+single-signatory canary account, its deterministically derived rollout alias in
+the `taira.universal` scope, and an empty `permissions` array. The inventory
+SHA-256 covered by the signed authorization binds this complete request before
+admission, so neither an operator nor a resumed controller can substitute the
+account, alias, or permissions during prepare. Preflight rejects a missing,
+noncanonical, mismatched, or permission-bearing request.
+
+`iroha taira public-reset preflight` performs local fail-closed admission;
+`iroha taira public-reset apply` is the live mutating operation. Apply requires
+explicit owner-private, runtime-only authorization, SSH, and canary inputs. It
+is permitted only after the identical artifact closure passes the disposable
+four-validator corridor and each admitted host already has the trusted compiled
+dispatcher and reset guard provisioned independently of the candidate. Never
+persist those inputs in the repository, let the candidate bootstrap its own
+host authority, or introduce a Python alias or parallel V1 schema.
+
+The rendered validator configuration must replace the dedicated
+`REPLACE_WITH_TAIRA_CANARY_ONBOARDING_*` fields with one credential scoped to
+the `universal` dataspace. Its token digest must match the owner-only token
+admitted by the reset closure; the raw token never enters the release bundle or
+repository.
 
 ## Public Taira endpoint checks
 
 The compiled CLI owns the current public API contract. Build it from the same
-revision being deployed, copy the example config to an owner-only runtime path,
-and replace its key placeholders before use:
+revision being deployed. The read-only doctor deliberately does not load a
+client config or signing identity:
 
 ```bash
-cargo build --locked --profile local-release -p iroha_cli --bin iroha
-target/local-release/iroha -c /private/runtime/client.toml \
+cargo build --locked --profile release -p iroha_cli --bin iroha
+target/release/iroha \
   taira doctor --public-root https://taira.sora.org --json
 ```
 
@@ -306,19 +383,15 @@ health or an expired host advert never substitutes for authoritative state.
 Both local and remote ingress overwrite upstream values, so guest self-reporting
 or a stale process cannot satisfy the proof.
 
-For an explicitly authorized public write canary, copy the example client
-configuration to a runtime-only location and supply the onboarding token from
-an owner-only runtime file:
-
-```bash
-target/local-release/iroha -c /private/runtime/client.toml \
-  --fee-payer authority \
-  taira write-canary \
-  --public-root https://taira.sora.org \
-  --onboarding-token-file /private/runtime/onboarding.token \
-  --write-config /private/runtime/canary-client.toml \
-  --json
-```
+An explicitly authorized public write canary is an ordered durable protocol,
+not a one-shot command. `iroha taira public-reset apply` prepares, privately
+persists, submits, and recovers the `onboarding`, `faucet`, and `final-canary`
+children in that order. The low-level `iroha taira write-canary` command accepts
+one child and one of `--prepare-envelope`, `--submit-prepared-envelope-fd`, or
+`--recover-prepared-envelope-fd`; later preparation also requires the exact
+Applied predecessor envelope. Do not invoke it manually unless implementing or
+auditing that coordinator protocol. Keep the populated example client config
+and owner-only onboarding-token file in the admitted runtime workspace.
 
 Do not persist signing keys, onboarding tokens, bearer tokens, or forwarded
 authorization headers in this repository.
@@ -338,9 +411,8 @@ authorization headers in this repository.
 - `validator_roster.example.toml`, the edge renderer, nginx template, and edge
   installer remain the public-ingress configuration surface.
 
-The retired privileged reset, release, evidence, host-supervision, and soak
-controllers are intentionally gone. `scripts/taira_public_reset.py` is retained
-only as the read-only inventory/handoff boundary described above. New mutating
-deployment behavior belongs in a compiled authenticated Kagami, daemon, or CLI
-surface; keep `scripts/taira_devnet.py` limited to disposable process
-orchestration and end-to-end smoke verification.
+The retired Python reset, release, evidence, host-supervision, and soak
+controllers are intentionally gone. The compiled `iroha taira public-reset`
+preflight/apply pair is the sole reset surface; there is no compatibility alias
+or parallel schema. Keep `scripts/taira_devnet.py` limited to disposable
+process orchestration and end-to-end smoke verification.

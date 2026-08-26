@@ -293,7 +293,6 @@ fn derive_manifest(
     parts: &BundleParts<'_>,
 ) -> Result<(PrivacyWalletExecutionBundleManifestV1, PrivateKey), PrivacyWalletBundleErrorV1> {
     let authority = AccountId::parse_encoded(parts.authority)
-        .map(|parsed| parsed.into_account_id())
         .map_err(|_| PrivacyWalletBundleErrorV1::at("authority"))?;
     let mut seed = Zeroizing::new([0_u8; 32]);
     seed.copy_from_slice(parts.signer_seed);
@@ -586,9 +585,7 @@ fn take_array(
     Ok(values)
 }
 fn account_id(value: String, stage: &'static str) -> Result<AccountId, PrivacyWalletBundleErrorV1> {
-    AccountId::parse_encoded(&value)
-        .map(|parsed| parsed.into_account_id())
-        .map_err(|_| PrivacyWalletBundleErrorV1::at(stage))
+    AccountId::parse_encoded(&value).map_err(|_| PrivacyWalletBundleErrorV1::at(stage))
 }
 fn asset_definition_id(
     value: String,

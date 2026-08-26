@@ -14,8 +14,7 @@ fn join_kaigi_roundtrip_preserves_optional_fields() {
     );
     let participant =
         AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
-            .expect("participant account id")
-            .into_account_id();
+            .expect("participant account id");
     let commitment = KaigiParticipantCommitment {
         commitment: Hash::new([0xAA; Hash::LENGTH]),
         alias_tag: Some("alice".into()),

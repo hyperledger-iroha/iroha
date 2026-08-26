@@ -143,7 +143,7 @@ import org.hyperledger.iroha.android.nexus.UaidManifestQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 
-String uaid = UaidLiteral.canonicalize("  UAID:DEADBEEF...  ", "lookup uaid");
+String uaid = UaidLiteral.canonicalize("uaid:deadbeef...", "lookup uaid");
 UaidPortfolioQuery portfolioQuery =
     UaidPortfolioQuery.builder()
         .setAssetId("61CtjvNd9T3THAR65GsMVHr82Bjc")

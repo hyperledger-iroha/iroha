@@ -6,13 +6,14 @@ class UaidManifestQuery(
     val status: UaidManifestStatusFilter? = null,
     limit: Long? = null,
     offset: Long? = null,
+    val countMode: UaidManifestCountMode? = null,
 ) {
     val dataspaceId: Long? = dataspaceId?.also {
         require(it >= 0) { "dataspaceId must be non-negative" }
     }
 
     val limit: Long? = limit?.also {
-        require(it >= 0) { "limit must be non-negative" }
+        require(it > 0) { "limit must be positive" }
     }
 
     val offset: Long? = offset?.also {
@@ -25,6 +26,7 @@ class UaidManifestQuery(
         status?.let { put("status", it.parameterValue) }
         this@UaidManifestQuery.limit?.let { put("limit", it.toString()) }
         this@UaidManifestQuery.offset?.let { put("offset", it.toString()) }
+        countMode?.let { put("count_mode", it.parameterValue) }
     }
 
     /** Status filter accepted by Torii manifests endpoint. */

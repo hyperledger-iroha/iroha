@@ -7,7 +7,7 @@ use iroha_primitives::{json::Json, numeric::Quantity};
 #[allow(unused_imports)]
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use std::{string::String, vec::Vec};
+use std::{fmt, string::String, vec::Vec};
 macro_rules! data_event {
     ($(#[$meta:meta])* $vis:vis enum $name:ident { $($body:tt)* }) => {
         iroha_data_model_derive::model_single! {
@@ -1526,9 +1526,7 @@ mod domain {
             }
         }
         /// Privacy route description mirrored from the manifest schema.
-        #[derive(
-            Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
-        )]
+        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         #[getset(get = "pub")]
         pub struct StreamingPrivacyRoute {
@@ -1542,6 +1540,30 @@ mod domain {
             pub soranet: Option<StreamingSoranetRoute>,
             #[getset(skip)]
             pub ticket: Option<TicketEnvelopeV1>,
+        }
+        impl fmt::Debug for StreamingPrivacyRoute {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter
+                    .debug_struct("StreamingPrivacyRoute")
+                    .field("route_id", &self.route_id)
+                    .field("entry", &self.entry)
+                    .field("exit", &self.exit)
+                    .field(
+                        "ticket_entry",
+                        &format_args!("<redacted:{} bytes>", self.ticket_entry.len()),
+                    )
+                    .field(
+                        "ticket_exit",
+                        &format_args!("<redacted:{} bytes>", self.ticket_exit.len()),
+                    )
+                    .field("expiry_segment", &self.expiry_segment)
+                    .field("soranet", &self.soranet)
+                    .field(
+                        "ticket",
+                        &self.ticket.as_ref().map(|_| "<redacted attached ticket>"),
+                    )
+                    .finish()
+            }
         }
         impl StreamingPrivacyRoute {
             /// Construct a new relay path descriptor (no ticket attached).

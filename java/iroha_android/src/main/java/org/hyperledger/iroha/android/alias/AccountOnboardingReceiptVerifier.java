@@ -29,7 +29,7 @@ public final class AccountOnboardingReceiptVerifier {
     return IrohaHash.prehash(preimage);
   }
 
-  /** Verifies the receipt against the exact local network and optional authority. */
+  /** Verifies the receipt against the exact local network and authority. */
   public static boolean verify(
       final AccountOnboardingPlanReceiptV1 receipt,
       final NetworkId expectedNetworkId,
@@ -38,17 +38,15 @@ public final class AccountOnboardingReceiptVerifier {
     if (!receipt.body().networkId().equals(Objects.requireNonNull(expectedNetworkId, "expectedNetworkId"))) {
       return false;
     }
-    if (expectedAuthority != null) {
-      final String canonicalExpected;
-      try {
-        canonicalExpected =
-            org.hyperledger.iroha.android.address.AccountIdLiteral.requireCanonicalI105Address(
-                expectedAuthority, "expectedAuthority");
-      } catch (final IllegalArgumentException ignored) {
-        return false;
-      }
-      if (!receipt.body().authority().equals(canonicalExpected)) return false;
+    final String canonicalExpected;
+    try {
+      canonicalExpected =
+          org.hyperledger.iroha.android.address.AccountIdLiteral.requireCanonicalI105Address(
+              Objects.requireNonNull(expectedAuthority, "expectedAuthority"), "expectedAuthority");
+    } catch (final IllegalArgumentException ignored) {
+      return false;
     }
+    if (!sameAccountIdentity(receipt.body().authority(), canonicalExpected)) return false;
     final byte[] carriedHash = AliasNameSupport.decodeHash(receipt.planHash());
     if (carriedHash == null
         || !MessageDigest.isEqual(carriedHash, canonicalHash(receipt.body()))) {
@@ -56,22 +54,55 @@ public final class AccountOnboardingReceiptVerifier {
     }
     final byte[] signature = decodeHex(receipt.signature());
     if (signature == null) return false;
+    return verifyAuthoritySignature(receipt.body().authority(), carriedHash, signature);
+  }
+
+  /** Verifies an exact digest/message against the single-key authority encoded by an I105 account. */
+  public static boolean verifyAuthoritySignature(
+      final String authority, final byte[] message, final String signatureHex) {
+    final byte[] signature = decodeHex(signatureHex);
+    return signature != null && verifyAuthoritySignature(authority, message, signature);
+  }
+
+  /** Compares universal account identities independently of the I105 display discriminant. */
+  public static boolean sameAccountIdentity(final String left, final String right) {
     try {
-      final AccountAddress address = AccountAddress.fromI105(receipt.body().authority(), null);
-      final Optional<AccountAddress.SingleKeyPayload> signatory =
-          address.singleKeyPayloadIgnoringCurveSupport();
-      if (!signatory.isPresent()) return false;
-      final AccountAddress.SingleKeyPayload key = signatory.get();
-      if (key.curveId() == 0x01) {
-        return verifyEd25519(key.publicKey(), carriedHash, signature);
-      }
-      return verifyNative(key.curveId(), key.publicKey(), carriedHash, signature);
+      final byte[] leftBytes =
+          AccountAddress.fromI105(
+                  org.hyperledger.iroha.android.address.AccountIdLiteral
+                      .requireCanonicalI105Address(left, "left"),
+                  null)
+              .canonicalBytes();
+      final byte[] rightBytes =
+          AccountAddress.fromI105(
+                  org.hyperledger.iroha.android.address.AccountIdLiteral
+                      .requireCanonicalI105Address(right, "right"),
+                  null)
+              .canonicalBytes();
+      return MessageDigest.isEqual(leftBytes, rightBytes);
     } catch (final Exception ignored) {
       return false;
     }
   }
 
-  /** Requires a valid receipt for the exact local network and optional authority. */
+  static boolean verifyAuthoritySignature(
+      final String authority, final byte[] message, final byte[] signature) {
+    try {
+      final AccountAddress address = AccountAddress.fromI105(authority, null);
+      final Optional<AccountAddress.SingleKeyPayload> signatory =
+          address.singleKeyPayloadIgnoringCurveSupport();
+      if (!signatory.isPresent()) return false;
+      final AccountAddress.SingleKeyPayload key = signatory.get();
+      if (key.curveId() == 0x01) {
+        return verifyEd25519(key.publicKey(), message, signature);
+      }
+      return verifyNative(key.curveId(), key.publicKey(), message, signature);
+    } catch (final Exception ignored) {
+      return false;
+    }
+  }
+
+  /** Requires a valid receipt for the exact local network and authority. */
   public static AccountOnboardingPlanReceiptV1 requireValid(
       final AccountOnboardingPlanReceiptV1 receipt,
       final NetworkId expectedNetworkId,

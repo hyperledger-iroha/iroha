@@ -8,7 +8,6 @@ use iroha_config::parameters::{
     },
     defaults::network::{DEFAULT_AEAD_FRAME_OVERHEAD_BYTES, TRUST_GOSSIP},
 };
-use iroha_config_base::WithOrigin;
 use iroha_crypto::{
     KeyPair,
     soranet::handshake::{
@@ -81,36 +80,6 @@ fn trust_config(
         default_soranet_handshake(),
         trust_gossip,
     )
-}
-#[cfg(feature = "p2p_ws")]
-fn websocket_test_config(
-    address: iroha_primitives::addr::SocketAddr,
-    idle_timeout: Duration,
-    prefer_ws_fallback: bool,
-) -> Config {
-    let mut config = trust_config(address, TRUST_GOSSIP, idle_timeout);
-    config.prefer_ws_fallback = prefer_ws_fallback;
-    config.happy_eyeballs_stagger = Duration::from_millis(50);
-    config.p2p_queue_cap_high =
-        NonZeroUsize::new(128).expect("WebSocket test high-priority capacity is non-zero");
-    config.p2p_queue_cap_low =
-        NonZeroUsize::new(128).expect("WebSocket test low-priority capacity is non-zero");
-    config.p2p_post_queue_cap =
-        NonZeroUsize::new(64).expect("WebSocket test post capacity is non-zero");
-    config
-}
-#[cfg(feature = "p2p_ws")]
-async fn accept_one_websocket_test_connection(
-    listener: tokio::net::TcpListener,
-    network: NetworkHandle<TestMessage>,
-) {
-    let Ok((tcp_stream, remote_address)) = listener.accept().await else {
-        return;
-    };
-    let Ok((reader, writer)) = super::ws_io::accept_bounded(tcp_stream).await else {
-        return;
-    };
-    let _ = network.accept_stream(reader, writer, remote_address).await;
 }
 /// This test creates a network and one peer. This peer connects back to our network, emulating some
 /// distant peer. There is no need to create separate networks to check that messages are properly
@@ -403,75 +372,6 @@ async fn trust_gossip_enabled_flows_through() {
         .expect("subscriber channel closed");
     assert_eq!(msg_b.payload.chan, 2);
     assert_eq!(msg_b.payload.payload, 99);
-}
-#[cfg(feature = "p2p_ws")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn ws_fallback_connects_and_handshakes() {
-    setup_logger();
-    if super::skip_if_no_tcp_bind() {
-        return;
-    }
-    let peer2_key_pair = super::random_node_key_pair();
-    let chain_id = super::test_network_id("test_chain");
-    let idle_timeout = Duration::from_secs(5);
-    let peer2_listen_address = super::next_addr();
-    let (peer2_network, _peer2_child) = NetworkHandle::<TestMessage>::start(
-        super::p2p_identity_keys(peer2_key_pair.clone()),
-        websocket_test_config(peer2_listen_address, idle_timeout, false),
-        chain_id,
-        None,
-        None,
-        ShutdownSignal::new(),
-    )
-    .await
-    .expect("start inbound WebSocket test network");
-    // Upgrade one connection and pass its bounded byte-stream adapters to peer 2.
-    let websocket_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind WebSocket fallback listener");
-    let websocket_address = websocket_listener
-        .local_addr()
-        .expect("read WebSocket fallback listener address");
-    // Retain the original handle for the full test while the server task owns a clone.
-    let websocket_peer_network = peer2_network.clone();
-    let _websocket_server = tokio::spawn(accept_one_websocket_test_connection(
-        websocket_listener,
-        websocket_peer_network,
-    ));
-    // Prefer the WebSocket transport for peer 1's connection to the listener.
-    let peer1_key_pair = super::random_node_key_pair();
-    let peer1_listen_address = super::next_addr();
-    let (mut peer1_network, _peer1_child) = NetworkHandle::<TestMessage>::start(
-        super::p2p_identity_keys(peer1_key_pair),
-        websocket_test_config(peer1_listen_address, idle_timeout, true),
-        chain_id,
-        None,
-        None,
-        ShutdownSignal::new(),
-    )
-    .await
-    .expect("start outbound WebSocket test network");
-    let peer2_address: iroha_primitives::addr::SocketAddr = websocket_address
-        .to_string()
-        .parse()
-        .expect("WebSocket listener address should be a valid peer address");
-    let peer2 = Peer::new(peer2_address.clone(), peer2_key_pair.public_key().clone());
-    peer1_network.update_topology(UpdateTopology(HashSet::from([peer2.id().clone()])));
-    peer1_network.update_peers_addresses(UpdatePeers(vec![(peer2.id().clone(), peer2_address)]));
-    tokio::time::timeout(Duration::from_secs(5), async {
-        let mut online_count = peer1_network
-            .wait_online_peers_update(HashSet::len)
-            .await
-            .expect("online peers channel closed");
-        while online_count < 1 {
-            online_count = peer1_network
-                .wait_online_peers_update(HashSet::len)
-                .await
-                .expect("online peers channel closed");
-        }
-    })
-    .await
-    .expect("peer did not connect and complete its handshake over WebSocket");
 }
 #[derive(Clone, Debug)]
 struct WaitForN(Arc<Inner>);
@@ -1411,104 +1311,82 @@ where
 #[cfg(feature = "p2p_tls")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tls_inbound_listener_smoke() {
-    use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
     setup_logger();
     if super::skip_if_no_tcp_bind() {
         return;
     }
+    const PEER_COUNT: usize = 4;
     let idle_timeout = Duration::from_secs(30);
     let chain_id = super::test_network_id("test_chain");
-    // Find a free local port for TLS listener
-    let port = match std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
-        Ok(sock) => sock.local_addr().unwrap().port(),
-        Err(e) => {
-            eprintln!("Skipping tls_inbound_listener_smoke: cannot bind probe socket: {e}");
-            return;
-        }
-    };
-    // Build addresses: TLS listener on this fixed port, and advertise hostname so outbound uses TLS
-    let tls_listen_addr = socket_addr!(127.0.0.1: {port});
-    let public_host_addr = IrohaSocketAddr::Host(iroha_primitives::addr::SocketAddrHost {
-        host: "localhost".into(),
-        port,
-    });
-    // Network 1 (listener with inbound TLS)
-    let key_pair1 = super::random_node_key_pair();
-    let peer1 = Peer::new(public_host_addr.clone(), key_pair1.public_key().clone());
-    let config1 = Config {
-        happy_eyeballs_stagger: Duration::from_millis(50),
-        tls_enabled: true,
-        p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
-        p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
-        p2p_post_queue_cap: NonZeroUsize::new(256).unwrap(),
-        ..super::test_network_config(
-            super::next_addr(),
-            public_host_addr.clone(),
-            idle_timeout,
-            default_soranet_handshake(),
-            TRUST_GOSSIP,
-        )
-    };
-    // Start network1; if sandbox forbids sockets, skip
-    let (network1, _child1) = match NetworkHandle::<TestMessage>::start(
-        super::p2p_identity_keys(key_pair1.clone()),
-        Config {
-            tls_listen_address: Some(WithOrigin::inline(tls_listen_addr.clone())),
-            ..config1
-        },
-        chain_id,
-        None,
-        None,
-        ShutdownSignal::new(),
-    )
-    .await
-    {
-        Ok(ok) => ok,
-        Err(e) => {
-            eprintln!("Skipping tls_inbound_listener_smoke: cannot start listener: {e:?}");
-            return;
-        }
-    };
-    // Network 2 (dialer with outbound TLS via hostname)
-    let key_pair2 = super::random_node_key_pair();
-    let dialer_addr = super::next_addr();
-    let (_n2, _child2) = match NetworkHandle::<TestMessage>::start(
-        super::p2p_identity_keys(key_pair2.clone()),
-        Config {
+    let mut networks = Vec::with_capacity(PEER_COUNT);
+    let mut peers = Vec::with_capacity(PEER_COUNT);
+    let mut children = Vec::with_capacity(PEER_COUNT);
+    for _ in 0..PEER_COUNT {
+        let address = super::next_addr();
+        let key_pair = super::random_node_key_pair();
+        let peer = Peer::new(address.clone(), key_pair.public_key().clone());
+        let config = Config {
             happy_eyeballs_stagger: Duration::from_millis(50),
-            tls_enabled: true,
             p2p_queue_cap_high: NonZeroUsize::new(1024).unwrap(),
             p2p_queue_cap_low: NonZeroUsize::new(4096).unwrap(),
             p2p_post_queue_cap: NonZeroUsize::new(256).unwrap(),
             ..super::test_network_config(
-                dialer_addr.clone(),
-                dialer_addr,
+                address.clone(),
+                address,
                 idle_timeout,
                 default_soranet_handshake(),
                 TRUST_GOSSIP,
             )
-        },
-        chain_id,
-        None,
-        None,
-        ShutdownSignal::new(),
-    )
-    .await
-    {
-        Ok(ok) => ok,
-        Err(e) => {
-            eprintln!("Skipping tls_inbound_listener_smoke: cannot start dialer: {e:?}");
-            return;
+        };
+        let (network, child) = match NetworkHandle::<TestMessage>::start(
+            super::p2p_identity_keys(key_pair),
+            config,
+            chain_id.clone(),
+            None,
+            None,
+            ShutdownSignal::new(),
+        )
+        .await
+        {
+            Ok(started) => started,
+            Err(error) => {
+                eprintln!("Skipping tls_inbound_listener_smoke: cannot start peer: {error:?}");
+                return;
+            }
+        };
+        peers.push(peer);
+        networks.push(network);
+        children.push(child);
+    }
+    for (index, network) in networks.iter().enumerate() {
+        let topology = peers
+            .iter()
+            .enumerate()
+            .filter(|(peer_index, _)| *peer_index != index)
+            .map(|(_, peer)| peer.id().clone())
+            .collect();
+        network.update_topology(UpdateTopology(topology));
+        let outbound_addresses = peers
+            .iter()
+            .enumerate()
+            .filter(|(peer_index, _)| *peer_index > index)
+            .map(|(_, peer)| (peer.id().clone(), peer.address().clone()))
+            .collect();
+        network.update_peers_addresses(UpdatePeers(outbound_addresses));
+    }
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if networks
+                .iter()
+                .all(|network| network.online_peers(HashSet::len) == PEER_COUNT - 1)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-    };
-    // Connect dialer to listener via hostname/port address so outbound TLS is used
-    network1.update_topology(UpdateTopology([peer1.id().clone()].into_iter().collect()));
-    network1.update_peers_addresses(UpdatePeers(vec![(
-        peer1.id().clone(),
-        public_host_addr.clone(),
-    )]));
-    // Quick smoke: network1 should not crash; we expect at least to process connect attempt.
-    // Since both ends are started, give it a short window and ensure code path runs.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    })
+    .await
+    .expect("all four peers must establish mandatory TLS sessions");
+    drop(children);
 }
 include!("p2p_test_primitives.rs");

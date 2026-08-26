@@ -343,7 +343,6 @@ impl SingularQueryJson {
     }
     fn decode_account_id(account_id: &str) -> Result<crate::account::AccountId, QueryJsonError> {
         crate::account::AccountId::parse_encoded(account_id)
-            .map(crate::account::ParsedAccountId::into_account_id)
             .map_err(|_| QueryJsonError::InvalidField("payload", "account_id"))
     }
     fn decode_asset_definition_id(

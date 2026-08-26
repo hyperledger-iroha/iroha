@@ -114,12 +114,12 @@ final class ToriiRequestBuilder {
       final Map<String, String> extraHeaders) {
     Objects.requireNonNull(baseUri, "baseUri");
     final String normalizedHash = Objects.requireNonNull(hashHex, "hashHex");
-    if (!normalizedHash.matches("[0-9a-f]{64}")) {
+    if (!normalizedHash.matches("[0-9a-f]{63}[13579bdf]")) {
       throw new IllegalArgumentException(
-          "hashHex must be a canonical lowercase 32-byte transaction hash");
+          "hashHex must be a canonical lowercase marked 32-byte transaction hash");
     }
     final URI target =
-        resolve(baseUri, STATUS_PATH + "?hash=" + normalizedHash + "&scope=auto");
+        resolve(baseUri, STATUS_PATH + "?hash=" + normalizedHash + "&scope=global");
     TransportSecurity.requireHttpRequestAllowed(
         "HttpClientTransport", baseUri, target, extraHeaders, null);
     final TransportRequest.Builder builder =

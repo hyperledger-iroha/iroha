@@ -7,8 +7,8 @@ This template provides:
 - `app_manifest.json` wiring both surfaces together
 - `dev.sh` to boot the frontend plus the local API shim
 - `build-and-sync.sh` to rebuild every artifact and refresh manifest hashes
-- `deploy.sh` to run the full publish + deploy flow from one command
-- `upgrade.sh` to rebuild, resync, and submit the app-wide upgrade flow
+- `release.sh` to run the mandatory build, validation, publication, deploy,
+  authoritative-status, and live-verification flow
 
 ## Local dev
 
@@ -43,11 +43,12 @@ iroha soracloud app build --manifest ./app_manifest.json
 `build-and-sync.sh` runs the frontend build, `services/api/./build.sh`, and
 `services/api/./verify-build.sh` before refreshing manifest hashes.
 
-The root scripts resolve `IROHA_BIN`, then `iroha` from `PATH`, then explicit source checkout settings (`IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`), so single-API app
-workspaces can target a local `iroha_cli` checkout without requiring a
-globally installed source wrapper. If you are driving the fallback through
-`IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`, set `IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to
-keep Cargo package and artifact state isolated from other local builds.
+Root scripts require `IROHA_BIN` to be an absolute path to an
+operator-qualified binary built from the same revision as the scaffold and
+`IROHA_BIN_SHA256` to match that exact file. They never resolve `iroha` from
+`PATH` or compile a source checkout while releasing. Contract build scripts
+likewise require an absolute same-revision `KOTO_BIN` and matching
+`KOTO_BIN_SHA256`.
 
 The app manifest references `services/api/build/api-service.to`, so the app-wide
 sync path updates the bundle hash automatically.
@@ -55,32 +56,15 @@ sync path updates the bundle hash automatically.
 ## Publish + deploy
 
 ```bash
-TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha soracloud app doctor --manifest ./app_manifest.json --dry-run
+TORII_URL=http://127.0.0.1:8080 ./release.sh
 iroha soracloud app doctor --manifest ./app_manifest.json
 iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
 iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
-iroha soracloud app deploy --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud app deploy --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
 ```
 
-Direct `iroha soracloud app deploy` responses keep the root
-`manifest_path`, root `hostname`, root `workspace_dir`, root
-`workspace_scripts`, the frontend publish projection, one manifest-derived
-child service entry per app service, and the top-level `routes` split that
-`app plan` reports.
-
-## Upgrade
-
-```bash
-TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
-```
-
-Direct `iroha soracloud app upgrade` responses keep the same root
-manifest/hostname/workspace metadata, frontend, service, and top-level
-`routes` projection as app deploy.
+`app release` is the only first-release app mutation command. It does not
+accept a build bypass, and it returns overall success only after authoritative
+status reconciliation and an exact live 2xx route/health probe.
 
 ## Inspect deployed status
 
@@ -91,7 +75,7 @@ iroha soracloud app status --manifest ./app_manifest.json --torii-url http://127
 `app status` keeps one entry per child service manifest and reports the child
 manifest paths, the root `manifest_path`, root `hostname`, root
 `workspace_dir`, root `workspace_scripts`, plane/runtime, route prefix, the
-top-level mixed `routes` split, the frontend publish projection, and the
+top-level `routes` split, the frontend publish projection, and the
 matched Torii control-plane status when present.
 
 Service-scoped Soracloud commands still operate on the child API manifests at

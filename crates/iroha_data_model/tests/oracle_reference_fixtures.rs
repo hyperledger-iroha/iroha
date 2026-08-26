@@ -325,9 +325,7 @@ fn sample_providers() -> Vec<AccountId> {
     .collect()
 }
 fn parse_fixture_account(literal: &str) -> AccountId {
-    AccountId::parse_encoded(literal)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("fixture account id")
+    AccountId::parse_encoded(literal).expect("fixture account id")
 }
 fn price_feed_config(providers: &[AccountId]) -> FeedConfig {
     FeedConfig {

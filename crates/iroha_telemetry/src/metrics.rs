@@ -6956,10 +6956,6 @@ fields {
     pub tx_gossip_status: raw(Arc<RwLock<Vec<TxGossipStatus>>>);
     /// Cached configured caps for status exports.
     pub tx_gossip_caps: raw(Arc<RwLock<TxGossipCaps>>);
-    /// Accepted inbound WebSocket P2P connections
-    pub p2p_ws_inbound_total: gauge();
-    /// Successful outbound WebSocket P2P connections
-    pub p2p_ws_outbound_total: gauge();
     /// Accepted inbound SCION P2P connections
     pub p2p_scion_inbound_total: gauge();
     /// Successful outbound SCION P2P connections
@@ -7990,12 +7986,6 @@ fields {
     pub sns_registrar_status_total: int_counter_vec(&["result", "suffix"]);
     /// Torii account address rejects grouped by endpoint/reason.
     pub torii_address_invalid_total: int_counter_vec(&["endpoint", "reason"]);
-    /// Torii account-domain selections grouped by endpoint/domain kind.
-    pub torii_address_domain_total: int_counter_vec(&["endpoint", "domain_kind"]);
-    /// Torii Local-12 collision detections grouped by endpoint/kind.
-    pub torii_address_collision_total: int_counter_vec(&["endpoint", "kind"]);
-    /// Torii Local-12 collision detections grouped by endpoint/domain label.
-    pub torii_address_collision_domain_total: int_counter_vec(&["endpoint", "domain"],);
     /// Torii account literal selections grouped by endpoint/format.
     pub torii_account_literal_total: int_counter_vec(&["endpoint", "format"]);
     /// Torii Norito RPC decode failures grouped by payload kind/reason.
@@ -8476,7 +8466,7 @@ construct {
             }
         }
     }
-    [p2p_ws_inbound_total p2p_ws_outbound_total p2p_scion_inbound_total p2p_scion_outbound_total
+    [p2p_scion_inbound_total p2p_scion_outbound_total
         tx_gossip_sent_total tx_gossip_dropped_total tx_gossip_targets tx_gossip_fallback_total
         tx_gossip_frame_cap_bytes tx_gossip_public_target_cap tx_gossip_restricted_target_cap
         tx_gossip_public_target_reshuffle_ms tx_gossip_restricted_target_reshuffle_ms
@@ -8862,9 +8852,8 @@ construct {
         torii_proof_request_duration_seconds torii_proof_response_bytes_total
         torii_proof_cache_hits_total torii_request_duration_seconds torii_request_failures_total
         torii_explorer_requests_total torii_explorer_request_duration_seconds
-        torii_norito_rpc_gate_total torii_address_invalid_total torii_address_domain_total
-        torii_address_collision_total torii_address_collision_domain_total
-        torii_account_literal_total torii_norito_decode_failures_total torii_proof_throttled_total
+        torii_norito_rpc_gate_total torii_address_invalid_total torii_account_literal_total
+        torii_norito_decode_failures_total torii_proof_throttled_total
         torii_contract_throttled_total torii_contract_errors_total sns_registrar_status_total
         torii_active_connections_total torii_connect_buffered_sessions
         torii_connect_total_buffer_bytes torii_connect_dedupe_size torii_connect_per_ip_sessions
@@ -9021,8 +9010,8 @@ initialize (metrics) {
         tx_gossip_frame_cap_bytes tx_gossip_public_target_cap tx_gossip_restricted_target_cap
         tx_gossip_public_target_reshuffle_ms tx_gossip_restricted_target_reshuffle_ms
         tx_gossip_drop_unknown_dataspace tx_gossip_restricted_fallback
-        tx_gossip_restricted_public_policy tx_gossip_status tx_gossip_caps p2p_ws_inbound_total
-        p2p_ws_outbound_total p2p_scion_inbound_total p2p_scion_outbound_total p2p_queue_depth
+        tx_gossip_restricted_public_policy tx_gossip_status tx_gossip_caps p2p_scion_inbound_total
+        p2p_scion_outbound_total p2p_queue_depth
         p2p_queue_dropped_total p2p_handshake_ms_bucket p2p_handshake_ms_sum p2p_handshake_ms_count
         p2p_handshake_error_total p2p_frame_cap_violations_total runtime_upgrade_events_total
         runtime_upgrade_provenance_rejections_total runtime_abi_version sumeragi_tail_votes_total
@@ -9269,9 +9258,8 @@ initialize (metrics) {
         torii_proof_request_duration_seconds torii_proof_response_bytes_total
         torii_proof_cache_hits_total torii_request_duration_seconds torii_request_failures_total
         torii_explorer_requests_total torii_explorer_request_duration_seconds
-        torii_norito_rpc_gate_total torii_address_invalid_total torii_address_domain_total
-        torii_address_collision_total torii_address_collision_domain_total
-        torii_account_literal_total torii_norito_decode_failures_total torii_proof_throttled_total
+        torii_norito_rpc_gate_total torii_address_invalid_total torii_account_literal_total
+        torii_norito_decode_failures_total torii_proof_throttled_total
         torii_contract_throttled_total torii_contract_errors_total sns_registrar_status_total
         torii_active_connections_total torii_connect_buffered_sessions
         torii_connect_total_buffer_bytes torii_connect_dedupe_size torii_connect_per_ip_sessions
@@ -9292,12 +9280,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 825;
-const METRIC_CATALOG_V2_REGISTERED: usize = 780;
-const METRIC_CATALOG_V2_BYTES: usize = 112_456;
+const METRIC_CATALOG_V2_ROWS: usize = 820;
+const METRIC_CATALOG_V2_REGISTERED: usize = 775;
+const METRIC_CATALOG_V2_BYTES: usize = 111_837;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "243d3497c82352252a050842ecd427c20d6c2bb446d9b21a393117b4bb53f4f4";
+    "0a173076dc3807df415cb581daea66a5a748ef6f4e30195ee2e1524eae624423";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {
@@ -10079,24 +10067,6 @@ impl Metrics {
     pub fn inc_sns_registrar_status(&self, result: &str, suffix: &str) {
         self.sns_registrar_status_total
             .with_label_values(&[result, suffix])
-            .inc();
-    }
-    /// Record the domain classification (implicit vs explicit, SNS suffix, etc.) emitted by Torii’s address handler.
-    pub fn inc_torii_address_domain(&self, endpoint: &str, domain_kind: &str) {
-        self.torii_address_domain_total
-            .with_label_values(&[endpoint, domain_kind])
-            .inc();
-    }
-    /// Record a Local-12 selector collision detected by Torii.
-    pub fn inc_torii_address_collision(&self, endpoint: &str, kind: &str) {
-        self.torii_address_collision_total
-            .with_label_values(&[endpoint, kind])
-            .inc();
-    }
-    /// Record a Local-12 selector collision grouped by endpoint + domain label.
-    pub fn inc_torii_address_collision_domain(&self, endpoint: &str, domain: &str) {
-        self.torii_address_collision_domain_total
-            .with_label_values(&[endpoint, domain])
             .inc();
     }
     /// Increment the account literal selection counter.

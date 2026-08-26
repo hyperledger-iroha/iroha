@@ -2674,46 +2674,56 @@ struct GlobalBeaconBrokerPartialSigner {
     metadata_digest: [u8; 32],
 }
 
+fn retry_consensus_signer_once_after_unavailable<T>(
+    session: &BrokerSession,
+    mut attempt: impl FnMut() -> Result<T, BrokerError>,
+) -> Result<T, BrokerError> {
+    match attempt() {
+        Err(BrokerError::Unavailable) => {
+            session.reconnect()?;
+            attempt()
+        }
+        outcome => outcome,
+    }
+}
+
 impl iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1 for GlobalBeaconBrokerPartialSigner {
     fn sign_partial(
         &self,
         session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
         payload: &[u8],
     ) -> Result<iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1, String> {
-        let slot =
-            iroha_core::beacon::global_threshold_beacon_pulse_signing_slot_v1(session, payload)
-                .map_err(|_| ERROR_REJECTED.to_owned())?;
-        live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)
-            .map_err(redacted_provider_error)?;
-        let request = GlobalBeaconPartialSignRequestWireV1 {
-            session: session.record().clone(),
-            height: slot.height,
-            finalized_chain_anchor: slot.finalized_chain_anchor,
-        };
-        let request_payload = encode_canonical(&request, MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1)
-            .map_err(redacted_provider_error)?;
-        let result = provider_call!(
-            self,
-            call,
-            OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1,
-            request_payload,
-            false,
-        )
-        .map_err(redacted_provider_error)?;
-        let signed = self
-            .session
-            .decode_result::<GlobalBeaconPartialSignResultWireV1>(&result)
-            .map_err(redacted_provider_error)?;
-        let mut verifier =
-            global_beacon_aggregator_from_sign_request(&request, &session.record().network_id)
-                .map_err(redacted_provider_error)?;
-        verifier.accept_partial(signed.partial).map_err(|_| {
-            self.session.poison();
-            ERROR_REJECTED.to_owned()
-        })?;
-        live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)
-            .map_err(redacted_provider_error)?;
-        Ok(signed.partial)
+        retry_consensus_signer_once_after_unavailable(self.session.as_ref(), || {
+            let slot =
+                iroha_core::beacon::global_threshold_beacon_pulse_signing_slot_v1(session, payload)
+                    .map_err(|_| BrokerError::Rejected)?;
+            live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
+            let request = GlobalBeaconPartialSignRequestWireV1 {
+                session: session.record().clone(),
+                height: slot.height,
+                finalized_chain_anchor: slot.finalized_chain_anchor,
+            };
+            let request_payload = encode_canonical(&request, MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1)?;
+            let result = provider_call!(
+                self,
+                call,
+                OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1,
+                request_payload,
+                false,
+            )?;
+            let signed = self
+                .session
+                .decode_result::<GlobalBeaconPartialSignResultWireV1>(&result)?;
+            let mut verifier =
+                global_beacon_aggregator_from_sign_request(&request, &session.record().network_id)?;
+            verifier.accept_partial(signed.partial).map_err(|_| {
+                self.session.poison();
+                BrokerError::Rejected
+            })?;
+            live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
+            Ok(signed.partial)
+        })
+        .map_err(redacted_provider_error)
     }
 }
 
@@ -2722,6 +2732,44 @@ struct ParliamentTleBrokerPartialReleaseSigner {
     session: Arc<BrokerSession>,
     binding: ProviderBindingWireV1,
     metadata_digest: [u8; 32],
+}
+
+impl ParliamentTleBrokerPartialReleaseSigner {
+    fn sign_projected_partial_release(
+        &self,
+        projection: &iroha_core::tle_release::AuthorizedTleReleaseProjectionV1,
+        session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
+        identity: &iroha_crypto::tle::TleReleaseIdentityV1,
+        finalized_height: u64,
+    ) -> Result<iroha_core::tle_release::TlePartialReleaseShareV1, BrokerError> {
+        retry_consensus_signer_once_after_unavailable(self.session.as_ref(), || {
+            live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
+            let request_payload = encode_canonical(
+                &ParliamentTlePartialReleaseSignRequestWireV1 {
+                    projection: projection.clone(),
+                },
+                MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+            )?;
+            let result = provider_call!(
+                self,
+                call,
+                OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1,
+                request_payload,
+                false,
+            )?;
+            let signed = self
+                .session
+                .decode_result::<ParliamentTlePartialReleaseSignResultWireV1>(&result)?;
+            session
+                .verify_partial_release(identity, finalized_height, &signed.partial)
+                .map_err(|_| {
+                    self.session.poison();
+                    BrokerError::Rejected
+                })?;
+            live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
+            Ok(signed.partial)
+        })
+    }
 }
 
 impl iroha_core::tle_release::TlePartialReleaseSignerV1
@@ -2733,40 +2781,14 @@ impl iroha_core::tle_release::TlePartialReleaseSignerV1
     ) -> Result<iroha_core::tle_release::TlePartialReleaseShareV1, String> {
         let projection = context
             .broker_projection_v1()
-            .map_err(|_| ERROR_REJECTED.to_owned())?;
-        live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)
-            .map_err(redacted_provider_error)?;
-        let request_payload = encode_canonical(
-            &ParliamentTlePartialReleaseSignRequestWireV1 { projection },
-            MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+            .map_err(|_| redacted_provider_error(BrokerError::Rejected))?;
+        self.sign_projected_partial_release(
+            &projection,
+            context.session(),
+            context.identity(),
+            context.finalized_height(),
         )
-        .map_err(redacted_provider_error)?;
-        let result = provider_call!(
-            self,
-            call,
-            OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1,
-            request_payload,
-            false,
-        )
-        .map_err(redacted_provider_error)?;
-        let signed = self
-            .session
-            .decode_result::<ParliamentTlePartialReleaseSignResultWireV1>(&result)
-            .map_err(redacted_provider_error)?;
-        context
-            .session()
-            .verify_partial_release(
-                context.identity(),
-                context.finalized_height(),
-                &signed.partial,
-            )
-            .map_err(|_| {
-                self.session.poison();
-                ERROR_REJECTED.to_owned()
-            })?;
-        live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)
-            .map_err(redacted_provider_error)?;
-        Ok(signed.partial)
+        .map_err(redacted_provider_error)
     }
 }
 
@@ -3538,21 +3560,6 @@ pub(super) fn resolve(
                 });
                 signer.live_qualification().map_err(registry_error)?;
                 dependencies = dependencies.with_soracloud_runtime_mutation_signer(signer);
-            }
-            slot if slot
-                == IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id() =>
-            {
-                let exact_binding =
-                    soracloud_hf_credential_binding_from_wire(binding).map_err(registry_error)?;
-                let provider = Arc::new(SoracloudHfCredentialBrokerProvider {
-                    session: Arc::clone(&session),
-                    binding: binding.clone(),
-                    metadata_digest: observation.metadata_digest,
-                    exact_binding,
-                });
-                provider.live_qualification().map_err(registry_error)?;
-                dependencies =
-                    dependencies.with_soracloud_hf_inference_credential_provider(provider);
             }
             slot if slot
                 == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id() =>

@@ -17,11 +17,11 @@ fn run_portable_local() -> Result<(), Box<dyn Error>> {
             "irohad",
             "--bin",
             "iroha3d",
-            "build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay",
+            "build_inrou_user_data_projects_isolated_portable_block_mounts",
             "--",
             "--nocapture",
         ],
-        &[("IROHA_RUN_IGNORED", "1"), ("IROHA_INROU_PORTABLE", "1")],
+        &[],
     )?;
     if !cfg!(windows) {
         run_cargo_smoke_command(
@@ -32,11 +32,11 @@ fn run_portable_local() -> Result<(), Box<dyn Error>> {
                 "irohad",
                 "--bin",
                 "iroha3d",
-                "ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file",
+                "ensure_inrou_portable_root_disk_is_a_standalone_authenticated_copy",
                 "--",
                 "--nocapture",
             ],
-            &[("IROHA_RUN_IGNORED", "1"), ("IROHA_INROU_PORTABLE", "1")],
+            &[],
         )?;
     }
     run_cargo_smoke_command(
@@ -52,7 +52,7 @@ fn run_portable_local() -> Result<(), Box<dyn Error>> {
             "--ignored",
             "--nocapture",
         ],
-        &[("IROHA_RUN_IGNORED", "1"), ("IROHA_INROU_PORTABLE", "1")],
+        &[],
     )?;
     Ok(())
 }

@@ -1,7 +1,7 @@
 // Queue-plan journal allocation, corruption, and cardinality regressions.
 #[test]
 fn complete_corruption_and_unsupported_versions_fail_without_truncation() {
-    let valid = raw_frame(&QueuePlanJournalFrameV4::Put(record("corrupt")));
+    let valid = raw_frame(&QueuePlanJournalFrameV1::Put(record("corrupt")));
     let payload_offset = usize::try_from(FRAME_HEADER_BYTES).expect("header");
     let cases = [
         {
@@ -36,7 +36,7 @@ fn complete_corruption_and_unsupported_versions_fail_without_truncation() {
             unsupported.version = QUEUE_PLAN_JOURNAL_VERSION + 1;
             (
                 "record-version",
-                raw_frame(&QueuePlanJournalFrameV4::Put(unsupported)),
+                raw_frame(&QueuePlanJournalFrameV1::Put(unsupported)),
             )
         },
     ];
@@ -53,8 +53,8 @@ fn complete_corruption_and_unsupported_versions_fail_without_truncation() {
 #[test]
 fn full_length_uncommitted_body_checksum_and_marker_tears_truncate_only_terminal_frame() {
     let committed_record = record("committed-before-full-length-tear");
-    let committed = raw_frame(&QueuePlanJournalFrameV4::Put(committed_record.clone()));
-    let terminal = raw_frame(&QueuePlanJournalFrameV4::Put(record(
+    let committed = raw_frame(&QueuePlanJournalFrameV1::Put(committed_record.clone()));
+    let terminal = raw_frame(&QueuePlanJournalFrameV1::Put(record(
         "full-length-uncommitted-terminal",
     )));
     let header = usize::try_from(FRAME_HEADER_BYTES).expect("header");
@@ -103,7 +103,7 @@ fn full_length_uncommitted_body_checksum_and_marker_tears_truncate_only_terminal
 }
 #[test]
 fn invalid_commit_marker_is_never_repaired_in_the_middle_of_history() {
-    let mut invalid = raw_frame(&QueuePlanJournalFrameV4::Put(record(
+    let mut invalid = raw_frame(&QueuePlanJournalFrameV1::Put(record(
         "mid-history-invalid-commit",
     )));
     let commit_start = invalid
@@ -111,7 +111,7 @@ fn invalid_commit_marker_is_never_repaired_in_the_middle_of_history() {
         .checked_sub(QUEUE_PLAN_JOURNAL_FRAME_COMMIT.len())
         .expect("commit start");
     invalid[commit_start..].fill(0);
-    let following = raw_frame(&QueuePlanJournalFrameV4::Put(record(
+    let following = raw_frame(&QueuePlanJournalFrameV1::Put(record(
         "after-mid-history-invalid-commit",
     )));
     let dir = tempfile::tempdir().expect("tempdir");
@@ -166,7 +166,7 @@ fn decode_budget_accepts_exact_wire_limit_and_rejects_one_byte_over() {
         "allocation-budget arithmetic must fail closed instead of saturating"
     );
     let frame =
-        QueuePlanJournalFrameV4::Put(record_with_message("decode-budget", "x".repeat(256 * 1024)));
+        QueuePlanJournalFrameV1::Put(record_with_message("decode-budget", "x".repeat(256 * 1024)));
     let payload = norito::encode_canonical(&frame).expect("encode large canonical frame payload");
     let payload_len = u64::try_from(payload.len()).expect("payload length fits u64");
     let exact_limits = QueuePlanJournalLimits::new(1, payload_len, TEST_MAX_BYTES, 1);
@@ -220,7 +220,7 @@ fn decode_budget_covers_maximum_native_contract_upload_chunk() {
     // dynamic InstructionBox inside a signed transaction, which exercises
     // more owned decode bookkeeping than the Log and flat-vector fixtures.
     let chunk = vec![0xA5; SMART_CONTRACT_CODE_CHUNK_BYTES];
-    let frame = QueuePlanJournalFrameV4::Put(record_with_instructions(
+    let frame = QueuePlanJournalFrameV1::Put(record_with_instructions(
         "native-contract-upload",
         [InstructionBox::from(UploadSmartContractCodeChunk {
             code_hash: Hash::new(b"native-contract-upload-artifact"),
@@ -238,33 +238,33 @@ fn decode_budget_covers_maximum_native_contract_upload_chunk() {
         "fixture must include the complete signed transaction and journal envelope"
     );
     let canonical_limits = norito::canonical_decode_limits(payload.len());
-    let legacy_element_budget = payload.len();
-    let legacy_allocation_budget = payload
+    let insufficient_element_budget = payload.len();
+    let insufficient_allocation_budget = payload
         .len()
         .checked_mul(26)
         .and_then(|bytes| bytes.checked_add(64 * 1024))
-        .expect("legacy fixture allocation budget");
+        .expect("insufficient fixture allocation budget");
     assert!(
         matches!(
             decode_frame_with_budgets(
                 &payload,
-                legacy_element_budget,
+                insufficient_element_budget,
                 canonical_limits.max_total_allocated_bytes(),
             ),
             Err(norito::Error::TotalElementsExceeded { .. })
         ),
-        "the former one-element-per-wire-byte envelope must reproduce its native-upload rejection"
+        "the narrow one-element-per-wire-byte envelope must reject the native upload"
     );
     assert!(
         matches!(
             decode_frame_with_budgets(
                 &payload,
                 canonical_limits.max_total_elements(),
-                legacy_allocation_budget,
+                insufficient_allocation_budget,
             ),
             Err(norito::Error::TotalAllocationExceeded { .. })
         ),
-        "the former 26x-plus-64-KiB envelope must reproduce its native-upload rejection"
+        "the narrow 26x-plus-64-KiB envelope must reject the native upload"
     );
     let payload_len = u64::try_from(payload.len()).expect("payload length fits u64");
     let exact_limits = QueuePlanJournalLimits::new(
@@ -288,7 +288,7 @@ fn decode_budget_covers_maximum_allocation_dense_instruction_vector() {
     let calibration_instructions =
         std::iter::repeat_with(|| InstructionBox::from(Log::new(Level::INFO, String::new())))
             .take(CALIBRATION_INSTRUCTION_COUNT);
-    let calibration_frame = QueuePlanJournalFrameV4::Put(record_with_instructions(
+    let calibration_frame = QueuePlanJournalFrameV1::Put(record_with_instructions(
         "allocation-calibration",
         calibration_instructions,
     ));
@@ -323,7 +323,7 @@ fn decode_budget_covers_maximum_allocation_dense_instruction_vector() {
         std::iter::repeat_with(|| InstructionBox::from(Log::new(Level::INFO, String::new())))
             .take(instruction_count);
     let frame =
-        QueuePlanJournalFrameV4::Put(record_with_instructions("allocation-dense", instructions));
+        QueuePlanJournalFrameV1::Put(record_with_instructions("allocation-dense", instructions));
     let payload = norito::encode_canonical(&frame).expect("encode allocation-dense frame");
     let payload_len = u64::try_from(payload.len()).expect("payload length fits u64");
     let exact_limits = QueuePlanJournalLimits::new(
@@ -343,7 +343,7 @@ fn decode_budget_covers_maximum_allocation_dense_instruction_vector() {
 }
 #[test]
 fn compressed_frame_is_rejected_before_owned_decompression() {
-    let frame = QueuePlanJournalFrameV4::Put(record_with_message(
+    let frame = QueuePlanJournalFrameV1::Put(record_with_message(
         "compressed-frame",
         "z".repeat(2 * 1024 * 1024),
     ));
@@ -524,8 +524,8 @@ fn replacement_preserves_original_fifo_ownership_through_compaction_and_reopen()
     assert_eq!(
         read_frames(&path, compact_limits).expect("read compacted FIFO frames"),
         vec![
-            QueuePlanJournalFrameV4::Put(replacement.clone()),
-            QueuePlanJournalFrameV4::Put(second.clone()),
+            QueuePlanJournalFrameV1::Put(replacement.clone()),
+            QueuePlanJournalFrameV1::Put(second.clone()),
         ]
     );
     drop(journal);

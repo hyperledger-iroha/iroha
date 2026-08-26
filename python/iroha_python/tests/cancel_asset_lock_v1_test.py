@@ -98,7 +98,7 @@ def test_bare_cancel_asset_lock_v1_matches_the_exact_canonical_archive() -> None
     value = CancelAssetLockV1(**bare)
     archive = _FIXTURES["cancel_asset_lock_v1.to"]
 
-    assert CANCEL_ASSET_LOCK_WIRE_ID_V1 == ("iroha_data_model::isi::escrow::CancelAssetLock")
+    assert CANCEL_ASSET_LOCK_WIRE_ID_V1 == ("iroha.instruction.v1::escrow::CancelAssetLock")
     assert value.to_mapping() == {
         "escrow_id": _ESCROW_ID,
         "expected_remaining_amount": "20",

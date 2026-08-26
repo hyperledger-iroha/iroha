@@ -3551,6 +3551,7 @@ fn retained_high_without_lock_can_sign_a_successor_view_timeout() {
     ));
 }
 #[test]
+#[allow(clippy::too_many_lines)]
 fn replay_rejects_later_view_commit_even_after_exact_tc_lock_installation() {
     let context = context();
     let subject = Subject::repeat(0x97);
@@ -3636,8 +3637,47 @@ fn replay_rejects_later_view_commit_even_after_exact_tc_lock_installation() {
     ];
     assert!(matches!(
         DurableState::replay(&context, Some(id(4)), decision_first_entries),
-        Err(ReplayError::InvalidLocalVote)
+        Err(ReplayError::RecordAfterDecision)
     ));
+    let decision = qc(&context, 0, Phase::Commit, subject, &[1, 2, 3]);
+    let mut terminal = DurableState::replay(
+        &context,
+        Some(id(4)),
+        [WalEntry::new(
+            PersistenceId::new(1),
+            WalRecord::Decision(decision.clone()),
+        )],
+    )
+    .expect("a valid decision replays");
+    let before = terminal.clone();
+    assert_eq!(
+        terminal.apply(
+            &context,
+            Some(id(4)),
+            &WalEntry::new(
+                PersistenceId::new(2),
+                WalRecord::InstallTimeout(tc_without_high(&context, 0, &[1, 2, 3])),
+            ),
+        ),
+        Err(ReplayError::RecordAfterDecision)
+    );
+    assert_eq!(terminal, before, "terminal rejection must be atomic");
+    assert_eq!(terminal.decision(), Some(&decision));
+    terminal
+        .apply(
+            &context,
+            Some(id(4)),
+            &WalEntry::new(
+                PersistenceId::new(2),
+                WalRecord::Decision(qc(&context, 1, Phase::Commit, subject, &[1, 2, 3])),
+            ),
+        )
+        .expect("a later certificate for the same decision remains idempotent");
+    assert_eq!(terminal.decision(), Some(&decision));
+    assert_eq!(
+        ReplayError::RecordAfterDecision.to_string(),
+        "non-decision WAL record after durable finality"
+    );
 }
 #[test]
 fn replay_resigns_same_subject_reproposal_fifo_without_relabelling_old_commit() {
@@ -6729,7 +6769,7 @@ fn grouped_timeout_certificate_uses_union_for_dual_quorum() {
         Round::new(context.height(), 1),
         vec![
             TimeoutSignatureGroup::new(None, shares(&[1])),
-            TimeoutSignatureGroup::new(Some(high), shares(&[2, 3])),
+            TimeoutSignatureGroup::new(Some(high.clone()), shares(&[2, 3])),
         ],
     );
     assert!(certificate.validate(&context).is_ok());
@@ -6754,6 +6794,18 @@ fn grouped_timeout_certificate_uses_union_for_dual_quorum() {
         overlap.validate(&context),
         Err(QuorumError::OverlappingTimeoutSigner(value)) if value == id(2)
     ));
+    let empty_group = TimeoutCertificate::new(
+        context.id(),
+        Round::new(context.height(), 1),
+        vec![
+            TimeoutSignatureGroup::new(None, Vec::new()),
+            TimeoutSignatureGroup::new(Some(high), shares(&[1, 2, 3])),
+        ],
+    );
+    assert_eq!(
+        empty_group.validate(&context),
+        Err(QuorumError::EmptyTimeoutGroup)
+    );
 }
 #[test]
 fn retransmit_repeats_a_decision_and_its_complete_certified_fetch() {

@@ -2,10 +2,29 @@
 #[rustfmt::skip]
 use iroha_data_model::{sorafs::orderbook_submission::{SorafsOrderbookSubmissionRouteV1, decode_and_verify_sorafs_orderbook_submission_receipt_v1, inspect_sorafs_orderbook_submission_for_discriminant_v1 as inspect_submission, parse_sorafs_orderbook_receipt_signer_v1, parse_sorafs_orderbook_submission_identity_v1}, transaction::TransactionSubmissionReceipt};
 #[rustfmt::skip]
-use pyo3::{Py, PyErr, PyResult, Python, exceptions::PyValueError, pyfunction, types::{PyDict, PyDictMethods}};
-use crate::PyNetworkId;
+use pyo3::{Py, PyErr, PyResult, Python, exceptions::PyValueError, pyfunction, types::{PyBytes, PyDict, PyDictMethods}};
+use crate::{PyNetworkId, canonical_signed_transaction_hash_v1};
 fn invalid(message: impl Into<String>) -> PyErr {
     PyValueError::new_err(message.into())
+}
+#[pyfunction]
+#[pyo3(name = "inspect_transaction_submission_v1")]
+/// Authenticate one exact signed transaction and canonically pin its expected receipt signer.
+pub(crate) fn inspect_transaction_submission_v1_py(
+    py: Python<'_>,
+    signed_transaction_versioned: &[u8],
+    expected_receipt_signer: &str,
+) -> PyResult<(Py<PyBytes>, String)> {
+    let signer = parse_sorafs_orderbook_receipt_signer_v1(expected_receipt_signer)
+        .ok_or_else(|| invalid("expected_receipt_signer must be exact canonical text"))?;
+    let canonical_signer = signer.to_string();
+    if canonical_signer != expected_receipt_signer {
+        return Err(invalid(
+            "expected_receipt_signer must be exact canonical text",
+        ));
+    }
+    let hash = canonical_signed_transaction_hash_v1(signed_transaction_versioned)?;
+    Ok((Py::from(PyBytes::new(py, &hash)), canonical_signer))
 }
 #[pyfunction]
 #[pyo3(name = "inspect_sorafs_orderbook_submission_for_discriminant_v1")]
@@ -39,6 +58,27 @@ pub(crate) fn verify_sorafs_orderbook_submission_receipt_v1_py(
     let identity = parse_sorafs_orderbook_submission_identity_v1(entrypoint_hash, signed_transaction_hash).ok_or_else(|| invalid("receipt identities must be exact canonical text"))?;
     let signer = parse_sorafs_orderbook_receipt_signer_v1(expected_receipt_signer).ok_or_else(|| invalid("expected_receipt_signer must be exact canonical text"))?;
     let receipt = decode_and_verify_sorafs_orderbook_submission_receipt_v1(receipt_norito, &identity, &signer).map_err(|error| invalid(error.to_string()))?;
+    norito::json::to_json(&receipt).map_err(|error| invalid(error.to_string()))
+}
+#[pyfunction]
+#[pyo3(name = "verify_transaction_submission_receipt_v1")]
+/// Canonically decode, authenticate, signer-pin, and transaction-bind one receipt.
+pub(crate) fn verify_transaction_submission_receipt_v1_py(
+    receipt_norito: &[u8],
+    transaction_hash: &str,
+    expected_receipt_signer: &str,
+) -> PyResult<String> {
+    let identity =
+        parse_sorafs_orderbook_submission_identity_v1(transaction_hash, transaction_hash)
+            .ok_or_else(|| invalid("transaction_hash must be exact canonical text"))?;
+    let signer = parse_sorafs_orderbook_receipt_signer_v1(expected_receipt_signer)
+        .ok_or_else(|| invalid("expected_receipt_signer must be exact canonical text"))?;
+    let receipt = decode_and_verify_sorafs_orderbook_submission_receipt_v1(
+        receipt_norito,
+        &identity,
+        &signer,
+    )
+    .map_err(|error| invalid(error.to_string()))?;
     norito::json::to_json(&receipt).map_err(|error| invalid(error.to_string()))
 }
 #[pyfunction]

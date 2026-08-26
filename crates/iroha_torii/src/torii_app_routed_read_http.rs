@@ -90,7 +90,7 @@ macro_rules! app_routed_read_endpoint {
         }
     };
 }
-const APP_ROUTED_READ_HTTP_ENDPOINTS_V1: [AppRoutedReadHttpEndpoint; 45] = [
+const APP_ROUTED_READ_HTTP_ENDPOINTS_V1: [AppRoutedReadHttpEndpoint; 46] = [
     app_routed_read_endpoint!(AccountGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_GET, AppRoutedReadHttpDecoder::None),
     app_routed_read_endpoint!(ExplorerAccountDetail, route_catalog::application_api::EXPLORER_ACCOUNTS_BY_ACCOUNT_ID_GET, AppRoutedReadHttpDecoder::None),
     app_routed_read_endpoint!(AccountAssetsGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_GET, AppRoutedReadHttpDecoder::Query("AccountAssetsGetParams")),
@@ -136,6 +136,7 @@ const APP_ROUTED_READ_HTTP_ENDPOINTS_V1: [AppRoutedReadHttpEndpoint; 45] = [
     app_routed_read_endpoint!(InternalAccountTransactionGet, route_catalog::application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET, AppRoutedReadHttpDecoder::None),
     app_routed_read_endpoint!(InternalAccountAssetGet, route_catalog::application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET, AppRoutedReadHttpDecoder::ExactInternalAssetScope),
     app_routed_read_endpoint!(ContractDeploymentState, route_catalog::contracts_and_verification_keys::CONTRACTS_DEPLOYMENT_STATE_POST, AppRoutedReadHttpDecoder::Json("ContractDeploymentStateRequestDto")),
+    app_routed_read_endpoint!(AccountOnboardingCurrentState, route_catalog::application_api::ACCOUNTS_ONBOARDING_CURRENT_STATE_POST, AppRoutedReadHttpDecoder::Json("AccountOnboardingCurrentStateRequestV1")),
 ];
 fn app_routed_read_http_endpoint(route_id: &str) -> Option<AppRoutedReadHttpEndpoint> {
     APP_ROUTED_READ_HTTP_ENDPOINTS_V1

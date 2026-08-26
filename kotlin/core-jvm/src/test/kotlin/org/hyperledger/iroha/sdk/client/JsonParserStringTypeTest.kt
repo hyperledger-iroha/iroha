@@ -128,52 +128,6 @@ class JsonParserStringTypeTest {
         }
     }
 
-    @Test
-    fun soracloudParserRejectsNonStringRequiredAndOptionalFields() {
-        val canonical = SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-            soracloudReceiptListJson(
-                countMode = "\"exact\"",
-                continueCursor = "\"$RECEIPT_CURSOR\"",
-            ).bytes()
-        )
-        assertEquals("exact", canonical.countMode)
-        assertEquals(RECEIPT_CURSOR, canonical.continueCursor)
-
-        assertRejects("soracloud private receipt list.count_mode") {
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                soracloudReceiptListJson(countMode = "7", continueCursor = "null").bytes()
-            )
-        }
-        assertRejects("soracloud private receipt list.continue_cursor") {
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                soracloudReceiptListJson(countMode = "\"exact\"", continueCursor = "7").bytes()
-            )
-        }
-    }
-
-    @Test
-    fun soracloudParserRejectsMissingOrMalformedHasMore() {
-        val canonical = soracloudReceiptListJson(
-            countMode = "\"exact\"",
-            continueCursor = "null",
-        )
-        assertEquals(
-            false,
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(canonical.bytes()).hasMore,
-        )
-
-        assertRejects("soracloud private receipt list.has_more") {
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                canonical.replace("\"has_more\":false", "\"has_more\":0").bytes()
-            )
-        }
-        assertRejects("soracloud private receipt list.has_more") {
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                canonical.replace("\"has_more\":false,", "").bytes()
-            )
-        }
-    }
-
     private fun identifierPolicyJson(): String =
         """
             {
@@ -219,22 +173,6 @@ class JsonParserStringTypeTest {
             }
         """.trimIndent()
 
-    private fun soracloudReceiptListJson(countMode: String, continueCursor: String): String {
-        val hasMore = continueCursor != "null"
-        return """
-            {
-              "schema_version":1,
-              "receipts":[],
-              "total":${if (hasMore) 1 else 0},
-              "returned_items":0,
-              "remaining_items":${if (hasMore) 1 else 0},
-              "has_more":$hasMore,
-              "count_mode":$countMode,
-              "continue_cursor":$continueCursor
-            }
-        """.trimIndent()
-    }
-
     private fun String.bytes(): ByteArray = toByteArray(StandardCharsets.UTF_8)
 
     private fun assertRejects(path: String, parse: () -> Unit) {
@@ -243,7 +181,6 @@ class JsonParserStringTypeTest {
     }
 
     private companion object {
-        val RECEIPT_CURSOR = "A".repeat(114)
         const val VALID_PUBLIC_KEY =
             "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29"
     }

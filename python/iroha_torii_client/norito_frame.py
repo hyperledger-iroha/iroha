@@ -47,15 +47,15 @@ def schema_hash_for_type_name(type_name: str) -> bytes:
     ).digest()[:16]
 
 
-def validate_norito_frame(
+def _validate_norito_frame(
     body: bytes,
     *,
     context: str,
-    expected_type_name: str,
+    expected_type_name: Optional[str],
     expected_padding_length: Optional[int] = None,
     require_nonempty_payload: bool = True,
 ) -> None:
-    """Validate one exact-schema, uncompressed Norito frame without decoding its payload."""
+    """Validate one uncompressed Norito frame without decoding its payload."""
 
     if not isinstance(body, bytes) or len(body) < _HEADER_BYTES:
         raise ValueError(f"{context} is shorter than the {_HEADER_BYTES}-byte Norito header")
@@ -64,7 +64,10 @@ def validate_norito_frame(
     major, minor = body[4], body[5]
     if major != 0 or minor != 0:
         raise ValueError(f"{context} uses unsupported NRT0 version {major}.{minor}")
-    if body[6:22] != schema_hash_for_type_name(expected_type_name):
+    if (
+        expected_type_name is not None
+        and body[6:22] != schema_hash_for_type_name(expected_type_name)
+    ):
         raise ValueError(f"{context} schema hash did not match the expected type")
     if body[22] != 0:
         raise ValueError(f"{context} must use uncompressed Norito payload encoding")
@@ -101,3 +104,40 @@ def validate_norito_frame(
         raise ValueError(f"{context} contains trailing bytes outside the declared payload")
     if _crc64_xz(payload) != expected_checksum:
         raise ValueError(f"{context} CRC64 mismatch")
+
+
+def validate_norito_frame(
+    body: bytes,
+    *,
+    context: str,
+    expected_type_name: str,
+    expected_padding_length: Optional[int] = None,
+    require_nonempty_payload: bool = True,
+) -> None:
+    """Validate one exact-schema, uncompressed Norito frame."""
+
+    _validate_norito_frame(
+        body,
+        context=context,
+        expected_type_name=expected_type_name,
+        expected_padding_length=expected_padding_length,
+        require_nonempty_payload=require_nonempty_payload,
+    )
+
+
+def validate_opaque_norito_frame(
+    body: bytes,
+    *,
+    context: str,
+    expected_padding_length: Optional[int] = None,
+    require_nonempty_payload: bool = True,
+) -> None:
+    """Validate framing only for an explicitly opaque, native-decoded envelope."""
+
+    _validate_norito_frame(
+        body,
+        context=context,
+        expected_type_name=None,
+        expected_padding_length=expected_padding_length,
+        require_nonempty_payload=require_nonempty_payload,
+    )

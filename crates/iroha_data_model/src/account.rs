@@ -75,13 +75,12 @@ mod model {
         /// Metadata of this account as a key-value store.
         pub metadata: Metadata,
         /// Stable alias under which the account is addressed (if provided).
-        #[norito(default)]
+        #[norito(required)]
         pub label: Option<AccountAlias>,
         /// Universal account identifier bound to this account (if registered in Nexus).
-        #[norito(default)]
+        #[norito(required)]
         pub uaid: Option<crate::nexus::UniversalAccountId>,
         /// Opaque identifiers bound to this account's UAID.
-        #[norito(default)]
         pub opaque_ids: Vec<OpaqueAccountId>,
     }
     /// Builder submitted in a transaction to register a canonical domainless account.
@@ -96,13 +95,12 @@ mod model {
         /// Metadata supplied during registration.
         pub metadata: Metadata,
         /// Stable alias under which the account is addressed (if provided).
-        #[norito(default)]
+        #[norito(required)]
         pub label: Option<AccountAlias>,
         /// Universal account identifier bound to this account (if registered in Nexus).
-        #[norito(default)]
+        #[norito(required)]
         pub uaid: Option<crate::nexus::UniversalAccountId>,
         /// Opaque identifiers bound to this account's UAID.
-        #[norito(default)]
         pub opaque_ids: Vec<OpaqueAccountId>,
     }
 }
@@ -166,15 +164,13 @@ impl norito::json::JsonDeserialize for AccountId {
 #[cfg(feature = "json")]
 fn account_id_from_json_str(value: &str) -> Result<AccountId, norito::json::Error> {
     reserve_account_literal_json_decode(value.len())?;
-    AccountId::parse_encoded(value)
-        .map(ParsedAccountId::into_account_id)
-        .map_err(|error| {
-            if error.reason() == address::AccountAddressErrorCode::DecodeResourceLimit.as_str() {
-                norito::json::Error::DecodeResourceLimit
-            } else {
-                invalid_account_id_json()
-            }
-        })
+    AccountId::parse_encoded(value).map_err(|error| {
+        if error.reason() == address::AccountAddressErrorCode::DecodeResourceLimit.as_str() {
+            norito::json::Error::DecodeResourceLimit
+        } else {
+            invalid_account_id_json()
+        }
+    })
 }
 
 #[cfg(feature = "json")]
@@ -185,7 +181,7 @@ fn invalid_account_id_json() -> norito::json::Error {
 pub(super) fn reserve_account_literal_json_decode(
     raw_bytes: usize,
 ) -> Result<(), norito::json::Error> {
-    // Source-derived raw-length upper bound for the legacy I105 parser. At its
+    // Source-derived raw-length upper bound for the canonical I105 parser. At its
     // phase maxima it can retain: one digit buffer (1S), radix work plus output
     // (3S), base32 checksum work (2S), canonical re-encode bytes/digits/output
     // (5S), original/keyed/dedup member topology (4S), and the three payload
@@ -254,50 +250,12 @@ impl norito::json::JsonDeserialize for NewAccount {
         let id = id.ok_or_else(|| norito::json::Error::missing_field("id"))?;
         Ok(Self {
             id,
-            metadata: metadata.unwrap_or_default(),
-            label: label.unwrap_or_default(),
-            uaid: uaid.unwrap_or_default(),
-            opaque_ids: opaque_ids.unwrap_or_default(),
+            metadata: metadata.ok_or_else(|| norito::json::Error::missing_field("metadata"))?,
+            label: label.ok_or_else(|| norito::json::Error::missing_field("label"))?,
+            uaid: uaid.ok_or_else(|| norito::json::Error::missing_field("uaid"))?,
+            opaque_ids: opaque_ids
+                .ok_or_else(|| norito::json::Error::missing_field("opaque_ids"))?,
         })
-    }
-}
-/// Source that produced an [`AccountId`] when parsing textual account identifiers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AccountAddressSource {
-    /// The identifier was supplied using one of the encoded address formats.
-    Encoded,
-}
-/// Result returned by [`AccountId::parse_encoded`] providing both the identifier and its canonical layout.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ParsedAccountId {
-    account_id: AccountId,
-    canonical: String,
-    source: AccountAddressSource,
-}
-impl ParsedAccountId {
-    /// Borrow the parsed [`AccountId`].
-    #[must_use]
-    pub fn account_id(&self) -> &AccountId {
-        &self.account_id
-    }
-    /// Borrow the canonical textual representation (i105).
-    #[must_use]
-    pub fn canonical(&self) -> &str {
-        &self.canonical
-    }
-    /// Inspect how the identifier was supplied.
-    #[must_use]
-    pub fn source(&self) -> AccountAddressSource {
-        self.source
-    }
-    /// Consume the result, yielding the parsed [`AccountId`].
-    pub fn into_account_id(self) -> AccountId {
-        self.account_id
-    }
-    /// Consume the result into all captured components.
-    #[must_use]
-    pub fn into_parts(self) -> (AccountId, String, AccountAddressSource) {
-        (self.account_id, self.canonical, self.source)
     }
 }
 /// Opaque identifier that maps to a UAID without disclosing raw PII.
@@ -345,14 +303,29 @@ impl From<OpaqueAccountId> for Hash {
     }
 }
 impl FromStr for OpaqueAccountId {
-    type Err = iroha_crypto::error::ParseError;
+    type Err = ParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
-        let hex_literal = match trimmed.get(..7) {
-            Some(prefix) if prefix.eq_ignore_ascii_case("opaque:") => trimmed[7..].trim(),
-            _ => trimmed,
-        };
-        Hash::from_str(hex_literal).map(Self::from_hash)
+        let hex_literal = s.strip_prefix("opaque:").ok_or_else(|| {
+            ParseError::new("opaque account id must use `opaque:<lowercase-hex>`")
+        })?;
+        if hex_literal.len() != Hash::LENGTH * 2
+            || !hex_literal
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(ParseError::new(
+                "opaque account id must use `opaque:<lowercase-hex>`",
+            ));
+        }
+        let opaque = Hash::from_str(hex_literal)
+            .map(Self::from_hash)
+            .map_err(|_| ParseError::new("opaque account id hash is invalid"))?;
+        if opaque.to_string() != s {
+            return Err(ParseError::new(
+                "opaque account id must use `opaque:<lowercase-hex>`",
+            ));
+        }
+        Ok(opaque)
     }
 }
 impl norito::NoritoSerialize for AccountId {
@@ -396,13 +369,12 @@ pub struct AccountDetails {
     /// Arbitrary metadata attached to the account.
     pub metadata: Metadata,
     /// Stable alias referenced by rekey records.
-    #[norito(default)]
+    #[norito(required)]
     pub label: Option<rekey::AccountAlias>,
     /// Universal account identifier bound to this account, when applicable.
-    #[norito(default)]
+    #[norito(required)]
     pub uaid: Option<UniversalAccountId>,
     /// Opaque identifiers mapped to this account's UAID.
-    #[norito(default)]
     pub opaque_ids: Vec<OpaqueAccountId>,
 }
 impl AccountDetails {
@@ -596,23 +568,20 @@ impl AccountId {
     pub fn to_canonical_hex(&self) -> Result<String, AccountAddressError> {
         self.to_account_address()?.canonical_hex()
     }
-    /// Parse an account identifier from text, returning the canonical representation and source.
+    /// Parse a canonical I105 account identifier from text.
     ///
     /// Canonical I105 literals are accepted.
-    /// Legacy forms such as `<identifier>@<domain>`, canonical hex, dotted/non-canonical
-    /// i105 literals, aliases, UAID, opaque account literals, and historical non-i105 envelopes are
-    /// rejected. The returned canonical string always matches the canonical I105 representation.
+    /// Domain-qualified identifiers, canonical hex, dotted or non-canonical I105 literals,
+    /// aliases, UAIDs, opaque account literals, and non-I105 envelopes are rejected.
     ///
     /// # Errors
     ///
     /// Propagates [`ParseError`] when the textual representation is invalid.
-    pub fn parse_encoded(input: &str) -> Result<ParsedAccountId, ParseError> {
-        let (account_id, source, canonical) = Self::parse_internal(input)?;
-        Ok(ParsedAccountId {
-            account_id,
-            canonical,
-            source,
-        })
+    pub fn parse_encoded(input: &str) -> Result<Self, ParseError> {
+        if input.is_empty() || input.trim() != input || input.contains('@') {
+            return Err(ParseError::new(ERR_ACCOUNT_LITERAL_FORMAT));
+        }
+        Self::parse_address_literal(input)
     }
     /// Canonicalise a textual identifier into the i105 form.
     ///
@@ -620,21 +589,11 @@ impl AccountId {
     ///
     /// Returns [`ParseError`] when the provided input is invalid.
     pub fn canonicalize(input: &str) -> Result<String, ParseError> {
-        Self::parse_encoded(input).map(|parsed| parsed.canonical)
+        Self::parse_encoded(input)?
+            .canonical_i105()
+            .map_err(|err| ParseError::new(err.code_str()))
     }
-    fn parse_internal(input: &str) -> Result<(Self, AccountAddressSource, String), ParseError> {
-        let trimmed = input.trim();
-        if trimmed.is_empty() {
-            return Err(ParseError::new(ERR_ACCOUNT_LITERAL_FORMAT));
-        }
-        if trimmed.contains('@') {
-            return Err(ParseError::new(ERR_ACCOUNT_LITERAL_FORMAT));
-        }
-        Self::parse_address_literal(trimmed)
-    }
-    fn parse_address_literal(
-        input: &str,
-    ) -> Result<(Self, AccountAddressSource, String), ParseError> {
+    fn parse_address_literal(input: &str) -> Result<Self, ParseError> {
         let expected_prefix = address::chain_discriminant();
         match AccountAddress::from_i105_for_discriminant(input, Some(expected_prefix)) {
             Ok(address) => {
@@ -647,11 +606,7 @@ impl AccountId {
                 let controller = address
                     .to_account_controller()
                     .map_err(|err| ParseError::new(err.code_str()))?;
-                Ok((
-                    Self { controller },
-                    AccountAddressSource::Encoded,
-                    canonical,
-                ))
+                Ok(Self { controller })
             }
             Err(
                 AccountAddressError::MissingI105Sentinel
@@ -882,7 +837,6 @@ mod account_id_parsing_tests {
                 .expect("parse public key literal");
         let raw = format!("{public_key}@banka.dataspace");
         let err = AccountId::parse_encoded(&raw)
-            .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("public_key@domain literals must be rejected");
         assert!(
             err.reason().to_ascii_lowercase().contains("i105"),
@@ -896,7 +850,6 @@ mod account_id_parsing_tests {
         let account = AccountId::new(key_pair.public_key().clone());
         let canonical = account.to_canonical_hex().expect("canonical hex encoding");
         let err = AccountId::parse_encoded(&canonical)
-            .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("canonical hex account literals must be rejected");
         assert!(
             err.reason().to_ascii_lowercase().contains("i105"),
@@ -933,7 +886,6 @@ mod account_id_parsing_tests {
     #[test]
     fn from_str_rejects_alias_literals() {
         let err = AccountId::parse_encoded("blue-alias@banka.dataspace")
-            .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("aliases must be rejected");
         assert!(
             err.reason().to_ascii_lowercase().contains("i105"),
@@ -948,7 +900,6 @@ mod account_id_parsing_tests {
             .expect_err("alias label should not parse as a valid address");
         assert_eq!(err.code_str(), "ERR_UNSUPPORTED_ADDRESS_FORMAT");
         let err = AccountId::parse_encoded("primary@banka.dataspace")
-            .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("aliases must be rejected");
         assert!(
             err.reason().to_ascii_lowercase().contains("i105"),
@@ -959,7 +910,6 @@ mod account_id_parsing_tests {
     #[test]
     fn from_str_rejects_alias_domain_mismatch() {
         let err = AccountId::parse_encoded("blue-alias@otherland")
-            .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("mismatched alias domain must fail");
         assert!(
             err.reason().to_ascii_lowercase().contains("i105"),
@@ -968,7 +918,7 @@ mod account_id_parsing_tests {
         );
     }
     #[test]
-    fn parse_reports_encoded_source() {
+    fn parse_returns_canonical_account_id() {
         let _guard = guard_chain_discriminant();
         let key_pair = checked_keypair(0xCD);
         let account = AccountId::new(key_pair.public_key().clone());
@@ -977,21 +927,8 @@ mod account_id_parsing_tests {
             .to_i105_for_discriminant(address::chain_discriminant())
             .expect("i105 encode");
         let parsed = AccountId::parse_encoded(&i105).expect("i105 account id must parse");
-        assert_eq!(parsed.source(), AccountAddressSource::Encoded);
-        assert_eq!(parsed.canonical(), parsed.account_id().to_string());
-    }
-    #[test]
-    fn parsed_account_id_into_parts_returns_components() {
-        let _guard = guard_chain_discriminant();
-        let key_pair = checked_keypair(0xCE);
-        let account = AccountId::new(key_pair.public_key().clone());
-        let literal = account.canonical_i105().expect("i105 encode");
-        let (parsed, canonical, source) = AccountId::parse_encoded(&literal)
-            .expect("i105 account id must parse")
-            .into_parts();
         assert_eq!(parsed, account);
-        assert_eq!(canonical, literal);
-        assert_eq!(source, AccountAddressSource::Encoded);
+        assert_eq!(parsed.to_string(), i105);
     }
     #[test]
     fn parse_rejects_fullwidth_sentinel_i105_literal() {
@@ -1027,19 +964,19 @@ mod account_id_parsing_tests {
             .expect("i105 encode");
         let literal = i105;
         let parsed = AccountId::parse_encoded(&literal).expect("encoded literal should parse");
-        assert_eq!(parsed.account_id(), &account);
-        assert_eq!(parsed.canonical(), account.to_string());
+        assert_eq!(parsed, account);
+        assert_eq!(parsed.to_string(), literal);
     }
     #[test]
-    fn parse_encoded_trims_i105_literal() {
+    fn parse_encoded_rejects_padded_i105_literal() {
         let _guard = guard_chain_discriminant();
         let key_pair = checked_keypair(0xEE);
         let account = AccountId::new(key_pair.public_key().clone());
         let literal = account.canonical_i105().expect("i105 encode");
         let padded = format!(" \n{literal}\t ");
-        let parsed = AccountId::parse_encoded(&padded).expect("padded i105 should parse");
-        assert_eq!(parsed.account_id(), &account);
-        assert_eq!(parsed.canonical(), literal);
+        let err = AccountId::parse_encoded(&padded)
+            .expect_err("padded i105 is not the canonical first-release literal");
+        assert_eq!(err.reason(), ERR_ACCOUNT_LITERAL_FORMAT);
     }
     #[test]
     fn norito_roundtrip_account_id() {
@@ -1098,9 +1035,7 @@ mod account_id_parsing_tests {
         let literal = payload
             .to_i105_for_discriminant(41)
             .expect("encode i105 with foreign prefix");
-        let err = AccountId::parse_encoded(&literal)
-            .map(crate::account::ParsedAccountId::into_account_id)
-            .expect_err("prefix mismatch must fail");
+        let err = AccountId::parse_encoded(&literal).expect_err("prefix mismatch must fail");
         assert!(
             err.reason()
                 .contains(AccountAddressErrorCode::UnexpectedNetworkPrefix.as_str()),
@@ -1118,9 +1053,7 @@ mod account_id_parsing_tests {
         let literal = payload
             .to_i105_for_discriminant(7)
             .expect("encode i105 with configured prefix");
-        let parsed = AccountId::parse_encoded(&literal)
-            .map(crate::account::ParsedAccountId::into_account_id)
-            .expect("matching prefix should parse");
+        let parsed = AccountId::parse_encoded(&literal).expect("matching prefix should parse");
         assert_eq!(
             parsed.expect_single_signatory(),
             account.expect_single_signatory()
@@ -1142,7 +1075,6 @@ mod account_id_parsing_tests {
             domain
         );
         let err = AccountId::parse_encoded(&literal)
-            .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("encoded address with domain should be rejected");
         assert!(
             err.reason().to_ascii_lowercase().contains("i105"),
@@ -1195,12 +1127,12 @@ impl IntoKeyValue for Account {
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::{
-        Account, AccountAddress, AccountAddressSource, AccountAdmissionMode,
-        AccountAdmissionPolicy, AccountAlias, AccountAliasDomain, AccountController, AccountEntry,
-        AccountId, AccountRecoveryPolicy, AccountRecoveryPolicyError, AccountRecoveryRequest,
-        AccountRecoveryStatus, AccountRekeyRecord, AccountRekeyRecordError,
-        AccountRekeyTransitionProvenance, AccountValue, MultisigMember, MultisigPolicy, NewAccount,
-        OpaqueAccountId, ParsedAccountId, RecoveryGuardian,
+        Account, AccountAddress, AccountAdmissionMode, AccountAdmissionPolicy, AccountAlias,
+        AccountAliasDomain, AccountController, AccountEntry, AccountId, AccountRecoveryPolicy,
+        AccountRecoveryPolicyError, AccountRecoveryRequest, AccountRecoveryStatus,
+        AccountRekeyRecord, AccountRekeyRecordError, AccountRekeyTransitionProvenance,
+        AccountValue, MultisigMember, MultisigPolicy, NewAccount, OpaqueAccountId,
+        RecoveryGuardian,
     };
 }
 #[cfg(test)]
@@ -1221,9 +1153,7 @@ mod tests {
         let key_pair = checked_random_keypair();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let literal = account_id.to_string();
-        let parsed = AccountId::parse_encoded(&literal)
-            .map(ParsedAccountId::into_account_id)
-            .expect("should be valid");
+        let parsed = AccountId::parse_encoded(&literal).expect("should be valid");
         assert_eq!(parsed.controller(), account_id.controller());
         assert_eq!(parsed.expect_single_signatory(), key_pair.public_key());
         let _err_empty_address =
@@ -1246,9 +1176,7 @@ mod tests {
         let kp = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
         let account_id = AccountId::new(kp.public_key().clone());
         let rendered = account_id.to_string();
-        let parsed = AccountId::parse_encoded(&rendered)
-            .map(ParsedAccountId::into_account_id)
-            .expect("rendered i105 must parse");
+        let parsed = AccountId::parse_encoded(&rendered).expect("rendered i105 must parse");
         assert_eq!(
             parsed.expect_single_signatory(),
             account_id.expect_single_signatory()
@@ -1334,9 +1262,7 @@ mod tests {
         let literal = account_id
             .canonical_i105()
             .expect("i105 encoding should succeed");
-        let parsed = AccountId::parse_encoded(&literal)
-            .map(ParsedAccountId::into_account_id)
-            .expect("should parse multisig");
+        let parsed = AccountId::parse_encoded(&literal).expect("should parse multisig");
         let parsed_policy = parsed
             .multisig_policy()
             .expect("multisig policy should be present");
@@ -1433,6 +1359,75 @@ mod json_tests {
         let json = norito::json::to_json(&account).expect("serialize account");
         let decoded: Account = norito::json::from_json(&json).expect("deserialize account");
         assert_eq!(decoded, account);
+    }
+    #[test]
+    fn opaque_account_id_from_str_accepts_only_canonical_literal() {
+        let opaque = OpaqueAccountId::from_hash(Hash::new(b"opaque-account-id"));
+        let canonical = opaque.to_string();
+        assert_eq!(
+            canonical
+                .parse::<OpaqueAccountId>()
+                .expect("canonical opaque account id"),
+            opaque
+        );
+        let hex = opaque.as_hash().to_string();
+        for literal in [
+            hex.clone(),
+            format!("OPAQUE:{hex}"),
+            format!("opaque:{}", hex.to_uppercase()),
+            format!(" opaque:{hex}"),
+            format!("opaque:{hex} "),
+        ] {
+            assert!(
+                literal.parse::<OpaqueAccountId>().is_err(),
+                "noncanonical opaque account id must reject: {literal:?}"
+            );
+        }
+    }
+    #[test]
+    fn account_json_requires_complete_first_release_shape() {
+        let _guard = guard_chain_discriminant();
+        let account = Account {
+            id: AccountId::new(checked_random_keypair().public_key().clone()),
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+        };
+        let value = norito::json::to_value(&account).expect("serialize current account");
+        let object = value.as_object().expect("account JSON object");
+        assert_eq!(object.get("label"), Some(&norito::json::Value::Null));
+        assert_eq!(object.get("uaid"), Some(&norito::json::Value::Null));
+        for field in ["metadata", "label", "uaid", "opaque_ids"] {
+            let mut missing = value.clone();
+            missing
+                .as_object_mut()
+                .expect("account JSON object")
+                .remove(field);
+            assert!(
+                norito::json::from_value::<Account>(missing).is_err(),
+                "current account JSON must reject missing `{field}`"
+            );
+        }
+    }
+    #[test]
+    fn account_details_json_requires_complete_first_release_shape() {
+        let details = AccountDetails::default();
+        let value = norito::json::to_value(&details).expect("serialize current account details");
+        let object = value.as_object().expect("account details JSON object");
+        assert_eq!(object.get("label"), Some(&norito::json::Value::Null));
+        assert_eq!(object.get("uaid"), Some(&norito::json::Value::Null));
+        for field in ["metadata", "label", "uaid", "opaque_ids"] {
+            let mut missing = value.clone();
+            missing
+                .as_object_mut()
+                .expect("account details JSON object")
+                .remove(field);
+            assert!(
+                norito::json::from_value::<AccountDetails>(missing).is_err(),
+                "current account details JSON must reject missing `{field}`"
+            );
+        }
     }
     #[test]
     fn account_id_json_uses_canonical_i105_literal() {
@@ -1604,18 +1599,33 @@ mod json_tests {
         assert_eq!(decoded.metadata, metadata);
     }
     #[test]
-    fn new_account_json_allows_domainless_payload() {
+    fn new_account_json_requires_complete_first_release_shape() {
         let _guard = guard_chain_discriminant();
         let keypair = checked_random_keypair();
         let id = AccountId::new(keypair.public_key().clone());
-        let i105 = id.canonical_i105().expect("i105 encoding");
-        let payload = format!("{{\"id\":\"{i105}\"}}");
-        let decoded =
-            norito::json::from_json::<NewAccount>(&payload).expect("domainless account payload");
-        assert_eq!(decoded.id, id);
-        assert!(decoded.label.is_none());
-        assert!(decoded.uaid.is_none());
-        assert_eq!(decoded.metadata, Metadata::default());
+        let account = NewAccount::new(id);
+        let value = norito::json::to_value(&account).expect("serialize current new account");
+        let object = value.as_object().expect("new account JSON object");
+        assert_eq!(object.get("label"), Some(&norito::json::Value::Null));
+        assert_eq!(object.get("uaid"), Some(&norito::json::Value::Null));
+        assert_eq!(
+            object
+                .get("opaque_ids")
+                .and_then(norito::json::Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+        for field in ["metadata", "label", "uaid", "opaque_ids"] {
+            let mut missing = value.clone();
+            missing
+                .as_object_mut()
+                .expect("new account JSON object")
+                .remove(field);
+            assert!(
+                norito::json::from_value::<NewAccount>(missing).is_err(),
+                "current new account JSON must reject missing `{field}`"
+            );
+        }
     }
     #[test]
     fn new_account_norito_roundtrip_preserves_packed_self_delimiting_fields() {

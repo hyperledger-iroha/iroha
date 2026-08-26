@@ -665,8 +665,8 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
                 "epoch_end_height": 1,
                 "mode": ["mode": "permissioned", "details": NSNull()],
                 "epoch_seed": [UInt8](repeating: 1, count: 32),
-                "validator_count": 1,
-                "quorum": ["min_signers": 1, "total_power": 1],
+                "validator_count": 4,
+                "quorum": ["min_signers": 3, "total_power": 4],
             ],
             "liveness": [
                 "generation": 0,

@@ -103,8 +103,8 @@ into the output directory.
   path before signalling a live process, so stale or reused pids are left alone.
 
 `kagami wizard`
-- Guided observer-onboarding flow for an existing Sora Nexus or Taira network;
-  use `localnet-wizard` for a new generic network
+- Guided observer-onboarding flow for the existing Sora Nexus network; use
+  `localnet-wizard` for a new generic network
 - Supports interactive and fully flag-driven non-interactive use
 - Requires the operator-authenticated full validator peer/PoP roster encoded by
   the network's signed genesis; the generated local peer is not promoted to validator
@@ -177,7 +177,8 @@ into the output directory.
   - `docker-compose.yml`
   - `README.md`
 - For a disposable four-validator Taira deployment, use
-  `python3 scripts/taira_devnet.py up`; use its `check` and `down` subcommands
+  `python3 scripts/taira_devnet.py up --inrou-canary-dir <owner-only-workspace>`;
+  use its `check` and `down` subcommands
   for inspection and teardown. The low-level `iroha3-taira` Kagami profile
   remains available for manifest generation and verification, targets the live
   Taira chain id, requires NPoS, and requires `--vrf-seed-hex`.

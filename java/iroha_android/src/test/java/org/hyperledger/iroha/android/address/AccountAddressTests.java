@@ -37,6 +37,7 @@ public final class AccountAddressTests {
     complianceFixtureSuite();
     goldenVectorsRoundTrip();
     mixedI105LiteralRoundTrip();
+    selectorPrefixedCanonicalBytesAreRejected();
     i105PrefixMismatchThrows();
     i105RejectsFullwidthSentinel();
     i105RejectsNonCanonicalFullwidthKana();
@@ -455,25 +456,23 @@ public final class AccountAddressTests {
     final int prefix = asNumber(i105.get("prefix"), caseId + ".encodings.i105.prefix", caseId).intValue();
     final String i105String = asString(i105.get("string"), caseId + ".encodings.i105.string", caseId);
 
-    final AccountAddress canonical = AccountAddress.fromCanonicalHex(canonicalHex);
-    final byte[] canonicalBytes = canonical.canonicalBytes();
+    final AccountAddress i105Parsed = AccountAddress.parseEncoded(i105String, prefix);
+    final byte[] canonicalBytes = i105Parsed.canonicalBytes();
+    assert i105Parsed.canonicalHex().equalsIgnoreCase(canonicalHex)
+        : caseId + ": canonical hex mismatch";
 
-    final AccountAddress.ParseResult i105Parsed = AccountAddress.parseAny(i105String, prefix);
-    assert Arrays.equals(i105Parsed.address.canonicalBytes(), canonicalBytes)
-        : caseId + ": i105 parse canonical mismatch";
-
-    final String reencodedI105 = canonical.toI105(prefix);
+    final String reencodedI105 = i105Parsed.toI105(prefix);
     assert reencodedI105.equals(i105String) : caseId + ": i105 re-encode mismatch";
-    assert canonical.canonicalHex().equalsIgnoreCase(canonicalHex)
+    assert i105Parsed.canonicalHex().equalsIgnoreCase(canonicalHex)
         : caseId + ": canonical hex re-encode mismatch";
 
-    final AccountAddress.DisplayFormats formats = canonical.displayFormats(prefix);
+    final AccountAddress.DisplayFormats formats = i105Parsed.displayFormats(prefix);
     assert formats.i105.equals(i105String) : caseId + ": displayFormats i105 mismatch";
     assert formats.discriminant == prefix : caseId + ": displayFormats discriminant mismatch";
     assert formats.i105Warning.equals(AccountAddress.i105WarningMessage())
         : caseId + ": displayFormats warning mismatch";
 
-    final AccountAddress.DisplayFormats defaultFormats = canonical.displayFormats();
+    final AccountAddress.DisplayFormats defaultFormats = i105Parsed.displayFormats();
     assert defaultFormats.discriminant == AccountAddress.DEFAULT_I105_DISCRIMINANT
         : caseId + ": default displayFormats discriminant mismatch";
     assert defaultFormats.i105.startsWith("sora")
@@ -497,11 +496,10 @@ public final class AccountAddressTests {
 
     switch (format) {
       case "i105":
-        expectError(caseId, expected, () -> AccountAddress.parseAny(input, expectedPrefix));
+        expectError(caseId, expected, () -> AccountAddress.parseEncoded(input, expectedPrefix));
         break;
       case "canonical_hex":
-        expectError(caseId, expected, () -> AccountAddress.parseAny(input, null));
-        expectError(caseId, expected, () -> AccountAddress.parseAny(input, null));
+        expectError(caseId, expected, () -> AccountAddress.parseEncoded(input, null));
         break;
       default:
         throw new IllegalStateException(caseId + ": unsupported negative format " + format);
@@ -520,10 +518,9 @@ public final class AccountAddressTests {
     assert i105.equals("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
         : "i105 encoding mismatch";
 
-    final AccountAddress.ParseResult i105Parsed =
-        AccountAddress.parseAny(i105, AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    assert i105Parsed.format == AccountAddress.Format.I105 : "expected i105 format";
-    assert Arrays.equals(address.canonicalBytes(), i105Parsed.address.canonicalBytes())
+    final AccountAddress i105Parsed =
+        AccountAddress.parseEncoded(i105, AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    assert Arrays.equals(address.canonicalBytes(), i105Parsed.canonicalBytes())
         : "i105 round-trip mismatch";
   }
 
@@ -539,13 +536,32 @@ public final class AccountAddressTests {
         : "ambiguous literal round-trip mismatch";
   }
 
+  private static void selectorPrefixedCanonicalBytesAreRejected() throws Exception {
+    final byte[] canonical =
+        AccountAddress.fromAccount(validEd25519Key(), "ed25519").canonicalBytes();
+    final byte[] selectorPrefixed = new byte[canonical.length + 13];
+    selectorPrefixed[0] = canonical[0];
+    selectorPrefixed[1] = 0x01;
+    for (int i = 0; i < 12; i++) {
+      selectorPrefixed[i + 2] = (byte) (i + 1);
+    }
+    System.arraycopy(canonical, 1, selectorPrefixed, 14, canonical.length - 1);
+
+    try {
+      AccountAddress.fromCanonicalBytes(selectorPrefixed);
+    } catch (final AccountAddress.AccountAddressException expected) {
+      return;
+    }
+    throw new AssertionError("retired domain-selector prefix was accepted");
+  }
+
   private static void i105PrefixMismatchThrows() throws Exception {
     final byte[] key = validEd25519Key();
     final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
     final String i105 = address.toI105(5);
     boolean threw = false;
     try {
-      AccountAddress.parseAny(i105, 9);
+      AccountAddress.parseEncoded(i105, 9);
     } catch (final AccountAddress.AccountAddressException ex) {
       threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX;
     }
@@ -560,7 +576,7 @@ public final class AccountAddressTests {
 
     boolean parseThrew = false;
     try {
-      AccountAddress.parseAny(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT);
+      AccountAddress.parseEncoded(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       parseThrew = ex.getCode() == AccountAddress.AccountAddressErrorCode.MISSING_I105_SENTINEL;
     }

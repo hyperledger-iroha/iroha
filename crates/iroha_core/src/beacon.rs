@@ -1447,6 +1447,19 @@ pub trait GlobalThresholdBeaconPartialSignerV1: Send + Sync {
         session: &ValidatedGlobalThresholdBeaconSessionV1,
         payload: &[u8],
     ) -> Result<GlobalThresholdBeaconPartialSignatureV1, String>;
+
+    /// Return whether the feature-isolated test daemon must corrupt this
+    /// provider's outbound share after signing and before broadcast.
+    ///
+    /// This hook does not exist in ordinary builds. Its sole caller skips
+    /// local reducer admission for the deliberately malformed share so the
+    /// live network exercises receiver-side proof rejection without granting
+    /// the faulty validator a hidden local contribution.
+    #[cfg(feature = "test-network-parliament-signers")]
+    #[doc(hidden)]
+    fn test_network_emit_invalid_outbound_partial_v1(&self) -> bool {
+        false
+    }
 }
 
 /// Process-local zeroizing software owner for one adaptive beacon signing share.
@@ -3059,6 +3072,26 @@ pub(crate) mod tests {
         Arc::new(live_fixture_in_memory_signer(fixture, recipient_index))
     }
 
+    #[cfg(feature = "test-network-parliament-signers")]
+    struct InvalidOutboundTestBeaconSigner {
+        inner: Arc<dyn GlobalThresholdBeaconPartialSignerV1>,
+    }
+
+    #[cfg(feature = "test-network-parliament-signers")]
+    impl GlobalThresholdBeaconPartialSignerV1 for InvalidOutboundTestBeaconSigner {
+        fn sign_partial(
+            &self,
+            session: &ValidatedGlobalThresholdBeaconSessionV1,
+            payload: &[u8],
+        ) -> Result<GlobalThresholdBeaconPartialSignatureV1, String> {
+            self.inner.sign_partial(session, payload)
+        }
+
+        fn test_network_emit_invalid_outbound_partial_v1(&self) -> bool {
+            true
+        }
+    }
+
     #[test]
     fn runtime_beacon_custody_selects_exact_rotating_session_and_rejects_replacement() {
         let fixture_a = adaptive_beacon_fixture();
@@ -3787,6 +3820,82 @@ pub(crate) mod tests {
     #[test]
     fn mandatory_npos_pulse_persists_across_same_block_key_rotation() {
         assert_same_block_key_rotation_persists_requested_pulse(false);
+    }
+
+    #[cfg(feature = "test-network-parliament-signers")]
+    #[test]
+    fn invalid_test_outbound_is_not_locally_counted_and_is_rejected_on_ingress() {
+        let keys = live_producer_keys();
+        let network_id = network_id(0xA7);
+        let parent_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xD7; 32]));
+        let context = live_producer_context(&keys, network_id, parent_hash);
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let mut dkg_session = adaptive_dkg_session_fixture();
+        dkg_session.network_id = network_id;
+        dkg_session.roster_hash = global_threshold_beacon_roster_hash_v1(&roster);
+        let fixture = adaptive_beacon_fixture_for_session(dkg_session);
+        let cursor = GlobalThresholdBeaconPulseLinkV1 {
+            pulse_id: [0x67; 32],
+            seed: [0x68; 32],
+            height: 0,
+            round: 0,
+        };
+        let state = live_producer_state(&fixture, cursor, parent_hash);
+
+        let invalid_signer: Arc<dyn GlobalThresholdBeaconPartialSignerV1> =
+            Arc::new(InvalidOutboundTestBeaconSigner {
+                inner: live_fixture_signer(&fixture, 1),
+            });
+        let mut invalid_producer =
+            V2GlobalBeaconLifecycle::open(&context, &state, Some(0), Some(invalid_signer))
+                .expect("open deliberately invalid feature-only producer");
+        invalid_producer
+            .begin_round(0)
+            .expect("an invalid test share is broadcast without local admission");
+        let invalid = beacon_partial_payload(
+            invalid_producer
+                .take_outbound()
+                .pop()
+                .expect("invalid outbound share"),
+        );
+
+        let mut valid_producer = V2GlobalBeaconLifecycle::open(
+            &context,
+            &state,
+            Some(1),
+            Some(live_fixture_signer(&fixture, 2)),
+        )
+        .expect("open ordinary valid producer");
+        valid_producer.begin_round(0).expect("sign valid share");
+        let valid = beacon_partial_payload(
+            valid_producer
+                .take_outbound()
+                .pop()
+                .expect("valid outbound share"),
+        );
+
+        assert_eq!(
+            invalid_producer
+                .accept_partial(valid, &roster[1], 0)
+                .expect("retain the sole proof-valid contribution"),
+            V2GlobalBeaconIngressOutcome::Accepted,
+            "one valid share must remain below the exact threshold of two",
+        );
+        assert!(invalid_producer.finalized_pulse(0).is_none());
+        assert!(matches!(
+            invalid_producer.accept_partial(invalid, &roster[0], 0),
+            Err(V2GlobalBeaconError::Beacon(
+                GlobalThresholdBeaconError::ThresholdBls(_)
+            ))
+        ));
+        assert!(
+            invalid_producer.finalized_pulse(0).is_none(),
+            "the malformed outbound share must neither be pre-counted locally nor admitted on ingress",
+        );
     }
 
     #[test]

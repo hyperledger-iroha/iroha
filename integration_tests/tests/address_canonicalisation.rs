@@ -357,7 +357,7 @@ fn dotted_i105_alice_literal() -> String {
 fn dotted_i105_bob_literal() -> String {
     dotted_i105_literal(&i105_bob_literal())
 }
-fn local8_literal() -> String {
+fn selector_prefixed_literal() -> String {
     let account_address = ALICE_ID
         .to_account_address()
         .expect("account address should encode");
@@ -366,15 +366,15 @@ fn local8_literal() -> String {
         .expect("canonical hex encoding");
     let canonical = hex::decode(&canonical_hex[2..]).expect("canonical hex decoding succeeds");
     let digest = [0xA5; 12];
-    // Construct a legacy Local-12 layout and then truncate it to Local-8 to emulate
-    // a pre-cutover payload shape that must be rejected by the parser.
-    let mut legacy = Vec::with_capacity(canonical.len() + digest.len());
-    legacy.push(canonical[0]); // header
-    legacy.push(0x01); // local selector tag
-    legacy.extend_from_slice(&digest);
-    legacy.extend_from_slice(&canonical[2..]); // controller payload
-    legacy.drain(10..14); // trim digest bytes to Local-8 legacy width
-    format!("0x{}", hex::encode(legacy))
+    // Insert a forbidden selector tag and truncated digest. Strict V1 decoding
+    // must reject this payload rather than interpreting the extra bytes.
+    let mut payload = Vec::with_capacity(canonical.len() + digest.len());
+    payload.push(canonical[0]); // header
+    payload.push(0x01); // forbidden selector tag
+    payload.extend_from_slice(&digest);
+    payload.extend_from_slice(&canonical[2..]); // controller payload
+    payload.drain(10..14); // keep an eight-byte selector prefix
+    format!("0x{}", hex::encode(payload))
 }
 fn public_key_literal() -> String {
     let public_key = ALICE_KEYPAIR.public_key().to_string();
@@ -718,19 +718,19 @@ async fn account_path_endpoints_reject_i105_literals() -> Result<()> {
     Ok(())
 }
 #[tokio::test]
-async fn account_path_endpoints_reject_local8_literals() -> Result<()> {
+async fn account_path_endpoints_reject_selector_prefixed_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(account_path_endpoints_reject_local8_literals),
+        stringify!(account_path_endpoints_reject_selector_prefixed_literals),
     )
     .await?
     else {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-    let literal = local8_literal();
-    let local8_reason = AccountId::parse_encoded(&literal)
-        .expect_err("local8 literal must fail to parse")
+    let literal = selector_prefixed_literal();
+    let rejection_reason = AccountId::parse_encoded(&literal)
+        .expect_err("selector-prefixed literal must fail to parse")
         .reason()
         .to_owned();
     let http = http_client();
@@ -755,12 +755,12 @@ async fn account_path_endpoints_reject_local8_literals() -> Result<()> {
         assert_eq!(
             resp.status(),
             reqwest::StatusCode::BAD_REQUEST,
-            "Local-8 literal should be rejected for {url}"
+            "selector-prefixed literal should be rejected for {url}"
         );
         let body = resp.text().await.unwrap_or_default();
         assert!(
-            body.contains(&local8_reason),
-            "response body should mention {local8_reason}, got {body}"
+            body.contains(&rejection_reason),
+            "response body should mention {rejection_reason}, got {body}"
         );
     }
     Ok(())
@@ -1499,19 +1499,19 @@ async fn explorer_account_qr_accepts_i105_hint() -> Result<()> {
     Ok(())
 }
 #[tokio::test]
-async fn accounts_query_rejects_local8_filter_literals() -> Result<()> {
+async fn accounts_query_rejects_selector_prefixed_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_query_rejects_local8_filter_literals),
+        stringify!(accounts_query_rejects_selector_prefixed_filter_literals),
     )
     .await?
     else {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-    let literal = local8_literal();
-    let local8_reason = AccountId::parse_encoded(&literal)
-        .expect_err("local8 literal must fail to parse")
+    let literal = selector_prefixed_literal();
+    let rejection_reason = AccountId::parse_encoded(&literal)
+        .expect_err("selector-prefixed literal must fail to parse")
         .reason()
         .to_owned();
     let body = format!(
@@ -1533,12 +1533,12 @@ async fn accounts_query_rejects_local8_filter_literals() -> Result<()> {
     assert_eq!(
         resp.status(),
         reqwest::StatusCode::BAD_REQUEST,
-        "Local-8 literal in filter should be rejected"
+        "selector-prefixed literal in filter should be rejected"
     );
     let body = resp.text().await.unwrap_or_default();
     assert!(
-        body.contains(&local8_reason),
-        "response body should mention {local8_reason}, got {body}"
+        body.contains(&rejection_reason),
+        "response body should mention {rejection_reason}, got {body}"
     );
     Ok(())
 }
@@ -1962,8 +1962,8 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         "expected I105 literal {} in kaigi summary, got {i105_literals:?}",
         seed.relay_i105
     );
-    let legacy_relay_literal = dotted_i105_bob_literal();
-    let detail_target = format!("/v1/kaigi/relays/{legacy_relay_literal}");
+    let noncanonical_relay_literal = dotted_i105_bob_literal();
+    let detail_target = format!("/v1/kaigi/relays/{noncanonical_relay_literal}");
     let detail_resp = kaigi_operator_get(&http, &client, &detail_target).await?;
     assert_eq!(
         detail_resp.status(),
@@ -1972,7 +1972,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         detail_resp.status()
     );
     let body = detail_resp.text().await?;
-    let reason = AccountId::parse_encoded(&legacy_relay_literal)
+    let reason = AccountId::parse_encoded(&noncanonical_relay_literal)
         .expect_err("dotted I105 relay literal must fail strict parsing")
         .reason()
         .to_string();

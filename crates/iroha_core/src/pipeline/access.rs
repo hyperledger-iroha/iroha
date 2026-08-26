@@ -1384,9 +1384,7 @@ fn access_set_from_hint_keys(
                 let Ok(key) = key_raw.parse::<Name>() else {
                     continue;
                 };
-                match AccountId::parse_encoded(id_raw)
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                {
+                match AccountId::parse_encoded(id_raw) {
                     Ok(id) => {
                         parsed = Some(AccountMetadataKey { id, key });
                         break;
@@ -1479,9 +1477,7 @@ fn access_set_from_hint_keys(
                 let Ok(role) = role_raw.parse::<RoleId>() else {
                     continue;
                 };
-                match AccountId::parse_encoded(account_raw)
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                {
+                match AccountId::parse_encoded(account_raw) {
                     Ok(account) => {
                         parsed = Some(AccountRoleKey { account, role });
                         break;
@@ -1498,9 +1494,7 @@ fn access_set_from_hint_keys(
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("account:") {
-            match AccountId::parse_encoded(rest)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            {
+            match AccountId::parse_encoded(rest) {
                 Ok(id) => canonical.push(CanonicalStateKey::Account(id)),
                 Err(_) => return None,
             }

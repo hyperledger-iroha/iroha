@@ -1521,8 +1521,8 @@ function irohaHash(value) {
 }
 
 function exactHashHex(value, context) {
-  if (typeof value !== JS_TYPE_STRING || !/^[0-9a-f]{64}$/u.test(value)) {
-    fail("invalid_hash", `${context} must be a 32-byte hexadecimal string`);
+  if (typeof value !== JS_TYPE_STRING || !/^[0-9a-f]{63}[13579bdf]$/u.test(value)) {
+    fail("invalid_hash", `${context} must be an exact canonical lowercase 32-byte Iroha hash`);
   }
   return value;
 }

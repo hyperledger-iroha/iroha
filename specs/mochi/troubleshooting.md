@@ -167,10 +167,18 @@ The local smoke path signs with the bundled primary development signer and
 updates metadata on the existing `wonderland.universal` domain. It does not
 create a new SNS-gated domain. Submission uses `Content-Type:
 application/x-norito` and waits for commit through block/event streams plus
-HTTP status fallback (`/v1/pipeline/transactions/status?hash=...`, then
-explorer transaction lookup). A closed WebSocket stream should not fail
-readiness by itself if the HTTP status endpoint reports the transaction as
-committed.
+one authoritative HTTP reconciliation route:
+`/v1/pipeline/transactions/status?hash=<marked-64-lowercase-hex>&scope=global`,
+where the transaction hash matches `[0-9a-f]{63}[13579bdf]` and therefore
+retains Iroha's canonical `HashOf` marker.
+Mochi never falls back to an Explorer transaction lookup. The response must
+match that exact hash and contain exactly `hash`, `status`, `scope`, and
+`resolved_from`; `status` contains `kind` and only the optional
+`block_height`. Missing, unknown, or aliased fields fail closed. Only a global,
+state-resolved `Applied` status with a positive integer `block_height` completes
+the smoke check. Queue/cache observations remain progress hints. A closed
+WebSocket stream should not fail readiness by itself if this status route proves
+exact Applied execution finality.
 
 If the smoke transaction rejects, treat the rejection text in `serve.log` as
 authoritative. Common causes are stale storage from an older genesis, a

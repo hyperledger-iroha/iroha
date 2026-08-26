@@ -43,6 +43,6 @@ test("ToriiClient blocks credentialed requests to a mismatched host", async () =
     fetchImpl: async () => makeResponse(),
   });
   await assert.rejects(() =>
-    client._request("GET", "https://evil.example/v1/status"),
+    client._request("GET", "https://evil.example/status"),
   );
 });

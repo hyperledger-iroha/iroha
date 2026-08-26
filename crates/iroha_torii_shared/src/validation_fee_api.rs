@@ -962,7 +962,7 @@ mod tests {
         enacted_at_height: u64,
     ) -> ValidationFeeParliamentAuthorizationV1 {
         let base = enacted_at_height
-            .checked_sub(10)
+            .checked_sub(1_024)
             .expect("certificate lifecycle");
         let root = |marker: u8| [marker; 32];
         let proposal_content_id = ProposalContentId::new(proposal_fingerprint);
@@ -996,7 +996,7 @@ mod tests {
             BallotAttemptId::derive_v1(body_instance_id, ballot_attempt_sequence);
         let release_beacon_session_id = BeaconSessionId::new(root(7));
         let tle_key_session_id = TleKeySessionId::new(root(8));
-        let release_height = base + 7;
+        let release_height = base + 1_021;
         let tle_session_id = TleSessionId::derive_v1(
             ballot_attempt_id,
             tle_key_session_id,
@@ -1012,7 +1012,7 @@ mod tests {
             abstain: 34,
         };
         let outcome = ParliamentAggregateOutcomeV1::Approved;
-        let result_height = base + 8;
+        let result_height = base + 1_022;
         let result_root = parliament_ballot_result_root_v1(
             governance_attempt_id,
             body_instance_id,
@@ -1055,14 +1055,14 @@ mod tests {
                     timed_commitment_root: root(14),
                     release_beacon_session_id,
                     registered_at_height: base + 3,
-                    registration_close_height: base + 4,
-                    survivor_freeze_height: base + 5,
-                    commitment_close_height: base + 6,
-                    registration_closed_at_height: base + 4,
-                    survivors_frozen_at_height: base + 5,
-                    commitment_closed_at_height: base + 6,
+                    registration_close_height: base + 504,
+                    survivor_freeze_height: base + 1_004,
+                    commitment_close_height: base + 1_020,
+                    registration_closed_at_height: base + 504,
+                    survivors_frozen_at_height: base + 1_004,
+                    commitment_closed_at_height: base + 1_020,
                     max_ballot_retries: 3,
-                    max_corpus_entries: 1_000,
+                    max_corpus_entries: 500,
                     release_height,
                     opening_deadline_height: result_height,
                     release_pulse_id: BeaconPulseId::new(root(15)),
@@ -1079,7 +1079,7 @@ mod tests {
                 version: 1,
                 head_root: root(18),
             }),
-            certified_at_height: base + 9,
+            certified_at_height: base + 1_023,
             enact_at_height: enacted_at_height,
         };
         let governance_certificate_id = GovernanceCertificateId::derive_v1(&governance_certificate);
@@ -1132,7 +1132,7 @@ mod tests {
     }
     #[test]
     fn verified_parliament_projection_rejects_noncanonical_certificate_identity() {
-        let mut authorization = parliament_authorization([0x02; 32], 107);
+        let mut authorization = parliament_authorization([0x02; 32], 2_048);
         verified_parliament_proposal("ValidationFeePolicyV1", &authorization)
             .expect("canonical certificate authorization");
         authorization.governance_certificate_id = GovernanceCertificateId::new([0xAA; 32]);
@@ -1147,7 +1147,7 @@ mod tests {
         reason = "the focused schema test keeps every required and retired mobile policy key auditable together"
     )]
     fn verified_current_policy_shape_has_exact_mobile_keys_and_recipient_evidence() {
-        let authorization = parliament_authorization([0x02; 32], 107);
+        let authorization = parliament_authorization([0x02; 32], 2_048);
         let proposal = verified_parliament_proposal("ValidationFeePolicyV1", &authorization)
             .expect("project canonical certificate authorization");
         let current = ValidationFeeVerifiedCurrentPolicyV1 {

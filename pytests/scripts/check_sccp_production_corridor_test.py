@@ -27,6 +27,7 @@ PHASES = (
     "core-admission",
     "runtime-api",
 )
+AUTOMATIC_PHASES = tuple(phase for phase in PHASES if phase != "tvm-contract-smoke")
 RETIRED_STEMS = (
     "source_bridge_evidence",
     "destination_evidence",
@@ -326,22 +327,30 @@ def test_production_attachments_never_enable_fixture_feature() -> None:
         assert "test-fixtures" not in path.read_text(encoding="utf-8")
 
 
-def test_workflow_exposes_every_phase_and_strict_aggregate() -> None:
+def test_workflow_exposes_every_phase_and_strict_automatic_aggregate() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     for phase in PHASES:
         assert f"          - {phase}" in workflow
         job = workflow_job(workflow, phase)
         if phase == "tvm-contract-smoke":
             assert "needs: [runner-self-check, contract-smoke]" in job
+            assert (
+                "if: ${{ github.event_name == 'workflow_dispatch' && "
+                "github.event.inputs.phase == 'tvm-contract-smoke' }}" in job
+            )
+            assert "TODO: Add this live lane to the automatic aggregate" in job
             assert "bash scripts/contract_tvm_runner.sh" in job
             assert "tronbox/tre@sha256:" in job
         else:
             assert "needs: runner-self-check" in job
             assert f"--phase {phase}" in job
+            if phase == "contract-smoke":
+                assert "github.event.inputs.phase == 'tvm-contract-smoke'" in job
         assert f"tee dist/sccp-production-corridor/{phase}.log" in job
         assert "if-no-files-found: error" in job
     aggregate = workflow_job(workflow, "sccp-production-corridor")
-    assert f"needs: [runner-self-check, {', '.join(PHASES)}]" in aggregate
+    assert f"needs: [runner-self-check, {', '.join(AUTOMATIC_PHASES)}]" in aggregate
+    assert "tvm-contract-smoke" not in aggregate
     for state in ("failure", "cancelled", "skipped"):
         assert f"contains(needs.*.result, '{state}')" in aggregate
     assert "exit 1" in aggregate
@@ -353,6 +362,31 @@ def test_evidence_workflow_installs_rust_and_runs_real_corridor() -> None:
     assert "actions-rust-lang/setup-rust-toolchain@" in job
     assert "Swatinem/rust-cache@" in job
     assert "bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts" in job
+
+
+def test_python_workflow_installs_hash_locked_sdk_dependencies() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    job = workflow_job(workflow, "python-sdk")
+    for required in (
+        'python-version: "3.12"',
+        "cache-dependency-path: python/iroha_python/requirements-ci.lock",
+        "--require-hashes",
+        "--only-binary=:all:",
+        "-r python/iroha_python/requirements-ci.lock",
+    ):
+        assert required in job
+    assert '"python/iroha_python/requirements-ci.lock"' in workflow
+    assert "pip install --upgrade pip pytest" not in job
+
+
+def test_contract_workflow_installs_pinned_test_dependencies_first() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    job = workflow_job(workflow, "contract-smoke")
+    install = "python3 -m pip install -r scripts/requirements.txt"
+    corridor = "bash scripts/check_sccp_production_corridor.sh --phase contract-smoke"
+    assert install in job
+    assert job.index(install) < job.index(corridor)
+    assert '"scripts/requirements.txt"' in workflow
 
 
 def test_swift_workflow_binds_the_exact_first_release_bridge_envelope() -> None:

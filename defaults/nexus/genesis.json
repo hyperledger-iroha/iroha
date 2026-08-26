@@ -40,7 +40,10 @@
               "id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "metadata": {
                 "key": "value"
-              }
+              },
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -50,7 +53,10 @@
               "id": "sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "metadata": {
                 "purpose": "fee_sponsor_vault_custody"
-              }
+              },
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -60,7 +66,10 @@
               "id": "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
               "metadata": {
                 "key": "value"
-              }
+              },
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -93,7 +102,10 @@
           "Register": {
             "Account": {
               "id": "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
-              "metadata": {}
+              "metadata": {},
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },

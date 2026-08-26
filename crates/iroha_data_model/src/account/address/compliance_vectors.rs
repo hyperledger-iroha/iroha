@@ -1,10 +1,7 @@
 //! ADDR-2 compliance vector generator shared by the example binary and CLI tooling.
-use crate::{
-    account::{
-        AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy,
-        MultisigPolicyError,
-    },
-    domain::DomainId,
+use crate::account::{
+    AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy,
+    MultisigPolicyError,
 };
 use hex::encode_upper;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
@@ -35,29 +32,25 @@ struct MultisigCase {
 struct MultisigFixture {
     case_id: &'static str,
     note: &'static str,
-    domain: &'static str,
     members: &'static [(u8, u16)],
     threshold: u16,
 }
 const MULTISIG_FIXTURES: &[MultisigFixture] = &[
     MultisigFixture {
         case_id: "addr-multisig-council-threshold3",
-        note: "Council domain multisig with three members (weights 2,1,1) requiring weight ≥3.",
-        domain: "council",
+        note: "Domainless multisig with three members (weights 2,1,1) requiring weight ≥3.",
         members: &[(0x21, 2), (0x36, 1), (0x4B, 1)],
         threshold: 3,
     },
     MultisigFixture {
         case_id: "addr-multisig-wonderland-threshold2",
-        note: "Two-member multisig policy with weights 1 and 2 requiring weight ≥2 on wonderland.",
-        domain: "wonderland",
+        note: "Domainless two-member multisig with weights 1 and 2 requiring weight ≥2.",
         members: &[(0x10, 1), (0x11, 2)],
         threshold: 2,
     },
     MultisigFixture {
         case_id: "addr-multisig-default-quorum3",
         note: "Domainless multisig fixture with four members (weight 1 each) requiring weight ≥3.",
-        domain: "default",
         members: &[(0xA0, 1), (0xA1, 1), (0xA2, 1), (0xA3, 1)],
         threshold: 3,
     },
@@ -69,9 +62,6 @@ fn ed25519_pk_with(seed_byte: u8) -> PublicKey {
         .into_parts();
     public_key
 }
-fn domain(label: &str) -> DomainId {
-    DomainId::try_new(label, "universal").expect("valid domain id")
-}
 fn canonical_hex(address: &AccountAddress) -> String {
     address
         .canonical_hex()
@@ -80,10 +70,6 @@ fn canonical_hex(address: &AccountAddress) -> String {
 fn canonical_bytes(hex_value: &str) -> Vec<u8> {
     let body = hex_value.strip_prefix("0x").unwrap_or(hex_value);
     hex::decode(body).expect("canonical hex should decode")
-}
-fn selector_value() -> Value {
-    // Canonical I105 payloads are globally scoped and no longer embed domain selectors.
-    json_obj!({ "kind": "default" })
 }
 fn checked_public_key_bytes(public_key: &PublicKey) -> (Algorithm, &[u8]) {
     public_key
@@ -149,23 +135,18 @@ fn encodings(address: &AccountAddress) -> PositiveEncodings {
         i105,
     }
 }
-fn build_single_case(case_id: &str, seed: u8, raw_domain: &str, note: &str) -> SingleCase {
+fn build_single_case(case_id: &str, seed: u8, note: &str) -> SingleCase {
     let public_key = ed25519_pk_with(seed);
-    let normalized_domain = domain(raw_domain);
     let account = AccountId::new(public_key.clone());
     let address = AccountAddress::from_account_id(&account).expect("single-key encoding succeeds");
     let encodings = encodings(&address);
-    let selector = selector_value();
     let value = json_obj!({
         "case_id": case_id,
         "category": "single",
         "note": note,
         "input": json_obj!({
-            "raw_domain": raw_domain,
-            "normalized_domain": normalized_domain.name().as_ref(),
             "seed_byte": seed,
         }),
-        "selector": selector,
         "controller": controller_single_value(&public_key),
         "encodings": json_obj!({
             "canonical_hex": encodings.canonical_hex.clone(),
@@ -185,7 +166,6 @@ fn build_multisig_cases() -> Vec<MultisigCase> {
     MULTISIG_FIXTURES
         .iter()
         .map(|fixture| {
-            let domain = domain(fixture.domain);
             let members = fixture
                 .members
                 .iter()
@@ -199,7 +179,6 @@ fn build_multisig_cases() -> Vec<MultisigCase> {
             let address =
                 AccountAddress::from_account_id(&account).expect("multisig encoding succeeds");
             let encodings = encodings(&address);
-            let selector = selector_value();
             let member_keys_hex: Vec<String> = policy
                 .members()
                 .iter()
@@ -218,8 +197,6 @@ fn build_multisig_cases() -> Vec<MultisigCase> {
                 "category": "multisig",
                 "note": fixture.note,
                 "input": json_obj!({
-                    "raw_domain": fixture.domain,
-                    "normalized_domain": domain.name().as_ref(),
                     "member_keys_hex": Value::Array(
                         member_keys_hex
                             .iter()
@@ -236,7 +213,6 @@ fn build_multisig_cases() -> Vec<MultisigCase> {
                     ),
                     "threshold": fixture.threshold,
                 }),
-                "selector": selector,
                 "controller": controller_multisig_value(&policy),
                 "encodings": json_obj!({
                     "canonical_hex": encodings.canonical_hex.clone(),
@@ -365,14 +341,12 @@ pub fn compliance_vectors_json() -> Value {
     let single_default = build_single_case(
         "addr-single-default-ed25519",
         0x0C,
-        "default",
         "Domainless address using a deterministic Ed25519 key derived from seed byte 0x0c.",
     );
     let single_treasury = build_single_case(
         "addr-single-treasury-ed25519",
         0x01,
-        "treasury",
-        "Domainless address with treasury fixture context, using a deterministic Ed25519 key derived from seed byte 0x01.",
+        "Domainless address using a second deterministic Ed25519 key derived from seed byte 0x01.",
     );
     let multisig_cases = build_multisig_cases();
     let mut positive_cases = vec![single_default.value.clone(), single_treasury.value.clone()];
@@ -487,6 +461,19 @@ mod tests {
             panic!("compliance vectors must contain positive cases");
         };
         assert!(!positive.is_empty());
+        assert!(
+            positive.iter().all(|case| {
+                case.get("selector").is_none()
+                    && case
+                        .get("input")
+                        .and_then(Value::as_object)
+                        .is_some_and(|input| {
+                            !input.contains_key("raw_domain")
+                                && !input.contains_key("normalized_domain")
+                        })
+            }),
+            "first-release vectors must not expose retired domain-selector metadata"
+        );
         let public_key = ed25519_pk_with(0x0C);
         let Some(controller) = positive
             .iter()

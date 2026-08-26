@@ -836,12 +836,12 @@ fn canonical_owner(
             error.reason()
         ))
     })?;
-    if parsed.canonical().as_bytes() != owner_bytes {
+    if parsed.to_string().as_bytes() != owner_bytes {
         return Err(invalid_parameter(
             "orderbook owner account must be exact canonical I105 bytes",
         ));
     }
-    let owner = parsed.account_id().clone();
+    let owner = parsed;
     if owner.subject_id() != authority.subject_id() {
         return Err(invalid_parameter(format!(
             "orderbook owner {owner} does not match transaction authority {authority}"

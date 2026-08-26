@@ -137,9 +137,11 @@ fn adapter_parses_and_accounts_frames() {
     let frame = VpnCellV1 { header, payload }
         .into_padded_frame()
         .expect("frame");
-    let parsed_in = adapter.record_frame_ingress(&frame.bytes).expect("ingress");
+    let parsed_in = adapter
+        .record_frame_ingress(frame.as_ref())
+        .expect("ingress");
     assert_eq!(10, parsed_in.payload.len());
-    let parsed_out = adapter.record_frame_egress(&frame.bytes).expect("egress");
+    let parsed_out = adapter.record_frame_egress(frame.as_ref()).expect("egress");
     assert_eq!(10, parsed_out.payload.len());
     let snapshot = metrics.snapshot();
     assert_eq!(1, snapshot.vpn_sessions);
@@ -205,8 +207,9 @@ async fn adapter_tracks_control_frames_separately() {
         },
         payload: vec![0xBB; 5],
     };
-    let _ = adapter
-        .encode_egress_cell(egress_cell)
+    adapter
+        .write_egress_frame(&mut writer, egress_cell)
+        .await
         .expect("control egress frame");
     let receipt = adapter.finish_receipt([0xAA; 16], VpnExitClassV1::Standard, [0xBB; 32]);
     assert_eq!(0, receipt.ingress_bytes);
@@ -256,7 +259,7 @@ fn adapter_counts_frame_only_hooks() {
     assert_eq!(64, snapshot.vpn_cover_egress_bytes);
 }
 #[test]
-fn adapter_encodes_egress_cell() {
+fn adapter_encodes_egress_cell_without_accounting() {
     let metrics = Arc::new(Metrics::new());
     metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
     let overlay = VpnOverlay::from_config(Default::default());
@@ -282,14 +285,14 @@ fn adapter_encodes_egress_cell() {
     let parsed = overlay.parse_frame(frame.frame.as_ref()).expect("parsed");
     assert_eq!(parsed.payload.len(), 20);
     let snapshot = metrics.snapshot();
-    assert_eq!(1, snapshot.vpn_frames);
-    assert_eq!(1, snapshot.vpn_egress_frames);
-    assert_eq!(20, snapshot.vpn_bytes);
-    assert_eq!(20, snapshot.vpn_egress_bytes);
-    assert_eq!(20, snapshot.vpn_data_bytes);
-    assert_eq!(20, snapshot.vpn_data_egress_bytes);
-    assert_eq!(1, snapshot.vpn_data_frames);
-    assert_eq!(1, snapshot.vpn_data_egress_frames);
+    assert_eq!(0, snapshot.vpn_frames);
+    assert_eq!(0, snapshot.vpn_egress_frames);
+    assert_eq!(0, snapshot.vpn_bytes);
+    assert_eq!(0, snapshot.vpn_egress_bytes);
+    assert_eq!(0, snapshot.vpn_data_bytes);
+    assert_eq!(0, snapshot.vpn_data_egress_bytes);
+    assert_eq!(0, snapshot.vpn_data_frames);
+    assert_eq!(0, snapshot.vpn_data_egress_frames);
     assert_eq!(0, snapshot.vpn_cover_bytes);
     assert_eq!(0, snapshot.vpn_cover_frames);
 }
@@ -322,7 +325,7 @@ fn session_can_emit_receipt_with_cover_bytes() {
     .into_padded_frame()
     .expect("data frame");
     let _ = session
-        .record_frame_ingress(&overlay, &data_frame.bytes)
+        .record_frame_ingress(&overlay, data_frame.as_ref())
         .expect("parsed data ingress");
     // Cover cell egress
     let cover_header = VpnCellHeaderV1 {
@@ -343,7 +346,7 @@ fn session_can_emit_receipt_with_cover_bytes() {
     .into_padded_frame()
     .expect("cover frame");
     let _ = session
-        .record_frame_egress(&overlay, &cover_frame.bytes)
+        .record_frame_egress(&overlay, cover_frame.as_ref())
         .expect("parsed cover egress");
     let receipt = session.finish_receipt([0x11; 16], VpnExitClassV1::Standard, [0x22; 32]);
     assert_eq!(8, receipt.ingress_bytes);
@@ -405,13 +408,13 @@ fn overlay_binds_session_receipt_metadata() {
     let overlay = VpnOverlay::from_config(cfg);
     let session = overlay.start_session(Arc::clone(&metrics));
     let handle = overlay.bind_session(session, [0xCC; 16]);
-    let receipt = handle.receipt();
+    let receipt = handle.receipt().expect("billing state available");
     assert_eq!(VpnExitClassV1::HighSecurity, receipt.exit_class);
     assert_eq!([0x44u8; 32], receipt.meter_hash);
     assert_eq!([0xCC; 16], receipt.session_id);
 }
 #[test]
-fn adapter_encapsulates_data_cell() {
+fn adapter_encapsulates_data_cell_without_accounting() {
     let metrics = Arc::new(Metrics::new());
     metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
     let overlay = VpnOverlay::from_config(Default::default());
@@ -432,13 +435,13 @@ fn adapter_encapsulates_data_cell() {
     assert_eq!(parsed.payload, vec![0xFF; 8]);
     assert_eq!(42, parsed.header.sequence);
     let snapshot = metrics.snapshot();
-    assert_eq!(1, snapshot.vpn_frames);
-    assert_eq!(1, snapshot.vpn_egress_frames);
-    assert_eq!(8, snapshot.vpn_bytes);
-    assert_eq!(8, snapshot.vpn_egress_bytes);
-    assert_eq!(8, snapshot.vpn_data_bytes);
-    assert_eq!(8, snapshot.vpn_data_egress_bytes);
-    assert_eq!(1, snapshot.vpn_data_frames);
+    assert_eq!(0, snapshot.vpn_frames);
+    assert_eq!(0, snapshot.vpn_egress_frames);
+    assert_eq!(0, snapshot.vpn_bytes);
+    assert_eq!(0, snapshot.vpn_egress_bytes);
+    assert_eq!(0, snapshot.vpn_data_bytes);
+    assert_eq!(0, snapshot.vpn_data_egress_bytes);
+    assert_eq!(0, snapshot.vpn_data_frames);
 }
 #[tokio::test]
 async fn adapter_stream_round_trip_records_metrics() {
@@ -1126,7 +1129,7 @@ async fn bridge_and_adapter_end_to_end_record_metrics() {
             .await
             .expect("ingress frame");
         if cell.header.class == VpnCellClassV1::Data {
-            received_payloads.push(cell.payload);
+            received_payloads.push(cell.into_payload());
         } else {
             assert_eq!(cell.header.class, VpnCellClassV1::Cover);
         }

@@ -24,11 +24,7 @@ fn trigger_decl_builds_typed_metadata() {
     assert_eq!(trigger.repeats, Repeats::Exactly(2));
     assert_eq!(
         trigger.authority,
-        Some(
-            AccountId::parse_encoded(authority_literal.as_str())
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .expect("authority literal"),
-        )
+        Some(AccountId::parse_encoded(authority_literal.as_str()).expect("authority literal"),)
     );
     assert!(!trigger.metadata.is_empty());
 }
@@ -133,18 +129,14 @@ fn trigger_decl_supports_structured_asset_data_filter() {
 }
 #[test]
 fn trigger_decl_supports_transfer_specific_asset_filter() {
-    use iroha_data_model::account::ParsedAccountId;
     let source_literal = sample_account_literal();
-    let source = AccountId::parse_encoded(source_literal.as_str())
-        .map(ParsedAccountId::into_account_id)
-        .expect("source account");
+    let source = AccountId::parse_encoded(source_literal.as_str()).expect("source account");
     let destination_literal = {
         let key_pair = iroha_crypto::KeyPair::try_random().expect("destination key");
         AccountId::new(key_pair.public_key().clone()).to_string()
     };
-    let destination = AccountId::parse_encoded(destination_literal.as_str())
-        .map(ParsedAccountId::into_account_id)
-        .expect("destination account");
+    let destination =
+        AccountId::parse_encoded(destination_literal.as_str()).expect("destination account");
     let asset_definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").expect("domain"),
         "rose".parse().expect("name"),
@@ -179,7 +171,7 @@ fn trigger_decl_supports_transfer_specific_asset_filter() {
 #[test]
 fn trigger_decl_supports_structured_data_filters_for_core_families() {
     use iroha_data_model::{
-        account::{AccountId, ParsedAccountId},
+        account::AccountId,
         events::{
             EventFilterBox,
             data::{
@@ -201,9 +193,7 @@ fn trigger_decl_supports_structured_data_filters_for_core_families() {
         trigger::TriggerId,
     };
     let account_literal = sample_account_literal();
-    let account = AccountId::parse_encoded(account_literal.as_str())
-        .map(ParsedAccountId::into_account_id)
-        .expect("account");
+    let account = AccountId::parse_encoded(account_literal.as_str()).expect("account");
     let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";
     let peer: PeerId = peer_literal.parse().expect("peer");
     let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");

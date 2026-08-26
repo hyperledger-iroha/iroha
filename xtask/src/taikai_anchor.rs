@@ -8,7 +8,7 @@ use std::{
     collections::BTreeMap,
     fs,
     io::ErrorKind,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 const ANCHOR_REQUEST_PREFIX: &str = "taikai-anchor-request-";
@@ -118,6 +118,20 @@ struct AnchorPaths {
     anchor_request: Option<PathBuf>,
     sentinel: Option<PathBuf>,
 }
+fn artifact_base_id<'a>(name: &'a str, prefix: &str, suffix: &str) -> Result<Option<&'a str>> {
+    let Some(base_id) = name
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_suffix(suffix))
+    else {
+        return Ok(None);
+    };
+    let mut components = Path::new(base_id).components();
+    ensure!(
+        matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none(),
+        "Taikai spool artifact `{name}` has unsafe base id `{base_id}`"
+    );
+    Ok(Some(base_id))
+}
 pub fn run_anchor_bundle(options: AnchorBundleOptions) -> Result<()> {
     let (entries, delivered, pending) =
         collect_anchor_entries(&options.spool_dir, options.copy_dir.as_deref())?;
@@ -160,59 +174,35 @@ fn collect_anchor_entries(
             Ok(value) => value,
             Err(_) => continue,
         };
-        if let Some(base) = name
-            .strip_prefix(ANCHOR_REQUEST_PREFIX)
-            .and_then(|rest| rest.strip_suffix(ANCHOR_REQUEST_SUFFIX))
-        {
+        if let Some(base) = artifact_base_id(&name, ANCHOR_REQUEST_PREFIX, ANCHOR_REQUEST_SUFFIX)? {
             entries.entry(base.to_string()).or_default().anchor_request = Some(entry.path());
             continue;
         }
-        if let Some(base) = name
-            .strip_prefix(SENTINEL_PREFIX)
-            .and_then(|rest| rest.strip_suffix(SENTINEL_SUFFIX))
-        {
+        if let Some(base) = artifact_base_id(&name, SENTINEL_PREFIX, SENTINEL_SUFFIX)? {
             entries.entry(base.to_string()).or_default().sentinel = Some(entry.path());
             continue;
         }
-        if let Some(base) = name
-            .strip_prefix(ENVELOPE_PREFIX)
-            .and_then(|rest| rest.strip_suffix(ENVELOPE_SUFFIX))
-        {
+        if let Some(base) = artifact_base_id(&name, ENVELOPE_PREFIX, ENVELOPE_SUFFIX)? {
             entries.entry(base.to_string()).or_default().envelope = Some(entry.path());
             continue;
         }
-        if let Some(base) = name
-            .strip_prefix(INDEXES_PREFIX)
-            .and_then(|rest| rest.strip_suffix(INDEXES_SUFFIX))
-        {
+        if let Some(base) = artifact_base_id(&name, INDEXES_PREFIX, INDEXES_SUFFIX)? {
             entries.entry(base.to_string()).or_default().indexes = Some(entry.path());
             continue;
         }
-        if let Some(base) = name
-            .strip_prefix(SSM_PREFIX)
-            .and_then(|rest| rest.strip_suffix(SSM_SUFFIX))
-        {
+        if let Some(base) = artifact_base_id(&name, SSM_PREFIX, SSM_SUFFIX)? {
             entries.entry(base.to_string()).or_default().ssm = Some(entry.path());
             continue;
         }
-        if let Some(base) = name
-            .strip_prefix(TRM_PREFIX)
-            .and_then(|rest| rest.strip_suffix(TRM_SUFFIX))
-        {
+        if let Some(base) = artifact_base_id(&name, TRM_PREFIX, TRM_SUFFIX)? {
             entries.entry(base.to_string()).or_default().trm = Some(entry.path());
             continue;
         }
-        if let Some(base) = name
-            .strip_prefix(TRM_STATE_PREFIX)
-            .and_then(|rest| rest.strip_suffix(TRM_STATE_SUFFIX))
-        {
+        if let Some(base) = artifact_base_id(&name, TRM_STATE_PREFIX, TRM_STATE_SUFFIX)? {
             entries.entry(base.to_string()).or_default().trm_state = Some(entry.path());
             continue;
         }
-        if let Some(base) = name
-            .strip_prefix(LINEAGE_PREFIX)
-            .and_then(|rest| rest.strip_suffix(LINEAGE_SUFFIX))
-        {
+        if let Some(base) = artifact_base_id(&name, LINEAGE_PREFIX, LINEAGE_SUFFIX)? {
             entries.entry(base.to_string()).or_default().lineage = Some(entry.path());
             continue;
         }
@@ -505,6 +495,26 @@ mod tests {
             std::fs::File::open(&out_path).expect("bundle output readable"),
         )?;
         assert!(value.get("signing").is_some(), "signing block missing");
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_artifact_base_id_that_escapes_copy_directory() -> Result<()> {
+        let dir = tempdir()?;
+        let spool = dir.path().join("taikai");
+        fs::create_dir_all(&spool)?;
+        let malicious_name = format!("{ANCHOR_REQUEST_PREFIX}..{ANCHOR_REQUEST_SUFFIX}");
+        fs::write(spool.join(&malicious_name), b"malicious")?;
+        let copy_dir = dir.path().join("bundle");
+
+        let error = collect_anchor_entries(&spool, Some(&copy_dir))
+            .expect_err("parent-directory base ids must be rejected");
+
+        assert!(error.to_string().contains("unsafe base id"));
+        assert!(
+            !dir.path().join(malicious_name).exists(),
+            "malicious artifact must not be copied outside the bundle root"
+        );
         Ok(())
     }
 }

@@ -260,7 +260,7 @@ impl Run for ManifestRevokeArgs {
         let uaid = self
             .uaid
             .parse()
-            .wrap_err("failed to parse UAID (expecting `uaid:<hex>` or a 64-hex digest)")?;
+            .wrap_err("failed to parse exact canonical UAID `uaid:<64-lowercase-hex>`")?;
         let dataspace = DataSpaceId::new(self.dataspace);
         let instruction = RevokeSpaceDirectoryManifest {
             uaid,
@@ -288,7 +288,7 @@ impl Run for ManifestExpireArgs {
         let uaid = self
             .uaid
             .parse()
-            .wrap_err("failed to parse UAID (expecting `uaid:<hex>` or a 64-hex digest)")?;
+            .wrap_err("failed to parse exact canonical UAID `uaid:<64-lowercase-hex>`")?;
         let dataspace = DataSpaceId::new(self.dataspace);
         let instruction = ExpireSpaceDirectoryManifest {
             uaid,
@@ -331,7 +331,7 @@ impl Run for ManifestFetchArgs {
 }
 #[derive(clap::Args, Debug)]
 pub struct ManifestScaffoldArgs {
-    /// Universal account identifier (`uaid:<hex>` or raw 64-hex digest, LSB=1).
+    /// Exact canonical universal account identifier (`uaid:<64-lowercase-hex>`, LSB=1).
     #[arg(long = "uaid", value_name = "UAID", required = true)]
     pub uaid: String,
     /// Dataspace identifier the manifest targets.
@@ -1246,31 +1246,70 @@ fn parse_quantity(value: &str, flag: &str) -> Result<Quantity> {
         .wrap_err_with(|| format!("{flag} must be a non-negative decimal quantity"))
 }
 fn parse_allowance_window(value: Option<&str>) -> Result<AllowanceWindow> {
-    value
-        .map(|raw| raw.trim().to_ascii_lowercase())
-        .map_or_else(
-            || Ok(AllowanceWindow::PerDay),
-            |raw| {
-                if raw.is_empty() || raw == "per-day" || raw == "perday" {
-                    Ok(AllowanceWindow::PerDay)
-                } else if raw == "per-minute" || raw == "perminute" {
-                    Ok(AllowanceWindow::PerMinute)
-                } else if raw == "per-slot" || raw == "perslot" {
-                    Ok(AllowanceWindow::PerSlot)
-                } else {
-                    Err(eyre!("invalid allowance window `{raw}`"))
-                }
-            },
-        )
+    value.map_or(Ok(AllowanceWindow::PerDay), |raw| match raw {
+        "per-day" => Ok(AllowanceWindow::PerDay),
+        "per-minute" => Ok(AllowanceWindow::PerMinute),
+        "per-slot" => Ok(AllowanceWindow::PerSlot),
+        _ => Err(eyre!(
+            "invalid allowance window `{raw}`; expected exactly `per-day`, `per-minute`, or `per-slot`"
+        )),
+    })
 }
 #[cfg(test)]
 mod quantity_tests {
     use super::*;
+
     #[test]
     fn allowance_cap_parser_rejects_negative_quantity() {
         let error = parse_quantity("-1", "--allow-max-amount")
             .expect_err("negative manifest cap must fail");
         assert!(error.to_string().contains("non-negative decimal quantity"));
+    }
+
+    #[test]
+    fn allowance_window_parser_accepts_only_exact_first_release_spellings() {
+        assert_eq!(
+            parse_allowance_window(None).expect("omitted window uses the documented default"),
+            AllowanceWindow::PerDay
+        );
+        for (literal, expected) in [
+            ("per-day", AllowanceWindow::PerDay),
+            ("per-minute", AllowanceWindow::PerMinute),
+            ("per-slot", AllowanceWindow::PerSlot),
+        ] {
+            assert_eq!(
+                parse_allowance_window(Some(literal)).expect("canonical allowance window"),
+                expected
+            );
+        }
+        for retired in [
+            "",
+            "perday",
+            "perminute",
+            "perslot",
+            "PerDay",
+            " per-day",
+            "per-day ",
+        ] {
+            parse_allowance_window(Some(retired))
+                .expect_err("allowance window aliases and normalized spellings must fail");
+        }
+    }
+
+    #[test]
+    fn amx_role_parser_accepts_only_exact_first_release_spellings() {
+        assert_eq!(
+            opt_amx_role(Some("initiator"), "--allow-role").expect("canonical initiator role"),
+            Some(AmxRole::Initiator)
+        );
+        assert_eq!(
+            opt_amx_role(Some("participant"), "--allow-role").expect("canonical participant role"),
+            Some(AmxRole::Participant)
+        );
+        for retired in ["Initiator", "PARTICIPANT", " initiator", "participant "] {
+            opt_amx_role(Some(retired), "--allow-role")
+                .expect_err("AMX role aliases and normalized spellings must fail");
+        }
     }
 }
 fn opt_program(value: Option<&str>, flag: &str) -> Result<Option<SmartContractId>> {
@@ -1299,7 +1338,7 @@ fn opt_asset(value: Option<&str>, flag: &str) -> Result<Option<AssetDefinitionId
 }
 fn opt_amx_role(value: Option<&str>, flag: &str) -> Result<Option<AmxRole>> {
     value
-        .map(|raw| match raw.trim().to_ascii_lowercase().as_str() {
+        .map(|raw| match raw {
             "initiator" => Ok(AmxRole::Initiator),
             "participant" => Ok(AmxRole::Participant),
             other => Err(eyre!("invalid {} role `{other}`", flag)),
@@ -1316,8 +1355,8 @@ fn update_scope_defaults(
     scope
 }
 fn parse_uaid_literal(raw: &str) -> Result<UniversalAccountId> {
-    UniversalAccountId::from_str(raw.trim())
-        .wrap_err("UAID literal must be `uaid:<hex>` or a 64-hex digest")
+    UniversalAccountId::from_str(raw)
+        .wrap_err("UAID literal must be exact canonical `uaid:<lowercase-hex>`")
 }
 #[derive(Debug, JsonSerialize)]
 struct ManifestAuditBundle {
@@ -1372,17 +1411,24 @@ mod tests {
     use tempfile::tempdir;
     use url::Url;
     #[test]
-    fn parse_uaid_literal_accepts_prefixed_or_raw() {
+    fn parse_uaid_literal_accepts_only_canonical_form() {
         let uaid = UniversalAccountId::from_hash(CryptoHash::new(b"cli-uaid"));
         let hex = uaid.as_hash().to_string();
-        let variants = [
+        let canonical = format!("uaid:{hex}");
+        assert_eq!(
+            parse_uaid_literal(&canonical).expect("parse canonical UAID literal"),
+            uaid
+        );
+        for literal in [
             hex.clone(),
-            format!("uaid:{hex}"),
             format!("UAID:{}", hex.to_uppercase()),
-        ];
-        for literal in variants {
-            let parsed = parse_uaid_literal(&literal).expect("parse UAID literal");
-            assert_eq!(parsed, uaid);
+            format!(" {canonical}"),
+            format!("{canonical} "),
+        ] {
+            assert!(
+                parse_uaid_literal(&literal).is_err(),
+                "noncanonical UAID must reject: {literal:?}"
+            );
         }
     }
     #[test]

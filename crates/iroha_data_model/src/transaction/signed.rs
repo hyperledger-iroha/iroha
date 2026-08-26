@@ -241,6 +241,7 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     pub struct MultisigSignature {
         /// Signer public key.
         pub signer: iroha_crypto::PublicKey,
@@ -262,6 +263,7 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     pub struct MultisigSignatures {
         /// Signature entries provided by multisig members.
         pub signatures: Vec<MultisigSignature>,
@@ -352,6 +354,7 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     #[display("{}", self.hash())]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct SignedTransaction {
@@ -1801,7 +1804,16 @@ impl iroha_version::codec::EncodeVersioned for SignedTransaction {
 }
 impl iroha_version::codec::DecodeVersioned for SignedTransaction {
     fn decode_all_versioned(input: &[u8]) -> iroha_version::error::Result<Self> {
-        iroha_version::codec::decode_exact_versioned(input)
+        let transaction: Self = iroha_version::codec::decode_exact_versioned(input)?;
+        let canonical = transaction
+            .encode_wire_v1()
+            .map_err(iroha_version::error::Error::from)?;
+        if canonical.as_slice() != input {
+            return Err(iroha_version::error::Error::from(
+                norito::core::Error::NonCanonicalEncoding,
+            ));
+        }
+        Ok(transaction)
     }
 }
 impl iroha_version::Version for TransactionEntrypoint {
@@ -1835,7 +1847,16 @@ impl iroha_version::codec::EncodeVersioned for TransactionEntrypoint {
 }
 impl iroha_version::codec::DecodeVersioned for TransactionEntrypoint {
     fn decode_all_versioned(input: &[u8]) -> iroha_version::error::Result<Self> {
-        iroha_version::codec::decode_exact_versioned(input)
+        let entrypoint: Self = iroha_version::codec::decode_exact_versioned(input)?;
+        let canonical = entrypoint
+            .encode_wire_v1()
+            .map_err(iroha_version::error::Error::from)?;
+        if canonical.as_slice() != input {
+            return Err(iroha_version::error::Error::from(
+                norito::core::Error::NonCanonicalEncoding,
+            ));
+        }
+        Ok(entrypoint)
     }
 }
 #[cfg(feature = "transparent_api")]

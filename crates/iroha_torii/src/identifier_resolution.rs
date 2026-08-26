@@ -760,8 +760,7 @@ mod tests {
             receipt_hash: hash_hex(fixture_str(payload, "receipt_hash")),
             uaid: UniversalAccountId::from_str(fixture_str(payload, "uaid")).expect("valid uaid"),
             account_id: AccountId::parse_encoded(fixture_str(payload, "account_id"))
-                .expect("valid account id")
-                .into_account_id(),
+                .expect("valid account id"),
         }
     }
     fn opening_payload_from_fixture(payload: &norito::json::Value) -> RamLfeOutputOpeningPayload {

@@ -1,18 +1,14 @@
-//! Build exact Soracloud uploaded-model and private-runtime request payloads for desktop clients.
+//! Build exact Soracloud uploaded-model registry request payloads for desktop clients.
 //! Private signing material is consumed only by this local helper; generated
 //! Torii request JSON contains signed provenance and never embeds the key.
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use iroha_crypto::{ExposedPrivateKey, Hash, PublicKey, Signature};
 use iroha_data_model::{
     account::AccountId,
     name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
-        SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
-        SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SORACLOUD_XOR_SCALE, SoraUploadedModelBundleV1,
-        SoraUploadedModelEncryptionRecipientV1, SoraUploadedModelKeyEncapsulationV1,
-        SoraUploadedModelKeyWrapAeadV1, SoraUploadedModelPricingPolicyV1,
-        SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
+        SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORACLOUD_XOR_SCALE, SoraUploadedModelBundleV1,
+        SoraUploadedModelPackageFormatV1, SoraUploadedModelPricingPolicyV1,
         encode_uploaded_model_bundle_register_provenance_payload,
         encode_uploaded_model_finalize_provenance_payload,
     },
@@ -23,22 +19,22 @@ use norito::{json, to_bytes};
 use std::{
     env, fs,
     io::{self, Read as _},
-    num::NonZeroU32,
     path::PathBuf,
-    str::FromStr as _,
 };
+const STAGE_UPLOAD_MANIFEST_SCHEMA_VERSION_V1: u16 = 1;
 #[derive(Debug, norito::json::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct SignUploadInput {
     manifest_path: String,
     authority: String,
     private_key: String,
 }
 #[derive(Debug, norito::json::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 #[allow(dead_code)]
 struct StageUploadManifest {
-    #[norito(default)]
     schema_version: u16,
-    #[norito(default)]
+    #[norito(required)]
     label: Option<String>,
     service_name: String,
     model_name: String,
@@ -47,30 +43,25 @@ struct StageUploadManifest {
     weight_version: String,
     family: String,
     modalities: Vec<String>,
-    runtime_format: String,
-    privacy_mode: String,
+    package_format: String,
     plaintext_root: String,
     sorafs_manifest_digest: String,
-    #[norito(default)]
+    #[norito(required)]
     source_path: Option<String>,
-    upload_recipient: StageUploadRecipient,
-    wrapped_bundle_key: StageWrappedBundleKey,
-    decryption_policy_ref: String,
     pricing_policy: StagePricingPolicy,
     compile_profile: StageCompileProfile,
     finalize: StageFinalize,
     chunks: Vec<StageChunk>,
-    #[norito(default)]
+    #[norito(required)]
     created_at: Option<String>,
 }
 #[derive(Debug, norito::json::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct StagePricingPolicy {
     storage_xor_nanos: u128,
-    compile_xor_nanos: u128,
-    runtime_step_xor_nanos: u128,
-    decrypt_release_xor_nanos: u128,
 }
 #[derive(Debug, norito::json::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct StageCompileProfile {
     family: String,
     quantization: String,
@@ -82,40 +73,17 @@ struct StageCompileProfile {
     execution_policy: String,
 }
 #[derive(Debug, norito::json::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct StageFinalize {
     dataset_ref: String,
 }
 #[derive(Debug, norito::json::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 struct StageChunk {
     ordinal: u32,
     offset_bytes: u64,
     plaintext_len: u32,
-    key_id: String,
-    key_version: u32,
-    nonce_base64: String,
     ciphertext_path: String,
-    #[norito(default)]
-    aad_seed: Option<String>,
-}
-#[derive(Debug, norito::json::JsonDeserialize)]
-struct StageUploadRecipient {
-    key_id: String,
-    key_version: u32,
-    kem: String,
-    aead: String,
-    public_key_bytes_base64: String,
-    public_key_fingerprint: String,
-}
-#[derive(Debug, norito::json::JsonDeserialize)]
-struct StageWrappedBundleKey {
-    recipient_key_id: String,
-    recipient_key_version: u32,
-    kem: String,
-    aead: String,
-    ephemeral_public_key_base64: String,
-    nonce_base64: String,
-    wrapped_key_ciphertext_base64: String,
-    aad_digest: String,
 }
 #[derive(Debug, norito::json::JsonSerialize)]
 struct UploadedModelBundleInitPayload {
@@ -169,86 +137,22 @@ struct MutationSigner {
     private_key: ExposedPrivateKey,
     public_key: PublicKey,
 }
-type UploadedModelBundleRootTuple<'a> = (
-    &'a str,
-    &'a str,
-    &'a str,
-    &'a str,
-    Vec<String>,
-    Hash,
-    SoraUploadedModelRuntimeFormatV1,
-    ManifestDigest,
-    u64,
-    u64,
-    Hash,
-    SoraUploadedModelEncryptionRecipientV1,
-    SoraUploadedModelWrappedKeyV1,
-    SoraUploadedModelPricingPolicyV1,
-    &'a str,
-);
-/// Canonical preimage for uploaded-model bundle roots.
-///
-/// This keeps the historical flat-tuple field order without depending on
-/// Norito's current tuple arity limit.
-struct UploadedModelBundleRootPayload<'a> {
-    service_name: &'a str,
-    model_id: &'a str,
-    weight_version: &'a str,
-    family: &'a str,
-    modalities: &'a Vec<String>,
+/// Canonical V1 preimage for uploaded-model bundle roots.
+#[derive(norito::Encode)]
+struct UploadedModelBundleRootPreimageV1 {
+    service_name: String,
+    model_id: String,
+    weight_version: String,
+    family: String,
+    modalities: Vec<String>,
     plaintext_root: Hash,
-    runtime_format: SoraUploadedModelRuntimeFormatV1,
+    package_format: SoraUploadedModelPackageFormatV1,
     sorafs_manifest_digest: ManifestDigest,
+    chunk_count: u32,
     plaintext_bytes: u64,
     ciphertext_bytes: u64,
     chunk_manifest_root: Hash,
-    upload_recipient: &'a SoraUploadedModelEncryptionRecipientV1,
-    wrapped_bundle_key: &'a SoraUploadedModelWrappedKeyV1,
-    pricing_policy: &'a SoraUploadedModelPricingPolicyV1,
-    decryption_policy_ref: &'a str,
-}
-impl norito::core::NoritoSerialize for UploadedModelBundleRootPayload<'_> {
-    fn schema_hash() -> [u8; 16]
-    where
-        Self: Sized,
-    {
-        norito::core::type_name_schema_hash::<UploadedModelBundleRootTuple<'static>>()
-    }
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
-        let current = norito::core::get_decode_flags();
-        let defaults = norito::core::default_encode_flags();
-        let dynamic_mask = norito::core::header_flags::PACKED_SEQ;
-        let static_defaults = defaults & !dynamic_mask;
-        let merged = if current == 0 {
-            defaults
-        } else {
-            let current_dynamic = current & dynamic_mask;
-            let current_static = current & !dynamic_mask;
-            let effective_static = if current_static == 0 {
-                static_defaults
-            } else {
-                current_static | static_defaults
-            };
-            current_dynamic | effective_static
-        };
-        let _guard = norito::core::DecodeFlagsGuard::enter(merged);
-        serialize_tuple_field(writer, &self.service_name)?;
-        serialize_tuple_field(writer, &self.model_id)?;
-        serialize_tuple_field(writer, &self.weight_version)?;
-        serialize_tuple_field(writer, &self.family)?;
-        serialize_tuple_field(writer, self.modalities)?;
-        serialize_tuple_field(writer, &self.plaintext_root)?;
-        serialize_tuple_field(writer, &self.runtime_format)?;
-        serialize_tuple_field(writer, &self.sorafs_manifest_digest)?;
-        serialize_tuple_field(writer, &self.plaintext_bytes)?;
-        serialize_tuple_field(writer, &self.ciphertext_bytes)?;
-        serialize_tuple_field(writer, &self.chunk_manifest_root)?;
-        serialize_tuple_field(writer, self.upload_recipient)?;
-        serialize_tuple_field(writer, self.wrapped_bundle_key)?;
-        serialize_tuple_field(writer, self.pricing_policy)?;
-        serialize_tuple_field(writer, &self.decryption_policy_ref)?;
-        Ok(())
-    }
+    pricing_policy: SoraUploadedModelPricingPolicyV1,
 }
 #[derive(Clone, Debug)]
 struct DerivedChunk {
@@ -260,6 +164,7 @@ struct DerivedChunk {
 }
 struct DerivedUploadBundle {
     bundle: SoraUploadedModelBundleV1,
+    #[cfg(test)]
     chunks: Vec<DerivedChunk>,
     bundle_root: Hash,
     chunk_manifest_root: Hash,
@@ -302,7 +207,7 @@ fn run() -> Result<(), String> {
                 bundle_root: derived.bundle_root,
                 sorafs_manifest_digest: derived.bundle.sorafs_manifest_digest,
                 chunk_manifest_root: derived.chunk_manifest_root,
-                chunk_count: u32::try_from(derived.chunks.len()).unwrap_or(u32::MAX),
+                chunk_count: derived.bundle.chunk_count,
                 plaintext_bytes: derived.plaintext_bytes,
                 ciphertext_bytes: derived.ciphertext_bytes,
                 request,
@@ -383,7 +288,6 @@ where
 }
 fn parse_signer(authority: &str, private_key: &str) -> Result<MutationSigner, String> {
     let authority = AccountId::parse_encoded(authority)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| format!("invalid authority account id: {err}"))?;
     let private_key = private_key
         .parse::<ExposedPrivateKey>()
@@ -409,23 +313,38 @@ impl MutationSigner {
 fn load_stage_manifest(manifest_path: &str) -> Result<StageUploadManifest, String> {
     let raw = fs::read_to_string(manifest_path)
         .map_err(|err| format!("failed to read stage manifest `{manifest_path}`: {err}"))?;
-    let manifest: StageUploadManifest = json::from_str(&raw)
-        .map_err(|err| format!("failed to decode stage manifest `{manifest_path}`: {err}"))?;
+    decode_stage_manifest(&raw)
+        .map_err(|err| format!("failed to decode stage manifest `{manifest_path}`: {err}"))
+}
+fn decode_stage_manifest(raw: &str) -> Result<StageUploadManifest, String> {
+    let manifest: StageUploadManifest =
+        json::from_str(raw).map_err(|err| format!("invalid JSON schema: {err}"))?;
+    validate_stage_manifest_v1(&manifest)?;
     if manifest.chunks.is_empty() {
         return Err("stage manifest must include at least one chunk".to_string());
     }
     Ok(manifest)
+}
+fn validate_stage_manifest_v1(manifest: &StageUploadManifest) -> Result<(), String> {
+    if manifest.schema_version != STAGE_UPLOAD_MANIFEST_SCHEMA_VERSION_V1 {
+        return Err(format!(
+            "stage manifest schema_version must equal {STAGE_UPLOAD_MANIFEST_SCHEMA_VERSION_V1}, got {}",
+            manifest.schema_version
+        ));
+    }
+    Ok(())
 }
 fn xor_quantity_from_nanos(value: u128) -> Result<Quantity, String> {
     Quantity::from_canonical_numeric(Numeric::new(value, SORACLOUD_XOR_SCALE))
         .map_err(|error| format!("invalid nano-XOR storage price: {error}"))
 }
 fn derive_upload_bundle(manifest: &StageUploadManifest) -> Result<DerivedUploadBundle, String> {
+    validate_stage_manifest_v1(manifest)?;
     let service_name = parse_name(&manifest.service_name, "service_name")?;
-    let plaintext_root = parse_hash_like(&manifest.plaintext_root);
+    let plaintext_root = parse_hash(&manifest.plaintext_root, "plaintext_root")?;
     let sorafs_manifest_digest = parse_manifest_digest(&manifest.sorafs_manifest_digest)?;
     let compile_profile_hash = hash_encoded(&(
-        "soracloud-upload-compile-profile",
+        "soracloud-uploaded-model-compile-profile-fields-v1",
         manifest.compile_profile.family.as_str(),
         manifest.compile_profile.quantization.as_str(),
         manifest.compile_profile.opset_version.as_str(),
@@ -435,13 +354,10 @@ fn derive_upload_bundle(manifest: &StageUploadManifest) -> Result<DerivedUploadB
         manifest.compile_profile.fhe_param_set.as_str(),
         manifest.compile_profile.execution_policy.as_str(),
     ))?;
-    let upload_recipient = parse_upload_recipient(&manifest.upload_recipient)?;
-    let wrapped_bundle_key = parse_wrapped_bundle_key(&manifest.wrapped_bundle_key)?;
     let mut chunks = Vec::with_capacity(manifest.chunks.len());
     let mut plaintext_bytes = 0_u64;
     let mut ciphertext_bytes = 0_u64;
     for chunk in &manifest.chunks {
-        validate_chunk_encryption_metadata(chunk)?;
         let ciphertext_path = PathBuf::from(&chunk.ciphertext_path);
         let ciphertext = fs::read(&ciphertext_path).map_err(|err| {
             format!(
@@ -452,8 +368,12 @@ fn derive_upload_bundle(manifest: &StageUploadManifest) -> Result<DerivedUploadB
         let ciphertext_len = u32::try_from(ciphertext.len())
             .map_err(|_| format!("ciphertext chunk `{}` exceeds u32 length", chunk.ordinal))?;
         let ciphertext_hash = Hash::new(ciphertext.as_slice());
-        plaintext_bytes = plaintext_bytes.saturating_add(u64::from(chunk.plaintext_len));
-        ciphertext_bytes = ciphertext_bytes.saturating_add(u64::from(ciphertext_len));
+        plaintext_bytes = plaintext_bytes
+            .checked_add(u64::from(chunk.plaintext_len))
+            .ok_or_else(|| "stage manifest plaintext byte total exceeds u64".to_string())?;
+        ciphertext_bytes = ciphertext_bytes
+            .checked_add(u64::from(ciphertext_len))
+            .ok_or_else(|| "stage manifest ciphertext byte total exceeds u64".to_string())?;
         chunks.push(DerivedChunk {
             ordinal: chunk.ordinal,
             offset_bytes: chunk.offset_bytes,
@@ -463,13 +383,10 @@ fn derive_upload_bundle(manifest: &StageUploadManifest) -> Result<DerivedUploadB
         });
     }
     chunks.sort_by_key(|chunk| chunk.ordinal);
+    let chunk_count = u32::try_from(chunks.len())
+        .map_err(|_| "stage manifest chunk count exceeds u32".to_string())?;
     let chunk_manifest_root = compute_chunk_manifest_root(&chunks)?;
-    let runtime_format = parse_runtime_format(&manifest.runtime_format);
-    let _legacy_private_runtime_pricing = (
-        manifest.pricing_policy.compile_xor_nanos,
-        manifest.pricing_policy.runtime_step_xor_nanos,
-        manifest.pricing_policy.decrypt_release_xor_nanos,
-    );
+    let package_format = parse_package_format(&manifest.package_format)?;
     let pricing_policy = SoraUploadedModelPricingPolicyV1 {
         storage_price: xor_quantity_from_nanos(manifest.pricing_policy.storage_xor_nanos)?,
     };
@@ -477,13 +394,12 @@ fn derive_upload_bundle(manifest: &StageUploadManifest) -> Result<DerivedUploadB
         &service_name,
         manifest,
         plaintext_root,
-        runtime_format,
+        package_format,
         sorafs_manifest_digest,
+        chunk_count,
         plaintext_bytes,
         ciphertext_bytes,
         chunk_manifest_root,
-        &upload_recipient,
-        &wrapped_bundle_key,
         &pricing_policy,
     )?;
     let bundle = SoraUploadedModelBundleV1 {
@@ -494,18 +410,18 @@ fn derive_upload_bundle(manifest: &StageUploadManifest) -> Result<DerivedUploadB
         family: manifest.family.clone(),
         modalities: manifest.modalities.clone(),
         plaintext_root,
-        runtime_format,
+        package_format,
         bundle_root,
         sorafs_manifest_digest,
-        chunk_count: u32::try_from(chunks.len()).unwrap_or(u32::MAX),
+        chunk_count,
         plaintext_bytes,
         ciphertext_bytes,
         chunk_manifest_root,
-        upload_recipient,
-        wrapped_bundle_key,
         pricing_policy,
-        decryption_policy_ref: manifest.decryption_policy_ref.clone(),
     };
+    bundle
+        .validate()
+        .map_err(|error| format!("invalid V1 uploaded-model bundle: {error}"))?;
     let weight_artifact_hash = hash_encoded(&(
         "uploaded-model-weight",
         manifest.service_name.as_str(),
@@ -516,9 +432,9 @@ fn derive_upload_bundle(manifest: &StageUploadManifest) -> Result<DerivedUploadB
         bundle_root,
     ))?;
     let training_config_hash = hash_encoded(&(
-        "private-compile-profile",
+        "uploaded-model-compile-profile-v1",
         compile_profile_hash,
-        manifest.runtime_format.as_str(),
+        manifest.package_format.as_str(),
     ))?;
     let reproducibility_hash = hash_encoded(&(
         "chunk-reproducibility",
@@ -546,6 +462,7 @@ fn derive_upload_bundle(manifest: &StageUploadManifest) -> Result<DerivedUploadB
     ))?;
     Ok(DerivedUploadBundle {
         bundle,
+        #[cfg(test)]
         chunks,
         bundle_root,
         chunk_manifest_root,
@@ -564,47 +481,33 @@ where
     let encoded = to_bytes(value).map_err(|err| format!("failed to encode hash payload: {err}"))?;
     Ok(Hash::new(encoded))
 }
-fn serialize_tuple_field(
-    writer: &mut norito::core::Encoder<'_>,
-    value: &dyn norito::core::NoritoSerialize,
-) -> Result<(), norito::Error> {
-    let mut payload = Vec::new();
-    norito::core::serialize_to_buffer(value, &mut payload)?;
-    let len = u64::try_from(payload.len()).map_err(|_| norito::Error::LengthMismatch)?;
-    norito::core::write_len(writer, len)?;
-    writer.write_all(&payload)?;
-    Ok(())
-}
 #[allow(clippy::too_many_arguments)]
 fn compute_bundle_root(
     service_name: &Name,
     manifest: &StageUploadManifest,
     plaintext_root: Hash,
-    runtime_format: SoraUploadedModelRuntimeFormatV1,
+    package_format: SoraUploadedModelPackageFormatV1,
     sorafs_manifest_digest: ManifestDigest,
+    chunk_count: u32,
     plaintext_bytes: u64,
     ciphertext_bytes: u64,
     chunk_manifest_root: Hash,
-    upload_recipient: &SoraUploadedModelEncryptionRecipientV1,
-    wrapped_bundle_key: &SoraUploadedModelWrappedKeyV1,
     pricing_policy: &SoraUploadedModelPricingPolicyV1,
 ) -> Result<Hash, String> {
-    hash_encoded(&UploadedModelBundleRootPayload {
-        service_name: service_name.as_ref(),
-        model_id: manifest.model_id.as_str(),
-        weight_version: manifest.weight_version.as_str(),
-        family: manifest.family.as_str(),
-        modalities: &manifest.modalities,
+    hash_encoded(&UploadedModelBundleRootPreimageV1 {
+        service_name: service_name.as_ref().to_owned(),
+        model_id: manifest.model_id.clone(),
+        weight_version: manifest.weight_version.clone(),
+        family: manifest.family.clone(),
+        modalities: manifest.modalities.clone(),
         plaintext_root,
-        runtime_format,
+        package_format,
         sorafs_manifest_digest,
+        chunk_count,
         plaintext_bytes,
         ciphertext_bytes,
         chunk_manifest_root,
-        upload_recipient,
-        wrapped_bundle_key,
-        pricing_policy,
-        decryption_policy_ref: manifest.decryption_policy_ref.as_str(),
+        pricing_policy: pricing_policy.clone(),
     })
 }
 fn compute_chunk_manifest_root(chunks: &[DerivedChunk]) -> Result<Hash, String> {
@@ -628,122 +531,88 @@ fn parse_name(raw: &str, field: &str) -> Result<Name, String> {
     raw.parse::<Name>()
         .map_err(|err| format!("invalid {field}: {err}"))
 }
-fn parse_runtime_format(raw: &str) -> SoraUploadedModelRuntimeFormatV1 {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "hf" | "hf-safetensors" | "huggingface-safetensors" | "hugging_face_safetensors" => {
-            SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors
+fn parse_package_format(raw: &str) -> Result<SoraUploadedModelPackageFormatV1, String> {
+    match raw {
+        "NormalizedHuggingFaceSafetensorsV1" => {
+            Ok(SoraUploadedModelPackageFormatV1::NormalizedHuggingFaceSafetensorsV1)
         }
-        "deterministic-quantized-cpu-v1" | "deterministic_quantized_cpu_v1" | "cpu-v1" => {
-            SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1
-        }
-        _ => SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors,
+        _ => Err(format!(
+            "invalid package_format `{raw}`; expected `NormalizedHuggingFaceSafetensorsV1`"
+        )),
     }
 }
-fn parse_uploaded_model_kem(raw: &str) -> SoraUploadedModelKeyEncapsulationV1 {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "x25519-hkdf-sha256" | "x25519_hkdf_sha256" | "x25519hkdfsha256" => {
-            SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256
-        }
-        _ => SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256,
+fn parse_hash(raw: &str, field: &str) -> Result<Hash, String> {
+    let hash = raw
+        .parse::<Hash>()
+        .map_err(|err| format!("invalid {field}: {err}"))?;
+    if hash.to_string() != raw {
+        return Err(format!(
+            "invalid {field}: expected canonical lowercase 64-character hexadecimal"
+        ));
     }
-}
-fn parse_uploaded_model_aead(raw: &str) -> SoraUploadedModelKeyWrapAeadV1 {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "aes-256-gcm" | "aes_256_gcm" | "aes256gcm" => SoraUploadedModelKeyWrapAeadV1::Aes256Gcm,
-        _ => SoraUploadedModelKeyWrapAeadV1::Aes256Gcm,
-    }
-}
-fn parse_upload_recipient(
-    recipient: &StageUploadRecipient,
-) -> Result<SoraUploadedModelEncryptionRecipientV1, String> {
-    let key_version = NonZeroU32::new(recipient.key_version)
-        .ok_or_else(|| "upload recipient key_version must be greater than zero".to_string())?;
-    let public_key_bytes = BASE64
-        .decode(recipient.public_key_bytes_base64.as_bytes())
-        .map_err(|err| format!("failed to decode upload recipient public key: {err}"))?;
-    Ok(SoraUploadedModelEncryptionRecipientV1 {
-        schema_version: SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
-        key_id: recipient.key_id.clone(),
-        key_version,
-        kem: parse_uploaded_model_kem(&recipient.kem),
-        aead: parse_uploaded_model_aead(&recipient.aead),
-        public_key_fingerprint: parse_hash_like(&recipient.public_key_fingerprint),
-        public_key_bytes,
-    })
-}
-fn parse_wrapped_bundle_key(
-    wrapped_key: &StageWrappedBundleKey,
-) -> Result<SoraUploadedModelWrappedKeyV1, String> {
-    let recipient_key_version =
-        NonZeroU32::new(wrapped_key.recipient_key_version).ok_or_else(|| {
-            "wrapped bundle key recipient_key_version must be greater than zero".to_string()
-        })?;
-    let ephemeral_public_key = BASE64
-        .decode(wrapped_key.ephemeral_public_key_base64.as_bytes())
-        .map_err(|err| format!("failed to decode wrapped bundle key ephemeral key: {err}"))?;
-    let nonce = BASE64
-        .decode(wrapped_key.nonce_base64.as_bytes())
-        .map_err(|err| format!("failed to decode wrapped bundle key nonce: {err}"))?;
-    let wrapped_key_ciphertext = BASE64
-        .decode(wrapped_key.wrapped_key_ciphertext_base64.as_bytes())
-        .map_err(|err| format!("failed to decode wrapped bundle key ciphertext: {err}"))?;
-    Ok(SoraUploadedModelWrappedKeyV1 {
-        schema_version: SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
-        recipient_key_id: wrapped_key.recipient_key_id.clone(),
-        recipient_key_version,
-        kem: parse_uploaded_model_kem(&wrapped_key.kem),
-        aead: parse_uploaded_model_aead(&wrapped_key.aead),
-        ephemeral_public_key,
-        nonce,
-        ciphertext_hash: Hash::new(wrapped_key_ciphertext.as_slice()),
-        wrapped_key_ciphertext,
-        aad_digest: parse_hash_like(&wrapped_key.aad_digest),
-    })
-}
-fn parse_hash_like(raw: &str) -> Hash {
-    Hash::from_str(raw.trim()).unwrap_or_else(|_| Hash::new(raw.trim().as_bytes()))
+    Ok(hash)
 }
 fn parse_manifest_digest(raw: &str) -> Result<ManifestDigest, String> {
-    let trimmed = raw.trim();
-    let hex_body = trimmed.strip_prefix("0x").unwrap_or(trimmed);
-    match hex::decode(hex_body) {
-        Ok(bytes) => {
-            let digest = <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| {
-                format!(
-                    "sorafs_manifest_digest must be 32 bytes, decoded {} bytes",
-                    bytes.len()
-                )
-            })?;
-            Ok(ManifestDigest::new(digest))
-        }
-        Err(_) => {
-            let digest = Hash::new(trimmed.as_bytes());
-            Ok(ManifestDigest::new(*digest.as_ref()))
-        }
+    if raw.len() != 64
+        || !raw
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(
+            "sorafs_manifest_digest must be canonical lowercase 64-character hexadecimal"
+                .to_string(),
+        );
     }
-}
-fn validate_chunk_encryption_metadata(chunk: &StageChunk) -> Result<(), String> {
-    if chunk.key_id.trim().is_empty() {
-        return Err(format!("chunk {} key_id must not be empty", chunk.ordinal));
-    }
-    NonZeroU32::new(chunk.key_version).ok_or_else(|| {
-        format!(
-            "chunk {} key_version must be greater than zero",
-            chunk.ordinal
-        )
-    })?;
-    BASE64
-        .decode(chunk.nonce_base64.as_bytes())
-        .map_err(|err| format!("failed to decode chunk {} nonce: {err}", chunk.ordinal))?;
-    if let Some(seed) = &chunk.aad_seed {
-        let _ = Hash::new(seed.as_bytes());
-    }
-    Ok(())
+    let bytes = hex::decode(raw)
+        .map_err(|err| format!("failed to decode sorafs_manifest_digest: {err}"))?;
+    let digest = <[u8; 32]>::try_from(bytes.as_slice())
+        .map_err(|_| "sorafs_manifest_digest must decode to exactly 32 bytes".to_string())?;
+    Ok(ManifestDigest::new(digest))
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+    fn exact_stage_manifest_json() -> String {
+        let plaintext_root = Hash::new(b"plaintext-root");
+        let manifest_digest = hex::encode([0xA5_u8; 32]);
+        format!(
+            r#"{{
+                "schema_version":1,
+                "label":null,
+                "service_name":"service",
+                "model_name":"model",
+                "model_id":"model-id",
+                "artifact_id":"artifact-id",
+                "weight_version":"weights-v1",
+                "family":"test-family",
+                "modalities":["text"],
+                "package_format":"NormalizedHuggingFaceSafetensorsV1",
+                "plaintext_root":"{plaintext_root}",
+                "sorafs_manifest_digest":"{manifest_digest}",
+                "source_path":null,
+                "pricing_policy":{{"storage_xor_nanos":11}},
+                "compile_profile":{{
+                    "family":"test-family",
+                    "quantization":"q8",
+                    "opset_version":"1",
+                    "max_context":2048,
+                    "max_images":1,
+                    "vision_patch_policy":"tiles",
+                    "fhe_param_set":"fhe-v1",
+                    "execution_policy":"deterministic"
+                }},
+                "finalize":{{"dataset_ref":"dataset-ref"}},
+                "chunks":[{{
+                    "ordinal":0,
+                    "offset_bytes":0,
+                    "plaintext_len":15,
+                    "ciphertext_path":"chunk.bin"
+                }}],
+                "created_at":null
+            }}"#,
+        )
+    }
     fn test_mutation_signer() -> MutationSigner {
         let private_key = ExposedPrivateKey(
             iroha_crypto::PrivateKey::from_bytes(iroha_crypto::Algorithm::Ed25519, &[0x42; 32])
@@ -802,13 +671,177 @@ mod tests {
         assert_eq!(error, "authority account id does not match the private key");
     }
     #[test]
-    fn derive_upload_bundle_hashes_bundle_root_without_tuple_arity_regression() {
+    fn sign_upload_input_requires_its_exact_first_release_fields() {
+        let exact = r#"{"manifest_path":"manifest.json","authority":"authority","private_key":"private-key"}"#;
+        json::from_str::<SignUploadInput>(exact).expect("exact signer input");
+        for invalid in [
+            r#"{"authority":"authority","private_key":"private-key"}"#,
+            r#"{"manifest_path":"manifest.json","authority":"authority"}"#,
+            r#"{"manifest_path":"manifest.json","authority":"authority","private_key":"private-key","legacy_token":"secret"}"#,
+        ] {
+            assert!(
+                json::from_str::<SignUploadInput>(invalid).is_err(),
+                "non-exact signer input must be rejected: {invalid}"
+            );
+        }
+    }
+    #[test]
+    fn stage_manifest_requires_explicit_nullable_fields_and_schema_version() {
+        let exact = exact_stage_manifest_json();
+        let manifest = decode_stage_manifest(&exact).expect("exact V1 stage manifest");
+        assert_eq!(
+            manifest.schema_version,
+            STAGE_UPLOAD_MANIFEST_SCHEMA_VERSION_V1
+        );
+        assert!(manifest.label.is_none());
+        assert!(manifest.source_path.is_none());
+        assert!(manifest.created_at.is_none());
+
+        for field_fragment in [
+            "\"schema_version\":1,",
+            "\"label\":null,",
+            "\"source_path\":null,",
+            ",\n                \"created_at\":null",
+        ] {
+            let invalid = exact.replacen(field_fragment, "", 1);
+            assert!(
+                decode_stage_manifest(&invalid).is_err(),
+                "missing canonical field `{field_fragment}` must be rejected"
+            );
+        }
+    }
+    #[test]
+    fn stage_manifest_accepts_only_schema_v1() {
+        let exact = exact_stage_manifest_json();
+        for version in [0_u16, 2, u16::MAX] {
+            let invalid = exact.replacen(
+                "\"schema_version\":1",
+                &format!("\"schema_version\":{version}"),
+                1,
+            );
+            let error = decode_stage_manifest(&invalid)
+                .expect_err("non-V1 stage schema version must be rejected");
+            assert!(error.contains("schema_version must equal 1"), "{error}");
+        }
+    }
+    #[test]
+    fn stage_manifest_and_nested_objects_reject_unknown_fields() {
+        let exact = exact_stage_manifest_json();
+        let replacements = [
+            ("{", "{\"retired_top_level\":true,"),
+            (
+                "\"pricing_policy\":{",
+                "\"pricing_policy\":{\"retired\":true,",
+            ),
+            (
+                "\"compile_profile\":{",
+                "\"compile_profile\":{\"retired\":true,",
+            ),
+            ("\"finalize\":{", "\"finalize\":{\"retired\":true,"),
+            ("\"chunks\":[{", "\"chunks\":[{\"retired\":true,"),
+        ];
+        for (target, replacement) in replacements {
+            let invalid = exact.replacen(target, replacement, 1);
+            assert!(
+                decode_stage_manifest(&invalid).is_err(),
+                "unknown field injected through `{target}` must be rejected"
+            );
+        }
+    }
+    #[test]
+    fn stage_pricing_policy_accepts_only_the_v1_storage_price_input() {
+        let policy: StagePricingPolicy =
+            json::from_str(r#"{"storage_xor_nanos":11}"#).expect("exact V1 pricing policy");
+        assert_eq!(policy.storage_xor_nanos, 11);
+
+        for retired_field in [
+            "compile_xor_nanos",
+            "runtime_step_xor_nanos",
+            "decrypt_release_xor_nanos",
+        ] {
+            let raw = format!(r#"{{"storage_xor_nanos":11,"{retired_field}":22}}"#);
+            assert!(
+                json::from_str::<StagePricingPolicy>(&raw).is_err(),
+                "retired pricing field `{retired_field}` must be rejected"
+            );
+        }
+    }
+    #[test]
+    fn package_format_parser_accepts_only_current_v1_label() {
+        assert_eq!(
+            parse_package_format("NormalizedHuggingFaceSafetensorsV1")
+                .expect("normalized safetensors package format"),
+            SoraUploadedModelPackageFormatV1::NormalizedHuggingFaceSafetensorsV1
+        );
+        for invalid in [
+            "hf",
+            "hf-safetensors",
+            "huggingfacesafetensors",
+            "HuggingFaceSafetensors",
+            " NormalizedHuggingFaceSafetensorsV1",
+            "NormalizedHuggingFaceSafetensorsV1 ",
+            "DeterministicQuantizedCpuV1",
+            "unknown",
+        ] {
+            assert!(
+                parse_package_format(invalid).is_err(),
+                "package format alias `{invalid}` must be rejected"
+            );
+        }
+    }
+    #[test]
+    fn hash_parser_requires_exact_canonical_hash_text() {
+        let expected = Hash::prehashed([0xAB; Hash::LENGTH]);
+        let canonical = expected.to_string();
+        assert_eq!(
+            parse_hash(&canonical, "digest").expect("canonical hash"),
+            expected
+        );
+        for invalid in [
+            format!(" {canonical}"),
+            format!("{canonical} "),
+            format!("0x{canonical}"),
+            canonical.to_ascii_uppercase(),
+            canonical[..canonical.len() - 2].to_string(),
+            "arbitrary-text".to_string(),
+        ] {
+            assert!(
+                parse_hash(&invalid, "digest").is_err(),
+                "noncanonical hash `{invalid}` must be rejected"
+            );
+        }
+    }
+    #[test]
+    fn manifest_digest_parser_requires_exact_lowercase_hex() {
+        let canonical = hex::encode([0xA5_u8; 32]);
+        assert_eq!(
+            parse_manifest_digest(&canonical)
+                .expect("canonical manifest digest")
+                .as_bytes(),
+            &[0xA5; 32]
+        );
+        for invalid in [
+            format!(" {canonical}"),
+            format!("{canonical} "),
+            format!("0x{canonical}"),
+            canonical.to_ascii_uppercase(),
+            canonical[..canonical.len() - 2].to_string(),
+            format!("{}zz", &canonical[..canonical.len() - 2]),
+            "manifest-name".to_string(),
+        ] {
+            assert!(
+                parse_manifest_digest(&invalid).is_err(),
+                "noncanonical manifest digest `{invalid}` must be rejected"
+            );
+        }
+    }
+    #[test]
+    fn derive_upload_bundle_hashes_the_direct_v1_preimage() {
         let tempdir = tempdir().expect("create temp dir");
         let chunk_path = tempdir.path().join("chunk.bin");
         fs::write(&chunk_path, b"ciphertext-chunk").expect("write ciphertext chunk");
-        let recipient_public_key_bytes = [7_u8; 32];
         let manifest = StageUploadManifest {
-            schema_version: 1,
+            schema_version: STAGE_UPLOAD_MANIFEST_SCHEMA_VERSION_V1,
             label: None,
             service_name: "service".to_string(),
             model_name: "model".to_string(),
@@ -817,36 +850,12 @@ mod tests {
             weight_version: "weights-v1".to_string(),
             family: "test-family".to_string(),
             modalities: vec!["text".to_string()],
-            runtime_format: "hf".to_string(),
-            privacy_mode: "private".to_string(),
-            plaintext_root: "plaintext-root".to_string(),
+            package_format: "NormalizedHuggingFaceSafetensorsV1".to_string(),
+            plaintext_root: Hash::new(b"plaintext-root").to_string(),
             sorafs_manifest_digest: hex::encode([0xA5_u8; 32]),
             source_path: None,
-            upload_recipient: StageUploadRecipient {
-                key_id: "recipient-key".to_string(),
-                key_version: 1,
-                kem: "x25519-hkdf-sha256".to_string(),
-                aead: "aes-256-gcm".to_string(),
-                public_key_bytes_base64: BASE64.encode(recipient_public_key_bytes),
-                public_key_fingerprint: Hash::new(recipient_public_key_bytes.as_slice())
-                    .to_string(),
-            },
-            wrapped_bundle_key: StageWrappedBundleKey {
-                recipient_key_id: "recipient-key".to_string(),
-                recipient_key_version: 1,
-                kem: "x25519-hkdf-sha256".to_string(),
-                aead: "aes-256-gcm".to_string(),
-                ephemeral_public_key_base64: BASE64.encode([9_u8; 32]),
-                nonce_base64: BASE64.encode([11_u8; 12]),
-                wrapped_key_ciphertext_base64: BASE64.encode([13_u8; 48]),
-                aad_digest: "wrapped-key-aad".to_string(),
-            },
-            decryption_policy_ref: "policy-ref".to_string(),
             pricing_policy: StagePricingPolicy {
                 storage_xor_nanos: 11,
-                compile_xor_nanos: 22,
-                runtime_step_xor_nanos: 33,
-                decrypt_release_xor_nanos: 44,
             },
             compile_profile: StageCompileProfile {
                 family: "test-family".to_string(),
@@ -865,15 +874,28 @@ mod tests {
                 ordinal: 0,
                 offset_bytes: 0,
                 plaintext_len: 15,
-                key_id: "chunk-key".to_string(),
-                key_version: 1,
-                nonce_base64: BASE64.encode([17_u8; 12]),
                 ciphertext_path: chunk_path.display().to_string(),
-                aad_seed: Some("aad-seed".to_string()),
             }],
             created_at: None,
         };
         let derived = derive_upload_bundle(&manifest).expect("derive upload bundle");
+        let expected_bundle_root = hash_encoded(&UploadedModelBundleRootPreimageV1 {
+            service_name: derived.bundle.service_name.as_ref().to_owned(),
+            model_id: derived.bundle.model_id.clone(),
+            weight_version: derived.bundle.weight_version.clone(),
+            family: derived.bundle.family.clone(),
+            modalities: derived.bundle.modalities.clone(),
+            plaintext_root: derived.bundle.plaintext_root,
+            package_format: derived.bundle.package_format,
+            sorafs_manifest_digest: derived.bundle.sorafs_manifest_digest,
+            chunk_count: derived.bundle.chunk_count,
+            plaintext_bytes: derived.bundle.plaintext_bytes,
+            ciphertext_bytes: derived.bundle.ciphertext_bytes,
+            chunk_manifest_root: derived.bundle.chunk_manifest_root,
+            pricing_policy: derived.bundle.pricing_policy.clone(),
+        })
+        .expect("hash direct V1 bundle-root preimage");
+        assert_eq!(derived.bundle_root, expected_bundle_root);
         assert_eq!(derived.bundle.bundle_root, derived.bundle_root);
         assert_eq!(
             derived.bundle.chunk_manifest_root,

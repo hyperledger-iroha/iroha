@@ -3978,7 +3978,7 @@ pub struct ProductionInFlightReservationTransitionProjection {
     pub before: ProductionInFlightReservationOwnerProjection,
     pub after: ProductionInFlightReservationOwnerProjection,
 }
-/// Verus-side QueuePlan V4 and reservation journal V5 state.
+/// Verus-side first-release QueuePlan and reservation-journal state.
 #[derive(Copy, Clone)]
 pub struct ProductionInFlightFirstReleaseQueueProjection {
     pub plan_state: u8,
@@ -4003,8 +4003,8 @@ pub struct ProductionInFlightFirstReleaseSessionProjection {
 /// Verus-side monotonic durable history.
 #[derive(Copy, Clone)]
 pub struct ProductionInFlightFirstReleaseHistoryProjection {
-    pub ever_queue_plan_v4: bool,
-    pub ever_reservation_v5: bool,
+    pub ever_queue_plan_v1: bool,
+    pub ever_reservation_v1: bool,
     pub ever_execution_input_durable: u128,
     pub ever_ready_authorized: u128,
     pub ready_signed: u128,

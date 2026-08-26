@@ -554,7 +554,42 @@ def _exact_hash_hex(value: Any, field: str, error_code: str) -> str:
 
 
 def _exact_transaction_hash_hex(value: Any, field: str) -> str:
-    return _exact_hash_hex(value, field, "invalid_transaction_hash")
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(char not in "0123456789abcdef" for char in value)
+        or value[-1] not in "13579bdf"
+    ):
+        raise NexusAppError(
+            "invalid_transaction_hash",
+            f"{field} must match [0-9a-f]{{63}}[13579bdf] with the canonical Iroha HashOf marker",
+        )
+    return value
+
+
+_TRANSACTION_WAIT_OPTION_FIELDS = frozenset(
+    {
+        "interval",
+        "timeout",
+        "max_attempts",
+        "on_status",
+    }
+)
+
+
+def _transaction_wait_options(value: Optional[Mapping[str, Any]]) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise NexusAppError("invalid_wait_options", "wait_options must be a mapping")
+    unsupported = [key for key in value if key not in _TRANSACTION_WAIT_OPTION_FIELDS]
+    if unsupported:
+        raise NexusAppError(
+            "invalid_wait_options",
+            "wait_options contains unsupported fields: "
+            + ", ".join(sorted(repr(key) for key in unsupported)),
+        )
+    return dict(value)
 
 
 def _exact_account_id_for_chain(
@@ -716,51 +751,78 @@ def _normalize_algorithm(algorithm: Any) -> str:
     return "ed25519"
 
 
-_SUBMISSION_HASH_ALIASES = (
-    "hash_hex",
-    "hashHex",
-    "transaction_hash_hex",
-    "transactionHashHex",
-    "entrypoint_hash_hex",
-    "entrypointHashHex",
-    "transaction_hash",
-    "transactionHash",
-    "entrypoint_hash",
-    "entrypointHash",
-    "hash",
-    "tx_hash",
-    "txHash",
+_RETIRED_SUBMISSION_HASH_FIELDS = frozenset(
+    {
+        "hash_hex",
+        "hashHex",
+        "transaction_hash_hex",
+        "transactionHashHex",
+        "entrypoint_hash_hex",
+        "entrypointHashHex",
+        "transaction_hash",
+        "transactionHash",
+        "signed_transaction_hash_hex",
+        "signedTransactionHashHex",
+        "signedTransactionHash",
+        "entrypointHash",
+        "hash",
+        "tx_hash",
+        "txHash",
+    }
 )
 
 
 def _submission_hash_hex(submission: Any) -> Optional[str]:
     if submission is None:
         return None
-    sources: list[Any] = [submission]
-    if isinstance(submission, Mapping):
-        payload = submission.get("payload")
-        if isinstance(payload, Mapping):
-            sources.append(payload)
-
-    canonical_hash: Optional[str] = None
-    for source in sources:
-        for alias in _SUBMISSION_HASH_ALIASES:
-            candidate = (
-                source.get(alias)
-                if isinstance(source, Mapping)
-                else getattr(source, alias, None)
-            )
-            if not candidate:
-                continue
-            candidate_hash = _bytes(candidate, f"submission.{alias}").hex()
-            if canonical_hash is not None and candidate_hash != canonical_hash:
-                raise NexusAppError(
-                    "transaction_hash_mismatch",
-                    "Torii returned conflicting canonical transaction hash aliases",
-                )
-            canonical_hash = candidate_hash
-    # `signed_transaction_hash` is Torii's distinct inner-wire identity.
-    return canonical_hash
+    if not isinstance(submission, Mapping):
+        raise NexusAppError(
+            "invalid_transaction_hash",
+            "Torii submission response must be an exact mapping",
+        )
+    retired_root = sorted(
+        set(submission)
+        & (
+            _RETIRED_SUBMISSION_HASH_FIELDS
+            | {
+                "entrypoint_hash",
+                "signed_transaction_hash",
+                "signedTransactionHash",
+            }
+        )
+    )
+    if retired_root:
+        raise NexusAppError(
+            "invalid_transaction_hash",
+            f"Torii submission response contains noncanonical root hash field {retired_root[0]}",
+        )
+    payload = submission.get("payload")
+    if payload is None:
+        return None
+    if not isinstance(payload, Mapping):
+        raise NexusAppError(
+            "invalid_transaction_hash",
+            "Torii submission response.payload must be an exact mapping",
+        )
+    retired_payload = sorted(set(payload) & _RETIRED_SUBMISSION_HASH_FIELDS)
+    if retired_payload:
+        raise NexusAppError(
+            "invalid_transaction_hash",
+            f"Torii submission response.payload contains retired hash field {retired_payload[0]}",
+        )
+    signed_transaction_hash = payload.get("signed_transaction_hash")
+    if signed_transaction_hash is not None:
+        _exact_transaction_hash_hex(
+            signed_transaction_hash,
+            "submission.payload.signed_transaction_hash",
+        )
+    entrypoint_hash = payload.get("entrypoint_hash")
+    if entrypoint_hash is None:
+        return None
+    return _exact_transaction_hash_hex(
+        entrypoint_hash,
+        "submission.payload.entrypoint_hash",
+    )
 
 
 def _normalize_signature(value: Union[NexusWalletSignature, Mapping[str, Any], BytesLike]) -> NexusWalletSignature:
@@ -1394,11 +1456,12 @@ class NexusAppClient:
         """Finalize, submit, and optionally wait for status.
 
         Custom codecs must return a mapping containing the signed transaction and its exact
-        canonical 32-byte transaction hash as 64 lowercase hexadecimal characters. The SDK cannot
-        infer the hash domain from opaque bare or versioned signed bytes and therefore fails closed
-        when the hash is absent.
+        canonical 32-byte transaction hash matching ``[0-9a-f]{63}[13579bdf]``; the final odd
+        nibble is the Iroha ``HashOf`` marker. The SDK cannot infer the hash domain from opaque bare
+        or versioned signed bytes and therefore fails closed when the hash is absent.
         """
 
+        options = _transaction_wait_options(wait_options)
         _normalize_algorithm(signable.signature_algorithm)
         normalized = _normalize_signature(signature)
         if self.transaction_codec is None or not hasattr(self.transaction_codec, "finalize_signed_transaction"):
@@ -1427,19 +1490,16 @@ class NexusAppClient:
                 "invalid_transaction_hash",
                 "transaction finalizer must return a mapping with signed_transaction and hash_hex",
             )
-        signed_transaction = _bytes(
-            finalized.get("signed_transaction", finalized.get("signedTransaction")),
-            "signed_transaction",
-        )
-        snake_hash = finalized.get("hash_hex")
-        camel_hash = finalized.get("hashHex")
-        if snake_hash is not None and camel_hash is not None and snake_hash != camel_hash:
+        required_finalized_fields = {"signed_transaction", "hash_hex"}
+        unknown_finalized_fields = set(finalized) - (required_finalized_fields | {"envelope"})
+        if not required_finalized_fields.issubset(finalized) or unknown_finalized_fields:
             raise NexusAppError(
                 "invalid_transaction_hash",
-                "transaction finalizer returned conflicting hash_hex and hashHex values",
+                "transaction finalizer must return only signed_transaction, hash_hex, and optional envelope",
             )
+        signed_transaction = _bytes(finalized["signed_transaction"], "signed_transaction")
         hash_hex = _exact_transaction_hash_hex(
-            snake_hash if snake_hash is not None else camel_hash,
+            finalized["hash_hex"],
             "transaction finalizer hash_hex",
         )
 
@@ -1458,7 +1518,6 @@ class NexusAppClient:
                 )
             if wait and hasattr(self.torii_client, "wait_for_transaction_status"):
                 try:
-                    options = dict(wait_options or {})
                     status = self.torii_client.wait_for_transaction_status(hash_hex, **options)
                 except Exception as exc:  # pragma: no cover - transport dependent
                     raise NexusAppError("status_wait_failed", str(exc)) from exc

@@ -27,10 +27,7 @@ pub(super) const OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1: u16 =
 pub(super) const OPERATION_PROVIDER_INGEST_RETENTION_LOAD_V1: u16 = 25;
 pub(super) const OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1: u16 = 26;
 pub(super) const OPERATION_PROVIDER_INGEST_SOURCE_READINESS_V1: u16 = 27;
-// Operation 28 carried the retired two-field pre-release source request. It is
-// deliberately not accepted: V2 adds the optional Musubi archive commitment
-// without silently reinterpreting the old canonical wire layout.
-pub(super) const OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2: u16 = 29;
+pub(super) const OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1: u16 = 28;
 pub(super) const OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1: u16 = 30;
 pub(super) const OPERATION_MODERATION_QUARANTINE_UNWRAP_DEK_V1: u16 = 31;
 pub(super) const OPERATION_EVIDENCE_VIEWER_ISSUE_CHALLENGE_V1: u16 = 40;
@@ -49,6 +46,7 @@ pub(super) const OPERATION_REPUTATION_RETENTION_COMPARE_AND_SWAP_V1: u16 = 52;
 pub(super) const OPERATION_GATEWAY_ACME_ORDER_CERTIFICATE_V1: u16 = 53;
 pub(super) const OPERATION_GATEWAY_COMPLIANCE_RESOLVE_V1: u16 = 54;
 pub(super) const OPERATION_GATEWAY_COMPLIANCE_FETCH_V1: u16 = 55;
+pub(super) const OPERATION_POP_RUNTIME_OPEN_V1: u16 = 60;
 pub(super) const OPERATION_POP_ISSUER_SIGN_V1: u16 = 61;
 pub(super) const OPERATION_POP_AUTHENTICATE_V1: u16 = 62;
 pub(super) const OPERATION_POP_REGISTRY_SUBMIT_V1: u16 = 63;
@@ -91,30 +89,28 @@ pub(super) const OPERATION_BILLING_COMPARE_AND_SWAP_EPOCH_V1: u16 = 99;
 pub(super) const OPERATION_SORACLOUD_PROVENANCE_SIGN_V1: u16 = 100;
 pub(super) const OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1: u16 = 101;
 pub(super) const OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1: u16 = 102;
-pub(super) const OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1: u16 = 103;
-pub(super) const OPERATION_MODERATION_CHECKPOINT_LOAD_V1: u16 = 104;
-pub(super) const OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1: u16 = 105;
-pub(super) const OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1: u16 = 106;
-pub(super) const OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1: u16 = 107;
-pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1: u16 = 108;
-pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1: u16 = 109;
-pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1: u16 = 110;
-pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1: u16 = 111;
-pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1: u16 = 112;
-pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1: u16 = 113;
-pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1: u16 = 114;
-pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1: u16 = 115;
-pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1: u16 = 116;
-pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1: u16 = 117;
-pub(super) const OPERATION_POP_RUNTIME_OPEN_V1: u16 = 118;
-pub(super) const OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1: u16 = 119;
-pub(super) const OPERATION_POP_WALLET_RECIPIENT_OPEN_V1: u16 = 120;
-pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1: u16 = 121;
-pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1: u16 = 122;
-pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1: u16 = 123;
-pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1: u16 = 124;
-pub(super) const OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1: u16 = 125;
-pub(super) const OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1: u16 = 126;
+pub(super) const OPERATION_MODERATION_CHECKPOINT_LOAD_V1: u16 = 103;
+pub(super) const OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1: u16 = 104;
+pub(super) const OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1: u16 = 105;
+pub(super) const OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1: u16 = 106;
+pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1: u16 = 107;
+pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1: u16 = 108;
+pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1: u16 = 109;
+pub(super) const OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1: u16 = 110;
+pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1: u16 = 111;
+pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1: u16 = 112;
+pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1: u16 = 113;
+pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1: u16 = 114;
+pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1: u16 = 115;
+pub(super) const OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1: u16 = 116;
+pub(super) const OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1: u16 = 117;
+pub(super) const OPERATION_POP_WALLET_RECIPIENT_OPEN_V1: u16 = 118;
+pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1: u16 = 119;
+pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1: u16 = 120;
+pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1: u16 = 121;
+pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1: u16 = 122;
+pub(super) const OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1: u16 = 123;
+pub(super) const OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1: u16 = 124;
 // A real payload byte avoids relying on zero-sized archive reconstruction;
 // the authenticated slot and operation provide the request-domain binding.
 pub(super) const CHECKPOINT_LOAD_REQUEST_VERSION_V1: u8 = 1;
@@ -378,7 +374,78 @@ pub(super) struct ScrubbedBytes {
     pub(super) bytes: Vec<u8>,
     pub(super) inbound_permit: Option<tokio::sync::OwnedSemaphorePermit>,
     pub(super) decode_admission: Option<Arc<DecodeResourceAdmissionV1>>,
+    #[cfg(test)]
+    drop_audit: Option<(usize, Arc<std::sync::atomic::AtomicUsize>)>,
 }
+#[cfg(test)]
+mod operation_ordinal_tests {
+    use super::*;
+
+    #[test]
+    fn post_soracloud_operation_ids_are_exact_and_contiguous() {
+        let exact = [
+            (OPERATION_SORACLOUD_PROVENANCE_SIGN_V1, 100),
+            (OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1, 101),
+            (
+                OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1,
+                102,
+            ),
+            (OPERATION_MODERATION_CHECKPOINT_LOAD_V1, 103),
+            (OPERATION_MODERATION_CHECKPOINT_COMPARE_AND_SWAP_V1, 104),
+            (OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1, 105),
+            (
+                OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_COMPARE_AND_PUBLISH_V1,
+                106,
+            ),
+            (OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1, 107),
+            (OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1, 108),
+            (OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1, 109),
+            (OPERATION_STREAM_TOKEN_GATEWAY_RELEASE_LEASE_V1, 110),
+            (
+                OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1,
+                111,
+            ),
+            (
+                OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_INSTALL_V1,
+                112,
+            ),
+            (OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_READ_V1, 113),
+            (
+                OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1,
+                114,
+            ),
+            (
+                OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1,
+                115,
+            ),
+            (
+                OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1,
+                116,
+            ),
+            (OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1, 117),
+            (OPERATION_POP_WALLET_RECIPIENT_OPEN_V1, 118),
+            (OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1, 119),
+            (
+                OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1,
+                120,
+            ),
+            (OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1, 121),
+            (OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1, 122),
+            (OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1, 123),
+            (OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1, 124),
+        ];
+        for (index, (operation, expected)) in exact.into_iter().enumerate() {
+            assert_eq!(operation, expected);
+            assert_eq!(usize::from(operation), index + 100);
+            assert!(super::super::operation_is_known(operation));
+        }
+        assert!(super::super::operation_is_known(
+            OPERATION_POP_RUNTIME_OPEN_V1
+        ));
+        assert!(!super::super::operation_is_known(125));
+    }
+}
+
 #[cfg(test)]
 mod pop_recipient_wire_tests {
     use super::*;
@@ -414,7 +481,7 @@ mod pop_recipient_wire_tests {
         }
     }
     #[test]
-    fn pop_runtime_open_is_public_and_legacy_operation_is_retired() {
+    fn pop_runtime_operations_use_the_exact_first_release_ids() {
         let exact = exact_binding();
         let outcome = PopRuntimeOpenResultWireV1 {
             issuer_signer_handle: exact.issuer_signer_handle.clone(),
@@ -432,14 +499,10 @@ mod pop_recipient_wire_tests {
             validate_pop_open_result(&substituted, &exact),
             Err(BrokerError::Rejected)
         );
-        assert_eq!(OPERATION_POP_RUNTIME_OPEN_V1, 118);
-        assert_eq!(OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1, 119);
-        assert_eq!(OPERATION_POP_WALLET_RECIPIENT_OPEN_V1, 120);
-        assert!(!super::super::operation_is_known(60));
-        assert_eq!(
-            pop_recipient_plaintext_limit(60),
-            Err(BrokerError::Rejected)
-        );
+        assert_eq!(OPERATION_POP_RUNTIME_OPEN_V1, 60);
+        assert_eq!(OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1, 117);
+        assert_eq!(OPERATION_POP_WALLET_RECIPIENT_OPEN_V1, 118);
+        assert!(super::super::operation_is_known(60));
     }
     #[test]
     fn pop_recipient_open_rejects_noncanonical_envelopes_and_redacts_values() {
@@ -544,6 +607,8 @@ impl ScrubbedBytes {
             bytes,
             inbound_permit: None,
             decode_admission: None,
+            #[cfg(test)]
+            drop_audit: None,
         }
     }
     pub(super) fn with_inbound_permit(
@@ -554,6 +619,8 @@ impl ScrubbedBytes {
             bytes,
             inbound_permit: Some(inbound_permit),
             decode_admission: None,
+            #[cfg(test)]
+            drop_audit: None,
         }
     }
     pub(super) fn with_decode_admission(
@@ -564,6 +631,21 @@ impl ScrubbedBytes {
             bytes,
             inbound_permit: None,
             decode_admission: Some(decode_admission),
+            #[cfg(test)]
+            drop_audit: None,
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn with_drop_audit(
+        bytes: Vec<u8>,
+        observed_scrubbed_len: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Self {
+        let expected_len = bytes.len();
+        Self {
+            bytes,
+            inbound_permit: None,
+            decode_admission: None,
+            drop_audit: Some((expected_len, observed_scrubbed_len)),
         }
     }
     pub(super) fn take(&mut self) -> Vec<u8> {
@@ -597,7 +679,22 @@ impl PartialEq for ScrubbedBytes {
     }
 }
 impl Eq for ScrubbedBytes {}
-impl_scrub_fields_on_drop!(ScrubbedBytes { bytes });
+impl Drop for ScrubbedBytes {
+    fn drop(&mut self) {
+        self.bytes.fill(0);
+        #[cfg(test)]
+        if let Some((expected_len, observed_scrubbed_len)) = &self.drop_audit {
+            let observed =
+                if self.bytes.len() == *expected_len && self.bytes.iter().all(|byte| *byte == 0) {
+                    self.bytes.len()
+                } else {
+                    usize::MAX
+                };
+            observed_scrubbed_len.store(observed, std::sync::atomic::Ordering::SeqCst);
+        }
+        let _ = std::hint::black_box(&self.bytes);
+    }
+}
 pub(super) struct ScrubbedReadChunk(pub(super) Box<[u8]>);
 impl std::ops::Deref for ScrubbedReadChunk {
     type Target = [u8];

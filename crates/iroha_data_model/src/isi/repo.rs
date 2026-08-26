@@ -411,9 +411,7 @@ mod tests {
     const INITIATOR: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const COUNTERPARTY: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
     fn parse_account(raw: &str) -> AccountId {
-        AccountId::parse_encoded(raw)
-            .expect("valid account")
-            .into_account_id()
+        AccountId::parse_encoded(raw).expect("valid account")
     }
     fn seeded_account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -689,13 +687,8 @@ mod tests {
         );
     }
     #[test]
-    fn repo_registry_decodes_type_names_and_stable_ids() {
+    fn repo_registry_decodes_only_the_stable_box_id() {
         let registry = crate::isi::registry::default();
-        assert_registry_decodes(
-            &registry,
-            std::any::type_name::<RepoInstructionBox>(),
-            RepoInstructionBox::from(repo_instruction()),
-        );
         for value in [
             RepoInstructionBox::from(repo_instruction()),
             RepoInstructionBox::Reverse(reverse_repo_instruction()),
@@ -713,5 +706,6 @@ mod tests {
         ] {
             assert!(!registry.contains(name), "{name} must remain boxed-only");
         }
+        assert!(!registry.contains(std::any::type_name::<RepoInstructionBox>()));
     }
 }

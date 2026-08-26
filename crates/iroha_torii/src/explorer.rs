@@ -789,7 +789,8 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
     }
 }
 fn instruction_wire_id(instruction: &InstructionBox) -> &str {
-    IsiInstruction::id(&**instruction)
+    iroha_data_model::isi::instruction_wire_id(instruction)
+        .expect("explorer instruction must have a canonical V1 wire identifier")
 }
 fn instruction_variant_from_wire_id(wire_id: &str) -> &str {
     wire_id.rsplit("::").next().unwrap_or(wire_id)
@@ -857,9 +858,7 @@ fn instruction_encoded_hex(instruction: &InstructionBox) -> String {
     format!("0x{}", hex::encode(bytes))
 }
 fn instruction_framed_sha256(instruction: &InstructionBox) -> String {
-    let wire_id = IsiInstruction::id(&**instruction);
-    let payload = instruction.dyn_encode();
-    let framed = iroha_data_model::isi::frame_instruction_payload(wire_id, &payload)
+    let (_, framed) = iroha_data_model::isi::framed_instruction_payload(instruction)
         .expect("registered explorer instruction must use canonical Norito framing");
     format!("0x{}", hex::encode(Sha256::digest(framed)))
 }
@@ -1475,10 +1474,10 @@ fn require_canonical_cursor_text<K: ToString>(
 impl CanonicalExplorerCursorKey for AccountId {
     fn parse_canonical_cursor_key(key: &str) -> Result<Self, ExplorerCursorError> {
         let parsed = Self::parse_encoded(key).map_err(|_| ExplorerCursorError::InvalidKey)?;
-        if parsed.canonical() != key {
+        if parsed.to_string() != key {
             return Err(ExplorerCursorError::InvalidKey);
         }
-        Ok(parsed.into_account_id())
+        Ok(parsed)
     }
 }
 impl CanonicalExplorerCursorKey for DomainId {
@@ -3002,10 +3001,8 @@ mod tests {
         let instruction: InstructionBox = register.into();
         let dto = instruction_box_dto(&instruction, ExplorerInstructionKind::Register);
         assert!(dto.encoded.starts_with("0x"));
-        let wire_id = IsiInstruction::id(&*instruction);
-        let framed =
-            iroha_data_model::isi::frame_instruction_payload(wire_id, &instruction.dyn_encode())
-                .expect("registered instruction should frame");
+        let (_, framed) = iroha_data_model::isi::framed_instruction_payload(&instruction)
+            .expect("registered instruction should frame");
         assert_eq!(
             dto.framed_sha256,
             format!("0x{}", hex::encode(Sha256::digest(framed)))
@@ -3092,7 +3089,7 @@ mod tests {
         assert_eq!(root.get("kind").and_then(Value::as_str), Some("Custom"));
         assert_eq!(
             root.get("wire_id").and_then(Value::as_str),
-            Some("iroha_data_model::isi::governance::ProposeSccpRouteGovernance")
+            Some("iroha.instruction.v1::governance::ProposeSccpRouteGovernance")
         );
         let payload = root
             .get("payload")

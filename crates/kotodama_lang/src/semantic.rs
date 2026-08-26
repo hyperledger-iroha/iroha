@@ -3516,7 +3516,6 @@ fn parse_account_matcher(
     raw: &str,
 ) -> Result<AccountId, SemanticError> {
     AccountId::parse_encoded(raw)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "account", raw, err))
 }
 fn parse_asset_matcher(
@@ -4219,14 +4218,10 @@ fn analyze_trigger(
         TriggerRepeats::Exactly(count) => Repeats::Exactly(count),
     };
     let authority = match &trigger.authority {
-        Some(raw) => Some(
-            AccountId::parse_encoded(raw)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .map_err(|err| SemanticError {
-                    code: "E_TRIGGER_INVALID_AUTHORITY",
-                    message: format!("invalid trigger authority `{raw}`: {err}"),
-                })?,
-        ),
+        Some(raw) => Some(AccountId::parse_encoded(raw).map_err(|err| SemanticError {
+            code: "E_TRIGGER_INVALID_AUTHORITY",
+            message: format!("invalid trigger authority `{raw}`: {err}"),
+        })?),
         None => None,
     };
     let metadata = trigger_metadata_from_entries(&trigger.metadata)?;
@@ -7349,9 +7344,6 @@ fn fixed_builtin_message(builtin: Builtin) -> Option<FixedBuiltinMessage> {
         | Builtin::SoracloudEmitMailboxMessage
         | Builtin::SoracloudAppendJournal
         | Builtin::SoracloudPublishCheckpoint
-        | Builtin::SoracloudReadSecret
-        | Builtin::SoracloudReadCredential
-        | Builtin::SoracloudEgressFetch
         | Builtin::SoracloudReadConfig
         | Builtin::SoracloudReadSecretEnvelope => M::NameSuffix(" expects (SoracloudRequest)"),
         Builtin::AddSignatory | Builtin::RemoveSignatory => {

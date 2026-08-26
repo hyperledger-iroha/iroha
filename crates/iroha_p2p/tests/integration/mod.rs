@@ -62,7 +62,6 @@ fn test_network_config(
         debug_packet_loss_inbound_percent: 0,
         debug_packet_loss_outbound_percent: 0,
         trust_gossip,
-        prefer_ws_fallback: false,
         p2p_proxy: None,
         p2p_proxy_required: false,
         p2p_no_proxy: Vec::new(),
@@ -78,10 +77,6 @@ fn test_network_config(
         quic_datagram_receive_buffer_bytes: network_defaults::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES
             .get(),
         quic_datagram_send_buffer_bytes: network_defaults::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
-        tls_enabled: false,
-        tls_fallback_to_plain: true,
-        tls_listen_address: None,
-        tls_inbound_only: false,
         p2p_queue_cap_high: NonZeroUsize::new(8192).expect("non-zero"),
         p2p_queue_cap_low: NonZeroUsize::new(32_768).expect("non-zero"),
         p2p_post_queue_cap: NonZeroUsize::new(2048).expect("non-zero"),
@@ -142,7 +137,6 @@ fn test_network_config(
         max_frame_bytes_peer_gossip: 131_072,
         max_frame_bytes_health: 65_536,
         max_frame_bytes_other: 262_144,
-        tls_only_v1_3: true,
         quic_max_idle_timeout: None,
     }
 }
@@ -240,5 +234,3 @@ mod p2p_caps;
 mod p2p_consensus_caps;
 mod p2p_puzzle;
 mod p2p_trust_gossip;
-#[cfg(feature = "p2p_ws")]
-mod ws_io;

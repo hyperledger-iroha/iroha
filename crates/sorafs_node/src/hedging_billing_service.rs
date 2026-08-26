@@ -6660,10 +6660,10 @@ fn validate_canonical_account_id_bytes(
     }
     let literal = std::str::from_utf8(account_id)
         .map_err(|_| HedgingBillingServiceError::InvalidFinalizedEvent)?;
-    let (_, canonical, _) = AccountId::parse_encoded(literal)
-        .map_err(|_| HedgingBillingServiceError::InvalidFinalizedEvent)?
-        .into_parts();
-    if literal != canonical || account_id != canonical.as_bytes() {
+    let account_id = AccountId::parse_encoded(literal)
+        .map_err(|_| HedgingBillingServiceError::InvalidFinalizedEvent)?;
+    let canonical = account_id.to_string();
+    if literal != canonical {
         return Err(HedgingBillingServiceError::InvalidFinalizedEvent);
     }
     Ok(())

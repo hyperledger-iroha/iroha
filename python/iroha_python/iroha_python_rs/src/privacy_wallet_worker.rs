@@ -1334,9 +1334,8 @@ fn validate_execution_plan_v1(
     if !constant_time_eq(&network_id, &binding.network_id) {
         return Err(WorkerError::WrongBinding);
     }
-    let authority = AccountId::parse_encoded(authority_label)
-        .map(|parsed| parsed.into_account_id())
-        .map_err(|_| WorkerError::InvalidExecutionPlan)?;
+    let authority =
+        AccountId::parse_encoded(authority_label).map_err(|_| WorkerError::InvalidExecutionPlan)?;
     if authority != manifest.authority {
         return Err(WorkerError::WrongBinding);
     }

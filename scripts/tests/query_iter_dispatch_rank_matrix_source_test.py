@@ -11,13 +11,33 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/query.rs"
+VALID_REQUEST_SOURCE_PATH = (
+    REPO_ROOT
+    / "crates/iroha_core/src/smartcontracts/isi/query/valid_query_request.rs"
+)
+ORDINARY_MEMORY_SOURCE_PATH = (
+    REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/query/ordinary_memory.rs"
+)
 MAX_SOURCE_LINES = 8_950
+
+FIRST_RELEASE_FORBIDDEN_TOKENS = (
+    "legacy_query_box",
+    "legacy_peer_source_shape",
+    "ExecuteQueryBox",
+    "decode_iter_query_payload_exact",
+    "iter_query_inner::<",
+    "run_payload_or_default",
+    "run_dispatch",
+    "try_decode_query",
+    "dynamic QueryBox execution",
+    "unsupported iterable query type",
+)
 
 CORE_START = """    #[derive(Clone, Copy)]
     enum IterDispatchRankFixture"""
 CORE_END = """    #[tokio::test]
     async fn iter_dispatch_accounts_sort_ties_stable_by_id"""
-CORE_HASH = "4f9059090c56eb02a61edd2d0e47775d2c9103a2d628d1eb2075f1b9793c5d59"
+CORE_HASH = "e7bfa21691d5e61c969fc82adbe3f661f22bfe6fd5bdc1b8efdb9c4808f932a4"
 
 DIRECT_TESTS = (
     "iter_dispatch_sorts_and_paginates_end_to_end",
@@ -276,6 +296,37 @@ def validate_source(source: str) -> None:
             raise GuardError(f"{name}: attributes {observed} != {expected}")
 
 
+def validate_first_release_dispatch(
+    query_source: str,
+    valid_request_source: str,
+    ordinary_memory_source: str,
+) -> None:
+    """Require one canonical typed dispatch path with no boxed compatibility lane."""
+
+    combined = "\n".join(
+        (query_source, valid_request_source, ordinary_memory_source)
+    )
+    for token in FIRST_RELEASE_FORBIDDEN_TOKENS:
+        if token in combined:
+            raise GuardError(f"retired iterable-query compatibility token remains: {token}")
+
+    parts = (
+        "let (item, predicate_bytes, selector_bytes, query_payload) = "
+        "iter_query.parts();"
+    )
+    if valid_request_source.count(parts) != 2:
+        raise GuardError("stored and ephemeral dispatch must both use canonical parts")
+    if valid_request_source.count("macro_rules! run_exact") != 2:
+        raise GuardError("stored and ephemeral dispatch must each use one exact runner")
+    if valid_request_source.count("match item {") != 2:
+        raise GuardError("stored and ephemeral dispatch must each have one item-kind match")
+    if (
+        "let peer_source = canonical_peer_source_shape(start, query_limits)?;"
+        not in ordinary_memory_source
+    ):
+        raise GuardError("ordinary-memory admission must inspect only the canonical source")
+
+
 def _replace_once(source: str, old: str, new: str) -> str:
     if source.count(old) != 1:
         raise AssertionError(f"mutation preimage must occur once: {old!r}")
@@ -286,9 +337,27 @@ class QueryIterDispatchRankMatrixSourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = SOURCE_PATH.read_text()
+        cls.valid_request_source = VALID_REQUEST_SOURCE_PATH.read_text()
+        cls.ordinary_memory_source = ORDINARY_MEMORY_SOURCE_PATH.read_text()
 
     def test_current_source_preserves_dispatch_matrix(self) -> None:
         validate_source(self.source)
+
+    def test_first_release_dispatch_has_no_boxed_compatibility_lane(self) -> None:
+        validate_first_release_dispatch(
+            self.source,
+            self.valid_request_source,
+            self.ordinary_memory_source,
+        )
+
+    def test_boxed_compatibility_lane_mutation_is_rejected(self) -> None:
+        mutated = self.valid_request_source + "\nfn legacy_query_box() {}\n"
+        with self.assertRaises(GuardError):
+            validate_first_release_dispatch(
+                self.source,
+                mutated,
+                self.ordinary_memory_source,
+            )
 
     def test_name_mutation_is_rejected(self) -> None:
         name = "iter_dispatch_accounts_sort_desc_batched"

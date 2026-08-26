@@ -66,8 +66,8 @@ macro_rules! signed_lifecycle_attempt_fixture {
                 ..ProductionInFlightFirstReleaseSessionProjection::default()
             },
             history: ProductionInFlightFirstReleaseHistoryProjection {
-                ever_queue_plan_v4: true,
-                ever_reservation_v5: true,
+                ever_queue_plan_v1: true,
+                ever_reservation_v1: true,
                 ..ProductionInFlightFirstReleaseHistoryProjection::default()
             },
             decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
@@ -83,8 +83,8 @@ macro_rules! signed_lifecycle_attempt_fixture {
             after: $activated,
         };
         let $sign_cursor =
-            |sequence, previous_cursor_hash, phase: AutonomousLifecycleCursorPhaseV2| {
-                let unsigned = AutonomousLifecycleCursorUnsignedV2::new(
+            |sequence, previous_cursor_hash, phase: AutonomousLifecycleCursorPhaseV1| {
+                let unsigned = AutonomousLifecycleCursorUnsignedV1::new(
                     sequence,
                     previous_cursor_hash,
                     $binding.clone(),
@@ -108,13 +108,13 @@ macro_rules! signed_lifecycle_attempt_fixture {
         let $prepared_activate = $sign_cursor(
             1,
             None,
-            AutonomousLifecycleCursorPhaseV2::prepared(1, $activate)
+            AutonomousLifecycleCursorPhaseV1::prepared(1, $activate)
                 .expect(concat!($context, ": construct Prepared ActivateKura")),
         );
         let $live_activate = $sign_cursor(
             2,
             Some($prepared_activate.cursor_hash()),
-            AutonomousLifecycleCursorPhaseV2::live(1, $activated)
+            AutonomousLifecycleCursorPhaseV1::live(1, $activated)
                 .expect(concat!($context, ": construct Live ActivateKura")),
         );
         let $authentication_facts = ($height_context_id, 1, 1, $reservation_group);
@@ -518,13 +518,13 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let prepared_activate_two = sign_cursor(
         1,
         None,
-        AutonomousLifecycleCursorPhaseV2::prepared(2, activate)
+        AutonomousLifecycleCursorPhaseV1::prepared(2, activate)
             .expect("construct generation-two Prepared ActivateKura"),
     );
     let live_activate_two = sign_cursor(
         2,
         Some(prepared_activate_two.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::live(2, activated)
+        AutonomousLifecycleCursorPhaseV1::live(2, activated)
             .expect("construct generation-two Live ActivateKura"),
     );
     let mut generation_replay = canonical_bootstrap.clone();
@@ -699,7 +699,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let direct_current_live = sign_cursor(
         3,
         Some(current.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::live(5, activated)
+        AutonomousLifecycleCursorPhaseV1::live(5, activated)
             .expect("construct prohibited direct current-generation Live"),
     );
     assert!(
@@ -719,7 +719,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let crashed_cursor = sign_cursor(
         3,
         Some(current.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::crashed(1, 5, activated, crashed)
+        AutonomousLifecycleCursorPhaseV1::crashed(1, 5, activated, crashed)
             .expect("construct required old-generation crash takeover"),
     );
     assert_eq!(
@@ -741,7 +741,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let prepared_recover = sign_cursor(
         4,
         Some(crashed_cursor.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::prepared(5, recover)
+        AutonomousLifecycleCursorPhaseV1::prepared(5, recover)
             .expect("construct exact current-generation Recover"),
     );
     let (_, recover_lease) = kura
@@ -755,7 +755,7 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let live_recovered = sign_cursor(
         5,
         Some(prepared_recover.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::live(5, recovered)
+        AutonomousLifecycleCursorPhaseV1::live(5, recovered)
             .expect("construct current-generation recovered Live"),
     );
     assert_eq!(
@@ -1564,8 +1564,8 @@ fn merge_application_receipt_makes_autonomous_auxiliary_persistence_terminal() {
         proposal.descriptor.lane_id,
         proposal.descriptor.dataspace_id,
     ));
-    let reservation = LaneQueueReservationKeyV2 {
-        version: LaneQueueReservationKeyV2::VERSION,
+    let reservation = LaneQueueReservationKeyV1 {
+        version: LaneQueueReservationKeyV1::VERSION,
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new(
             b"merge-terminal-queue-plan-admission-binding",

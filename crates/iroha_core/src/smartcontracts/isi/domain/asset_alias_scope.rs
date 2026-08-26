@@ -62,9 +62,6 @@ fn ensure_global_asset_definition_home_is_public_or_universal(
     state_transaction: &StateTransaction<'_, '_>,
     definition: &AssetDefinition,
 ) -> Result<(), InstructionExecutionError> {
-    if state_transaction.replay_compatibility {
-        return Ok(());
-    }
     if definition.balance_scope_policy() != AssetBalancePolicy::Global {
         return Ok(());
     }
@@ -94,9 +91,6 @@ fn ensure_global_asset_definition_registered_on_authoritative_route(
     state_transaction: &StateTransaction<'_, '_>,
     definition: &AssetDefinition,
 ) -> Result<(), InstructionExecutionError> {
-    if state_transaction.replay_compatibility {
-        return Ok(());
-    }
     ensure_global_asset_definition_home_is_public_or_universal(state_transaction, definition)?;
     let home_dataspace = asset_definition_home_dataspace(state_transaction, definition)
         .ok_or_else(|| {

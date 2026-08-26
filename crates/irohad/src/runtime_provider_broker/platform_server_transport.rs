@@ -1,3 +1,5 @@
+const BROKER_SESSION_THREAD_STACK_BYTES_V1: usize = 4 * 1024 * 1024;
+
 fn broker_error_status(error: BrokerError) -> Option<(u8, bool)> {
     match error {
         BrokerError::Rejected => Some((STATUS_REJECTED_V1, false)),
@@ -107,7 +109,7 @@ fn serve_provider_ingest_source_fetch(
     apply_source_socket_deadline(&stream, deadline)?;
     let configured =
         qualify_server_binding(state, &request.binding, request.provider_metadata_digest)?;
-    let fetch = decode_canonical::<ProviderIngestSourceFetchRequestWireV2>(
+    let fetch = decode_canonical::<ProviderIngestSourceFetchRequestWireV1>(
         &request.payload,
         MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1,
     )?;
@@ -131,7 +133,7 @@ fn serve_provider_ingest_source_fetch(
     let frame_count = source_stream_frame_count(content_length)?;
     let mut transcript = {
         let initial_admission = DecodeResourceAdmissionV1::acquire_operation(
-            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
+            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
         )?;
         let _initial_scope = initial_admission.enter();
         let manifest = fetched
@@ -383,7 +385,7 @@ fn serve_client(
         };
         if request.binding.slot
             == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id()
-            && request.operation == OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2
+            && request.operation == OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1
         {
             let Ok(source_stream_permit) = Arc::clone(&source_stream_permits).try_acquire_owned()
             else {
@@ -749,10 +751,6 @@ impl Drop for AcceptedSessionControlsV1 {
         self.shutdown_all();
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the serving lifecycle is one ordered shutdown protocol"
-)]
 fn serve_with_policy_and_fallible_readiness<R>(
     bindings: &IrohaRuntimeProviderBindingsV1,
     backends: RuntimeProviderBrokerBackendsV1,
@@ -762,6 +760,32 @@ fn serve_with_policy_and_fallible_readiness<R>(
 ) -> Result<(), RuntimeProviderBrokerServerErrorV1>
 where
     R: FnOnce() -> Result<(), RuntimeProviderBrokerReadinessErrorV1>,
+{
+    serve_with_policy_and_fallible_readiness_and_peer_authorizer(
+        bindings,
+        backends,
+        policy,
+        lifecycle,
+        on_ready,
+        verify_peer_uid,
+    )
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "the serving lifecycle is one ordered shutdown protocol"
+)]
+fn serve_with_policy_and_fallible_readiness_and_peer_authorizer<R, A>(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    backends: RuntimeProviderBrokerBackendsV1,
+    policy: &EndpointPolicy,
+    lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+    on_ready: R,
+    authorize_peer_uid: A,
+) -> Result<(), RuntimeProviderBrokerServerErrorV1>
+where
+    R: FnOnce() -> Result<(), RuntimeProviderBrokerReadinessErrorV1>,
+    A: Fn(u32, u32) -> Result<(), BrokerError>,
 {
     if lifecycle.shutdown_requested() {
         return Ok(());
@@ -790,8 +814,13 @@ where
         })
         .transpose()?
         .unwrap_or(0);
+    // Debug builds of the proof-carrying consensus signer validators exceed
+    // Tokio's two-MiB blocking-thread default while reconstructing a complete
+    // public transcript. Keep an explicit bounded stack for every broker
+    // session worker so authenticated requests cannot abort the broker process.
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
+        .thread_stack_size(BROKER_SESSION_THREAD_STACK_BYTES_V1)
         .build()
         .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
     runtime.block_on(async move {
@@ -906,10 +935,13 @@ where
                     break Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
                 }
             };
-            if let Err(error) = verify_peer_uid(credentials.uid(), policy.expected_service_uid)
-                .map_err(server_error)
-            {
-                break Err(error);
+            if authorize_peer_uid(credentials.uid(), policy.expected_service_uid).is_err() {
+                // Authentication rejection belongs to this connection. A
+                // wrong-UID local peer must not turn one failed admission
+                // into a broker-wide denial of service for the authorized
+                // daemon.
+                drop(stream);
+                continue;
             }
             let Ok(session_permit) = Arc::clone(&session_permits).try_acquire_owned() else {
                 // Excess peers are closed immediately. They never
@@ -1015,7 +1047,7 @@ struct BrokerConnection {
     stream: UnixStream,
     session_id: [u8; 32],
     next_request_id: u64,
-    poisoned: bool,
+    poison_reason: Option<BrokerError>,
 }
 struct BrokerSession {
     connection: Mutex<BrokerConnection>,
@@ -1068,7 +1100,7 @@ fn connect_broker_connection(
             stream,
             session_id: response.session_id,
             next_request_id: 1,
-            poisoned: false,
+            poison_reason: None,
         },
         response.observations,
     ))
@@ -1100,6 +1132,18 @@ impl BrokerSession {
         ))
     }
     fn reconnect(&self) -> Result<(), BrokerError> {
+        {
+            let current = self
+                .connection
+                .lock()
+                .map_err(|_| BrokerError::Unavailable)?;
+            if let Some(reason) = current
+                .poison_reason
+                .filter(|reason| *reason != BrokerError::Unavailable)
+            {
+                return Err(reason);
+            }
+        }
         let (connection, _) = connect_broker_connection(
             &self.endpoint,
             &self.chain_id,
@@ -1111,12 +1155,26 @@ impl BrokerSession {
             .connection
             .lock()
             .map_err(|_| BrokerError::Unavailable)?;
+        if let Some(reason) = current
+            .poison_reason
+            .filter(|reason| *reason != BrokerError::Unavailable)
+        {
+            return Err(reason);
+        }
         *current = connection;
         Ok(())
     }
     fn poison(&self) {
+        self.poison_with_reason(BrokerError::Protocol);
+    }
+    fn poison_with_reason(&self, reason: BrokerError) {
         if let Ok(mut connection) = self.connection.lock() {
-            connection.poisoned = true;
+            match connection.poison_reason {
+                None | Some(BrokerError::Unavailable) => {
+                    connection.poison_reason = Some(reason);
+                }
+                Some(_) => {}
+            }
         }
     }
     fn decode_result<T>(&self, bytes: &ScrubbedBytes) -> Result<T, BrokerError>
@@ -1125,8 +1183,8 @@ impl BrokerSession {
         for<'de> T: NoritoDeserialize<'de>,
     {
         let _scope = bytes.enter_decode_admission();
-        decode_canonical::<T>(bytes, MAX_OPERATION_FRAME_BYTES_V1).inspect_err(|_| {
-            self.poison();
+        decode_canonical::<T>(bytes, MAX_OPERATION_FRAME_BYTES_V1).inspect_err(|error| {
+            self.poison_with_reason(*error);
         })
     }
     fn decode_operation_result<T>(
@@ -1144,7 +1202,7 @@ impl BrokerSession {
             .and_then(|admission| admission.operation)
             .is_some_and(|active| active != operation)
         {
-            self.poison();
+            self.poison_with_reason(BrokerError::Protocol);
             return Err(BrokerError::Protocol);
         }
         let _scope = bytes.enter_decode_admission();
@@ -1153,8 +1211,8 @@ impl BrokerSession {
             operation_frame_limit(operation),
             operation_decode_policy(operation),
         )
-        .inspect_err(|_| {
-            self.poison();
+        .inspect_err(|error| {
+            self.poison_with_reason(*error);
         })
     }
     fn decode_nested_result<T>(&self, bytes: &ScrubbedBytes, limit: usize) -> Result<T, BrokerError>
@@ -1163,20 +1221,36 @@ impl BrokerSession {
         for<'de> T: NoritoDeserialize<'de>,
     {
         let _scope = bytes.enter_decode_admission();
-        decode_nested_canonical::<T>(bytes, limit).inspect_err(|_| {
-            self.poison();
+        decode_nested_canonical::<T>(bytes, limit).inspect_err(|error| {
+            self.poison_with_reason(*error);
         })
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one request owns its full authenticated exchange"
-    )]
     fn call(
         &self,
         binding: &ProviderBindingWireV1,
         metadata_digest: [u8; 32],
         operation: u16,
         payload: Vec<u8>,
+        mutating: bool,
+    ) -> Result<ScrubbedBytes, BrokerError> {
+        self.call_with_scrubbed_payload(
+            binding,
+            metadata_digest,
+            operation,
+            ScrubbedBytes::new(payload),
+            mutating,
+        )
+    }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one request owns its full authenticated exchange"
+    )]
+    fn call_with_scrubbed_payload(
+        &self,
+        binding: &ProviderBindingWireV1,
+        metadata_digest: [u8; 32],
+        operation: u16,
+        payload: ScrubbedBytes,
         mutating: bool,
     ) -> Result<ScrubbedBytes, BrokerError> {
         let frame_limit = operation_frame_limit(operation);
@@ -1191,15 +1265,15 @@ impl BrokerSession {
             .connection
             .lock()
             .map_err(|_| BrokerError::Unavailable)?;
-        if connection.poisoned {
-            return Err(BrokerError::Unavailable);
+        if let Some(reason) = connection.poison_reason {
+            return Err(reason);
         }
         let request_id = connection.next_request_id;
         let next_request_id = connection
             .next_request_id
             .checked_add(1)
             .ok_or(BrokerError::Unavailable)?;
-        let request = make_operation_request(
+        let request = make_operation_request_with_scrubbed_payload(
             connection.session_id,
             request_id,
             binding.clone(),
@@ -1213,12 +1287,13 @@ impl BrokerSession {
         connection.next_request_id = next_request_id;
         if write_operation_request_frame(&mut connection.stream, &request, &request_frame).is_err()
         {
-            connection.poisoned = true;
-            return Err(if mutating {
+            let error = if mutating {
                 BrokerError::Ambiguous
             } else {
                 BrokerError::Unavailable
-            });
+            };
+            connection.poison_reason = Some(error);
+            return Err(error);
         }
         drop(request_frame);
         let Ok(response_frame) = read_length_prefixed_with_decode_admission(
@@ -1226,34 +1301,37 @@ impl BrokerSession {
             frame_limit,
             &decode_admission,
         ) else {
-            connection.poisoned = true;
-            return Err(if mutating {
+            let error = if mutating {
                 BrokerError::Ambiguous
             } else {
                 BrokerError::Unavailable
-            });
+            };
+            connection.poison_reason = Some(error);
+            return Err(error);
         };
         let Ok(mut response) = decode_operation_frame::<OperationResponseV1>(
             &response_frame,
             FRAME_KIND_OPERATION_RESPONSE_V1,
             operation,
         ) else {
-            connection.poisoned = true;
-            return Err(if mutating {
+            let error = if mutating {
                 BrokerError::Ambiguous
             } else {
                 BrokerError::Protocol
-            });
+            };
+            connection.poison_reason = Some(error);
+            return Err(error);
         };
         if let Err(error) =
             validate_operation_response_for_client(&request, &response, &self.network_id)
         {
-            connection.poisoned = true;
-            return Err(if mutating {
+            let error = if mutating {
                 BrokerError::Ambiguous
             } else {
                 error
-            });
+            };
+            connection.poison_reason = Some(error);
+            return Err(error);
         }
         match response.status {
             STATUS_OK_V1 => {
@@ -1267,24 +1345,25 @@ impl BrokerSession {
             STATUS_REJECTED_V1 => Err(BrokerError::Rejected),
             STATUS_CONFLICT_V1 => Err(BrokerError::Conflict),
             STATUS_STALE_OR_REVOKED_V1 => {
-                connection.poisoned = true;
+                connection.poison_reason = Some(BrokerError::StaleOrRevoked);
                 Err(BrokerError::StaleOrRevoked)
             }
             STATUS_AMBIGUOUS_V1 => {
-                connection.poisoned = true;
+                connection.poison_reason = Some(BrokerError::Ambiguous);
                 Err(BrokerError::Ambiguous)
             }
             STATUS_UNAVAILABLE_V1 => {
-                connection.poisoned = true;
+                connection.poison_reason = Some(BrokerError::Unavailable);
                 Err(BrokerError::Unavailable)
             }
             _ => {
-                connection.poisoned = true;
-                Err(if mutating {
+                let error = if mutating {
                     BrokerError::Ambiguous
                 } else {
                     BrokerError::Protocol
-                })
+                };
+                connection.poison_reason = Some(error);
+                Err(error)
             }
         }
     }
@@ -1293,15 +1372,9 @@ impl BrokerSession {
         binding: &ProviderBindingWireV1,
         metadata_digest: [u8; 32],
         operation: u16,
-        mut payload: ScrubbedBytes,
+        payload: ScrubbedBytes,
         mutating: bool,
     ) -> Result<ScrubbedBytes, BrokerError> {
-        self.call(
-            binding,
-            metadata_digest,
-            operation,
-            payload.take(),
-            mutating,
-        )
+        self.call_with_scrubbed_payload(binding, metadata_digest, operation, payload, mutating)
     }
 }

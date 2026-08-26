@@ -96,7 +96,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CancelTwitterEscrow {
 mod tests {
     use super::*;
     use crate::isi::test_support::{
-        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+        assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::core::DecodeFromSlice;
@@ -133,11 +133,15 @@ mod tests {
         );
     }
     #[test]
-    fn social_registry_decodes_type_names() {
+    fn social_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::InstructionRegistry::new()
-            .register_slice::<ClaimTwitterFollowReward>()
-            .register_slice::<SendToTwitter>()
-            .register_slice::<CancelTwitterEscrow>();
+            .register_with_id_slice::<ClaimTwitterFollowReward>(
+                "iroha.instruction.v1::social::ClaimTwitterFollowReward",
+            )
+            .register_with_id_slice::<SendToTwitter>("iroha.instruction.v1::social::SendToTwitter")
+            .register_with_id_slice::<CancelTwitterEscrow>(
+                "iroha.instruction.v1::social::CancelTwitterEscrow",
+            );
         assert_registry_decodes(
             &registry,
             ClaimTwitterFollowReward {

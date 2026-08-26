@@ -21,4 +21,5 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
 hex = { workspace = true }
-blake3 = { workspace = true }
+blake3 = { workspace = true, features = ["zeroize"] }
+zeroize = { version = "1.8.2", default-features = false, features = ["alloc"] }

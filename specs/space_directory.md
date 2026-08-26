@@ -454,7 +454,7 @@ POST /v1/space-directory/manifests/revoke
 | Field | Type | Description |
 |-------|------|-------------|
 | `authority` | `AccountId` | Account that signs the revocation transaction. |
-| `uaid` | `String` | UAID literal (`uaid:<hex>` or raw 64-char hex digest, LSB=1). |
+| `uaid` | `String` | Exact lower-case UAID literal (`uaid:<64-hex>`, LSB=1). |
 | `dataspace` | `u64` | Dataspace identifier that hosts the manifest. |
 | `revoked_epoch` | `u64` | Epoch (inclusive) when the revocation should take effect. |
 | `reason` | `Option<String>` | Optional audit trail message stored alongside the lifecycle data. |

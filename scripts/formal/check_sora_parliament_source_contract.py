@@ -80,6 +80,10 @@ def main() -> int:
             "public_finding.endorsements != quorum",
             ".endorsing_assignments\n                        .windows(2)",
             ".all(|pair| pair[0] < pair[1])",
+            "ballot.commitment_closed_at_height <= ballot.survivor_freeze_height",
+            "ballot.commitment_closed_at_height > ballot.commitment_close_height",
+            ".saturating_sub(ballot.survivor_freeze_height)",
+            "parliament_timed_ovn_required_chunk_blocks_v1(",
         ),
     )
     if "AggregateOpeningFailed" in types:
@@ -99,7 +103,16 @@ def main() -> int:
             "pub(crate) fn precheck_freeze_ballot_survivors(",
             "current_height == ballot.survivor_freeze_height",
             "pub(crate) fn precheck_freeze_timed_ovn_corpus(",
-            "current_height == ballot.commitment_close_height",
+            "timed_commitment_height_is_in_window(ballot, current_height)",
+            "height > ballot.survivor_freeze_height",
+            "height <= ballot.commitment_close_height",
+            "timed_commitment_completed_in_window(ballot)",
+            "ParliamentBallotFailureKindV1::CommitmentDeadlineExpired",
+            "minimum_registration_phase_blocks = u64::from(policy.max_corpus_entries)",
+            "policy.registration_phase_blocks < minimum_registration_phase_blocks",
+            "policy.survivor_freeze_phase_blocks < minimum_survivor_freeze_phase_blocks",
+            "parliament_timed_ovn_required_chunk_blocks_v1(policy.max_corpus_entries)",
+            "timed_ovn_policy.max_corpus_entries < original_seats",
             "policy.opening_phase_blocks == 0",
             ".checked_add(policy.opening_phase_blocks)",
             "at_height > ballot.opening_deadline_height",
@@ -173,6 +186,16 @@ def main() -> int:
 
     instruction_path = "crates/iroha_data_model/src/isi/governance/parliament.rs"
     instructions = read(instruction_path)
+    require_all(
+        instruction_path,
+        instructions,
+        (
+            "PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1: usize = 32",
+            "parliament_timed_ovn_required_chunk_blocks_v1",
+            "next contiguous corpus chunk is appended",
+            "complete exact survivor coverage and causes automatic corpus sealing",
+        ),
+    )
     transition_enum = section(
         instructions,
         "pub enum ParliamentLifecycleTransitionV1 {",
@@ -348,6 +371,7 @@ def main() -> int:
             ".record_dropout(participant_hash, &tle_key_session)",
             ".freeze_survivors(&tle_key_session)",
             ".seal_ballots(payload.ballot_records, &tle_key_session)",
+            "PARLIAMENT_TIMED_OVN_BALLOT_CHUNK_MAX_RECORDS_V1",
             "DueParliamentCertificateExecutionV1",
             "execute_due_parliament_certificate_v1",
             "record_due_parliament_execution_failure_v1",
@@ -425,6 +449,21 @@ def main() -> int:
                 f"{world_path}: {phase_guard!r} must precede proof-heavy {expensive_call!r}"
             )
 
+    corpus_branch = section(
+        world,
+        "gov::ParliamentLifecycleTransitionV1::FreezeTimedOvnCorpus(payload) => {",
+        "gov::ParliamentLifecycleTransitionV1::FinalizeOpenedBallot(payload) => {",
+        world_path,
+    )
+    require_all(
+        world_path,
+        corpus_branch,
+        (
+            "TimedOvnLifecycleStateV1::CorpusOpen(_)",
+            "if let TimedOvnLifecycleStateV1::Sealed(sealed) = &lifecycle",
+            ".freeze_timed_ovn_corpus(",
+        ),
+    )
     api_path = "crates/iroha_torii_shared/src/parliament_api.rs"
     api = read(api_path)
     require_all(api_path, api, ("impl ParliamentTransitionDraftRequestV1 {",))
@@ -515,6 +554,35 @@ def main() -> int:
             '"ballot_opening_deadline_expired"',
         ),
     )
+    commitment_precheck = section(
+        reducer,
+        "pub(crate) fn precheck_freeze_timed_ovn_corpus(",
+        "fn precheck_ballot_checkpoint(",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        commitment_precheck,
+        (
+            "timed_commitment_height_is_in_window(ballot, current_height)",
+            "ballot.survivors_frozen_at_height == Some(ballot.survivor_freeze_height)",
+        ),
+    )
+    ballot_failure_classifier = section(
+        reducer,
+        "fn classify_ballot_failure(",
+        "fn ballot_failure_matches_state(",
+        reducer_path,
+    )
+    require_all(
+        reducer_path,
+        ballot_failure_classifier,
+        (
+            "BallotAttemptStatusV1::TimedCommitment",
+            "current_height > ballot.commitment_close_height",
+            "ParliamentBallotFailureKindV1::CommitmentDeadlineExpired",
+        ),
+    )
 
     defaults_path = "crates/iroha_config/src/parameters/defaults.rs"
     defaults = read(defaults_path)
@@ -523,6 +591,7 @@ def main() -> int:
         defaults,
         (
             "pub const PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS: u64 = 3_600",
+            "pub const SURVIVOR_FREEZE_PHASE_BLOCKS: u64 = 1_000",
             "pub const OPENING_PHASE_BLOCKS: u64 = 600",
         ),
     )
@@ -538,6 +607,10 @@ def main() -> int:
             ".checked_add(self.opening_phase_blocks)",
             '("opening_phase_blocks", self.opening_phase_blocks)',
             '"governance.parliament_timed_ovn.opening_phase_blocks"',
+            "parliament_timed_ovn_required_chunk_blocks_v1(",
+            "self.registration_phase_blocks >= required_registration_blocks",
+            "self.survivor_freeze_phase_blocks >= required_single_record_blocks",
+            "self.commitment_phase_blocks >= required_chunk_blocks",
         ),
     )
     user_config_path = "crates/iroha_config/src/parameters/user.rs"
@@ -590,8 +663,30 @@ def main() -> int:
             "no secret fields, private-share codec, individual opening",
             "aggregate-only tally operation",
             "fn verify_final_release_pregate(",
+            "CorpusOpen(TimedOvnCorpusOpenStateV1)",
+            "fn is_bounded_ballot_prefix_extension(",
+            "pub(crate) fn validate_committed_cache(",
         ),
     )
+    corpus_open_impl = section(
+        evidence,
+        "impl TimedOvnCorpusOpenStateV1 {",
+        "/// Public-only persisted evidence for a complete sealed timed-OVN ballot corpus.",
+        evidence_path,
+    )
+    require_all(
+        evidence_path,
+        corpus_open_impl,
+        (
+            "fn validate_committed_cache(",
+            "self.frozen.verification_common(tle_key_session)",
+            "self.accumulator.validate_shape()",
+        ),
+    )
+    if "self.frozen.validate_committed_cache" in corpus_open_impl:
+        raise RuntimeError(
+            f"{evidence_path}: a corpus append must not rederive the predecessor's frozen cache"
+        )
     lifecycle_finalize = section(
         evidence,
         "/// Verify the unique threshold release and persist the aggregate-only tally.",
@@ -601,14 +696,38 @@ def main() -> int:
     require_all(
         evidence_path,
         lifecycle_finalize,
-        ("sealed.verify_final_release_pregate(", "sealed.validate(tle_key_session)?"),
+        ("sealed.finalize_release_committed_cache(",),
     )
-    if lifecycle_finalize.find("verify_final_release_pregate") > lifecycle_finalize.find(
-        "sealed.validate"
+    cached_finalize = section(
+        evidence,
+        "fn finalize_release_committed_cache(",
+        "/// Public tally derived only after a valid threshold release opens the aggregate.",
+        evidence_path,
+    )
+    require_all(
+        evidence_path,
+        cached_finalize,
+        ("self.verify_final_release_pregate(", "self.validate_committed_cache("),
+    )
+    if cached_finalize.find("verify_final_release_pregate") > cached_finalize.find(
+        "validate_committed_cache"
     ):
         raise RuntimeError(
-            f"{evidence_path}: fixed-size final-release verification must precede corpus replay"
+            f"{evidence_path}: fixed-size final-release verification must precede committed-cache validation"
         )
+
+    restore_path = "crates/iroha_core/src/state/deserialize_world.rs"
+    restore = read(restore_path)
+    require_all(
+        restore_path,
+        restore,
+        (
+            "TimedOvnLifecycleStateV1::CorpusOpen(_)",
+            ".validated_parliament_reducer_binding(key_session)",
+            "timed_ovn_reducer_binding_matches(ballot_attempt_id, &lifecycle_binding)",
+            "parliament_timed_ovn_resource_windows_overlap_v1(left_windows, right_windows)",
+        ),
+    )
 
     tle_release_path = "crates/iroha_core/src/tle_release.rs"
     tle_release = read(tle_release_path)
@@ -947,6 +1066,15 @@ def main() -> int:
             "certificateFindingEndorsementCount",
             "certificateFindingQuorum",
             "ExactPhaseBoundaries ==",
+            "PhaseCapacity ==",
+            "RegistrationBlocks >= MaxCorpusEntries + 1",
+            "SurvivorBlocks >= MaxCorpusEntries",
+            "CommitmentBlocks * 32 >= MaxCorpusEntries",
+            "FreezeCommitmentInWindow ==",
+            "height > survivorFreezeHeight",
+            "height <= commitmentCloseHeight",
+            "commitmentClosedAt > survivorFreezeHeight",
+            "commitmentClosedAt <= commitmentCloseHeight",
             "ExactPublicFindingDeadline ==",
             "ObjectiveReleaseAvailability ==",
             "OpeningBlocks",
@@ -974,6 +1102,10 @@ def main() -> int:
         model_config,
         (
             "OpeningBlocks = 2",
+            "RegistrationBlocks = 3",
+            "SurvivorBlocks = 2",
+            "CommitmentBlocks = 2",
+            "MaxCorpusEntries = 2",
             "FindingBlocks = 2",
             "SeatedAssignments = {Seat0, Seat1}",
             "FirstAssignment = Seat0",
@@ -982,6 +1114,7 @@ def main() -> int:
             "AuthorityBoundImmutableMemberRecords",
             "PublicFindingQuorumBinding",
             "ExactPublicFindingDeadline",
+            "PhaseCapacity",
             "BoundedOpeningWindow",
             "CertificateBindsApprovedResult",
             "ExactHeightCasEnactment",

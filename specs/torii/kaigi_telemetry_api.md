@@ -16,9 +16,9 @@ the Prometheus metrics emitted by `iroha_telemetry::metrics::Metrics`.
 | `/v1/kaigi/relays` | GET | `app_api` + `telemetry` | Operator-signed expensive read listing registered relays with their domain, bandwidth class, HPKE fingerprint, and latest health sample. Emits canonical I105 relay identifiers. | `KaigiRelaySummaryListDto` |
 | `/v1/kaigi/relays/{relay_id}` | GET | `app_api` + `telemetry` | Operator-signed bounded lookup for one relay, including base64 HPKE key material, latest health report metadata, and per-domain counters. `reported_by` always uses canonical I105 output, matching the Torii hard-cut account-literal contract. | `KaigiRelayDetailDto` |
 | `/v1/kaigi/relays/health` | GET | `app_api` + `telemetry` | Operator-signed expensive aggregation of relay health totals and per-domain metrics. | `KaigiRelayHealthSnapshotDto` |
-| `/v1/kaigi/relays/events` | GET (SSE) | `app_api` + `telemetry` | Server-Sent Events stream emitting relay registration and health update notifications. | SSE events with JSON payloads (see below) |
+| `/v1/kaigi/relays/events` | GET (SSE) | `app_api` | Server-Sent Events stream emitting relay registration and health update notifications. | SSE events with JSON payloads (see below) |
 
-> **Account literals (`ADDR-5`):** The list and single-relay endpoints always return canonical I105 in `relay_id` and `reported_by`, matching the Torii hard-cut account-literal contract and the metrics counters backing Local-8 cutover dashboards.
+> **Account literals (`ADDR-5`):** The list and single-relay endpoints always return canonical I105 in `relay_id` and `reported_by`, matching the Torii hard-cut account-literal contract and its invalid-input telemetry.
 
 ### Response Schemas
 
@@ -29,7 +29,7 @@ pub struct KaigiRelaySummaryDto {
     pub domain: String,
     pub bandwidth_class: u8,
     pub hpke_fingerprint_hex: String,
-    pub status: Option<KaigiRelayHealthStatus>,
+    pub status: Option<String>, // lowercase `healthy`, `degraded`, or `unavailable`
     pub reported_at_ms: Option<u64>,
 }
 
@@ -70,6 +70,16 @@ pub struct KaigiRelayHealthSnapshotDto {
 
 All DTOs derive Norito and JSON traits (`norito::derive`, `crate::json_macros`)
 so responses stay canonical across transports.
+
+The HPKE fingerprint is the lowercase hexadecimal form of
+`iroha_crypto::Hash::new(hpke_public_key)`: a 32-byte Blake2b digest with
+Iroha's least-significant-bit marker applied. It is not a raw BLAKE3 digest.
+On every successful list response, `total == items.len()` and both values are
+bounded by `KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS` (500). A summary's `status` and
+`reported_at_ms` are either both absent or both present. In a detail response,
+`reported_call` and `reported_by` follow the same feedback presence, `notes`
+can appear only with that feedback, and any `metrics` entry uses the relay's
+owning domain.
 
 ### SSE Payload Shape
 
@@ -121,9 +131,11 @@ comment (`"ignored"`), and filter mismatches yield `"filtered"` comments.
   the requested heap window, and caps retained page JSON at
   `KAIGI_CALL_SIGNALS_MAX_RETAINED_BYTES`.
 - The SSE route retains its separate streaming protocol and is not converted to
-  snapshot-style operator request signing by this contract.
-- All routes still reject with `TelemetryProfileRestricted` when the active
-  profile disables metrics.
+  snapshot-style operator request signing by this contract. It consumes the
+  core event broadcast and therefore remains available when metrics telemetry
+  is not compiled or the active profile disables metrics.
+- The three snapshot routes reject with `TelemetryProfileRestricted` when the
+  active profile disables metrics.
 
 ### Metrics Backing
 

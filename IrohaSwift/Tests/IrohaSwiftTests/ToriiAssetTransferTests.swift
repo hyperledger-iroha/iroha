@@ -756,13 +756,12 @@ final class ToriiAssetTransferTests: XCTestCase {
         for mutation in statusMutations {
             var object = pipelineStatusObject()
             mutation(&object)
-            let status = try JSONDecoder().decode(
-                ToriiPipelineTransactionStatus.self,
-                from: JSONSerialization.data(withJSONObject: object)
-            )
             XCTAssertThrowsError(
                 try ToriiAssetTransferDraft.validateAuthoritativeFinality(
-                    status,
+                    JSONDecoder().decode(
+                        ToriiPipelineTransactionStatus.self,
+                        from: JSONSerialization.data(withJSONObject: object)
+                    ),
                     expectedTransactionHashHex: hashHex(0x33)
                 )
             )
@@ -1259,7 +1258,7 @@ final class ToriiAssetTransferTests: XCTestCase {
                 XCTAssertEqual(
                     try JSONDecoder().decode(
                         ToriiAssetTransferRequest.self,
-                        from: try XCTUnwrap(request.httpBody)
+                        from: try XCTUnwrap(toriiClientTestBodyData(from: request))
                     ),
                     evidence.submittedRequest
                 )
@@ -1353,7 +1352,7 @@ final class ToriiAssetTransferTests: XCTestCase {
                 XCTAssertEqual(
                     try JSONDecoder().decode(
                         ToriiAssetTransferRequest.self,
-                        from: try XCTUnwrap(request.httpBody)
+                        from: try XCTUnwrap(toriiClientTestBodyData(from: request))
                     ),
                     evidence.submittedRequest
                 )
@@ -1458,7 +1457,7 @@ final class ToriiAssetTransferTests: XCTestCase {
                 XCTAssertEqual(
                     try JSONDecoder().decode(
                         ToriiAssetTransferRequest.self,
-                        from: try XCTUnwrap(request.httpBody)
+                        from: try XCTUnwrap(toriiClientTestBodyData(from: request))
                     ),
                     evidence.submittedRequest
                 )
@@ -1532,7 +1531,7 @@ final class ToriiAssetTransferTests: XCTestCase {
                 XCTAssertEqual(
                     try JSONDecoder().decode(
                         ToriiAssetTransferRequest.self,
-                        from: try XCTUnwrap(request.httpBody)
+                        from: try XCTUnwrap(toriiClientTestBodyData(from: request))
                     ),
                     evidence.submittedRequest
                 )
@@ -1712,8 +1711,6 @@ final class ToriiAssetTransferTests: XCTestCase {
             "pipeline_status": [
                 "hash": transactionHash,
                 "status": ["kind": "Queued"],
-                "summary": "Queued",
-                "diagnostics": [],
                 "scope": "local",
                 "resolved_from": "queue",
             ],
@@ -1725,7 +1722,6 @@ final class ToriiAssetTransferTests: XCTestCase {
         var object = submittedResponseObject()
         var pipeline = object["pipeline_status"] as! [String: Any]
         pipeline["status"] = ["kind": "Applied", "block_height": 44]
-        pipeline["summary"] = "Applied at block 44"
         pipeline["resolved_from"] = "state"
         object["pipeline_status"] = pipeline
         var receipt = object["receipt"] as! [String: Any]
@@ -1768,8 +1764,6 @@ final class ToriiAssetTransferTests: XCTestCase {
             "pipeline_status": [
                 "hash": evidence.transactionHashHex,
                 "status": ["kind": "Queued"],
-                "summary": "Queued",
-                "diagnostics": [],
                 "scope": "local",
                 "resolved_from": "queue",
             ],
@@ -1783,7 +1777,6 @@ final class ToriiAssetTransferTests: XCTestCase {
         var object = submittedResponseObject(evidence: evidence)
         var pipeline = object["pipeline_status"] as! [String: Any]
         pipeline["status"] = ["kind": "Applied", "block_height": 44]
-        pipeline["summary"] = "Applied at block 44"
         pipeline["resolved_from"] = "state"
         object["pipeline_status"] = pipeline
         var receipt = object["receipt"] as! [String: Any]
@@ -1826,8 +1819,6 @@ final class ToriiAssetTransferTests: XCTestCase {
         [
             "hash": hash,
             "status": ["kind": "Applied", "block_height": 44],
-            "summary": "Applied at block 44",
-            "diagnostics": [],
             "scope": "global",
             "resolved_from": "state",
         ]
@@ -1845,7 +1836,9 @@ final class ToriiAssetTransferTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [AssetTransferStubURLProtocol.self]
         return ToriiClient(
-            baseURL: URL(string: "https://torii.example")!,
+            baseURL: URL(
+                string: "https://torii-\(UUID().uuidString.lowercased()).example"
+            )!,
             session: URLSession(configuration: configuration),
             localSigningContext: ToriiLocalSigningContext(
                 networkId: TestNetworkIds.canonical

@@ -629,6 +629,8 @@ mod tests {
             .join("fixtures/da/reconstruct/rs_parity_v1");
         let manifest_path = fixture_root.join("manifest.norito.hex");
         let manifest = load_manifest(&manifest_path).expect("fixture manifest");
+        build_plan_from_da_manifest(&manifest)
+            .expect("fixture manifest must produce a valid DA plan");
         let chunks_src = fixture_root.join("chunks");
         let (_temp_dir, temp_path) = canonical_tempdir();
         for entry in fs::read_dir(&chunks_src).expect("chunks dir") {
@@ -723,10 +725,11 @@ mod tests {
         let plan = CarBuildPlan::single_file_with_profile(&payload, chunk_profile)
             .expect("plan derivation succeeds");
         let mut chunk_store = ChunkStore::with_profile(chunk_profile);
-        let chunk_dir = tempdir().expect("chunk dir");
+        let (_chunk_temp_root, chunk_temp_path) = canonical_tempdir();
+        let chunk_dir = chunk_temp_path.join("chunks");
         let mut reader: &[u8] = payload.as_slice();
         let chunk_output = chunk_store
-            .ingest_plan_stream_to_directory(&plan, &mut reader, chunk_dir.path())
+            .ingest_plan_stream_to_directory(&plan, &mut reader, &chunk_dir)
             .expect("persist chunk files");
         let (manifest, parity_payloads) = build_fixture_manifest(
             &payload,
@@ -742,7 +745,7 @@ mod tests {
         let chunks_dir = fixture_root.join("chunks");
         fs::create_dir_all(&chunks_dir).expect("create chunks directory");
         for record in &chunk_output.records {
-            let src = chunk_dir.path().join(&record.file_name);
+            let src = chunk_dir.join(&record.file_name);
             let dst = chunks_dir.join(&record.file_name);
             fs::copy(&src, &dst).expect("copy chunk file");
         }
@@ -879,7 +882,7 @@ mod tests {
             client_blob_id: BlobDigest::from_hash(blake3::hash(b"fixture-client")),
             lane_id: LaneId::new(9),
             epoch: 7,
-            blob_class: BlobClass::TaikaiSegment,
+            blob_class: BlobClass::NexusLaneSidecar,
             codec: BlobCodec::new("fixture.binary"),
             blob_hash: BlobDigest::from_hash(blake3::hash(payload)),
             chunk_root: BlobDigest::new(*chunk_store.por_tree().root()),

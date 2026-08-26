@@ -58,10 +58,10 @@ impl EvidenceViewerFinalizedAuthorizationReaderV1
     ) -> Result<EvidenceViewerFinalizedAuthorizationV1, EvidenceViewerAuthorizationErrorV1> {
         let parsed = AccountId::parse_encoded(viewer_account)
             .map_err(|_| EvidenceViewerAuthorizationErrorV1::Denied)?;
-        if parsed.canonical() != viewer_account {
+        if parsed.to_string() != viewer_account {
             return Err(EvidenceViewerAuthorizationErrorV1::Denied);
         }
-        let account = parsed.into_account_id();
+        let account = parsed;
         let view = self.state.query_view();
         let case = FindSorafsModerationCase::new(case_id.to_owned(), round_id.to_owned())
             .execute(&view)

@@ -585,7 +585,7 @@ impl<'a> DecodeFromSlice<'a> for SoranetRoute {
     }
 }
 /// An entry/exit route authorizing privacy-preserving transport.
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct PrivacyRoute {
     pub route_id: Hash,
@@ -597,6 +597,26 @@ pub struct PrivacyRoute {
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
     pub soranet: Option<SoranetRoute>,
+}
+impl fmt::Debug for PrivacyRoute {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivacyRoute")
+            .field("route_id", &self.route_id)
+            .field("entry", &self.entry)
+            .field("exit", &self.exit)
+            .field(
+                "ticket_entry",
+                &format_args!("<redacted:{} bytes>", self.ticket_entry.len()),
+            )
+            .field(
+                "ticket_exit",
+                &format_args!("<redacted:{} bytes>", self.ticket_exit.len()),
+            )
+            .field("expiry_segment", &self.expiry_segment)
+            .field("soranet", &self.soranet)
+            .finish()
+    }
 }
 /// Optional neural enhancement bundle metadata.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -825,7 +845,7 @@ pub struct ContentKeyUpdate {
     pub valid_from_segment: u64,
 }
 /// Privacy route provisioning payload.
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 pub struct PrivacyRouteUpdate {
     pub route_id: Hash,
@@ -837,6 +857,23 @@ pub struct PrivacyRouteUpdate {
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
     pub soranet: Option<SoranetRoute>,
+}
+impl fmt::Debug for PrivacyRouteUpdate {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PrivacyRouteUpdate")
+            .field("route_id", &self.route_id)
+            .field("stream_id", &self.stream_id)
+            .field("content_key_id", &self.content_key_id)
+            .field("valid_from_segment", &self.valid_from_segment)
+            .field("valid_until_segment", &self.valid_until_segment)
+            .field(
+                "exit_token",
+                &format_args!("<redacted:{} bytes>", self.exit_token.len()),
+            )
+            .field("soranet", &self.soranet)
+            .finish()
+    }
 }
 /// Capability negotiation report.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -9478,6 +9515,42 @@ mod tests {
             &demo_hash(0x26),
             "channel id must roundtrip"
         );
+    }
+    #[test]
+    fn privacy_route_debug_redacts_bearer_tokens() {
+        let relay = PrivacyRelay {
+            relay_id: demo_hash(0x41),
+            endpoint: "/dns/relay.example/quic".into(),
+            key_fingerprint: demo_hash(0x42),
+            capabilities: PrivacyCapabilities::from_bits(1),
+        };
+        let route = PrivacyRoute {
+            route_id: demo_hash(0x43),
+            entry: relay.clone(),
+            exit: relay,
+            ticket_entry: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            ticket_exit: vec![0xCA, 0xFE, 0xBA, 0xBE],
+            expiry_segment: 9,
+            soranet: None,
+        };
+        let rendered = format!("{route:?}");
+        assert!(rendered.contains("ticket_entry: <redacted:4 bytes>"));
+        assert!(rendered.contains("ticket_exit: <redacted:4 bytes>"));
+        assert!(!rendered.contains("222, 173, 190, 239"));
+        assert!(!rendered.contains("202, 254, 186, 190"));
+
+        let update = PrivacyRouteUpdate {
+            route_id: demo_hash(0x44),
+            stream_id: demo_hash(0x45),
+            content_key_id: 1,
+            valid_from_segment: 0,
+            valid_until_segment: u64::MAX,
+            exit_token: vec![0xBA, 0xAD, 0xF0, 0x0D],
+            soranet: None,
+        };
+        let rendered = format!("{update:?}");
+        assert!(rendered.contains("exit_token: <redacted:4 bytes>"));
+        assert!(!rendered.contains("186, 173, 240, 13"));
     }
     #[test]
     fn soranet_stream_tag_default_is_norito() {

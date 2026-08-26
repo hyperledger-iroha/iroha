@@ -1571,7 +1571,7 @@ private class MusubiAccountOrderKeyV1(
 )
 
 private fun musubiAccountOrderKeyV1(canonicalOwner: String): MusubiAccountOrderKeyV1 {
-    val address = AccountAddress.parseAny(canonicalOwner, null).address
+    val address = AccountAddress.parseEncoded(canonicalOwner, null)
     val single = address.singleKeyPayload()
     if (single != null) {
         return MusubiAccountOrderKeyV1(

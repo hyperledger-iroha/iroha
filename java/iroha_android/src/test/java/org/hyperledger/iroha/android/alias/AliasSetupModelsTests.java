@@ -606,7 +606,7 @@ public final class AliasSetupModelsTests {
   }
 
   @Test
-  public void sponsoredOnboardingReceiptIsTypedSecretFreeAndRoundTripsForApply()
+  public void sponsoredOnboardingReceiptAndPrepareRequestAreTypedAndSecretFree()
       throws Exception {
     final AliasSetupModels.AccountAliasIntent intent = accountIntent();
     final AccountOnboardingPlanRequestV1 request =
@@ -635,20 +635,20 @@ public final class AliasSetupModelsTests {
     final byte[] encoded =
         JsonEncoder.encode(receipt.toJsonMap()).getBytes(StandardCharsets.UTF_8);
     assert receipt.equals(AccountOnboardingJsonParser.parseReceipt(encoded));
-    final String apply =
-        JsonEncoder.encode(new AccountOnboardingApplyRequestV1(receipt).toJsonMap());
-    assert !apply.contains("token");
-    assert !apply.contains("private_key");
-
-    final AccountOnboardingResponseV1 response =
-        AccountOnboardingJsonParser.parseResponse(
-            ("{\"account_id\":\""
-                    + account(0x22)
-                    + "\",\"alias\":\"merchant@banka.paynet\",\"status\":\"Unchanged\","
-                    + "\"disposition\":{\"kind\":\"no_op\",\"value\":null}}")
-                .getBytes(StandardCharsets.UTF_8));
-    assert response.status() == AccountOnboardingStatusV1.UNCHANGED;
-    assert response.transactionHashHex() == null;
+    final TairaPublicResetMutationBindingV1 binding =
+        new TairaPublicResetMutationBindingV1(
+            "11".repeat(32),
+            "onboarding-fixture-nonce-0000001",
+            TairaPublicResetMutationBindingV1.ONBOARDING,
+            "onboarding",
+            "22".repeat(32),
+            50_000);
+    final String prepare =
+        JsonEncoder.encode(new AccountOnboardingPrepareRequestV1(binding, receipt).toJsonMap());
+    assert prepare.contains(AccountOnboardingPrepareRequestV1.SCHEMA);
+    assert prepare.contains(TairaPublicResetMutationBindingV1.SCHEMA);
+    assert !prepare.contains("token");
+    assert !prepare.contains("private_key");
 
     final AliasSetupModels.AliasSetupReportV1 readiness =
         AccountOnboardingJsonParser.parseReadiness(
@@ -656,144 +656,6 @@ public final class AliasSetupModelsTests {
                 .getBytes(StandardCharsets.UTF_8));
     assert readiness.status() == AliasSetupModels.AliasSetupStatusV1.READY;
     assert readiness.diagnostics().isEmpty();
-  }
-
-  @Test
-  public void onboardingResponseRequiresExactStatusHashAndDispositionSemantics()
-      throws Exception {
-    final String hash = "ab".repeat(32);
-    final String account = account(0x22);
-
-    new AccountOnboardingResponseV1(
-        account,
-        "merchant@banka.paynet",
-        hash,
-        AccountOnboardingStatusV1.QUEUED,
-        AliasSetupModels.AliasPlanDispositionV1.CREATE);
-    new AccountOnboardingResponseV1(
-        account,
-        "merchant@banka.paynet",
-        hash,
-        AccountOnboardingStatusV1.REPAIRED,
-        AliasSetupModels.AliasPlanDispositionV1.REPAIR);
-    new AccountOnboardingResponseV1(
-        account,
-        "merchant@banka.paynet",
-        hash,
-        AccountOnboardingStatusV1.REPAIRED,
-        AliasSetupModels.AliasPlanDispositionV1.NO_OP);
-    new AccountOnboardingResponseV1(
-        account,
-        "merchant@banka.paynet",
-        null,
-        AccountOnboardingStatusV1.UNCHANGED,
-        AliasSetupModels.AliasPlanDispositionV1.NO_OP);
-
-    expectIllegalArgument(
-        () ->
-            new AccountOnboardingResponseV1(
-                account,
-                "merchant@banka.paynet",
-                hash,
-                AccountOnboardingStatusV1.QUEUED,
-                AliasSetupModels.AliasPlanDispositionV1.REPAIR));
-    expectIllegalArgument(
-        () ->
-            new AccountOnboardingResponseV1(
-                account,
-                "merchant@banka.paynet",
-                hash,
-                AccountOnboardingStatusV1.REPAIRED,
-                AliasSetupModels.AliasPlanDispositionV1.CREATE));
-    expectIllegalArgument(
-        () ->
-            new AccountOnboardingResponseV1(
-                account,
-                "merchant@banka.paynet",
-                hash,
-                AccountOnboardingStatusV1.UNCHANGED,
-                AliasSetupModels.AliasPlanDispositionV1.NO_OP));
-    expectIllegalArgument(
-        () ->
-            new AccountOnboardingResponseV1(
-                account,
-                "merchant@banka.paynet",
-                null,
-                AccountOnboardingStatusV1.QUEUED,
-                AliasSetupModels.AliasPlanDispositionV1.CREATE));
-    expectIllegalArgument(
-        () ->
-            new AccountOnboardingResponseV1(
-                account,
-                "Merchant@Banka.Paynet",
-                null,
-                AccountOnboardingStatusV1.UNCHANGED,
-                AliasSetupModels.AliasPlanDispositionV1.NO_OP));
-  }
-
-  @Test
-  public void onboardingResponseVerifierBindsReceiptAndHttpStatus() throws Exception {
-    final AccountOnboardingPlanReceiptV1 createReceipt =
-        new AccountOnboardingPlanReceiptV1(
-            onboardingBody(account(0x11), TEST_NETWORK_ID), "03".repeat(32), "AA");
-    final AccountOnboardingResponseV1 unchanged =
-        new AccountOnboardingResponseV1(
-            account(0x22),
-            "merchant@banka.paynet",
-            null,
-            AccountOnboardingStatusV1.UNCHANGED,
-            AliasSetupModels.AliasPlanDispositionV1.NO_OP);
-    assert unchanged
-        == AccountOnboardingResponseVerifier.requireValidForReceipt(
-            createReceipt, unchanged, 200);
-
-    final AccountOnboardingResponseV1 queued =
-        new AccountOnboardingResponseV1(
-            account(0x22),
-            "merchant@banka.paynet",
-            "ab".repeat(32),
-            AccountOnboardingStatusV1.QUEUED,
-            AliasSetupModels.AliasPlanDispositionV1.CREATE);
-    assert queued
-        == AccountOnboardingResponseVerifier.requireValidForReceipt(
-            createReceipt, queued, 202);
-
-    expectIllegalArgument(
-        () -> AccountOnboardingResponseVerifier.requireValidForReceipt(createReceipt, queued, 200));
-    final AccountOnboardingResponseV1 substituted =
-        new AccountOnboardingResponseV1(
-            account(0x23),
-            "merchant@banka.paynet",
-            null,
-            AccountOnboardingStatusV1.UNCHANGED,
-            AliasSetupModels.AliasPlanDispositionV1.NO_OP);
-    expectIllegalArgument(
-        () ->
-            AccountOnboardingResponseVerifier.requireValidForReceipt(
-                createReceipt, substituted, 200));
-
-    final AccountOnboardingPlanReceiptV1 noOpReceipt =
-        new AccountOnboardingPlanReceiptV1(
-            onboardingBody(
-                account(0x11),
-                TEST_NETWORK_ID,
-                AliasSetupModels.AliasPlanDispositionV1.NO_OP),
-            "04".repeat(32),
-            "AA");
-    final AccountOnboardingResponseV1 ancillaryRepair =
-        new AccountOnboardingResponseV1(
-            account(0x22),
-            "merchant@banka.paynet",
-            "cd".repeat(32),
-            AccountOnboardingStatusV1.REPAIRED,
-            AliasSetupModels.AliasPlanDispositionV1.NO_OP);
-    assert ancillaryRepair
-        == AccountOnboardingResponseVerifier.requireValidForReceipt(
-            noOpReceipt, ancillaryRepair, 202);
-    expectIllegalArgument(
-        () ->
-            AccountOnboardingResponseVerifier.requireValidForReceipt(
-                noOpReceipt, queued, 202));
   }
 
   @Test
@@ -813,17 +675,17 @@ public final class AliasSetupModelsTests {
                 encoded, AccountAddress.DEFAULT_I105_DISCRIMINANT)));
 
     final AccountOnboardingPlanReceiptV1 receipt = signedOnboardingReceipt(body, signer);
-    assert AccountOnboardingReceiptVerifier.verify(receipt, body.networkId(), null);
+    assert AccountOnboardingReceiptVerifier.verify(receipt, body.networkId(), authority);
     assert receipt.equals(
         AccountOnboardingReceiptVerifier.requireValidForRequest(
-            body.request(), receipt, body.networkId(), null));
+            body.request(), receipt, body.networkId(), authority));
 
     final AccountOnboardingPlanReceiptV1 tampered =
         new AccountOnboardingPlanReceiptV1(
             onboardingBody(authority, OTHER_NETWORK_ID),
             receipt.planHash(),
             receipt.signature());
-    assert !AccountOnboardingReceiptVerifier.verify(tampered, body.networkId(), null);
+    assert !AccountOnboardingReceiptVerifier.verify(tampered, body.networkId(), authority);
 
     final Ed25519PrivateKeyParameters wrongSigner =
         new Ed25519PrivateKeyParameters(filled(0x52), 0);
@@ -832,12 +694,11 @@ public final class AliasSetupModelsTests {
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final AccountOnboardingPlanReceiptV1 wrongAuthorityReceipt =
         signedOnboardingReceipt(onboardingBody(wrongAuthority, TEST_NETWORK_ID), signer);
-    assert !AccountOnboardingReceiptVerifier.verify(wrongAuthorityReceipt, body.networkId(), null);
+    assert !AccountOnboardingReceiptVerifier.verify(
+        wrongAuthorityReceipt, body.networkId(), authority);
 
     final AccountOnboardingPlanReceiptV1 substitutedSelfSignedReceipt =
         signedOnboardingReceipt(onboardingBody(wrongAuthority, TEST_NETWORK_ID), wrongSigner);
-    assert AccountOnboardingReceiptVerifier.verify(
-        substitutedSelfSignedReceipt, body.networkId(), null);
     assert !AccountOnboardingReceiptVerifier.verify(
         substitutedSelfSignedReceipt, body.networkId(), authority);
     try {

@@ -2076,6 +2076,55 @@ impl ProductionLifecycleOwnerV1 {
             .exactly_covers_finalization_work(&self.coordinator)
     }
 
+    /// Build an empty storage-owning production owner for ingress admission tests.
+    pub(in crate::sumeragi) fn empty_owner_for_ingress_test(
+        verified: crate::sumeragi::v2::VerifiedHeightContext,
+        local_signer: &iroha_crypto::KeyPair,
+        root: &std::path::Path,
+    ) -> Self {
+        use super::{CapacityClass, schema::CapacityGeometry};
+
+        let context = super::projection::lifecycle_context(verified.context());
+        let mut coordinator = LifecycleCoordinator::new(
+            context,
+            0,
+            CapacityGeometry::new(CapacityClass::ALL.into_iter().map(|class| (class, 8))),
+        );
+        coordinator
+            .attach_empty_test_ledger(&root.join("ledger"))
+            .expect("attach the empty ingress lifecycle ledger");
+        let body_store = crate::sumeragi::v2_body_store::V2BodyStore::open(
+            root.join("body"),
+            verified.context().clone(),
+        )
+        .expect("open empty ingress owner body store");
+        let (payload_store, recovery) =
+            crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
+                &root.join("serve"),
+                verified.context(),
+            )
+            .expect("open empty ingress owner Serve payload store");
+        let serve_payloads = recovery
+            .authenticate(&verified, local_signer, &body_store)
+            .expect("authenticate empty ingress owner Serve payload census");
+        Self {
+            verified,
+            coordinator,
+            registry: LifecycleWorkRegistryHolder::empty(),
+            recovered_lifecycle_outputs: None,
+            payload_store,
+            serve_payloads,
+            body_store: Some(body_store),
+            body_store_identity: None,
+            kura_binding: None,
+            apply_service: None,
+            adapter_startup: Some(
+                crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
+            ),
+            timeout_supersession_successor: None,
+        }
+    }
+
     /// Build one storage-owning production owner around the exact selected
     /// Fetch carrier used by the cross-module planner transaction regression.
     pub(in crate::sumeragi) fn waiting_fetch_for_ingress_test(

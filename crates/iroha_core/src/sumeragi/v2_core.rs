@@ -73,7 +73,7 @@ pub(crate) use refinement::{
     IN_FLIGHT_FIRST_RELEASE_ACTION_CRASH, IN_FLIGHT_FIRST_RELEASE_ACTION_FANOUT_FROM_PRODUCER,
     IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_COMMIT,
     IN_FLIGHT_FIRST_RELEASE_ACTION_FORGET_RESERVATION_RELEASE,
-    IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5,
+    IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V1,
     IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT,
     IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT,
     IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_KURA_RETIREMENT,
@@ -87,7 +87,7 @@ pub(crate) use refinement::{
     IN_FLIGHT_FIRST_RELEASE_ACTION_RELEASE_RESERVATION_DIRECT,
     IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER,
     IN_FLIGHT_FIRST_RELEASE_ACTION_RESTORE_RELEASED_FIFO,
-    IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4,
+    IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1,
     IN_FLIGHT_FIRST_RELEASE_ACTION_SERVE_LATE_BODY, IN_FLIGHT_FIRST_RELEASE_ACTION_SIGN_READY,
     IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_ABSENT, IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED,
     IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_TOMBSTONED, IN_FLIGHT_FIRST_RELEASE_RESERVATION_ABSENT,
@@ -230,8 +230,8 @@ fn canonical_first_release_state_bytes_v1(
     bytes.extend_from_slice(&state.session.ready_authorized.to_be_bytes());
     bytes.extend_from_slice(&state.session.crashed.to_be_bytes());
     append_first_release_bool_v1(&mut bytes, state.session.producer_alive);
-    append_first_release_bool_v1(&mut bytes, state.history.ever_queue_plan_v4);
-    append_first_release_bool_v1(&mut bytes, state.history.ever_reservation_v5);
+    append_first_release_bool_v1(&mut bytes, state.history.ever_queue_plan_v1);
+    append_first_release_bool_v1(&mut bytes, state.history.ever_reservation_v1);
     bytes.extend_from_slice(&state.history.ever_execution_input_durable.to_be_bytes());
     bytes.extend_from_slice(&state.history.ever_ready_authorized.to_be_bytes());
     bytes.extend_from_slice(&state.history.ready_signed.to_be_bytes());

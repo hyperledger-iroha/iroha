@@ -81,10 +81,20 @@ impl ReplayKey {
         }
     }
 }
+/// Opaque handle for rolling back one specific fresh replay-cache insertion.
+///
+/// The generation distinguishes a reservation from a later insertion of the same key after
+/// expiry or eviction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReplayReservation {
+    key: ReplayKey,
+    generation: u128,
+}
 /// Configuration for [`ReplayCache`]. This governs eviction, TTL, and sequence windows.
 #[derive(Clone, Copy, Debug)]
 pub struct ReplayCacheConfig {
-    /// Maximum number of manifests tracked per `(lane, epoch)` window.
+    /// Maximum number of committed manifests tracked per `(lane, epoch)` window.
+    /// In-flight reservations may temporarily exceed this bound until they commit or roll back.
     pub max_entries_per_lane: NonZeroUsize,
     /// Maximum number of distinct `(lane, epoch)` windows retained globally.
     pub max_lane_epochs: NonZeroUsize,
@@ -163,9 +173,14 @@ pub enum ReplayInsertOutcome {
         /// Snapshot captured after inserting the manifest.
         snapshot: ReplayEntrySnapshot,
     },
-    /// Manifest was already observed; the cache updates its metadata.
+    /// Manifest was already committed; the cache updates its observation metadata.
     Duplicate {
         /// Snapshot captured after registering the duplicate manifest.
+        snapshot: ReplayEntrySnapshot,
+    },
+    /// An identical manifest is reserved by an ingest that has not committed durably yet.
+    InFlight {
+        /// Snapshot captured after observing the in-flight manifest.
         snapshot: ReplayEntrySnapshot,
     },
     /// Sequence number fell outside the permitted lag window.
@@ -190,6 +205,11 @@ pub enum ReplayInsertOutcome {
     /// The global `(lane, epoch)` capacity is full.
     LaneEpochCapacityExceeded {
         /// Configured maximum number of distinct `(lane, epoch)` windows.
+        capacity: usize,
+    },
+    /// The per-lane in-flight reservation capacity is full.
+    ReservationCapacityExceeded {
+        /// Configured maximum number of pending reservations for the lane/epoch.
         capacity: usize,
     },
 }
@@ -233,42 +253,83 @@ impl ReplayCache {
     /// Insert a manifest fingerprint into the cache and obtain the resulting outcome.
     #[must_use]
     pub fn insert(&self, key: ReplayKey, now: Instant) -> ReplayInsertOutcome {
+        self.insert_inner(key, now, false).0
+    }
+    /// Reserve a fresh manifest until the caller durably commits or rolls back the ingest.
+    ///
+    /// The optional handle is present exactly when the outcome is [`ReplayInsertOutcome::Fresh`].
+    /// Pending reservations are not evicted by cache pruning and do not displace committed replay
+    /// history before their durable receipt commits.
+    #[must_use]
+    pub fn reserve(
+        &self,
+        key: ReplayKey,
+        now: Instant,
+    ) -> (ReplayInsertOutcome, Option<ReplayReservation>) {
+        self.insert_inner(key, now, true)
+    }
+    fn insert_inner(
+        &self,
+        key: ReplayKey,
+        now: Instant,
+        reserve: bool,
+    ) -> (ReplayInsertOutcome, Option<ReplayReservation>) {
         let mut guard = self.inner.lock();
         guard.prune(now, &self.config);
         if !guard.lanes.contains_key(&key.lane_epoch)
             && guard.lanes.len() >= self.config.max_lane_epochs.get()
         {
-            return ReplayInsertOutcome::LaneEpochCapacityExceeded {
-                capacity: self.config.max_lane_epochs.get(),
-            };
+            return (
+                ReplayInsertOutcome::LaneEpochCapacityExceeded {
+                    capacity: self.config.max_lane_epochs.get(),
+                },
+                None,
+            );
         }
+        let generation = reserve.then(|| {
+            let generation = guard.next_reservation_generation;
+            guard.next_reservation_generation = guard.next_reservation_generation.wrapping_add(1);
+            generation
+        });
         let lane_state = guard.lanes.entry(key.lane_epoch).or_default();
         if let Some(floor) = lane_state.stale_floor {
             if key.sequence <= floor {
-                return ReplayInsertOutcome::StaleSequence {
-                    highest_observed: lane_state.highest_sequence.max(floor),
-                };
+                return (
+                    ReplayInsertOutcome::StaleSequence {
+                        highest_observed: lane_state.highest_sequence.max(floor),
+                    },
+                    None,
+                );
             }
         }
         if lane_state.highest_sequence >= key.sequence {
             let lag = lane_state.highest_sequence.saturating_sub(key.sequence);
             if lag > self.config.max_sequence_lag {
-                return ReplayInsertOutcome::StaleSequence {
-                    highest_observed: lane_state.highest_sequence,
-                };
+                return (
+                    ReplayInsertOutcome::StaleSequence {
+                        highest_observed: lane_state.highest_sequence,
+                    },
+                    None,
+                );
             }
         }
         if let Some(entry) = lane_state.entries.get_mut(&key.sequence) {
             if entry.fingerprint != key.fingerprint {
-                return ReplayInsertOutcome::ConflictingFingerprint {
-                    expected: entry.fingerprint,
-                    observed: key.fingerprint,
-                };
+                return (
+                    ReplayInsertOutcome::ConflictingFingerprint {
+                        expected: entry.fingerprint,
+                        observed: key.fingerprint,
+                    },
+                    None,
+                );
             }
             entry.hit_count = entry.hit_count.saturating_add(1);
             entry.last_seen = now;
-            ReplayInsertOutcome::Duplicate {
-                snapshot: entry.snapshot(key.sequence),
+            let snapshot = entry.snapshot(key.sequence);
+            if entry.reservation_generation.is_some() {
+                (ReplayInsertOutcome::InFlight { snapshot }, None)
+            } else {
+                (ReplayInsertOutcome::Duplicate { snapshot }, None)
             }
         } else {
             if key.sequence > lane_state.highest_sequence
@@ -276,30 +337,63 @@ impl ReplayCache {
                 && let Some(expected_next) = lane_state.highest_sequence.checked_add(1)
                 && key.sequence != expected_next
             {
-                return ReplayInsertOutcome::SequenceGap {
-                    expected_next,
-                    observed: key.sequence,
-                };
+                return (
+                    ReplayInsertOutcome::SequenceGap {
+                        expected_next,
+                        observed: key.sequence,
+                    },
+                    None,
+                );
+            }
+            if reserve
+                && lane_state
+                    .entries
+                    .values()
+                    .filter(|entry| entry.reservation_generation.is_some())
+                    .count()
+                    >= self.config.max_entries_per_lane.get()
+            {
+                return (
+                    ReplayInsertOutcome::ReservationCapacityExceeded {
+                        capacity: self.config.max_entries_per_lane.get(),
+                    },
+                    None,
+                );
+            }
+            if lane_state.cannot_commit_sequence(key.sequence, &self.config) {
+                return (
+                    ReplayInsertOutcome::StaleSequence {
+                        highest_observed: lane_state.highest_sequence,
+                    },
+                    None,
+                );
             }
             let entry = Entry {
                 fingerprint: key.fingerprint,
                 first_seen: now,
                 last_seen: now,
                 hit_count: 1,
+                reservation_generation: generation,
             };
             let updated = lane_state.highest_sequence.max(key.sequence);
             lane_state.highest_sequence = updated;
+            if generation.is_none() {
+                lane_state.committed_highest_sequence =
+                    lane_state.committed_highest_sequence.max(key.sequence);
+            }
             lane_state.entries.insert(key.sequence, entry);
             lane_state.enforce_capacity(&self.config, Some(key.sequence));
             let snapshot = lane_state.entries.get(&key.sequence).map_or_else(
                 || entry.snapshot(key.sequence),
                 |entry| entry.snapshot(key.sequence),
             );
-            ReplayInsertOutcome::Fresh { snapshot }
+            let reservation = generation.map(|generation| ReplayReservation { key, generation });
+            (ReplayInsertOutcome::Fresh { snapshot }, reservation)
         }
     }
     /// Prime the replay cache with a known highest sequence for a `(lane, epoch)` window.
-    /// This is useful when restoring state from persisted cursors after a restart.
+    /// This is useful when restoring state from persisted cursors after a restart. Priming
+    /// invalidates any in-memory entries and reservations already present for that window.
     pub fn prime_lane_epoch(
         &self,
         lane_epoch: LaneEpoch,
@@ -314,10 +408,88 @@ impl ReplayCache {
             });
         }
         let lane_state = guard.lanes.entry(lane_epoch).or_default();
-        let primed = lane_state.highest_sequence.max(highest_sequence);
+        let primed = lane_state.committed_highest_sequence.max(highest_sequence);
         lane_state.highest_sequence = primed;
+        lane_state.committed_highest_sequence = primed;
         lane_state.stale_floor = Some(primed);
+        lane_state.entries.clear();
         Ok(())
+    }
+    /// Commit a fresh replay reservation after its durable receipt is accepted.
+    ///
+    /// Callers must let the durable receipt/cursor layer authorize sequence order first; a replay
+    /// reservation prevents duplicate concurrent work but is not itself a durable admission grant.
+    ///
+    /// Returns `true` only when the exact pending generation was still present.
+    pub fn commit_reservation(&self, reservation: &ReplayReservation) -> bool {
+        let mut guard = self.inner.lock();
+        let key = reservation.key;
+        let Some(lane_state) = guard.lanes.get_mut(&key.lane_epoch) else {
+            return false;
+        };
+        let matches_reservation = lane_state.entries.get(&key.sequence).is_some_and(|entry| {
+            entry.fingerprint == key.fingerprint
+                && entry.reservation_generation == Some(reservation.generation)
+        });
+        if !matches_reservation {
+            return false;
+        }
+        if lane_state
+            .stale_floor
+            .is_some_and(|floor| key.sequence <= floor)
+            || lane_state.cannot_commit_sequence(key.sequence, &self.config)
+        {
+            lane_state.entries.remove(&key.sequence);
+            return false;
+        }
+        lane_state
+            .entries
+            .get_mut(&key.sequence)
+            .expect("matching replay reservation entry exists")
+            .reservation_generation = None;
+        lane_state.committed_highest_sequence =
+            lane_state.committed_highest_sequence.max(key.sequence);
+        lane_state.enforce_capacity(&self.config, Some(key.sequence));
+        true
+    }
+    /// Roll back a fresh replay reservation that did not reach durable acceptance.
+    ///
+    /// The entry is removed only when its key and opaque reservation generation still match, so
+    /// an expired or evicted reservation cannot discard a later insertion of the same manifest.
+    /// Returns `true` when the matching reservation was present.
+    pub fn rollback_reservation(&self, reservation: ReplayReservation) -> bool {
+        let mut guard = self.inner.lock();
+        let mut remove_lane = false;
+        let ReplayReservation { key, generation } = reservation;
+        let removed = if let Some(lane_state) = guard.lanes.get_mut(&key.lane_epoch) {
+            let matches_reservation = lane_state.entries.get(&key.sequence).is_some_and(|entry| {
+                entry.fingerprint == key.fingerprint
+                    && entry.reservation_generation == Some(generation)
+            });
+            if matches_reservation {
+                lane_state.entries.remove(&key.sequence);
+                lane_state.highest_sequence = lane_state
+                    .entries
+                    .keys()
+                    .next_back()
+                    .copied()
+                    .into_iter()
+                    .chain(lane_state.stale_floor)
+                    .chain(std::iter::once(lane_state.committed_highest_sequence))
+                    .max()
+                    .unwrap_or_default();
+                remove_lane = lane_state.entries.is_empty() && lane_state.stale_floor.is_none();
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if remove_lane {
+            guard.lanes.remove(&key.lane_epoch);
+        }
+        removed
     }
     /// Drop cached manifests for a `(lane, epoch)` window. This is useful during epoch
     /// transitions or when replay state is reset via governance.
@@ -341,10 +513,19 @@ impl ReplayCache {
     pub fn lane_epoch_count(&self) -> usize {
         self.inner.lock().lanes.len()
     }
+    #[cfg(test)]
+    fn highest_sequence(&self, lane_epoch: LaneEpoch) -> Option<u64> {
+        self.inner
+            .lock()
+            .lanes
+            .get(&lane_epoch)
+            .map(|state| state.highest_sequence)
+    }
 }
 #[derive(Default, Debug)]
 struct ReplayCacheInner {
     lanes: BTreeMap<LaneEpoch, LaneState>,
+    next_reservation_generation: u128,
 }
 impl ReplayCacheInner {
     fn prune(&mut self, now: Instant, config: &ReplayCacheConfig) {
@@ -362,10 +543,24 @@ impl ReplayCacheInner {
 #[derive(Debug, Default)]
 struct LaneState {
     highest_sequence: u64,
+    committed_highest_sequence: u64,
     stale_floor: Option<u64>,
     entries: BTreeMap<u64, Entry>,
 }
 impl LaneState {
+    fn cannot_commit_sequence(&self, sequence: u64, config: &ReplayCacheConfig) -> bool {
+        let mut committed = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.reservation_generation.is_none());
+        let first_sequence = committed.next().map(|(sequence, _)| *sequence);
+        let committed_count = first_sequence
+            .is_some()
+            .then(|| 1_usize.saturating_add(committed.count()))
+            .unwrap_or_default();
+        committed_count >= config.max_entries_per_lane.get()
+            && first_sequence.is_some_and(|first| sequence < first)
+    }
     /// Returns `true` if the state became empty after pruning.
     fn prune(&mut self, now: Instant, config: &ReplayCacheConfig) -> bool {
         if self.entries.is_empty() {
@@ -375,9 +570,12 @@ impl LaneState {
         let highest = self.highest_sequence;
         let max_lag = config.max_sequence_lag;
         self.entries.retain(|sequence, entry| {
+            if entry.reservation_generation.is_some() {
+                return true;
+            }
             let expired = now
                 .checked_duration_since(entry.last_seen)
-                .is_some_and(|duration| duration > ttl);
+                .is_some_and(|duration| duration >= ttl);
             let too_far = highest.saturating_sub(*sequence) > max_lag;
             !(expired || too_far)
         });
@@ -385,22 +583,40 @@ impl LaneState {
     }
     fn enforce_capacity(&mut self, config: &ReplayCacheConfig, protected_sequence: Option<u64>) {
         let max_entries = config.max_entries_per_lane.get();
-        while self.entries.len() > max_entries {
+        while self
+            .entries
+            .values()
+            .filter(|entry| entry.reservation_generation.is_none())
+            .count()
+            > max_entries
+        {
             if let Some((&sequence, _)) = self
                 .entries
                 .iter()
                 .filter(|(sequence, _)| Some(**sequence) != protected_sequence)
-                .min_by_key(|(_, entry)| entry.last_seen)
+                .filter(|(_, entry)| entry.reservation_generation.is_none())
+                .next()
             {
-                self.entries.remove(&sequence);
-                self.retire_evicted_sequence(sequence);
+                if self.entries.remove(&sequence).is_some() {
+                    self.retire_evicted_sequence(sequence);
+                }
             } else {
                 break;
             }
         }
+        if let Some(floor) = self.stale_floor {
+            self.entries.retain(|sequence, entry| {
+                entry.reservation_generation.is_none() || *sequence > floor
+            });
+        }
     }
     fn retire_evicted_sequence(&mut self, sequence: u64) {
-        let min_retained = self.entries.keys().next().copied();
+        let min_retained = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.reservation_generation.is_none())
+            .map(|(sequence, _)| *sequence)
+            .next();
         if min_retained.is_none_or(|min| sequence < min) {
             self.stale_floor = Some(
                 self.stale_floor
@@ -412,12 +628,13 @@ impl LaneState {
         self.stale_floor.is_some() || !self.entries.is_empty()
     }
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Entry {
     fingerprint: ReplayFingerprint,
     first_seen: Instant,
     last_seen: Instant,
     hit_count: u32,
+    reservation_generation: Option<u128>,
 }
 impl Entry {
     fn snapshot(&self, sequence: u64) -> ReplayEntrySnapshot {
@@ -443,6 +660,11 @@ mod tests {
         let mut hasher = blake3::Hasher::new();
         hasher.update(&[seed]);
         ReplayFingerprint::from_hash(hasher.finalize())
+    }
+    fn reserve_fresh(cache: &ReplayCache, key: ReplayKey, now: Instant) -> ReplayReservation {
+        let (outcome, reservation) = cache.reserve(key, now);
+        assert!(matches!(outcome, ReplayInsertOutcome::Fresh { .. }));
+        reservation.expect("fresh outcome carries a replay reservation")
     }
     #[test]
     fn try_from_hash_bytes_rejects_malformed_lengths() {
@@ -481,7 +703,7 @@ mod tests {
         let now = Instant::now();
         let outcome = cache.insert(key, now);
         match outcome {
-            ReplayInsertOutcome::Fresh { snapshot } => {
+            ReplayInsertOutcome::Fresh { snapshot, .. } => {
                 assert_eq!(snapshot.sequence, 1);
                 assert_eq!(snapshot.hit_count, 1);
                 assert_eq!(snapshot.first_seen, now);
@@ -594,6 +816,301 @@ mod tests {
         ));
     }
     #[test]
+    fn matching_pending_reservation_is_not_a_durable_duplicate() {
+        let cache = ReplayCache::new(ReplayCacheConfig::new());
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 17);
+        let key = ReplayKey::new(lane_epoch, 5, fingerprint(5));
+        let first = Instant::now();
+        let second = first + Duration::from_secs(1);
+        let reservation = reserve_fresh(&cache, key, first);
+
+        assert!(matches!(
+            cache.reserve(key, second),
+            (
+                ReplayInsertOutcome::InFlight {
+                    snapshot: ReplayEntrySnapshot {
+                        hit_count: 2,
+                        last_seen,
+                        ..
+                    }
+                },
+                None,
+            ) if last_seen == second
+        ));
+        assert!(cache.commit_reservation(&reservation));
+        assert!(matches!(
+            cache.insert(key, second),
+            ReplayInsertOutcome::Duplicate { .. }
+        ));
+    }
+    #[test]
+    fn rollback_reservation_reopens_only_the_matching_fresh_entry() {
+        let cache = ReplayCache::new(ReplayCacheConfig::new());
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 8);
+        let key = ReplayKey::new(lane_epoch, 5, fingerprint(5));
+        let now = Instant::now();
+        let first_reservation = reserve_fresh(&cache, key, now);
+        let stale_first_reservation = first_reservation;
+        assert_eq!(cache.len_for_lane_epoch(lane_epoch), 1);
+        assert!(cache.rollback_reservation(first_reservation));
+        assert_eq!(cache.len_for_lane_epoch(lane_epoch), 0);
+        assert_eq!(cache.lane_epoch_count(), 0);
+        let current_reservation = reserve_fresh(&cache, key, now + Duration::from_millis(1));
+        assert!(!cache.rollback_reservation(stale_first_reservation));
+        assert!(cache.rollback_reservation(current_reservation));
+    }
+    #[test]
+    fn rollback_reservation_does_not_remove_reinserted_generation() {
+        let cache = ReplayCache::new(
+            ReplayCacheConfig::new()
+                .with_max_entries_per_lane(NonZeroUsize::new(1).expect("non-zero capacity")),
+        );
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 9);
+        let key = ReplayKey::new(lane_epoch, 5, fingerprint(5));
+        let now = Instant::now();
+        let old_reservation = reserve_fresh(&cache, key, now);
+        cache.clear_lane_epoch(lane_epoch);
+        let current_reservation = reserve_fresh(&cache, key, now);
+        assert!(!cache.rollback_reservation(old_reservation));
+        assert!(cache.commit_reservation(&current_reservation));
+        assert!(matches!(
+            cache.insert(key, now),
+            ReplayInsertOutcome::Duplicate { .. }
+        ));
+    }
+    #[test]
+    fn priming_invalidates_older_pending_reservation() {
+        let cache = ReplayCache::new(ReplayCacheConfig::new());
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 15);
+        let pending = reserve_fresh(
+            &cache,
+            ReplayKey::new(lane_epoch, 5, fingerprint(5)),
+            Instant::now(),
+        );
+
+        cache
+            .prime_lane_epoch(lane_epoch, 10)
+            .expect("priming existing lane within capacity succeeds");
+
+        assert!(!cache.commit_reservation(&pending));
+        assert_eq!(cache.len_for_lane_epoch(lane_epoch), 0);
+        assert_eq!(cache.highest_sequence(lane_epoch), Some(10));
+        assert_eq!(
+            cache.insert(
+                ReplayKey::new(lane_epoch, 5, fingerprint(5)),
+                Instant::now(),
+            ),
+            ReplayInsertOutcome::StaleSequence {
+                highest_observed: 10
+            }
+        );
+    }
+    #[test]
+    fn rollback_reservation_preserves_committed_entry_at_capacity() {
+        let cache = ReplayCache::new(
+            ReplayCacheConfig::new()
+                .with_max_entries_per_lane(NonZeroUsize::new(1).expect("non-zero capacity")),
+        );
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 10);
+        let accepted_key = ReplayKey::new(lane_epoch, 5, fingerprint(5));
+        let failed_key = ReplayKey::new(lane_epoch, 6, fingerprint(6));
+        let now = Instant::now();
+        assert!(matches!(
+            cache.insert(accepted_key, now),
+            ReplayInsertOutcome::Fresh { .. }
+        ));
+        let failed_reservation = reserve_fresh(&cache, failed_key, now);
+        assert!(cache.rollback_reservation(failed_reservation));
+        assert!(matches!(
+            cache.insert(accepted_key, now),
+            ReplayInsertOutcome::Duplicate { .. }
+        ));
+        assert!(matches!(
+            cache.insert(
+                ReplayKey::new(lane_epoch, 5, fingerprint(6)),
+                now + Duration::from_millis(1),
+            ),
+            ReplayInsertOutcome::ConflictingFingerprint { .. }
+        ));
+    }
+    #[test]
+    fn later_commit_does_not_replace_newer_history_with_rolled_back_history() {
+        let cache = ReplayCache::new(
+            ReplayCacheConfig::new()
+                .with_max_entries_per_lane(NonZeroUsize::new(2).expect("non-zero capacity"))
+                .with_max_sequence_lag(u64::MAX),
+        );
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 12);
+        let base = Instant::now();
+        for sequence in 9_u64..=10 {
+            assert!(matches!(
+                cache.insert(
+                    ReplayKey::new(lane_epoch, sequence, fingerprint(sequence as u8)),
+                    base + Duration::from_millis(sequence),
+                ),
+                ReplayInsertOutcome::Fresh { .. }
+            ));
+        }
+        let first = reserve_fresh(
+            &cache,
+            ReplayKey::new(lane_epoch, 11, fingerprint(11)),
+            base + Duration::from_millis(11),
+        );
+        let second_key = ReplayKey::new(lane_epoch, 12, fingerprint(12));
+        let second = reserve_fresh(&cache, second_key, base + Duration::from_millis(12));
+
+        assert!(cache.commit_reservation(&second));
+        assert!(cache.rollback_reservation(first));
+
+        assert_eq!(cache.len_for_lane_epoch(lane_epoch), 2);
+        assert_eq!(cache.highest_sequence(lane_epoch), Some(12));
+        assert!(matches!(
+            cache.insert(
+                ReplayKey::new(lane_epoch, 10, fingerprint(10)),
+                base + Duration::from_millis(13),
+            ),
+            ReplayInsertOutcome::Duplicate { .. }
+        ));
+        assert_eq!(
+            cache.insert(
+                ReplayKey::new(lane_epoch, 9, fingerprint(9)),
+                base + Duration::from_millis(14),
+            ),
+            ReplayInsertOutcome::StaleSequence {
+                highest_observed: 12
+            }
+        );
+        assert!(matches!(
+            cache.insert(second_key, base + Duration::from_millis(15)),
+            ReplayInsertOutcome::Duplicate { .. }
+        ));
+    }
+    #[test]
+    fn chained_pending_reservations_do_not_evict_or_restore_each_other() {
+        let cache = ReplayCache::new(
+            ReplayCacheConfig::new()
+                .with_max_entries_per_lane(NonZeroUsize::new(2).expect("non-zero capacity")),
+        );
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 11);
+        let accepted_key = ReplayKey::new(lane_epoch, 10, fingerprint(10));
+        let first_pending_key = ReplayKey::new(lane_epoch, 11, fingerprint(11));
+        let second_pending_key = ReplayKey::new(lane_epoch, 12, fingerprint(12));
+        let now = Instant::now();
+        assert!(matches!(
+            cache.insert(accepted_key, now),
+            ReplayInsertOutcome::Fresh { .. }
+        ));
+        let first = reserve_fresh(&cache, first_pending_key, now);
+        let second = reserve_fresh(&cache, second_pending_key, now);
+
+        assert!(cache.rollback_reservation(first));
+        assert!(cache.rollback_reservation(second));
+        assert!(matches!(
+            cache.insert(accepted_key, now),
+            ReplayInsertOutcome::Duplicate { .. }
+        ));
+        assert_eq!(cache.highest_sequence(lane_epoch), Some(10));
+
+        let first = reserve_fresh(&cache, first_pending_key, now);
+        let second = reserve_fresh(&cache, second_pending_key, now);
+        assert!(cache.commit_reservation(&second));
+        assert!(cache.rollback_reservation(first));
+        assert_eq!(cache.len_for_lane_epoch(lane_epoch), 2);
+        assert!(matches!(
+            cache.insert(accepted_key, now),
+            ReplayInsertOutcome::Duplicate { .. }
+        ));
+        assert!(matches!(
+            cache.insert(second_pending_key, now),
+            ReplayInsertOutcome::Duplicate { .. }
+        ));
+        assert_eq!(cache.highest_sequence(lane_epoch), Some(12));
+    }
+    #[test]
+    fn pending_reservation_capacity_is_bounded_without_displacing_history() {
+        let cache = ReplayCache::new(
+            ReplayCacheConfig::new()
+                .with_max_entries_per_lane(NonZeroUsize::new(1).expect("non-zero capacity")),
+        );
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 13);
+        let accepted_key = ReplayKey::new(lane_epoch, 10, fingerprint(10));
+        let first_pending_key = ReplayKey::new(lane_epoch, 11, fingerprint(11));
+        let now = Instant::now();
+        assert!(matches!(
+            cache.insert(accepted_key, now),
+            ReplayInsertOutcome::Fresh { .. }
+        ));
+        let first = reserve_fresh(&cache, first_pending_key, now);
+
+        assert_eq!(
+            cache.reserve(
+                ReplayKey::new(lane_epoch, 12, fingerprint(12)),
+                now + Duration::from_millis(1),
+            ),
+            (
+                ReplayInsertOutcome::ReservationCapacityExceeded { capacity: 1 },
+                None,
+            )
+        );
+        assert!(matches!(
+            cache.insert(accepted_key, now + Duration::from_millis(2)),
+            ReplayInsertOutcome::Duplicate { .. }
+        ));
+        assert!(cache.rollback_reservation(first));
+        assert_eq!(cache.len_for_lane_epoch(lane_epoch), 1);
+    }
+    #[test]
+    fn capacity_floor_invalidates_older_pending_reservation() {
+        let cache = ReplayCache::new(
+            ReplayCacheConfig::new()
+                .with_max_entries_per_lane(NonZeroUsize::new(3).expect("non-zero capacity"))
+                .with_max_sequence_lag(u64::MAX),
+        );
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 14);
+        let base = Instant::now();
+        for sequence in 9_u64..=10 {
+            assert!(matches!(
+                cache.insert(
+                    ReplayKey::new(lane_epoch, sequence, fingerprint(sequence as u8)),
+                    base + Duration::from_millis(sequence),
+                ),
+                ReplayInsertOutcome::Fresh { .. }
+            ));
+        }
+        let stale_pending = reserve_fresh(
+            &cache,
+            ReplayKey::new(lane_epoch, 8, fingerprint(8)),
+            base + Duration::from_millis(11),
+        );
+        let first_successor = reserve_fresh(
+            &cache,
+            ReplayKey::new(lane_epoch, 11, fingerprint(11)),
+            base + Duration::from_millis(12),
+        );
+        assert!(cache.commit_reservation(&first_successor));
+        let second_successor = reserve_fresh(
+            &cache,
+            ReplayKey::new(lane_epoch, 12, fingerprint(12)),
+            base + Duration::from_millis(13),
+        );
+
+        assert!(cache.commit_reservation(&second_successor));
+        assert!(
+            !cache.rollback_reservation(stale_pending),
+            "advancing the committed capacity floor must invalidate an older pending entry"
+        );
+        assert_eq!(
+            cache.insert(
+                ReplayKey::new(lane_epoch, 9, fingerprint(9)),
+                base + Duration::from_millis(14),
+            ),
+            ReplayInsertOutcome::StaleSequence {
+                highest_observed: 12
+            }
+        );
+        assert_eq!(cache.len_for_lane_epoch(lane_epoch), 3);
+    }
+    #[test]
     fn conflicting_fingerprint_detected() {
         let cache = ReplayCache::new(ReplayCacheConfig::new());
         let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 1);
@@ -653,6 +1170,22 @@ mod tests {
             ReplayInsertOutcome::Fresh { .. }
         ));
         assert_eq!(cache.len_for_lane_epoch(lane_epoch), 1);
+    }
+    #[test]
+    fn ttl_expires_at_exact_boundary() {
+        let ttl = Duration::from_millis(10);
+        let cache = ReplayCache::new(ReplayCacheConfig::new().with_ttl(ttl));
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 16);
+        let key = ReplayKey::new(lane_epoch, 1, fingerprint(1));
+        let now = Instant::now();
+        assert!(matches!(
+            cache.insert(key, now),
+            ReplayInsertOutcome::Fresh { .. }
+        ));
+        assert!(matches!(
+            cache.insert(key, now + ttl),
+            ReplayInsertOutcome::Fresh { .. }
+        ));
     }
     #[test]
     fn capacity_enforced() {
@@ -734,7 +1267,7 @@ mod tests {
         ));
         let key = ReplayKey::new(lane_epoch, 12, fingerprint(12));
         match cache.insert(key, base) {
-            ReplayInsertOutcome::Fresh { snapshot } => {
+            ReplayInsertOutcome::Fresh { snapshot, .. } => {
                 assert_eq!(snapshot.sequence, 12);
                 assert_eq!(snapshot.last_seen, base);
             }
@@ -748,6 +1281,94 @@ mod tests {
             }
             other => panic!("protected insert should remain cached, got {other:?}"),
         }
+    }
+    #[test]
+    fn capacity_evicts_sequence_prefix_instead_of_recently_touched_hole() {
+        let capacity = NonZeroUsize::new(2).unwrap();
+        let cache = ReplayCache::new(
+            ReplayCacheConfig::new()
+                .with_max_entries_per_lane(capacity)
+                .with_max_sequence_lag(u64::MAX),
+        );
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 17);
+        let base = Instant::now();
+        let first = ReplayKey::new(lane_epoch, 1, fingerprint(1));
+        let second = ReplayKey::new(lane_epoch, 2, fingerprint(2));
+        for key in [first, second] {
+            assert!(matches!(
+                cache.insert(key, base),
+                ReplayInsertOutcome::Fresh { .. }
+            ));
+        }
+        assert!(matches!(
+            cache.insert(first, base + Duration::from_millis(1)),
+            ReplayInsertOutcome::Duplicate { .. }
+        ));
+        assert!(matches!(
+            cache.insert(
+                ReplayKey::new(lane_epoch, 3, fingerprint(3)),
+                base + Duration::from_millis(2),
+            ),
+            ReplayInsertOutcome::Fresh { .. }
+        ));
+
+        assert_eq!(
+            cache.insert(first, base + Duration::from_millis(3)),
+            ReplayInsertOutcome::StaleSequence {
+                highest_observed: 3
+            }
+        );
+        assert!(matches!(
+            cache.insert(
+                ReplayKey::new(lane_epoch, 2, fingerprint(9)),
+                base + Duration::from_millis(4),
+            ),
+            ReplayInsertOutcome::ConflictingFingerprint { .. }
+        ));
+    }
+    #[test]
+    fn full_capacity_rejects_new_sequence_below_retained_window() {
+        let capacity = NonZeroUsize::new(2).unwrap();
+        let cache = ReplayCache::new(
+            ReplayCacheConfig::new()
+                .with_max_entries_per_lane(capacity)
+                .with_max_sequence_lag(u64::MAX),
+        );
+        let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 18);
+        let now = Instant::now();
+        for sequence in 9_u64..=10 {
+            assert!(matches!(
+                cache.insert(
+                    ReplayKey::new(lane_epoch, sequence, fingerprint(sequence as u8)),
+                    now,
+                ),
+                ReplayInsertOutcome::Fresh { .. }
+            ));
+        }
+
+        assert_eq!(
+            cache.insert(
+                ReplayKey::new(lane_epoch, 8, fingerprint(8)),
+                now + Duration::from_millis(1),
+            ),
+            ReplayInsertOutcome::StaleSequence {
+                highest_observed: 10
+            }
+        );
+        assert_eq!(
+            cache.reserve(
+                ReplayKey::new(lane_epoch, 8, fingerprint(8)),
+                now + Duration::from_millis(2),
+            ),
+            (
+                ReplayInsertOutcome::StaleSequence {
+                    highest_observed: 10
+                },
+                None,
+            ),
+            "a pending backfill must not force a hole in committed history"
+        );
+        assert_eq!(cache.len_for_lane_epoch(lane_epoch), 2);
     }
     #[test]
     fn fresh_then_duplicate_for_replayed_sequences() {
@@ -770,10 +1391,10 @@ mod tests {
                     ReplayKey::new(lane_epoch, sequence, fingerprint((sequence & 0xFF) as u8));
                 let outcome = cache.insert(key, now);
                 if seen.insert(sequence) {
-                    let is_fresh = matches!(outcome, ReplayInsertOutcome::Fresh { .. });
+                    let is_fresh = matches!(&outcome, ReplayInsertOutcome::Fresh { .. });
                     assert!(is_fresh, "sequence={sequence}");
                 } else {
-                    let is_duplicate = matches!(outcome, ReplayInsertOutcome::Duplicate { .. });
+                    let is_duplicate = matches!(&outcome, ReplayInsertOutcome::Duplicate { .. });
                     assert!(is_duplicate, "sequence={sequence}");
                 }
             }

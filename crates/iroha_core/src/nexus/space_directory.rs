@@ -212,6 +212,7 @@ pub fn extract_authority_domains(
             &alias,
             now_ms,
         )
+        .map_err(|_| ParseError::new("malformed authoritative SNS account-alias state"))?
         .as_ref()
             != Some(authority)
         {
@@ -415,7 +416,6 @@ pub struct SpaceDirectoryManifestRecord {
     /// Hash of the Norito-encoded manifest bytes.
     pub manifest_hash: Hash,
     /// Lifecycle information populated from activation/expiry/revocation events.
-    #[norito(default)]
     pub lifecycle: SpaceDirectoryManifestLifecycle,
 }
 impl SpaceDirectoryManifestRecord {
@@ -449,13 +449,10 @@ impl SpaceDirectoryManifestRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 pub struct SpaceDirectoryManifestLifecycle {
     /// Epoch (inclusive) when the manifest actually became active, if known.
-    #[norito(default)]
     pub activated_epoch: Option<u64>,
     /// Epoch (inclusive) when the manifest expired naturally.
-    #[norito(default)]
     pub expired_epoch: Option<u64>,
     /// Revocation metadata (if the manifest was revoked).
-    #[norito(default)]
     pub revocation: Option<SpaceDirectoryManifestRevocation>,
 }
 /// Metadata describing a manifest revocation event.
@@ -464,7 +461,6 @@ pub struct SpaceDirectoryManifestRevocation {
     /// Epoch when the revocation took effect.
     pub epoch: u64,
     /// Optional textual reason captured by the host.
-    #[norito(default)]
     pub reason: Option<String>,
 }
 impl SpaceDirectoryManifestLifecycle {
@@ -558,6 +554,20 @@ mod tests {
         assert_eq!(
             ambient_record.manifest_hash, expected_hash,
             "manifest identity must ignore ambient Norito layout"
+        );
+    }
+    #[test]
+    fn first_release_manifest_record_binary_roundtrip_keeps_lifecycle() {
+        let mut record = SpaceDirectoryManifestRecord::new(sample_manifest(11));
+        record.lifecycle.mark_activated(13);
+        let encoded = record.encode();
+        let mut input = encoded.as_slice();
+        let decoded = SpaceDirectoryManifestRecord::decode(&mut input)
+            .expect("complete first-release manifest record must decode");
+        assert_eq!(decoded, record);
+        assert!(
+            input.is_empty(),
+            "manifest record decoder must consume the exact payload"
         );
     }
     #[test]

@@ -393,8 +393,7 @@ fn proof_blob_for_profile(
         let mut transcripts = if remote_spend_claims.is_empty() {
             let from = ALICE_ID.clone();
             let to = AccountId::parse_encoded(FIXTURE_MERCHANT_ACCOUNT_LITERAL)
-                .expect("canonical fixture receiver")
-                .into_account_id();
+                .expect("canonical fixture receiver");
             vec![TransferTranscript {
                 batch_hash,
                 deltas: vec![TransferDeltaTranscript {
@@ -416,12 +415,8 @@ fn proof_blob_for_profile(
             remote_spend_claims
                 .iter()
                 .map(|claim| {
-                    let from = AccountId::parse_encoded(&claim.from)
-                        .expect("canonical sender")
-                        .into_account_id();
-                    let to = AccountId::parse_encoded(&claim.to)
-                        .expect("canonical receiver")
-                        .into_account_id();
+                    let from = AccountId::parse_encoded(&claim.from).expect("canonical sender");
+                    let to = AccountId::parse_encoded(&claim.to).expect("canonical receiver");
                     let amount = iroha_data_model::fastpq::normalized_numeric_to_u64(
                         claim.effective_amount.as_numeric(),
                         0,

@@ -261,7 +261,7 @@ async fn soracloud_signed_mutation_middleware_strips_internal_identity_and_rejec
     assert!(String::from_utf8_lossy(&replay_body).contains("nonce already used"));
 }
 #[tokio::test]
-async fn soracloud_signed_mutation_middleware_applies_route_body_caps_before_auth() {
+async fn soracloud_signed_mutation_middleware_applies_one_body_cap_before_auth() {
     use axum::{Router, routing::post};
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
@@ -277,7 +277,6 @@ async fn soracloud_signed_mutation_middleware_applies_route_body_caps_before_aut
     );
     let app_state = Arc::get_mut(&mut app).expect("test owns app state");
     app_state.soracloud_mutation_max_body_bytes = 8;
-    app_state.soracloud_upload_max_body_bytes = 64;
     let router = Router::new()
         .route("/v1/soracloud/test", post(probe))
         .route("/v1/soracloud/model/upload/register", post(probe))
@@ -307,7 +306,7 @@ async fn soracloud_signed_mutation_middleware_applies_route_body_caps_before_aut
         .body(Body::from(body))
         .expect("request");
     let upload_response = router.oneshot(upload).await.expect("response");
-    assert_eq!(upload_response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(upload_response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 #[tokio::test]
 async fn soracloud_signed_mutation_middleware_rate_limits_account_across_caller_origins() {
@@ -331,14 +330,14 @@ async fn soracloud_signed_mutation_middleware_rate_limits_account_across_caller_
         .expect("test owns app state")
         .soracloud_mutation_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
     let router = Router::new()
-        .route("/v1/soracloud/hf/deploy", post(probe))
+        .route("/v1/soracloud/hf/lease/join", post(probe))
         .layer(axum::middleware::from_fn_with_state(
             app.clone(),
             enforce_soracloud_signed_mutation_request,
         ))
         .with_state(app);
     let method = axum::http::Method::POST;
-    let uri: axum::http::Uri = "/v1/soracloud/hf/deploy".parse().expect("uri");
+    let uri: axum::http::Uri = "/v1/soracloud/hf/lease/join".parse().expect("uri");
     let body = br#"{"model":"test"}"#;
     let mut statuses = Vec::new();
     for origin in ["https://wallet-a.test", "https://wallet-b.test"] {
@@ -388,7 +387,7 @@ fn soracloud_signed_mutation_route_groups_cover_load_gate_paths() {
         "upload"
     );
     assert_eq!(
-        super::soracloud_signed_mutation_route_group("/v1/soracloud/hf/deploy"),
+        super::soracloud_signed_mutation_route_group("/v1/soracloud/hf/lease/join"),
         "hf"
     );
     let model_key = super::soracloud_signed_mutation_rate_key(&account_id, "model");
@@ -538,6 +537,8 @@ async fn zk_attachment_route_authenticates_before_decode_and_rejects_replay() {
             CanonicalAccountBodyAuthState {
                 app: app.clone(),
                 max_body_bytes: 1024,
+                missing_auth_code: "canonical_authentication_required",
+                missing_auth_message: "canonical account request authentication is required",
             },
             enforce_canonical_account_body_authentication,
         ));
@@ -573,6 +574,38 @@ async fn zk_attachment_route_authenticates_before_decode_and_rejects_replay() {
     let unsigned_error = norito::decode_from_bytes::<super::ErrorEnvelope>(&unsigned_body)
         .expect("unsigned response error envelope");
     assert_eq!(unsigned_error.code(), "canonical_authentication_required");
+    let contract_router = Router::new()
+        .route("/v1/gov/contracts/test", post(probe))
+        .layer(axum::middleware::from_fn_with_state(
+            CanonicalAccountBodyAuthState {
+                app: app.clone(),
+                max_body_bytes: 1024,
+                missing_auth_code: "contract_code_auth_required",
+                missing_auth_message:
+                    "signed account headers are required to read governed contract metadata",
+            },
+            enforce_canonical_account_body_authentication,
+        ));
+    let contract_response = contract_router
+        .oneshot(
+            axum::http::Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/gov/contracts/test")
+                .body(Body::from("{"))
+                .expect("unsigned governed-contract request"),
+        )
+        .await
+        .expect("unsigned governed-contract response");
+    assert_eq!(contract_response.status(), StatusCode::UNAUTHORIZED);
+    let contract_body = contract_response
+        .into_body()
+        .collect()
+        .await
+        .expect("governed-contract response body")
+        .to_bytes();
+    let contract_error = norito::decode_from_bytes::<super::ErrorEnvelope>(&contract_body)
+        .expect("governed-contract error envelope");
+    assert_eq!(contract_error.code(), "contract_code_auth_required");
     let signed_request = || {
         let mut request = axum::http::Request::builder()
             .method(method.clone())

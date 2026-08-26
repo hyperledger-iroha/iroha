@@ -170,7 +170,6 @@ fn expected_container_manifest() -> SoraContainerManifestV1 {
                 SoraNetworkAllowlistEntryV1::new("api.sora.internal", [443]),
                 SoraNetworkAllowlistEntryV1::new("wallet.sora.internal", [443]),
             ]),
-            allow_wallet_signing: true,
             allow_state_writes: true,
             allow_model_inference: true,
             allow_model_training: false,
@@ -179,7 +178,7 @@ fn expected_container_manifest() -> SoraContainerManifestV1 {
             cpu_millis: NonZeroU32::new(750).expect("nonzero"),
             memory_bytes: NonZeroU64::new(536_870_912).expect("nonzero"),
             ephemeral_storage_bytes: NonZeroU64::new(2_147_483_648).expect("nonzero"),
-            max_open_files: NonZeroU32::new(512).expect("nonzero"),
+            max_open_files_per_process: NonZeroU32::new(512).expect("nonzero"),
             max_tasks: NonZeroU16::new(64).expect("nonzero"),
         },
         lifecycle: SoraLifecycleHooksV1 {
@@ -223,7 +222,7 @@ fn expected_service_manifest() -> SoraServiceManifestV1 {
         replicas: NonZeroU16::new(3).expect("nonzero"),
         route: Some(expected_service_route()),
         rollout: SoraRolloutPolicyV1 {
-            canary_percent: 20,
+            canary_percent: 0,
             max_unavailable_replicas: 1,
             health_window_secs: NonZeroU32::new(45).expect("nonzero"),
             automatic_rollback_failures: NonZeroU32::new(3).expect("nonzero"),
@@ -262,13 +261,13 @@ fn expected_service_manifest() -> SoraServiceManifestV1 {
                 }),
             },
             SoraServiceHandlerV1 {
-                handler_name: "private_update".parse().expect("valid name"),
-                class: SoraServiceHandlerClassV1::PrivateUpdate,
-                entrypoint: "apply_private_update".to_string(),
-                route_path: Some("/private/update".to_string()),
+                handler_name: "ciphertext_update".parse().expect("valid name"),
+                class: SoraServiceHandlerClassV1::Update,
+                entrypoint: "apply_ciphertext_update".to_string(),
+                route_path: Some("/ciphertext/update".to_string()),
                 certified_response: SoraCertifiedResponsePolicyV1::None,
                 mailbox: Some(SoraMailboxContractV1 {
-                    queue_name: "private_updates".parse().expect("valid name"),
+                    queue_name: "ciphertext_updates".parse().expect("valid name"),
                     max_pending_messages: NonZeroU32::new(256).expect("nonzero"),
                     max_message_bytes: NonZeroU64::new(131_072).expect("nonzero"),
                     retention_blocks: NonZeroU32::new(2_880).expect("nonzero"),
@@ -292,7 +291,7 @@ fn expected_service_manifest() -> SoraServiceManifestV1 {
                 kind: SoraArtifactKindV1::Checkpoint,
                 artifact_hash: sample_hash(17),
                 artifact_path: "/checkpoints/portal.chk".to_string(),
-                handler_name: Some("private_update".parse().expect("valid name")),
+                handler_name: Some("ciphertext_update".parse().expect("valid name")),
             },
         ],
     }
@@ -316,36 +315,26 @@ fn expected_inrou_http_deployment_bundle() -> SoraDeploymentBundleV1 {
         json::from_str::<SoraInrouManifestV1>(
             r#"{
               "schema_version": 1,
-              "guest_os": {
-                "guest_os": "DebianSlim",
-                "value": null
-              },
               "guest_images": {
                 "x86_64": {
                   "kernel_image_path": "/inrou/x86_64/vmlinux",
                   "rootfs_image_path": "/inrou/x86_64/rootfs.ext4",
                   "initrd_image_path": null,
-                  "distribution": {
-                    "target": {"target": "Global", "value": null},
-                    "prefer_low_latency": true,
-                    "fallback_to_low_latency_when_geography_unknown": true
-                  },
-                  "published_artifact": null
+                  "published_artifact": {
+                    "manifest_digest_hex": "3131313131313131313131313131313131313131313131313131313131313131",
+                    "content_cid": "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
+                  }
                 },
                 "aarch64": {
                   "kernel_image_path": "/inrou/aarch64/vmlinux",
                   "rootfs_image_path": "/inrou/aarch64/rootfs.ext4",
                   "initrd_image_path": null,
-                  "distribution": {
-                    "target": {"target": "Global", "value": null},
-                    "prefer_low_latency": true,
-                    "fallback_to_low_latency_when_geography_unknown": true
-                  },
-                  "published_artifact": null
+                  "published_artifact": {
+                    "manifest_digest_hex": "3232323232323232323232323232323232323232323232323232323232323232",
+                    "content_cid": "bafyr6ibsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgi"
+                  }
                 }
-              },
-              "bootstrap_user_data_path": null,
-              "ssh_authorized_keys": ["ssh-ed25519 test-key fixture"]
+              }
             }"#,
         )
         .expect("valid inrou manifest fixture"),
@@ -369,7 +358,7 @@ fn expected_inrou_http_deployment_bundle() -> SoraDeploymentBundleV1 {
             volume_name: "shared_state".parse().expect("valid name"),
             kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
             storage_class: StorageClass::Warm,
-            mount_path: "/var/lib/soracloud".to_string(),
+            mount_path: "/var/lib/soracloud/volumes/shared_state".to_string(),
             max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
         },
     ];
@@ -454,7 +443,6 @@ fn expected_fhe_param_set() -> FheParamSetV1 {
         max_multiplicative_depth: NonZeroU16::new(1).expect("nonzero"),
         lifecycle: FheParamLifecycleV1::Active,
         activation_height: Some(1),
-        deprecation_height: None,
         withdraw_height: None,
         parameter_digest,
         rns_modulus_chain_digest,
@@ -869,36 +857,26 @@ fn container_manifest_fixture_rejects_inrou_metadata_for_ivm_runtime() {
     let inrou: json::Value = json::from_str(
         r#"{
           "schema_version": 1,
-          "guest_os": {
-            "guest_os": "DebianSlim",
-            "value": null
-          },
           "guest_images": {
             "x86_64": {
               "kernel_image_path": "/inrou/x86_64/vmlinux",
               "rootfs_image_path": "/inrou/x86_64/rootfs.ext4",
               "initrd_image_path": null,
-              "distribution": {
-                "target": {"target": "Global", "value": null},
-                "prefer_low_latency": true,
-                "fallback_to_low_latency_when_geography_unknown": true
-              },
-              "published_artifact": null
+              "published_artifact": {
+                "manifest_digest_hex": "3131313131313131313131313131313131313131313131313131313131313131",
+                "content_cid": "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge"
+              }
             },
             "aarch64": {
               "kernel_image_path": "/inrou/aarch64/vmlinux",
               "rootfs_image_path": "/inrou/aarch64/rootfs.ext4",
               "initrd_image_path": null,
-              "distribution": {
-                "target": {"target": "Global", "value": null},
-                "prefer_low_latency": true,
-                "fallback_to_low_latency_when_geography_unknown": true
-              },
-              "published_artifact": null
+              "published_artifact": {
+                "manifest_digest_hex": "3232323232323232323232323232323232323232323232323232323232323232",
+                "content_cid": "bafyr6ibsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgi"
+              }
             }
-          },
-          "bootstrap_user_data_path": null,
-          "ssh_authorized_keys": ["ssh-ed25519 test-key fixture"]
+          }
         }"#,
     )
     .expect("inrou JSON must decode");
@@ -1303,7 +1281,7 @@ fn service_manifest_rejects_deterministic_service_with_lease_volume() {
         volume_name: "scratch".parse().expect("valid name"),
         kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
         storage_class: StorageClass::Warm,
-        mount_path: "/var/lib/scratch".to_string(),
+        mount_path: "/var/lib/soracloud/volumes/scratch".to_string(),
         max_total_bytes: NonZeroU64::new(1_048_576).expect("nonzero"),
     }];
     let error = manifest
@@ -1634,7 +1612,7 @@ fn deployment_bundle_rejects_http_service_without_root_lease_volume() {
     bundle
         .service
         .lease_volumes
-        .retain(|volume| !volume.attaches_per_replica());
+        .retain(|volume| !volume.is_root_volume());
     let error = bundle
         .validate_for_admission()
         .expect_err("Inrou HTTP services require one persistent root volume");
@@ -1648,15 +1626,15 @@ fn deployment_bundle_rejects_http_service_without_root_lease_volume() {
 }
 #[cfg(feature = "json")]
 #[test]
-fn deployment_bundle_rejects_http_service_without_shared_lease_volume() {
+fn deployment_bundle_rejects_http_service_without_data_lease_volume() {
     let mut bundle = expected_inrou_http_deployment_bundle();
     bundle
         .service
         .lease_volumes
-        .retain(SoraLeaseVolumeBindingV1::attaches_per_replica);
+        .retain(SoraLeaseVolumeBindingV1::is_root_volume);
     let error = bundle
         .validate_for_admission()
-        .expect_err("Inrou HTTP services require shared lease-backed storage");
+        .expect_err("Inrou HTTP services require a replica-private data volume");
     assert!(matches!(
         error,
         SoracloudManifestError::InvalidField {
@@ -1667,15 +1645,8 @@ fn deployment_bundle_rejects_http_service_without_shared_lease_volume() {
 }
 #[cfg(feature = "json")]
 #[test]
-fn deployment_bundle_accepts_inrou_http_service_without_ssh_keys() {
+fn deployment_bundle_accepts_inrou_http_service_without_login_surface() {
     let mut bundle = expected_inrou_http_deployment_bundle();
-    bundle
-        .container
-        .inrou
-        .as_mut()
-        .expect("inrou metadata")
-        .ssh_authorized_keys
-        .clear();
     bundle.service.container.manifest_hash = bundle.container_manifest_hash();
     bundle
         .validate_for_admission()
@@ -1716,15 +1687,16 @@ fn deployment_bundle_rejects_http_service_task_limit_over_quota() {
 }
 #[cfg(feature = "json")]
 #[test]
-fn deployment_bundle_rejects_http_service_lease_bytes_over_quota() {
+fn deployment_bundle_charges_replica_private_lease_bytes_for_every_replica() {
     let mut bundle = expected_inrou_http_deployment_bundle();
-    let shared = bundle
+    bundle.service.replicas = NonZeroU16::new(4).expect("nonzero");
+    let data = bundle
         .service
         .lease_volumes
         .iter_mut()
-        .find(|volume| volume.attaches_shared_across_replicas())
-        .expect("shared lease volume");
-    shared.max_total_bytes = NonZeroU64::new(600 * 1024 * 1024 * 1024).expect("nonzero");
+        .find(|volume| volume.is_data_volume())
+        .expect("data lease volume");
+    data.max_total_bytes = NonZeroU64::new(128 * 1024 * 1024 * 1024).expect("nonzero");
     let error = bundle
         .validate_for_admission()
         .expect_err("HTTP service lease storage must stay within quota class limits");
@@ -2119,7 +2091,6 @@ fn fhe_governance_bundle_fixture_rejects_adversarial_parameter_drift() {
     ));
     let mut proposed_param_set = bundle.clone();
     proposed_param_set.param_set.lifecycle = FheParamLifecycleV1::Proposed;
-    proposed_param_set.param_set.deprecation_height = None;
     proposed_param_set.param_set.withdraw_height = None;
     let error = proposed_param_set
         .validate_for_admission()

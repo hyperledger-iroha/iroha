@@ -22,7 +22,7 @@ GET /v1/accounts/{uaid}/portfolio
 
 | Name | Description |
 |------|-------------|
-| `uaid` | UAID literal. Accepts either the `uaid:<hex>` form or a raw 64-character hex digest (LSB=1). |
+| `uaid` | Exact lower-case `uaid:<64-hex>` literal with LSB=1. |
 
 ## Query parameters
 
@@ -329,7 +329,7 @@ Body fields mirror the `RevokeSpaceDirectoryManifest` ISI:
 | Field | Description |
 |-------|-------------|
 | `authority` | Account ID that signs the transaction (must hold `CanPublishSpaceDirectoryManifest{dataspace}` or an equivalent grant). |
-| `uaid` | UAID literal (`uaid:<hex>` or raw 64-hex digest, LSB=1). |
+| `uaid` | Exact lower-case UAID literal (`uaid:<64-hex>`, LSB=1). |
 | `dataspace` | Dataspace identifier hosting the manifest. |
 | `revoked_epoch` | Epoch (inclusive) when the revocation takes effect. |
 | `reason` (optional) | Human-readable justification archived with the lifecycle record. |

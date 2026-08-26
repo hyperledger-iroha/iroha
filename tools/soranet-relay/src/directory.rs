@@ -7,15 +7,11 @@ use crate::{checked_ed25519_verifying_key_from_bytes, config::read_bounded_direc
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use hex::FromHexError;
 use iroha_crypto::soranet::{
-    certificate::{
-        CertificateError, CertificateValidationPhase, RelayCertificateBundleV2,
-        SRC_V2_MAX_BUNDLE_BYTES,
-    },
+    certificate::{CertificateError, RelayCertificateBundleV2, SRC_V2_MAX_BUNDLE_BYTES},
     directory::{
         GUARD_DIRECTORY_ISSUER_MLDSA65_MAX_BYTES_V1, GUARD_DIRECTORY_MAX_ISSUERS_V1,
         GUARD_DIRECTORY_MAX_RELAYS_V1, GUARD_DIRECTORY_VERSION_V2, GuardDirectoryIssuerV1,
         GuardDirectoryRelayEntryV2, GuardDirectorySnapshotV2, compute_issuer_fingerprint,
-        decode_validation_phase, encode_validation_phase,
     },
 };
 use norito::{
@@ -27,7 +23,7 @@ use soranet_pq::{
     MlDsaError, MlDsaKeyPair, MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair,
 };
 use std::{
-    collections::{HashMap, TryReserveError},
+    collections::{HashMap, HashSet, TryReserveError},
     fmt, fs,
     path::{Path, PathBuf},
 };
@@ -47,9 +43,9 @@ const DIRECTORY_BUILD_CONFIG_JSON_MAX_ALLOCATED_BYTES_V1: usize =
 const DIRECTORY_BUILD_CONFIG_JSON_MAX_DEPTH_V1: usize = 8;
 const DIRECTORY_BUILD_CONFIG_LABEL_MAX_BYTES_V1: usize = 256;
 const DIRECTORY_BUILD_CONFIG_PATH_MAX_BYTES_V1: usize = 4 * 1024;
-// A proof only restates bounded fields from one SRCv2 bundle plus its snapshot
-// path. Capping it at the source bundle's 64 KiB ceiling admits the worst-case
-// 4 KiB path and ML-KEM-1024 hex field even when JSON-escaped.
+// A proof only restates bounded scalar fields from one SRCv2 bundle plus its
+// snapshot path. Keep its document ceiling aligned with the source bundle so
+// the independently bounded strings remain well inside the producer budget.
 const GUARD_PINNING_PROOF_JSON_MAX_BYTES_V1: usize = SRC_V2_MAX_BUNDLE_BYTES;
 const GUARD_PINNING_PROOF_JSON_MAX_FIELD_BYTES_V1: usize = 4 * 1024;
 const GUARD_PINNING_PROOF_JSON_MAX_TOTAL_STRING_BYTES_V1: usize = 12 * 1024;
@@ -151,7 +147,7 @@ pub struct IssuerConfig {
 /// Certificate bundle path supplied by the configuration.
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 pub struct BundleConfig {
-    /// Path to the Norito-encoded certificate bundle.
+    /// Path to the canonical SRCv2 CBOR certificate bundle.
     pub path: PathBuf,
 }
 /// Guard pinning proof supplied by the configuration.
@@ -177,8 +173,6 @@ pub struct DirectoryMetadata {
     pub valid_after_unix: i64,
     /// Validity window end in UNIX seconds.
     pub valid_until_unix: i64,
-    /// Validation phase enforced by the snapshot.
-    pub validation_phase: CertificateValidationPhase,
     /// Issuers embedded in the snapshot.
     pub issuers: Vec<IssuerSummary>,
     /// Certificates embedded in the snapshot.
@@ -195,8 +189,6 @@ pub struct IssuerSummary {
     pub fingerprint_hex: String,
     /// Hex-encoded Ed25519 public key.
     pub ed25519_hex: String,
-    /// Whether an ML-DSA key was provided.
-    pub has_mldsa: bool,
 }
 /// Certificate summary rendered in CLI output.
 #[derive(Debug, Clone)]
@@ -229,10 +221,6 @@ pub struct GuardPinningProofSummary {
     pub descriptor_commit_hex: String,
     /// Hex-encoded issuer fingerprint associated with the proof.
     pub issuer_fingerprint_hex: String,
-    /// Hex-encoded ML-KEM public key referenced by the proof.
-    pub pq_kem_public_hex: String,
-    /// Validation phase label recorded in the proof.
-    pub validation_phase: String,
     /// Timestamp when the proof was recorded (UNIX seconds).
     pub recorded_at_unix: i64,
     /// Certificate validity window start (UNIX seconds).
@@ -355,6 +343,9 @@ pub enum DirectoryBuildError {
     IssuerMissingMlDsa { label: String },
     #[error("duplicate issuer fingerprint {fingerprint}")]
     DuplicateIssuer { fingerprint: String },
+    /// Multiple configured bundles advertise the same relay identity.
+    #[error("duplicate relay id {relay_id} in certificate bundle {path}")]
+    DuplicateRelay { relay_id: String, path: PathBuf },
     #[error("issuer {label} contained an invalid Ed25519 public key: {source}")]
     InvalidIssuerEd25519 {
         label: String,
@@ -433,16 +424,15 @@ pub enum DirectoryRotateError {
         #[source]
         source: norito::Error,
     },
+    #[error("failed to authenticate source guard directory snapshot: {source}")]
+    Authentication {
+        #[source]
+        source: norito::Error,
+    },
     #[error("snapshot missing issuer records")]
     NoIssuers,
     #[error("rotation currently supports single-issuer snapshots (found {found})")]
     MultipleIssuers { found: usize },
-    #[error("snapshot validation phase {phase} is not recognised")]
-    UnknownPhase { phase: u8 },
-    #[error(
-        "snapshot validation phase {phase:?} is not accepted; the first release requires phase 3 dual signatures"
-    )]
-    UnsupportedReleasePhase { phase: CertificateValidationPhase },
     #[error("snapshot contained no relay certificates to rotate")]
     NoCertificates,
     #[error("issuer public key invalid: {source}")]
@@ -467,6 +457,15 @@ pub enum DirectoryRotateError {
     #[error("failed to reissue certificate at index {index}: {source}")]
     CertificateReissue {
         index: usize,
+        #[source]
+        source: CertificateError,
+    },
+    /// Reissued certificate serialization failed.
+    #[error("failed to encode reissued certificate at index {index}: {source}")]
+    CertificateEncode {
+        /// Relay entry index in the source snapshot.
+        index: usize,
+        /// Canonical SRCv2 serialization failure.
         #[source]
         source: CertificateError,
     },
@@ -500,10 +499,10 @@ pub struct RotationKeys {
 }
 impl RotationKeys {
     fn clear_private_material(&mut self) {
-        self.ed25519_secret.fill(0);
-        std::hint::black_box(&mut self.ed25519_secret);
-        self.mldsa_secret.fill(0);
-        std::hint::black_box(self.mldsa_secret.as_mut_slice());
+        zeroize::Zeroize::zeroize(&mut self.ed25519_secret);
+        self.mldsa_secret.resize(self.mldsa_secret.capacity(), 0);
+        zeroize::Zeroize::zeroize(self.mldsa_secret.as_mut_slice());
+        self.mldsa_secret.clear();
     }
 }
 impl fmt::Debug for RotationKeys {
@@ -605,29 +604,45 @@ pub fn read_guard_pinning_proof_file(
         source,
     })
 }
-/// Rotate issuer material for an existing snapshot using OS randomness.
+/// Rotate issuer material for an authenticated, active snapshot using OS randomness.
+///
+/// `expected_snapshot_digest` must be supplied over a trust path independent of
+/// `snapshot_bytes`. The source snapshot is authenticated at `at_unix` before
+/// any replacement key material is generated or any certificate is reissued.
 ///
 /// # Errors
-/// Returns [`DirectoryRotateError`] when the snapshot fails validation or certificates
-/// cannot be reissued.
+/// Returns [`DirectoryRotateError`] when exact source authentication fails or
+/// certificates cannot be reissued.
 pub fn rotate_snapshot_with_os_rng(
     snapshot_bytes: &[u8],
+    expected_snapshot_digest: [u8; 32],
+    at_unix: i64,
 ) -> Result<RotationOutput, DirectoryRotateError> {
     let mut entropy = rand::rng();
     let mut rng = <StdRng as SeedableRng>::from_rng(&mut entropy);
-    rotate_snapshot(snapshot_bytes, &mut rng)
+    rotate_snapshot(snapshot_bytes, expected_snapshot_digest, at_unix, &mut rng)
 }
-/// Rotate issuer material for an existing snapshot with the provided RNG.
+/// Rotate issuer material for an authenticated, active snapshot with the provided RNG.
+///
+/// `expected_snapshot_digest` must be supplied over a trust path independent of
+/// `snapshot_bytes`. The source snapshot is authenticated at `at_unix` before
+/// any replacement key material is generated or any certificate is reissued.
 ///
 /// # Errors
-/// Returns [`DirectoryRotateError`] when the snapshot fails validation or certificates
-/// cannot be reissued.
+/// Returns [`DirectoryRotateError`] when exact source authentication fails or
+/// certificates cannot be reissued.
 pub fn rotate_snapshot<R: RngCore + CryptoRng>(
     snapshot_bytes: &[u8],
+    expected_snapshot_digest: [u8; 32],
+    at_unix: i64,
     rng: &mut R,
 ) -> Result<RotationOutput, DirectoryRotateError> {
-    let snapshot = GuardDirectorySnapshotV2::inspect_bytes(snapshot_bytes)
-        .map_err(|source| DirectoryRotateError::Decode { source })?;
+    let snapshot = GuardDirectorySnapshotV2::authenticate_bytes_at(
+        snapshot_bytes,
+        expected_snapshot_digest,
+        at_unix,
+    )
+    .map_err(|source| DirectoryRotateError::Authentication { source })?;
     rotate_snapshot_struct(snapshot, rng)
 }
 /// Produce metadata for an existing snapshot.
@@ -653,7 +668,6 @@ fn build_snapshot(
     if config.bundles.is_empty() {
         return Err(DirectoryBuildError::NoBundles);
     }
-    let validation_phase = CertificateValidationPhase::Phase3RequireDual;
     let issuers = load_issuers(&config.issuers)?;
     let mut issuer_map: HashMap<[u8; 32], usize> = HashMap::new();
     issuer_map
@@ -684,6 +698,13 @@ fn build_snapshot(
             source,
         })?;
     let mut retained_bundle_bytes = 0_usize;
+    let mut relay_ids = HashSet::new();
+    relay_ids
+        .try_reserve(config.bundles.len())
+        .map_err(|source| DirectoryBuildError::Allocation {
+            artifact: "guard directory relay identity index",
+            source,
+        })?;
     let mut directory_hash = parse_optional_hash(config.directory_hash_hex.as_deref())?;
     let mut published_at = config.published_at_unix;
     let mut valid_after = config.valid_after_unix;
@@ -710,6 +731,12 @@ fn build_snapshot(
                 source,
             }
         })?;
+        if !relay_ids.insert(bundle.certificate.relay_id) {
+            return Err(DirectoryBuildError::DuplicateRelay {
+                relay_id: hex::encode(bundle.certificate.relay_id),
+                path: absolute_path,
+            });
+        }
         let fingerprint = bundle.certificate.issuer_fingerprint;
         let issuer_index = issuer_map.get(&fingerprint).ok_or_else(|| {
             DirectoryBuildError::UnknownIssuerForCertificate {
@@ -719,11 +746,7 @@ fn build_snapshot(
         })?;
         let issuer = &issuers[*issuer_index];
         bundle
-            .verify_signatures(
-                &issuer.verifying_key,
-                &issuer.mldsa_public,
-                validation_phase,
-            )
+            .verify_signatures(&issuer.verifying_key, &issuer.mldsa_public)
             .map_err(|source| DirectoryBuildError::CertificateVerify {
                 path: absolute_path.clone(),
                 source,
@@ -793,7 +816,6 @@ fn build_snapshot(
             label: issuer.label,
             fingerprint_hex: hex::encode(issuer.fingerprint),
             ed25519_hex: hex::encode(issuer.ed25519_bytes),
-            has_mldsa: !issuer.mldsa_public.is_empty(),
         });
         issuer_list.push(GuardDirectoryIssuerV1 {
             fingerprint: issuer.fingerprint,
@@ -824,7 +846,6 @@ fn build_snapshot(
         published_at_unix: published_at,
         valid_after_unix: valid_after,
         valid_until_unix: valid_until,
-        validation_phase: encode_validation_phase(validation_phase),
         issuers: issuer_list,
         relays,
     };
@@ -877,7 +898,6 @@ fn build_snapshot(
         published_at_unix: published_at,
         valid_after_unix: valid_after,
         valid_until_unix: valid_until,
-        validation_phase,
         issuers: issuer_summaries,
         certificates: certificate_summaries,
         guard_pinning_proofs,
@@ -899,16 +919,6 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
     if snapshot.relays.is_empty() {
         return Err(DirectoryRotateError::NoCertificates);
     }
-    let validation_phase = decode_validation_phase(snapshot.validation_phase).ok_or(
-        DirectoryRotateError::UnknownPhase {
-            phase: snapshot.validation_phase,
-        },
-    )?;
-    if validation_phase != CertificateValidationPhase::Phase3RequireDual {
-        return Err(DirectoryRotateError::UnsupportedReleasePhase {
-            phase: validation_phase,
-        });
-    }
     let issuer = &snapshot.issuers[0];
     let verifying_key = checked_ed25519_verifying_key_from_bytes(&issuer.ed25519_public)
         .map_err(|reason| DirectoryRotateError::InvalidIssuerKeyMaterial { reason })?;
@@ -920,7 +930,7 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
         let bundle = RelayCertificateBundleV2::from_cbor(&relay_entry.certificate)
             .map_err(|source| DirectoryRotateError::CertificateDecode { index, source })?;
         bundle
-            .verify_signatures(&verifying_key, &issuer.mldsa65_public, validation_phase)
+            .verify_signatures(&verifying_key, &issuer.mldsa65_public)
             .map_err(|source| DirectoryRotateError::CertificateVerify { index, source })?;
         certificate_summaries.push(CertificateSummary {
             path: None,
@@ -961,7 +971,9 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
             .issue(&signing_key, mldsa_keys.secret_key())
             .map_err(|source| DirectoryRotateError::CertificateReissue { index, source })?;
         relays.push(GuardDirectoryRelayEntryV2 {
-            certificate: reissued.to_cbor(),
+            certificate: reissued
+                .try_to_cbor()
+                .map_err(|source| DirectoryRotateError::CertificateEncode { index, source })?,
         });
     }
     let snapshot = GuardDirectorySnapshotV2 {
@@ -970,7 +982,6 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
         published_at_unix: snapshot.published_at_unix,
         valid_after_unix: snapshot.valid_after_unix,
         valid_until_unix: snapshot.valid_until_unix,
-        validation_phase: snapshot.validation_phase,
         issuers: vec![GuardDirectoryIssuerV1 {
             fingerprint,
             ed25519_public: ed_public,
@@ -983,12 +994,10 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
         published_at_unix: snapshot.published_at_unix,
         valid_after_unix: snapshot.valid_after_unix,
         valid_until_unix: snapshot.valid_until_unix,
-        validation_phase,
         issuers: vec![IssuerSummary {
             label: None,
             fingerprint_hex: hex::encode(fingerprint),
             ed25519_hex: hex::encode(ed_public),
-            has_mldsa: true,
         }],
         certificates: certificate_summaries,
         guard_pinning_proofs: Vec::new(),
@@ -1008,11 +1017,6 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
 fn summarize_snapshot(
     snapshot: &GuardDirectorySnapshotV2,
 ) -> Result<DirectoryMetadata, DirectoryRotateError> {
-    let validation_phase = decode_validation_phase(snapshot.validation_phase).ok_or(
-        DirectoryRotateError::UnknownPhase {
-            phase: snapshot.validation_phase,
-        },
-    )?;
     let mut issuer_summaries: Vec<IssuerSummary> = Vec::with_capacity(snapshot.issuers.len());
     let mut issuer_records: HashMap<[u8; 32], (VerifyingKey, Vec<u8>)> =
         HashMap::with_capacity(snapshot.issuers.len());
@@ -1027,7 +1031,6 @@ fn summarize_snapshot(
             label: None,
             fingerprint_hex: hex::encode(issuer.fingerprint),
             ed25519_hex: hex::encode(issuer.ed25519_public),
-            has_mldsa: !issuer.mldsa65_public.is_empty(),
         });
     }
     let mut certificate_summaries: Vec<CertificateSummary> =
@@ -1039,7 +1042,7 @@ fn summarize_snapshot(
             issuer_records.get(&bundle.certificate.issuer_fingerprint)
         {
             bundle
-                .verify_signatures(issuer_key, mldsa_public, validation_phase)
+                .verify_signatures(issuer_key, mldsa_public)
                 .map_err(|source| DirectoryRotateError::CertificateVerify { index, source })?;
         }
         certificate_summaries.push(CertificateSummary {
@@ -1057,7 +1060,6 @@ fn summarize_snapshot(
         published_at_unix: snapshot.published_at_unix,
         valid_after_unix: snapshot.valid_after_unix,
         valid_until_unix: snapshot.valid_until_unix,
-        validation_phase,
         issuers: issuer_summaries,
         certificates: certificate_summaries,
         guard_pinning_proofs: Vec::new(),
@@ -1280,14 +1282,6 @@ impl GuardPinningProofSummary {
                 proof.issuer_fingerprint_hex(),
                 "guard proof issuer fingerprint summary",
             )?,
-            pq_kem_public_hex: try_clone_bounded_string(
-                proof.pq_kem_public_hex(),
-                "guard proof ML-KEM public key summary",
-            )?,
-            validation_phase: try_clone_bounded_string(
-                proof.validation_phase(),
-                "guard proof validation phase summary",
-            )?,
             recorded_at_unix: proof.recorded_at_unix(),
             valid_after_unix: proof.valid_after_unix(),
             valid_until_unix: proof.valid_until_unix(),
@@ -1502,13 +1496,14 @@ mod tests {
     use crate::guard::{GuardDirectoryEntry, persist_guard_pinning_proof};
     use iroha_crypto::soranet::{
         certificate::{
-            CapabilityToggle, KemRotationModeV1, KemRotationPolicyV1, RelayCapabilityFlagsV1,
-            RelayCertificateV2, RelayEndpointV2, RelayRolesV2,
+            CapabilityToggle, RelayCapabilityFlagsV1, RelayCertificateV2, RelayEndpointV2,
+            RelayRolesV2,
         },
+        directory::compute_snapshot_digest,
         handshake::HandshakeSuite,
     };
     use rand::{SeedableRng, rngs::StdRng};
-    use soranet_pq::{MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
+    use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
     use std::time::{Duration, SystemTime};
@@ -1864,9 +1859,15 @@ mod tests {
             .expect("issue");
         let dir = tempdir().expect("tempdir");
         let bundle_path = dir.path().join("alpha.cbor");
-        fs::write(&bundle_path, bundle.to_cbor()).expect("write bundle");
+        fs::write(
+            &bundle_path,
+            bundle
+                .try_to_cbor()
+                .expect("sample relay bundle should encode"),
+        )
+        .expect("write bundle");
         let config_path = dir.path().join("directory.json");
-        let config = DirectoryBuildConfig {
+        let mut config = DirectoryBuildConfig {
             directory_hash_hex: Some(hex::encode(bundle.certificate.directory_hash)),
             published_at_unix: Some(bundle.certificate.published_at),
             valid_after_unix: Some(bundle.certificate.valid_after),
@@ -1888,16 +1889,28 @@ mod tests {
         assert_eq!(bundle.metadata.certificates.len(), 1);
         assert_eq!(bundle.metadata.issuers.len(), 1);
         assert_eq!(
-            bundle.metadata.validation_phase,
-            CertificateValidationPhase::Phase3RequireDual
-        );
-        assert_eq!(
             bundle.metadata.certificates[0].relay_id_hex,
             hex::encode(certificate.relay_id)
         );
         assert_eq!(
             bundle.metadata.issuers[0].fingerprint_hex,
             hex::encode(fingerprint)
+        );
+
+        config.bundles.push(BundleConfig {
+            path: bundle_path.clone(),
+        });
+        write_directory_config(&config_path, &config);
+        let error = build_snapshot_from_config(&config_path)
+            .expect_err("duplicate relay identities must be rejected by the producer");
+        let expected_relay_id = hex::encode(certificate.relay_id);
+        assert!(
+            matches!(
+                &error,
+                DirectoryBuildError::DuplicateRelay { relay_id, path }
+                    if relay_id == &expected_relay_id && path == &bundle_path
+            ),
+            "unexpected duplicate relay error: {error:?}"
         );
     }
     #[test]
@@ -1952,7 +1965,13 @@ mod tests {
             .expect("issue");
         let dir = tempdir().expect("tempdir");
         let bundle_path = dir.path().join("relay.cbor");
-        fs::write(&bundle_path, bundle.to_cbor()).expect("write bundle");
+        fs::write(
+            &bundle_path,
+            bundle
+                .try_to_cbor()
+                .expect("sample relay bundle should encode"),
+        )
+        .expect("write bundle");
         let config_path = dir.path().join("directory.json");
         let snapshot_path = dir.path().join("snapshots/current.norito");
         let proof_rel_path = PathBuf::from("evidence/entry.json");
@@ -1984,7 +2003,6 @@ mod tests {
             bundle: bundle.clone(),
             snapshot_valid_until_unix: initial_bundle.snapshot.valid_until_unix,
             directory_hash: certificate.directory_hash,
-            validation_phase: CertificateValidationPhase::Phase3RequireDual,
         };
         persist_guard_pinning_proof(
             &proof_abs_path,
@@ -2013,7 +2031,6 @@ mod tests {
             summary.directory_hash_hex,
             hex::encode(certificate.directory_hash)
         );
-        assert_eq!(summary.validation_phase, "phase3_require_dual");
         assert_eq!(summary.guard_weight, certificate.guard_weight);
         assert_eq!(
             summary.bandwidth_bytes_per_sec,
@@ -2038,7 +2055,13 @@ mod tests {
             .expect("issue");
         let dir = tempdir().expect("tempdir");
         let bundle_path = dir.path().join("relay.cbor");
-        fs::write(&bundle_path, bundle.to_cbor()).expect("write bundle");
+        fs::write(
+            &bundle_path,
+            bundle
+                .try_to_cbor()
+                .expect("sample relay bundle should encode"),
+        )
+        .expect("write bundle");
         let config_path = dir.path().join("directory.json");
         let snapshot_path = dir.path().join("snapshots/current.norito");
         let evidence_dir = dir.path().join("evidence");
@@ -2073,7 +2096,6 @@ mod tests {
             bundle,
             snapshot_valid_until_unix: snapshot_bundle.snapshot.valid_until_unix,
             directory_hash: certificate.directory_hash,
-            validation_phase: CertificateValidationPhase::Phase3RequireDual,
         };
         persist_guard_pinning_proof(
             &proof_path,
@@ -2117,7 +2139,13 @@ mod tests {
             .expect("issue");
         let dir = tempdir().expect("tempdir");
         let bundle_path = dir.path().join("relay.cbor");
-        fs::write(&bundle_path, bundle.to_cbor()).expect("write bundle");
+        fs::write(
+            &bundle_path,
+            bundle
+                .try_to_cbor()
+                .expect("sample relay bundle should encode"),
+        )
+        .expect("write bundle");
         let config_path = dir.path().join("directory.json");
         let snapshot_path = dir.path().join("snapshots/current.norito");
         let evidence_dir = dir.path().join("evidence");
@@ -2152,7 +2180,6 @@ mod tests {
             bundle,
             snapshot_valid_until_unix: snapshot_bundle.snapshot.valid_until_unix,
             directory_hash: certificate.directory_hash,
-            validation_phase: CertificateValidationPhase::Phase3RequireDual,
         };
         persist_guard_pinning_proof(
             &proof_path,
@@ -2194,21 +2221,35 @@ mod tests {
             published_at_unix: certificate.published_at,
             valid_after_unix: certificate.valid_after,
             valid_until_unix: certificate.valid_until,
-            validation_phase: encode_validation_phase(
-                CertificateValidationPhase::Phase3RequireDual,
-            ),
             issuers: vec![GuardDirectoryIssuerV1 {
                 fingerprint,
                 ed25519_public: ed_public,
                 mldsa65_public: issuer_keys.public_key().to_vec(),
             }],
             relays: vec![GuardDirectoryRelayEntryV2 {
-                certificate: bundle.to_cbor(),
+                certificate: bundle
+                    .try_to_cbor()
+                    .expect("sample relay bundle should encode"),
             }],
         };
         let bytes = snapshot.to_bytes().expect("encode snapshot");
+        let expected_digest = compute_snapshot_digest(&bytes);
         let mut rng = StdRng::seed_from_u64(0xDEADBEEF);
-        let output = rotate_snapshot(&bytes, &mut rng).expect("rotate snapshot");
+        let digest_err = rotate_snapshot(&bytes, [0xEE; 32], snapshot.valid_after_unix, &mut rng)
+            .expect_err("rotation must reject an untrusted source artifact");
+        assert!(
+            matches!(&digest_err, DirectoryRotateError::Authentication { .. }),
+            "unexpected digest authentication error: {digest_err:?}"
+        );
+        let expiry_err =
+            rotate_snapshot(&bytes, expected_digest, snapshot.valid_until_unix, &mut rng)
+                .expect_err("rotation must reject an expired source artifact");
+        assert!(
+            matches!(&expiry_err, DirectoryRotateError::Authentication { .. }),
+            "unexpected freshness authentication error: {expiry_err:?}"
+        );
+        let output = rotate_snapshot(&bytes, expected_digest, snapshot.valid_after_unix, &mut rng)
+            .expect("rotate authenticated active snapshot");
         assert_eq!(
             output.bundle.metadata.certificates.len(),
             snapshot.relays.len()
@@ -2219,56 +2260,9 @@ mod tests {
         for entry in &output.bundle.snapshot.relays {
             let bundle = RelayCertificateBundleV2::from_cbor(&entry.certificate).expect("bundle");
             bundle
-                .verify_signatures(
-                    &new_verifying,
-                    &output.keys.mldsa_public,
-                    output.bundle.metadata.validation_phase,
-                )
+                .verify_signatures(&new_verifying, &output.keys.mldsa_public)
                 .expect("verify");
         }
-    }
-    #[test]
-    fn rotate_snapshot_rejects_pre_release_validation_phase() {
-        let issuer_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
-            .expect("ML-DSA keypair generation should succeed");
-        let signing_key = SigningKey::from_bytes(&[0x57; 32]);
-        let ed_public = signing_key.verifying_key().to_bytes();
-        let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key())
-            .expect("sample issuer fingerprint should compute");
-        let certificate = sample_certificate(fingerprint);
-        let bundle = certificate
-            .clone()
-            .issue(&signing_key, issuer_keys.secret_key())
-            .expect("issue");
-        let snapshot = GuardDirectorySnapshotV2 {
-            version: GUARD_DIRECTORY_VERSION_V2,
-            directory_hash: certificate.directory_hash,
-            published_at_unix: certificate.published_at,
-            valid_after_unix: certificate.valid_after,
-            valid_until_unix: certificate.valid_until,
-            validation_phase: encode_validation_phase(CertificateValidationPhase::Phase2PreferDual),
-            issuers: vec![GuardDirectoryIssuerV1 {
-                fingerprint,
-                ed25519_public: ed_public,
-                mldsa65_public: issuer_keys.public_key().to_vec(),
-            }],
-            relays: vec![GuardDirectoryRelayEntryV2 {
-                certificate: bundle.to_cbor(),
-            }],
-        };
-        let bytes = snapshot.to_bytes().expect("encode snapshot");
-        let mut rng = StdRng::seed_from_u64(0xBAD_CAFE);
-        let err = rotate_snapshot(&bytes, &mut rng)
-            .expect_err("rotation must not preserve a pre-release validation policy");
-        assert!(
-            matches!(
-                &err,
-                DirectoryRotateError::UnsupportedReleasePhase {
-                    phase: CertificateValidationPhase::Phase2PreferDual
-                }
-            ),
-            "unexpected directory rotation error: {err:?}"
-        );
     }
     #[test]
     fn rotate_snapshot_rejects_all_zero_generated_ed25519_seed() {
@@ -2305,22 +2299,26 @@ mod tests {
             published_at_unix: certificate.published_at,
             valid_after_unix: certificate.valid_after,
             valid_until_unix: certificate.valid_until,
-            validation_phase: encode_validation_phase(
-                CertificateValidationPhase::Phase3RequireDual,
-            ),
             issuers: vec![GuardDirectoryIssuerV1 {
                 fingerprint,
                 ed25519_public: ed_public,
                 mldsa65_public: issuer_keys.public_key().to_vec(),
             }],
             relays: vec![GuardDirectoryRelayEntryV2 {
-                certificate: bundle.to_cbor(),
+                certificate: bundle
+                    .try_to_cbor()
+                    .expect("sample relay bundle should encode"),
             }],
         };
         let bytes = snapshot.to_bytes().expect("encode snapshot");
         let mut rng = ZeroRng;
-        let err = rotate_snapshot(&bytes, &mut rng)
-            .expect_err("all-zero generated Ed25519 issuer seed must fail");
+        let err = rotate_snapshot(
+            &bytes,
+            compute_snapshot_digest(&bytes),
+            snapshot.valid_after_unix,
+            &mut rng,
+        )
+        .expect_err("all-zero generated Ed25519 issuer seed must fail");
         match err {
             DirectoryRotateError::InvalidGeneratedIssuerKeyMaterial { reason } => {
                 assert!(reason.contains("all zero"), "unexpected reason: {reason}");
@@ -2358,13 +2356,6 @@ mod tests {
                 CapabilityToggle::Enabled,
                 CapabilityToggle::Disabled,
             ),
-            kem_policy: KemRotationPolicyV1 {
-                mode: KemRotationModeV1::Static,
-                preferred_suite: 2,
-                fallback_suite: None,
-                rotation_interval_hours: 0,
-                grace_period_hours: 0,
-            },
             handshake_suites: vec![
                 HandshakeSuite::Nk3PqForwardSecure,
                 HandshakeSuite::Nk2Hybrid,
@@ -2374,7 +2365,6 @@ mod tests {
             valid_until: 1_734_086_400,
             directory_hash: [0x55; 32],
             issuer_fingerprint: fingerprint,
-            pq_kem_public: vec![0x66; MlKemSuite::MlKem1024.public_key_len()],
         }
     }
     fn config_with_counts(
@@ -2433,9 +2423,6 @@ mod tests {
             published_at_unix: 0,
             valid_after_unix: 0,
             valid_until_unix: 1,
-            validation_phase: encode_validation_phase(
-                CertificateValidationPhase::Phase3RequireDual,
-            ),
             issuers: Vec::new(),
             relays: Vec::new(),
         }
@@ -2447,7 +2434,6 @@ mod tests {
                 "\"version\":1,",
                 "\"recorded_at_unix\":0,",
                 "\"snapshot_path\":\"{}\",",
-                "\"validation_phase\":\"phase3_require_dual\",",
                 "\"relay_id_hex\":\"{}\",",
                 "\"directory_hash_hex\":\"{}\",",
                 "\"descriptor_commit_hex\":\"{}\",",
@@ -2456,8 +2442,7 @@ mod tests {
                 "\"valid_until_unix\":1,",
                 "\"guard_weight\":1,",
                 "\"bandwidth_bytes_per_sec\":1,",
-                "\"reputation_weight\":1,",
-                "\"pq_kem_public_hex\":\"\"",
+                "\"reputation_weight\":1",
                 "}}"
             ),
             snapshot_path,

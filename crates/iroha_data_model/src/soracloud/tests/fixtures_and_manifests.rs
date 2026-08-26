@@ -65,7 +65,9 @@ fn sample_app_infra_manifest() -> SoraAppInfraManifestV1 {
         static_site: Some(SoraAppStaticSiteBindingV1 {
             schema_version: SORA_APP_STATIC_SITE_BINDING_VERSION_V1,
             public_url: "https://app.example.test".to_string(),
-            content_cid: Some("bafyapp".to_string()),
+            content_cid: Some(encode_lowercase_multibase_base32(
+                &sorafs_manifest::canonical_manifest_root_cid([0xA4; 32]),
+            )),
             manifest_digest_hex: Some("a".repeat(64)),
             mount_path: "/".to_string(),
             api_base_path: Some("/api".to_string()),
@@ -88,14 +90,6 @@ fn sample_peer_id(seed: u8) -> String {
     let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("fixture seed derives Ed25519 peer keypair");
     PeerId::from(keypair.public_key().clone()).to_string()
-}
-fn sample_validator_execution_host(seed: u8) -> SoraRuntimeDeterministicValidatorHostV1 {
-    let validator_account_id = sample_account_id(seed);
-    SoraRuntimeDeterministicValidatorHostV1 {
-        lane_id: LaneId::SINGLE,
-        peer_id: PeerId::from(validator_account_id.expect_single_signatory().clone()).to_string(),
-        validator_account_id,
-    }
 }
 fn sample_ed25519_keypair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -143,6 +137,124 @@ fn app_infra_manifest_hash_and_provenance_are_canonical() {
             .expect("encode app infra provenance"),
         norito::to_bytes(&(manifest, precondition)).expect("encode canonical app mutation")
     );
+}
+#[test]
+fn app_infra_manifest_rejects_noncanonical_url_and_path_text() {
+    let mut padded_url = sample_app_infra_manifest();
+    padded_url.public_url.push(' ');
+    padded_url
+        .validate()
+        .expect_err("public URL whitespace must not be normalized");
+
+    let mut padded_path = sample_app_infra_manifest();
+    padded_path
+        .static_site
+        .as_mut()
+        .expect("static-site fixture")
+        .mount_path
+        .push(' ');
+    padded_path
+        .validate()
+        .expect_err("absolute path whitespace must not be normalized");
+
+    let mut traversal_path = sample_app_infra_manifest();
+    traversal_path
+        .static_site
+        .as_mut()
+        .expect("static-site fixture")
+        .api_base_path = Some("/api/../private".to_owned());
+    traversal_path
+        .validate()
+        .expect_err("noncanonical absolute path components must fail closed");
+
+    for public_url in [
+        "https://App.example.test",
+        "https://app.example.test:0443/api",
+        "https://app.example.test:443/api",
+        "https://app.example.test/api/../private",
+        "https://127.1/api",
+        "https://app.example.test/",
+    ] {
+        let mut noncanonical_url = sample_app_infra_manifest();
+        noncanonical_url.public_url = public_url.to_owned();
+        noncanonical_url
+            .validate()
+            .expect_err("public URL aliases must fail closed");
+    }
+}
+#[test]
+fn app_static_site_requires_exact_paired_sorafs_references() {
+    let mut manifest = sample_app_infra_manifest();
+    manifest
+        .validate()
+        .expect("canonical static-site references");
+
+    let static_site = manifest.static_site.as_mut().expect("static-site fixture");
+    static_site.content_cid = static_site
+        .content_cid
+        .take()
+        .map(|content_cid| content_cid.replacen('b', "B", 1));
+    manifest
+        .validate()
+        .expect_err("noncanonical content CID spelling must fail closed");
+
+    let mut uppercase_digest = sample_app_infra_manifest();
+    uppercase_digest
+        .static_site
+        .as_mut()
+        .expect("static-site fixture")
+        .manifest_digest_hex = Some("A".repeat(64));
+    uppercase_digest
+        .validate()
+        .expect_err("noncanonical manifest digest spelling must fail closed");
+
+    let mut unpaired = sample_app_infra_manifest();
+    unpaired
+        .static_site
+        .as_mut()
+        .expect("static-site fixture")
+        .manifest_digest_hex = None;
+    unpaired
+        .validate()
+        .expect_err("partial static content identity must fail closed");
+}
+#[test]
+fn app_route_and_service_references_require_exact_v1_tokens() {
+    let canonical = sample_app_infra_service("app_api");
+    canonical
+        .validate()
+        .expect("canonical app service reference");
+
+    let mut uppercase_host = canonical.clone();
+    uppercase_host.routes[0].public_host = Some("App.Example.Test".to_owned());
+    uppercase_host
+        .validate()
+        .expect_err("public host case aliases must fail closed");
+
+    let mut legacy_internal_scheme = canonical.clone();
+    legacy_internal_scheme.routes[0].internal_url = Some("http://app_api:8080/api".to_owned());
+    legacy_internal_scheme
+        .validate()
+        .expect_err("internal routes must use the exact Soracloud V1 scheme");
+
+    let mut noncanonical_internal_port = canonical.clone();
+    noncanonical_internal_port.routes[0].internal_url =
+        Some("soracloud://app_api:08080/api".to_owned());
+    noncanonical_internal_port
+        .validate()
+        .expect_err("internal route ports must use canonical decimal spelling");
+
+    let mut padded_version = canonical.clone();
+    padded_version.service_version.push(' ');
+    padded_version
+        .validate()
+        .expect_err("service version aliases must fail closed");
+
+    let mut padded_shard = canonical;
+    padded_shard.shard = Some(" SORACLOUD_SHARD_ID=0;SORACLOUD_SHARD_COUNT=1".to_owned());
+    padded_shard
+        .validate()
+        .expect_err("shard aliases must fail closed");
 }
 #[cfg(feature = "json")]
 #[test]
@@ -352,138 +464,61 @@ fn app_infra_audit_event_validate_rejects_zero_prehash_manifest_hash_sentinel() 
         .expect_err("app manifest placeholder hash must fail admission");
     assert_zero_prehash_digest_error(&error, "app_manifest_hash");
 }
+#[test]
+fn app_infra_audit_versions_are_exact_tokens() {
+    let canonical = SoraAppInfraAuditEventV1 {
+        schema_version: SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1,
+        sequence: 2,
+        action: SoraAppInfraActionV1::Upgrade,
+        app_name: sample_name("sample_app"),
+        from_version: Some("1.0.0".to_owned()),
+        to_version: "1.1.0".to_owned(),
+        app_manifest_hash: sample_hash(0xB0),
+        service_count: 1,
+        signer: sample_signer(),
+    };
+    canonical
+        .validate()
+        .expect("canonical app-infra audit event");
+
+    let mut padded_from = canonical.clone();
+    padded_from.from_version = Some(" 1.0.0".to_owned());
+    padded_from
+        .validate()
+        .expect_err("from-version aliases must fail closed");
+
+    let mut padded_to = canonical;
+    padded_to.to_version = "1.1.0 ".to_owned();
+    padded_to
+        .validate()
+        .expect_err("to-version aliases must fail closed");
+}
 fn sample_model_provenance_ref() -> SoraModelProvenanceRefV1 {
     SoraModelProvenanceRefV1 {
         kind: SoraModelProvenanceKindV1::TrainingJob,
         id: "job-1".to_string(),
     }
 }
-fn sample_uploaded_model_encryption_recipient() -> SoraUploadedModelEncryptionRecipientV1 {
-    let public_key_bytes = vec![7u8; 32];
-    SoraUploadedModelEncryptionRecipientV1 {
-        schema_version: SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
-        key_id: "soracloud-upload-recipient".to_string(),
-        key_version: NonZeroU32::new(1).expect("non-zero key version"),
-        kem: SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256,
-        aead: SoraUploadedModelKeyWrapAeadV1::Aes256Gcm,
-        public_key_bytes: public_key_bytes.clone(),
-        public_key_fingerprint: Hash::new(public_key_bytes.as_slice()),
-    }
-}
-fn sample_uploaded_model_wrapped_key() -> SoraUploadedModelWrappedKeyV1 {
-    let recipient = sample_uploaded_model_encryption_recipient();
-    let wrapped_key_ciphertext = vec![9u8; 48];
-    SoraUploadedModelWrappedKeyV1 {
-        schema_version: SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
-        recipient_key_id: recipient.key_id,
-        recipient_key_version: recipient.key_version,
-        kem: recipient.kem,
-        aead: recipient.aead,
-        ephemeral_public_key: vec![8u8; 32],
-        nonce: vec![5u8; 12],
-        wrapped_key_ciphertext: wrapped_key_ciphertext.clone(),
-        ciphertext_hash: Hash::new(wrapped_key_ciphertext.as_slice()),
-        aad_digest: sample_hash(210),
-    }
-}
+
 fn sample_uploaded_model_bundle() -> SoraUploadedModelBundleV1 {
     SoraUploadedModelBundleV1 {
         schema_version: SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
-        service_name: sample_name("private_model_host"),
+        service_name: sample_name("uploaded_model_registry"),
         model_id: "upload-1".to_string(),
         weight_version: "v1".to_string(),
         family: "demo-family".to_string(),
         modalities: vec!["text".to_string()],
         plaintext_root: sample_hash(30),
-        runtime_format: SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors,
+        package_format: SoraUploadedModelPackageFormatV1::NormalizedHuggingFaceSafetensorsV1,
         bundle_root: sample_hash(31),
         sorafs_manifest_digest: ManifestDigest::new([0xA5; 32]),
         chunk_count: 2,
         plaintext_bytes: 1_024,
         ciphertext_bytes: 2_048,
         chunk_manifest_root: sample_hash(33),
-        upload_recipient: sample_uploaded_model_encryption_recipient(),
-        wrapped_bundle_key: sample_uploaded_model_wrapped_key(),
         pricing_policy: SoraUploadedModelPricingPolicyV1 {
             storage_price: xor_quantity_from_nanos(10),
         },
-        decryption_policy_ref: "policy/v1".to_string(),
-    }
-}
-fn sample_private_model_artifact_ref(role: &str, seed: u8) -> SoraPrivateModelArtifactRefV1 {
-    SoraPrivateModelArtifactRefV1 {
-        schema_version: SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
-        sorafs_manifest_digest: ManifestDigest::new([seed; 32]),
-        sorafs_root_cid: crate::sorafs::pin_registry::ManifestRootCid::from_blake3_digest(
-            [seed; 32],
-        )
-        .expect("fixture root CID"),
-        artifact_hash: sample_hash(seed.wrapping_add(1)),
-        ciphertext_bytes: 128,
-        artifact_role: role.to_string(),
-    }
-}
-fn sample_private_model_artifact_context() -> SoraPrivateModelArtifactContextV1 {
-    SoraPrivateModelArtifactContextV1::Model(SoraPrivateModelArtifactModelContextV1 {
-        service_name: sample_name("private_model_host"),
-        service_version: "2026.1".to_owned(),
-        model_id: "upload-1".to_owned(),
-        weight_version: "v1".to_owned(),
-        policy_id: "policy/v1".to_owned(),
-        model_plaintext_commitment: sample_hash(0x35),
-    })
-}
-fn sample_private_uploaded_model_execution_receipt() -> SoraPrivateUploadedModelExecutionReceiptV1 {
-    let mut receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
-        schema_version: SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
-        network_id: crate::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
-            crate::block::BlockHeader,
-        >::from_untyped_unchecked(
-            Hash::prehashed([0x92; Hash::LENGTH])
-        )),
-        receipt_id: Hash::prehashed([0; 32]),
-        service_name: sample_name("private_model_host"),
-        service_version: "2026.1".to_string(),
-        model_id: "upload-1".to_string(),
-        weight_version: "v1".to_string(),
-        runtime_version: SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1.to_string(),
-        model_manifest_digest: ManifestDigest::new([0xA5; 32]),
-        model_bundle_root: sample_hash(31),
-        policy_id: "policy/v1".to_string(),
-        decryption_request_id: "decrypt-upload-1".to_string(),
-        attesting_validator: sample_validator_execution_host(0x30),
-        input_artifact: sample_private_model_artifact_ref("input", 0x11),
-        output_artifact: sample_private_model_artifact_ref("output", 0x22),
-        output_replication_order_id:
-            crate::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1(
-                &ManifestDigest::new([0x22; 32]),
-            ),
-        input_commitment: sample_hash(0x41),
-        output_commitment: sample_hash(0x42),
-        output_recipient: sample_uploaded_model_encryption_recipient(),
-        request_commitment: Hash::prehashed([0; 32]),
-        result_commitment: Hash::prehashed([0; 32]),
-        authorization_claim_block_height: 2,
-        authorization_claim_epoch: 2,
-        emitted_sequence: 7,
-        emitted_block_height: 3,
-        emitted_epoch: 3,
-    };
-    receipt.request_commitment = derive_soracloud_private_model_request_commitment_v1(&receipt);
-    receipt.result_commitment = derive_soracloud_private_model_result_commitment_v1(&receipt);
-    receipt.receipt_id = derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&receipt);
-    receipt
-}
-fn sample_hf_resource_profile() -> SoraHfResourceProfileV1 {
-    SoraHfResourceProfileV1 {
-        required_model_bytes: 3 * 1024 * 1024 * 1024,
-        backend_family: SoraHfBackendFamilyV1::Transformers,
-        model_format: SoraHfModelFormatV1::Safetensors,
-        selected_weight_file_count: 2,
-        weight_selection_commitment: sample_hash(0x71),
-        disk_cache_bytes_floor: 4 * 1024 * 1024 * 1024,
-        ram_bytes_floor: 4 * 1024 * 1024 * 1024,
-        vram_bytes_floor: 0,
     }
 }
 #[test]
@@ -546,157 +581,39 @@ fn canonical_hf_source_id_binds_repo_spelling_and_immutable_commit() {
     assert!(derive_hf_source_id_v1("openai/gpt-oss", "main").is_err());
 }
 #[test]
-fn hf_weight_selection_is_sorted_authenticated_bounded_and_committed() {
-    let gguf_a = "11".repeat(32);
-    let gguf_b = "22".repeat(32);
-    let gguf_a_duplicate = "11".repeat(32);
-    let safetensors = "33".repeat(32);
-    let model_info = norito::json!({
-        "siblings": [
-            {"rfilename": "fallback.safetensors", "lfs": {"sha256": safetensors, "size": 99}},
-            {"rfilename": "weights/z.GGUF", "lfs": {"sha256": gguf_b, "size": 7}},
-            {"rfilename": "weights/a.gguf", "lfs": {"sha256": gguf_a, "size": 5}},
-            {"rfilename": "weights/a.gguf", "lfs": {"sha256": gguf_a_duplicate, "size": 5}}
-        ]
-    });
-    let selection = derive_hf_weight_selection_v1(&model_info, 4, 8, 12)
-        .expect("bounded canonical model-info")
-        .expect("supported weight set");
-    assert_eq!(selection.backend_family, SoraHfBackendFamilyV1::Gguf);
-    assert_eq!(selection.model_format, SoraHfModelFormatV1::Gguf);
-    assert_eq!(selection.required_model_bytes, 12);
-    assert_eq!(selection.required_weight_files.len(), 2);
-    assert_eq!(selection.required_weight_files[0].path, "weights/a.gguf");
-    assert_eq!(selection.required_weight_files[1].path, "weights/z.GGUF");
-    let changed_gguf_a = "44".repeat(32);
-    let changed_gguf_b = "22".repeat(32);
-    let changed = derive_hf_weight_selection_v1(
-        &norito::json!({
-            "siblings": [
-                {"rfilename": "weights/a.gguf", "lfs": {"sha256": changed_gguf_a, "size": 5}},
-                {"rfilename": "weights/z.GGUF", "lfs": {"sha256": changed_gguf_b, "size": 7}}
-            ]
-        }),
-        4,
-        8,
-        12,
-    )
-    .expect("changed bounded model-info")
-    .expect("changed supported weight set");
-    assert_ne!(
-        selection.weight_selection_commitment, changed.weight_selection_commitment,
-        "the exact LFS digest set must be committed"
+fn canonical_hf_shared_lease_pool_id_is_domain_separated() {
+    let source_id = Hash::new(b"canonical-hf-source");
+    let storage_class = StorageClass::Warm;
+    let lease_term_ms = 604_800_000_u64;
+    let expected = Hash::new(
+        norito::to_bytes(&(
+            "soracloud:hf-shared-lease-pool-id:v1",
+            source_id,
+            storage_class,
+            lease_term_ms,
+        ))
+        .expect("canonical domain-separated pool preimage"),
     );
-}
-#[test]
-fn hf_weight_selection_rejects_unauthenticated_ambiguous_or_over_budget_shards() {
-    let digest = "11".repeat(32);
-    let missing_filename_digest = "11".repeat(32);
-    for malformed in [
-        norito::json!({"siblings": ["model.gguf"]}),
-        norito::json!({"siblings": [{"lfs": {"sha256": missing_filename_digest, "size": 8}}]}),
-        norito::json!({"siblings": [{"rfilename": 7}]}),
-    ] {
-        assert!(
-            derive_hf_weight_selection_v1(&malformed, 1, 8, 8).is_err(),
-            "malformed sibling entries must not be omitted from an exact selection"
-        );
-    }
-    let missing_lfs = norito::json!({"siblings": [{"rfilename": "model.gguf"}]});
-    assert!(derive_hf_weight_selection_v1(&missing_lfs, 1, 8, 8).is_err());
-    let uppercase_digest_hex = "AA".repeat(32);
-    let uppercase_digest = norito::json!({
-        "siblings": [{"rfilename": "model.gguf", "lfs": {"sha256": uppercase_digest_hex, "size": 8}}]
-    });
-    assert!(derive_hf_weight_selection_v1(&uppercase_digest, 1, 8, 8).is_err());
-    let zero_digest_hex = "00".repeat(32);
-    let zero_digest = norito::json!({
-        "siblings": [{"rfilename": "model.gguf", "lfs": {"sha256": zero_digest_hex, "size": 8}}]
-    });
-    assert!(derive_hf_weight_selection_v1(&zero_digest, 1, 8, 8).is_err());
-    let conflicting_digest = "22".repeat(32);
-    let conflicting = norito::json!({
-        "siblings": [
-            {"rfilename": "model.gguf", "lfs": {"sha256": digest, "size": 8}},
-            {"rfilename": "model.gguf", "lfs": {"sha256": conflicting_digest, "size": 8}}
-        ]
-    });
-    assert!(derive_hf_weight_selection_v1(&conflicting, 1, 8, 8).is_err());
-    let traversal_digest = "11".repeat(32);
-    let traversal = norito::json!({
-        "siblings": [{"rfilename": "../model.gguf", "lfs": {"sha256": traversal_digest, "size": 8}}]
-    });
-    assert!(derive_hf_weight_selection_v1(&traversal, 1, 8, 8).is_err());
-    let shard_a_digest = "11".repeat(32);
-    let shard_b_digest = "22".repeat(32);
-    let two_shards = norito::json!({
-        "siblings": [
-            {"rfilename": "a.gguf", "lfs": {"sha256": shard_a_digest, "size": 5}},
-            {"rfilename": "b.gguf", "lfs": {"sha256": shard_b_digest, "size": 5}}
-        ]
-    });
-    assert!(derive_hf_weight_selection_v1(&two_shards, 1, 8, 10).is_err());
-    assert!(derive_hf_weight_selection_v1(&two_shards, 2, 4, 10).is_err());
-    assert!(derive_hf_weight_selection_v1(&two_shards, 2, 8, 9).is_err());
-    assert!(derive_hf_weight_selection_v1(&two_shards, 0, 8, 10).is_err());
-}
-#[test]
-fn hf_resource_profile_requires_a_nonempty_committed_weight_set() {
-    let mut profile = sample_hf_resource_profile();
-    profile.selected_weight_file_count = 0;
-    assert!(profile.validate().is_err());
-    profile.selected_weight_file_count = 1;
-    profile.weight_selection_commitment = Hash::prehashed([0; Hash::LENGTH]);
-    assert!(profile.validate().is_err());
-}
-#[test]
-fn hf_shared_lease_compute_reservation_caps_are_exact_for_each_size_bucket() {
-    let profile =
-        |required_model_bytes, disk_cache_bytes_floor, ram_bytes_floor| SoraHfResourceProfileV1 {
-            required_model_bytes,
-            backend_family: SoraHfBackendFamilyV1::Transformers,
-            model_format: SoraHfModelFormatV1::Safetensors,
-            selected_weight_file_count: 2,
-            weight_selection_commitment: sample_hash(0x71),
-            disk_cache_bytes_floor,
-            ram_bytes_floor,
-            vram_bytes_floor: 0,
-        };
-    let gib = 1024_u64 * 1024 * 1024;
-    let cases = [
-        (profile(2 * gib, 2 * gib, 4 * gib), 7_500_u128),
-        (profile(3 * gib, 4 * gib, 4 * gib), 8_000_u128),
-        (profile(9 * gib, 12 * gib, 16 * gib), 12_000_u128),
-    ];
-    for (profile, expected_nanos) in cases {
-        let cap = hf_shared_lease_max_compute_reservation_fee_v1(&profile, u64::MAX)
-            .expect("maximal non-zero lease term is admitted");
-        assert_eq!(cap, xor_quantity_from_nanos(expected_nanos));
-    }
-}
-#[test]
-fn hf_shared_lease_compute_reservation_cap_rejects_zero_term() {
-    let error = hf_shared_lease_max_compute_reservation_fee_v1(&sample_hf_resource_profile(), 0)
-        .expect_err("zero lease term must fail");
-    assert!(error.to_string().contains("lease_term_ms"));
+    let retired_undomained = Hash::new(
+        norito::to_bytes(&(source_id, storage_class, lease_term_ms))
+            .expect("retired undomained pool preimage"),
+    );
+    let actual = derive_hf_shared_lease_pool_id_v1(source_id, storage_class, lease_term_ms)
+        .expect("canonical shared-lease pool identity");
+    assert_eq!(actual, expected);
+    assert_ne!(actual, retired_undomained);
 }
 fn sample_hf_source_record() -> SoraHfSourceRecordV1 {
     let repo_id = "openai/demo-model";
-    let resolved_revision = "4f9d72c4f9d72c4f9d72c4f9d72c4f9d72c4f9d";
+    let resolved_revision = "4f9d72c4f9d72c4f9d72c4f9d72c4f9d72c4f9da";
     SoraHfSourceRecordV1 {
         schema_version: SORA_HF_SOURCE_RECORD_VERSION_V1,
         source_id: derive_hf_source_id_v1(repo_id, resolved_revision)
             .expect("sample HF source identity is canonical"),
         repo_id: repo_id.to_string(),
         resolved_revision: resolved_revision.to_string(),
-        model_name: "demo_model".to_string(),
-        adapter_id: "text-generation".to_string(),
-        normalized_runtime_hash: sample_hash(22),
-        resource_profile: Some(sample_hf_resource_profile()),
-        status: SoraHfSourceStatusV1::PendingImport,
         created_at_ms: 1_000,
         updated_at_ms: 1_500,
-        last_error: None,
     }
 }
 #[test]
@@ -714,6 +631,142 @@ fn hf_source_record_rejects_repo_aliases_and_mismatched_source_ids() {
     assert!(
         source.validate().is_err(),
         "unqualified provider aliases must fail"
+    );
+}
+#[test]
+fn hf_persisted_binding_tokens_are_exact() {
+    let mut member = sample_hf_shared_lease_member();
+    member.validate().expect("canonical HF shared-lease member");
+    member.service_bindings = BTreeSet::from([" demo_service".to_owned()]);
+    member
+        .validate()
+        .expect_err("service binding aliases must fail closed");
+
+    let mut member = sample_hf_shared_lease_member();
+    member.apartment_bindings = BTreeSet::from(["demo apartment".to_owned()]);
+    member
+        .validate()
+        .expect_err("apartment bindings must use canonical Names");
+
+    let mut event = sample_hf_shared_lease_audit_event();
+    event
+        .validate()
+        .expect("canonical HF shared-lease audit event");
+    event.service_name = Some("demo_service ".to_owned());
+    event
+        .validate()
+        .expect_err("audit service binding aliases must fail closed");
+
+    let mut event = sample_hf_shared_lease_audit_event();
+    event.apartment_name = Some("demo apartment".to_owned());
+    event
+        .validate()
+        .expect_err("audit apartment bindings must use canonical Names");
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn hf_registry_json_rejects_retired_runtime_metadata() {
+    for retired_field in [
+        "model_name",
+        "adapter_id",
+        "normalized_runtime_hash",
+        "resource_profile",
+        "source_artifact_hash",
+        "source_profile",
+        "status",
+        "last_error",
+    ] {
+        let mut value =
+            norito::json::to_value(&sample_hf_source_record()).expect("serialize HF source");
+        value
+            .as_object_mut()
+            .expect("HF source JSON object")
+            .insert(
+                retired_field.to_owned(),
+                norito::json::Value::from("retired"),
+            );
+        let error = norito::json::from_value::<SoraHfSourceRecordV1>(value)
+            .expect_err("retired HF source field must fail closed");
+        assert!(
+            matches!(
+                error,
+                norito::json::Error::UnknownField { ref field } if field == retired_field
+            ),
+            "retired HF source field `{retired_field}` reported the wrong error: {error}"
+        );
+    }
+}
+
+#[test]
+fn hf_registry_norito_rejects_retired_runtime_metadata_layouts() {
+    #[derive(Encode)]
+    enum RetiredBackendFamilyV1 {
+        Transformers,
+    }
+    #[derive(Encode)]
+    struct RetiredHfResourceProfileV1 {
+        required_model_bytes: u64,
+        backend_family: RetiredBackendFamilyV1,
+        model_format: RetiredHfModelFormatV1,
+        selected_weight_file_count: u32,
+        weight_selection_commitment: Hash,
+        disk_cache_bytes_floor: u64,
+        ram_bytes_floor: u64,
+        vram_bytes_floor: u64,
+    }
+    #[derive(Encode)]
+    enum RetiredHfModelFormatV1 {
+        Safetensors,
+    }
+    #[derive(Encode)]
+    enum RetiredHfSourceStatusV1 {
+        Admitted,
+    }
+
+    #[derive(Encode)]
+    struct RetiredHfSourceRecordV1 {
+        schema_version: u16,
+        source_id: Hash,
+        repo_id: String,
+        resolved_revision: String,
+        model_name: String,
+        adapter_id: String,
+        normalized_runtime_hash: Hash,
+        resource_profile: Option<RetiredHfResourceProfileV1>,
+        status: RetiredHfSourceStatusV1,
+        created_at_ms: u64,
+        updated_at_ms: u64,
+        last_error: Option<String>,
+    }
+    let canonical = sample_hf_source_record();
+    let retired_source = RetiredHfSourceRecordV1 {
+        schema_version: canonical.schema_version,
+        source_id: canonical.source_id,
+        repo_id: canonical.repo_id,
+        resolved_revision: canonical.resolved_revision,
+        model_name: "demo_model".to_owned(),
+        adapter_id: "transformers".to_owned(),
+        normalized_runtime_hash: sample_hash(22),
+        resource_profile: Some(RetiredHfResourceProfileV1 {
+            required_model_bytes: 1,
+            backend_family: RetiredBackendFamilyV1::Transformers,
+            model_format: RetiredHfModelFormatV1::Safetensors,
+            selected_weight_file_count: 1,
+            weight_selection_commitment: sample_hash(0x71),
+            disk_cache_bytes_floor: 1,
+            ram_bytes_floor: 1,
+            vram_bytes_floor: 0,
+        }),
+        status: RetiredHfSourceStatusV1::Admitted,
+        created_at_ms: canonical.created_at_ms,
+        updated_at_ms: canonical.updated_at_ms,
+        last_error: None,
+    };
+    let retired_source_bytes = retired_source.encode();
+    assert!(
+        SoraHfSourceRecordV1::decode_all(&mut retired_source_bytes.as_slice()).is_err(),
+        "HF source record must reject the retired adapter/runtime-hash Norito layout"
     );
 }
 fn sample_hf_shared_lease_pool() -> SoraHfSharedLeasePoolV1 {
@@ -744,34 +797,8 @@ fn sample_hf_shared_lease_member() -> SoraHfSharedLeaseMemberV1 {
         total_paid: xor_quantity_from_nanos(10_000),
         total_refunded: xor_quantity_from_nanos(5_000),
         last_charge: xor_quantity_from_nanos(10_000),
-        total_compute_paid: xor_quantity_from_nanos(8_000),
-        total_compute_refunded: xor_quantity_from_nanos(2_000),
-        last_compute_charge: xor_quantity_from_nanos(8_000),
         service_bindings: BTreeSet::from(["demo_service".to_string()]),
         apartment_bindings: BTreeSet::from(["demo_apartment".to_string()]),
-    }
-}
-fn sample_model_host_capability_record() -> SoraModelHostCapabilityRecordV1 {
-    SoraModelHostCapabilityRecordV1 {
-        schema_version: SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
-        validator_account_id: sample_account_id(0xC3),
-        peer_id: sample_peer_id(0xC3),
-        supported_backends: BTreeSet::from([
-            SoraHfBackendFamilyV1::Transformers,
-            SoraHfBackendFamilyV1::Gguf,
-        ]),
-        supported_formats: BTreeSet::from([
-            SoraHfModelFormatV1::Safetensors,
-            SoraHfModelFormatV1::Gguf,
-        ]),
-        max_model_bytes: 12 * 1024 * 1024 * 1024,
-        max_disk_cache_bytes: 24 * 1024 * 1024 * 1024,
-        max_ram_bytes: 16 * 1024 * 1024 * 1024,
-        max_vram_bytes: 8 * 1024 * 1024 * 1024,
-        max_concurrent_resident_models: 2,
-        host_class: "gpu.large".to_string(),
-        advertised_at_ms: 100_000,
-        heartbeat_expires_at_ms: 160_000,
     }
 }
 fn sample_inrou_host_capability_record() -> SoraInrouHostCapabilityRecordV1 {
@@ -780,12 +807,14 @@ fn sample_inrou_host_capability_record() -> SoraInrouHostCapabilityRecordV1 {
         validator_account_id: sample_account_id(0xD1),
         peer_id: sample_peer_id(0xD1),
         supported_guest_isas: BTreeSet::from([SoraInrouGuestIsaV1::X8664]),
+        trusted_guest_artifact: SoraPublishedInrouGuestImageArtifactV1 {
+            manifest_digest_hex: "31".repeat(32),
+            content_cid: "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge".to_owned(),
+        },
         max_hosted_replica_capacity: SORA_INROU_HOSTED_REPLICA_CAPACITY_V1,
         max_cpu_millis: 4_000,
         max_memory_bytes: 16 * 1024 * 1024 * 1024,
         max_storage_bytes: 64 * 1024 * 1024 * 1024,
-        geography_tags: BTreeSet::from(["global".to_string(), "ae-dxb".to_string()]),
-        observed_latency_ms: Some(24),
         advertised_at_ms: 100_000,
         heartbeat_expires_at_ms: 160_000,
     }
@@ -800,19 +829,23 @@ fn sample_inrou_service_placement_record() -> SoraInrouServicePlacementRecordV1 
         placements: vec![
             SoraInrouReplicaPlacementV1 {
                 replica_slot: 1,
+                economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+                lease_started_height: 1,
+                placement_incarnation: Hash::new(b"placement-1"),
+                host_availability: SoraInrouReplicaHostAvailabilityV1::Available,
                 validator_account_id: sample_account_id(0xD1),
                 peer_id: sample_peer_id(0xD1),
                 selected_guest_isa: SoraInrouGuestIsaV1::X8664,
-                selected_geography_tag: Some("ae-dxb".to_string()),
-                selection_latency_ms: Some(24),
             },
             SoraInrouReplicaPlacementV1 {
                 replica_slot: 2,
+                economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+                lease_started_height: 1,
+                placement_incarnation: Hash::new(b"placement-2"),
+                host_availability: SoraInrouReplicaHostAvailabilityV1::Available,
                 validator_account_id: sample_account_id(0xD2),
                 peer_id: sample_peer_id(0xD2),
                 selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
-                selected_geography_tag: None,
-                selection_latency_ms: Some(48),
             },
         ],
         reconciled_at_ms: 125_000,
@@ -820,7 +853,13 @@ fn sample_inrou_service_placement_record() -> SoraInrouServicePlacementRecordV1 
     }
 }
 #[test]
-fn inrou_service_placement_requires_sorted_contiguous_slot_prefix() {
+fn inrou_service_placement_requires_sorted_unique_bounded_slots() {
+    let mut aliased_version = sample_inrou_service_placement_record();
+    aliased_version.service_version.push(' ');
+    aliased_version
+        .validate()
+        .expect_err("Inrou placement service-version aliases must fail closed");
+
     let mut reordered = sample_inrou_service_placement_record();
     reordered.placements.swap(0, 1);
     let error = reordered
@@ -829,20 +868,38 @@ fn inrou_service_placement_requires_sorted_contiguous_slot_prefix() {
     assert!(
         error
             .to_string()
-            .contains("sorted contiguous slot prefix 1..=len"),
+            .contains("strictly increasing unique replica slots"),
         "unexpected reordered placement error: {error}"
     );
 
     let mut holey = sample_inrou_service_placement_record();
     holey.placements.remove(0);
-    let error = holey
+    holey
         .validate()
-        .expect_err("holey Inrou placements must be rejected");
+        .expect("sparse Inrou placement slots are valid when an earlier slot has no host");
+
+    let mut duplicate_slot = sample_inrou_service_placement_record();
+    duplicate_slot.placements[1].replica_slot = 1;
+    let error = duplicate_slot
+        .validate()
+        .expect_err("duplicate Inrou placement slots must be rejected");
     assert!(
         error
             .to_string()
-            .contains("sorted contiguous slot prefix 1..=len"),
-        "unexpected holey placement error: {error}"
+            .contains("strictly increasing unique replica slots"),
+        "unexpected duplicate-slot placement error: {error}"
+    );
+
+    let mut out_of_range = sample_inrou_service_placement_record();
+    out_of_range.placements[1].replica_slot = 3;
+    let error = out_of_range
+        .validate()
+        .expect_err("slots beyond desired_replica_count must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("bounded by desired_replica_count"),
+        "unexpected out-of-range placement error: {error}"
     );
 }
 #[test]
@@ -869,40 +926,70 @@ fn inrou_service_placement_requires_one_distinct_eligible_host_per_slot() {
         error.to_string().contains("eligible_validator_count"),
         "unexpected eligible-validator-count error: {error}"
     );
+
+    overcommitted.placements[1].host_availability = SoraInrouReplicaHostAvailabilityV1::Unavailable;
+    overcommitted
+        .validate()
+        .expect("an unavailable retained assignment does not consume current eligible capacity");
 }
-fn sample_hf_placement_record() -> SoraHfPlacementRecordV1 {
-    let pool_id = sample_hash(23);
-    let selection_seed_hash = sample_hash(25);
-    SoraHfPlacementRecordV1 {
-        schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-        placement_id: derive_hf_placement_id_v1(pool_id, selection_seed_hash)
-            .expect("canonical HF placement id"),
-        source_id: sample_hash(21),
-        pool_id,
-        status: SoraHfPlacementStatusV1::Degraded,
-        selection_seed_hash,
-        resource_profile: sample_hf_resource_profile(),
-        eligible_validator_count: 3,
-        adaptive_target_host_count: 2,
-        assigned_hosts: vec![
-            SoraHfPlacementHostAssignmentV1 {
-                validator_account_id: sample_account_id(0xC3),
-                peer_id: sample_peer_id(0xC3),
-                role: SoraHfPlacementHostRoleV1::Primary,
-                status: SoraHfPlacementHostStatusV1::Warm,
-                host_class: "gpu.large".to_string(),
-            },
-            SoraHfPlacementHostAssignmentV1 {
-                validator_account_id: sample_account_id(0xC4),
-                peer_id: sample_peer_id(0xC4),
-                role: SoraHfPlacementHostRoleV1::Replica,
-                status: SoraHfPlacementHostStatusV1::Warming,
-                host_class: "gpu.large".to_string(),
-            },
-        ],
-        total_reservation_fee: xor_quantity_from_nanos(50_000),
-        last_rebalance_at_ms: 110_000,
-        last_error: Some("replica warming".to_string()),
+#[test]
+fn inrou_replica_host_availability_norito_roundtrips_both_states() {
+    for host_availability in [
+        SoraInrouReplicaHostAvailabilityV1::Available,
+        SoraInrouReplicaHostAvailabilityV1::Unavailable,
+    ] {
+        let mut placement = sample_inrou_service_placement_record().placements.remove(0);
+        placement.host_availability = host_availability;
+        let encoded = placement.encode();
+        let decoded = SoraInrouReplicaPlacementV1::decode_all(&mut encoded.as_slice())
+            .expect("decode canonical Inrou replica placement");
+        assert_eq!(decoded, placement);
+    }
+}
+#[test]
+fn hf_free_form_error_and_detail_text_remains_byte_exact() {
+    let mut runtime = sample_inrou_replica_runtime_state();
+    runtime.last_error = Some(" guest restart scheduled\noperator notified ".to_owned());
+    runtime
+        .validate()
+        .expect("nonblank free-form Inrou runtime errors remain valid");
+    assert_eq!(
+        runtime.last_error.as_deref(),
+        Some(" guest restart scheduled\noperator notified ")
+    );
+
+    let mut job = sample_training_job_record();
+    job.last_failure_reason = Some(" retry after checkpoint\nworker replaced ".to_owned());
+    job.validate()
+        .expect("nonblank free-form training reasons remain valid");
+    assert_eq!(
+        job.last_failure_reason.as_deref(),
+        Some(" retry after checkpoint\nworker replaced ")
+    );
+
+    let mut audit = sample_training_job_audit_event();
+    audit.last_failure_reason = Some(" retry after checkpoint\nworker replaced ".to_owned());
+    audit
+        .validate()
+        .expect("nonblank free-form training audit reasons remain valid");
+
+    for blank in ["", " \t\n "] {
+        let mut runtime = sample_inrou_replica_runtime_state();
+        runtime.last_error = Some(blank.to_owned());
+        runtime
+            .validate()
+            .expect_err("blank Inrou runtime errors must fail closed");
+
+        let mut job = sample_training_job_record();
+        job.last_failure_reason = Some(blank.to_owned());
+        job.validate()
+            .expect_err("blank training failure reasons must fail closed");
+
+        let mut audit = sample_training_job_audit_event();
+        audit.last_failure_reason = Some(blank.to_owned());
+        audit
+            .validate()
+            .expect_err("blank training audit failure reasons must fail closed");
     }
 }
 fn sample_inrou_replica_runtime_state() -> SoraInrouReplicaRuntimeStateV1 {
@@ -911,6 +998,7 @@ fn sample_inrou_replica_runtime_state() -> SoraInrouReplicaRuntimeStateV1 {
         service_name: sample_name("portal"),
         service_version: "2026.4".to_string(),
         replica_slot: 1,
+        placement_incarnation: Hash::new(b"placement-1"),
         validator_account_id: sample_account_id(0xD1),
         peer_id: sample_peer_id(0xD1),
         selected_guest_isa: SoraInrouGuestIsaV1::X8664,
@@ -921,27 +1009,6 @@ fn sample_inrou_replica_runtime_state() -> SoraInrouReplicaRuntimeStateV1 {
         accounted_egress_bytes: 4_096,
         updated_at_ms: 130_000,
         last_error: None,
-    }
-}
-fn sample_model_host_violation_evidence_record() -> SoraModelHostViolationEvidenceRecordV1 {
-    let placement = sample_hf_placement_record();
-    let pool = sample_hf_shared_lease_pool();
-    SoraModelHostViolationEvidenceRecordV1 {
-        schema_version: SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1,
-        evidence_id: sample_hash(26),
-        sequence: 45,
-        validator_account_id: sample_account_id(0xC3),
-        kind: SoraModelHostViolationKindV1::AssignedHeartbeatMiss,
-        placement_id: Some(placement.placement_id),
-        pool_id: Some(pool.pool_id),
-        source_id: Some(pool.source_id),
-        window_started_at_ms: Some(pool.window_started_at_ms),
-        observed_at_ms: 120_000,
-        detail: Some("assigned host heartbeat expired".to_string()),
-        strike_count: 2,
-        penalty_applied: true,
-        host_evicted: true,
-        slash_id: Some(sample_hash(27)),
     }
 }
 fn sample_hf_shared_lease_audit_event() -> SoraHfSharedLeaseAuditEventV1 {
@@ -1090,6 +1157,37 @@ fn sample_model_artifact_audit_event() -> SoraModelArtifactAuditEventV1 {
         signer: sample_signer(),
     }
 }
+#[test]
+fn model_artifact_audit_identifiers_are_exact_tokens() {
+    let canonical = sample_model_artifact_audit_event();
+    canonical
+        .validate()
+        .expect("canonical model-artifact audit event");
+
+    let mut padded_service_version = canonical.clone();
+    padded_service_version.service_version.push(' ');
+    padded_service_version
+        .validate()
+        .expect_err("service-version aliases must fail closed");
+
+    let mut spaced_model_name = canonical.clone();
+    spaced_model_name.model_name = "vision model".to_owned();
+    spaced_model_name
+        .validate()
+        .expect_err("model names must be exact tokens");
+
+    let mut padded_job = canonical.clone();
+    padded_job.training_job_id.insert(0, ' ');
+    padded_job
+        .validate()
+        .expect_err("training-job aliases must fail closed");
+
+    let mut padded_consumed_version = canonical;
+    padded_consumed_version.consumed_by_version = Some("v2 ".to_owned());
+    padded_consumed_version
+        .validate()
+        .expect_err("consumed-version aliases must fail closed");
+}
 #[cfg(feature = "json")]
 #[test]
 fn canonical_deployment_and_hosting_json_graph_rejects_unknown_fields() {
@@ -1126,47 +1224,23 @@ fn canonical_deployment_and_hosting_json_graph_rejects_unknown_fields() {
     assert_unknown_rejected!(SoraModelProvenanceKindV1, "model provenance kind");
     assert_unknown_rejected!(SoraModelProvenanceRefV1, "model provenance ref");
     assert_unknown_rejected!(
-        SoraUploadedModelRuntimeFormatV1,
-        "uploaded-model runtime format"
+        SoraUploadedModelPackageFormatV1,
+        "uploaded-model package format"
     );
     assert_unknown_rejected!(SoraUploadedModelPricingPolicyV1, "uploaded-model pricing");
-    assert_unknown_rejected!(SoraUploadedModelKeyEncapsulationV1, "uploaded-model KEM");
-    assert_unknown_rejected!(SoraUploadedModelKeyWrapAeadV1, "uploaded-model AEAD");
-    assert_unknown_rejected!(
-        SoraUploadedModelEncryptionRecipientV1,
-        "uploaded-model recipient"
-    );
-    assert_unknown_rejected!(SoraUploadedModelWrappedKeyV1, "uploaded-model wrapped key");
     assert_unknown_rejected!(SoraUploadedModelBundleV1, "uploaded-model bundle");
-    assert_unknown_rejected!(SoraPrivateModelArtifactRefV1, "private model artifact ref");
-    assert_unknown_rejected!(
-        SoraPrivateUploadedModelExecutionReceiptV1,
-        "private uploaded-model receipt"
-    );
     assert_unknown_rejected!(SoraModelWeightVersionRecordV1, "model-weight record");
     assert_unknown_rejected!(SoraModelWeightAuditEventV1, "model-weight audit event");
     assert_unknown_rejected!(SoraModelArtifactActionV1, "model-artifact action");
     assert_unknown_rejected!(SoraModelArtifactRecordV1, "model-artifact record");
 
-    assert_unknown_rejected!(SoraHfBackendFamilyV1, "HF backend family");
-    assert_unknown_rejected!(SoraHfModelFormatV1, "HF model format");
-    assert_unknown_rejected!(SoraHfModelSizeBucketV1, "HF model-size bucket");
-    assert_unknown_rejected!(SoraHfResourceProfileV1, "HF resource profile");
-    assert_unknown_rejected!(SoraModelHostCapabilityRecordV1, "model-host capability");
     assert_unknown_rejected!(SoraInrouHostCapabilityRecordV1, "Inrou host capability");
+    assert_unknown_rejected!(
+        SoraInrouReplicaHostAvailabilityV1,
+        "Inrou replica host availability"
+    );
     assert_unknown_rejected!(SoraInrouReplicaPlacementV1, "Inrou replica placement");
     assert_unknown_rejected!(SoraInrouServicePlacementRecordV1, "Inrou service placement");
-    assert_unknown_rejected!(SoraHfPlacementStatusV1, "HF placement status");
-    assert_unknown_rejected!(SoraHfPlacementHostRoleV1, "HF placement host role");
-    assert_unknown_rejected!(SoraHfPlacementHostStatusV1, "HF placement host status");
-    assert_unknown_rejected!(SoraHfPlacementHostAssignmentV1, "HF host assignment");
-    assert_unknown_rejected!(SoraHfPlacementRecordV1, "HF placement record");
-    assert_unknown_rejected!(SoraModelHostViolationKindV1, "model-host violation kind");
-    assert_unknown_rejected!(
-        SoraModelHostViolationEvidenceRecordV1,
-        "model-host violation evidence"
-    );
-    assert_unknown_rejected!(SoraHfSourceStatusV1, "HF source status");
     assert_unknown_rejected!(SoraHfSourceRecordV1, "HF source record");
     assert_unknown_rejected!(SoraHfSharedLeaseStatusV1, "HF shared-lease status");
     assert_unknown_rejected!(
@@ -1371,70 +1445,10 @@ fn canonical_deployment_and_hosting_json_graph_requires_explicit_keys() {
         "model-artifact audit event"
     );
 
-    assert_required_keys!(
-        sample_hf_resource_profile(),
-        SoraHfResourceProfileV1,
-        [
-            "selected_weight_file_count",
-            "weight_selection_commitment",
-            "vram_bytes_floor",
-        ],
-        [],
-        "HF resource profile"
-    );
-    assert_required_keys!(
-        sample_model_host_capability_record(),
-        SoraModelHostCapabilityRecordV1,
-        ["max_vram_bytes"],
-        [],
-        "model-host capability"
-    );
-    assert_required_keys!(
-        sample_hf_placement_record(),
-        SoraHfPlacementRecordV1,
-        ["assigned_hosts", "last_error"],
-        ["last_error"],
-        "HF placement record"
-    );
-    assert_required_keys!(
-        sample_model_host_violation_evidence_record(),
-        SoraModelHostViolationEvidenceRecordV1,
-        [
-            "placement_id",
-            "pool_id",
-            "source_id",
-            "window_started_at_ms",
-            "detail",
-            "strike_count",
-            "penalty_applied",
-            "host_evicted",
-            "slash_id",
-        ],
-        [
-            "placement_id",
-            "pool_id",
-            "source_id",
-            "window_started_at_ms",
-            "detail",
-            "slash_id",
-        ],
-        "model-host violation evidence"
-    );
-    assert_required_keys!(
-        sample_hf_source_record(),
-        SoraHfSourceRecordV1,
-        ["resource_profile", "last_error"],
-        ["resource_profile", "last_error"],
-        "HF source record"
-    );
-    let placement_fixture = sample_hf_placement_record();
     let queued_window = SoraHfSharedLeaseQueuedWindowV1 {
         sponsor_account_id: sample_account_id(0xB2),
-        model_name: "demo_model".to_owned(),
         lease_asset_definition_id: sample_asset_definition_id("4cuvDVPuLBKJyN6dPbRQhmLh68sU"),
         base_fee: xor_quantity_from_nanos(10_000),
-        compute_reservation_cap: placement_fixture.total_reservation_fee.clone(),
-        resource_profile: placement_fixture.resource_profile,
         sponsored_at_ms: 1_000,
         window_started_at_ms: 2_000,
         window_expires_at_ms: 3_000,
@@ -1444,11 +1458,7 @@ fn canonical_deployment_and_hosting_json_graph_requires_explicit_keys() {
     assert_required_keys!(
         queued_window,
         SoraHfSharedLeaseQueuedWindowV1,
-        [
-            "compute_reservation_cap",
-            "resource_profile",
-            "apartment_name"
-        ],
+        ["apartment_name"],
         ["apartment_name"],
         "HF queued lease window"
     );
@@ -1462,13 +1472,7 @@ fn canonical_deployment_and_hosting_json_graph_requires_explicit_keys() {
     assert_required_keys!(
         sample_hf_shared_lease_member(),
         SoraHfSharedLeaseMemberV1,
-        [
-            "total_compute_paid",
-            "total_compute_refunded",
-            "last_compute_charge",
-            "service_bindings",
-            "apartment_bindings",
-        ],
+        ["service_bindings", "apartment_bindings"],
         [],
         "HF shared-lease member"
     );
@@ -1482,7 +1486,7 @@ fn canonical_deployment_and_hosting_json_graph_requires_explicit_keys() {
 }
 #[cfg(feature = "json")]
 #[test]
-fn inrou_v1_wire_records_reject_retired_backend_selector_fields() {
+fn inrou_v1_wire_records_reject_retired_fields() {
     let cases = [
         (
             norito::json::to_value(&sample_inrou_host_capability_record())
@@ -1492,10 +1496,38 @@ fn inrou_v1_wire_records_reject_retired_backend_selector_fields() {
             "host capability",
         ),
         (
+            norito::json::to_value(&sample_inrou_host_capability_record())
+                .expect("serialize Inrou host capability"),
+            "geography_tags",
+            norito::json!(["ae-dxb"]),
+            "host capability",
+        ),
+        (
+            norito::json::to_value(&sample_inrou_host_capability_record())
+                .expect("serialize Inrou host capability"),
+            "observed_latency_ms",
+            norito::json!(24),
+            "host capability",
+        ),
+        (
             norito::json::to_value(&sample_inrou_service_placement_record().placements[0])
                 .expect("serialize Inrou placement"),
             "selected_backend",
             norito::json!({"backend": "PortableVm", "value": null}),
+            "replica placement",
+        ),
+        (
+            norito::json::to_value(&sample_inrou_service_placement_record().placements[0])
+                .expect("serialize Inrou placement"),
+            "selected_geography_tag",
+            norito::json!("ae-dxb"),
+            "replica placement",
+        ),
+        (
+            norito::json::to_value(&sample_inrou_service_placement_record().placements[0])
+                .expect("serialize Inrou placement"),
+            "selection_latency_ms",
+            norito::json!(24),
             "replica placement",
         ),
         (
@@ -1511,6 +1543,13 @@ fn inrou_v1_wire_records_reject_retired_backend_selector_fields() {
             "selected_backend",
             norito::json!({"backend": "PortableVm", "value": null}),
             "replica runtime state",
+        ),
+        (
+            norito::json::to_value(&sample_inrou_service_placement_record().placements[0])
+                .expect("serialize Inrou placement"),
+            "requires_state_migration",
+            norito::json!(false),
+            "replica placement",
         ),
     ];
     for (mut value, retired_field, retired_value, label) in cases {
@@ -1554,16 +1593,10 @@ fn inrou_v1_wire_records_require_every_canonical_field() {
         }};
     }
 
-    let host = sample_inrou_host_capability_record();
+    let host_capability = sample_inrou_host_capability_record();
     assert_missing_rejected!(
-        host,
-        "geography_tags",
-        SoraInrouHostCapabilityRecordV1,
-        "host capability"
-    );
-    assert_missing_rejected!(
-        host,
-        "observed_latency_ms",
+        host_capability,
+        "trusted_guest_artifact",
         SoraInrouHostCapabilityRecordV1,
         "host capability"
     );
@@ -1571,13 +1604,7 @@ fn inrou_v1_wire_records_require_every_canonical_field() {
     let placement = placement_record.placements[0].clone();
     assert_missing_rejected!(
         placement,
-        "selected_geography_tag",
-        SoraInrouReplicaPlacementV1,
-        "replica placement"
-    );
-    assert_missing_rejected!(
-        placement,
-        "selection_latency_ms",
+        "host_availability",
         SoraInrouReplicaPlacementV1,
         "replica placement"
     );
@@ -1614,6 +1641,79 @@ fn inrou_v1_wire_records_require_every_canonical_field() {
     );
 }
 #[test]
+fn inrou_v1_norito_records_reject_retired_distribution_hints() {
+    #[derive(Encode)]
+    struct RetiredHostDistributionHintsV1 {
+        schema_version: u16,
+        validator_account_id: AccountId,
+        peer_id: String,
+        supported_guest_isas: BTreeSet<SoraInrouGuestIsaV1>,
+        max_hosted_replica_capacity: u16,
+        max_cpu_millis: u32,
+        max_memory_bytes: u64,
+        max_storage_bytes: u64,
+        geography_tags: BTreeSet<String>,
+        observed_latency_ms: Option<u32>,
+        advertised_at_ms: u64,
+        heartbeat_expires_at_ms: u64,
+    }
+    #[derive(Encode)]
+    struct RetiredPlacementDistributionHintsV1 {
+        replica_slot: u16,
+        lease_started_sequence: u64,
+        placement_incarnation: Hash,
+        host_availability: SoraInrouReplicaHostAvailabilityV1,
+        validator_account_id: AccountId,
+        peer_id: String,
+        selected_guest_isa: SoraInrouGuestIsaV1,
+        selected_geography_tag: Option<String>,
+        selection_latency_ms: Option<u32>,
+    }
+
+    let host = sample_inrou_host_capability_record();
+    let retired_host = RetiredHostDistributionHintsV1 {
+        schema_version: host.schema_version,
+        validator_account_id: host.validator_account_id,
+        peer_id: host.peer_id,
+        supported_guest_isas: host.supported_guest_isas,
+        max_hosted_replica_capacity: host.max_hosted_replica_capacity,
+        max_cpu_millis: host.max_cpu_millis,
+        max_memory_bytes: host.max_memory_bytes,
+        max_storage_bytes: host.max_storage_bytes,
+        geography_tags: BTreeSet::from(["ae-dxb".to_owned()]),
+        observed_latency_ms: Some(24),
+        advertised_at_ms: host.advertised_at_ms,
+        heartbeat_expires_at_ms: host.heartbeat_expires_at_ms,
+    };
+    let placement = sample_inrou_service_placement_record()
+        .placements
+        .into_iter()
+        .next()
+        .expect("sample Inrou placement");
+    let retired_placement = RetiredPlacementDistributionHintsV1 {
+        replica_slot: placement.replica_slot,
+        lease_started_sequence: placement.lease_started_height,
+        placement_incarnation: placement.placement_incarnation,
+        host_availability: placement.host_availability,
+        validator_account_id: placement.validator_account_id,
+        peer_id: placement.peer_id,
+        selected_guest_isa: placement.selected_guest_isa,
+        selected_geography_tag: Some("ae-dxb".to_owned()),
+        selection_latency_ms: Some(24),
+    };
+
+    let retired_host_bytes = retired_host.encode();
+    assert!(
+        SoraInrouHostCapabilityRecordV1::decode_all(&mut retired_host_bytes.as_slice()).is_err(),
+        "host capability must reject the retired distribution-hint Norito layout"
+    );
+    let retired_placement_bytes = retired_placement.encode();
+    assert!(
+        SoraInrouReplicaPlacementV1::decode_all(&mut retired_placement_bytes.as_slice()).is_err(),
+        "replica placement must reject the retired distribution-hint Norito layout"
+    );
+}
+#[test]
 fn inrou_v1_norito_records_reject_retired_backend_selector_layouts() {
     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode)]
     enum RetiredBackend {
@@ -1630,20 +1730,19 @@ fn inrou_v1_norito_records_reject_retired_backend_selector_layouts() {
         max_cpu_millis: u32,
         max_memory_bytes: u64,
         max_storage_bytes: u64,
-        geography_tags: BTreeSet<String>,
-        observed_latency_ms: Option<u32>,
         advertised_at_ms: u64,
         heartbeat_expires_at_ms: u64,
     }
     #[derive(Encode)]
     struct RetiredReplicaPlacement {
         replica_slot: u16,
+        lease_started_sequence: u64,
+        placement_incarnation: Hash,
+        host_availability: SoraInrouReplicaHostAvailabilityV1,
         validator_account_id: AccountId,
         peer_id: String,
         selected_backend: RetiredBackend,
         selected_guest_isa: SoraInrouGuestIsaV1,
-        selected_geography_tag: Option<String>,
-        selection_latency_ms: Option<u32>,
     }
     #[derive(Encode)]
     struct RetiredReplicaRuntimeState {
@@ -1676,8 +1775,6 @@ fn inrou_v1_norito_records_reject_retired_backend_selector_layouts() {
         max_cpu_millis: host.max_cpu_millis,
         max_memory_bytes: host.max_memory_bytes,
         max_storage_bytes: host.max_storage_bytes,
-        geography_tags: host.geography_tags,
-        observed_latency_ms: host.observed_latency_ms,
         advertised_at_ms: host.advertised_at_ms,
         heartbeat_expires_at_ms: host.heartbeat_expires_at_ms,
     };
@@ -1688,12 +1785,13 @@ fn inrou_v1_norito_records_reject_retired_backend_selector_layouts() {
         .expect("sample Inrou placement");
     let retired_placement = RetiredReplicaPlacement {
         replica_slot: placement.replica_slot,
+        lease_started_sequence: placement.lease_started_height,
+        placement_incarnation: placement.placement_incarnation,
+        host_availability: placement.host_availability,
         validator_account_id: placement.validator_account_id,
         peer_id: placement.peer_id,
         selected_backend: RetiredBackend::PortableVm,
         selected_guest_isa: placement.selected_guest_isa,
-        selected_geography_tag: placement.selected_geography_tag,
-        selection_latency_ms: placement.selection_latency_ms,
     };
     let runtime = sample_inrou_replica_runtime_state();
     let retired_runtime = RetiredReplicaRuntimeState {

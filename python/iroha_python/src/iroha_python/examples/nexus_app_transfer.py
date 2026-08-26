@@ -86,7 +86,12 @@ class DemoToriiClient:
         return {"accepted": True}
 
     def wait_for_transaction_status(self, hash_hex, **options):
-        return {"hash": hash_hex, "status": "Committed"}
+        return {
+            "hash": hash_hex,
+            "status": {"kind": "Applied", "block_height": 1},
+            "scope": "global",
+            "resolved_from": "state",
+        }
 
 
 def main() -> None:

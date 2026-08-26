@@ -27,9 +27,7 @@ NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
 FOREIGN_NETWORK_ID = NetworkId.from_bytes(bytes([0xA7]) * 32)
 CANONICAL_AUTH = ToriiCanonicalRequestAuth(
     network_id=NETWORK_ID.literal,
-    account_id=AccountAddress.from_account(
-        domain="wonderland", public_key=bytes([0x11]) * 32
-    ).to_i105(0x02F1),
+    account_id=AccountAddress.from_account(public_key=bytes([0x11]) * 32).to_i105(0x02F1),
     signer=lambda _message: bytes([0x44]) * 64,
     timestamp_ms=4_102_444_801_000,
     nonce="privacy-capability-test",
@@ -415,7 +413,6 @@ def test_x509_transport_wait_path_submits_through_wait_helper_exactly_once(
             interval=0.25,
             timeout=5.0,
             max_attempts=3,
-            scope="local",
         )
     )
 
@@ -426,7 +423,8 @@ def test_x509_transport_wait_path_submits_through_wait_helper_exactly_once(
     assert waits[0][1]["interval"] == 0.25
     assert waits[0][1]["timeout"] == 5.0
     assert waits[0][1]["max_attempts"] == 3
-    assert waits[0][1]["scope"] == "local"
+    assert "scope" not in waits[0][1]
+    assert "success_statuses" not in waits[0][1]
     assert events == ["inspect", "capabilities", "reconstruct", "wait"]
 
 

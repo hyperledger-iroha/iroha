@@ -3,7 +3,8 @@ use iroha_crypto::{
     Algorithm, KeyPair,
     soranet::handshake::{
         DEFAULT_DESCRIPTOR_COMMIT, DEFAULT_TLS_SERVER_NAME, HandshakeSuite, HarnessError,
-        RuntimeParams, SORANET_QUIC_ALPN, build_client_hello, client_handle_relay_hello,
+        RelayAuthenticationSignerV1, RuntimeParams, SORANET_QUIC_ALPN, build_client_hello,
+        client_handle_relay_hello,
     },
 };
 use norito::json::{self, Map, Value};
@@ -14,6 +15,7 @@ use std::{
     error::Error,
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Instant,
 };
 const DEFAULT_BASELINE: &str = "crates/iroha_crypto/benches/soranet_handshake_baseline.json";
@@ -58,7 +60,7 @@ fn run_handshake(suite: HandshakeSuite) -> Result<(), HarnessError> {
     let params = scenario.params();
     let mut rng_client = ChaCha20Rng::from_seed([0xA5; 32]);
     let mut rng_relay = ChaCha20Rng::from_seed([0x5A; 32]);
-    let relay_keys = fixed_ed25519_keypair("relay", 0x22)?;
+    let relay_keys = fixed_relay_authentication("relay", 0x22)?;
     let (client_hello, client_state) = build_client_hello(&params, &mut rng_client)?;
     let client_hello_len = client_hello.len();
     let (relay_message, _relay_session) = iroha_crypto::soranet::handshake::process_client_hello(
@@ -81,17 +83,28 @@ fn run_handshake(suite: HandshakeSuite) -> Result<(), HarnessError> {
     client_handle_relay_hello(
         client_state,
         &relay_message,
-        relay_keys.public_key(),
+        &relay_keys.verifier(),
         &params,
     )?;
     Ok(())
 }
-fn fixed_ed25519_keypair(label: &str, seed_byte: u8) -> Result<KeyPair, HarnessError> {
-    KeyPair::try_from_seed(vec![seed_byte; 32], Algorithm::Ed25519).map_err(|err| {
-        HarnessError::Validation(format!(
-            "failed to derive {label} handshake-check Ed25519 keypair: {err}"
-        ))
-    })
+fn fixed_relay_authentication(
+    label: &str,
+    seed_byte: u8,
+) -> Result<RelayAuthenticationSignerV1, HarnessError> {
+    let ed25519 =
+        KeyPair::try_from_seed(vec![seed_byte; 32], Algorithm::Ed25519).map_err(|err| {
+            HarnessError::Validation(format!(
+                "failed to derive {label} handshake-check Ed25519 keypair: {err}"
+            ))
+        })?;
+    let mldsa65 =
+        KeyPair::try_from_seed(vec![seed_byte ^ 0xA5; 32], Algorithm::MlDsa).map_err(|err| {
+            HarnessError::Validation(format!(
+                "failed to derive {label} handshake-check ML-DSA-65 keypair: {err}"
+            ))
+        })?;
+    RelayAuthenticationSignerV1::try_new(Arc::new(ed25519), Arc::new(mldsa65), [0xB7; 32])
 }
 fn measure_suite(suite: HandshakeSuite, samples: usize) -> Result<Vec<u128>, HarnessError> {
     let mut timings = Vec::with_capacity(samples);
@@ -407,16 +420,24 @@ fn main() -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     #[test]
-    fn fixed_ed25519_keypair_uses_checked_seed_derivation() {
-        let keypair = fixed_ed25519_keypair("client", 0x11)
-            .expect("fixed handshake-check Ed25519 key must derive");
+    fn fixed_relay_authentication_uses_checked_dual_seed_derivation() {
+        let authentication = fixed_relay_authentication("relay", 0x11)
+            .expect("fixed handshake-check relay authentication must derive");
         assert_eq!(
-            keypair
-                .public_key()
+            authentication
+                .ed25519_public_key()
                 .try_algorithm()
                 .expect("fixed public key algorithm"),
             Algorithm::Ed25519
         );
+        assert_eq!(
+            authentication
+                .mldsa65_public_key()
+                .try_algorithm()
+                .expect("fixed ML-DSA-65 public key algorithm"),
+            Algorithm::MlDsa
+        );
+        assert_eq!(authentication.authenticated_binding_digest(), &[0xB7; 32]);
     }
     #[test]
     fn malformed_fixture_hex_reports_validation_error() {

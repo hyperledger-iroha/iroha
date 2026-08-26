@@ -138,7 +138,7 @@ fn new_for_testing_seeds_reserved_universal_dataspace_name_record() {
             crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
             0,
         ),
-        Some(genesis_id)
+        Ok(Some(genesis_id))
     );
 }
 #[test]

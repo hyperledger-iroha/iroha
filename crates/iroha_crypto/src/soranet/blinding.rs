@@ -10,7 +10,7 @@ use rand_core::TryCryptoRng;
 use soranet_pq::{HkdfDomain, HkdfSuite, derive_labeled_hkdf};
 use std::fmt;
 use thiserror::Error;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 /// Length in bytes of the derived blinding key.
 pub const BLINDING_KEY_LEN: usize = 32;
 /// Length in bytes of a request nonce.
@@ -42,7 +42,6 @@ pub enum BlindingError {
     },
 }
 /// Deterministic blinding key derived from the daily salt and circuit secret.
-#[derive(Clone)]
 pub struct CircuitBlindingKey(Secret<Zeroizing<[u8; BLINDING_KEY_LEN]>>);
 impl CircuitBlindingKey {
     /// Derive a new blinding key from the published salt and circuit secret.
@@ -113,7 +112,7 @@ pub fn canonical_cache_key(epoch_salt: &[u8; 32], cid: &[u8]) -> BlindedCid {
     BlindedCid::from_hash(hasher.finalize())
 }
 /// Opaque 16-byte nonce injected into request blinding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct RequestNonce([u8; REQUEST_NONCE_LEN]);
 impl RequestNonce {
     /// Construct a nonce from raw bytes.
@@ -131,6 +130,10 @@ impl RequestNonce {
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; REQUEST_NONCE_LEN] {
         &self.0
+    }
+
+    fn clear(&mut self) {
+        self.0.zeroize();
     }
     /// Populate the nonce with random bytes using the provided RNG.
     ///
@@ -153,6 +156,16 @@ impl RequestNonce {
             return Err(BlindingError::WeakInput("request_nonce"));
         }
         Ok(Self(buf))
+    }
+}
+impl fmt::Debug for RequestNonce {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RequestNonce([REDACTED])")
+    }
+}
+impl Drop for RequestNonce {
+    fn drop(&mut self) {
+        self.clear();
     }
 }
 /// 32-byte digest representing a blinded CID.
@@ -270,6 +283,18 @@ mod tests {
         let err = RequestNonce::from_bytes([0xA5_u8; REQUEST_NONCE_LEN])
             .expect_err("all-identical nonce bytes must fail");
         assert!(matches!(err, BlindingError::WeakInput("request_nonce")));
+    }
+    #[test]
+    fn request_nonce_debug_is_redacted_and_clear_scrubs_bytes() {
+        let mut bytes = [0xA5_u8; REQUEST_NONCE_LEN];
+        bytes[0] = 0x5A;
+        let mut nonce = RequestNonce::from_bytes(bytes).expect("non-degenerate nonce");
+        let rendered = format!("{nonce:?}");
+        assert_eq!(rendered, "RequestNonce([REDACTED])");
+        assert!(!rendered.contains(&hex::encode(bytes)));
+
+        nonce.clear();
+        assert_eq!(nonce.as_bytes(), &[0_u8; REQUEST_NONCE_LEN]);
     }
     #[test]
     fn request_nonce_random_reports_rng_failure() {

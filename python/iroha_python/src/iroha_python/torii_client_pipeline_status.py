@@ -22,9 +22,8 @@ def _extract_pipeline_status_kind(payload: Any) -> Optional[str]:
 def _normalize_transaction_status_scope(value: str, context: str) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{context} must be a string")
-    normalized = value.strip().lower()
-    if not normalized:
+    if not value:
         raise ValueError(f"{context} must be a non-empty string")
-    if normalized not in _TRANSACTION_STATUS_SCOPES:
+    if value not in _TRANSACTION_STATUS_SCOPES:
         raise ValueError(f"{context} must be one of: local, global")
-    return normalized
+    return value

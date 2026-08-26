@@ -26,6 +26,7 @@ override arguments. Provider objects retain private material internally.
 | Service identity | iroha:iroha | iroha:iroha |
 | Executable | /usr/local/libexec/iroha-runtime-provider-broker-v1 | /usr/local/libexec/iroha-runtime-provider-broker-v1 |
 | Public catalog | /etc/iroha/runtime-provider-broker/catalog.norito | /private/etc/iroha/runtime-provider-broker/catalog.norito |
+| Threshold credential handoff | systemd `CREDENTIALS_DIRECTORY` | launchd-opened `/private/var/run/iroha-runtime-provider-broker-credentials-v1/threshold.bundle` FIFO |
 | Runtime directory | /run/iroha-runtime-provider-broker-v1, mode 0700 | /private/var/iroha/run, mode 0700 |
 | Broker socket | /run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock | /private/var/iroha/run/runtime-provider-broker-v1.sock |
 
@@ -35,11 +36,86 @@ The broker creates the fixed socket with mode 0660. The macOS catalog path
 names /private/etc explicitly because /etc is a symlink and the process shell
 rejects symlink path components.
 
+Peer authorization is evaluated independently for every accepted connection.
+An unauthorized UID is dropped without processing a request, while the broker
+continues accepting later authorized clients. Failure to read peer credentials
+is a transport failure and stops the serving loop because the broker cannot
+establish the authorization boundary.
+
 The broker holds a single-link, mode-0600 instance lock in its runtime
 directory for its full serving lifetime. After an unclean exit releases that
 lock, the next process removes only an exact inactive socket with the expected
 owner, mode, and stable device/inode identity before rebinding. Every other
 pre-existing entry fails startup without being removed.
+
+## Consensus threshold-signer credentials
+
+Global-beacon and Parliament timed-release credentials bind their public
+`policy_digest` to the complete provisioned signer inventory. The digest uses
+one consensus-threshold inventory domain and covers the exact role slot,
+network, every public threshold session transcript, and every seat index in
+canonical sorted order. Version 1 is
+`SHA-256(domain || u64_be(norito_len) || norito_inventory)`;
+the inventory fields are `version`, `slot`, `network_id`, and the sorted public
+session-and-seat entries. Producers reject a supplied digest that does not
+match that inventory. Consumers require the credential vector itself to be
+strictly sorted before recomputing the digest, so only one canonical credential
+ordering is accepted. Reordering provisioning input preserves the encoded
+credential, while reordered wire entries, transcript substitution, or seat
+substitution fail closed. Secret share components are not included in the
+public inventory encoding. The header-framed top-level inventory schema names
+are
+`iroha.runtime_provider_broker.v1.consensus_threshold.global_beacon_public_inventory`
+and
+`iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_public_inventory`;
+credential and nested wire types also carry explicit V1 schema names so Rust
+type renames cannot silently change the operator contract.
+
+A previously resolved threshold-signer proxy reconnects and retries the whole
+operation exactly once when the broker transport or live threshold-backend
+qualification reports unavailability, so a supervised broker restart or
+transient HSM outage does not permanently strand the validator. Rejected or
+drifted qualification remains a permanent stale-provider failure. The proxy
+never replays protocol errors, binding mismatches, stale observations, provider
+rejections, conflicts, or ambiguous outcomes.
+
+Broker session workers use a fixed 4 MiB stack. This is large enough for the
+proof-carrying threshold transcript validators in unoptimized builds while
+remaining bounded by the fixed maximum number of authenticated sessions.
+
+On Linux, a reviewed provider drop-in supplies the two fixed credential names
+through systemd's per-unit credential mount:
+`iroha-global-beacon-partial-signer-v1.norito` and
+`iroha-parliament-tle-partial-release-signer-v1.norito`. A requested file must
+not be exposed through `Environment=` or `EnvironmentFile=`.
+
+On macOS, an independent administrator creates the named pipe
+`/private/var/run/iroha-runtime-provider-broker-credentials-v1/threshold.bundle`
+beneath a root-owned mode-0700 directory and keeps the FIFO root-owned mode
+0600 with one link. Before every bootstrap or supervised restart, the
+administrator starts one blocking credential writer and, while that writer is
+waiting for a reader, bootstraps or kickstarts the launchd job. launchd opens
+the FIFO as standard input before changing to the shared broker UID; the writer
+then emits exactly one credential bundle and closes. Do not try to finish a
+write before launchd opens the read end: a FIFO has no persistent preloaded
+payload, and that sequential choreography cannot complete safely. The broker
+validates the already-open descriptor as a root-owned, single-link, exact-mode
+0600 FIFO before reading, never resolves a secret pathname accessible to the
+validator, and leaves no persistent credential bytes after the writer closes.
+
+The V1 bundle is `IRTHB001 || u16_be(1) || u16_be(flags) ||
+u64_be(beacon_len) || u64_be(tle_len) || beacon || tle`. Flag bit 0 denotes the
+global-beacon credential and bit 1 the Parliament-TLE credential; no other bit
+is admitted. Presence must exactly match the two public catalog slots, each
+credential is bounded to 16 MiB, and trailing, truncated, empty-present, or
+unrequested payloads fail before socket publication. Deployment provisioning
+should call the zeroizing
+`encode_consensus_threshold_credential_bundle_v1` API and write its result
+directly to the FIFO; do not stage the bundle, credential frames, or scalar
+shares in the plist, argv, environment, public catalog, repo, or a path readable
+by the shared validator UID. Even a catalog with neither threshold slot receives
+and validates the exact header-only bundle on each launch, keeping one immutable
+launchd service contract.
 
 Install the executable, catalog, supervisor asset, and Linux consumer drop-ins
 as single-link, non-symlink regular files owned by root. They must have no
@@ -101,7 +177,10 @@ Install launchd/org.hyperledger.iroha.runtime-provider-broker-v1.plist as:
 
 Before bootstrapping the LaunchDaemon, create the persistent
 `/private/var/iroha/run` directory as iroha:iroha with mode 0700 and install the
-executable and public catalog at the fixed paths above. The plist uses no
+executable and public catalog at the fixed paths above. Create and feed the
+root-protected credential FIFO as described above: start the blocking writer,
+bootstrap or kickstart launchd while it waits, then require both writer
+completion and broker readiness before starting consumers. The plist uses no
 environment variables, disables core images with zero soft and hard `Core`
 limits, and restarts only after unsuccessful exit.
 

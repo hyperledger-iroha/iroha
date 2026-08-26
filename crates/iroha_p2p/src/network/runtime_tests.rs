@@ -179,5 +179,5 @@ fn disabled_test_admission_uses_only_in_memory_replay_state() {
     let runtime =
         runtime_from_handshake(handshake).expect("test-local disabled admission is in-memory");
     assert!(!runtime.pow_required());
-    assert_eq!(runtime.active_revocations(), 0);
+    assert_eq!(runtime.active_revocations().expect("active count"), 0);
 }

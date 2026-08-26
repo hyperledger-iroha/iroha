@@ -63,7 +63,7 @@ Serde derives, visitors, JSON DOM helpers, and config loaders.
 >
 > **Status (Jan 25, 2026):** `AccountId`/`AssetId` JSON is emitted in canonical
 > encoded literals (e.g., `i105`, `<canonical-base58-asset-definition-id>`), and decoding no longer relies
-> on a domain-selector resolver.
+> on any account-domain selector.
 
 > **Status (Nov 7, 2025):** `IpfsPath` gained Norito `FastJsonWrite` and
 > `JsonDeserialize` impls backed by the existing parser, with regression tests

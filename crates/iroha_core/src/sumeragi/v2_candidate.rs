@@ -704,7 +704,7 @@ impl V2CandidateAssembler {
         let mut carrier_queue_plan_bindings = BTreeMap::new();
         for certificate in &attachments.queue_plan_admissions {
             let admission =
-                crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+                crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
                     state.network_id_ref(),
                     certificate,
                 )
@@ -1588,7 +1588,7 @@ mod tests {
         block::ValidBlock,
         kura::Kura,
         query::store::LiveQueryStore,
-        queue::{LaneQueueReservationKeyV2, RouteLeg, RouteLegRole, RoutingDecision},
+        queue::{LaneQueueReservationKeyV1, RouteLeg, RouteLegRole, RoutingDecision},
         state::{State, World},
         sumeragi::network_topology::Topology,
     };
@@ -1722,8 +1722,8 @@ mod tests {
             .find(|key| key.public_key() == producer.public_key())
             .expect("producer belongs to fixture validator set");
         let routing_plan = RoutingPlan::single(RoutingDecision::new(lane_id, dataspace_id));
-        let reservation = LaneQueueReservationKeyV2 {
-            version: LaneQueueReservationKeyV2::VERSION,
+        let reservation = LaneQueueReservationKeyV1 {
+            version: LaneQueueReservationKeyV1::VERSION,
             entrypoint_hash: transaction.hash_as_entrypoint(),
             queue_plan_admission_binding_hash: Hash::new(b"candidate-queue-plan-admission-binding"),
             routing_plan_digest: routing_plan.digest(),
@@ -1989,8 +1989,8 @@ mod tests {
             .route_plan_with_state(&queue_plan, &state)
             .expect("fixture transaction has a routable plan");
         let validators = vec![PeerId::new(key.public_key().clone())];
-        let context = crate::queue::QueuePlanAdmissionContextV2 {
-            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+        let context = crate::queue::QueuePlanAdmissionContextV1 {
+            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
             authority_height: 2,
             proposal_height: 3,
             predecessor_block_hash: Some(anchor.snapshot_block_hash),
@@ -1998,7 +1998,7 @@ mod tests {
             route_incarnations: routing_plan
                 .legs()
                 .into_iter()
-                .map(|leg| crate::queue::QueuePlanRouteIncarnationV2 {
+                .map(|leg| crate::queue::QueuePlanRouteIncarnationV1 {
                     leg,
                     lane_incarnation: state
                         .lane_incarnation_at_height(leg.route.lane_id, 3)
@@ -2011,7 +2011,7 @@ mod tests {
                 })
                 .collect(),
         };
-        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
             state.network_id_ref(),
             queue_plan.entrypoint(),
             &routing_plan,

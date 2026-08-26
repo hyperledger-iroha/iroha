@@ -2,7 +2,7 @@
 
 This template provides a real Soracloud/IVM Hayahi API scaffold:
 
-- `contract/hayahi_api.ko` with concrete Soracloud query/update/private-update entrypoints.
+- `contract/hayahi_api.ko` with concrete Soracloud query and public replicated update entrypoints.
 - `build.sh` that compiles the contract into `build/hayahi-app-api.to`.
 - Shared Soracloud state bindings for search sessions, shared cache, and collector job/result ledgers.
 - Confidential Soracloud state bindings for wallet-bound preferences and saved searches.
@@ -14,11 +14,18 @@ This template provides a real Soracloud/IVM Hayahi API scaffold:
 ./build.sh
 ```
 
-`build.sh` will use a local `koto` binary when available and otherwise
-falls back to:
+`build.sh` requires `KOTO_BIN` to be an absolute, non-symlinked executable
+built from the same Iroha revision as this workspace and `KOTO_BIN_SHA256` to
+match that exact file:
 
 ```bash
-cargo run --manifest-path ../../../Cargo.toml -p ivm --bin koto -- build \
+KOTO_BIN=/absolute/path/to/koto KOTO_BIN_SHA256=<lowercase-sha256> ./build.sh
+```
+
+The invoked command is equivalent to:
+
+```bash
+"$KOTO_BIN" build \
   ./contract/hayahi_api.ko \
   --out ./build/hayahi-app-api.to \
   --manifest-out ./build/hayahi-app-api.contract_manifest.json \

@@ -181,12 +181,12 @@ fn complete_order_instruction(
             "--expected-owner" => {
                 let parsed = AccountId::parse_encoded(value)
                     .map_err(|error| format!("invalid `--expected-owner` account ID: {error}"))?;
-                if parsed.canonical() != value {
+                if parsed.to_string() != value {
                     return Err(
                         "`--expected-owner` must be an exact canonical I105 account ID".to_owned(),
                     );
                 }
-                let owner = parsed.into_account_id();
+                let owner = parsed;
                 set_once(&mut expected_owner, owner, key)?;
             }
             "--assignment-revision" => {
@@ -535,9 +535,7 @@ mod tests {
         ];
         let actual =
             complete_order_instruction(args.clone().into_iter()).expect("build exact completion");
-        let owner = AccountId::parse_encoded(OWNER_I105)
-            .expect("fixture owner")
-            .into_account_id();
+        let owner = AccountId::parse_encoded(OWNER_I105).expect("fixture owner");
         let expected = InstructionBox::from(CompleteReplicationOrder::new(
             ReplicationOrderId::new([0x11; 32]),
             ProviderId::new([0x22; 32]),

@@ -127,8 +127,8 @@ object MultisigSeedHelper {
 
     private fun parseSingleKeyIdentifier(identifier: String): KeyPayload? {
         try {
-            val parsed = AccountAddress.parseAny(identifier, null)
-            val singleKey = parsed.address.singleKeyPayload()
+            val parsed = AccountAddress.parseEncoded(identifier, null)
+            val singleKey = parsed.singleKeyPayload()
             if (singleKey != null) {
                 return KeyPayload(singleKey.curveId, singleKey.publicKey)
             }

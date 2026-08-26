@@ -1349,16 +1349,31 @@ pub(super) fn load_bounded_software_signer_credential_v1(
     {
         return Err(SoftwareSignerCredentialErrorV1::InvalidSource);
     }
-    let read_limit = u64::try_from(maximum_bytes)
-        .ok()
-        .and_then(|maximum| maximum.checked_add(1))
-        .ok_or(SoftwareSignerCredentialErrorV1::InvalidLength)?;
-    let mut bytes = Zeroizing::new(Vec::with_capacity(maximum_bytes.min(4_096)));
-    (&descriptor)
-        .take(read_limit)
-        .read_to_end(&mut bytes)
+    let declared_bytes = usize::try_from(opened.len())
+        .map_err(|_| SoftwareSignerCredentialErrorV1::InvalidLength)?;
+    if declared_bytes < minimum_bytes || declared_bytes > maximum_bytes {
+        return Err(SoftwareSignerCredentialErrorV1::InvalidLength);
+    }
+    // Allocate the metadata-declared credential length exactly once. Using
+    // `read_to_end` here would grow a large `Zeroizing<Vec<_>>` through
+    // ordinary reallocations, leaving freed secret-bearing allocations
+    // outside the final zeroizing owner.
+    let mut allocation = Vec::new();
+    allocation
+        .try_reserve_exact(declared_bytes)
         .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
-    if bytes.len() < minimum_bytes || bytes.len() > maximum_bytes {
+    allocation.resize(declared_bytes, 0);
+    let mut bytes = Zeroizing::new(allocation);
+    let mut reader = &descriptor;
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
+    let mut trailing = [0_u8; 1];
+    let trailing_len = reader
+        .read(&mut trailing)
+        .map_err(|_| SoftwareSignerCredentialErrorV1::Unavailable)?;
+    scrub(&mut trailing);
+    if trailing_len != 0 {
         return Err(SoftwareSignerCredentialErrorV1::InvalidLength);
     }
     let opened_after = descriptor

@@ -39,6 +39,10 @@ LAUNCHD_PLIST = (
     / "launchd"
     / "org.hyperledger.iroha.runtime-provider-broker-v1.plist"
 )
+BROKER_BINARY_SOURCE = (
+    REPO_ROOT / "crates" / "irohad" / "src" / "bin"
+    / "sorafs_external_software_signer.rs"
+)
 
 
 class RuntimeProviderBrokerInstallCheckerTests(unittest.TestCase):
@@ -539,6 +543,10 @@ class RuntimeProviderBrokerSupervisorAssetTests(unittest.TestCase):
                 "/private/etc/iroha/runtime-provider-broker/catalog.norito",
             ],
         )
+        self.assertEqual(
+            payload["StandardInPath"],
+            "/private/var/run/iroha-runtime-provider-broker-credentials-v1/threshold.bundle",
+        )
         self.assertEqual(payload["KeepAlive"], {"SuccessfulExit": False})
         self.assertTrue(payload["RunAtLoad"])
         self.assertEqual(payload["SoftResourceLimits"]["Core"], 0)
@@ -547,6 +555,28 @@ class RuntimeProviderBrokerSupervisorAssetTests(unittest.TestCase):
         joined_arguments = " ".join(payload["ProgramArguments"])
         for forbidden in ("--socket", "--plugin", "--private-key", "--credential"):
             self.assertNotIn(forbidden, joined_arguments)
+
+    def test_macos_broker_validates_launchd_fifo_before_reading(self) -> None:
+        source = BROKER_BINARY_SOURCE.read_text(encoding="utf-8")
+        for required in (
+            "rustix::fs::fstat(stdin.as_fd())",
+            "rustix::fs::FileType::Fifo",
+            "owner_uid == 0",
+            "link_count == 1",
+            "mode & 0o7777 == 0o600",
+        ):
+            self.assertIn(required, source)
+        validation = source.index(
+            "validate_launchd_threshold_bundle_stdin_v1(&stdin)?;"
+        )
+        read = source.index("let mut credential_bundle = stdin.lock();", validation)
+        self.assertLess(validation, read)
+
+    def test_macos_docs_require_fifo_writer_and_launchd_overlap(self) -> None:
+        docs = (ASSET_ROOT / "README.md").read_text(encoding="utf-8")
+        normalized = " ".join(docs.split())
+        self.assertIn("while that writer is waiting for a reader", normalized)
+        self.assertIn("both writer completion and broker readiness", normalized)
 
     def test_docs_do_not_claim_concrete_provider_backends(self) -> None:
         docs = (ASSET_ROOT / "README.md").read_text(encoding="utf-8")

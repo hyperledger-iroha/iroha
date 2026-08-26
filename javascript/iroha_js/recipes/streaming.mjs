@@ -11,7 +11,7 @@
  * Environment variables:
  * - TORII_URL — Torii endpoint (default: http://127.0.0.1:8080)
  * - TORII_API_TOKEN / TORII_AUTH_TOKEN — optional headers
- * - PIPELINE_STATUS — filter status (default: Committed)
+ * - PIPELINE_STATUS — diagnostic SSE event filter only (default: Committed)
  * - STREAM_FILTER_JSON — override the SSE filter JSON
  * - STREAM_MAX_EVENTS — stop after N events (0 = run indefinitely, default: 10)
  */

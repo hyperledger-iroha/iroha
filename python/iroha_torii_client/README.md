@@ -32,9 +32,20 @@ debt, the last tracked reducer transition, and any classified delay.
 pressure, governance readiness, and Native AMX participant-application
 records. Diagnostics are operational evidence and are not consensus authority.
 
-Use `get_status_snapshot()` for `/v1/status`. That route remains a distinct
+Use `get_status_snapshot()` for `/status`. That route remains a distinct
 operational-health surface; its queue and historical lane telemetry must not be
 treated as consensus-authoritative state.
+
+Typed public pipeline metadata keeps every lifecycle kind and both exact read
+scopes visible. `PipelineTransactionStatusResponse.is_authoritatively_applied`
+is the sole finality-success helper: it is true only for `Applied` with
+`scope == "global"` and `resolved_from == "state"`. `Committed`, local results,
+and queue/cache observations are not successful finality.
+Signed transaction hashes in this status surface use exact
+`[0-9a-f]{63}[13579bdf]` text; the final odd nibble is the Iroha `HashOf`
+marker, not a normalization option. Contract `tx_hash_hex` receipt fields use
+the same exact spelling, as do contract entrypoint hashes, multisig transaction
+hashes, and offline-operation status transaction hashes.
 
 ## Node-local core and pipeline reads
 
@@ -64,14 +75,21 @@ relay = operator_client.get_kaigi_relay(relays.items[0].relay_id) if relays.item
 health = operator_client.get_kaigi_relays_health()
 ```
 
+The preflight DTO exposes both current IVM cycle limits and validates every fee
+account field as an exact canonical I105 account id. Alias-shaped
+`name@domain` values are rejected instead of interpreted as account identity.
+
 Each helper generates a fresh signature over the exact `GET`, path, query, and
 empty body and dispatches once with redirects and retries disabled. Bearer/API
 tokens, canonical-account or witness headers, and precomputed operator headers
-are rejected rather than used as fallbacks. The lightweight client has no
-pipeline-recovery, policy, or proof-retention method; no replacement API is
-invented for those absent surfaces. Kaigi list and health also fail closed at
-Torii's hard relay diagnostic cap rather than materializing an unbounded
-registry; the relay SSE handshake remains a separate streaming protocol.
+are rejected rather than used as fallbacks; session authentication and cookies
+are rejected as ambient authority too. The lightweight client has no pipeline
+recovery, policy, or proof-retention method; no replacement API is invented for
+those absent surfaces. Typed Kaigi responses require Torii's exact fields and
+integer spellings, and relay details bind the decoded HPKE key to its advertised
+fingerprint. Kaigi list and health also fail closed at Torii's hard relay
+diagnostic cap rather than materializing an unbounded registry; the relay SSE
+handshake remains a separate streaming protocol.
 
 ## Tenant-scoped ZK attachments
 
@@ -170,6 +188,51 @@ quote, or fall back to the authority. Legacy transaction metadata keys
 `IROHA_NETWORK_ID` must be the canonical checksummed hash literal generated
 from the deployment genesis; a display chain label is never accepted as a
 signing domain.
+
+## SORA Parliament V1
+
+The account-authenticated Parliament surface is available through strict V1
+methods for readiness, attempt drafting and reading, timed-OVN casting context
+and proof pages, TLE release context and local partial release, and lifecycle
+transition drafting. Draft callers supply the independently derived IDs or
+transition digest that the response must match before an instruction is exposed
+for signing:
+
+```python
+capabilities = client.get_governance_capabilities_v1(canonical_auth=auth)
+draft = client.draft_parliament_attempt_v1(
+    proposal,
+    attempt_sequence=0,
+    expected_proposal_content_id=proposal_content_id,
+    expected_governance_attempt_id=governance_attempt_id,
+    canonical_auth=auth,
+)
+attempt = client.get_parliament_attempt_v1(
+    governance_attempt_id, canonical_auth=auth
+)
+```
+
+`get_parliament_timed_ovn_casting_proof_page_v1(...)` accepts an immutable
+canonical Norito request frame and returns an opaque, schema-bound Norito
+response frame. The lightweight Python package validates media type, schema,
+checksum, and the 8 MiB response bound only. Before any ballot seed is used,
+pass the response and the independently pinned network ID, checkpoint height,
+checkpoint context ID, and ballot-attempt ID to the ABI-23 native verifier.
+Python does not claim to verify finality, the ordinary-write witness,
+application membership, or the embedded Core archive. Local partial-release
+requests are deliberately bodyless and their public response is rebound to a
+previously validated release context.
+
+`FreezeTimedOvnCorpus` transition drafts accept one contiguous batch of at
+most 32 canonical 2,858-byte records per call; the complete frozen corpus may
+still contain up to 1,000 records across calls. Parliament requests reject
+ambient session auth headers, cookies, and `Session.auth`, and suppress
+Requests' environment/netrc credential fallback during preparation.
+
+The separate `get_parliament_timed_ovn_casting_context_v1(...)` response is a
+node-local diagnostic projection, not a finality proof or authorization
+capability. Its archive must not reach a secret-local operation unless the
+casting-proof response has been verified by the ABI-23 native verifier.
 
 ## Signed SoraFS orderbook submission
 

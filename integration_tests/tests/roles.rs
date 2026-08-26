@@ -241,9 +241,8 @@ fn role_with_invalid_permissions_is_not_accepted() -> Result<()> {
     Ok(())
 }
 #[test]
-// NOTE: Permissions in this test are created explicitly as json strings
-// so that they don't get deduplicated eagerly but rather in the executor
-// This way, if the executor compares permissions just as JSON strings, the test will fail
+// The two independently constructed permissions have the same canonical V1 payload and must be
+// deduplicated by the executor.
 fn role_permissions_are_deduplicated() {
     let Some((network, _rt)) = start_network(stringify!(role_permissions_are_deduplicated)) else {
         return;
@@ -267,13 +266,11 @@ fn role_permissions_are_deduplicated() {
             .expect("serialize permission payload"),
         ),
     );
-    // Different content, but same meaning
+    // Independently construct the same canonical payload through the strict text boundary.
     let allow_alice_to_transfer_rose_2 = Permission::new(
         "CanTransferAsset".parse().unwrap(),
-        iroha_primitives::json::Json::from_raw_json(format!(
-            r#"{{ "asset" : "{rose_asset_lower}" }}"#
-        ))
-        .expect("valid permission JSON fixture"),
+        iroha_primitives::json::Json::from_raw_json(format!(r#"{{"asset":"{rose_asset_lower}"}}"#))
+            .expect("valid permission JSON fixture"),
     );
     let role_id: RoleId = "role_id".parse().expect("Valid");
     let role = Role::new(role_id.clone(), ALICE_ID.clone())

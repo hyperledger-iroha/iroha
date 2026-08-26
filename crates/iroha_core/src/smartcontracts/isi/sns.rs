@@ -28,6 +28,7 @@ impl ValidSingularQuery for FindDataspaceNameOwnerById {
             self.dataspace_id(),
             state_ro.query_ledger_time_ms(),
         )
+        .map_err(|error| QueryError::Conversion(error.to_string()))?
         .ok_or(QueryError::NotFound)
     }
 }
@@ -474,6 +475,7 @@ impl Execute for ConfigureAliasAutoRenew {
         }
         if let Some(config) = config.as_ref() {
             let policy = crate::sns::policy_by_id(state_transaction.world(), selector.suffix_id)
+                .map_err(alias_lease_instruction_error)?
                 .ok_or_else(|| {
                     InstructionExecutionError::InvariantViolation(
                         "SNS policy is missing for the auto-renew target"
@@ -622,6 +624,32 @@ impl Execute for CompareAndSetPrimaryAccountAlias {
         }
         if current == new_numeric {
             return Ok(());
+        }
+        if let Some(current_alias) = current.as_ref() {
+            let catalog = state_transaction.world.dataspace_catalog();
+            let current_domain = current_alias.domain_id(catalog).map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("failed to resolve current primary alias domain: {err}").into(),
+                )
+            })?;
+            let new_domain = new_numeric
+                .as_ref()
+                .map(|alias| alias.domain_id(catalog))
+                .transpose()
+                .map_err(|err| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("failed to resolve new primary alias domain: {err}").into(),
+                    )
+                })?
+                .flatten();
+            if let Some(current_domain) = current_domain.as_ref() {
+                super::kaigi::ensure_kaigi_relay_home_change_allowed(
+                    state_transaction,
+                    &account,
+                    current_domain,
+                    new_domain.as_ref(),
+                )?;
+            }
         }
         if let Some(current) = current.as_ref() {
             super::domain::isi::ensure_alias_can_change_recovery_binding(
@@ -818,8 +846,9 @@ mod tests {
         suffix_id: u16,
         quote: &crate::sns::LeaseQuote,
     ) -> AliasQuoteGuardV1 {
-        let policy =
-            policy_by_id(state_transaction.world(), suffix_id).expect("fixture namespace policy");
+        let policy = policy_by_id(state_transaction.world(), suffix_id)
+            .expect("valid fixture policy state")
+            .expect("fixture namespace policy");
         AliasQuoteGuardV1 {
             expected_policy_version: policy.policy_version,
             expected_payment_asset: quote.payment_asset_definition_id.clone(),
@@ -893,7 +922,9 @@ mod tests {
             "unexpected error: {error}",
         );
         assert!(
-            crate::sns::record_by_selector(transaction.world(), &selector).is_none(),
+            crate::sns::record_by_selector(transaction.world(), &selector)
+                .expect("valid SNS record state")
+                .is_none(),
             "rejection must not create an SNS ownership record",
         );
         assert!(
@@ -1246,7 +1277,9 @@ mod tests {
         ));
         let policy = {
             let view = state.view();
-            policy_by_id(view.world(), crate::sns::DOMAIN_NAME_SUFFIX_ID).expect("domain policy")
+            policy_by_id(view.world(), crate::sns::DOMAIN_NAME_SUFFIX_ID)
+                .expect("valid domain policy state")
+                .expect("domain policy")
         };
         let config = AliasAutoRenewConfigV1 {
             term_years: 1,
@@ -1292,6 +1325,7 @@ mod tests {
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         let mut policy = policy_by_id(transaction.world(), crate::sns::DOMAIN_NAME_SUFFIX_ID)
+            .expect("valid domain policy state")
             .expect("domain policy");
         update(&mut policy);
         transaction.world.smart_contract_state.insert(
@@ -1353,6 +1387,7 @@ mod tests {
         );
         let view = fixture.state.view();
         let record = crate::sns::record_by_selector(view.world(), &fixture.selector)
+            .expect("valid renewed record state")
             .expect("renewed record");
         assert_eq!(
             record.expires_at_ms,
@@ -1434,6 +1469,7 @@ mod tests {
         );
         assert_eq!(
             crate::sns::record_by_selector(view.world(), &fixture.selector)
+                .expect("valid unchanged record state")
                 .expect("unchanged record")
                 .expires_at_ms,
             AUTO_RENEW_EXPIRY_MS
@@ -1475,6 +1511,7 @@ mod tests {
             assert_eq!(state.suspended_reason.as_deref(), Some(expected));
             assert_eq!(
                 crate::sns::record_by_selector(view.world(), &fixture.selector)
+                    .expect("valid unchanged record state")
                     .expect("unchanged record")
                     .expires_at_ms,
                 AUTO_RENEW_EXPIRY_MS
@@ -1654,7 +1691,9 @@ mod tests {
             "blocked setup must not create the domain"
         );
         assert!(
-            crate::sns::record_by_selector(transaction.world(), &selector).is_none(),
+            crate::sns::record_by_selector(transaction.world(), &selector)
+                .expect("valid SNS record state")
+                .is_none(),
             "blocked setup must not acquire the domain lease"
         );
     }
@@ -1761,7 +1800,9 @@ mod tests {
                 "{case} guard failure must precede any collector credit"
             );
             assert!(
-                crate::sns::record_by_selector(transaction.world(), &selector).is_none(),
+                crate::sns::record_by_selector(transaction.world(), &selector)
+                    .expect("valid SNS record state")
+                    .is_none(),
                 "{case} guard failure must not acquire the lease"
             );
             assert!(
@@ -1902,8 +1943,9 @@ mod tests {
                 0,
             )
             .expect("first alias quote");
-            let policy =
-                policy_by_id(view.world(), ACCOUNT_ALIAS_SUFFIX_ID).expect("account-alias policy");
+            let policy = policy_by_id(view.world(), ACCOUNT_ALIAS_SUFFIX_ID)
+                .expect("valid account-alias policy state")
+                .expect("account-alias policy");
             (quote, policy)
         };
         assert_eq!(quote.collector_account, collector);
@@ -1937,7 +1979,9 @@ mod tests {
             .execute(&authority, &mut transaction)
             .expect("the first ordered EnsureAlias must stage successfully");
         assert!(
-            crate::sns::record_by_selector(transaction.world(), &first_selector).is_some(),
+            crate::sns::record_by_selector(transaction.world(), &first_selector)
+                .expect("valid staged SNS record state")
+                .is_some(),
             "the first instruction must stage its lease record before the later conflict"
         );
         assert_eq!(
@@ -1984,7 +2028,9 @@ mod tests {
         drop(block);
         let view = state.view();
         assert!(
-            crate::sns::record_by_selector(view.world(), &first_selector).is_none(),
+            crate::sns::record_by_selector(view.world(), &first_selector)
+                .expect("valid rolled-back SNS record state")
+                .is_none(),
             "a rejected transaction must not retain the earlier alias lease"
         );
         assert!(
@@ -2105,9 +2151,11 @@ mod tests {
                 0,
             )
             .expect("exact registration quote");
-            let policy =
-                policy_by_id(view.world(), ACCOUNT_ALIAS_SUFFIX_ID).expect("account-alias policy");
+            let policy = policy_by_id(view.world(), ACCOUNT_ALIAS_SUFFIX_ID)
+                .expect("valid account-alias policy state")
+                .expect("account-alias policy");
             let parent_policy = policy_by_id(view.world(), DATASPACE_ALIAS_SUFFIX_ID)
+                .expect("valid dataspace-alias policy state")
                 .expect("dataspace-alias policy");
             (parent_quote, parent_policy, quote, policy)
         };
@@ -2272,7 +2320,7 @@ mod tests {
                 DataSpaceId::new(9),
                 0,
             ),
-            Some(owner.clone()),
+            Ok(Some(owner.clone())),
             "SNS helper should resolve the active owner from the state view"
         );
         let resolved = FindDataspaceNameOwnerById::new(DataSpaceId::new(9))
@@ -3011,7 +3059,9 @@ mod tests {
         drop(stx);
         drop(block);
         let view = state.view();
-        let policy = policy_by_id(view.world(), ACCOUNT_ALIAS_SUFFIX_ID).expect("policy");
+        let policy = policy_by_id(view.world(), ACCOUNT_ALIAS_SUFFIX_ID)
+            .expect("valid policy state")
+            .expect("policy");
         assert_eq!(
             policy.payment_asset_id, "61CtjvNd9T3THAR65GsMVHr82Bjc",
             "rejected mutation must not silently converge policy state"
@@ -3053,11 +3103,10 @@ mod tests {
             vec![authority_account, collector_account],
             vec![payment_definition],
         );
-        seed_default_namespace_policies(&mut world);
-        assert!(crate::sns::sync_default_namespace_policy_payment_asset(
+        crate::sns::seed_default_namespace_policies_for_payment_asset(
             &mut world,
             &payment_asset_definition_id.to_string(),
-        ));
+        );
         seed_active_dataspace_lease(&mut world, "paynet", paynet, &collector);
         let state = State::new_for_testing(
             world,

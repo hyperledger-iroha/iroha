@@ -35,8 +35,8 @@ input to `AccountAddress` encoding.
 ## Canonical account-address payload
 
 The first-release account-address payload consists of the version/class header
-and controller payload. Canonical decoding rejects trailing bytes, so legacy
-payloads containing selector tags or digests are not accepted. I105 formatting
+and controller payload. Canonical decoding rejects trailing bytes, so payloads
+containing selector tags or digests are not accepted. I105 formatting
 wraps the same domainless canonical payload.
 
 ## Security invariants

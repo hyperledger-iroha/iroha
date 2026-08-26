@@ -111,8 +111,7 @@ impl ComplianceLogger {
             pipeline_spool_dir,
             writer: Mutex::new(file),
         };
-        hash_key.fill(0);
-        std::hint::black_box(&mut hash_key);
+        zeroize::Zeroize::zeroize(&mut hash_key);
         Ok(Some(logger))
     }
     /// Record a successful handshake.
@@ -528,7 +527,11 @@ impl ComplianceLogger {
         hasher.update(domain);
         hasher.update(&[0]);
         hasher.update(bytes);
-        hasher.finalize().to_hex().to_string()
+        let mut digest = hasher.finalize();
+        let encoded = digest.to_hex().to_string();
+        zeroize::Zeroize::zeroize(&mut digest);
+        zeroize::Zeroize::zeroize(&mut hasher);
+        encoded
     }
     fn write_entry(&self, writer: &mut File, rendered: &str) -> Result<(), ComplianceError> {
         writer
@@ -718,8 +721,7 @@ impl std::fmt::Debug for ComplianceLogger {
 
 impl Drop for ComplianceLogger {
     fn drop(&mut self) {
-        self.hash_key.fill(0);
-        std::hint::black_box(&mut self.hash_key);
+        zeroize::Zeroize::zeroize(&mut self.hash_key);
     }
 }
 fn open_log_file(path: &Path) -> Result<File, ComplianceError> {

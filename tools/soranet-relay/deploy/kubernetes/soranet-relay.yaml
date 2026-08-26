@@ -16,7 +16,8 @@ data:
       "admin_listen": "127.0.0.1:9090",
       "admin_auth_token_path": "/etc/soranet/relay/secrets/admin-token",
       "tls": {
-        "self_signed_subject": "relay.soranet.local"
+        "certificate_path": "/etc/soranet/relay/secrets/server.crt",
+        "private_key_path": "/etc/soranet/relay/secrets/server.key"
       },
       "pow": {
         "required": true,
@@ -46,6 +47,11 @@ data:
       "handshake": {
         "descriptor_manifest_path": "/etc/soranet/relay/secrets/relay-descriptor-manifest.json",
         "descriptor_commit_hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "certificate": {
+          "bundle_path": "/etc/soranet/relay/secrets/relay-certificate.cbor",
+          "issuer_ed25519_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+          "issuer_mldsa_hex": "2222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222"
+        },
         "kem": [
           { "id": "ml-kem-768", "required": true },
           { "id": "ml-kem-1024", "required": false }
@@ -59,9 +65,9 @@ data:
         ]
       },
       "guard_directory": {
-        "snapshot_path": "/etc/soranet/relay/guards/current_snapshot.norito",
+        "snapshot_path": "/etc/soranet/relay/secrets/current_snapshot.norito",
         "expected_snapshot_digest_hex": "fedcba98765432100123456789abcdef0123456789abcdef0123456789abcdef",
-        "allow_missing_entry": false
+        "pinning_proof_path": "/var/lib/soranet-relay/guard-pinning-proofs/relay.json"
       }
     }
 ---
@@ -77,15 +83,27 @@ stringData:
   admin-token: "REPLACE_ME"
   # Replace with 32 random bytes encoded as exactly 64 lowercase hex characters.
   compliance-hash-salt.hex: "REPLACE_WITH_64_LOWERCASE_HEX_BYTES"
+  # Replace all transport/directory placeholders together. The served leaf
+  # SPKI and server name must match one endpoint in the dual-signed bundle,
+  # and that exact bundle must be present in the pinned guard snapshot.
+  server.crt: "REPLACE_WITH_PEM_CERTIFICATE_CHAIN"
+  server.key: "REPLACE_WITH_PEM_PRIVATE_KEY"
+  # Both values below are deliberately invalid placeholders. Replace them
+  # as one exact identity bundle; an uncustomized deployment must fail closed.
+  # Inject the completed manifest only as a runtime Secret; never place real
+  # private key material in this deployment file or the public ConfigMap.
   relay-descriptor-manifest.json: |
     {
       "version": 1,
       "identity": {
-        "ed25519_private_key_hex": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-        "ml_kem_private_key_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "ml_kem_public_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        "ed25519_private_key_hex": "REPLACE_WITH_EXACTLY_64_LOWERCASE_HEX_CHARACTERS",
+        "mldsa65_private_key_hex": "REPLACE_WITH_EXACTLY_8064_LOWERCASE_HEX_CHARACTERS"
       }
     }
+data:
+  # Replace this valid-base64 fail-closed placeholder with the base64 encoding
+  # of the exact binary SRCv2 bundle. The larger guard snapshot uses its own PVC.
+  relay-certificate.cbor: "UkVQTEFDRV9XSVRIX0JJTkFSWV9TUkNWMl9CVU5ETEU="
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -108,31 +126,66 @@ spec:
       labels:
         app: soranet-relay
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
         runAsGroup: 65532
-        fsGroup: 65532
-        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
-      # Kubernetes Secret projections are symlinks. Copy them once into a
-      # fresh emptyDir so the relay can enforce direct-file identity, owner,
-      # link-count, and permission checks on the files it actually reads.
+      # Kubernetes ConfigMap and Secret projections are symlinks, while guard
+      # snapshots can exceed their 1 MiB object limit. Copy the projections and
+      # dedicated snapshot PVC input once into fresh emptyDirs so the relay can
+      # enforce direct-file identity, owner, link-count, and permission checks.
+      # Provision persistent custody leaves before startup; the relay
+      # deliberately refuses missing or permissive compliance paths.
       initContainers:
-        - name: materialize-private-files
-          image: busybox:1.36.1
+        - name: materialize-runtime-files
+          # Deliberately fail closed until the operator pins an audited image.
+          image: busybox@sha256:0000000000000000000000000000000000000000000000000000000000000000
           command:
             - /bin/sh
             - -eu
             - -c
             - |
               umask 077
+              cp /var/run/soranet-relay-config-source/relay.json /config/relay.json
               cp /var/run/soranet-relay-secret-source/admin-token /private/admin-token
               cp /var/run/soranet-relay-secret-source/compliance-hash-salt.hex /private/compliance-hash-salt.hex
               cp /var/run/soranet-relay-secret-source/relay-descriptor-manifest.json /private/relay-descriptor-manifest.json
-              chown 65532:65532 /private/admin-token /private/compliance-hash-salt.hex /private/relay-descriptor-manifest.json
-              chmod 0400 /private/admin-token /private/compliance-hash-salt.hex /private/relay-descriptor-manifest.json
+              cp /var/run/soranet-relay-secret-source/server.crt /private/server.crt
+              cp /var/run/soranet-relay-secret-source/server.key /private/server.key
+              cp /var/run/soranet-relay-secret-source/relay-certificate.cbor /private/relay-certificate.cbor
+              snapshot_source=/var/run/soranet-relay-snapshot-source/current_snapshot.norito
+              if [ ! -f "$snapshot_source" ] || [ -L "$snapshot_source" ]; then
+                echo "guard snapshot source must be a direct regular file: $snapshot_source" >&2
+                exit 1
+              fi
+              snapshot_size=$(wc -c < "$snapshot_source")
+              if [ "$snapshot_size" -gt 5242880 ]; then
+                echo "guard snapshot exceeds the 5 MiB first-release limit" >&2
+                exit 1
+              fi
+              cp "$snapshot_source" /private/current_snapshot.norito
+              chown 65532:65532 /config/relay.json
+              chmod 0400 /config/relay.json
+              chown 65532:65532 /private/*
+              chmod 0400 /private/*
+              for path in /persistent/audit /persistent/logs /persistent/state /persistent/state/guard-pinning-proofs; do
+                if [ -L "$path" ]; then
+                  echo "refusing symbolic-link persistence path: $path" >&2
+                  exit 1
+                fi
+                mkdir -p "$path"
+                if [ ! -d "$path" ] || [ -L "$path" ]; then
+                  echo "persistence path is not a direct directory: $path" >&2
+                  exit 1
+                fi
+                chown 65532:65532 "$path"
+                chmod 0700 "$path"
+              done
+              chown 0:0 /config
+              chmod 0755 /config
               chown 0:0 /private
               chmod 0755 /private
           securityContext:
@@ -140,15 +193,37 @@ spec:
             runAsUser: 0
             runAsGroup: 0
             allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - CHOWN
+                - DAC_OVERRIDE
+                - FOWNER
           volumeMounts:
+            - name: config-source
+              mountPath: /var/run/soranet-relay-config-source
+              readOnly: true
+            - name: config
+              mountPath: /config
             - name: manifest-source
               mountPath: /var/run/soranet-relay-secret-source
               readOnly: true
+            - name: guard-snapshot-source
+              mountPath: /var/run/soranet-relay-snapshot-source
+              readOnly: true
             - name: manifest
               mountPath: /private
+            - name: audit-spool
+              mountPath: /persistent/audit
+            - name: relay-logs
+              mountPath: /persistent/logs
+            - name: relay-state
+              mountPath: /persistent/state
       containers:
         - name: relay
-          image: ghcr.io/sora-nexus/soranet-relay:latest
+          # Deliberately fail closed until the operator pins an audited image.
+          image: ghcr.io/sora-nexus/soranet-relay@sha256:0000000000000000000000000000000000000000000000000000000000000000
           imagePullPolicy: IfNotPresent
           args:
             - "--config"
@@ -168,6 +243,7 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/soranet/relay
+              readOnly: true
             - name: manifest
               mountPath: /etc/soranet/relay/secrets
               readOnly: true
@@ -182,6 +258,9 @@ spec:
               readOnly: false
       volumes:
         - name: config
+          emptyDir:
+            medium: Memory
+        - name: config-source
           configMap:
             name: soranet-relay-config
         - name: manifest
@@ -191,13 +270,31 @@ spec:
           secret:
             secretName: soranet-relay-manifest
             defaultMode: 0400
+        - name: guard-snapshot-source
+          persistentVolumeClaim:
+            claimName: soranet-relay-guard-snapshot
+            readOnly: true
         - name: audit-spool
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: soranet-relay-audit-spool
         - name: relay-logs
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: soranet-relay-compliance-logs
         - name: relay-state
           persistentVolumeClaim:
             claimName: soranet-relay-state
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: soranet-relay-guard-snapshot
+  namespace: soranet
+spec:
+  accessModes:
+    - ReadWriteOncePod
+  resources:
+    requests:
+      storage: 16Mi
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -206,10 +303,34 @@ metadata:
   namespace: soranet
 spec:
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteOncePod
   resources:
     requests:
       storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: soranet-relay-audit-spool
+  namespace: soranet
+spec:
+  accessModes:
+    - ReadWriteOncePod
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: soranet-relay-compliance-logs
+  namespace: soranet
+spec:
+  accessModes:
+    - ReadWriteOncePod
+  resources:
+    requests:
+      storage: 2Gi
 ---
 apiVersion: v1
 kind: Service

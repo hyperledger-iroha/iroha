@@ -1068,7 +1068,7 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
         "stock-local-runtime-provider-broker-v1",
         "Bootle/Lantern provider plan",
     )?;
-    expect_u64_v1(provider, "slot_wire_id", 56, "Bootle/Lantern provider plan")?;
+    expect_u64_v1(provider, "slot_wire_id", 55, "Bootle/Lantern provider plan")?;
     expect_string_v1(
         provider,
         "handle",
@@ -1356,9 +1356,16 @@ fn validate_secret_free_config_template_v1(config: &toml::Value) -> color_eyre::
             "dpn",
             "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH",
         ),
+        (
+            "REPLACE_WITH_TAIRA_CANARY_ONBOARDING_CREDENTIAL_ID",
+            "universal",
+            "REPLACE_WITH_TAIRA_CANARY_ONBOARDING_TOKEN_HASH",
+        ),
     ];
     if credentials.len() != expected_credentials.len() {
-        bail!("Taira config template must contain exactly two placeholder onboarding credentials");
+        bail!(
+            "Taira config template must contain the exact BOI, DPN, and public-reset canary onboarding credentials"
+        );
     }
     for (index, (credential, (expected_id, expected_dataspace, expected_token_hash))) in
         credentials.iter().zip(expected_credentials).enumerate()

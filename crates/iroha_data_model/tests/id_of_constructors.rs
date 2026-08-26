@@ -45,9 +45,8 @@ fn account_id_of_matches_parse() {
     let _guard = guard_chain_discriminant();
     let kp = checked_random_keypair();
     let via_of = AccountId::of(kp.public_key().clone());
-    let parsed = AccountId::parse_encoded(&via_of.to_string())
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("canonical AccountId literal parses");
+    let parsed =
+        AccountId::parse_encoded(&via_of.to_string()).expect("canonical AccountId literal parses");
     assert_eq!(parsed, via_of);
     assert_eq!(format!("{parsed}"), format!("{via_of}"));
 }

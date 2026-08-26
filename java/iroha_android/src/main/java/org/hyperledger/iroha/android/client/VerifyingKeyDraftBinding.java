@@ -23,8 +23,8 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 /** Exact transaction and instruction binding for unsigned verifying-key mutation drafts. */
 final class VerifyingKeyDraftBinding {
   enum Operation {
-    REGISTER("iroha_data_model::isi::verifying_keys::RegisterVerifyingKey"),
-    UPDATE("iroha_data_model::isi::verifying_keys::UpdateVerifyingKey");
+    REGISTER("iroha.instruction.v1::verifying_keys::RegisterVerifyingKey"),
+    UPDATE("iroha.instruction.v1::verifying_keys::UpdateVerifyingKey");
 
     private final String wireName;
 

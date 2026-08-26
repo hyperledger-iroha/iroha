@@ -311,15 +311,15 @@ fn uaid_is_bound_to_account_domain(
     let mut matched_domain = false;
     let mut retail_fi_home = None;
     for alias in aliases {
-        if crate::sns::resolve_active_account_alias(
-            &state_transaction.world,
-            &state_transaction.nexus.dataspace_catalog,
-            alias,
-            state_transaction.block_unix_timestamp_ms(),
-        )
-        .as_ref()
-            != Some(account_id)
-            || alias.dataspace != dataspace
+        if !matches!(
+            crate::sns::resolve_active_account_alias(
+                &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
+                alias,
+                state_transaction.block_unix_timestamp_ms(),
+            ),
+            Ok(Some(ref resolved)) if resolved == account_id
+        ) || alias.dataspace != dataspace
         {
             continue;
         }

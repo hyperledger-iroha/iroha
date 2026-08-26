@@ -1,4 +1,206 @@
 #[test]
+fn pipeline_status_openapi_exposes_only_the_exact_first_release_scope() {
+    let document = canonical_document();
+    let schemas = component_schemas(&document);
+    let response = schemas
+        .get("PipelineTransactionStatusResponse")
+        .and_then(Value::as_object)
+        .expect("pipeline transaction status response schema");
+    assert_eq!(response.get("type"), Some(&Value::from("object")));
+    assert_eq!(
+        response.get("additionalProperties"),
+        Some(&Value::from(false))
+    );
+    let properties = response
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("pipeline transaction status response properties");
+    let exact_response_fields = BTreeSet::from(["hash", "resolved_from", "scope", "status"]);
+    assert_eq!(
+        properties
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        exact_response_fields
+    );
+    assert_eq!(
+        response["required"]
+            .as_array()
+            .expect("pipeline transaction status required fields")
+            .iter()
+            .map(|field| {
+                field
+                    .as_str()
+                    .expect("pipeline transaction status required field name")
+            })
+            .collect::<BTreeSet<_>>(),
+        exact_response_fields
+    );
+    assert_eq!(properties["scope"]["type"], Value::from("string"));
+    assert_eq!(
+        properties["scope"]["enum"],
+        Value::Array(vec![Value::from("local"), Value::from("global")])
+    );
+    assert_eq!(properties["hash"]["type"], Value::from("string"));
+    assert_eq!(properties["hash"]["minLength"], Value::from(64_u64));
+    assert_eq!(properties["hash"]["maxLength"], Value::from(64_u64));
+    assert_eq!(
+        properties["hash"]["pattern"],
+        Value::from("^[0-9a-f]{63}[13579bdf]$")
+    );
+    assert!(
+        properties["hash"]["description"]
+            .as_str()
+            .expect("pipeline response hash description")
+            .contains("Iroha hash marker set")
+    );
+
+    let operation = &document["paths"]["/v1/pipeline/transactions/status"]["get"];
+    assert_eq!(
+        operation["responses"]
+            .as_object()
+            .expect("pipeline status responses")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["200", "404"])
+    );
+    let parameters = operation["parameters"]
+        .as_array()
+        .expect("pipeline status parameters");
+    assert_eq!(
+        parameters
+            .iter()
+            .map(|parameter| {
+                parameter["name"]
+                    .as_str()
+                    .expect("pipeline status parameter name")
+            })
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["hash", "scope"])
+    );
+    assert!(
+        parameters
+            .iter()
+            .all(|parameter| parameter["in"] == Value::from("query"))
+    );
+    let scope = parameters
+        .iter()
+        .find(|parameter| parameter["name"].as_str() == Some("scope"))
+        .expect("pipeline status scope parameter");
+    assert_eq!(scope["required"], Value::from(false));
+    assert_eq!(scope["schema"]["type"], Value::from("string"));
+    assert_eq!(scope["schema"]["default"], Value::from("global"));
+    assert_eq!(
+        scope["schema"]["enum"],
+        Value::Array(vec![Value::from("local"), Value::from("global")])
+    );
+    assert!(
+        scope["description"]
+            .as_str()
+            .expect("pipeline status scope description")
+            .contains("omission selects `global`")
+    );
+    let hash = parameters
+        .iter()
+        .find(|parameter| parameter["name"].as_str() == Some("hash"))
+        .expect("pipeline status hash parameter");
+    assert_eq!(hash["required"], Value::from(true));
+    assert_eq!(hash["schema"]["type"], Value::from("string"));
+    assert_eq!(hash["schema"]["minLength"], Value::from(64_u64));
+    assert_eq!(hash["schema"]["maxLength"], Value::from(64_u64));
+    assert_eq!(
+        hash["schema"]["pattern"],
+        Value::from("^[0-9a-f]{63}[13579bdf]$")
+    );
+    assert!(
+        hash["description"]
+            .as_str()
+            .expect("pipeline request hash description")
+            .contains("Iroha hash marker set")
+    );
+}
+
+#[test]
+fn npos_and_vrf_penalty_schemas_exclude_retired_process_local_counters() {
+    let document = canonical_document();
+    let schemas = component_schemas(&document);
+    let retired = [
+        "vrf_penalty_epoch",
+        "vrf_committed_no_reveal_total",
+        "vrf_no_participation_total",
+        "vrf_late_reveals_total",
+    ];
+    let npos = schemas
+        .get("SumeragiNposDiagnostics")
+        .and_then(Value::as_object)
+        .expect("NPoS diagnostics schema");
+    let npos_properties = npos
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("NPoS diagnostics properties");
+    assert_eq!(
+        npos_properties
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "epoch_length_blocks",
+            "epoch_seed",
+            "prf_height",
+            "prf_view",
+            "vrf_commit_deadline_offset",
+            "vrf_reveal_deadline_offset",
+        ])
+    );
+    let report = schemas
+        .get("SumeragiVrfPenaltiesReport")
+        .and_then(Value::as_object)
+        .expect("authoritative VRF penalties report schema");
+    assert_eq!(
+        report.get("additionalProperties"),
+        Some(&Value::from(false))
+    );
+    let report_properties = report
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("VRF penalties report properties");
+    assert_eq!(
+        report_properties
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "committed_no_reveal",
+            "epoch",
+            "no_participation",
+            "roster_len",
+        ])
+    );
+    for field in retired {
+        assert!(
+            !npos_properties.contains_key(field) && !report_properties.contains_key(field),
+            "retired process-local VRF counter remains in OpenAPI: {field}"
+        );
+    }
+    let responses = document
+        .get("paths")
+        .and_then(Value::as_object)
+        .and_then(|paths| paths.get("/v1/sumeragi/vrf/penalties/{epoch}"))
+        .and_then(Value::as_object)
+        .and_then(|path| path.get("get"))
+        .and_then(Value::as_object)
+        .and_then(|operation| operation.get("responses"))
+        .and_then(Value::as_object)
+        .expect("VRF penalties route responses");
+    assert_eq!(
+        responses["200"]["content"]["application/json"]["schema"]["$ref"],
+        Value::from("#/components/schemas/SumeragiVrfPenaltiesReport")
+    );
+    assert!(responses.contains_key("404"));
+}
+
+#[test]
 fn native_amx_participant_diagnostics_schema_is_closed_and_bounded() {
     let schemas = openapi_schemas();
     let response = schemas

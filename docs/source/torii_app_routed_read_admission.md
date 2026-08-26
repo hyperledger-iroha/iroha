@@ -1,6 +1,6 @@
 # App API routed-read HTTP admission
 
-All 45 first-release `ToriiReadEndpointV1` public handlers share one outer HTTP
+All 46 first-release `ToriiReadEndpointV1` public handlers share one outer HTTP
 admission corridor. Before a request body is polled, Torii reserves the existing
 query-fanout working set. The same reservation is adopted by downstream
 single-route and fanout execution and remains owned by the final response body.

@@ -718,7 +718,7 @@ impl ProviderIngestBrokerAuthenticatedSource {
         }
         apply_source_socket_deadline(&connection.stream, deadline)?;
         let decode_admission = DecodeResourceAdmissionV1::acquire_operation(
-            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
+            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
         )?;
         let decode_scope = decode_admission.enter();
         let payload = encode_canonical(&fetch, MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1)?;
@@ -727,7 +727,7 @@ impl ProviderIngestBrokerAuthenticatedSource {
             connection.next_request_id,
             binding,
             metadata_digest,
-            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
+            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
             payload,
         )?;
         let request_frame = encode_frame(
@@ -745,7 +745,7 @@ impl ProviderIngestBrokerAuthenticatedSource {
         let response = decode_operation_frame::<OperationResponseV1>(
             &response_frame,
             FRAME_KIND_OPERATION_RESPONSE_V1,
-            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
+            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
         )?;
         validate_operation_response(&operation_request, &response, &network_id)?;
         match response.status {

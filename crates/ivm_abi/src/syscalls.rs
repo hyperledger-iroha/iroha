@@ -443,12 +443,6 @@ pub const SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE: u32 = 0xC2;
 pub const SYSCALL_SORACLOUD_APPEND_JOURNAL: u32 = 0xC3;
 /// Publish a checkpoint artifact.
 pub const SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT: u32 = 0xC4;
-/// Read node-local secret material exposed only through the Soracloud host.
-pub const SYSCALL_SORACLOUD_READ_SECRET: u32 = 0xC5;
-/// Read node-local credential material exposed only through the Soracloud host.
-pub const SYSCALL_SORACLOUD_READ_CREDENTIAL: u32 = 0xC6;
-/// Perform a bounded, policy-checked egress fetch against allowlisted hosts.
-pub const SYSCALL_SORACLOUD_EGRESS_FETCH: u32 = 0xC7;
 /// Read authoritative service config material exposed through the Soracloud host.
 pub const SYSCALL_SORACLOUD_READ_CONFIG: u32 = 0xC8;
 /// Read authoritative service secret envelopes exposed through the Soracloud host.
@@ -824,9 +818,6 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_ZK_ROOTS_GET
             | SYSCALL_ZK_VOTE_GET_TALLY
             | SYSCALL_SORACLOUD_READ_COMMITTED_STATE
-            | SYSCALL_SORACLOUD_READ_SECRET
-            | SYSCALL_SORACLOUD_READ_CREDENTIAL
-            | SYSCALL_SORACLOUD_EGRESS_FETCH
             | SYSCALL_SORACLOUD_READ_CONFIG
             | SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE
     ) {
@@ -1178,12 +1169,6 @@ const ABI_V1_SYSCALL_METADATA: &[(u32, &str)] = &[
         SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT,
         "SORACLOUD_PUBLISH_CHECKPOINT",
     ),
-    (SYSCALL_SORACLOUD_READ_SECRET, "SORACLOUD_READ_SECRET"),
-    (
-        SYSCALL_SORACLOUD_READ_CREDENTIAL,
-        "SORACLOUD_READ_CREDENTIAL",
-    ),
-    (SYSCALL_SORACLOUD_EGRESS_FETCH, "SORACLOUD_EGRESS_FETCH"),
     (SYSCALL_SORACLOUD_READ_CONFIG, "SORACLOUD_READ_CONFIG"),
     (
         SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE,

@@ -4,7 +4,7 @@ import XCTest
 final class KagemushaQRStreamTests: XCTestCase {
     func testMeasuredReleaseArchivesStayWithinTheStandardQRFrameBudget() {
         let samples: [(String, Int, Int)] = [
-            ("receive-offer", 12_425, 63),
+            ("receive-offer", 12_423, 63),
             ("acknowledgement", 471, 4),
             ("payment-v4-peer-hop-1", 12_896, 65),
         ]

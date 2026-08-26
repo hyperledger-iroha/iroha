@@ -6,19 +6,26 @@ and forward traffic to Kaigi hubs while preserving the same GAR and compliance
 guardrails used for Norito streaming.
 
 ## Exit relay behaviour
-- Routes are sourced from `exit-<relay_id>/kaigi-stream/*.norito` catalogs,
-  carrying `PrivacyRouteUpdate` records tagged with `SoranetStreamTag::Kaigi`.
-- The `RouteOpenFrame` stream tag `0x02` selects the Kaigi exit path; the auth
-  flag maps to `stream.kaigi.public` or `stream.kaigi.authenticated` GAR
-  categories. Relays enforce the `SoranetAccessKind` from the route and reject
-  unauthenticated viewers when required.
-- Room identifiers are BLAKE3-blinded from the `{channel_id, route_id,
-  stream_id}` tuple so observers cannot correlate Kaigi room metadata with the
-  underlying channel.
-- Exit adapters convert Kaigi multiaddrs to WebSocket targets; unsupported
-  multiaddrs fall back to the configured hub URL so circuits stay usable while
-  route catalogs converge. Compliance logging records the channel, route,
-  stream, room id, GAR category, and exit target for every open.
+- Token-bearing Kaigi filesystem routing is disabled in V1. Core rejects every
+  publication before enqueue or filesystem I/O, relay configuration rejects
+  `kaigi_stream.spool_dir`, and catalog admission independently rejects every
+  record. There is no static/read-only exception.
+- The `RouteOpenFrame` stream tag `0x02` selects the Kaigi exit path. Its second
+  byte is reserved and must be zero; it is not an authentication assertion.
+  Relays currently admit only `SoranetAccessKind::ReadOnly` routes and map them
+  to the `stream.kaigi.public` GAR category. Authenticated records fail closed
+  until a viewer credential is cryptographically bound to route opening.
+- The reserved adapter derives room identifiers by BLAKE3-blinding the
+  `{channel_id, route_id, stream_id}` tuple after a future route has passed the
+  missing proof and revocation boundaries.
+- `exit_multiaddr` is retained only as signed diagnostic metadata. Exit adapters
+  dial the operator-configured exact canonical `wss://` `hub_ws_url` and never
+  convert, redirect, or fall back to any catalog address. Configuration rejects
+  plaintext WebSockets, userinfo, queries, fragments, authority escapes, ambiguous or
+  non-canonical hosts/ports, and zero ports. The exit token is attached only
+  after the exact configured TLS WebSocket handshake succeeds. Compliance
+  logging records the channel, route, stream, room id, GAR category, diagnostic
+  multiaddr, and configured exit target for every future admitted open.
 
 ## Local proxy bridge (browser/SDK)
 - `sorafs_cli` exposes Kaigi payloads to browsers/SDKs via
@@ -32,11 +39,17 @@ guardrails used for Norito streaming.
   matching Norito/CAR behaviour.
 
 ## Operator checklist
-- Refresh Kaigi route catalogs alongside Norito routes; rotation/expiry respects
-  the shared `route_refresh_secs` cadence.
+- Leave `streaming.soranet.enabled = false` and omit relay
+  `kaigi_stream.spool_dir`. Explicit producer enablement or relay spool
+  configuration is a startup error.
+- Re-enablement requires a replay-protected RouteOpen proof binding viewer
+  authority, selected route, and authoritative segment plus a durable
+  unpublish/tombstone lifecycle. The intended custody contract is a direct
+  effective-UID-owned mode-`0700` directory chain with no named symlink
+  component and one direct single-link mode-`0600` channel-bound token file,
+  published through private write-sync-atomic-replace-directory-sync steps.
 - Validate proxy bridging locally with
   `cargo test -p sorafs_orchestrator kaigi_bridge_streams_spool_payload_with_policy`
   to exercise the spool, cache tags, and policy acknowledgement.
-- Monitor exit telemetry for Kaigi via proxy transport events and relay
-  compliance logs; GAR categories default to
-  `stream.kaigi.public`/`stream.kaigi.authenticated`.
+- Treat any Kaigi exit-routing activity in V1 as a configuration error; no GAR
+  category is active while token-bearing filesystem routes are disabled.

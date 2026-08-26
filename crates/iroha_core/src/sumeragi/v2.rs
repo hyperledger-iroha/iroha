@@ -11685,6 +11685,11 @@ impl SumeragiV2Adapter {
                         } else if locked_reproposal_prepare_progress {
                             !delivered.locked_commit_progress
                                 && delivered.locked_reproposal_prepare_progress
+                        } else if matches!(key, IngressSemanticKey::Proposal { .. }) {
+                            // A strict same-round TC upgrade can change the
+                            // lock without changing the view, so re-evaluate
+                            // one exact proposal in the new consumer epoch.
+                            true
                         } else {
                             return true;
                         };

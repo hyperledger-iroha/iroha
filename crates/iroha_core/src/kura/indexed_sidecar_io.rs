@@ -565,28 +565,6 @@ impl Kura {
         }
         Some(sidecar)
     }
-    fn truncate_pipeline_metadata_above_at(blocks_dir: &Path, height: u64) -> Result<()> {
-        if blocks_dir.as_os_str().is_empty() {
-            return Err(Error::EmptyStoreRoot);
-        }
-        let dir = blocks_dir.join(PIPELINE_DIR_NAME);
-        let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
-        let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
-        if !Self::truncate_indexed_sidecars_to_height(
-            &data_path,
-            &index_path,
-            height,
-            "pipeline recovery sidecar",
-        ) {
-            return Err(Error::IO(
-                std::io::Error::other(format!(
-                    "failed to truncate pipeline sidecars to canonical height {height}"
-                )),
-                index_path,
-            ));
-        }
-        Ok(())
-    }
     /// Read persisted FASTPQ proof snapshots for a committed block.
     #[must_use]
     pub fn fastpq_proofs_for_block(&self, height: u64) -> Vec<FastpqProofSnapshot> {
@@ -3330,11 +3308,9 @@ impl Kura {
         namespace: &BoundProgressNamespace,
     ) -> std::result::Result<(), BoundProgressRecoveryFailure> {
         for directory in &namespace.directories {
-            let opened = directory
-                .file
-                .metadata()
+            let opened = secure_file_metadata::from_file(&directory.file)
                 .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
-            let current = std::fs::symlink_metadata(&directory.expected_path)
+            let current = secure_file_metadata::from_path(&directory.expected_path)
                 .map_err(|error| BoundProgressRecoveryFailure::from_io(&error))?;
             if !opened.is_dir()
                 || !current.is_dir()

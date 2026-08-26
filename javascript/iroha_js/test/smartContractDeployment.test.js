@@ -260,7 +260,7 @@ test("deployment instruction transactions are locally signed and verified", asyn
     PUBLIC_KEY,
   );
   assert.equal(finalized.signedTransaction[0], 1);
-  assert.match(finalized.hashHex, /^[0-9a-f]{64}$/u);
+  assert.match(finalized.hashHex, /^[0-9a-f]{63}[13579bdf]$/u);
   assert.equal(
     browserSignedTransactionHashHex(finalized.signedTransaction),
     finalized.hashHex,
@@ -285,7 +285,7 @@ test("deployment instruction transactions are locally signed and verified", asyn
         headers: {
           "content-type": "application/json",
           ...expectedReceiptHeaders,
-          "x-iroha-entrypoint-hash": "00".repeat(32),
+          "x-iroha-entrypoint-hash": "01".repeat(32),
         },
       }),
   });
@@ -453,7 +453,7 @@ test("browser deployment stops without exact persisted Applied finality and auth
       submitAndWait() {
         submissions += 1;
         return {
-          hash: "00".repeat(32),
+          hash: "01".repeat(32),
           status: { kind: "Applied", block_height: 11 },
           scope: "global",
           resolved_from: "state",

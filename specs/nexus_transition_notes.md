@@ -193,11 +193,11 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   Per-dataspace defaults name one exact `fee_sponsor_program_id` and require a
   dataspace key present in the active catalog; there is no
   sponsorship toggle or account fallback. Runtime config swaps also mirror the
-  parser's fee-shape checks: the Nexus fee asset selector must be the canonical
-  XOR asset definition id or `xor#universal`/`xor#universal.universal` after
-  genesis binds the alias to a canonical Base58 asset definition, and is
-  trimmed to the parser-normalized selector, while the fee sink literal cannot
-  be blank. Operation allow/deny selectors and asset budgets live on immutable
+  parser's fee-shape checks: the Nexus fee asset selector must be the exact
+  canonical XOR asset definition id or the exact lowercase `xor#universal`
+  alias after genesis binds it to that definition. Whitespace-padded,
+  case-folded, and dataspace-qualified alias variants are rejected, while the
+  fee sink literal cannot be blank. Operation allow/deny selectors and asset budgets live on immutable
   on-chain sponsor-program revisions rather than in runtime configuration.
 - State snapshots now carry a versioned `nexus_runtime` record with the exact
   effective lane catalog and autoscale transition cursor. Startup overlays

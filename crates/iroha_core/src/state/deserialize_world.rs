@@ -47,7 +47,6 @@ struct SoracloudInrouPersistedStateV1<'a> {
     model_weight_audit_events: &'a Storage<u64, SoraModelWeightAuditEventV1>,
     model_artifact_audit_events: &'a Storage<u64, SoraModelArtifactAuditEventV1>,
     hf_shared_lease_audit_events: &'a Storage<u64, SoraHfSharedLeaseAuditEventV1>,
-    model_host_violation_evidence: &'a Storage<Hash, SoraModelHostViolationEvidenceRecordV1>,
     agent_apartment_audit_events: &'a Storage<u64, SoraAgentApartmentAuditEventV1>,
     service_state_entries: &'a Storage<(String, String, String), SoraServiceStateEntryV1>,
     decryption_request_records: &'a Storage<(String, String), SoraDecryptionRequestRecordV1>,
@@ -56,22 +55,14 @@ struct SoracloudInrouPersistedStateV1<'a> {
     model_registries: &'a Storage<(String, String), SoraModelRegistryV1>,
     model_weight_versions: &'a Storage<(String, String, String), SoraModelWeightVersionRecordV1>,
     model_artifacts: &'a Storage<(String, String), SoraModelArtifactRecordV1>,
-    model_host_capabilities: &'a Storage<AccountId, SoraModelHostCapabilityRecordV1>,
     hf_sources: &'a Storage<Hash, SoraHfSourceRecordV1>,
     hf_shared_lease_pools: &'a Storage<Hash, SoraHfSharedLeasePoolV1>,
     hf_shared_lease_members: &'a Storage<(String, String), SoraHfSharedLeaseMemberV1>,
-    hf_placements: &'a Storage<Hash, SoraHfPlacementRecordV1>,
     inrou_host_capabilities: &'a Storage<AccountId, SoraInrouHostCapabilityRecordV1>,
     inrou_service_placements: &'a Storage<(String, String), SoraInrouServicePlacementRecordV1>,
     uploaded_model_bundles: &'a Storage<(String, String, String), SoraUploadedModelBundleV1>,
-    pin_manifests: &'a Storage<ManifestDigest, PinManifestRecord>,
-    replication_orders: &'a Storage<ReplicationOrderId, ReplicationOrderRecord>,
     mailbox_messages: &'a Storage<Hash, SoraServiceMailboxMessageV1>,
     runtime_receipts: &'a Storage<Hash, SoraRuntimeReceiptV1>,
-    private_uploaded_model_execution_receipts:
-        &'a Storage<Hash, SoraPrivateUploadedModelExecutionReceiptV1>,
-    private_uploaded_model_execution_claims:
-        &'a Storage<(String, String), SoraPrivateUploadedModelExecutionClaimV1>,
 }
 
 impl SoracloudInrouPersistedStateV1<'_> {
@@ -180,34 +171,17 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     ),
                 )
             })?;
-            if deployment.current_service_manifest_hash != current_bundle.service_manifest_hash()
-                || deployment.current_container_manifest_hash
-                    != current_bundle.container_manifest_hash()
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_service_deployments",
-                    format!(
-                        "service `{}` current revision `{}` manifest hashes must exactly match its admitted bundle",
-                        deployment.service_name, deployment.current_service_version
-                    ),
-                ));
-            }
-            let hosted_http_service = current_bundle.service.execution_plane
-                == iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
-            if deployment.service_lease.is_some() != hosted_http_service {
-                return Err(invalid_soracloud_state(
-                    "soracloud_service_deployments",
-                    format!(
-                        "service `{}` must carry a hosted-service lease if and only if its execution plane is HttpService",
-                        deployment.service_name
-                    ),
-                ));
-            }
-            crate::soracloud_runtime::validate_soracloud_deployment_lease_volume_bindings(
-                deployment,
-                current_bundle,
-            )
-            .map_err(|message| invalid_soracloud_state("soracloud_service_deployments", message))?;
+            deployment
+                .validate_against_active_bundle(current_bundle)
+                .map_err(|error| {
+                    invalid_soracloud_state(
+                        "soracloud_service_deployments",
+                        format!(
+                            "service `{}` current revision `{}` is not bound to its active admitted bundle: {error}",
+                            deployment.service_name, deployment.current_service_version
+                        ),
+                    )
+                })?;
             for ((_service_name, _service_version), revision) in
                 service_revisions.iter().filter(|((service_name, _), _)| {
                     service_name.as_str() == deployment.service_name.as_ref()
@@ -507,13 +481,15 @@ impl SoracloudInrouPersistedStateV1<'_> {
                         ),
                     )
                 })?;
-            if state.validator_account_id != assignment.validator_account_id
+            if !assignment.host_availability.is_available()
+                || state.placement_incarnation != assignment.placement_incarnation
+                || state.validator_account_id != assignment.validator_account_id
                 || state.peer_id != assignment.peer_id
                 || state.selected_guest_isa != assignment.selected_guest_isa
             {
                 return Err(invalid_soracloud_state(
                     "soracloud_inrou_replica_runtime",
-                    "replica runtime identity must exactly match its authoritative placement assignment",
+                    "replica runtime identity must exactly match its authoritative placement assignment, which must be available",
                 ));
             }
             let admitted_bundle = service_revisions
@@ -1039,7 +1015,14 @@ impl SoracloudInrouPersistedStateV1<'_> {
                             usage,
                             event.lease_reporting_epoch_rollover.as_ref(),
                             event.block_height,
-                            deployment.accounted_storage_bytes(),
+                            deployment.accounted_storage_bytes().map_err(|error| {
+                                invalid_soracloud_state(
+                                    "soracloud_service_audit_events",
+                                    format!(
+                                        "service `{service_name}` accounted storage is invalid: {error}"
+                                    ),
+                                )
+                            })?,
                         )
                         .map_err(|message| {
                             invalid_soracloud_state(
@@ -1507,26 +1490,6 @@ impl SoracloudInrouPersistedStateV1<'_> {
                 &mut authoritative_sequences,
                 "soracloud_hf_shared_lease_audit_events",
                 event.sequence,
-            )?;
-        }
-
-        for (key, record) in self.model_host_violation_evidence.view().iter() {
-            record.validate().map_err(|error| {
-                invalid_soracloud_state(
-                    "soracloud_model_host_violation_evidence",
-                    error.to_string(),
-                )
-            })?;
-            if key != &record.evidence_id {
-                return Err(invalid_soracloud_state(
-                    "soracloud_model_host_violation_evidence",
-                    "storage key must match the embedded evidence_id",
-                ));
-            }
-            register_soracloud_sequence(
-                &mut authoritative_sequences,
-                "soracloud_model_host_violation_evidence",
-                record.sequence,
             )?;
         }
 
@@ -2055,10 +2018,12 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     "first-release model weights require explicit source_provenance",
                 ));
             };
-            if source.kind == iroha_data_model::soracloud::SoraModelProvenanceKindV1::HfImport {
+            if source.kind
+                == iroha_data_model::soracloud::SoraModelProvenanceKindV1::HfSourceAdmission
+            {
                 return Err(invalid_soracloud_state(
                     "soracloud_model_weight_versions",
-                    "first-release state cannot contain unwritten HfImport model provenance",
+                    "first-release state cannot contain unwritten HF source-admission provenance",
                 ));
             }
             if (source.kind == iroha_data_model::soracloud::SoraModelProvenanceKindV1::TrainingJob
@@ -2334,10 +2299,10 @@ impl SoracloudInrouPersistedStateV1<'_> {
                         ));
                     }
                 }
-                iroha_data_model::soracloud::SoraModelProvenanceKindV1::HfImport => {
+                iroha_data_model::soracloud::SoraModelProvenanceKindV1::HfSourceAdmission => {
                     return Err(invalid_soracloud_state(
                         "soracloud_model_artifacts",
-                        "first-release state cannot contain unwritten HfImport model provenance",
+                        "first-release state cannot contain unwritten HF source-admission provenance",
                     ));
                 }
             }
@@ -3230,25 +3195,6 @@ impl SoracloudInrouPersistedStateV1<'_> {
             }
         }
 
-        let model_host_capabilities = self.model_host_capabilities.view();
-        for (key, capability) in model_host_capabilities.iter() {
-            capability.validate().map_err(|error| {
-                invalid_soracloud_state("soracloud_model_host_capabilities", error.to_string())
-            })?;
-            crate::smartcontracts::isi::soracloud::validate_model_host_capability_against_class(
-                capability,
-            )
-            .map_err(|error| {
-                invalid_soracloud_state("soracloud_model_host_capabilities", error.to_string())
-            })?;
-            if key != &capability.validator_account_id {
-                return Err(invalid_soracloud_state(
-                    "soracloud_model_host_capabilities",
-                    "storage key must match the embedded validator_account_id",
-                ));
-            }
-        }
-
         let hf_sources = self.hf_sources.view();
         for (key, source) in hf_sources.iter() {
             source.validate().map_err(|error| {
@@ -3372,34 +3318,6 @@ impl SoracloudInrouPersistedStateV1<'_> {
                         "service binding must use its canonical Name spelling",
                     ));
                 }
-                if let Some(deployment) = service_deployments.get(&parsed_name) {
-                    let bundle = service_revisions
-                        .get(&(
-                            service_name.clone(),
-                            deployment.current_service_version.clone(),
-                        ))
-                        .ok_or_else(|| {
-                            invalid_soracloud_state(
-                                "soracloud_hf_shared_lease_members",
-                                "bound service deployment is missing its current revision",
-                            )
-                        })?;
-                    let binding = crate::soracloud_runtime::soracloud_hf_generated_source_binding(
-                        bundle,
-                    )
-                    .ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_hf_shared_lease_members",
-                            "existing bound service must be a canonical HF-generated service",
-                        )
-                    })?;
-                    if binding.source_id != member.source_id.to_string() {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_hf_shared_lease_members",
-                            "bound HF-generated service source must match the member source",
-                        ));
-                    }
-                }
             }
             for apartment_name in &member.apartment_bindings {
                 let parsed_name = apartment_name.parse::<Name>().map_err(|error| {
@@ -3467,113 +3385,6 @@ impl SoracloudInrouPersistedStateV1<'_> {
             }
         }
 
-        let hf_placements = self.hf_placements.view();
-        for (key, placement) in hf_placements.iter() {
-            placement.validate().map_err(|error| {
-                invalid_soracloud_state("soracloud_hf_placements", error.to_string())
-            })?;
-            crate::smartcontracts::isi::soracloud::validate_hf_placement_economics_and_status(
-                placement,
-            )
-            .map_err(|error| {
-                invalid_soracloud_state("soracloud_hf_placements", error.to_string())
-            })?;
-            if key != &placement.pool_id {
-                return Err(invalid_soracloud_state(
-                    "soracloud_hf_placements",
-                    "storage key must match the embedded pool_id",
-                ));
-            }
-            let pool = hf_shared_lease_pools
-                .get(&placement.pool_id)
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_hf_placements",
-                        "HF placement references a missing shared-lease pool",
-                    )
-                })?;
-            let source = hf_sources.get(&placement.source_id).ok_or_else(|| {
-                invalid_soracloud_state(
-                    "soracloud_hf_placements",
-                    "HF placement references a missing canonical source",
-                )
-            })?;
-            if placement.source_id != pool.source_id
-                || source.resource_profile.as_ref() != Some(&placement.resource_profile)
-                || u32::try_from(placement.assigned_hosts.len()).map_or(true, |assigned| {
-                    assigned > placement.eligible_validator_count
-                })
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_hf_placements",
-                    "HF placement must exactly bind its pool/source profile and eligible count",
-                ));
-            }
-            let pool_is_terminal = matches!(
-                pool.status,
-                iroha_data_model::soracloud::SoraHfSharedLeaseStatusV1::Expired
-                    | iroha_data_model::soracloud::SoraHfSharedLeaseStatusV1::Retired
-            );
-            if pool_is_terminal
-                != (placement.status
-                    == iroha_data_model::soracloud::SoraHfPlacementStatusV1::Retired)
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_hf_placements",
-                    "terminal HF pools and placements must have matching lifecycle state",
-                ));
-            }
-            for assignment in &placement.assigned_hosts {
-                if !matches!(
-                    assignment.status,
-                    iroha_data_model::soracloud::SoraHfPlacementHostStatusV1::Warming
-                        | iroha_data_model::soracloud::SoraHfPlacementHostStatusV1::Warm
-                ) {
-                    continue;
-                }
-                let capability = model_host_capabilities
-                    .get(&assignment.validator_account_id)
-                    .ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_hf_placements",
-                            "warming/warm HF assignment is missing its authoritative host capability",
-                        )
-                    })?;
-                if capability.peer_id != assignment.peer_id
-                    || capability.host_class != assignment.host_class
-                    || !capability
-                        .supported_backends
-                        .contains(&placement.resource_profile.backend_family)
-                    || !capability
-                        .supported_formats
-                        .contains(&placement.resource_profile.model_format)
-                    || capability.max_model_bytes < placement.resource_profile.required_model_bytes
-                    || capability.max_disk_cache_bytes
-                        < placement.resource_profile.disk_cache_bytes_floor
-                    || capability.max_ram_bytes < placement.resource_profile.ram_bytes_floor
-                    || capability.max_vram_bytes < placement.resource_profile.vram_bytes_floor
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_hf_placements",
-                        "warming/warm HF assignment must exactly match a capable retained host advert",
-                    ));
-                }
-            }
-        }
-        for (pool_id, pool) in hf_shared_lease_pools.iter() {
-            let placement = hf_placements.get(pool_id).ok_or_else(|| {
-                invalid_soracloud_state(
-                    "soracloud_hf_shared_lease_pools",
-                    "HF shared-lease pool is missing its authoritative placement",
-                )
-            })?;
-            if placement.source_id != pool.source_id {
-                return Err(invalid_soracloud_state(
-                    "soracloud_hf_shared_lease_pools",
-                    "HF pool placement must reference the exact canonical source",
-                ));
-            }
-        }
         for (source_id, _source) in hf_sources.iter() {
             if !hf_shared_lease_pools
                 .iter()
@@ -3625,6 +3436,29 @@ impl SoracloudInrouPersistedStateV1<'_> {
                         "service `{}` revision `{}` placement has no admitted bundle",
                         placement.service_name, placement.service_version
                     ),
+                )
+            })?;
+            let deployment = service_deployments
+                .get(&placement.service_name)
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_inrou_service_placements",
+                        format!(
+                            "service `{}` revision `{}` placement has no authoritative deployment",
+                            placement.service_name, placement.service_version
+                        ),
+                    )
+                })?;
+            if deployment.current_service_version != placement.service_version {
+                return Err(invalid_soracloud_state(
+                    "soracloud_inrou_service_placements",
+                    "first-release Inrou placement must reference the exact active deployment revision",
+                ));
+            }
+            let lease = deployment.service_lease.as_ref().ok_or_else(|| {
+                invalid_soracloud_state(
+                    "soracloud_inrou_service_placements",
+                    "Inrou placement requires an authoritative hosted-service lease",
                 )
             })?;
             if admitted_bundle.container.runtime
@@ -3681,10 +3515,40 @@ impl SoracloudInrouPersistedStateV1<'_> {
                         "per-replica storage reservation overflows u64",
                     )
                 })?;
-            let per_replica_cpu_millis =
-                u64::from(admitted_bundle.container.resources.cpu_millis.get());
-            let per_replica_memory_bytes = admitted_bundle.container.resources.memory_bytes.get();
+            let per_replica_cpu_millis = admitted_bundle
+                .container
+                .resources
+                .checked_inrou_host_cpu_millis()
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_inrou_service_placements",
+                        "per-replica physical CPU reservation overflows u64",
+                    )
+                })?;
+            let per_replica_memory_bytes = admitted_bundle
+                .container
+                .resources
+                .checked_inrou_host_memory_bytes()
+                .ok_or_else(|| {
+                    invalid_soracloud_state(
+                        "soracloud_inrou_service_placements",
+                        "per-replica physical memory reservation overflows u64",
+                    )
+                })?;
             for assignment in &placement.placements {
+                if assignment.economic_clock != lease.economic_clock
+                    || assignment.lease_started_height != lease.lease_started_height
+                {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_inrou_service_placements",
+                        format!(
+                            "service `{}` revision `{}` replica {} belongs to another economic lease incarnation",
+                            placement.service_name,
+                            placement.service_version,
+                            assignment.replica_slot
+                        ),
+                    ));
+                }
                 let capability = inrou_host_capabilities
                     .get(&assignment.validator_account_id)
                     .ok_or_else(|| {
@@ -3693,25 +3557,20 @@ impl SoracloudInrouPersistedStateV1<'_> {
                             "Inrou assignment is missing its authoritative host capability",
                         )
                     })?;
-                if capability.peer_id != assignment.peer_id
+                if !inrou
+                    .guest_images
+                    .get(&assignment.selected_guest_isa)
+                    .is_some_and(|image| {
+                        image.published_artifact == capability.trusted_guest_artifact
+                    })
+                    || capability.peer_id != assignment.peer_id
                     || !capability
                         .supported_guest_isas
                         .contains(&assignment.selected_guest_isa)
-                    || !inrou
-                        .guest_images
-                        .contains_key(&assignment.selected_guest_isa)
                 {
                     return Err(invalid_soracloud_state(
                         "soracloud_inrou_service_placements",
                         "Inrou assignment must exactly match its retained capability peer and a guest ISA supported by both host and revision",
-                    ));
-                }
-                if assignment.selected_geography_tag.is_some()
-                    || assignment.selection_latency_ms.is_some()
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_inrou_service_placements",
-                        "first-release Inrou assignments must retain the writer-produced empty geography and latency hints",
                     ));
                 }
                 if per_replica_cpu_millis > u64::from(capability.max_cpu_millis)
@@ -3782,12 +3641,6 @@ impl SoracloudInrouPersistedStateV1<'_> {
         }
 
         let mailbox_messages = self.mailbox_messages.view();
-        if mailbox_messages.iter().next().is_some() {
-            return Err(invalid_soracloud_state(
-                "soracloud_mailbox_messages",
-                "ordered mailbox persistence is disabled until consensus-verifiable deterministic execution and self-contained effect certificates are implemented",
-            ));
-        }
         for (key, message) in mailbox_messages.iter() {
             message.validate().map_err(|error| {
                 invalid_soracloud_state("soracloud_mailbox_messages", error.to_string())
@@ -3825,15 +3678,13 @@ impl SoracloudInrouPersistedStateV1<'_> {
                         "source handler must exist in the bound admitted service revision",
                     )
                 })?;
-            if !matches!(
-                source_handler.class,
-                iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update
-                    | iroha_data_model::soracloud::SoraServiceHandlerClassV1::PrivateUpdate
-            ) || source_handler.mailbox.is_none()
+            if source_handler.class
+                != iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update
+                || source_handler.mailbox.is_none()
             {
                 return Err(invalid_soracloud_state(
                     "soracloud_mailbox_messages",
-                    "source handler must be an update/private_update mailbox handler",
+                    "source handler must be an update mailbox handler",
                 ));
             }
             let destination_bundle = service_revisions
@@ -3864,14 +3715,12 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     "destination handler must carry an admitted mailbox contract",
                 )
             })?;
-            if !matches!(
-                destination_handler.class,
-                iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update
-                    | iroha_data_model::soracloud::SoraServiceHandlerClassV1::PrivateUpdate
-            ) {
+            if destination_handler.class
+                != iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update
+            {
                 return Err(invalid_soracloud_state(
                     "soracloud_mailbox_messages",
-                    "destination handler must be update/private_update",
+                    "destination handler must be update",
                 ));
             }
             let payload_len = u64::try_from(message.payload_bytes.len()).map_err(|error| {
@@ -3916,15 +3765,7 @@ impl SoracloudInrouPersistedStateV1<'_> {
             }
         }
 
-        if runtime_receipts
-            .iter()
-            .any(|(_receipt_id, receipt)| receipt.mailbox_message_id.is_some())
-        {
-            return Err(invalid_soracloud_state(
-                "soracloud_runtime_receipts",
-                "ordered mailbox receipts are disabled until consensus-verifiable deterministic execution and self-contained effect certificates are implemented",
-            ));
-        }
+        let mut consumed_mailbox_messages = std::collections::BTreeSet::new();
         for (key, receipt) in runtime_receipts.iter() {
             receipt.validate().map_err(|error| {
                 invalid_soracloud_state("soracloud_runtime_receipts", error.to_string())
@@ -3970,483 +3811,62 @@ impl SoracloudInrouPersistedStateV1<'_> {
                     "receipt class and certification must match the admitted handler contract",
                 ));
             }
-            let hf_generated =
-                crate::soracloud_runtime::soracloud_hf_generated_source_binding(receipt_bundle)
-                    .is_some();
-            if hf_generated
-                != matches!(
-                    receipt.execution_host.as_ref(),
-                    Some(iroha_data_model::soracloud::SoraRuntimeExecutionHostV1::HfModelHost(_))
-                )
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_runtime_receipts",
-                    "HF-generated receipts and only those receipts must carry HF model-host attribution",
-                ));
-            }
-            if let Some(iroha_data_model::soracloud::SoraRuntimeExecutionHostV1::HfModelHost(
-                host,
-            )) = receipt.execution_host.as_ref()
-            {
-                let binding =
-                    crate::soracloud_runtime::soracloud_hf_generated_source_binding(receipt_bundle)
-                        .expect("HF host attribution was proven to require an HF-generated bundle");
-                let pool = hf_shared_lease_pools.get(&host.pool_id).ok_or_else(|| {
+            if let Some(message_id) = receipt.mailbox_message_id {
+                if receipt.execution_host.is_none() {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_runtime_receipts",
+                        "ordered mailbox receipts must carry deterministic-validator attribution",
+                    ));
+                }
+                let message = mailbox_messages.get(&message_id).ok_or_else(|| {
                     invalid_soracloud_state(
                         "soracloud_runtime_receipts",
-                        "HF model-host attribution references no retained shared-lease pool",
+                        "ordered mailbox receipt references no retained source message",
                     )
                 })?;
-                if host.source_id.to_string() != binding.source_id
-                    || pool.source_id != host.source_id
+                if message.to_service != receipt.service_name
+                    || message.to_service_version != receipt.service_version
+                    || message.to_handler != receipt.handler_name
+                    || message.payload_commitment != receipt.request_commitment
                 {
                     return Err(invalid_soracloud_state(
                         "soracloud_runtime_receipts",
-                        "HF model-host attribution must exactly bind the generated service source and retained pool",
+                        "ordered mailbox receipt must exactly bind its source message destination and request commitment",
                     ));
                 }
-            }
-            if matches!(
-                receipt.execution_host.as_ref(),
-                Some(
-                    iroha_data_model::soracloud::SoraRuntimeExecutionHostV1::DeterministicValidator(
-                        _
-                    )
-                )
-            ) {
-                return Err(invalid_soracloud_state(
-                    "soracloud_runtime_receipts",
-                    "deterministic-validator receipts are disabled with ordered mailbox execution",
-                ));
-            }
-            let expected_receipt_id =
-                iroha_data_model::soracloud::derive_soracloud_local_read_receipt_id_v1(receipt);
-            if receipt.receipt_id != expected_receipt_id {
-                return Err(invalid_soracloud_state(
-                    "soracloud_runtime_receipts",
-                    "local-read receipt_id must equal its canonical sequence-independent receipt ID",
-                ));
+                let expected_receipt_id =
+                    crate::soracloud_runtime::ordered_mailbox_runtime_receipt_id(receipt)
+                        .expect("mailbox_message_id was proven present");
+                if receipt.receipt_id != expected_receipt_id {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_runtime_receipts",
+                        "ordered mailbox receipt_id must equal its canonical sequence-independent receipt ID",
+                    ));
+                }
+                if !consumed_mailbox_messages.insert(message_id) {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_runtime_receipts",
+                        "one mailbox message must not be consumed by multiple receipts",
+                    ));
+                }
+            } else {
+                if receipt.execution_host.is_some() {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_runtime_receipts",
+                        "deterministic-validator attribution requires an authoritative mailbox message",
+                    ));
+                }
+                let expected_receipt_id =
+                    iroha_data_model::soracloud::derive_soracloud_local_read_receipt_id_v1(receipt);
+                if receipt.receipt_id != expected_receipt_id {
+                    return Err(invalid_soracloud_state(
+                        "soracloud_runtime_receipts",
+                        "local-read receipt_id must equal its canonical sequence-independent local-read receipt ID",
+                    ));
+                }
             }
         }
 
-        let decryption_request_records = self.decryption_request_records.view();
-        let pin_manifests = self.pin_manifests.view();
-        let replication_orders = self.replication_orders.view();
-        let private_execution_claims = self.private_uploaded_model_execution_claims.view();
-        for (key, claim) in private_execution_claims.iter() {
-            claim.validate().map_err(|error| {
-                invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    error.to_string(),
-                )
-            })?;
-            let receipt = &claim.receipt;
-            let expected_key = (
-                receipt.service_name.as_ref().to_owned(),
-                receipt.decryption_request_id.clone(),
-            );
-            if key != &expected_key {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    "storage key must match the embedded service_name and decryption_request_id",
-                ));
-            }
-
-            let bundle = uploaded_model_bundles
-                .get(&(
-                    receipt.service_name.as_ref().to_owned(),
-                    receipt.model_id.clone(),
-                    receipt.weight_version.clone(),
-                ))
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_claims",
-                        "prepared private execution must reference an authoritative uploaded-model bundle",
-                    )
-                })?;
-            if bundle.runtime_format
-                != iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1
-                || bundle.sorafs_manifest_digest != receipt.model_manifest_digest
-                || bundle.bundle_root != receipt.model_bundle_root
-                || bundle.decryption_policy_ref != receipt.policy_id
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    "prepared private execution must exactly match its deterministic uploaded-model bundle and policy",
-                ));
-            }
-            let service_revision = service_revisions
-                .get(&(
-                    receipt.service_name.as_ref().to_owned(),
-                    receipt.service_version.clone(),
-                ))
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_claims",
-                        "prepared private execution must reference a retained service revision",
-                    )
-                })?;
-            if service_revision.service.service_name != receipt.service_name
-                || service_revision.service.service_version != receipt.service_version
-                || !service_revision
-                    .container
-                    .capabilities
-                    .allow_model_inference
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    "prepared private execution service revision must admit uploaded-model inference",
-                ));
-            }
-
-            let release = decryption_request_records.get(key).ok_or_else(|| {
-                invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    "prepared private execution must reference an authoritative decryption request",
-                )
-            })?;
-            if release.service_name != receipt.service_name
-                || release.service_version != receipt.service_version
-                || release.request.request_id != receipt.decryption_request_id
-                || release.request.policy_name.as_ref() != receipt.policy_id
-                || release.request.ciphertext_commitment != receipt.input_artifact.artifact_hash
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    "prepared private execution must exactly match its committed decryption authorization",
-                ));
-            }
-            let release_event = service_audit_events.get(&release.sequence).ok_or_else(|| {
-                invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    "prepared private execution decryption authorization must retain its exact audit event",
-                )
-            })?;
-            let release_expires_at_height = release_event
-                .block_height
-                .checked_add(u64::from(release.request.requested_ttl_blocks.get()))
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_claims",
-                        "prepared private execution authorization expiry height overflows",
-                    )
-                })?;
-            if claim.claimed_block_height < release_event.block_height
-                || claim.claimed_block_height >= release_expires_at_height
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    "claim block height must fall inside its decryption-authorization window",
-                ));
-            }
-            let release_epoch = release_event.block_timestamp_ms / 1_000;
-            if claim.claimed_epoch < release_epoch
-                || claim.claimed_block_height == release_event.block_height
-                    && claim.claimed_epoch != release_epoch
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    "claim epoch must not precede its decryption authorization and must equal the release epoch when both occur in the same block",
-                ));
-            }
-
-            let require_exact_pin =
-                |artifact: &iroha_data_model::soracloud::SoraPrivateModelArtifactRefV1| {
-                    let pin = pin_manifests
-                        .get(&artifact.sorafs_manifest_digest)
-                        .ok_or_else(|| {
-                            invalid_soracloud_state(
-                                "soracloud_private_uploaded_model_execution_claims",
-                                format!(
-                                    "prepared private `{}` artifact must reference a retained SoraFS pin record",
-                                    artifact.artifact_role
-                                ),
-                            )
-                        })?;
-                    if pin.digest != artifact.sorafs_manifest_digest
-                        || pin.root_cid != artifact.sorafs_root_cid
-                        || pin.content_length != artifact.ciphertext_bytes
-                        || pin.submitted_epoch > claim.claimed_epoch
-                    {
-                        return Err(invalid_soracloud_state(
-                            "soracloud_private_uploaded_model_execution_claims",
-                            format!(
-                                "prepared private `{}` artifact must exactly match its SoraFS pin record submitted by the claim epoch",
-                                artifact.artifact_role
-                            ),
-                        ));
-                    }
-                    Ok(pin)
-                };
-            let dependency_pin_was_live_at_claim = |pin: &PinManifestRecord| {
-                pin.approved_epoch
-                    .is_some_and(|approved_epoch| approved_epoch <= claim.claimed_epoch)
-                    && pin.policy.retention_epoch > claim.claimed_epoch
-                    && match pin.status {
-                        PinStatus::Approved(approved_epoch) => {
-                            approved_epoch <= claim.claimed_epoch
-                        }
-                        PinStatus::Retired(retired_epoch) => {
-                            // Lifecycle epochs have one-second resolution. A claim followed by
-                            // retirement later in the same block/second is reachable, so equality
-                            // cannot prove that retirement preceded the claim.
-                            retired_epoch >= claim.claimed_epoch
-                        }
-                        PinStatus::Pending => false,
-                    }
-            };
-            let model_pin = pin_manifests
-                .get(&bundle.sorafs_manifest_digest)
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_claims",
-                        "prepared private execution model bundle must reference a retained SoraFS pin record",
-                    )
-                })?;
-            if model_pin.digest != bundle.sorafs_manifest_digest
-                || model_pin.content_length != bundle.ciphertext_bytes
-                || model_pin.submitted_epoch > claim.claimed_epoch
-                || !dependency_pin_was_live_at_claim(model_pin)
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    "prepared private execution model pin does not prove it was approved, live, and retained at the claim epoch",
-                ));
-            }
-            let input_pin = require_exact_pin(&receipt.input_artifact)?;
-            if !dependency_pin_was_live_at_claim(input_pin) {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    "prepared private input pin does not prove it was approved, live, and retained at the claim epoch",
-                ));
-            }
-            let output_pin = require_exact_pin(&receipt.output_artifact)?;
-            if output_pin.submitted_by != receipt.attesting_validator.validator_account_id
-                || !dependency_pin_was_live_at_claim(output_pin)
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    "prepared private output pin was not attester-owned, approved, live, and retained at the claim epoch",
-                ));
-            }
-            let output_order = replication_orders
-                .get(&receipt.output_replication_order_id)
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_claims",
-                        "prepared private output pin is missing its deterministic automatic replication order",
-                    )
-                })?;
-            let output_order_label = hex::encode(output_order.order_id.as_bytes());
-            if output_order.issued_epoch > claim.claimed_epoch {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    "prepared private output automatic replication order was issued after the claim epoch",
-                ));
-            }
-            match output_order.status {
-                ReplicationOrderStatus::Pending
-                    if claim.claimed_epoch > output_order.deadline_epoch =>
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_claims",
-                        "prepared private output automatic replication order was already overdue at the claim epoch",
-                    ));
-                }
-                ReplicationOrderStatus::Expired(epoch)
-                | ReplicationOrderStatus::Cancelled(epoch)
-                    if epoch < claim.claimed_epoch =>
-                {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_claims",
-                        "prepared private output automatic replication order was already terminal before the claim epoch",
-                    ));
-                }
-                ReplicationOrderStatus::Pending
-                | ReplicationOrderStatus::Completed(_)
-                | ReplicationOrderStatus::Expired(_)
-                | ReplicationOrderStatus::Cancelled(_) => {}
-            }
-            crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
-                output_pin,
-                output_order,
-                &output_order_label,
-            )
-            .map_err(|error| {
-                invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    format!(
-                        "prepared private output automatic replication order is invalid: {error}"
-                    ),
-                )
-            })?;
-            let minimum_order_retention_epoch = output_order
-                .deadline_epoch
-                .checked_add(
-                    iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1,
-                )
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_claims",
-                        "prepared private output replication-order recovery horizon overflows",
-                    )
-                })?;
-            if output_pin.policy.retention_epoch < minimum_order_retention_epoch {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    "prepared private output pin does not retain the replication-order deadline plus receipt-recovery floor",
-                ));
-            }
-            let minimum_retention_epoch = claim
-                .claimed_epoch
-                .checked_add(
-                    iroha_data_model::soracloud::SORACLOUD_PRIVATE_OUTPUT_MIN_RETENTION_SECS_V1,
-                )
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_claims",
-                        "prepared private output retention epoch overflows",
-                    )
-                })?;
-            if output_pin.policy.retention_epoch < minimum_retention_epoch {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_claims",
-                    "prepared private output pin does not retain the minimum claim-time horizon",
-                ));
-            }
-        }
-
-        for (key, receipt) in self.private_uploaded_model_execution_receipts.view().iter() {
-            receipt.validate().map_err(|error| {
-                invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    error.to_string(),
-                )
-            })?;
-            if key != &receipt.receipt_id {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    "storage key must match the embedded receipt_id",
-                ));
-            }
-            register_soracloud_sequence(
-                &mut authoritative_sequences,
-                "soracloud_private_uploaded_model_execution_receipts",
-                receipt.emitted_sequence,
-            )?;
-            let claim_key = (
-                receipt.service_name.as_ref().to_owned(),
-                receipt.decryption_request_id.clone(),
-            );
-            let claim = private_execution_claims.get(&claim_key).ok_or_else(|| {
-                invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    "private receipt must reference its exact prepared authorization claim",
-                )
-            })?;
-            let mut submission = receipt.clone();
-            submission.authorization_claim_block_height = 0;
-            submission.authorization_claim_epoch = 0;
-            submission.emitted_sequence = 0;
-            submission.emitted_block_height = 0;
-            submission.emitted_epoch = 0;
-            if claim.receipt != submission {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    "private receipt must exactly match its prepared authorization claim",
-                ));
-            }
-            if receipt.authorization_claim_block_height != claim.claimed_block_height
-                || receipt.authorization_claim_epoch != claim.claimed_epoch
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    "private receipt must expose the exact prepared authorization claim coordinates",
-                ));
-            }
-            let release = decryption_request_records
-                .get(&claim_key)
-                .expect("validated claim retained its authoritative decryption request");
-            if receipt.emitted_sequence <= release.sequence {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    "private receipt sequence must be later than its decryption authorization",
-                ));
-            }
-            let output_pin = pin_manifests
-                .get(&receipt.output_artifact.sorafs_manifest_digest)
-                .expect("validated claim retained its exact output pin");
-            let durability =
-                crate::soracloud_runtime::validate_soracloud_private_output_durability_records_v1(
-                    Some(output_pin),
-                    replication_orders.get(&receipt.output_replication_order_id),
-                    receipt,
-                    receipt.emitted_epoch,
-                )
-                .map_err(|message| {
-                    invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_receipts",
-                        message,
-                    )
-                })?;
-            if durability
-                != crate::soracloud_runtime::SoracloudPrivateOutputDurabilityStatusV1::Ready
-            {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    format!(
-                        "private output was not durably replicated at receipt commit: {durability:?}"
-                    ),
-                ));
-            }
-            let replication_order = replication_orders
-                .get(&receipt.output_replication_order_id)
-                .ok_or_else(|| {
-                    invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_receipts",
-                        "private output artifact must retain its exact completed replication order",
-                    )
-                })?;
-            match output_pin.status {
-                PinStatus::Approved(_) | PinStatus::Retired(_) => {}
-                PinStatus::Pending => {
-                    return Err(invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_receipts",
-                        "private output artifact pin cannot remain pending after receipt commit",
-                    ));
-                }
-            }
-            let order_label = hex::encode(replication_order.order_id.as_bytes());
-            crate::smartcontracts::isi::sorafs::validate_stored_automatic_replication_order(
-                output_pin,
-                replication_order,
-                &order_label,
-            )
-            .map_err(|error| {
-                invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    format!("private output replication order is invalid: {error}"),
-                )
-            })?;
-            let ReplicationOrderStatus::Completed(completion_epoch) = replication_order.status
-            else {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    "private output artifact must retain a completed replication order",
-                ));
-            };
-            if matches!(
-                output_pin.status,
-                PinStatus::Retired(retired_epoch)
-                    if retired_epoch < output_pin.policy.retention_epoch
-                        || completion_epoch > retired_epoch
-            ) {
-                return Err(invalid_soracloud_state(
-                    "soracloud_private_uploaded_model_execution_receipts",
-                    "private output replication order must prove the exact pin-policy quorum and promised retention before retirement",
-                ));
-            }
-        }
         if authoritative_sequences.contains(&0) {
             return Err(invalid_soracloud_state(
                 "soracloud_authoritative_sequences",
@@ -4696,11 +4116,13 @@ fn replay_soracloud_service_lease_usage(
 
 #[cfg(test)]
 mod soracloud_service_lease_replay_tests {
+    use core::num::NonZeroU16;
+
     use super::{
         lease_rollover_extends_settlement_chain,
         lease_usage_assignment_version_is_writer_reachable, replay_soracloud_service_lease_usage,
     };
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         account::AccountId,
         peer::PeerId,
@@ -4709,7 +4131,8 @@ mod soracloud_service_lease_replay_tests {
             SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1,
             SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1,
             SORA_SERVICE_LEASE_STATE_VERSION_V1, SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
-            SoraInrouGuestIsaV1, SoraInrouReplicaPlacementV1, SoraServiceLeaseEgressCheckpointV1,
+            SoraInrouGuestIsaV1, SoraInrouReplicaHostAvailabilityV1, SoraInrouReplicaPlacementV1,
+            SoraServiceLeaseClockV1, SoraServiceLeaseEgressCheckpointV1,
             SoraServiceLeaseReporterAssignmentV1, SoraServiceLeaseReportingEpochRolloverV1,
             SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1, SoraServiceLeaseUsageAuditV1,
         },
@@ -4723,11 +4146,13 @@ mod soracloud_service_lease_replay_tests {
             service_version: service_version.to_owned(),
             placement: SoraInrouReplicaPlacementV1 {
                 replica_slot: 1,
+                economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+                lease_started_height: 1,
+                placement_incarnation: Hash::new(b"lease-replay-placement"),
+                host_availability: SoraInrouReplicaHostAvailabilityV1::Available,
                 validator_account_id: AccountId::new(key_pair.public_key().clone()),
                 peer_id: PeerId::from(key_pair.public_key().clone()).to_string(),
                 selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
-                selected_geography_tag: None,
-                selection_latency_ms: None,
             },
             placement_reconciled_at_ms: 1,
         }
@@ -4738,8 +4163,10 @@ mod soracloud_service_lease_replay_tests {
     ) -> SoraServiceLeaseStateV1 {
         let lease = SoraServiceLeaseStateV1 {
             schema_version: SORA_SERVICE_LEASE_STATE_VERSION_V1,
+            economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
             status: SoraServiceLeaseStatusV1::Active,
             quota_class: "replay-test".to_owned(),
+            replica_count: NonZeroU16::new(1).expect("one replica"),
             deployment_deposit: "1".parse().expect("deployment deposit"),
             prepaid_runtime_balance: "100".parse().expect("prepaid balance"),
             runtime_price_per_block: "0.001".parse().expect("runtime price"),
@@ -4796,12 +4223,14 @@ mod soracloud_service_lease_replay_tests {
         let assignment = sample_assignment("baseline");
         let rollover = SoraServiceLeaseReportingEpochRolloverV1 {
             schema_version: SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1,
+            economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
             lease_started_height: 1,
             previous_reporting_epoch: 3,
             new_reporting_epoch: 4,
-            reporter_account_id: assignment.placement.validator_account_id,
-            active_service_version: assignment.service_version,
+            reporter_account_id: assignment.placement.validator_account_id.clone(),
+            active_service_version: assignment.service_version.clone(),
             replica_slot: 1,
+            placement_incarnation: assignment.placement.placement_incarnation,
             finalized_checkpoint_count: u32::try_from(
                 SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
             )
@@ -6140,7 +5569,9 @@ fn persisted_timed_ovn_phase_v1(lifecycle: &TimedOvnLifecycleStateV1) -> Persist
         TimedOvnLifecycleStateV1::RegistrationClosed(_) => {
             PersistedTimedOvnPhaseV1::RegistrationClosed
         }
-        TimedOvnLifecycleStateV1::SurvivorsFrozen(_) => PersistedTimedOvnPhaseV1::SurvivorsFrozen,
+        TimedOvnLifecycleStateV1::SurvivorsFrozen(_) | TimedOvnLifecycleStateV1::CorpusOpen(_) => {
+            PersistedTimedOvnPhaseV1::SurvivorsFrozen
+        }
         TimedOvnLifecycleStateV1::Sealed(_) => PersistedTimedOvnPhaseV1::Sealed,
         TimedOvnLifecycleStateV1::Released(_) => PersistedTimedOvnPhaseV1::Released,
     }
@@ -6239,12 +5670,14 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                     "timed-OVN lifecycle references a missing TLE key session",
                 )
             })?;
-        lifecycle.validate(key_session).map_err(|error| {
-            invalid_tle_ovn_persistence(
-                "timed_ovn_evidence",
-                format!("invalid persisted timed-OVN lifecycle {ballot_attempt_id}: {error}"),
-            )
-        })?;
+        let (lifecycle_binding, registered_participant_hashes) = lifecycle
+            .validated_parliament_reducer_binding(key_session)
+            .map_err(|error| {
+                invalid_tle_ovn_persistence(
+                    "timed_ovn_evidence",
+                    format!("invalid persisted timed-OVN lifecycle {ballot_attempt_id}: {error}"),
+                )
+            })?;
 
         let session = lifecycle.session();
         if session.parameter_hash != crate::governance::timed_ovn::timed_ovn_parameter_hash_v1() {
@@ -6265,12 +5698,6 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                         "timed-OVN lifecycle references a missing Parliament attempt",
                     )
                 })?;
-        if governance_attempt.proposal_content_id().as_bytes() != &session.proposal_content_id {
-            return Err(invalid_tle_ovn_persistence(
-                "timed_ovn_evidence",
-                "timed-OVN proposal binding differs from its Parliament attempt",
-            ));
-        }
         let ballot = governance_attempt
             .ballot(ballot_attempt_id)
             .ok_or_else(|| {
@@ -6279,12 +5706,12 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                     "timed-OVN lifecycle references a missing Parliament ballot attempt",
                 )
             })?;
-        if ballot.attempt().body_instance_id.as_bytes() != &session.body_instance_id
-            || ballot.release_height() != Some(lifecycle.target_finalized_height())
+        if !governance_attempt
+            .timed_ovn_reducer_binding_matches(ballot_attempt_id, &lifecycle_binding)
         {
             return Err(invalid_tle_ovn_persistence(
                 "timed_ovn_evidence",
-                "timed-OVN body or release-height binding differs from Parliament state",
+                "timed-OVN lifecycle bindings differ from the Parliament reducer",
             ));
         }
         let body = governance_attempt
@@ -6310,32 +5737,76 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
                 )
             })
             .collect::<BTreeSet<_>>();
-        let registered_participant_hashes = lifecycle
-            .validated_registration_participant_hashes(key_session)
-            .map_err(|error| {
-                invalid_tle_ovn_persistence(
-                    "timed_ovn_evidence",
-                    format!(
-                        "could not rebuild authenticated Parliament participant roster: {error}"
-                    ),
-                )
-            })?;
-        let expected_registered_voters = u32::try_from(registered_participant_hashes.len()).ok();
-        let registration_count_matches =
-            if persisted_timed_ovn_phase_v1(lifecycle) == PersistedTimedOvnPhaseV1::Registered {
-                ballot.registered_voters().is_none()
-            } else {
-                ballot.registered_voters() == expected_registered_voters
-            };
         if registered_participant_hashes
             .iter()
             .any(|participant_hash| !eligible_participant_hashes.contains(participant_hash))
-            || !registration_count_matches
         {
             return Err(invalid_tle_ovn_persistence(
                 "timed_ovn_evidence",
                 "timed-OVN registration corpus is not the authenticated nonexcluded body-member subset",
             ));
+        }
+    }
+
+    let mut active_resource_reservations = Vec::new();
+    for (governance_attempt_id, governance_attempt) in parliament_attempts.iter() {
+        if governance_attempt.attempt().status
+            != iroha_data_model::governance::types::GovernanceAttemptStatusV1::Active
+        {
+            continue;
+        }
+        for (ballot_attempt_id, ballot) in governance_attempt.ballot_attempts() {
+            if matches!(
+                ballot.attempt().status,
+                iroha_data_model::governance::types::BallotAttemptStatusV1::Finalized
+                    | iroha_data_model::governance::types::BallotAttemptStatusV1::NoResult
+                    | iroha_data_model::governance::types::BallotAttemptStatusV1::Superseded
+            ) || governance_attempt
+                .active_ballot_for_body(&ballot.attempt().body_instance_id)
+                .is_none_or(|active| active.attempt().id != *ballot_attempt_id)
+                || governance_attempt
+                    .body(&ballot.attempt().body_instance_id)
+                    .is_none_or(|body| {
+                        body.instance().status
+                            != iroha_data_model::governance::types::BodyInstanceStatusV1::Balloting
+                    })
+            {
+                continue;
+            }
+            let release_height = ballot.release_height().ok_or_else(|| {
+                invalid_tle_ovn_persistence(
+                    "parliament_attempts",
+                    "active timed-OVN ballot is missing its release height",
+                )
+            })?;
+            active_resource_reservations.push((
+                *governance_attempt_id,
+                *ballot_attempt_id,
+                [
+                    (
+                        ballot.registered_at_height(),
+                        ballot.commitment_close_height(),
+                    ),
+                    (release_height, ballot.opening_deadline_height()),
+                ],
+            ));
+        }
+    }
+    for left_index in 0..active_resource_reservations.len() {
+        for right_index in left_index + 1..active_resource_reservations.len() {
+            let (left_attempt, left_ballot, left_windows) =
+                active_resource_reservations[left_index];
+            let (right_attempt, right_ballot, right_windows) =
+                active_resource_reservations[right_index];
+            if super::parliament_timed_ovn_resource_windows_overlap_v1(left_windows, right_windows)
+            {
+                return Err(invalid_tle_ovn_persistence(
+                    "parliament_attempts",
+                    format!(
+                        "active timed-OVN resource reservations overlap between {left_attempt:?}/{left_ballot:?} and {right_attempt:?}/{right_ballot:?}"
+                    ),
+                ));
+            }
         }
     }
 
@@ -6445,9 +5916,37 @@ fn validate_tle_ovn_persistence(world: &World) -> Result<(), json::Error> {
     Ok(())
 }
 
+fn validate_tle_ovn_snapshot_network_v1(
+    world: &World,
+    expected_network_id: &iroha_data_model::NetworkId,
+) -> Result<(), String> {
+    let expected_network_binding = *expected_network_id.as_bytes();
+    for (key_session_id, key_session) in world.tle_key_sessions.view().iter() {
+        if key_session.network_id != expected_network_binding {
+            return Err(format!(
+                "restored TLE key session {key_session_id:?} belongs to a different exact NetworkId"
+            ));
+        }
+    }
+    for (ballot_attempt_id, lifecycle) in world.timed_ovn_evidence.view().iter() {
+        if lifecycle.session().network_id != expected_network_binding {
+            return Err(format!(
+                "restored timed-OVN lifecycle {ballot_attempt_id:?} belongs to a different exact NetworkId"
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod timed_ovn_persistence_phase_tests {
     use super::*;
+    use crate::{
+        governance::timed_ovn::{
+            TimedOvnLifecycleStateV1, TimedOvnSessionPublicV1, timed_ovn_parameter_hash_v1,
+        },
+        tle_release::tests::public_key_session_fixture_for_context_v1,
+    };
     use iroha_data_model::governance::types::{
         BallotAttemptStatusV1 as BallotStatus, ParliamentBallotFailureKindV1 as FailureKind,
     };
@@ -6529,6 +6028,60 @@ mod timed_ovn_persistence_phase_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn restored_tle_ovn_state_must_match_the_authoritative_network() {
+        let authoritative_network = iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
+        );
+        let foreign_network = iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB1; 32])),
+        );
+        let foreign_key_state = public_key_session_fixture_for_context_v1(
+            *foreign_network.as_bytes(),
+            0xB2,
+            [0xB3; 32],
+        );
+        let foreign_key_session_id = foreign_key_state.key_session_id;
+        let foreign_key = foreign_key_state
+            .clone()
+            .validate()
+            .expect("foreign-network TLE fixture is internally valid");
+        let ballot_attempt_id = BallotAttemptId::new([0xB4; 32]);
+        let lifecycle = TimedOvnLifecycleStateV1::open_registration(
+            TimedOvnSessionPublicV1 {
+                network_id: *foreign_network.as_bytes(),
+                proposal_content_id: [0xB5; 32],
+                governance_attempt_id: [0xB6; 32],
+                body_instance_id: [0xB7; 32],
+                ballot_attempt_id: *ballot_attempt_id.as_bytes(),
+                parameter_hash: timed_ovn_parameter_hash_v1(),
+                tle_key_session_id: foreign_key_session_id,
+                tle_key_transcript_hash: foreign_key.public_state().transcript_hash,
+                tle_master_public_key: *foreign_key.master_public_key().as_bytes(),
+            },
+            10,
+            20,
+            &foreign_key,
+        )
+        .expect("foreign-network lifecycle is self-consistent with its TLE session");
+        let mut world = World::default();
+        world
+            .tle_key_sessions
+            .insert(foreign_key_session_id, foreign_key_state);
+        world
+            .timed_ovn_evidence
+            .insert(ballot_attempt_id, lifecycle);
+
+        validate_tle_ovn_snapshot_network_v1(&world, &foreign_network)
+            .expect("same-network restored TLE/OVN state is admitted");
+        let error = validate_tle_ovn_snapshot_network_v1(&world, &authoritative_network)
+            .expect_err("self-consistent foreign-network TLE/OVN state must fail closed");
+        assert!(
+            error.contains("different exact NetworkId"),
+            "rejection identifies the cross-network restore: {error}"
+        );
     }
 }
 
@@ -6990,8 +6543,6 @@ fn parse_world(
         take_required(&mut map, "soracloud_model_artifact_audit_events")?;
     let soracloud_uploaded_model_bundles =
         take_required(&mut map, "soracloud_uploaded_model_bundles")?;
-    let soracloud_model_host_capabilities =
-        take_required(&mut map, "soracloud_model_host_capabilities")?;
     let soracloud_inrou_host_capabilities =
         take_required(&mut map, "soracloud_inrou_host_capabilities")?;
     let soracloud_hf_sources = take_required(&mut map, "soracloud_hf_sources")?;
@@ -7001,22 +6552,11 @@ fn parse_world(
         take_required(&mut map, "soracloud_hf_shared_lease_members")?;
     let soracloud_hf_shared_lease_audit_events =
         take_required(&mut map, "soracloud_hf_shared_lease_audit_events")?;
-    let soracloud_model_host_violation_evidence =
-        take_required(&mut map, "soracloud_model_host_violation_evidence")?;
-    let soracloud_hf_placements = take_required(&mut map, "soracloud_hf_placements")?;
     let soracloud_inrou_service_placements =
         take_required(&mut map, "soracloud_inrou_service_placements")?;
     let soracloud_mailbox_messages = take_required(&mut map, "soracloud_mailbox_messages")?;
     let soracloud_runtime_receipts = take_required(&mut map, "soracloud_runtime_receipts")?;
-    let soracloud_private_uploaded_model_execution_receipts = take_required(
-        &mut map,
-        "soracloud_private_uploaded_model_execution_receipts",
-    )?;
     let capacity_declarations = take_required(&mut map, "capacity_declarations")?;
-    let soracloud_private_uploaded_model_execution_claims = take_required(
-        &mut map,
-        "soracloud_private_uploaded_model_execution_claims",
-    )?;
     let pin_manifests = take_required(&mut map, "pin_manifests")?;
     let replication_orders = take_required(&mut map, "replication_orders")?;
     if !emergency_fast {
@@ -7033,7 +6573,6 @@ fn parse_world(
             model_weight_audit_events: &soracloud_model_weight_audit_events,
             model_artifact_audit_events: &soracloud_model_artifact_audit_events,
             hf_shared_lease_audit_events: &soracloud_hf_shared_lease_audit_events,
-            model_host_violation_evidence: &soracloud_model_host_violation_evidence,
             agent_apartment_audit_events: &soracloud_agent_apartment_audit_events,
             service_state_entries: &soracloud_service_state_entries,
             decryption_request_records: &soracloud_decryption_request_records,
@@ -7042,22 +6581,14 @@ fn parse_world(
             model_registries: &soracloud_model_registries,
             model_weight_versions: &soracloud_model_weight_versions,
             model_artifacts: &soracloud_model_artifacts,
-            model_host_capabilities: &soracloud_model_host_capabilities,
             hf_sources: &soracloud_hf_sources,
             hf_shared_lease_pools: &soracloud_hf_shared_lease_pools,
             hf_shared_lease_members: &soracloud_hf_shared_lease_members,
-            hf_placements: &soracloud_hf_placements,
             inrou_host_capabilities: &soracloud_inrou_host_capabilities,
             inrou_service_placements: &soracloud_inrou_service_placements,
             uploaded_model_bundles: &soracloud_uploaded_model_bundles,
-            pin_manifests: &pin_manifests,
-            replication_orders: &replication_orders,
             mailbox_messages: &soracloud_mailbox_messages,
             runtime_receipts: &soracloud_runtime_receipts,
-            private_uploaded_model_execution_receipts:
-                &soracloud_private_uploaded_model_execution_receipts,
-            private_uploaded_model_execution_claims:
-                &soracloud_private_uploaded_model_execution_claims,
         }
         .validate()?;
     }
@@ -7291,19 +6822,14 @@ fn parse_world(
         soracloud_model_artifacts,
         soracloud_model_artifact_audit_events,
         soracloud_uploaded_model_bundles,
-        soracloud_model_host_capabilities,
         soracloud_inrou_host_capabilities,
         soracloud_hf_sources,
         soracloud_hf_shared_lease_pools,
         soracloud_hf_shared_lease_members,
         soracloud_hf_shared_lease_audit_events,
-        soracloud_model_host_violation_evidence,
-        soracloud_hf_placements,
         soracloud_inrou_service_placements,
         soracloud_mailbox_messages,
         soracloud_runtime_receipts,
-        soracloud_private_uploaded_model_execution_receipts,
-        soracloud_private_uploaded_model_execution_claims,
         capacity_declarations,
         capacity_fee_ledger: Storage::default(),
         capacity_disputes: Storage::default(),
@@ -7363,6 +6889,7 @@ fn parse_world(
         council,
         parliament_bodies,
         parliament_attempts,
+        parliament_timed_ovn_resource_reservations: Storage::default(),
         tle_key_sessions,
         tle_active_key_session,
         timed_ovn_evidence,
@@ -7378,38 +6905,6 @@ fn parse_world(
         external_event_buf,
     };
     if !emergency_fast {
-        {
-            let world_view = world.view();
-            for (_claim_key, claim) in world_view
-                .soracloud_private_uploaded_model_execution_claims()
-                .iter()
-            {
-                let receipt = &claim.receipt;
-                let bundle = world_view
-                    .soracloud_uploaded_model_bundles()
-                    .get(&(
-                        receipt.service_name.as_ref().to_owned(),
-                        receipt.model_id.clone(),
-                        receipt.weight_version.clone(),
-                    ))
-                    .ok_or_else(|| {
-                        invalid_soracloud_state(
-                            "soracloud_private_uploaded_model_execution_claims",
-                            "prepared private execution must reference an authoritative uploaded-model bundle",
-                        )
-                    })?;
-                crate::soracloud_runtime::validate_finalized_soracloud_uploaded_model_release(
-                    &world_view,
-                    bundle,
-                )
-                .map_err(|error| {
-                    invalid_soracloud_state(
-                        "soracloud_private_uploaded_model_execution_claims",
-                        error,
-                    )
-                })?;
-            }
-        }
         let parliament_attempts_view = world.parliament_attempts.view();
         let governance_proposals_view = world.governance_proposals.view();
         for (attempt_id, attempt) in parliament_attempts_view.iter() {
@@ -7767,29 +7262,6 @@ fn build_state(
     #[cfg(feature = "telemetry")]
     let telemetry_seed = telemetry.clone();
     let initial_crypto = iroha_config::parameters::actual::Crypto::default();
-    if !emergency_fast {
-        if world
-            .soracloud_private_uploaded_model_execution_receipts
-            .view()
-            .iter()
-            .any(|(_, receipt)| receipt.network_id != network_id)
-        {
-            return Err(MergeLedgerCommitError::ExecutionStatePublication(
-                "restored private uploaded-model receipt belongs to another network".to_owned(),
-            ));
-        }
-        if world
-            .soracloud_private_uploaded_model_execution_claims
-            .view()
-            .iter()
-            .any(|(_, claim)| claim.receipt.network_id != network_id)
-        {
-            return Err(MergeLedgerCommitError::ExecutionStatePublication(
-                "restored private uploaded-model execution claim belongs to another network"
-                    .to_owned(),
-            ));
-        }
-    }
     let streaming_storage_paths = StreamingStoragePaths::default();
     let da_receipt_cursors = parking_lot::RwLock::new(DaReceiptCursorIndex::default());
     let da_shard_cursors = parking_lot::RwLock::new(DaShardCursorIndex::default());
@@ -7799,6 +7271,8 @@ fn build_state(
         ))
     })?;
     if !emergency_fast {
+        validate_tle_ovn_snapshot_network_v1(&world, &network_id)
+            .map_err(MergeLedgerCommitError::ExecutionStatePublication)?;
         for (proposal_id, proposal) in world.governance_proposals.view().iter() {
             if let Some(reason) = proposal.first_release_exact_json_u64_invariant_error() {
                 return Err(MergeLedgerCommitError::ExecutionStatePublication(format!(
@@ -9123,10 +8597,8 @@ mod decode_tests {
     }
     #[test]
     fn borrowed_snapshot_field_errors_retain_the_schema_field() {
-        let error = match (SnapshotJsonField::Borrowed {
-            raw: "[]",
-        })
-        .decode_canonical::<Cell<Vec<PeerId>>>("commit_topology")
+        let error = match (SnapshotJsonField::Borrowed { raw: "[]" })
+            .decode_canonical::<Cell<Vec<PeerId>>>("commit_topology")
         {
             Ok(_) => panic!("an array must not decode as an MV topology cell"),
             Err(error) => error,
@@ -9158,7 +8630,7 @@ mod decode_tests {
             encoded_hex: hex::encode(&encoded),
         };
         assert_eq!(
-            decode_snapshot_records::<u64>(vec![record], "fixture", true)
+            decode_snapshot_records::<u64>(vec![record], "fixture")
                 .expect("canonical Norito record"),
             [7]
         );
@@ -9169,24 +8641,10 @@ mod decode_tests {
                 encoded_hex: hex::encode(trailing),
             }],
             "fixture",
-            true,
         )
         .expect_err("trailing or alternate Norito bytes must fail closed");
         assert!(error.to_string().contains("fixture"));
         SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| assert_eq!(passes.get(), 1));
-    }
-    #[test]
-    fn emergency_fast_norito_records_skip_canonical_reserialization() {
-        SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(0));
-        let record = SnapshotNoritoBlob {
-            encoded_hex: hex::encode(7_u64.encode()),
-        };
-        assert_eq!(
-            decode_snapshot_records::<u64>(vec![record], "fixture", false)
-                .expect("Fast keeps exact typed Norito decoding"),
-            [7]
-        );
-        SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| assert_eq!(passes.get(), 0));
     }
     #[test]
     fn take_parameters_cell_rejects_legacy_blocks_envelope() {

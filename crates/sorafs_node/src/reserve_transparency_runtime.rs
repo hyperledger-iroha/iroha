@@ -667,7 +667,7 @@ mod tests {
     use crate::reputation::ReputationFinalizedIdentityV1;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
-        account::{AccountId, ParsedAccountId},
+        account::AccountId,
         events::data::sorafs::{SorafsReserveLedgerEvent, SorafsReserveLedgerEventKind},
         sorafs::{
             capacity::ProviderId,
@@ -827,7 +827,6 @@ mod tests {
     }
     fn test_account() -> AccountId {
         AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
-            .map(ParsedAccountId::into_account_id)
             .expect("test account id")
     }
     fn finalized_event(

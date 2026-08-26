@@ -17,6 +17,17 @@ pub(super) struct ExclusiveLedgerLock {
 impl ExclusiveLedgerLock {
     /// Acquire the sidecar lock associated with `ledger_path`.
     pub(super) fn acquire(ledger_path: &Path) -> io::Result<Self> {
+        // A ledger named `foo.lock` could otherwise replace the lock inode
+        // protecting `foo` while its original owner is still running.
+        if has_reserved_lock_suffix(ledger_path) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "replay ledger path uses the reserved .lock suffix: {}",
+                    ledger_path.display()
+                ),
+            ));
+        }
         let custody = CustodiedSnapshotPath::prepare(ledger_path)?;
         let lock_path = lock_path(custody.destination());
         let mut options = OpenOptions::new();
@@ -50,6 +61,20 @@ impl ExclusiveLedgerLock {
     pub(super) fn custody(&self) -> &CustodiedSnapshotPath {
         &self.custody
     }
+}
+fn has_reserved_lock_suffix(path: &Path) -> bool {
+    path.file_name().is_some_and(|file_name| {
+        let bytes = file_name.as_encoded_bytes();
+        // Win32 normalizes terminal spaces and dots for non-verbatim paths, so
+        // `foo.lock.` can name the same file as `foo.lock`.
+        let normalized_len = bytes
+            .iter()
+            .rposition(|byte| !matches!(byte, b'.' | b' '))
+            .map_or(0, |index| index + 1);
+        bytes[..normalized_len]
+            .get(normalized_len.saturating_sub(5)..)
+            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(b".lock"))
+    })
 }
 fn lock_path(ledger_path: &Path) -> PathBuf {
     let mut path = OsString::from(ledger_path.as_os_str());
@@ -109,5 +134,47 @@ mod tests {
             .expect("create lock hard link");
         ExclusiveLedgerLock::acquire(&hardlink_ledger)
             .expect_err("a multiply-linked lock file must fail closed");
+    }
+    #[test]
+    fn ledger_lock_rejects_reserved_sidecar_suffix() {
+        for path in [
+            "replays.norito.lock",
+            "other.LoCk",
+            "windows.lock.",
+            "windows.LOCK ... ",
+        ] {
+            assert!(has_reserved_lock_suffix(Path::new(path)));
+            let error = ExclusiveLedgerLock::acquire(Path::new(path))
+                .expect_err("the reserved sidecar suffix must be rejected before custody");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+            assert!(error.to_string().contains("reserved .lock suffix"));
+        }
+        assert!(!has_reserved_lock_suffix(Path::new("ledger.lock.backup")));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn ledger_lock_reserves_its_live_sidecar_name() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let directory = tempdir().expect("temporary directory");
+        let ledger = directory.path().join("replays.norito");
+        let owner = ExclusiveLedgerLock::acquire(&ledger).expect("primary ledger owner");
+
+        let colliding_ledger = lock_path(&ledger);
+        let error = ExclusiveLedgerLock::acquire(&colliding_ledger)
+            .expect_err("a sidecar path must not become another ledger path");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("reserved .lock suffix"));
+
+        let mut non_utf8_name = vec![0xFF];
+        non_utf8_name.extend_from_slice(b".LOCK");
+        let non_utf8 = directory.path().join(OsString::from_vec(non_utf8_name));
+        let error = ExclusiveLedgerLock::acquire(&non_utf8)
+            .expect_err("non-UTF-8 names must retain the reserved suffix check");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+
+        ExclusiveLedgerLock::acquire(&directory.path().join("ledger.lock.backup"))
+            .expect("non-terminal lock text is not reserved");
+        drop(owner);
     }
 }

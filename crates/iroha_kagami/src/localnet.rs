@@ -555,6 +555,9 @@ const LOCALNET_FEE_SPONSOR_RESERVE_FLOOR: u64 = 10_000_000;
 const LOCALNET_FEE_SPONSOR_EPOCH_BLOCKS: u64 = 3_600;
 const LOCALNET_ONBOARDING_CREDENTIAL_ID: &str = "local-dev";
 const LOCALNET_OPERATOR_ALIAS: &str = "operator@wonderland.universal";
+const TAIRA_LOCALNET_OPERATOR_ALIAS: &str = "operator@taira.universal";
+const TAIRA_CANARY_DOMAIN: &str = "taira.universal";
+const TAIRA_CANARY_DATASPACE_ALIAS: &str = "universal";
 const LOCALNET_ALIAS_SETUP_INTENT_FILE: &str = "alias-setup.intent.json";
 const LOCALNET_ALIAS_SETUP_PAYER_BALANCE: u64 = 10;
 const LOCALNET_ALIAS_SETUP_POLICY_VERSION: u16 = 1;
@@ -1188,9 +1191,7 @@ fn account_id_runtime_literal(account_id: &AccountId, chain_discriminant: Option
     )
 }
 fn account_literal_for_chain_discriminant(raw: &str, chain_discriminant: u16) -> String {
-    let account_id = AccountId::parse_encoded(raw)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("known account literal must parse");
+    let account_id = AccountId::parse_encoded(raw).expect("known account literal must parse");
     account_id_runtime_literal(&account_id, Some(chain_discriminant))
 }
 #[cfg(test)]
@@ -1324,7 +1325,8 @@ fn generate_localnet_inner<T: Write>(
         &genesis_account_id,
         &client_identity.account_id,
     );
-    genesis = append_localnet_onboarding_permissions(genesis, &onboarding_identity.account_id)?;
+    genesis =
+        append_localnet_onboarding_permissions(genesis, &onboarding_identity.account_id, taira)?;
     genesis = append_peer_pop(genesis, &peers);
     if npos_bootstrap {
         let gas_account_id = gas_account_id
@@ -1354,7 +1356,7 @@ fn generate_localnet_inner<T: Write>(
     }
     genesis = apply_localnet_crypto_overrides(genesis, npos_bootstrap);
     let alias_setup_request =
-        localnet_alias_setup_request(&genesis_account_id, &client_identity.account_id)?;
+        localnet_alias_setup_request(&genesis_account_id, &client_identity.account_id, taira)?;
     let append_alias_setup_to_current_transaction = npos_bootstrap
         && matches!(
             opts.sora_profile,
@@ -2164,9 +2166,14 @@ fn localnet_public_validator_lanes(sora_profile: Option<SoraProfile>) -> Vec<Lan
     lanes
 }
 fn resolve_localnet_chain_id(configured: Option<&str>) -> Result<String> {
-    let chain_id = configured.unwrap_or(DEFAULT_CHAIN_ID).trim();
+    let chain_id = configured.unwrap_or(DEFAULT_CHAIN_ID);
     if chain_id.is_empty() {
         return Err(eyre!("`--chain-id` must not be empty"));
+    }
+    if chain_id.trim() != chain_id {
+        return Err(eyre!(
+            "`--chain-id` must not contain leading or trailing whitespace"
+        ));
     }
     if chain_id == RETIRED_TAIRA_CHAIN_ID_ALIAS {
         return Err(eyre!(
@@ -3131,10 +3138,17 @@ fn render_peer_config(
     account_onboarding.insert("lease_term_years".into(), Value::Integer(1));
     account_onboarding.insert("additional_permissions".into(), Value::Array(Vec::new()));
     let mut credential_scope = Table::new();
-    credential_scope.insert(
-        "domain".into(),
-        Value::String(CLIENT_ACCOUNT_DOMAIN.to_owned()),
-    );
+    if taira {
+        credential_scope.insert(
+            "dataspace".into(),
+            Value::String(TAIRA_CANARY_DATASPACE_ALIAS.to_owned()),
+        );
+    } else {
+        credential_scope.insert(
+            "domain".into(),
+            Value::String(CLIENT_ACCOUNT_DOMAIN.to_owned()),
+        );
+    }
     let mut credential = Table::new();
     credential.insert(
         "id".into(),
@@ -3340,9 +3354,9 @@ fn localnet_ivm_gas_units_per_gas_payload(asset: &str) -> Json {
     let payload = format!(
         concat!(
             r#"[{{"asset":"{asset}","#,
-            r#""units_per_gas":{units},"#,
-            r#""twap_local_per_xor":"1","#,
             r#""liquidity_profile":"tier2","#,
+            r#""twap_local_per_xor":"1","#,
+            r#""units_per_gas":{units},"#,
             r#""volatility_class":"stable"}}]"#
         ),
         asset = asset,
@@ -3587,17 +3601,23 @@ fn append_localnet_alias_fee_bootstrap(
 fn localnet_alias_setup_request(
     genesis_account_id: &AccountId,
     operator_account_id: &AccountId,
+    taira: bool,
 ) -> Result<AliasSetupPlanRequestV1> {
     let dataspace_id = DataSpaceId::UNIVERSAL;
     let dataspace = ResolvedDataSpaceV1::new("universal".parse()?, dataspace_id);
-    let domain = ResolvedDomainV1::new(
-        DomainId::parse_fully_qualified(CLIENT_ACCOUNT_DOMAIN)?,
-        dataspace_id,
-    );
-    let alias = ResolvedAccountAliasV1::new(
-        LOCALNET_OPERATOR_ALIAS.parse::<AccountAliasName>()?,
-        dataspace_id,
-    );
+    let domain_name = if taira {
+        TAIRA_CANARY_DOMAIN
+    } else {
+        CLIENT_ACCOUNT_DOMAIN
+    };
+    let operator_alias = if taira {
+        TAIRA_LOCALNET_OPERATOR_ALIAS
+    } else {
+        LOCALNET_OPERATOR_ALIAS
+    };
+    let domain = ResolvedDomainV1::new(DomainId::parse_fully_qualified(domain_name)?, dataspace_id);
+    let alias =
+        ResolvedAccountAliasV1::new(operator_alias.parse::<AccountAliasName>()?, dataspace_id);
     let guard = AliasQuoteGuardV1 {
         expected_policy_version: LOCALNET_ALIAS_SETUP_POLICY_VERSION,
         expected_payment_asset: localnet_fee_asset_definition_id(),
@@ -3662,11 +3682,21 @@ fn write_localnet_alias_setup_intent(
 fn append_localnet_onboarding_permissions(
     genesis: RawGenesisTransaction,
     onboarding_account_id: &AccountId,
+    taira: bool,
 ) -> Result<RawGenesisTransaction> {
-    let domain = DomainId::parse_fully_qualified(CLIENT_ACCOUNT_DOMAIN)?;
+    let domain = DomainId::parse_fully_qualified(if taira {
+        TAIRA_CANARY_DOMAIN
+    } else {
+        CLIENT_ACCOUNT_DOMAIN
+    })?;
+    let manage_scope = if taira {
+        AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL)
+    } else {
+        AccountAliasPermissionScope::Domain(domain.clone())
+    };
     let permissions = [
         Permission::from(CanManageAccountAlias {
-            scope: AccountAliasPermissionScope::Domain(domain.clone()),
+            scope: manage_scope,
         }),
         Permission::from(CanRegisterAccount {
             domain: domain.clone(),
@@ -5384,6 +5414,53 @@ mod tests {
         .expect("rebuild deterministic peer identities");
         let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
             .expect("parse generated Taira genesis");
+        let peer_config_text = fs::read_to_string(temp.path().join("peer0.toml"))
+            .expect("read generated Taira peer config");
+        let peer_config: toml::Value =
+            toml::from_str(&peer_config_text).expect("parse generated Taira peer config");
+        let credential_scope = peer_config
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .and_then(|torii| torii.get("account_onboarding"))
+            .and_then(toml::Value::as_table)
+            .and_then(|onboarding| onboarding.get("credentials"))
+            .and_then(toml::Value::as_array)
+            .and_then(|credentials| credentials.as_slice().first())
+            .and_then(toml::Value::as_table)
+            .and_then(|credential| credential.get("scope"))
+            .and_then(toml::Value::as_table)
+            .expect("canonical Taira onboarding credential scope");
+        assert_eq!(
+            credential_scope
+                .get("dataspace")
+                .and_then(toml::Value::as_str),
+            Some(TAIRA_CANARY_DATASPACE_ALIAS)
+        );
+        assert!(!credential_scope.contains_key("domain"));
+        let alias_setup = manifest
+            .transactions()
+            .last()
+            .expect("canonical Taira alias setup transaction")
+            .instructions();
+        let domain_intent = alias_setup[1]
+            .as_any()
+            .downcast_ref::<EnsureAlias>()
+            .expect("canonical Taira domain setup");
+        let AliasIntentV1::Domain(domain_intent) = &domain_intent.intent else {
+            panic!("canonical Taira setup must create its canary domain");
+        };
+        assert_eq!(domain_intent.domain.canonical_text(), TAIRA_CANARY_DOMAIN);
+        let account_intent = alias_setup[2]
+            .as_any()
+            .downcast_ref::<EnsureAlias>()
+            .expect("canonical Taira operator alias setup");
+        let AliasIntentV1::AccountAlias(account_intent) = &account_intent.intent else {
+            panic!("canonical Taira setup must bind its operator alias");
+        };
+        assert_eq!(
+            account_intent.alias.canonical_text(),
+            TAIRA_LOCALNET_OPERATOR_ALIAS
+        );
         let validator_records = manifest
             .instructions()
             .filter_map(|instruction| {
@@ -7611,6 +7688,17 @@ mod tests {
         );
         assert!(resolve_localnet_chain_id(Some("   ")).is_err());
         assert!(resolve_localnet_chain_id(Some(RETIRED_TAIRA_CHAIN_ID_ALIAS)).is_err());
+        for padded in [
+            format!(" {TAIRA_TESTNET_CHAIN_ID}"),
+            format!("{TAIRA_TESTNET_CHAIN_ID} "),
+            format!("{TAIRA_TESTNET_CHAIN_ID}\n"),
+            format!("\t{TAIRA_TESTNET_CHAIN_ID}"),
+        ] {
+            assert!(
+                resolve_localnet_chain_id(Some(&padded)).is_err(),
+                "padded chain identity must fail rather than normalize: {padded:?}"
+            );
+        }
     }
     #[test]
     #[allow(clippy::too_many_lines)]

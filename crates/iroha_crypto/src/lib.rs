@@ -906,7 +906,8 @@ pub fn ed25519_parse_public_key(payload: &[u8]) -> Result<Ed25519ParsedPublicKey
 ///
 /// # Errors
 /// Returns [`Error::BadSignature`] if the payload length is invalid or the
-/// signature `R` component is malformed, non-canonical, or small-order.
+/// signature `R` component is malformed, non-canonical, small-order, or outside
+/// the prime-order subgroup.
 /// Returns [`Error::Parse`] if the payload is empty or all zero.
 pub fn ed25519_parse_signature(payload: &[u8]) -> Result<Signature, Error> {
     if payload.is_empty() || payload.iter().all(|byte| *byte == 0) {
@@ -2551,11 +2552,23 @@ impl MlDsaSecretKey {
         self.inner.secret.as_bytes().to_vec()
     }
     fn try_sign(&self, payload: &[u8]) -> Result<Vec<u8>, Error> {
-        let mut rng = rand::rngs::OsRng;
-        self.try_sign_with_rng(payload, &mut rng)
+        self.try_sign_with_context(&[], payload)
     }
+    fn try_sign_with_context(&self, context: &[u8], payload: &[u8]) -> Result<Vec<u8>, Error> {
+        let mut rng = rand::rngs::OsRng;
+        self.try_sign_with_context_and_rng(context, payload, &mut rng)
+    }
+    #[cfg(test)]
     fn try_sign_with_rng<R: rand_core::TryCryptoRng + ?Sized>(
         &self,
+        payload: &[u8],
+        rng: &mut R,
+    ) -> Result<Vec<u8>, Error> {
+        self.try_sign_with_context_and_rng(&[], payload, rng)
+    }
+    fn try_sign_with_context_and_rng<R: rand_core::TryCryptoRng + ?Sized>(
+        &self,
+        context: &[u8],
         payload: &[u8],
         rng: &mut R,
     ) -> Result<Vec<u8>, Error> {
@@ -2565,11 +2578,30 @@ impl MlDsaSecretKey {
         soranet_pq::sign_mldsa_from_rng(
             soranet_pq::MlDsaSuite::MlDsa65,
             self.as_secret().as_bytes(),
-            &[],
+            context,
             payload,
             rng,
         )
-        .map(|signature| signature.as_bytes().to_vec())
+        .map(soranet_pq::MlDsaSignature::into_bytes)
+        .map_err(|err| Error::Signing(err.to_string()))
+    }
+    fn try_sign_with_context_and_hedged_rng(
+        &self,
+        context: &[u8],
+        payload: &[u8],
+        rng: &mut soranet_pq::HedgedChaCha20Rng,
+    ) -> Result<Vec<u8>, Error> {
+        use pqcrypto_traits::sign::SecretKey as _;
+        mldsa_seed::mldsa65::public_key_from_secret(self.as_secret())
+            .map_err(|err| Error::Signing(err.to_string()))?;
+        soranet_pq::sign_mldsa(
+            soranet_pq::MlDsaSuite::MlDsa65,
+            self.as_secret().as_bytes(),
+            context,
+            payload,
+            rng,
+        )
+        .map(soranet_pq::MlDsaSignature::into_bytes)
         .map_err(|err| Error::Signing(err.to_string()))
     }
     #[cfg(test)]
@@ -2591,15 +2623,20 @@ impl ZeroizeOnDrop for MlDsaSecretKey {}
 #[cfg(feature = "pqc")]
 #[allow(unsafe_code)]
 fn zeroize_mldsa_secret_key(secret: &mut pqcrypto_mldsa::mldsa65::SecretKey) {
-    use core::{mem, ptr};
+    use core::{mem, ptr, slice};
     let byte_ptr = ptr::addr_of_mut!(*secret).cast::<u8>();
-    unsafe {
-        ptr::write_bytes(
+    // SAFETY: `byte_ptr` points to the complete live `SecretKey` object. The
+    // upstream type is a plain fixed-size byte wrapper; treating its object
+    // representation as bytes is the same layout assumption required to hold
+    // the key at all. `Zeroize` uses volatile stores plus a compiler fence, so
+    // the erase cannot be removed merely because the object is about to drop.
+    let bytes = unsafe {
+        slice::from_raw_parts_mut(
             byte_ptr,
-            0,
             mem::size_of::<pqcrypto_mldsa::mldsa65::SecretKey>(),
-        );
-    }
+        )
+    };
+    zeroize::Zeroize::zeroize(bytes);
 }
 #[cfg(feature = "pqc")]
 impl Drop for MlDsaSecretKeyInner {
@@ -3064,7 +3101,9 @@ impl ZeroizingConstVec {
 impl Zeroize for ZeroizingConstVec {
     fn zeroize(&mut self) {
         let mut bytes = core::mem::take(&mut self.0).into_vec();
-        bytes.fill(0);
+        let len = bytes.len();
+        bytes.zeroize();
+        bytes.resize(len, 0);
         record_session_key_zeroization(&bytes);
         self.0 = ConstVec::from(bytes);
     }

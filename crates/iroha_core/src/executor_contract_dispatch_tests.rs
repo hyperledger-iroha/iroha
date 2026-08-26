@@ -1004,24 +1004,6 @@ fn validate_start_query_with_ivm() {
         dsl::{CompoundPredicate, SelectorTuple},
         parameters::QueryParams,
     };
-    // Ensure the erased-query registry is initialized for iterable queries
-    iroha_data_model::query::set_query_registry(iroha_data_model::query_registry![
-        iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::Domain>,
-        iroha_data_model::query::ErasedIterQuery<iroha_data_model::account::Account>,
-        iroha_data_model::query::ErasedIterQuery<iroha_data_model::asset::value::Asset>,
-        iroha_data_model::query::ErasedIterQuery<
-            iroha_data_model::asset::definition::AssetDefinition,
-        >,
-        iroha_data_model::query::ErasedIterQuery<iroha_data_model::nft::Nft>,
-        iroha_data_model::query::ErasedIterQuery<iroha_data_model::role::Role>,
-        iroha_data_model::query::ErasedIterQuery<iroha_data_model::role::RoleId>,
-        iroha_data_model::query::ErasedIterQuery<iroha_data_model::peer::PeerId>,
-        iroha_data_model::query::ErasedIterQuery<iroha_data_model::trigger::TriggerId>,
-        iroha_data_model::query::ErasedIterQuery<iroha_data_model::trigger::Trigger>,
-        iroha_data_model::query::ErasedIterQuery<iroha_data_model::query::CommittedTransaction>,
-        iroha_data_model::query::ErasedIterQuery<iroha_data_model::block::SignedBlock>,
-        iroha_data_model::query::ErasedIterQuery<iroha_data_model::block::BlockHeader>,
-    ]);
     let bytecode = read_default_bytecode().unwrap_or_else(generate_ok_program);
     let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(bytecode));
     let executor = super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));

@@ -68,7 +68,8 @@ Space Directory data-model and integration tests.
 
 - All quantity allowances use decimal strings so they can be losslessly parsed
   into `Quantity`.
-- UAIDs follow the `uaid:<hex>` format (`Hash` serialization). Generate new
+- UAIDs use the exact `uaid:<64-lowercase-hex>` format (`Hash` serialization);
+  raw hex, uppercase, and padded spellings are rejected. Generate new
   UAIDs with a deterministic blake2b helper:
 
   ```bash

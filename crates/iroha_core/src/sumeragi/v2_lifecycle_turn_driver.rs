@@ -6,8 +6,9 @@ use super::super::{
 use super::*;
 use crate::sumeragi::v2_lifecycle_coordinator::{
     AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleIngressSelectorError,
-    LifecycleLedgerV1, LifecycleValidateSidecarDriveV1, ReadyValidateSuccessorDispatchV1,
-    SelectedCertifiedResponsePriorityV1, WaitSource, WaitToken, claim_certified_serve_turn_v1,
+    LifecycleLedgerV1, LifecycleValidateSidecarDriveV1, ProductionIngressCapacityStatus,
+    ReadyValidateSuccessorDispatchV1, SelectedCertifiedResponsePriorityV1, WaitSource, WaitToken,
+    claim_certified_serve_turn_v1,
 };
 #[cfg(test)]
 pub(in crate::sumeragi) use crate::sumeragi::v2_runner::ordinary_ingress_consumer::ProductionPreparedCertifiedServeTestSettlementV1;
@@ -2213,6 +2214,9 @@ impl LaunchedProductionLifecycleV1 {
             ) => ProductionLifecycleIngressSelectionV1::CertifiedFetchCompetingReady,
             Err(
                 ProductionIngressSchedulerInputsError::StaleModeObservation
+                | ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionPreparation {
+                    ..
+                }
                 | ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionDeferred { .. }
                 | ProductionIngressSchedulerInputsError::CommandPreparation { .. }
                 | ProductionIngressSchedulerInputsError::InFlightSelectedWork { .. }
@@ -2224,7 +2228,6 @@ impl LaunchedProductionLifecycleV1 {
                 | ProductionIngressSchedulerInputsError::ForeignOutputGuard
                 | ProductionIngressSchedulerInputsError::ForeignRunnerObservation
                 | ProductionIngressSchedulerInputsError::BodyStoreNotBound
-                | ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionPreparation
                 | ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionSettlement
                 | ProductionIngressSchedulerInputsError::InvalidSelectedCarrier
                 | ProductionIngressSchedulerInputsError::InvalidReservedCommand
@@ -2429,14 +2432,42 @@ impl ActivatedProductionLifecycleV1 {
                     )
                 }
             },
-            pending @ (PendingIngressCapacityV1::CertifiedFetch(_)
-            | PendingIngressCapacityV1::RecoveredDecisionFetch(_)) => {
+            PendingIngressCapacityV1::CertifiedFetch(wait) => {
+                match wait.capacity_status(&self.launched.services) {
+                    ProductionIngressCapacityStatus::Pending
+                    | ProductionIngressCapacityStatus::Released => {
+                        // Ordinary Fetch capacity is captured before durable
+                        // admission. The fair-ingress occurrence was never
+                        // dequeued, so sealed height retirement remains its
+                        // sole terminal owner after this observation is dropped.
+                        drop(wait);
+                        Ok(true)
+                    }
+                    ProductionIngressCapacityStatus::GenerationExhausted
+                    | ProductionIngressCapacityStatus::RestartRequired => {
+                        self.launched.pending_ingress_capacity =
+                            Some(PendingIngressCapacityV1::CertifiedFetch(wait));
+                        self.launched
+                            .services
+                            .lifecycle_output_guard()
+                            .close_admission_for_restart();
+                        Err(
+                            "terminal-barrier Certified-Fetch capacity owner lost its exact service"
+                                .to_owned(),
+                        )
+                    }
+                }
+            }
+            pending @ PendingIngressCapacityV1::RecoveredDecisionFetch(_) => {
                 self.launched.pending_ingress_capacity = Some(pending);
                 self.launched
                     .services
                     .lifecycle_output_guard()
                     .close_admission_for_restart();
-                Err("terminal barrier retained a non-Serve ingress-capacity owner".to_owned())
+                Err(
+                    "terminal barrier retained a recovered Decision-Fetch ingress-capacity owner"
+                        .to_owned(),
+                )
             }
         }
     }

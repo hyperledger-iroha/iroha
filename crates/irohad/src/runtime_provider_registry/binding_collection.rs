@@ -18,41 +18,32 @@ pub(super) fn collect_configured_bindings(
     collect_reputation_billing_bindings(config, bindings)?;
     collect_provider_ingest_bindings(config, bindings)?;
     collect_soracloud_runtime_signer_binding(config, bindings)?;
-    collect_soracloud_hf_credential_provider_binding(config, bindings)?;
     collect_musubi_provider_attestation_bindings(config, bindings)?;
     collect_consensus_governance_signer_bindings(config, bindings)
 }
 
 fn append_optional_consensus_signer_binding(
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
-    network_id: &NetworkId,
     slot: IrohaRuntimeProviderSlotV1,
     handle: Option<&str>,
     revision: Option<u64>,
-    provider_profile_digest: Option<[u8; 32]>,
+    inventory_digest: Option<[u8; 32]>,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
-    match (handle, revision, provider_profile_digest) {
+    match (handle, revision, inventory_digest) {
         (None, None, None) => Ok(()),
-        (Some(handle), Some(revision), Some(provider_profile_digest))
-            if revision != 0 && provider_profile_digest != [0; 32] =>
+        (Some(handle), Some(revision), Some(inventory_digest))
+            if revision != 0 && inventory_digest != [0; 32] =>
         {
-            let handle_len = u64::try_from(handle.len())
-                .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
-            let policy_digest: [u8; 32] = iroha_crypto::Hash::new_from_chunks(&[
-                b"iroha.runtime-provider.consensus-signing-profile.v1\0",
-                &slot.wire_id().to_be_bytes(),
-                network_id.as_bytes(),
-                &handle_len.to_be_bytes(),
-                handle.as_bytes(),
-                &revision.to_be_bytes(),
-                &provider_profile_digest,
-            ])
-            .into();
             bindings.push(IrohaRuntimeProviderBindingV1::try_new(
                 slot,
                 handle,
                 Some(revision),
-                Some(policy_digest),
+                // Threshold credentials bind this field to the canonical
+                // public session-and-seat inventory digest. The inventory
+                // already commits to the role slot and network; wrapping it
+                // here would make the configured catalog impossible for the
+                // credential decoder to satisfy.
+                Some(inventory_digest),
             )?);
             Ok(())
         }
@@ -64,10 +55,8 @@ fn collect_consensus_governance_signer_bindings(
     config: &Config,
     bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
 ) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
-    let network_id = NetworkId::from_genesis_hash(config.genesis.expected_hash);
     append_optional_consensus_signer_binding(
         bindings,
-        &network_id,
         IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
         config
             .sumeragi
@@ -82,7 +71,6 @@ fn collect_consensus_governance_signer_bindings(
     )?;
     append_optional_consensus_signer_binding(
         bindings,
-        &network_id,
         IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
         config
             .gov
@@ -177,23 +165,6 @@ fn collect_soracloud_runtime_signer_binding(
         None if config.soracloud_runtime.production_mode => {
             return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
         }
-        None => {}
-    }
-    Ok(())
-}
-fn collect_soracloud_hf_credential_provider_binding(
-    config: &Config,
-    bindings: &mut Vec<IrohaRuntimeProviderBindingV1>,
-) -> Result<(), IrohaRuntimeProviderRegistryErrorV1> {
-    match config
-        .soracloud_runtime
-        .hf
-        .inference_credential_provider
-        .as_ref()
-    {
-        Some(binding) => bindings.push(
-            IrohaRuntimeProviderBindingV1::try_new_soracloud_hf_credential_provider(binding)?,
-        ),
         None => {}
     }
     Ok(())
@@ -988,4 +959,84 @@ fn collect_provider_ingest_bindings(
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn optional_consensus_signer_binding_is_all_or_nothing_and_network_bound() {
+        let slot = IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner;
+        let network_id = runtime_provider_test_network_id();
+        let mut bindings = Vec::new();
+
+        append_optional_consensus_signer_binding(
+            &mut bindings,
+            &network_id,
+            slot,
+            None,
+            None,
+            None,
+        )
+        .expect("an absent optional signer must remain absent");
+        assert!(bindings.is_empty());
+
+        let handle = "hsm://consensus/global-beacon-primary";
+        let provider_profile_digest = [0xA5; 32];
+        append_optional_consensus_signer_binding(
+            &mut bindings,
+            &network_id,
+            slot,
+            Some(handle),
+            Some(7),
+            Some(provider_profile_digest),
+        )
+        .expect("a complete production signer binding must be admitted");
+        let binding = bindings.first().expect("one projected signer binding");
+        assert_eq!(binding.slot(), slot);
+        assert_eq!(binding.handle(), handle);
+        assert_eq!(binding.revision(), Some(7));
+        assert_ne!(binding.policy_digest(), Some(provider_profile_digest));
+        let other_network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x16; iroha_crypto::Hash::LENGTH]),
+        ));
+        let mut other_network_bindings = Vec::new();
+        append_optional_consensus_signer_binding(
+            &mut other_network_bindings,
+            &other_network_id,
+            slot,
+            Some(handle),
+            Some(7),
+            Some(provider_profile_digest),
+        )
+        .expect("the same provider may be projected for another network");
+        assert_ne!(
+            binding.policy_digest(),
+            other_network_bindings[0].policy_digest(),
+            "the public signer policy must bind the exact network identity"
+        );
+
+        for incomplete in [
+            (None, Some(7), Some(provider_profile_digest)),
+            (Some(handle), None, Some(provider_profile_digest)),
+            (Some(handle), Some(0), Some(provider_profile_digest)),
+            (Some(handle), Some(7), Some([0; 32])),
+        ] {
+            assert!(matches!(
+                append_optional_consensus_signer_binding(
+                    &mut Vec::new(),
+                    &network_id,
+                    slot,
+                    incomplete.0,
+                    incomplete.1,
+                    incomplete.2,
+                ),
+                Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(rejected))
+                    if rejected == slot
+            ));
+        }
+    }
 }

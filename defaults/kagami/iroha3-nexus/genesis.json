@@ -44,7 +44,8 @@
               "metadata": {
                 "key": "value"
               },
-              "uaid": null
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -56,7 +57,8 @@
               "metadata": {
                 "purpose": "fee_sponsor_vault_custody"
               },
-              "uaid": null
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -91,7 +93,8 @@
               "id": "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
               "label": null,
               "metadata": {},
-              "uaid": null
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },

@@ -11,7 +11,7 @@ ABI22_ARTIFACT_CHECKER="$ROOT_DIR/scripts/check_native_sdk_abi22_artifact.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
 LOCALNET_DEPLOYER="$ROOT_DIR/scripts/deploy_localnet.sh"
 PINNED_TOOLCHAIN="1.93.1"
-REQUIRED_NATIVE_ASSERTION="The release JNI gate requires a freshly built connect_norito_bridge ABI 23 library"
+REQUIRED_NATIVE_ASSERTION="A freshly built connect_norito_bridge ABI 23 artifact-streaming library is required"
 LOCALNET_TEST_CLASS="org.hyperledger.iroha.sdk.client.ZkAssetShieldLocalnetTest"
 
 fail() {
@@ -161,10 +161,12 @@ else
   [[ -n "$JAVA_HOME_DIR" ]] \
     || fail "NORITO_MOBILE_JAVA_HOME must pin the setup-java JDK on non-macOS hosts"
 fi
-[[ "$JAVA_HOME_DIR" == /* && -d "$JAVA_HOME_DIR" && ! -L "$JAVA_HOME_DIR" ]] \
-  || fail "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must provide an absolute regular JDK directory"
-NM_BINARY="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$NM_BINARY")"
+[[ "$JAVA_HOME_DIR" == /* && -d "$JAVA_HOME_DIR" ]] \
+  || fail "NORITO_MOBILE_JAVA_HOME or the macOS Java locator must provide an absolute existing JDK directory"
 JAVA_HOME_DIR="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$JAVA_HOME_DIR")"
+[[ -d "$JAVA_HOME_DIR" && ! -L "$JAVA_HOME_DIR" ]] \
+  || fail "resolved Java home must be a canonical non-symlink JDK directory"
+NM_BINARY="$("$PYTHON_BINARY" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$NM_BINARY")"
 JAVA_BINARY="$JAVA_HOME_DIR/bin/java"
 for tool in "$NM_BINARY" "$JAVA_BINARY"; do
   [[ -f "$tool" && ! -L "$tool" && -x "$tool" ]] \
@@ -502,6 +504,7 @@ source_seal() {
     NORITO_BRIDGE_SEAL_CARGO_HOME="$MOBILE_CARGO_HOME" \
     NORITO_BRIDGE_SEAL_RUSTUP_HOME="$MOBILE_RUSTUP_HOME" \
     NORITO_BRIDGE_SEAL_TMPDIR="$MOBILE_TMPDIR" \
+    NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR="$CARGO_TARGET_DIR" \
     NORITO_BRIDGE_SEAL_CARGO="$CARGO_BINARY" \
     NORITO_BRIDGE_SEAL_RUSTC="$RUSTC_BINARY" \
     "$PYTHON_BINARY" -I -S "$SOURCE_SEAL" "$@"
@@ -621,16 +624,20 @@ printf '[kagemusha-jvm-native] building fresh host ABI-23 bridge for %s\n' "$HOS
 source_seal verify --root "$ROOT_DIR" --platform android --snapshot "$SOURCE_SNAPSHOT"
 
 case "$HOST_TRIPLE" in
-  *-apple-*) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.dylib" ;;
-  *-windows-*) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/connect_norito_bridge.dll" ;;
-  *) NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/libconnect_norito_bridge.so" ;;
+  *-apple-*) NATIVE_LIBRARY_NAME="libconnect_norito_bridge.dylib" ;;
+  *-windows-*) NATIVE_LIBRARY_NAME="connect_norito_bridge.dll" ;;
+  *) NATIVE_LIBRARY_NAME="libconnect_norito_bridge.so" ;;
 esac
-[[ -f "$NATIVE_LIBRARY" && ! -L "$NATIVE_LIBRARY" ]] \
-  || fail "fresh host bridge library is missing: $NATIVE_LIBRARY"
-NATIVE_LIBRARY_DIR="${NATIVE_LIBRARY%/*}"
+CARGO_NATIVE_LIBRARY="$CARGO_TARGET_DIR/$HOST_TRIPLE/debug/$NATIVE_LIBRARY_NAME"
+[[ -f "$CARGO_NATIVE_LIBRARY" && ! -L "$CARGO_NATIVE_LIBRARY" ]] \
+  || fail "fresh host bridge library is missing: $CARGO_NATIVE_LIBRARY"
+NATIVE_LIBRARY_DIR="$BUILD_SESSION/native-runtime"
+mkdir -m 0700 -- "$NATIVE_LIBRARY_DIR"
+NATIVE_LIBRARY="$NATIVE_LIBRARY_DIR/$NATIVE_LIBRARY_NAME"
 NATIVE_EVIDENCE="$BUILD_SESSION/c-jni-native-abi22.json"
 "$PYTHON_BINARY" -I -S "$ABI22_ARTIFACT_CHECKER" record \
-  --artifact "$NATIVE_LIBRARY" \
+  --artifact "$CARGO_NATIVE_LIBRARY" \
+  --stage-artifact "$NATIVE_LIBRARY" \
   --manifest "$NATIVE_EVIDENCE" \
   --source-root "$ROOT_DIR" \
   --sdk c-jni \

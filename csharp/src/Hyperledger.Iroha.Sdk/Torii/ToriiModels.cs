@@ -51,7 +51,7 @@ internal static class ToriiJsonSnapshots
 
 public sealed record class ToriiAccountAliasLookupRequest
 {
-    [JsonPropertyName("account_id")]
+    [JsonRequired, JsonPropertyName("account_id")]
     public string AccountId { get; init; } = string.Empty;
 
     [JsonPropertyName("dataspace")]
@@ -91,16 +91,16 @@ public sealed record class ToriiAccountOnboardingPlanRequest
 {
     private string[] permissions = Array.Empty<string>();
 
-    [JsonPropertyName("version")]
+    [JsonRequired, JsonPropertyName("version")]
     public byte Version { get; init; } = 1;
 
-    [JsonPropertyName("alias")]
+    [JsonRequired, JsonPropertyName("alias")]
     public string Alias { get; init; } = string.Empty;
 
-    [JsonPropertyName("account_id")]
+    [JsonRequired, JsonPropertyName("account_id")]
     public string AccountId { get; init; } = string.Empty;
 
-    [JsonPropertyName("permissions")]
+    [JsonRequired, JsonPropertyName("permissions")]
     public IReadOnlyList<string> Permissions
     {
         get => permissions.ToArray();
@@ -113,37 +113,37 @@ public sealed record class ToriiAccountOnboardingPlanRequest
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiAccountOnboardingPlanBody
 {
-    [JsonPropertyName("version")]
+    [JsonRequired, JsonPropertyName("version")]
     public byte Version { get; init; }
 
-    [JsonPropertyName("request")]
+    [JsonRequired, JsonPropertyName("request")]
     public ToriiAccountOnboardingPlanRequest Request { get; init; } = new();
 
-    [JsonPropertyName("authority")]
+    [JsonRequired, JsonPropertyName("authority")]
     public string Authority { get; init; } = string.Empty;
 
-    [JsonPropertyName("network_id")]
+    [JsonRequired, JsonPropertyName("network_id")]
     public NetworkId NetworkId { get; init; } = null!;
 
-    [JsonPropertyName("anchor")]
+    [JsonRequired, JsonPropertyName("anchor")]
     public JsonElement Anchor { get; init; }
 
-    [JsonPropertyName("resource")]
+    [JsonRequired, JsonPropertyName("resource")]
     public JsonElement Resource { get; init; }
 
-    [JsonPropertyName("acquisition")]
+    [JsonRequired, JsonPropertyName("acquisition")]
     public JsonElement Acquisition { get; init; }
 
-    [JsonPropertyName("quote_guard")]
+    [JsonRequired, JsonPropertyName("quote_guard")]
     public JsonElement QuoteGuard { get; init; }
 
-    [JsonPropertyName("instructions")]
+    [JsonRequired, JsonPropertyName("instructions")]
     public JsonElement Instructions { get; init; }
 
-    [JsonPropertyName("owner_auto_renew_instruction")]
+    [JsonRequired, JsonPropertyName("owner_auto_renew_instruction")]
     public JsonElement OwnerAutoRenewInstruction { get; init; }
 
-    [JsonPropertyName("valid_until_ms")]
+    [JsonRequired, JsonPropertyName("valid_until_ms")]
     public ulong ValidUntilMilliseconds { get; init; }
 }
 
@@ -154,126 +154,363 @@ public delegate byte[] ToriiAccountOnboardingPlanBodyEncoder(ToriiAccountOnboard
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiAccountOnboardingPlanReceipt
 {
-    [JsonPropertyName("body")]
+    [JsonRequired, JsonPropertyName("body")]
     public ToriiAccountOnboardingPlanBody Body { get; init; } = new();
 
-    [JsonPropertyName("plan_hash")]
+    [JsonRequired, JsonPropertyName("plan_hash")]
     public string PlanHash { get; init; } = string.Empty;
 
-    [JsonPropertyName("signature")]
+    [JsonRequired, JsonPropertyName("signature")]
     public string Signature { get; init; } = string.Empty;
 }
 
-/// <summary>Apply request containing exactly one previously issued receipt.</summary>
+/// <summary>Exact public-reset mutation identity committed by a prepared transaction.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record class ToriiAccountOnboardingApplyRequest
+public sealed record class ToriiTairaPublicResetMutationBindingV1
 {
-    [JsonPropertyName("receipt")]
+    public const string SchemaV1 = "iroha.taira.public-reset.mutation-binding.v1";
+
+    [JsonRequired, JsonPropertyName("schema")]
+    public string Schema { get; init; } = SchemaV1;
+
+    [JsonRequired, JsonPropertyName("authorization_sha256")]
+    public string AuthorizationSha256 { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("authorization_nonce")]
+    public string AuthorizationNonce { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("kind")]
+    public string Kind { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("phase")]
+    public string Phase { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("idempotency_key")]
+    public string IdempotencyKey { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("execution_expires_at_unix_ms")]
+    public ulong ExecutionExpiresAtUnixMilliseconds { get; init; }
+}
+
+/// <summary>Exact non-mutating onboarding prepare request.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record class ToriiAccountOnboardingPrepareRequestV1
+{
+    public const string SchemaV1 = "iroha.accounts.onboard.prepare.v1";
+
+    [JsonRequired, JsonPropertyName("schema")]
+    public string Schema { get; init; } = SchemaV1;
+
+    [JsonRequired, JsonPropertyName("binding")]
+    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; } = new();
+
+    [JsonRequired, JsonPropertyName("receipt")]
     public ToriiAccountOnboardingPlanReceipt Receipt { get; init; } = new();
 }
 
-/// <summary>Live disposition returned by sponsored onboarding apply.</summary>
+/// <summary>Live onboarding disposition used to prepare the exact instruction vector.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiAccountOnboardingDisposition
 {
-    [JsonPropertyName("kind")]
+    [JsonRequired, JsonPropertyName("kind")]
     public string Kind { get; init; } = string.Empty;
 
-    [JsonPropertyName("value")]
+    [JsonRequired, JsonPropertyName("value")]
     public JsonElement Value { get; init; }
 }
 
-/// <summary>Queued, repaired, or unchanged sponsored onboarding result.</summary>
+/// <summary>Authenticated exact onboarding transaction prepared by Torii.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record class ToriiAccountOnboardingResponse
+public sealed record class ToriiAccountOnboardingPreparedTransactionV1
 {
-    [JsonPropertyName("account_id")]
+    public const string SchemaV1 = "iroha.taira.prepared-transaction.v1";
+    public const string OperationV1 = "onboarding";
+
+    [JsonRequired, JsonPropertyName("schema")]
+    public string Schema { get; init; } = SchemaV1;
+
+    [JsonRequired, JsonPropertyName("binding")]
+    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; } = new();
+
+    [JsonRequired, JsonPropertyName("operation")]
+    public string Operation { get; init; } = OperationV1;
+
+    [JsonRequired, JsonPropertyName("receipt")]
+    public ToriiAccountOnboardingPlanReceipt Receipt { get; init; } = new();
+
+    [JsonRequired, JsonPropertyName("semantic_hash_hex")]
+    public string SemanticHashHex { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("account_id")]
     public string AccountId { get; init; } = string.Empty;
 
-    [JsonPropertyName("alias")]
+    [JsonRequired, JsonPropertyName("alias")]
     public string Alias { get; init; } = string.Empty;
 
-    [JsonPropertyName("tx_hash_hex")]
-    public string? TransactionHashHex { get; init; }
-
-    [JsonPropertyName("status")]
-    public string Status { get; init; } = string.Empty;
-
-    [JsonPropertyName("disposition")]
+    [JsonRequired, JsonPropertyName("disposition")]
     public ToriiAccountOnboardingDisposition Disposition { get; init; } = new();
+
+    [JsonRequired, JsonPropertyName("transaction_hash_hex")]
+    public string TransactionHashHex { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("signed_transaction_wire_hex")]
+    public string SignedTransactionWireHex { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("signed_transaction_wire_sha256")]
+    public string SignedTransactionWireSha256 { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("fee_payment")]
+    public FeePaymentIntent FeePayment { get; init; } = null!;
+
+    [JsonRequired, JsonPropertyName("server_signature")]
+    public string ServerSignature { get; init; } = string.Empty;
 }
 
-public sealed record class ToriiAccountFaucetRequest
+/// <summary>
+/// Authenticated nonterminal onboarding result requiring one fresh atomic state observation.
+/// </summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record class ToriiAccountOnboardingProofRequiredPrepareResponseV1
 {
-    [JsonPropertyName("account_id")]
+    public const string SchemaV1 = "iroha.accounts.onboard.prepare-proof-required.v1";
+    public const string OperationV1 = "onboarding";
+    public const string OutcomeV1 = "ProofRequired";
+    public const string ProofKindV1 = "account_alias_current_state";
+
+    [JsonRequired, JsonPropertyName("schema")]
+    public string Schema { get; init; } = SchemaV1;
+
+    [JsonRequired, JsonPropertyName("binding")]
+    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; } = new();
+
+    [JsonRequired, JsonPropertyName("operation")]
+    public string Operation { get; init; } = OperationV1;
+
+    [JsonRequired, JsonPropertyName("outcome")]
+    public string Outcome { get; init; } = OutcomeV1;
+
+    [JsonRequired, JsonPropertyName("proof_kind")]
+    public string ProofKind { get; init; } = ProofKindV1;
+
+    [JsonRequired, JsonPropertyName("semantic_hash_hex")]
+    public string SemanticHashHex { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("account_id")]
     public string AccountId { get; init; } = string.Empty;
 
-    [JsonPropertyName("pow_anchor_height")]
+    [JsonRequired, JsonPropertyName("alias")]
+    public string Alias { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("disposition")]
+    public ToriiAccountOnboardingDisposition Disposition { get; init; } = new();
+
+    [JsonRequired, JsonPropertyName("server_signature")]
+    public string ServerSignature { get; init; } = string.Empty;
+}
+
+/// <summary>Closed onboarding preparation result.</summary>
+public sealed record class ToriiAccountOnboardingPrepareResultV1
+{
+    private ToriiAccountOnboardingPrepareResultV1(
+        ToriiAccountOnboardingPreparedTransactionV1? prepared,
+        ToriiAccountOnboardingProofRequiredPrepareResponseV1? proofRequired)
+    {
+        Prepared = prepared;
+        ProofRequired = proofRequired;
+    }
+
+    public ToriiAccountOnboardingPreparedTransactionV1? Prepared { get; }
+
+    public ToriiAccountOnboardingProofRequiredPrepareResponseV1? ProofRequired { get; }
+
+    public static ToriiAccountOnboardingPrepareResultV1 FromPrepared(
+        ToriiAccountOnboardingPreparedTransactionV1 value) =>
+        new(value ?? throw new ArgumentNullException(nameof(value)), null);
+
+    public static ToriiAccountOnboardingPrepareResultV1 FromProofRequired(
+        ToriiAccountOnboardingProofRequiredPrepareResponseV1 value) =>
+        new(null, value ?? throw new ArgumentNullException(nameof(value)));
+}
+
+/// <summary>Closed first-release request for one atomic onboarding-state observation.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record class ToriiAccountOnboardingCurrentStateRequestV1
+{
+    public const byte VersionV1 = 1;
+
+    [JsonRequired, JsonPropertyName("version")]
+    public byte Version { get; init; } = VersionV1;
+
+    [JsonRequired, JsonPropertyName("account_id")]
+    public string AccountId { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("alias")]
+    public string Alias { get; init; } = string.Empty;
+}
+
+/// <summary>One internally consistent first-release onboarding-state observation.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record class ToriiAccountOnboardingCurrentStateResponseV1
+{
+    public const byte VersionV1 = 1;
+
+    [JsonRequired, JsonPropertyName("version")]
+    public byte Version { get; init; } = VersionV1;
+
+    [JsonRequired, JsonPropertyName("network_id")]
+    public NetworkId NetworkId { get; init; } = null!;
+
+    [JsonRequired, JsonPropertyName("account_id")]
+    public string AccountId { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("alias")]
+    public string Alias { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("account_exists")]
+    public bool AccountExists { get; init; }
+
+    [JsonRequired, JsonPropertyName("alias_target_account_id")]
+    public string? AliasTargetAccountId { get; init; }
+
+    [JsonRequired, JsonPropertyName("observed_block_height")]
+    public ulong ObservedBlockHeight { get; init; }
+
+    [JsonRequired, JsonPropertyName("observed_block_hash")]
+    public string ObservedBlockHash { get; init; } = string.Empty;
+}
+
+/// <summary>Classification of the exact alias in one atomic onboarding-state observation.</summary>
+public enum ToriiAccountOnboardingCurrentStateKindV1
+{
+    /// <summary>The alias targets the expected existing account.</summary>
+    Applied,
+    /// <summary>The expected account exists, but the alias has no active target.</summary>
+    AliasAbsent,
+    /// <summary>The expected account exists, but the alias targets another account.</summary>
+    AliasConflict,
+}
+
+/// <summary>
+/// Ephemeral evidence from one atomic account-and-alias state observation.
+/// </summary>
+public sealed class ToriiAccountOnboardingCurrentStateProofV1
+{
+    internal ToriiAccountOnboardingCurrentStateProofV1(
+        ToriiAccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
+        ToriiAccountOnboardingCurrentStateResponseV1 observation,
+        ToriiAccountOnboardingCurrentStateKindV1 kind)
+    {
+        ProofRequired = proofRequired;
+        Observation = observation;
+        Kind = kind;
+    }
+
+    public ToriiAccountOnboardingProofRequiredPrepareResponseV1 ProofRequired { get; }
+
+    public ToriiAccountOnboardingCurrentStateResponseV1 Observation { get; }
+
+    public ToriiAccountOnboardingCurrentStateKindV1 Kind { get; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record class ToriiAccountFaucetClaimV1
+{
+    [JsonRequired, JsonPropertyName("account_id")]
+    public string AccountId { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("pow_anchor_height")]
     public ulong? PowAnchorHeight { get; init; }
 
-    [JsonPropertyName("pow_nonce_hex")]
+    [JsonRequired, JsonPropertyName("pow_nonce_hex")]
     public string? PowNonceHex { get; init; }
 }
 
-[JsonConverter(typeof(ToriiAccountFaucetResponseJsonConverter))]
-public sealed record class ToriiAccountFaucetResponse
+/// <summary>Exact non-mutating faucet prepare request.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record class ToriiAccountFaucetPrepareRequestV1
 {
-    private string accountId = string.Empty;
-    private string assetDefinitionId = string.Empty;
-    private string assetId = string.Empty;
-    private string amount = string.Empty;
-    private string transactionHashHex = string.Empty;
-    private string status = string.Empty;
+    public const string SchemaV1 = "iroha.accounts.faucet.prepare.v1";
 
-    [JsonPropertyName("account_id")]
-    public string AccountId
-    {
-        get => accountId;
-        init => accountId = ToriiAccountOnboardingReceiptVerifier.RequireCanonicalAccountId(
-            value,
-            nameof(AccountId));
-    }
+    [JsonRequired, JsonPropertyName("schema")]
+    public string Schema { get; init; } = SchemaV1;
 
-    [JsonPropertyName("asset_definition_id")]
-    public string AssetDefinitionId
-    {
-        get => assetDefinitionId;
-        init => assetDefinitionId = ToriiOnboardingDirectMetadata.RequireExactTokenText(
-            value,
-            nameof(AssetDefinitionId));
-    }
+    [JsonRequired, JsonPropertyName("binding")]
+    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; } = new();
 
-    [JsonPropertyName("asset_id")]
-    public string AssetId
-    {
-        get => assetId;
-        init => assetId = ToriiOnboardingDirectMetadata.RequireExactTokenText(value, nameof(AssetId));
-    }
+    [JsonRequired, JsonPropertyName("claim")]
+    public ToriiAccountFaucetClaimV1 Claim { get; init; } = new();
+}
 
-    [JsonPropertyName("amount")]
-    public string Amount
-    {
-        get => amount;
-        init => amount = ToriiOnboardingDirectMetadata.RequireCanonicalQuantityText(
-            value,
-            nameof(Amount));
-    }
+/// <summary>Authenticated exact faucet transaction prepared by Torii.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record class ToriiAccountFaucetPreparedTransactionV1
+{
+    public const string SchemaV1 = "iroha.taira.prepared-transaction.v1";
+    public const string OperationV1 = "faucet";
 
-    [JsonPropertyName("tx_hash_hex")]
-    public string TransactionHashHex
-    {
-        get => transactionHashHex;
-        init => transactionHashHex = ToriiOnboardingDirectMetadata.RequireOptionalTransactionHashHex(
-            value,
-            nameof(TransactionHashHex));
-    }
+    [JsonRequired, JsonPropertyName("schema")]
+    public string Schema { get; init; } = SchemaV1;
 
-    [JsonPropertyName("status")]
-    public string Status
-    {
-        get => status;
-        init => status = ToriiOnboardingDirectMetadata.RequireExactTokenText(value, nameof(Status));
-    }
+    [JsonRequired, JsonPropertyName("binding")]
+    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; } = new();
+
+    [JsonRequired, JsonPropertyName("operation")]
+    public string Operation { get; init; } = OperationV1;
+
+    [JsonRequired, JsonPropertyName("claim")]
+    public ToriiAccountFaucetClaimV1 Claim { get; init; } = new();
+
+    [JsonRequired, JsonPropertyName("semantic_hash_hex")]
+    public string SemanticHashHex { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("account_id")]
+    public string AccountId { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("asset_definition_id")]
+    public string AssetDefinitionId { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("asset_id")]
+    public string AssetId { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("amount")]
+    public string Amount { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("transaction_hash_hex")]
+    public string TransactionHashHex { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("signed_transaction_wire_hex")]
+    public string SignedTransactionWireHex { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("signed_transaction_wire_sha256")]
+    public string SignedTransactionWireSha256 { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("fee_payment")]
+    public FeePaymentIntent FeePayment { get; init; } = null!;
+
+    [JsonRequired, JsonPropertyName("server_signature")]
+    public string ServerSignature { get; init; } = string.Empty;
+}
+
+/// <summary>Exact outcome for one submitted prepared transaction hash.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record class ToriiPreparedTransactionSubmitResponseV1
+{
+    public const string SchemaV1 = "iroha.taira.prepared-transaction-submit.v1";
+
+    [JsonRequired, JsonPropertyName("schema")]
+    public string Schema { get; init; } = SchemaV1;
+
+    [JsonRequired, JsonPropertyName("binding")]
+    public ToriiTairaPublicResetMutationBindingV1 Binding { get; init; } = new();
+
+    [JsonRequired, JsonPropertyName("operation")]
+    public string Operation { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("transaction_hash_hex")]
+    public string TransactionHashHex { get; init; } = string.Empty;
+
+    [JsonRequired, JsonPropertyName("outcome")]
+    public string Outcome { get; init; } = string.Empty;
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -479,6 +716,7 @@ public sealed record class ToriiVpnQuote
     private ulong mtuBytes;
     private string meterFamily = string.Empty;
     private string relayIdHex = string.Empty;
+    private string relayMldsa65PublicKeyHex = string.Empty;
     private string descriptorCommitHex = string.Empty;
     private string tlsServerName = string.Empty;
     private string relayTlsSpkiSha256Hex = string.Empty;
@@ -635,6 +873,16 @@ public sealed record class ToriiVpnQuote
         init => relayIdHex = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(RelayIdHex), 32);
     }
 
+    [JsonPropertyName("relay_mldsa65_public_key_hex")]
+    public string RelayMldsa65PublicKeyHex
+    {
+        get => relayMldsa65PublicKeyHex;
+        init => relayMldsa65PublicKeyHex = ToriiVpnDirectMetadata.RequireNonZeroExactSizedHex(
+            value,
+            nameof(RelayMldsa65PublicKeyHex),
+            ToriiVpnDirectMetadata.RelayMldsa65PublicKeyByteLength);
+    }
+
     [JsonPropertyName("descriptor_commit_hex")]
     public string DescriptorCommitHex
     {
@@ -725,6 +973,7 @@ public sealed record class ToriiVpnSession
     private string operatorAccountId = string.Empty;
     private string leaseFee = string.Empty;
     private string relayIdHex = string.Empty;
+    private string relayMldsa65PublicKeyHex = string.Empty;
     private string descriptorCommitHex = string.Empty;
     private string tlsServerName = string.Empty;
     private string relayTlsSpkiSha256Hex = string.Empty;
@@ -859,6 +1108,16 @@ public sealed record class ToriiVpnSession
     {
         get => relayIdHex;
         init => relayIdHex = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(RelayIdHex), 32);
+    }
+
+    [JsonPropertyName("relay_mldsa65_public_key_hex")]
+    public string RelayMldsa65PublicKeyHex
+    {
+        get => relayMldsa65PublicKeyHex;
+        init => relayMldsa65PublicKeyHex = ToriiVpnDirectMetadata.RequireNonZeroExactSizedHex(
+            value,
+            nameof(RelayMldsa65PublicKeyHex),
+            ToriiVpnDirectMetadata.RelayMldsa65PublicKeyByteLength);
     }
 
     [JsonPropertyName("descriptor_commit_hex")]
@@ -1162,6 +1421,7 @@ public sealed record class ToriiVpnReceiptListResponse
 internal static class ToriiVpnDirectMetadata
 {
     internal const int HelperTicketByteLength = 788;
+    internal const int RelayMldsa65PublicKeyByteLength = 1952;
 
     internal static ulong RequirePositive(ulong value, string paramName)
     {
@@ -1219,6 +1479,35 @@ internal static class ToriiVpnDirectMetadata
         }
 
         return value.Length == 0 ? value : RequireExactSizedHex(value, paramName, expectedBytes);
+    }
+
+    internal static string RequireNonZeroExactSizedHex(
+        string? value,
+        string paramName,
+        int expectedBytes)
+    {
+        var canonical = RequireExactSizedHex(value, paramName, expectedBytes);
+        if (canonical.AsSpan().IndexOfAnyExcept('0') < 0)
+        {
+            throw new ArgumentException("Value must not be all zero.", paramName);
+        }
+
+        return canonical;
+    }
+
+    internal static string RequireEmptyOrNonZeroExactSizedHex(
+        string? value,
+        string paramName,
+        int expectedBytes)
+    {
+        if (value is null)
+        {
+            throw new ArgumentNullException(paramName);
+        }
+
+        return value.Length == 0
+            ? value
+            : RequireNonZeroExactSizedHex(value, paramName, expectedBytes);
     }
 
     internal static string? RequireOptionalExactSizedHex(string? value, string paramName, int expectedBytes)
@@ -1339,6 +1628,29 @@ internal static class ToriiVpnDirectMetadata
         RequireExactSizedHex(value.LeaseIdHex, $"{paramName}.{nameof(ToriiVpnReceipt.LeaseIdHex)}", 32);
         RequireOptionalVpnTxInstruction(value.SettleLeaseInstruction, $"{paramName}.{nameof(ToriiVpnReceipt.SettleLeaseInstruction)}");
         return value;
+    }
+}
+
+/// <summary>Canonical materialized account returned by the exact account read route.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record class ToriiAccountReadResponse
+{
+    private JsonElement[] opaqueIds = Array.Empty<JsonElement>();
+
+    [JsonRequired, JsonPropertyName("account_id")]
+    public string AccountId { get; init; } = string.Empty;
+
+    [JsonPropertyName("label")]
+    public JsonElement? Label { get; init; }
+
+    [JsonPropertyName("uaid")]
+    public JsonElement? Uaid { get; init; }
+
+    [JsonRequired, JsonPropertyName("opaque_ids")]
+    public IReadOnlyList<JsonElement> OpaqueIds
+    {
+        get => ToriiListSnapshots.CopyRequired(opaqueIds);
+        init => opaqueIds = ToriiListSnapshots.CopyRequired(value);
     }
 }
 
@@ -1824,7 +2136,20 @@ internal static class ToriiAliasDirectMetadata
 
     internal static string RequireCanonicalAccountId(string? value, string paramName)
     {
-        return ToriiExplorerDirectMetadata.RequireCanonicalAccountId(value, paramName);
+        var exact = ToriiExplorerDirectMetadata.RequireExactNonEmptyText(value, paramName);
+        if (exact.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("Value must not contain whitespace.", paramName);
+        }
+        try
+        {
+            _ = global::Hyperledger.Iroha.Address.AccountAddress.Parse(exact);
+            return exact;
+        }
+        catch (global::Hyperledger.Iroha.AccountAddressException exception)
+        {
+            throw new ArgumentException("Value must be a canonical I105 account id.", paramName, exception);
+        }
     }
 
     internal static long RequirePositive(long value, string paramName)
@@ -1853,7 +2178,7 @@ internal static class ToriiAliasDirectMetadata
     }
 }
 
-internal static class ToriiOnboardingDirectMetadata
+internal static class ToriiAccountFaucetMetadata
 {
     internal static string RequireCanonicalAccountId(string? value, string paramName)
     {
@@ -1868,16 +2193,6 @@ internal static class ToriiOnboardingDirectMetadata
     internal static string RequireCanonicalQuantityText(string? value, string paramName)
     {
         return ToriiExplorerDirectMetadata.RequireCanonicalQuantityText(value, paramName);
-    }
-
-    internal static string RequireOptionalTransactionHashHex(string? value, string paramName)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return string.Empty;
-        }
-
-        return ToriiExplorerDirectMetadata.RequireExactSizedHex(value, paramName, 32);
     }
 
     internal static string RequireFaucetAlgorithm(string? value, string paramName)
@@ -4072,35 +4387,51 @@ public enum ToriiUaidManifestStatusFilter
     All,
 }
 
+public enum ToriiUaidManifestCountMode
+{
+    Exact = 1,
+    Bounded = 2,
+}
+
+public enum ToriiUaidManifestStatus
+{
+    Active = 1,
+    Pending = 2,
+    Expired = 3,
+    Revoked = 4,
+}
+
 public sealed record class ToriiUaidManifestQuery
 {
-    public long? DataspaceId { get; init; }
+    public ulong? DataspaceId { get; init; }
 
     public ToriiUaidManifestStatusFilter? Status { get; init; }
 
-    public int? Limit { get; init; }
+    public uint? Limit { get; init; }
 
-    public long Offset { get; init; }
+    public uint? Offset { get; init; }
+
+    public ToriiUaidManifestCountMode? CountMode { get; init; }
 }
 
 [JsonConverter(typeof(ToriiUaidPortfolioTotalsJsonConverter))]
 public sealed record class ToriiUaidPortfolioTotals
 {
-    private long accounts;
-    private long positions;
+    private ulong accounts;
+    private ulong positions;
 
     [JsonPropertyName("accounts")]
-    public long Accounts
+    public ulong Accounts
     {
         get => accounts;
-        init => accounts = ToriiUaidDirectMetadata.RequireNonNegativeInt64(value, nameof(Accounts));
+        init => accounts = value;
     }
 
     [JsonPropertyName("positions")]
-    public long Positions
+    public ulong Positions
     {
         get => positions;
-        init => positions = ToriiUaidDirectMetadata.RequireNonNegativeInt64(value, nameof(Positions));
+        init => positions = value;
     }
 }
 
@@ -4115,14 +4446,14 @@ public sealed record class ToriiUaidPortfolioAsset
     public string AssetId
     {
         get => assetId;
-        init => assetId = ToriiUaidDirectMetadata.RequireExactNonEmptyText(value, nameof(AssetId));
+        init => assetId = ToriiUaidDirectMetadata.RequireCanonicalAssetId(value, nameof(AssetId)).Literal;
     }
 
     [JsonPropertyName("asset_definition_id")]
     public string AssetDefinitionId
     {
         get => assetDefinitionId;
-        init => assetDefinitionId = ToriiUaidDirectMetadata.RequireExactNonEmptyText(
+        init => assetDefinitionId = ToriiUaidDirectMetadata.RequireCanonicalAssetDefinitionId(
             value,
             nameof(AssetDefinitionId));
     }
@@ -4155,7 +4486,7 @@ public sealed record class ToriiUaidPortfolioAccount
     public string? Label
     {
         get => label;
-        init => label = ToriiUaidDirectMetadata.RequireOptionalExactNonEmptyText(value, nameof(Label));
+        init => label = value;
     }
 
     [JsonPropertyName("assets")]
@@ -4169,24 +4500,22 @@ public sealed record class ToriiUaidPortfolioAccount
 [JsonConverter(typeof(ToriiUaidPortfolioDataspaceJsonConverter))]
 public sealed record class ToriiUaidPortfolioDataspace
 {
-    private long dataspaceId;
+    private ulong dataspaceId;
     private string? dataspaceAlias;
     private ToriiUaidPortfolioAccount[] accounts = Array.Empty<ToriiUaidPortfolioAccount>();
 
     [JsonPropertyName("dataspace_id")]
-    public long DataspaceId
+    public ulong DataspaceId
     {
         get => dataspaceId;
-        init => dataspaceId = ToriiUaidDirectMetadata.RequireNonNegativeInt64(value, nameof(DataspaceId));
+        init => dataspaceId = value;
     }
 
     [JsonPropertyName("dataspace_alias")]
     public string? DataspaceAlias
     {
         get => dataspaceAlias;
-        init => dataspaceAlias = ToriiUaidDirectMetadata.RequireOptionalExactNonEmptyText(
-            value,
-            nameof(DataspaceAlias));
+        init => dataspaceAlias = value;
     }
 
     [JsonPropertyName("accounts")]
@@ -4229,24 +4558,22 @@ public sealed record class ToriiUaidPortfolioResponse
 [JsonConverter(typeof(ToriiUaidBindingsDataspaceJsonConverter))]
 public sealed record class ToriiUaidBindingsDataspace
 {
-    private long dataspaceId;
+    private ulong dataspaceId;
     private string? dataspaceAlias;
     private string[] accounts = Array.Empty<string>();
 
     [JsonPropertyName("dataspace_id")]
-    public long DataspaceId
+    public ulong DataspaceId
     {
         get => dataspaceId;
-        init => dataspaceId = ToriiUaidDirectMetadata.RequireNonNegativeInt64(value, nameof(DataspaceId));
+        init => dataspaceId = value;
     }
 
     [JsonPropertyName("dataspace_alias")]
     public string? DataspaceAlias
     {
         get => dataspaceAlias;
-        init => dataspaceAlias = ToriiUaidDirectMetadata.RequireOptionalExactNonEmptyText(
-            value,
-            nameof(DataspaceAlias));
+        init => dataspaceAlias = value;
     }
 
     [JsonPropertyName("accounts")]
@@ -4281,45 +4608,43 @@ public sealed record class ToriiUaidBindingsResponse
 [JsonConverter(typeof(ToriiUaidManifestRevocationJsonConverter))]
 public sealed record class ToriiUaidManifestRevocation
 {
-    private long epoch;
+    private ulong epoch;
     private string? reason;
 
     [JsonPropertyName("epoch")]
-    public long Epoch
+    public ulong Epoch
     {
         get => epoch;
-        init => epoch = ToriiUaidDirectMetadata.RequireNonNegativeInt64(value, nameof(Epoch));
+        init => epoch = value;
     }
 
     [JsonPropertyName("reason")]
     public string? Reason
     {
         get => reason;
-        init => reason = ToriiUaidDirectMetadata.RequireOptionalExactNonEmptyText(value, nameof(Reason));
+        init => reason = value;
     }
 }
 
 [JsonConverter(typeof(ToriiUaidManifestLifecycleJsonConverter))]
 public sealed record class ToriiUaidManifestLifecycle
 {
-    private long? activatedEpoch;
-    private long? expiredEpoch;
+    private ulong? activatedEpoch;
+    private ulong? expiredEpoch;
     private ToriiUaidManifestRevocation? revocation;
 
     [JsonPropertyName("activated_epoch")]
-    public long? ActivatedEpoch
+    public ulong? ActivatedEpoch
     {
         get => activatedEpoch;
-        init => activatedEpoch = ToriiUaidDirectMetadata.RequireOptionalNonNegativeInt64(
-            value,
-            nameof(ActivatedEpoch));
+        init => activatedEpoch = value;
     }
 
     [JsonPropertyName("expired_epoch")]
-    public long? ExpiredEpoch
+    public ulong? ExpiredEpoch
     {
         get => expiredEpoch;
-        init => expiredEpoch = ToriiUaidDirectMetadata.RequireOptionalNonNegativeInt64(value, nameof(ExpiredEpoch));
+        init => expiredEpoch = value;
     }
 
     [JsonPropertyName("revocation")]
@@ -4335,28 +4660,26 @@ public sealed record class ToriiUaidManifestLifecycle
 [JsonConverter(typeof(ToriiUaidManifestRecordJsonConverter))]
 public sealed record class ToriiUaidManifestRecord
 {
-    private long dataspaceId;
+    private ulong dataspaceId;
     private string? dataspaceAlias;
     private string manifestHash = string.Empty;
-    private string status = string.Empty;
+    private ToriiUaidManifestStatus status;
     private ToriiUaidManifestLifecycle lifecycle = new();
     private string[] accounts = Array.Empty<string>();
     private JsonNode? manifest;
 
     [JsonPropertyName("dataspace_id")]
-    public long DataspaceId
+    public ulong DataspaceId
     {
         get => dataspaceId;
-        init => dataspaceId = ToriiUaidDirectMetadata.RequireNonNegativeInt64(value, nameof(DataspaceId));
+        init => dataspaceId = value;
     }
 
     [JsonPropertyName("dataspace_alias")]
     public string? DataspaceAlias
     {
         get => dataspaceAlias;
-        init => dataspaceAlias = ToriiUaidDirectMetadata.RequireOptionalExactNonEmptyText(
-            value,
-            nameof(DataspaceAlias));
+        init => dataspaceAlias = value;
     }
 
     [JsonPropertyName("manifest_hash")]
@@ -4367,10 +4690,10 @@ public sealed record class ToriiUaidManifestRecord
     }
 
     [JsonPropertyName("status")]
-    public string Status
+    public ToriiUaidManifestStatus Status
     {
         get => status;
-        init => status = ToriiUaidDirectMetadata.RequireExactNonEmptyText(value, nameof(Status));
+        init => status = ToriiUaidDirectMetadata.RequireManifestStatus(value, nameof(Status));
     }
 
     [JsonPropertyName("lifecycle")]
@@ -4388,10 +4711,10 @@ public sealed record class ToriiUaidManifestRecord
     }
 
     [JsonPropertyName("manifest")]
-    public JsonNode? Manifest
+    public JsonNode Manifest
     {
-        get => ToriiJsonSnapshots.Copy(manifest);
-        init => manifest = ToriiJsonSnapshots.Copy(value);
+        get => ToriiJsonSnapshots.Copy(manifest)!;
+        init => manifest = ToriiUaidDirectMetadata.CopyRequiredAssetPermissionManifest(value, nameof(Manifest));
     }
 }
 
@@ -4399,7 +4722,9 @@ public sealed record class ToriiUaidManifestRecord
 public sealed record class ToriiUaidManifestsResponse
 {
     private string uaid = string.Empty;
-    private long total;
+    private ulong total;
+    private bool hasMore;
+    private ToriiUaidManifestCountMode countMode;
     private ToriiUaidManifestRecord[] manifests = Array.Empty<ToriiUaidManifestRecord>();
 
     [JsonPropertyName("uaid")]
@@ -4410,10 +4735,24 @@ public sealed record class ToriiUaidManifestsResponse
     }
 
     [JsonPropertyName("total")]
-    public long Total
+    public ulong Total
     {
         get => total;
-        init => total = ToriiUaidDirectMetadata.RequireNonNegativeInt64(value, nameof(Total));
+        init => total = value;
+    }
+
+    [JsonPropertyName("has_more")]
+    public bool HasMore
+    {
+        get => hasMore;
+        init => hasMore = value;
+    }
+
+    [JsonPropertyName("count_mode")]
+    public ToriiUaidManifestCountMode CountMode
+    {
+        get => countMode;
+        init => countMode = ToriiUaidDirectMetadata.RequireManifestCountMode(value, nameof(CountMode));
     }
 
     [JsonPropertyName("manifests")]
@@ -4426,20 +4765,11 @@ public sealed record class ToriiUaidManifestsResponse
 
 internal static class ToriiUaidDirectMetadata
 {
-    internal static long RequireNonNegativeInt64(long value, string paramName)
-    {
-        if (value < 0)
-        {
-            throw new ArgumentOutOfRangeException(paramName, value, "Value must be non-negative.");
-        }
-
-        return value;
-    }
-
-    internal static long? RequireOptionalNonNegativeInt64(long? value, string paramName)
-    {
-        return value is long integer ? RequireNonNegativeInt64(integer, paramName) : null;
-    }
+    internal readonly record struct CanonicalAssetIdParts(
+        string Literal,
+        string AssetDefinitionId,
+        string AccountId,
+        ulong? DataspaceId);
 
     internal static string RequireCanonicalUaidLiteral(string? value, string paramName)
     {
@@ -4462,6 +4792,59 @@ internal static class ToriiUaidDirectMetadata
         return ToriiExplorerDirectMetadata.RequireCanonicalAccountId(value, paramName);
     }
 
+    internal static string RequireCanonicalAssetDefinitionId(string? value, string paramName)
+    {
+        var text = RequireExactNonEmptyText(value, paramName);
+        return TransactionEncodingContext.CanonicalizeAssetDefinitionId(text, paramName);
+    }
+
+    internal static CanonicalAssetIdParts RequireCanonicalAssetId(string? value, string paramName)
+    {
+        var text = RequireExactNonEmptyText(value, paramName);
+        if (text.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("Value must not contain whitespace.", paramName);
+        }
+        var parts = text.Split('#', StringSplitOptions.None);
+        if (parts.Length is not (2 or 3) || parts[0].Length == 0 || parts[1].Length == 0)
+        {
+            throw new ArgumentException("Value must be a canonical public asset id.", paramName);
+        }
+
+        string definition;
+        string account;
+        try
+        {
+            definition = RequireCanonicalAssetDefinitionId(parts[0], paramName);
+            account = RequireCanonicalAccountId(parts[1], paramName);
+        }
+        catch (ArgumentException error)
+        {
+            throw new ArgumentException("Value must be a canonical public asset id.", paramName, error);
+        }
+
+        ulong? dataspaceId = null;
+        if (parts.Length == 3)
+        {
+            const string Prefix = "dataspace:";
+            if (!parts[2].StartsWith(Prefix, StringComparison.Ordinal))
+            {
+                throw new ArgumentException("Value must be a canonical public asset id.", paramName);
+            }
+            var rawDataspace = parts[2].AsSpan(Prefix.Length);
+            if (rawDataspace.IsEmpty
+                || (rawDataspace.Length > 1 && rawDataspace[0] == '0')
+                || !rawDataspace.ToString().All(static character => character is >= '0' and <= '9')
+                || !ulong.TryParse(rawDataspace, out var parsedDataspace))
+            {
+                throw new ArgumentException("Value must be a canonical public asset id.", paramName);
+            }
+            dataspaceId = parsedDataspace;
+        }
+
+        return new CanonicalAssetIdParts(text, definition, account, dataspaceId);
+    }
+
     internal static string RequireExactNonEmptyText(string? value, string paramName)
     {
         return ToriiExplorerDirectMetadata.RequireExactNonEmptyText(value, paramName);
@@ -4482,6 +4865,38 @@ internal static class ToriiUaidDirectMetadata
         return ToriiExplorerDirectMetadata.RequireExactSizedHex(value, paramName, 32);
     }
 
+    internal static ToriiUaidManifestStatus RequireManifestStatus(
+        ToriiUaidManifestStatus value,
+        string paramName)
+    {
+        return value is ToriiUaidManifestStatus.Active
+            or ToriiUaidManifestStatus.Pending
+            or ToriiUaidManifestStatus.Expired
+            or ToriiUaidManifestStatus.Revoked
+            ? value
+            : throw new ArgumentOutOfRangeException(paramName, value, "Unknown UAID manifest status.");
+    }
+
+    internal static ToriiUaidManifestCountMode RequireManifestCountMode(
+        ToriiUaidManifestCountMode value,
+        string paramName)
+    {
+        return value is ToriiUaidManifestCountMode.Exact or ToriiUaidManifestCountMode.Bounded
+            ? value
+            : throw new ArgumentOutOfRangeException(paramName, value, "Unknown UAID manifest count mode.");
+    }
+
+    internal static JsonNode CopyRequiredAssetPermissionManifest(JsonNode? value, string paramName)
+    {
+        if (value is null)
+        {
+            throw new ArgumentNullException(paramName, "Value must not be null.");
+        }
+
+        ToriiUaidJson.ValidateAssetPermissionManifest(value, paramName);
+        return value.DeepClone();
+    }
+
     internal static ToriiUaidPortfolioTotals RequirePortfolioTotals(
         ToriiUaidPortfolioTotals? value,
         string paramName)
@@ -4491,8 +4906,6 @@ internal static class ToriiUaidDirectMetadata
             throw new ArgumentNullException(paramName, "Value must not be null.");
         }
 
-        RequireNonNegativeInt64(value.Accounts, $"{paramName}.{nameof(ToriiUaidPortfolioTotals.Accounts)}");
-        RequireNonNegativeInt64(value.Positions, $"{paramName}.{nameof(ToriiUaidPortfolioTotals.Positions)}");
         return value;
     }
 
@@ -4505,12 +4918,6 @@ internal static class ToriiUaidDirectMetadata
             throw new ArgumentNullException(paramName, "Value must not be null.");
         }
 
-        RequireOptionalNonNegativeInt64(
-            value.ActivatedEpoch,
-            $"{paramName}.{nameof(ToriiUaidManifestLifecycle.ActivatedEpoch)}");
-        RequireOptionalNonNegativeInt64(
-            value.ExpiredEpoch,
-            $"{paramName}.{nameof(ToriiUaidManifestLifecycle.ExpiredEpoch)}");
         RequireOptionalManifestRevocation(
             value.Revocation,
             $"{paramName}.{nameof(ToriiUaidManifestLifecycle.Revocation)}");
@@ -4526,8 +4933,6 @@ internal static class ToriiUaidDirectMetadata
             return null;
         }
 
-        RequireNonNegativeInt64(value.Epoch, $"{paramName}.{nameof(ToriiUaidManifestRevocation.Epoch)}");
-        RequireOptionalExactNonEmptyText(value.Reason, $"{paramName}.{nameof(ToriiUaidManifestRevocation.Reason)}");
         return value;
     }
 
@@ -4574,6 +4979,12 @@ internal static class ToriiUaidDirectMetadata
         }
 
         var copy = new string[values.Count];
+        if (values.Count > 1)
+        {
+            throw new ArgumentException(
+                "List must contain at most one universal account.",
+                paramName);
+        }
         for (var index = 0; index < values.Count; index++)
         {
             var value = values[index];
@@ -4618,10 +5029,18 @@ internal static class ToriiUaidDirectMetadata
         ToriiUaidPortfolioAsset value,
         string paramName)
     {
-        RequireExactNonEmptyText(value.AssetId, $"{paramName}.{nameof(ToriiUaidPortfolioAsset.AssetId)}");
-        RequireExactNonEmptyText(
+        var asset = RequireCanonicalAssetId(
+            value.AssetId,
+            $"{paramName}.{nameof(ToriiUaidPortfolioAsset.AssetId)}");
+        var definition = RequireCanonicalAssetDefinitionId(
             value.AssetDefinitionId,
             $"{paramName}.{nameof(ToriiUaidPortfolioAsset.AssetDefinitionId)}");
+        if (!string.Equals(asset.AssetDefinitionId, definition, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Asset id must match its asset definition id.",
+                $"{paramName}.{nameof(ToriiUaidPortfolioAsset.AssetId)}");
+        }
         RequireCanonicalQuantityText(
             value.Quantity,
             $"{paramName}.{nameof(ToriiUaidPortfolioAsset.Quantity)}");
@@ -4633,7 +5052,6 @@ internal static class ToriiUaidDirectMetadata
         string paramName)
     {
         RequireCanonicalAccountId(value.AccountId, $"{paramName}.{nameof(ToriiUaidPortfolioAccount.AccountId)}");
-        RequireOptionalExactNonEmptyText(value.Label, $"{paramName}.{nameof(ToriiUaidPortfolioAccount.Label)}");
         CopyRequiredPortfolioAssets(value.Assets, $"{paramName}.{nameof(ToriiUaidPortfolioAccount.Assets)}");
         return value;
     }
@@ -4642,11 +5060,25 @@ internal static class ToriiUaidDirectMetadata
         ToriiUaidPortfolioDataspace value,
         string paramName)
     {
-        RequireNonNegativeInt64(value.DataspaceId, $"{paramName}.{nameof(ToriiUaidPortfolioDataspace.DataspaceId)}");
-        RequireOptionalExactNonEmptyText(
-            value.DataspaceAlias,
-            $"{paramName}.{nameof(ToriiUaidPortfolioDataspace.DataspaceAlias)}");
         CopyRequiredPortfolioAccounts(value.Accounts, $"{paramName}.{nameof(ToriiUaidPortfolioDataspace.Accounts)}");
+        for (var accountIndex = 0; accountIndex < value.Accounts.Count; accountIndex++)
+        {
+            var account = value.Accounts[accountIndex];
+            for (var assetIndex = 0; assetIndex < account.Assets.Count; assetIndex++)
+            {
+                var asset = account.Assets[assetIndex];
+                var parts = RequireCanonicalAssetId(
+                    asset.AssetId,
+                    $"{paramName}.{nameof(ToriiUaidPortfolioDataspace.Accounts)}[{accountIndex}].{nameof(ToriiUaidPortfolioAccount.Assets)}[{assetIndex}].{nameof(ToriiUaidPortfolioAsset.AssetId)}");
+                if (!string.Equals(parts.AccountId, account.AccountId, StringComparison.Ordinal)
+                    || (parts.DataspaceId.HasValue && parts.DataspaceId.Value != value.DataspaceId))
+                {
+                    throw new ArgumentException(
+                        "Asset id must match its account and dataspace.",
+                        $"{paramName}.{nameof(ToriiUaidPortfolioDataspace.Accounts)}[{accountIndex}].{nameof(ToriiUaidPortfolioAccount.Assets)}[{assetIndex}].{nameof(ToriiUaidPortfolioAsset.AssetId)}");
+                }
+            }
+        }
         return value;
     }
 
@@ -4654,10 +5086,6 @@ internal static class ToriiUaidDirectMetadata
         ToriiUaidBindingsDataspace value,
         string paramName)
     {
-        RequireNonNegativeInt64(value.DataspaceId, $"{paramName}.{nameof(ToriiUaidBindingsDataspace.DataspaceId)}");
-        RequireOptionalExactNonEmptyText(
-            value.DataspaceAlias,
-            $"{paramName}.{nameof(ToriiUaidBindingsDataspace.DataspaceAlias)}");
         CopyRequiredCanonicalAccountIdList(value.Accounts, $"{paramName}.{nameof(ToriiUaidBindingsDataspace.Accounts)}");
         return value;
     }
@@ -4666,14 +5094,33 @@ internal static class ToriiUaidDirectMetadata
         ToriiUaidManifestRecord value,
         string paramName)
     {
-        RequireNonNegativeInt64(value.DataspaceId, $"{paramName}.{nameof(ToriiUaidManifestRecord.DataspaceId)}");
-        RequireOptionalExactNonEmptyText(
-            value.DataspaceAlias,
-            $"{paramName}.{nameof(ToriiUaidManifestRecord.DataspaceAlias)}");
         RequireExactSizedHex(value.ManifestHash, $"{paramName}.{nameof(ToriiUaidManifestRecord.ManifestHash)}");
-        RequireExactNonEmptyText(value.Status, $"{paramName}.{nameof(ToriiUaidManifestRecord.Status)}");
+        RequireManifestStatus(value.Status, $"{paramName}.{nameof(ToriiUaidManifestRecord.Status)}");
         RequireManifestLifecycle(value.Lifecycle, $"{paramName}.{nameof(ToriiUaidManifestRecord.Lifecycle)}");
+        var derivedStatus = value.Lifecycle.Revocation is not null
+            ? ToriiUaidManifestStatus.Revoked
+            : value.Lifecycle.ExpiredEpoch.HasValue
+                ? ToriiUaidManifestStatus.Expired
+                : value.Lifecycle.ActivatedEpoch.HasValue
+                    ? ToriiUaidManifestStatus.Active
+                    : ToriiUaidManifestStatus.Pending;
+        if (value.Status != derivedStatus)
+        {
+            throw new ArgumentException(
+                "Manifest status must match its lifecycle.",
+                $"{paramName}.{nameof(ToriiUaidManifestRecord.Status)}");
+        }
         CopyRequiredCanonicalAccountIdList(value.Accounts, $"{paramName}.{nameof(ToriiUaidManifestRecord.Accounts)}");
+        CopyRequiredAssetPermissionManifest(value.Manifest, $"{paramName}.{nameof(ToriiUaidManifestRecord.Manifest)}");
+        var manifest = value.Manifest.AsObject();
+        if (ToriiUaidJson.RequireJsonUInt64(
+                manifest["dataspace"],
+                $"{paramName}.{nameof(ToriiUaidManifestRecord.Manifest)}.dataspace") != value.DataspaceId)
+        {
+            throw new ArgumentException(
+                "Manifest dataspace must match the record dataspace id.",
+                $"{paramName}.{nameof(ToriiUaidManifestRecord.Manifest)}");
+        }
         return value;
     }
 

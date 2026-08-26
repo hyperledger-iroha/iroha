@@ -31,14 +31,14 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
             )
         })
         .collect::<Vec<_>>();
-    let encode_claim = |claim: &AutonomousLaneEntrypointClaimV3| {
+    let encode_claim = |claim: &AutonomousLaneEntrypointClaimV1| {
         norito::to_bytes(claim).expect("encode adversarial claim")
     };
     let pending = payload
         .entrypoint_hashes
         .iter()
         .map(|entrypoint_hash| {
-            AutonomousLaneEntrypointClaimV3::release_pending_for_payload(
+            AutonomousLaneEntrypointClaimV1::release_pending_for_payload(
                 &payload,
                 *entrypoint_hash,
                 retirement_hash,
@@ -49,7 +49,7 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
         .entrypoint_hashes
         .iter()
         .map(|entrypoint_hash| {
-            AutonomousLaneEntrypointClaimV3::released_for_payload(
+            AutonomousLaneEntrypointClaimV1::released_for_payload(
                 &payload,
                 *entrypoint_hash,
                 retirement_hash,
@@ -59,7 +59,7 @@ fn autonomous_claim_release_rejects_noncanonical_groups_before_any_write() {
     // Pending*/Active* is the only crash-reachable prepare ordering. An
     // Active/ReleasePending inversion must fail before the first claim is
     // normalized, leaving the entire adversarial group byte-identical.
-    let active_first = AutonomousLaneEntrypointClaimV3::new(&payload, payload.entrypoint_hashes[0]);
+    let active_first = AutonomousLaneEntrypointClaimV1::new(&payload, payload.entrypoint_hashes[0]);
     fs::write(&paths[0], encode_claim(&active_first)).expect("write inverted active claim");
     let before_prepare = paths
         .iter()
@@ -651,7 +651,7 @@ fn strict_reservation_classifier_rejects_conflicting_claim_temp_without_mutation
     let claim_path =
         Kura::autonomous_lane_entrypoint_claim_path(temp_dir.path(), &network_id, &entrypoint_hash);
     let temp_path = Kura::autonomous_lane_entrypoint_claim_temp_path(&claim_path);
-    let conflicting_claim = AutonomousLaneEntrypointClaimV3::new(&conflicting, entrypoint_hash);
+    let conflicting_claim = AutonomousLaneEntrypointClaimV1::new(&conflicting, entrypoint_hash);
     let temp_bytes =
         norito::encode_canonical(&conflicting_claim).expect("encode conflicting claim temp");
     fs::write(&temp_path, &temp_bytes).expect("write conflicting claim temp");

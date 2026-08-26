@@ -12,7 +12,7 @@ object SubscriptionJsonParser {
         return SubscriptionPlanCreateResponse(
             ok = asBoolean(obj["ok"], "ok"),
             planId = asString(obj["plan_id"], "plan_id"),
-            txHashHex = asString(obj["tx_hash_hex"], "tx_hash_hex"),
+            txHashHex = transactionHash(obj["tx_hash_hex"], "tx_hash_hex"),
         )
     }
 
@@ -41,7 +41,7 @@ object SubscriptionJsonParser {
             billingTriggerId = asString(obj["billing_trigger_id"], "billing_trigger_id"),
             usageTriggerId = asOptionalString(obj["usage_trigger_id"], "usage_trigger_id"),
             firstChargeMs = asNonNegativeLong(obj["first_charge_ms"], "first_charge_ms"),
-            txHashHex = asString(obj["tx_hash_hex"], "tx_hash_hex"),
+            txHashHex = transactionHash(obj["tx_hash_hex"], "tx_hash_hex"),
         )
     }
 
@@ -66,7 +66,7 @@ object SubscriptionJsonParser {
         return SubscriptionActionResponse(
             ok = asBoolean(obj["ok"], "ok"),
             subscriptionId = asString(obj["subscription_id"], "subscription_id"),
-            txHashHex = asString(obj["tx_hash_hex"], "tx_hash_hex"),
+            txHashHex = transactionHash(obj["tx_hash_hex"], "tx_hash_hex"),
         )
     }
 
@@ -94,6 +94,14 @@ object SubscriptionJsonParser {
     private fun asString(value: Any?, path: String): String {
         check(value is String) { "$path must be a string" }
         return value
+    }
+
+    private fun transactionHash(value: Any?, path: String): String {
+        val literal = asString(value, path)
+        check(literal.matches(Regex("[0-9a-f]{63}[13579bdf]"))) {
+            "$path must match [0-9a-f]{63}[13579bdf] with the Iroha HashOf marker"
+        }
+        return literal
     }
 
     private fun asOptionalString(value: Any?, path: String): String? {

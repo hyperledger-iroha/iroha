@@ -253,7 +253,7 @@ public final class CanonicalRequestSignerTests {
     final String canonicalHex =
         "0x02000120ce7fa46c9dce7ea4b125e2e36bdb63ea33073e7590ac92816ae1e861b7048b03";
     assert canonicalHex.equals(
-            AccountAddress.parseEncodedIgnoringCurveSupport(i105, null).address.canonicalHex())
+            AccountAddress.parseEncodedIgnoringCurveSupport(i105, null).canonicalHex())
         : "shared I105 fixture must decode to the cross-SDK canonical bytes";
     final URI uri = new URI("https://torii.example/v1/accounts");
     final long timestampMs = 1_717_171_717_006L;

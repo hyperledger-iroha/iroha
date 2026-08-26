@@ -112,7 +112,7 @@ use sorafs_orchestrator::{
     taikai_cache::{TaikaiCacheConfig, TaikaiCacheStatsSnapshot, TaikaiPullQueueStats},
 };
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::TryInto,
@@ -307,7 +307,6 @@ fn parse_account_id_arg(flag: &str, raw: &str, context: &str) -> Result<AccountI
         });
     }
     AccountId::parse_encoded(trimmed)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| format!("failed to parse `{flag}` for `{context}` as account id: {err}"))
 }
 fn parse_account_id_arg_with_prefix(
@@ -330,7 +329,6 @@ fn parse_account_id_arg_with_prefix(
         return parse_account_id_arg(flag, trimmed, context);
     }
     AccountId::parse_encoded(trimmed)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| format!("failed to parse `{flag}` for `{context}` as account id: {err}"))
 }
 fn authority_payload_literal(
@@ -2733,6 +2731,82 @@ fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
     file.write_all(bytes)
         .map_err(|err| format!("failed to write `{}`: {err}", path.display()))
 }
+fn write_secret_text(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut file = open_secret_output_file(path)?;
+    file.write_all(bytes)
+        .map_err(|err| format!("failed to write `{}`: {err}", path.display()))?;
+    file.sync_all()
+        .map_err(|err| format!("failed to sync `{}`: {err}", path.display()))
+}
+#[cfg(unix)]
+#[allow(unsafe_code, reason = "geteuid has no safe standard-library wrapper")]
+fn secret_output_effective_uid() -> u32 {
+    unsafe extern "C" {
+        fn geteuid() -> std::os::raw::c_uint;
+    }
+    // SAFETY: `geteuid` has no preconditions and does not retain pointers.
+    unsafe { geteuid() }
+}
+#[cfg(not(unix))]
+fn open_secret_output_file(path: &Path) -> Result<File, String> {
+    Err(format!(
+        "failed to write `{}`: secret outputs require Unix owner/mode/link custody enforcement",
+        path.display()
+    ))
+}
+#[cfg(unix)]
+fn open_secret_output_file(path: &Path) -> Result<File, String> {
+    validate_output_path(path)?;
+    ensure_parent_dir(path)?;
+    validate_output_path(path)?;
+    let mut options = OpenOptions::new();
+    // A bootstrap capability must never be written through an inode that may
+    // already have been opened for reading. Publish only into a fresh inode;
+    // operators must choose a new path for every proxy start.
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    set_no_follow_flag(&mut options);
+    let file = options
+        .open(path)
+        .map_err(|err| format!("failed to open `{}` for writing: {err}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("failed to inspect `{}` after open: {err}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "failed to write `{}`: secret output must be a regular file",
+            path.display()
+        ));
+    }
+    if metadata.uid() != secret_output_effective_uid()
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(format!(
+            "failed to write `{}`: secret output must be owned by the invoking user, have one link, and be owner-private",
+            path.display()
+        ));
+    }
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|err| format!("failed to enforce mode 0600 on `{}`: {err}", path.display()))?;
+    let secured_metadata = file.metadata().map_err(|err| {
+        format!(
+            "failed to re-inspect `{}` after securing permissions: {err}",
+            path.display()
+        )
+    })?;
+    if secured_metadata.uid() != secret_output_effective_uid()
+        || secured_metadata.nlink() != 1
+        || secured_metadata.mode() & 0o777 != 0o600
+    {
+        return Err(format!(
+            "failed to write `{}`: secret output custody changed while it was opened",
+            path.display()
+        ));
+    }
+    Ok(file)
+}
 fn open_output_file(path: &Path) -> Result<File, String> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -3708,11 +3782,13 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         let manifest = session.local_proxy_manifest.as_ref().ok_or_else(|| {
             "--local-proxy-manifest-out requires `local_proxy.emit_browser_manifest = true` and an active local proxy runtime".to_string()
         })?;
-        let manifest_value =
-            to_value(manifest).expect("local proxy manifest should serialise to JSON");
         let manifest_json =
-            to_string_pretty(&manifest_value).expect("local proxy manifest should emit valid JSON");
-        write_text(&path, manifest_json.as_bytes())?;
+            to_string_pretty(manifest).expect("local proxy manifest should emit valid JSON");
+        let write_result = write_secret_text(&path, manifest_json.as_bytes());
+        let mut secret_bytes = manifest_json.into_bytes();
+        secret_bytes.fill(0);
+        std::hint::black_box(secret_bytes.as_mut_slice());
+        write_result?;
     }
     let summary_text = to_string_pretty(&summary).expect("fetch summary should be serialisable");
     println!("{summary_text}");
@@ -3781,7 +3857,7 @@ fn proxy_set_mode(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to parse orchestrator config JSON: {err}"))?;
     let mut orchestrator_config = orchestrator_config_from_json(&config_value)
         .map_err(|err| format!("failed to decode orchestrator config structure: {err}"))?;
-    let (previous_mode, telemetry_label, bind_addr, guard_cache_key_hex) = {
+    let (previous_mode, telemetry_label, bind_addr) = {
         let proxy_cfg = orchestrator_config.local_proxy.as_mut().ok_or_else(|| {
             "orchestrator config does not enable `local_proxy`; remediation is unavailable"
                 .to_string()
@@ -3790,8 +3866,7 @@ fn proxy_set_mode(raw_args: Vec<String>) -> Result<(), String> {
         proxy_cfg.proxy_mode = requested_mode.clone();
         let label = proxy_cfg.telemetry_label.clone();
         let addr = proxy_cfg.bind_addr.clone();
-        let guard_key = proxy_cfg.guard_cache_key_hex.clone();
-        (prev, label, addr, guard_key)
+        (prev, label, addr)
     };
     let effective_mode = orchestrator_config
         .local_proxy
@@ -3823,9 +3898,6 @@ fn proxy_set_mode(raw_args: Vec<String>) -> Result<(), String> {
         insert_json!(summary["telemetry_label"] = Value::String(label));
     }
     insert_json!(summary["bind_addr"] = Value::String(bind_addr));
-    if let Some(guard_key) = guard_cache_key_hex {
-        insert_json!(summary["guard_cache_key_hex"] = Value::String(guard_key));
-    }
     let summary_json = norito::json::to_json_pretty(&Value::Object(summary))
         .map_err(|err| format!("failed to render summary JSON: {err}"))?;
     if let Some(path) = json_out {
@@ -11455,6 +11527,41 @@ mod manifest_tests {
             fs::read(&output_path).expect("read output"),
             br#"{"ok":true}"#
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn secret_output_refuses_every_existing_inode() {
+        use std::{
+            io::{Read as _, Seek as _, SeekFrom},
+            os::unix::fs::PermissionsExt as _,
+        };
+
+        let temp = TempDir::new().expect("tempdir");
+        let output_path = temp.path().join("proxy-bootstrap.json");
+        fs::write(&output_path, b"existing owner-private contents")
+            .expect("write existing destination");
+        fs::set_permissions(&output_path, fs::Permissions::from_mode(0o600))
+            .expect("make destination owner-private");
+        let mut preopened_reader = File::open(&output_path).expect("pre-open destination reader");
+
+        let error = write_secret_text(&output_path, b"new bearer capability")
+            .expect_err("secret output must never reuse an existing inode");
+        assert!(
+            error.contains("failed to open"),
+            "unexpected secret-output error: {error}"
+        );
+        assert_eq!(
+            fs::read(&output_path).expect("read unchanged destination"),
+            b"existing owner-private contents"
+        );
+        preopened_reader
+            .seek(SeekFrom::Start(0))
+            .expect("rewind pre-opened reader");
+        let mut observed = Vec::new();
+        preopened_reader
+            .read_to_end(&mut observed)
+            .expect("read pre-opened inode");
+        assert_eq!(observed, b"existing owner-private contents");
     }
     #[cfg(unix)]
     #[test]
@@ -20972,8 +21079,13 @@ fn build_fetch_summary(
         .collect();
     insert_json!(root["chunk_receipts"] = Value::Array(receipts));
     if let Some(manifest) = &session.local_proxy_manifest {
-        let manifest_json =
-            to_value(manifest).expect("local proxy manifest should serialise to JSON");
+        let mut public_manifest = manifest.clone();
+        public_manifest.client_capability_hex = None;
+        let mut manifest_json =
+            to_value(&public_manifest).expect("local proxy manifest should serialise to JSON");
+        if let Value::Object(fields) = &mut manifest_json {
+            fields.remove("client_capability_hex");
+        }
         insert_json!(root["local_proxy_manifest"] = manifest_json);
     }
     if let Some(stats) = session.taikai_cache_stats {

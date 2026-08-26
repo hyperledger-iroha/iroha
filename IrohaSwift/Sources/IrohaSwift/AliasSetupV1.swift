@@ -1516,10 +1516,11 @@ public struct AliasSetupReportV1: Codable, Equatable, Sendable {
 
 public struct AliasPlanAnchorV1: Codable, Equatable, Sendable {
     public let blockHeight: UInt64
+    /// Exact canonical checksummed `hash:<64 uppercase hex>#<CRC16>` block hash.
     public let blockHash: String
 
     public init(blockHeight: UInt64, blockHash: String) throws {
-        guard AliasPlanVerifier.isCanonicalHashText(blockHash) else {
+        guard AliasPlanVerifier.isCanonicalHashLiteral(blockHash) else {
             throw AliasSetupModelError.invalidValue(field: "block_hash")
         }
         self.blockHeight = blockHeight
@@ -2224,6 +2225,10 @@ public enum AliasPlanVerifier {
 
     fileprivate static func isCanonicalHashText(_ text: String) -> Bool {
         decodeHash(text) != nil
+    }
+
+    fileprivate static func isCanonicalHashLiteral(_ text: String) -> Bool {
+        (try? NetworkId(literal: text)) != nil
     }
 
     private static func decodeHash(_ text: String) -> Data? {

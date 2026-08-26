@@ -10,7 +10,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.Base64;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import okhttp3.mockwebserver.MockResponse;
@@ -50,7 +49,7 @@ public final class DefaultOkHttpWiringTests {
     try (MockWebServer server = new MockWebServer()) {
       final String uaidHex = "11".repeat(32);
       final String canonicalUaid = "uaid:" + uaidHex;
-      final String responseUaid = "UAID:" + uaidHex.toUpperCase(Locale.ROOT);
+      final String responseUaid = canonicalUaid;
       final String responseBody =
           String.format(
               """
@@ -81,7 +80,7 @@ public final class DefaultOkHttpWiringTests {
 
       final HttpClientTransport transport = HttpClientTransport.createDefault(config);
       final UaidBindingsResponse response =
-          transport.getUaidBindings(uaidHex).get(2, TimeUnit.SECONDS);
+          transport.getUaidBindings(canonicalUaid).get(2, TimeUnit.SECONDS);
 
       assertEquals(canonicalUaid, response.uaid());
       assertEquals(1, response.dataspaces().size());

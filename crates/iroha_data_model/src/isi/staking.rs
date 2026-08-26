@@ -568,25 +568,26 @@ mod slice_tests {
         });
     }
     #[test]
-    fn staking_registry_decodes_type_names_and_stable_ids() {
+    fn staking_registry_decodes_only_stable_ids() {
         let registry = crate::isi::InstructionRegistry::new()
-            .register_slice::<RegisterPublicLaneValidator>()
-            .register_slice::<RebindPublicLaneValidatorPeer>()
-            .register_slice::<ActivatePublicLaneValidator>()
-            .register_slice::<ExitPublicLaneValidator>()
-            .register_slice::<CancelConsensusEvidencePenalty>()
-            .register_with_id_slice::<ActivatePublicLaneValidator>(
-                "iroha.staking.activate_public_lane_validator",
+            .register_with_id_slice::<RegisterPublicLaneValidator>(
+                "iroha.instruction.v1::staking::RegisterPublicLaneValidator",
             )
             .register_with_id_slice::<RebindPublicLaneValidatorPeer>(
                 "iroha.staking.rebind_public_lane_validator_peer",
             )
+            .register_with_id_slice::<ActivatePublicLaneValidator>(
+                "iroha.staking.activate_public_lane_validator",
+            )
             .register_with_id_slice::<ExitPublicLaneValidator>(
                 "iroha.staking.exit_public_lane_validator",
+            )
+            .register_with_id_slice::<CancelConsensusEvidencePenalty>(
+                "iroha.instruction.v1::staking::CancelConsensusEvidencePenalty",
             );
         assert_registry_decodes(
             &registry,
-            std::any::type_name::<RegisterPublicLaneValidator>(),
+            "iroha.instruction.v1::staking::RegisterPublicLaneValidator",
             RegisterPublicLaneValidator {
                 lane_id: LaneId::SINGLE,
                 validator: account(0x11),
@@ -624,11 +625,20 @@ mod slice_tests {
         );
         assert_registry_decodes(
             &registry,
-            std::any::type_name::<CancelConsensusEvidencePenalty>(),
+            "iroha.instruction.v1::staking::CancelConsensusEvidencePenalty",
             CancelConsensusEvidencePenalty {
                 evidence: sample_evidence(),
             },
         );
+        for type_name in [
+            std::any::type_name::<RegisterPublicLaneValidator>(),
+            std::any::type_name::<RebindPublicLaneValidatorPeer>(),
+            std::any::type_name::<ActivatePublicLaneValidator>(),
+            std::any::type_name::<ExitPublicLaneValidator>(),
+            std::any::type_name::<CancelConsensusEvidencePenalty>(),
+        ] {
+            assert!(registry.decode(type_name, &[]).is_none());
+        }
     }
     #[test]
     fn negative_numeric_payloads_cannot_decode_as_staking_instructions() {
@@ -711,10 +721,12 @@ mod slice_tests {
             encoded_flags,
         )
         .expect("frame forged bond");
-        let registry = crate::isi::InstructionRegistry::new().register::<BondPublicLaneStake>();
+        const WIRE_ID: &str = "iroha.instruction.v1::staking::BondPublicLaneStake";
+        let registry =
+            crate::isi::InstructionRegistry::new().register_with_id::<BondPublicLaneStake>(WIRE_ID);
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             registry
-                .decode(std::any::type_name::<BondPublicLaneStake>(), &framed)
+                .decode(WIRE_ID, &framed)
                 .expect("registered BondPublicLaneStake")
         }));
         let decoded = outcome.expect("forged LaneId must not unwind");

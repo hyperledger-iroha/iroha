@@ -101,7 +101,7 @@ def test_revoke_space_directory_manifest_posts_payload() -> None:
 
     result = client.revoke_space_directory_manifest(
         authority=CANONICAL_OWNER,
-        uaid="UAID:" + "23" * 32,
+        uaid="uaid:" + "23" * 32,
         dataspace=3,
         revoked_epoch=4096,
         reason="audit",

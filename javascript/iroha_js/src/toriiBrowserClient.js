@@ -70,6 +70,20 @@ const PIPELINE_STATUS_VALUES = new Set([
 ]);
 const PIPELINE_FAILURE_STATUSES = new Set(["Rejected", "Expired"]);
 const PIPELINE_STATUS_RESOLUTION_VALUES = new Set(["queue", "cache", "state"]);
+const TRANSACTION_ADMISSION_SUCCESS_STATUSES = Object.freeze([202]);
+const TRANSACTION_SUBMISSION_OPTION_KEYS = new Set(["signal", "headers"]);
+const TRANSACTION_STATUS_READ_OPTION_KEYS = new Set(["signal", "headers", "scope"]);
+const TRANSACTION_STATUS_POLL_OPTION_KEYS = new Set([
+  "signal",
+  "headers",
+  "intervalMs",
+  "timeoutMs",
+  "maxAttempts",
+]);
+const SUBMIT_TRANSACTION_AND_WAIT_OPTION_KEYS = new Set([
+  ...TRANSACTION_STATUS_POLL_OPTION_KEYS,
+  "hashHex",
+]);
 const HASH_LITERAL_PATTERN = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/u;
 const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
   "COLLECTING_SIGNATURES",
@@ -340,16 +354,18 @@ function normalizeContractDeploymentStateResponse(value, request) {
 }
 
 function requireExactHashHex(value, context) {
-  if (typeof value !== "string" || !/^[0-9a-fA-F]{64}$/u.test(value)) {
-    throw new TypeError(`${context} must be an exact 32-byte hexadecimal string`);
+  if (typeof value !== "string" || !/^[0-9a-f]{63}[13579bdf]$/u.test(value)) {
+    throw new TypeError(
+      `${context} must be an exact canonical lowercase 32-byte Iroha hash`,
+    );
   }
-  return value.toLowerCase();
+  return value;
 }
 
 function requireMatchingReceiptHashHeader(response, name, expectedHash) {
   const value = response.headers.get(name);
-  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
-    throw new Error(`${name} must occur exactly once as a lowercase 32-byte hash`);
+  if (typeof value !== "string" || !/^[0-9a-f]{63}[13579bdf]$/u.test(value)) {
+    throw new Error(`${name} must occur exactly once as a canonical lowercase Iroha hash`);
   }
   if (value !== expectedHash) {
     throw new Error(`${name} does not match the locally signed transaction`);
@@ -421,7 +437,7 @@ function normalizePublicPipelineStatusEnvelope(value, context) {
     }
     status.block_height = value.status.block_height;
   }
-  if (!["local", "auto", "global"].includes(value.scope)) {
+  if (!["local", "global"].includes(value.scope)) {
     throw new TypeError(`${context}.scope is not a current status scope`);
   }
   if (!PIPELINE_STATUS_RESOLUTION_VALUES.has(value.resolved_from)) {
@@ -461,17 +477,6 @@ function classifyGlobalPipelineStatusEnvelope(value, requestedHash, context) {
     if (!Number.isSafeInteger(blockHeight) || blockHeight < 1) {
       throw new Error(
         `${context}.status.block_height must be a positive safe integer`,
-      );
-    }
-    if (value.resolved_from !== "cache" && value.resolved_from !== "state") {
-      throw new Error(
-        `${context} Applied status must be cache- or state-resolved`,
-      );
-    }
-  } else if (PIPELINE_FAILURE_STATUSES.has(kind)) {
-    if (value.resolved_from !== "cache" && value.resolved_from !== "state") {
-      throw new Error(
-        `${context} terminal failure must be cache- or state-resolved`,
       );
     }
   }
@@ -1699,7 +1704,11 @@ export class ToriiBrowserClient {
 
   /** Submit exact locally signed version-1 transaction bytes to the pipeline. */
   submitTransaction(signedTransaction, options = {}) {
-    const opts = requireObject(options, "submitTransaction options");
+    const opts = requireSupportedOptions(
+      options,
+      "submitTransaction options",
+      TRANSACTION_SUBMISSION_OPTION_KEYS,
+    );
     const body = requireTransactionBytes(
       signedTransaction,
       "submitTransaction signedTransaction",
@@ -1714,7 +1723,7 @@ export class ToriiBrowserClient {
       },
       oneShot: true,
       signal: signalFrom(opts),
-      successStatuses: opts.successStatuses ?? [200, 201, 202, 204],
+      successStatuses: TRANSACTION_ADMISSION_SUCCESS_STATUSES,
       responseObserver: (response) => {
         requireMatchingReceiptHashHeader(
           response,
@@ -1732,7 +1741,11 @@ export class ToriiBrowserClient {
 
   /** Fetch one exact pipeline status by transaction hash. */
   async getTransactionStatus(hashHex, options = {}) {
-    const opts = requireObject(options, "getTransactionStatus options");
+    const opts = requireSupportedOptions(
+      options,
+      "getTransactionStatus options",
+      TRANSACTION_STATUS_READ_OPTION_KEYS,
+    );
     const hash = requireExactHashHex(hashHex, "getTransactionStatus hashHex");
     const scope = normalizeTransactionStatusScope(
       opts.scope,
@@ -1762,9 +1775,11 @@ export class ToriiBrowserClient {
 
   /** Poll until global chain state proves the exact transaction was applied. */
   async waitForTransactionStatus(hashHex, options = {}) {
-    const opts = requireObject(options, "waitForTransactionStatus options");
+    const context = "waitForTransactionStatus options";
+    const opts = requireObject(options, context);
     const hash = requireExactHashHex(hashHex, "waitForTransactionStatus hashHex");
-    rejectRemovedWaitScope(opts, "waitForTransactionStatus options");
+    rejectRemovedWaitScope(opts, context);
+    requireSupportedOptions(opts, context, TRANSACTION_STATUS_POLL_OPTION_KEYS);
     const intervalMs = normalizeOffset(
       opts.intervalMs,
       "waitForTransactionStatus.intervalMs",
@@ -1809,12 +1824,9 @@ export class ToriiBrowserClient {
       ) {
         return lastStatus;
       }
-      if (
-        classified.authoritative &&
-        PIPELINE_FAILURE_STATUSES.has(classified.kind)
-      ) {
+      if (PIPELINE_FAILURE_STATUSES.has(classified.kind)) {
         const error = new Error(
-          `Transaction ${hash} reached terminal ${classified.kind} status`,
+          `Transaction ${hash} reached fixed failure status ${classified.kind}`,
         );
         error.name = "ToriiBrowserTransactionStatusError";
         error.hashHex = hash;
@@ -1826,7 +1838,7 @@ export class ToriiBrowserClient {
       await delayWithSignal(Math.min(intervalMs, Math.max(0, deadline - Date.now())), signal);
     }
     const error = new Error(
-      `Transaction ${hash} did not reach persisted Applied status within ${timeoutMs}ms`,
+      `Transaction ${hash} did not reach global state-resolved Applied finality within ${timeoutMs}ms`,
     );
     error.name = "ToriiBrowserTransactionTimeoutError";
     error.hashHex = hash;
@@ -1834,10 +1846,12 @@ export class ToriiBrowserClient {
     throw error;
   }
 
-  /** Submit exact locally signed bytes and wait for persisted Applied finality. */
+  /** Submit exact locally signed bytes and wait for global state-resolved Applied finality. */
   async submitTransactionAndWait(signedTransaction, options = {}) {
-    const opts = requireObject(options, "submitTransactionAndWait options");
-    rejectRemovedWaitScope(opts, "submitTransactionAndWait options");
+    const context = "submitTransactionAndWait options";
+    const opts = requireObject(options, context);
+    rejectRemovedWaitScope(opts, context);
+    requireSupportedOptions(opts, context, SUBMIT_TRANSACTION_AND_WAIT_OPTION_KEYS);
     const body = requireTransactionBytes(
       signedTransaction,
       "submitTransactionAndWait signedTransaction",
@@ -1858,7 +1872,13 @@ export class ToriiBrowserClient {
       signal: signalFrom(opts),
       headers: opts.headers,
     });
-    return this.waitForTransactionStatus(hashHex, opts);
+    return this.waitForTransactionStatus(hashHex, {
+      signal: opts.signal,
+      headers: opts.headers,
+      intervalMs: opts.intervalMs,
+      timeoutMs: opts.timeoutMs,
+      maxAttempts: opts.maxAttempts,
+    });
   }
 
   /** Read the node compatibility advert before constructing deployment bytes. */

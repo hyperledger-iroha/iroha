@@ -1,7 +1,8 @@
-//! Transport and handshake scaffolding traits.
+//! Authenticated peer transport and handshake support.
 //!
-//! This module provides thin abstractions intended to support optional transports (e.g., QUIC) and
-//! handshakes (e.g., Noise/TLS) behind feature flags without affecting the default TCP path.
+//! Stock nodes use mandatory TLS 1.3 over TCP, with optional QUIC using the
+//! same application identity and channel-binding invariants. No plaintext or
+//! legacy Noise peer transport is selectable in the first release.
 #[cfg(any(feature = "p2p_tls", feature = "quic"))]
 use rustls::{
     DigitallySignedStruct, Error as RustlsError, SignatureScheme,
@@ -14,6 +15,8 @@ static SELF_SIGNED_SIGNATURE_ALGORITHMS: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| {
     rustls::crypto::ring::default_provider().signature_verification_algorithms
 });
+/// Exact ALPN negotiated by Iroha's raw TLS and QUIC P2P transports.
+pub const P2P_ALPN: &[u8] = b"iroha-p2p/1";
 /// Certificate verifier for self-signed transport certificates.
 ///
 /// An unpinned verifier deliberately leaves naming and trust-root validation to the application
@@ -101,14 +104,14 @@ pub mod quic {
     //! application handshake, but TLS still verifies that the server owns the certificate key. The
     //! signed handshake binds the presented certificate fingerprint to the active session. ALPN is
     //! fixed.
+    /// ALPN negotiated for Iroha P2P QUIC connections.
+    pub use super::P2P_ALPN;
     use quinn::{
         ClientConfig, Connection, Endpoint, IdleTimeout, RecvStream, SendStream, TransportConfig,
         VarInt, crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
     };
     use rustls::client::danger::ServerCertVerifier;
     use std::{io, sync::Arc, time::Duration};
-    /// ALPN negotiated for Iroha P2P QUIC connections.
-    pub const P2P_ALPN: &[u8] = b"iroha-p2p/1";
     /// Number of bidirectional streams used by one Iroha P2P QUIC session.
     pub const P2P_BIDI_STREAMS_PER_CONNECTION: u32 = 2;
     /// Smallest per-direction flow-control allocation used by the budget split.
@@ -760,46 +763,96 @@ pub fn quic_peer_certificate_fingerprint(
 }
 #[cfg(feature = "p2p_tls")]
 pub mod tls {
-    //! TLS-over-TCP transport (feature-gated, optional).
+    //! Mandatory first-release TLS-over-TCP transport.
     //!
     //! Wraps a TCP stream with TLS 1.3 using rustls. Self-signed certificates are accepted after
     //! TLS proves possession of their private key; peer identity is then enforced by the
-    //! application handshake signature bound to the presented certificate fingerprint.
+    //! application handshake signature bound to the presented certificate fingerprint. Stock
+    //! builds enable this module; builds without it fail network startup before public binding.
     use rustls::{ClientConfig, client::danger::ServerCertVerifier, pki_types::ServerName};
     use std::sync::Arc;
     use tokio::io::{AsyncRead, AsyncWrite};
     use tokio_rustls::{TlsConnector, client::TlsStream};
-    /// Upgrade an already-connected TCP stream to TLS 1.3.
+    const HTTPS_PROXY_ALPN: &[u8] = b"http/1.1";
+
+    fn server_name(host: &str) -> tokio::io::Result<ServerName<'static>> {
+        if let Ok(name) = ServerName::try_from(host) {
+            Ok(name.to_owned())
+        } else if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            Ok(ServerName::IpAddress(ip.into()))
+        } else {
+            Err(tokio::io::Error::new(
+                tokio::io::ErrorKind::InvalidInput,
+                "invalid SNI",
+            ))
+        }
+    }
+
+    fn require_alpn<S>(
+        tls: &TlsStream<S>,
+        expected: &[u8],
+        profile: &str,
+    ) -> tokio::io::Result<()> {
+        let negotiated = tls.get_ref().1.alpn_protocol();
+        if negotiated == Some(expected) {
+            Ok(())
+        } else {
+            Err(tokio::io::Error::new(
+                tokio::io::ErrorKind::InvalidData,
+                format!("{profile} did not negotiate its required ALPN"),
+            ))
+        }
+    }
+
+    async fn connect_with_profile<S>(
+        host: &str,
+        tcp: S,
+        verifier: Arc<dyn ServerCertVerifier>,
+        alpn: &[u8],
+        profile: &str,
+    ) -> tokio::io::Result<TlsStream<S>>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let mut config = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .dangerous()
+            .with_custom_certificate_verifier(verifier)
+            .with_no_client_auth();
+        config.alpn_protocols = vec![alpn.to_vec()];
+        let connector = TlsConnector::from(Arc::new(config));
+        let tls = connector.connect(server_name(host)?, tcp).await?;
+        require_alpn(&tls, alpn, profile)?;
+        Ok(tls)
+    }
+
+    /// Upgrade an already-connected raw P2P TCP stream to TLS 1.3.
+    ///
+    /// This profile offers and requires the exact [`super::P2P_ALPN`] protocol.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid server names, TLS handshake failures, or a
+    /// missing or different negotiated ALPN.
     pub async fn connect_tls<S>(host: &str, tcp: S) -> tokio::io::Result<TlsStream<S>>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
         let verifier: Arc<dyn ServerCertVerifier> =
             Arc::new(super::CertificateKeyProofVerifier::unpinned());
-        let config = ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth();
-        let config = Arc::new(config);
-        let connector = TlsConnector::from(config);
-        let server_name = if let Ok(name) = ServerName::try_from(host) {
-            name.to_owned()
-        } else if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-            ServerName::IpAddress(ip.into())
-        } else {
-            return Err(tokio::io::Error::new(
-                tokio::io::ErrorKind::InvalidInput,
-                "invalid SNI",
-            ));
-        };
-        let tls = connector.connect(server_name, tcp).await?;
-        Ok(tls)
+        connect_with_profile(host, tcp, verifier, super::P2P_ALPN, "raw P2P TLS").await
     }
-    /// Upgrade an already-connected TCP stream to TLS with end-entity certificate pinning.
+
+    /// Upgrade an already-connected HTTPS proxy stream to pinned TLS 1.3.
     ///
-    /// This is intended for `https://` proxy connections where operator-supplied pins can prevent
-    /// MITM capture of proxy credentials.
-    pub async fn connect_tls_pinned<S>(
+    /// This profile offers and requires HTTP/1.1 ALPN. The exact end-entity
+    /// certificate pin is mandatory so CONNECT credentials cannot be captured by
+    /// an unauthenticated proxy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid server names, TLS handshake or certificate
+    /// pin failures, or a missing or different negotiated ALPN.
+    pub async fn connect_https_proxy_tls_pinned<S>(
         host: &str,
         tcp: S,
         expected_cert_der: Arc<[u8]>,
@@ -811,747 +864,140 @@ pub mod tls {
         let verifier: Arc<dyn ServerCertVerifier> = Arc::new(
             super::CertificateKeyProofVerifier::pinned(expected_fingerprint),
         );
-        let config = ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(verifier)
-            .with_no_client_auth();
-        let connector = TlsConnector::from(Arc::new(config));
-        let server_name = if let Ok(name) = ServerName::try_from(host) {
-            name.to_owned()
-        } else if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-            ServerName::IpAddress(ip.into())
-        } else {
-            return Err(tokio::io::Error::new(
-                tokio::io::ErrorKind::InvalidInput,
-                "invalid SNI",
-            ));
-        };
-        let tls = connector.connect(server_name, tcp).await?;
-        Ok(tls)
+        connect_with_profile(host, tcp, verifier, HTTPS_PROXY_ALPN, "HTTPS proxy TLS").await
     }
-}
-#[cfg(feature = "p2p_ws")]
-pub mod ws {
-    //! WebSocket fallback transport (client-side) over WSS to Torii `/p2p`.
-    use futures::{Sink as _, Stream as _};
-    use tokio::io::{AsyncRead, AsyncWrite};
-    use tokio_tungstenite::{
-        MaybeTlsStream, client_async_tls_with_config,
-        tungstenite::{Message, client::IntoClientRequest, protocol::WebSocketConfig},
-    };
-    /// Maximum payload carried by one WebSocket transport message.
-    ///
-    /// P2P's encrypted stream framing remains continuous across these chunks;
-    /// this bound prevents a maximal P2P frame from becoming one equally large
-    /// WebSocket allocation before the inner frame cap can run.
-    pub const WEBSOCKET_CHUNK_BYTES: usize = 64 * 1024;
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    enum ReadState {
-        Open,
-        FlushingCloseReply,
-        Eof,
-    }
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    enum ShutdownState {
-        Open,
-        FlushingForClose,
-        Closing,
-        Closed,
-    }
-    fn websocket_config() -> WebSocketConfig {
-        WebSocketConfig::default()
-            .read_buffer_size(WEBSOCKET_CHUNK_BYTES)
-            .write_buffer_size(WEBSOCKET_CHUNK_BYTES)
-            .max_write_buffer_size(WEBSOCKET_CHUNK_BYTES * 4)
-            .max_message_size(Some(WEBSOCKET_CHUNK_BYTES))
-            .max_frame_size(Some(WEBSOCKET_CHUNK_BYTES))
-    }
-    /// A duplex adaptor that implements `AsyncRead`/`AsyncWrite` over a WebSocket stream.
-    /// Bytes written are segmented into bounded Binary messages. Reads concatenate
-    /// those messages back into one byte stream, preserving application framing above.
-    pub struct WsDuplex<S> {
-        inner: tokio_tungstenite::WebSocketStream<S>,
-        read_buf: bytes::Bytes, // remaining unread bytes from last Binary frame
-        write_buf: Vec<u8>,
-        read_state: ReadState,
-        shutdown_state: ShutdownState,
-    }
-    impl<S> WsDuplex<S>
-    where
-        S: AsyncRead + AsyncWrite + Unpin,
-    {
-        fn new(inner: tokio_tungstenite::WebSocketStream<S>) -> Self {
-            Self {
-                inner,
-                read_buf: bytes::Bytes::new(),
-                write_buf: Vec::new(),
-                read_state: ReadState::Open,
-                shutdown_state: ShutdownState::Open,
-            }
-        }
-        fn poll_send_buffered(
-            &mut self,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<std::io::Result<()>> {
-            if self.write_buf.is_empty() {
-                return std::task::Poll::Ready(Ok(()));
-            }
-            let mut sink = std::pin::Pin::new(&mut self.inner);
-            futures::ready!(
-                sink.as_mut()
-                    .poll_ready(cx)
-                    .map_err(|e| std::io::Error::other(format!("ws poll_ready error: {e}")))
-            )?;
-            let data = std::mem::take(&mut self.write_buf);
-            debug_assert!(data.len() <= WEBSOCKET_CHUNK_BYTES);
-            sink.as_mut()
-                .start_send(Message::Binary(data.into()))
-                .map_err(|e| std::io::Error::other(format!("ws send error: {e}")))?;
-            std::task::Poll::Ready(Ok(()))
-        }
-        fn poll_flush_buffered(
-            &mut self,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<std::io::Result<()>> {
-            futures::ready!(self.poll_send_buffered(cx))?;
-            let mut sink = std::pin::Pin::new(&mut self.inner);
-            futures::ready!(
-                sink.as_mut()
-                    .poll_flush(cx)
-                    .map_err(|e| std::io::Error::other(format!("ws flush error: {e}")))
-            )?;
-            std::task::Poll::Ready(Ok(()))
-        }
-        fn mark_closed(&mut self) {
-            self.read_buf = bytes::Bytes::new();
-            self.write_buf.clear();
-            self.read_state = ReadState::Eof;
-            self.shutdown_state = ShutdownState::Closed;
-        }
-        fn begin_peer_close(&mut self) {
-            // Tungstenite has queued the protocol-mandated close reply. No
-            // buffered application payload may be emitted after that reply.
-            self.write_buf.clear();
-            self.read_state = ReadState::FlushingCloseReply;
-            self.shutdown_state = ShutdownState::Closing;
-        }
-        fn poll_flush_close_reply(
-            &mut self,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<std::io::Result<()>> {
-            debug_assert_eq!(self.read_state, ReadState::FlushingCloseReply);
-            let result = std::pin::Pin::new(&mut self.inner).poll_flush(cx);
-            match result {
-                std::task::Poll::Pending => std::task::Poll::Pending,
-                std::task::Poll::Ready(
-                    Ok(())
-                    | Err(
-                        tokio_tungstenite::tungstenite::Error::ConnectionClosed
-                        | tokio_tungstenite::tungstenite::Error::AlreadyClosed,
-                    ),
-                ) => {
-                    self.mark_closed();
-                    std::task::Poll::Ready(Ok(()))
-                }
-                std::task::Poll::Ready(Err(error)) => {
-                    self.mark_closed();
-                    std::task::Poll::Ready(Err(std::io::Error::other(format!(
-                        "ws close reply flush error: {error}"
-                    ))))
-                }
-            }
-        }
-        fn reject_late_write() -> std::io::Error {
-            std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "WebSocket transport is closing or closed",
-            )
-        }
-    }
-    /// Perform a websocket client handshake over an already-established stream.
-    ///
-    /// This is useful for applying custom TCP dial logic (proxies, socket options) while
-    /// still speaking WebSocket/WSS at the HTTP layer.
-    ///
-    /// # Errors
-    ///
-    /// Returns an I/O error when the WebSocket client handshake over the supplied
-    /// stream cannot be completed.
-    pub async fn connect_with_stream<R, S>(
-        request: R,
-        stream: S,
-    ) -> std::io::Result<WsDuplex<MaybeTlsStream<S>>>
-    where
-        R: IntoClientRequest + Unpin,
-        S: 'static + AsyncRead + AsyncWrite + Send + Unpin,
-        MaybeTlsStream<S>: Unpin,
-    {
-        let (ws_stream, _resp) =
-            client_async_tls_with_config(request, stream, Some(websocket_config()), None)
-                .await
-                .map_err(|e| std::io::Error::other(format!("ws connect: {e}")))?;
-        Ok(WsDuplex::new(ws_stream))
-    }
-    impl<S> AsyncRead for WsDuplex<S>
-    where
-        S: AsyncRead + AsyncWrite + Unpin,
-    {
-        fn poll_read(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-            buf: &mut tokio::io::ReadBuf<'_>,
-        ) -> std::task::Poll<std::io::Result<()>> {
-            // `AsyncRead` requires an empty destination to complete without
-            // touching the transport. In particular, it must not consume a
-            // complete WebSocket frame into the adaptor's private buffer.
-            if buf.remaining() == 0 {
-                return std::task::Poll::Ready(Ok(()));
-            }
-            match self.read_state {
-                ReadState::Eof => return std::task::Poll::Ready(Ok(())),
-                ReadState::FlushingCloseReply => {
-                    return self.poll_flush_close_reply(cx);
-                }
-                ReadState::Open => {}
-            }
-            if !self.read_buf.is_empty() {
-                let n = std::cmp::min(self.read_buf.len(), buf.remaining());
-                buf.put_slice(&self.read_buf.split_to(n));
-                return std::task::Poll::Ready(Ok(()));
-            }
-            // Pull next Binary frame
-            match futures::ready!(std::pin::Pin::new(&mut self.inner).poll_next(cx)) {
-                Some(Ok(Message::Binary(b))) if b.is_empty() => {
-                    // An empty WebSocket data message carries no stream bytes;
-                    // it is not the end of the byte stream. Yield after one
-                    // ignored message so a hostile peer cannot monopolize a
-                    // single poll with an unbounded run of empty messages.
-                    cx.waker().wake_by_ref();
-                    std::task::Poll::Pending
-                }
-                Some(Ok(Message::Binary(b))) => {
-                    self.read_buf = b;
-                    let n = std::cmp::min(self.read_buf.len(), buf.remaining());
-                    buf.put_slice(&self.read_buf.split_to(n));
-                    std::task::Poll::Ready(Ok(()))
-                }
-                Some(Ok(
-                    Message::Text(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_),
-                )) => {
-                    // Ignore control/text frames and read next
-                    cx.waker().wake_by_ref();
-                    std::task::Poll::Pending
-                }
-                Some(Ok(Message::Close(_))) => {
-                    self.begin_peer_close();
-                    self.poll_flush_close_reply(cx)
-                }
-                None
-                | Some(Err(
-                    tokio_tungstenite::tungstenite::Error::ConnectionClosed
-                    | tokio_tungstenite::tungstenite::Error::AlreadyClosed,
-                )) => {
-                    self.mark_closed();
-                    std::task::Poll::Ready(Ok(()))
-                }
-                Some(Err(error)) => {
-                    self.mark_closed();
-                    std::task::Poll::Ready(Err(std::io::Error::other(format!(
-                        "ws read error: {error}"
-                    ))))
-                }
-            }
-        }
-    }
-    impl<S> AsyncWrite for WsDuplex<S>
-    where
-        S: AsyncRead + AsyncWrite + Unpin,
-    {
-        fn poll_write(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-            data: &[u8],
-        ) -> std::task::Poll<std::io::Result<usize>> {
-            if self.shutdown_state != ShutdownState::Open {
-                return std::task::Poll::Ready(Err(Self::reject_late_write()));
-            }
-            if data.is_empty() {
-                return std::task::Poll::Ready(Ok(0));
-            }
-            if self.write_buf.len() == WEBSOCKET_CHUNK_BYTES {
-                futures::ready!(self.poll_send_buffered(cx))?;
-            }
-            let accepted = data
-                .len()
-                .min(WEBSOCKET_CHUNK_BYTES.saturating_sub(self.write_buf.len()));
-            self.write_buf.extend_from_slice(&data[..accepted]);
-            std::task::Poll::Ready(Ok(accepted))
-        }
-        fn poll_flush(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<std::io::Result<()>> {
-            match self.shutdown_state {
-                ShutdownState::Open | ShutdownState::FlushingForClose => {
-                    self.poll_flush_buffered(cx)
-                }
-                ShutdownState::Closing => {
-                    let result = std::pin::Pin::new(&mut self.inner).poll_flush(cx);
-                    match result {
-                        std::task::Poll::Pending => std::task::Poll::Pending,
-                        std::task::Poll::Ready(
-                            Ok(())
-                            | Err(
-                                tokio_tungstenite::tungstenite::Error::ConnectionClosed
-                                | tokio_tungstenite::tungstenite::Error::AlreadyClosed,
-                            ),
-                        ) => std::task::Poll::Ready(Ok(())),
-                        std::task::Poll::Ready(Err(error)) => std::task::Poll::Ready(Err(
-                            std::io::Error::other(format!("ws close flush error: {error}")),
-                        )),
-                    }
-                }
-                ShutdownState::Closed => std::task::Poll::Ready(Ok(())),
-            }
-        }
-        fn poll_shutdown(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<std::io::Result<()>> {
-            loop {
-                match self.shutdown_state {
-                    ShutdownState::Open => {
-                        // Record shutdown before the first operation that can
-                        // return `Pending`; dropping that future must never
-                        // reopen the write side.
-                        self.shutdown_state = ShutdownState::FlushingForClose;
-                    }
-                    ShutdownState::FlushingForClose => match self.poll_flush_buffered(cx) {
-                        std::task::Poll::Pending => return std::task::Poll::Pending,
-                        std::task::Poll::Ready(Ok(())) => {
-                            self.shutdown_state = ShutdownState::Closing;
-                        }
-                        std::task::Poll::Ready(Err(error)) => {
-                            self.mark_closed();
-                            return std::task::Poll::Ready(Err(error));
-                        }
-                    },
-                    ShutdownState::Closing => {
-                        let result = std::pin::Pin::new(&mut self.inner).poll_close(cx);
-                        return match result {
-                            std::task::Poll::Pending => std::task::Poll::Pending,
-                            std::task::Poll::Ready(Ok(())) => {
-                                self.write_buf.clear();
-                                self.shutdown_state = ShutdownState::Closed;
-                                std::task::Poll::Ready(Ok(()))
-                            }
-                            std::task::Poll::Ready(Err(error)) => {
-                                self.mark_closed();
-                                std::task::Poll::Ready(Err(std::io::Error::other(format!(
-                                    "ws close error: {error}"
-                                ))))
-                            }
-                        };
-                    }
-                    ShutdownState::Closed => return std::task::Poll::Ready(Ok(())),
-                }
-            }
-        }
-    }
-    /// Connect a WSS endpoint `wss://host:port/p2p` and return a duplex stream.
-    ///
-    /// # Errors
-    ///
-    /// Returns an invalid-input error when `endpoint` cannot form a WebSocket
-    /// request, or an I/O error when the WSS connection or handshake fails.
-    pub async fn connect_wss(
-        endpoint: &str,
-    ) -> std::io::Result<WsDuplex<MaybeTlsStream<tokio::net::TcpStream>>> {
-        let url = format!("wss://{endpoint}/p2p");
-        let req = url.into_client_request().map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad url: {e}"))
-        })?;
-        let (ws_stream, _resp) =
-            tokio_tungstenite::connect_async_with_config(req, Some(websocket_config()), false)
-                .await
-                .map_err(|e| std::io::Error::other(format!("wss connect: {e}")))?;
-        Ok(WsDuplex::new(ws_stream))
-    }
-    /// Connect a WS endpoint `ws://host:port/p2p` and return a duplex stream.
-    ///
-    /// # Errors
-    ///
-    /// Returns an invalid-input error when `endpoint` cannot form a WebSocket
-    /// request, or an I/O error when the WS connection or handshake fails.
-    pub async fn connect_ws(
-        endpoint: &str,
-    ) -> std::io::Result<WsDuplex<MaybeTlsStream<tokio::net::TcpStream>>> {
-        let url = format!("ws://{endpoint}/p2p");
-        let req = url.into_client_request().map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad url: {e}"))
-        })?;
-        let (ws_stream, _resp) =
-            tokio_tungstenite::connect_async_with_config(req, Some(websocket_config()), false)
-                .await
-                .map_err(|e| std::io::Error::other(format!("ws connect: {e}")))?;
-        Ok(WsDuplex::new(ws_stream))
-    }
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use futures::{SinkExt as _, StreamExt as _};
-        use std::sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        };
-        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-        use tokio_tungstenite::{WebSocketStream, tungstenite::protocol::Role};
-        async fn assert_chunked_stream_roundtrip(byte_len: usize) {
-            let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
-            let (client_ws, mut server_ws) = tokio::join!(
-                WebSocketStream::from_raw_socket(client_io, Role::Client, Some(websocket_config()),),
-                WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()),),
-            );
-            let mut client = WsDuplex::new(client_ws);
-            let expected = (0..byte_len)
-                .map(|index| u8::try_from(index % 251).expect("bounded fixture byte"))
-                .collect::<Vec<_>>();
-            let send = async {
-                client
-                    .write_all(&expected)
-                    .await
-                    .expect("write complete P2P byte stream");
-                client.flush().await.expect("flush P2P byte stream");
-            };
-            let receive = async {
-                let mut received = Vec::with_capacity(byte_len);
-                let mut chunks = 0usize;
-                while received.len() < byte_len {
-                    match server_ws.next().await.expect("next WebSocket message") {
-                        Ok(Message::Binary(chunk)) => {
-                            assert!(!chunk.is_empty());
-                            assert!(chunk.len() <= WEBSOCKET_CHUNK_BYTES);
-                            received.extend_from_slice(&chunk);
-                            chunks = chunks.checked_add(1).expect("small chunk count");
-                        }
-                        other => panic!("expected bounded binary chunk, got {other:?}"),
-                    }
-                }
-                (received, chunks)
-            };
-            let ((), (received, chunks)) = tokio::join!(send, receive);
-            assert_eq!(received, expected);
-            assert_eq!(chunks, byte_len.div_ceil(WEBSOCKET_CHUNK_BYTES));
-        }
-        #[tokio::test(flavor = "current_thread")]
-        async fn websocket_duplex_chunks_boundaries_and_default_maximum_p2p_frame() {
-            for byte_len in [
-                WEBSOCKET_CHUNK_BYTES - 1,
-                WEBSOCKET_CHUNK_BYTES,
-                WEBSOCKET_CHUNK_BYTES + 1,
-                iroha_config::parameters::defaults::network::MAX_FRAME_BYTES.get()
-                    + crate::P2P_FRAME_LENGTH_PREFIX_BYTES,
-            ] {
-                assert_chunked_stream_roundtrip(byte_len).await;
-            }
-        }
-        #[tokio::test(flavor = "current_thread")]
-        async fn websocket_config_rejects_one_oversized_transport_message() {
-            let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
-            let (mut client_ws, mut server_ws) = tokio::join!(
-                WebSocketStream::from_raw_socket(client_io, Role::Client, Some(websocket_config()),),
-                WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()),),
-            );
-            let send = async {
-                futures::SinkExt::send(
-                    &mut client_ws,
-                    Message::Binary(vec![0xA5; WEBSOCKET_CHUNK_BYTES + 1].into()),
-                )
-                .await
-            };
-            let receive = async { server_ws.next().await.expect("oversized message result") };
-            let (send_result, receive_result) = tokio::join!(send, receive);
-            send_result.expect("peer can emit adversarial oversized transport message");
-            assert!(
-                receive_result.is_err(),
-                "the receiver must reject a WebSocket message one byte above the chunk cap"
-            );
-        }
-        struct ReadPollGuard<S> {
-            inner: S,
-            reject_reads: Arc<AtomicBool>,
-        }
-        impl<S> ReadPollGuard<S> {
-            fn new(inner: S, reject_reads: Arc<AtomicBool>) -> Self {
-                Self {
-                    inner,
-                    reject_reads,
-                }
-            }
-        }
-        impl<S: AsyncRead + Unpin> AsyncRead for ReadPollGuard<S> {
-            fn poll_read(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-                buf: &mut tokio::io::ReadBuf<'_>,
-            ) -> std::task::Poll<std::io::Result<()>> {
-                assert!(
-                    !self.reject_reads.load(Ordering::SeqCst),
-                    "WebSocket adaptor polled its transport after reads were forbidden"
-                );
-                std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
-            }
-        }
-        impl<S: AsyncWrite + Unpin> AsyncWrite for ReadPollGuard<S> {
-            fn poll_write(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-                data: &[u8],
-            ) -> std::task::Poll<std::io::Result<usize>> {
-                std::pin::Pin::new(&mut self.inner).poll_write(cx, data)
-            }
-            fn poll_flush(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<std::io::Result<()>> {
-                std::pin::Pin::new(&mut self.inner).poll_flush(cx)
-            }
-            fn poll_shutdown(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<std::io::Result<()>> {
-                std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
-            }
-        }
-        #[tokio::test(flavor = "current_thread")]
-        async fn websocket_duplex_zero_capacity_read_does_not_poll_or_consume_frame() {
-            let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
-            let reject_reads = Arc::new(AtomicBool::new(false));
-            let client_io = ReadPollGuard::new(client_io, Arc::clone(&reject_reads));
-            let (client_ws, mut server_ws) = tokio::join!(
-                WebSocketStream::from_raw_socket(client_io, Role::Client, Some(websocket_config()),),
-                WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()),),
-            );
-            let mut client = WsDuplex::new(client_ws);
-            let expected = [0xC3, 0x7E, 0x41, 0x19];
-            server_ws
-                .send(Message::Binary(expected.to_vec().into()))
-                .await
-                .expect("send frame before zero-capacity read");
-            reject_reads.store(true, Ordering::SeqCst);
-            let mut empty = [];
-            let mut empty_buf = tokio::io::ReadBuf::new(&mut empty);
-            futures::future::poll_fn(|cx| {
-                std::pin::Pin::new(&mut client).poll_read(cx, &mut empty_buf)
-            })
-            .await
-            .expect("zero-capacity read succeeds immediately");
-            assert!(empty_buf.filled().is_empty());
-            reject_reads.store(false, Ordering::SeqCst);
-            let mut received = [0_u8; 4];
-            client
-                .read_exact(&mut received)
-                .await
-                .expect("frame remains available after zero-capacity read");
-            assert_eq!(received, expected);
-        }
-        #[tokio::test(flavor = "current_thread")]
-        async fn websocket_duplex_ignores_empty_binary_without_reporting_stream_eof() {
-            let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
-            let (client_ws, mut server_ws) = tokio::join!(
-                WebSocketStream::from_raw_socket(client_io, Role::Client, Some(websocket_config()),),
-                WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()),),
-            );
-            let mut client = WsDuplex::new(client_ws);
-            let expected = [0xA5, 0x5A, 0x11, 0x22];
-            server_ws
-                .send(Message::Binary(Vec::new().into()))
-                .await
-                .expect("send legal empty WebSocket data message");
-            server_ws
-                .send(Message::Binary(expected.to_vec().into()))
-                .await
-                .expect("send following non-empty WebSocket data message");
-            let mut received = [0_u8; 4];
-            client
-                .read_exact(&mut received)
-                .await
-                .expect("empty Binary message must not terminate the byte stream");
-            assert_eq!(received, expected);
-        }
-        #[tokio::test(flavor = "current_thread")]
-        async fn websocket_duplex_flushes_close_reply_before_sticky_eof() {
-            let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
-            let reject_reads = Arc::new(AtomicBool::new(false));
-            let client_io = ReadPollGuard::new(client_io, Arc::clone(&reject_reads));
-            let (client_ws, mut server_ws) = tokio::join!(
-                WebSocketStream::from_raw_socket(client_io, Role::Client, Some(websocket_config()),),
-                WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()),),
-            );
-            let mut client = WsDuplex::new(client_ws);
-            tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                let consume_close = async {
-                    let mut byte = [0_u8; 1];
-                    assert_eq!(
-                        client.read(&mut byte).await.expect("read peer close"),
-                        0,
-                        "peer Close must become byte-stream EOF"
-                    );
-                    reject_reads.store(true, Ordering::SeqCst);
-                    assert_eq!(
-                        client.read(&mut byte).await.expect("read sticky EOF"),
-                        0,
-                        "EOF must remain stable without polling the transport"
-                    );
-                };
-                let exchange_close = async {
-                    server_ws
-                        .send(Message::Close(None))
-                        .await
-                        .expect("send peer Close");
-                    match server_ws
-                        .next()
-                        .await
-                        .expect("client close acknowledgement")
-                    {
-                        Ok(Message::Close(_)) => {}
-                        Ok(other) => {
-                            panic!("expected WebSocket Close acknowledgement, got {other:?}")
-                        }
-                        Err(error) => {
-                            panic!("failed to observe WebSocket Close acknowledgement: {error}")
-                        }
-                    }
-                };
-                tokio::join!(consume_close, exchange_close);
-            })
-            .await
-            .expect("close acknowledgement and sticky EOF must not stall");
-        }
-        struct PendingFlushOnce<S> {
-            inner: S,
-            observed: Arc<AtomicBool>,
-            pending: bool,
-        }
-        impl<S> PendingFlushOnce<S> {
-            fn new(inner: S, observed: Arc<AtomicBool>) -> Self {
-                Self {
-                    inner,
-                    observed,
-                    pending: true,
-                }
-            }
-        }
-        impl<S: AsyncRead + Unpin> AsyncRead for PendingFlushOnce<S> {
-            fn poll_read(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-                buf: &mut tokio::io::ReadBuf<'_>,
-            ) -> std::task::Poll<std::io::Result<()>> {
-                std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
-            }
-        }
-        impl<S: AsyncWrite + Unpin> AsyncWrite for PendingFlushOnce<S> {
-            fn poll_write(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-                data: &[u8],
-            ) -> std::task::Poll<std::io::Result<usize>> {
-                std::pin::Pin::new(&mut self.inner).poll_write(cx, data)
-            }
-            fn poll_flush(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<std::io::Result<()>> {
-                if self.pending {
-                    self.pending = false;
-                    self.observed.store(true, Ordering::SeqCst);
-                    cx.waker().wake_by_ref();
-                    return std::task::Poll::Pending;
-                }
-                std::pin::Pin::new(&mut self.inner).poll_flush(cx)
-            }
-            fn poll_shutdown(
-                mut self: std::pin::Pin<&mut Self>,
-                cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<std::io::Result<()>> {
-                std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
-            }
-        }
-        #[tokio::test(flavor = "current_thread")]
-        async fn websocket_duplex_cancelled_shutdown_rejects_late_writes_and_resumes() {
-            let (client_io, server_io) = tokio::io::duplex(WEBSOCKET_CHUNK_BYTES * 2);
-            let pending_observed = Arc::new(AtomicBool::new(false));
-            let client_io = PendingFlushOnce::new(client_io, Arc::clone(&pending_observed));
-            let (client_ws, mut server_ws) = tokio::join!(
-                WebSocketStream::from_raw_socket(client_io, Role::Client, Some(websocket_config()),),
-                WebSocketStream::from_raw_socket(server_io, Role::Server, Some(websocket_config()),),
-            );
-            let mut client = WsDuplex::new(client_ws);
-            let mut shutdown = Box::pin(client.shutdown());
-            futures::future::poll_fn(
-                |cx| match std::future::Future::poll(shutdown.as_mut(), cx) {
-                    std::task::Poll::Pending => std::task::Poll::Ready(()),
-                    std::task::Poll::Ready(result) => {
-                        panic!("fixture must suspend the first shutdown poll, got {result:?}")
-                    }
-                },
-            )
-            .await;
-            drop(shutdown);
-            assert!(
-                pending_observed.load(Ordering::SeqCst),
-                "fixture must suspend shutdown while flushing before Close"
-            );
-            let error = client
-                .write_all(b"must not escape after shutdown cancellation")
-                .await
-                .expect_err("a cancelled shutdown must leave the write side closed");
-            assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
-            tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                let shutdown = client.shutdown();
-                let observe_close = async {
-                    loop {
-                        match server_ws.next().await.expect("client close message") {
-                            Ok(Message::Close(_)) => break,
-                            Ok(other) => panic!("expected WebSocket Close, got {other:?}"),
-                            Err(error) => panic!("failed to observe WebSocket Close: {error}"),
-                        }
-                    }
-                };
-                let (shutdown_result, ()) = tokio::join!(shutdown, observe_close);
-                shutdown_result.expect("stateful close must survive a Pending flush");
-            })
-            .await
-            .expect("WebSocket shutdown must not stall");
-        }
-    }
-}
-/// Transport connector abstraction (scaffolding).
-///
-/// The default implementation uses TCP; alternative transports should match semantics (ordered,
-/// reliable) and integrate with the same message framing.
-#[allow(clippy::missing_errors_doc)]
-pub trait TransportConnector {
-    /// Underlying stream type used by the transport.
-    type Stream;
-    /// Dial a remote endpoint.
-    fn dial(endpoint: &str) -> tokio::io::Result<Self::Stream>;
 }
 use crate::sampler::LogSampler;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_primitives::addr::SocketAddr;
 use socket2::{SockRef, TcpKeepalive};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt, Result},
     net::TcpStream,
 };
+fn clear_sensitive_vec(bytes: &mut Vec<u8>) {
+    bytes.resize(bytes.capacity(), 0);
+    bytes.fill(0);
+    std::hint::black_box(bytes.as_mut_slice());
+    bytes.clear();
+}
+
+fn clear_sensitive_string(value: &mut String) {
+    let mut bytes = std::mem::take(value).into_bytes();
+    clear_sensitive_vec(&mut bytes);
+}
+
+struct SensitiveBytes {
+    bytes: Vec<u8>,
+}
+impl SensitiveBytes {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            bytes: Vec::with_capacity(capacity),
+        }
+    }
+    fn from_vec(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+    fn extend_from_slice(&mut self, bytes: &[u8]) {
+        self.bytes.extend_from_slice(bytes);
+    }
+    fn reserve(&mut self, additional: usize) {
+        self.bytes.reserve(additional);
+    }
+    fn as_slice(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+    fn len(&self) -> usize {
+        self.bytes.len()
+    }
+    fn ends_with(&self, suffix: &[u8]) -> bool {
+        self.bytes.ends_with(suffix)
+    }
+    fn clear(&mut self) {
+        clear_sensitive_vec(&mut self.bytes);
+    }
+}
+impl std::fmt::Debug for SensitiveBytes {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SensitiveBytes")
+            .field("bytes", &"[REDACTED]")
+            .field("len", &self.bytes.len())
+            .finish()
+    }
+}
+impl Drop for SensitiveBytes {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+struct ProxyCredentials {
+    user_pass: String,
+    username_len: usize,
+}
+impl ProxyCredentials {
+    fn new(username: &str, password: &str) -> Self {
+        let mut user_pass = String::with_capacity(username.len() + 1 + password.len());
+        user_pass.push_str(username);
+        user_pass.push(':');
+        user_pass.push_str(password);
+        Self {
+            user_pass,
+            username_len: username.len(),
+        }
+    }
+    fn username(&self) -> &str {
+        self.user_pass.get(..self.username_len).unwrap_or_default()
+    }
+    fn password(&self) -> &str {
+        self.user_pass
+            .get(self.username_len.saturating_add(1)..)
+            .unwrap_or_default()
+    }
+    fn clear(&mut self) {
+        clear_sensitive_string(&mut self.user_pass);
+        self.username_len = 0;
+    }
+}
+impl std::fmt::Debug for ProxyCredentials {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProxyCredentials")
+            .field("username", &"[REDACTED]")
+            .field("password", &"[REDACTED]")
+            .finish()
+    }
+}
+impl Drop for ProxyCredentials {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+enum NoProxyEntry {
+    Any,
+    Ip(std::net::IpAddr),
+    Domain(String),
+}
+
 /// Outbound proxy configuration for TCP-based dials (HTTP CONNECT / SOCKS5).
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct ProxyPolicy {
     proxy: Option<Proxy>,
-    no_proxy: Vec<String>,
+    no_proxy: Vec<NoProxyEntry>,
+}
+impl std::fmt::Debug for ProxyPolicy {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProxyPolicy")
+            .field("proxy", &self.proxy)
+            .field("no_proxy_count", &self.no_proxy.len())
+            .finish()
+    }
 }
 impl ProxyPolicy {
     /// Disable proxying entirely.
@@ -1565,21 +1011,51 @@ impl ProxyPolicy {
     /// Build a proxy policy from config values.
     ///
     /// # Errors
-    /// Returns an error if `proxy_url` is present but cannot be parsed.
+    /// Returns an error if `proxy_url` or a no-proxy entry cannot be parsed, or
+    /// if credentials are configured for a plaintext proxy transport.
     pub fn from_config(proxy_url: Option<String>, no_proxy: Vec<String>) -> io::Result<Self> {
-        let proxy = proxy_url
-            .map(|raw| parse_proxy_value(&raw))
-            .transpose()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-        let no_proxy = normalize_no_proxy(no_proxy);
+        let proxy = if let Some(mut raw) = proxy_url {
+            let parsed = parse_proxy_value(&raw);
+            clear_sensitive_string(&mut raw);
+            Some(parsed.map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?)
+        } else {
+            None
+        };
+        let no_proxy = normalize_no_proxy(no_proxy)?;
         Ok(Self { proxy, no_proxy })
     }
+    pub(crate) fn is_configured(&self) -> bool {
+        self.proxy.is_some()
+    }
+    pub(crate) fn has_no_proxy_entries(&self) -> bool {
+        !self.no_proxy.is_empty()
+    }
+    pub(crate) fn uses_https_proxy(&self) -> bool {
+        self.proxy
+            .as_ref()
+            .is_some_and(|proxy| proxy.kind == ProxyKind::HttpConnectTls)
+    }
     fn should_bypass_proxy(&self, target_host: &str) -> bool {
-        self.no_proxy.iter().any(|entry| {
-            if entry.is_empty() {
-                return false;
-            }
-            target_host.ends_with(entry)
+        let target_host = target_host.trim();
+        let unbracketed = target_host
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .unwrap_or(target_host);
+        let target_ip = unbracketed.parse::<std::net::IpAddr>().ok();
+        let target_domain = if target_ip.is_none() {
+            normalize_dns_name(unbracketed).ok()
+        } else {
+            None
+        };
+        self.no_proxy.iter().any(|entry| match entry {
+            NoProxyEntry::Any => true,
+            NoProxyEntry::Ip(expected) => target_ip == Some(*expected),
+            NoProxyEntry::Domain(suffix) => target_domain.as_ref().is_some_and(|host| {
+                host == suffix
+                    || host
+                        .strip_suffix(suffix)
+                        .is_some_and(|prefix| prefix.ends_with('.'))
+            }),
         })
     }
     fn pick_proxy_for_target(&self, target: &SocketAddr) -> Option<&Proxy> {
@@ -1614,31 +1090,101 @@ impl ProxyPolicy {
         }
     }
 }
-fn normalize_no_proxy(mut list: Vec<String>) -> Vec<String> {
-    for entry in &mut list {
-        // Keep ASCII; no unicode normalization needed.
-        *entry = entry.trim().to_string();
+fn normalize_dns_name(raw: &str) -> io::Result<String> {
+    let name = raw.strip_suffix('.').unwrap_or(raw);
+    if name.is_empty() || name.len() > 253 || !name.is_ascii() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no-proxy DNS name is empty, non-ASCII, or too long",
+        ));
     }
-    list.retain(|s| !s.is_empty());
-    list
+    if name.split('.').any(|label| {
+        label.is_empty()
+            || label.len() > 63
+            || label.starts_with('-')
+            || label.ends_with('-')
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    }) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no-proxy DNS name contains an invalid label",
+        ));
+    }
+    Ok(name.to_ascii_lowercase())
+}
+
+fn normalize_no_proxy(list: Vec<String>) -> io::Result<Vec<NoProxyEntry>> {
+    let mut normalized = Vec::with_capacity(list.len());
+    for raw in list {
+        let entry = raw.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        if entry == "*" {
+            normalized.push(NoProxyEntry::Any);
+            continue;
+        }
+        let entry = entry.strip_prefix('.').unwrap_or(entry);
+        let unbracketed = match (entry.strip_prefix('['), entry.strip_suffix(']')) {
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "no-proxy IP literal has mismatched brackets",
+                ));
+            }
+            (Some(without_open), Some(_)) => without_open.strip_suffix(']').unwrap_or(without_open),
+            (None, None) => entry,
+        };
+        if let Ok(ip) = unbracketed.parse::<std::net::IpAddr>() {
+            normalized.push(NoProxyEntry::Ip(ip));
+        } else {
+            normalized.push(NoProxyEntry::Domain(normalize_dns_name(entry)?));
+        }
+    }
+    Ok(normalized)
 }
 /// TCP socket options applied to outbound dials.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TcpConnectOptions {
     /// Proxy policy for this dial.
     pub proxy: ProxyPolicy,
     /// Whether to verify TLS certificates when connecting to an `https://` proxy.
     ///
-    /// This does not affect P2P TLS-over-TCP (peer identity is authenticated at the application layer).
+    /// This must be `true` for HTTPS proxies. `false` is rejected before dialing.
+    /// This does not affect raw P2P TLS-over-TCP.
     pub proxy_tls_verify: bool,
     /// Optional DER-encoded (base64 decoded) end-entity certificate to pin when connecting to an `https://` proxy.
     ///
-    /// Used only when `proxy_tls_verify=true` and the proxy URL uses the `https://` scheme.
+    /// Required when the proxy URL uses the `https://` scheme.
     pub proxy_tls_pinned_cert_der: Option<std::sync::Arc<[u8]>>,
     /// Whether to enable `TCP_NODELAY` for reduced latency.
     pub tcp_nodelay: bool,
     /// Optional keepalive idle time. When `None`, keepalive is disabled.
     pub tcp_keepalive: Option<std::time::Duration>,
+}
+impl std::fmt::Debug for TcpConnectOptions {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TcpConnectOptions")
+            .field("proxy", &self.proxy)
+            .field("proxy_tls_verify", &self.proxy_tls_verify)
+            .field(
+                "proxy_tls_pin_present",
+                &self.proxy_tls_pinned_cert_der.is_some(),
+            )
+            .field(
+                "proxy_tls_pin_len",
+                &self
+                    .proxy_tls_pinned_cert_der
+                    .as_ref()
+                    .map_or(0, |pin| pin.len()),
+            )
+            .field("tcp_nodelay", &self.tcp_nodelay)
+            .field("tcp_keepalive", &self.tcp_keepalive)
+            .finish()
+    }
 }
 impl Default for TcpConnectOptions {
     fn default() -> Self {
@@ -1651,12 +1197,14 @@ impl Default for TcpConnectOptions {
         }
     }
 }
-/// TCP-like outbound stream returned by [`connect`].
+/// TCP-like outbound substrate returned by [`connect`].
 ///
-/// Most dials return a plain [`TcpStream`]. When tunnelling through an `https://`
-/// proxy, the connection to the proxy is wrapped in TLS.
+/// Most substrate dials return a plain [`TcpStream`] which the peer dialer must
+/// immediately upgrade to TLS 1.3. When tunnelling through an `https://` proxy,
+/// the connection to the proxy is already wrapped in TLS before the independent
+/// end-to-end P2P TLS session is established.
 pub enum TcpConnectStream {
-    /// Plain TCP stream (direct or proxied).
+    /// Raw substrate stream which is not itself an admitted P2P transport.
     Plain(TcpStream),
     /// TLS-wrapped stream to the proxy (`https://` proxies only).
     #[cfg(feature = "p2p_tls")]
@@ -1668,12 +1216,23 @@ enum ProxyKind {
     HttpConnectTls,
     Socks5,
 }
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Proxy {
     kind: ProxyKind,
     host: String,
     port: u16,
-    auth: Option<(String, String)>,
+    auth: Option<Arc<ProxyCredentials>>,
+}
+impl std::fmt::Debug for Proxy {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Proxy")
+            .field("kind", &self.kind)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("auth_present", &self.auth.is_some())
+            .finish()
+    }
 }
 fn parse_proxy_value(raw: &str) -> std::result::Result<Proxy, String> {
     let mut s = raw;
@@ -1693,15 +1252,20 @@ fn parse_proxy_value(raw: &str) -> std::result::Result<Proxy, String> {
         kind = ProxyKind::Socks5;
     }
     // Strip credentials if present
-    let mut auth: Option<(String, String)> = None;
+    let mut auth = None;
     if let Some(at) = s.rfind('@') {
         let (creds, host_part) = s.split_at(at);
         s = host_part.get(1..).unwrap_or_default(); // skip '@'
         if !creds.is_empty() {
+            if kind != ProxyKind::HttpConnectTls {
+                return Err(
+                    "proxy credentials require a pinned https:// proxy transport".to_owned(),
+                );
+            }
             let mut parts = creds.splitn(2, ':');
-            let user = parts.next().unwrap_or("").to_string();
-            let pass = parts.next().unwrap_or("").to_string();
-            auth = Some((user, pass));
+            let user = parts.next().unwrap_or("");
+            let pass = parts.next().unwrap_or("");
+            auth = Some(Arc::new(ProxyCredentials::new(user, pass)));
         }
     }
     let (host, port_str) = if let Some(rest) = s.strip_prefix('[') {
@@ -1735,27 +1299,33 @@ fn parse_proxy_value(raw: &str) -> std::result::Result<Proxy, String> {
     })
 }
 // ---- TCP socket option helpers ----
-fn build_connect_request(target: &str, proxy: &Proxy) -> String {
-    let mut headers =
+fn build_connect_request(target: &str, proxy: &Proxy) -> SensitiveBytes {
+    let prefix =
         format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nConnection: keep-alive\r\n");
-    if let Some((user, pass)) = &proxy.auth {
-        let creds = format!("{user}:{pass}");
-        let auth = BASE64_STANDARD.encode(creds.as_bytes());
-        headers.push_str("Proxy-Authorization: Basic ");
-        headers.push_str(&auth);
-        headers.push_str("\r\n");
+    let mut headers = SensitiveBytes::from_vec(prefix.into_bytes());
+    if let Some(credentials) = &proxy.auth {
+        let mut user_pass = SensitiveBytes::with_capacity(credentials.user_pass.len());
+        user_pass.extend_from_slice(credentials.username().as_bytes());
+        user_pass.extend_from_slice(b":");
+        user_pass.extend_from_slice(credentials.password().as_bytes());
+        let mut authorization =
+            SensitiveBytes::from_vec(BASE64_STANDARD.encode(user_pass.as_slice()).into_bytes());
+        user_pass.clear();
+        headers.reserve(b"Proxy-Authorization: Basic ".len() + authorization.as_slice().len() + 4);
+        headers.extend_from_slice(b"Proxy-Authorization: Basic ");
+        headers.extend_from_slice(authorization.as_slice());
+        headers.extend_from_slice(b"\r\n");
+        authorization.clear();
     }
-    headers.push_str("\r\n");
+    headers.extend_from_slice(b"\r\n");
     headers
 }
 async fn socks5_negotiate_method<S>(stream: &mut S, proxy: &Proxy) -> Result<u8>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
-    let mut methods: Vec<u8> = vec![0x00];
-    if proxy.auth.is_some() {
-        methods.push(0x02);
-    }
+    debug_assert!(proxy.auth.is_none());
+    let methods = [0x00];
     let methods_len = u8::try_from(methods.len())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "SOCKS5 method list too long"))?;
     let mut greeting = Vec::with_capacity(2 + methods.len());
@@ -1773,7 +1343,7 @@ where
         ));
     }
     match choice[1] {
-        0x00 | 0x02 => Ok(choice[1]),
+        0x00 => Ok(choice[1]),
         0xFF => Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "SOCKS5 no acceptable auth methods",
@@ -1783,33 +1353,6 @@ where
             format!("SOCKS5 unsupported auth method {m}"),
         )),
     }
-}
-async fn socks5_auth_user_pass<S>(stream: &mut S, user: &str, pass: &str) -> Result<()>
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
-    // RFC 1929: username/password authentication.
-    let user_len = u8::try_from(user.len())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "SOCKS5 username too long"))?;
-    let pass_len = u8::try_from(pass.len())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "SOCKS5 password too long"))?;
-    let mut auth_req = Vec::with_capacity(3 + user.len() + pass.len());
-    auth_req.push(0x01);
-    auth_req.push(user_len);
-    auth_req.extend_from_slice(user.as_bytes());
-    auth_req.push(pass_len);
-    auth_req.extend_from_slice(pass.as_bytes());
-    stream.write_all(&auth_req).await?;
-    stream.flush().await?;
-    let mut auth_resp = [0u8; 2];
-    stream.read_exact(&mut auth_resp).await?;
-    if auth_resp[0] != 0x01 || auth_resp[1] != 0x00 {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "SOCKS5 authentication failed",
-        ));
-    }
-    Ok(())
 }
 fn socks5_build_connect_request(target: &SocketAddr) -> Result<Vec<u8>> {
     let mut req = Vec::with_capacity(32);
@@ -1895,16 +1438,7 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     // RFC 1928: SOCKS5 version/method negotiation.
-    let method = socks5_negotiate_method(stream, proxy).await?;
-    if method == 0x02 {
-        let (user, pass) = proxy.auth.as_ref().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "SOCKS5 proxy requires username/password",
-            )
-        })?;
-        socks5_auth_user_pass(stream, user, pass).await?;
-    }
+    socks5_negotiate_method(stream, proxy).await?;
     let req = socks5_build_connect_request(target)?;
     stream.write_all(&req).await?;
     stream.flush().await?;
@@ -1920,35 +1454,152 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     let target = target.to_string();
-    let req = build_connect_request(&target, proxy);
-    stream.write_all(req.as_bytes()).await?;
-    // Read until end of headers (\r\n\r\n) or small cap
-    let mut buf = vec![0u8; 1024];
-    let mut acc = Vec::with_capacity(1024);
-    loop {
-        let n = stream.read(&mut buf).await?;
-        if n == 0 {
-            break;
-        }
-        acc.extend_from_slice(&buf[..n]);
-        if acc.windows(4).any(|w| w == b"\r\n\r\n") {
-            break;
-        }
-        if acc.len() > 8192 {
-            break;
-        }
-    }
-    // Crude status check
-    let text = String::from_utf8_lossy(&acc);
-    if !(text.starts_with("HTTP/1.1 200") || text.starts_with("HTTP/1.0 200")) {
-        static PROXY_CONNECT_SAMPLER: OnceLock<Mutex<LogSampler>> = OnceLock::new();
-        let sampler = PROXY_CONNECT_SAMPLER.get_or_init(|| Mutex::new(LogSampler::new()));
-        if let Ok(mut s) = sampler.lock() {
-            if let Some(supp) = s.should_log(tokio::time::Duration::from_millis(500)) {
-                iroha_logger::warn!(status=%text.lines().next().unwrap_or("?"), proxy=%proxy_endpoint, target=%target, suppressed=supp, "HTTP CONNECT to proxy failed");
+    let mut req = build_connect_request(&target, proxy);
+    let write_result = stream.write_all(req.as_slice()).await;
+    req.clear();
+    write_result?;
+    const MAX_CONNECT_RESPONSE_HEADER_BYTES: usize = 8192;
+    let mut response = SensitiveBytes::with_capacity(MAX_CONNECT_RESPONSE_HEADER_BYTES);
+    let read_result = async {
+        // Read exactly through CRLFCRLF. Chunked reads can consume tunneled P2P
+        // bytes and make them unavailable to the caller.
+        loop {
+            if response.len() == MAX_CONNECT_RESPONSE_HEADER_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "proxy CONNECT response header exceeds 8192 bytes",
+                ));
+            }
+            let mut byte = [0u8; 1];
+            match stream.read_exact(&mut byte).await {
+                Ok(_) => response.extend_from_slice(&byte),
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "proxy CONNECT response ended before CRLFCRLF",
+                    ));
+                }
+                Err(error) => return Err(error),
+            }
+            if response.ends_with(b"\r\n\r\n") {
+                return validate_http_connect_response(response.as_slice());
             }
         }
-        return Err(io::Error::other("proxy CONNECT failed"));
+    }
+    .await;
+    response.clear();
+    if let Err(error) = read_result {
+        static PROXY_CONNECT_SAMPLER: OnceLock<Mutex<LogSampler>> = OnceLock::new();
+        let sampler = PROXY_CONNECT_SAMPLER.get_or_init(|| Mutex::new(LogSampler::new()));
+        if let Ok(mut sampler) = sampler.lock()
+            && let Some(suppressed) = sampler.should_log(tokio::time::Duration::from_millis(500))
+        {
+            iroha_logger::warn!(
+                kind = ?error.kind(),
+                proxy = %proxy_endpoint,
+                target = %target,
+                suppressed,
+                "HTTP CONNECT proxy response rejected"
+            );
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn validate_http_connect_response(response: &[u8]) -> Result<()> {
+    const STATUS: &[u8] = b"HTTP/1.1 200";
+    if !response.ends_with(b"\r\n\r\n") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "proxy CONNECT response is missing CRLFCRLF",
+        ));
+    }
+    if response
+        .windows(2)
+        .any(|pair| pair[0] == b'\r' && pair[1] != b'\n')
+        || response
+            .iter()
+            .enumerate()
+            .any(|(index, byte)| *byte == b'\n' && (index == 0 || response[index - 1] != b'\r'))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "proxy CONNECT response contains malformed line endings",
+        ));
+    }
+    let mut lines = response[..response.len() - 2].split(|byte| *byte == b'\n');
+    let status_line = lines
+        .next()
+        .and_then(|line| line.strip_suffix(b"\r"))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "proxy CONNECT response has no status line",
+            )
+        })?;
+    if !status_line.starts_with(STATUS)
+        || status_line
+            .get(STATUS.len())
+            .is_some_and(|byte| *byte != b' ')
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "proxy CONNECT did not return exact HTTP/1.1 200 status",
+        ));
+    }
+    if status_line.iter().any(|byte| !(0x20..=0x7e).contains(byte)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "proxy CONNECT status line contains control or non-ASCII bytes",
+        ));
+    }
+    for line in lines {
+        let line = line.strip_suffix(b"\r").ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "proxy CONNECT response contains a malformed header line",
+            )
+        })?;
+        if line.is_empty() {
+            continue;
+        }
+        let colon = line.iter().position(|byte| *byte == b':').ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "proxy CONNECT response header is missing a colon",
+            )
+        })?;
+        if colon == 0
+            || !line[..colon].iter().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(
+                        *byte,
+                        b'!' | b'#'
+                            | b'$'
+                            | b'%'
+                            | b'&'
+                            | b'\''
+                            | b'*'
+                            | b'+'
+                            | b'-'
+                            | b'.'
+                            | b'^'
+                            | b'_'
+                            | b'`'
+                            | b'|'
+                            | b'~'
+                    )
+            })
+            || line[colon + 1..]
+                .iter()
+                .any(|byte| !(0x20..=0x7e).contains(byte))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "proxy CONNECT response contains an invalid header",
+            ));
+        }
     }
     Ok(())
 }
@@ -1961,6 +1612,46 @@ where
 ///
 /// Returns an `io::Error` if TCP connect fails, proxy handshake fails, or I/O operations error.
 pub async fn connect(addr: &SocketAddr, opts: &TcpConnectOptions) -> Result<TcpConnectStream> {
+    let _configured_https_proxy_pin: Option<Arc<[u8]>> =
+        if let Some(proxy) = opts.proxy.proxy.as_ref() {
+            if proxy.auth.is_some() && proxy.kind != ProxyKind::HttpConnectTls {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "proxy credentials require a pinned https:// proxy transport",
+                ));
+            }
+            if proxy.kind == ProxyKind::HttpConnectTls {
+                if !opts.proxy_tls_verify {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "HTTPS proxy certificate verification cannot be disabled",
+                    ));
+                }
+                let pin = opts.proxy_tls_pinned_cert_der.clone().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "HTTPS proxy requires an exact configured leaf certificate pin",
+                    )
+                })?;
+                if pin.is_empty() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "HTTPS proxy leaf certificate pin cannot be empty",
+                    ));
+                }
+                #[cfg(not(feature = "p2p_tls"))]
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "https proxy requires a build with the `iroha_p2p/p2p_tls` feature",
+                ));
+                #[cfg(feature = "p2p_tls")]
+                Some(pin)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
     // If a proxy is configured and the target is not in NO_PROXY, tunnel via HTTP CONNECT.
     if let Some(proxy) = opts.proxy.pick_proxy_for_target(addr) {
         let proxy_endpoint = if proxy.host.contains(':') {
@@ -1989,18 +1680,14 @@ pub async fn connect(addr: &SocketAddr, opts: &TcpConnectOptions) -> Result<TcpC
             ProxyKind::HttpConnectTls => {
                 #[cfg(feature = "p2p_tls")]
                 {
-                    let mut tls = if opts.proxy_tls_verify {
-                        let pinned = opts.proxy_tls_pinned_cert_der.clone().ok_or_else(|| {
-                            io::Error::new(
-                                io::ErrorKind::InvalidInput,
-                                "https proxy verification enabled but no pin configured; set network.p2p_proxy_tls_pinned_cert_der_base64 or disable p2p_proxy_tls_verify",
-                            )
-                        })?;
-                        crate::transport::tls::connect_tls_pinned(&proxy.host, stream, pinned)
-                            .await?
-                    } else {
-                        crate::transport::tls::connect_tls(&proxy.host, stream).await?
-                    };
+                    let pinned =
+                        _configured_https_proxy_pin.expect("HTTPS proxy pin validated before dial");
+                    let mut tls = crate::transport::tls::connect_https_proxy_tls_pinned(
+                        &proxy.host,
+                        stream,
+                        pinned,
+                    )
+                    .await?;
                     http_connect_tunnel(&mut tls, proxy, addr, &proxy_endpoint).await?;
                     return Ok(TcpConnectStream::Tls(tls));
                 }
@@ -2084,14 +1771,42 @@ mod tests {
     }
     #[test]
     fn parse_proxy_extracts_auth_and_host() {
-        let proxy = parse_proxy_value("http://user:pass@example.com:8080").expect("proxy parsed");
-        assert_eq!(proxy.kind, ProxyKind::HttpConnect);
+        let proxy = parse_proxy_value("https://user:pass@example.com:8443").expect("proxy parsed");
+        assert_eq!(proxy.kind, ProxyKind::HttpConnectTls);
         assert_eq!(proxy.host, "example.com");
-        assert_eq!(proxy.port, 8080);
-        assert_eq!(
-            proxy.auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str())),
-            Some(("user", "pass"))
-        );
+        assert_eq!(proxy.port, 8443);
+        let credentials = proxy.auth.as_deref().expect("credentials");
+        assert_eq!(credentials.username(), "user");
+        assert_eq!(credentials.password(), "pass");
+    }
+    #[test]
+    fn parse_proxy_rejects_credentials_on_plaintext_transports() {
+        for value in [
+            "http://user:pass@proxy.example:8080",
+            "user:pass@proxy.example:8080",
+            "socks5://user:pass@proxy.example:1080",
+            "socks5h://user:pass@proxy.example:1080",
+        ] {
+            let error = parse_proxy_value(value).expect_err("plaintext credentials must fail");
+            assert_eq!(
+                error,
+                "proxy credentials require a pinned https:// proxy transport"
+            );
+            assert!(!error.contains("user"));
+            assert!(!error.contains("pass"));
+        }
+    }
+    #[test]
+    fn proxy_parse_errors_do_not_echo_credentials() {
+        let error = ProxyPolicy::from_config(
+            Some("https://UNIQUE_USER:UNIQUE_PASSWORD@proxy.example:not-a-port".to_owned()),
+            Vec::new(),
+        )
+        .expect_err("invalid port must fail");
+        let text = error.to_string();
+        assert_eq!(text, "proxy URL has invalid port");
+        assert!(!text.contains("UNIQUE_USER"));
+        assert!(!text.contains("UNIQUE_PASSWORD"));
     }
     #[test]
     fn parse_proxy_accepts_socks5_scheme() {
@@ -2111,13 +1826,19 @@ mod tests {
     #[test]
     fn connect_request_includes_basic_auth_when_present() {
         let proxy = Proxy {
-            kind: ProxyKind::HttpConnect,
+            kind: ProxyKind::HttpConnectTls,
             host: "example.com".into(),
-            port: 8080,
-            auth: Some(("user".into(), "pass".into())),
+            port: 8443,
+            auth: Some(Arc::new(ProxyCredentials::new("user", "pass"))),
         };
-        let req = build_connect_request("dest:443", &proxy);
-        assert!(req.contains("Proxy-Authorization: Basic dXNlcjpwYXNz"));
+        let mut req = build_connect_request("dest:443", &proxy);
+        assert!(
+            std::str::from_utf8(req.as_slice())
+                .expect("ASCII request")
+                .contains("Proxy-Authorization: Basic dXNlcjpwYXNz")
+        );
+        req.clear();
+        assert!(req.as_slice().is_empty());
         let proxy_no_auth = Proxy {
             kind: ProxyKind::HttpConnect,
             host: "example.com".into(),
@@ -2125,7 +1846,245 @@ mod tests {
             auth: None,
         };
         let req = build_connect_request("dest:443", &proxy_no_auth);
-        assert!(!req.contains("Proxy-Authorization"));
+        assert!(
+            !std::str::from_utf8(req.as_slice())
+                .expect("ASCII request")
+                .contains("Proxy-Authorization")
+        );
+    }
+    #[test]
+    fn proxy_credentials_clear_and_debug_are_redacted() {
+        let mut credentials = ProxyCredentials::new("UNIQUE_PROXY_USER", "UNIQUE_PROXY_PASSWORD");
+        let debug = format!("{credentials:?}");
+        assert_eq!(
+            debug,
+            "ProxyCredentials { username: \"[REDACTED]\", password: \"[REDACTED]\" }"
+        );
+        credentials.clear();
+        assert!(credentials.user_pass.is_empty());
+        assert_eq!(credentials.user_pass.capacity(), 0);
+        assert_eq!(credentials.username_len, 0);
+    }
+    #[test]
+    fn cloned_proxy_policy_shares_redacted_credentials_and_options_hide_pin() {
+        let policy = ProxyPolicy::from_config(
+            Some("https://UNIQUE_PROXY_USER:UNIQUE_PROXY_PASSWORD@proxy.example:8443".to_owned()),
+            vec![".Example.COM".to_owned(), "127.0.0.1".to_owned()],
+        )
+        .expect("policy");
+        let clone = policy.clone();
+        let original_credentials = policy
+            .proxy
+            .as_ref()
+            .and_then(|proxy| proxy.auth.as_ref())
+            .expect("credentials");
+        let cloned_credentials = clone
+            .proxy
+            .as_ref()
+            .and_then(|proxy| proxy.auth.as_ref())
+            .expect("credentials");
+        assert!(Arc::ptr_eq(original_credentials, cloned_credentials));
+
+        let opts = TcpConnectOptions {
+            proxy: policy,
+            proxy_tls_verify: true,
+            proxy_tls_pinned_cert_der: Some(Arc::from(b"UNIQUE_PROXY_PIN_MATERIAL".to_vec())),
+            tcp_nodelay: true,
+            tcp_keepalive: None,
+        };
+        let debug = format!("{opts:?}");
+        assert_eq!(
+            debug,
+            "TcpConnectOptions { proxy: ProxyPolicy { proxy: Some(Proxy { kind: HttpConnectTls, host: \"proxy.example\", port: 8443, auth_present: true }), no_proxy_count: 2 }, proxy_tls_verify: true, proxy_tls_pin_present: true, proxy_tls_pin_len: 25, tcp_nodelay: true, tcp_keepalive: None }"
+        );
+        for secret in [
+            "UNIQUE_PROXY_USER",
+            "UNIQUE_PROXY_PASSWORD",
+            "UNIQUE_PROXY_PIN_MATERIAL",
+        ] {
+            assert!(!debug.contains(secret), "Debug leaked {secret}");
+        }
+    }
+    #[test]
+    fn no_proxy_matches_only_exact_ip_or_dns_label_boundary() {
+        let policy = ProxyPolicy::from_config(
+            None,
+            vec![
+                ".Example.COM".to_owned(),
+                "192.0.2.1".to_owned(),
+                "[2001:db8::1]".to_owned(),
+            ],
+        )
+        .expect("no-proxy policy");
+        assert!(policy.should_bypass_proxy("example.com"));
+        assert!(policy.should_bypass_proxy("Api.Example.Com."));
+        assert!(!policy.should_bypass_proxy("notexample.com"));
+        assert!(!policy.should_bypass_proxy("example.com.attacker"));
+        assert!(policy.should_bypass_proxy("192.0.2.1"));
+        assert!(!policy.should_bypass_proxy("1192.0.2.1"));
+        assert!(policy.should_bypass_proxy("2001:0db8:0:0:0:0:0:1"));
+        assert!(!policy.should_bypass_proxy("2001:db8::2"));
+
+        let wildcard = ProxyPolicy::from_config(None, vec!["*".to_owned()]).expect("wildcard");
+        assert!(wildcard.should_bypass_proxy("anything.example"));
+    }
+    #[test]
+    fn no_proxy_rejects_invalid_suffixes() {
+        for invalid in ["..example.com", "exa_mple.com", "[2001:db8::1", "例.test"] {
+            let error = ProxyPolicy::from_config(None, vec![invalid.to_owned()])
+                .expect_err("invalid no-proxy entry");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        }
+    }
+    #[test]
+    fn connect_response_parser_requires_exact_bounded_http11_success() {
+        for valid in [
+            b"HTTP/1.1 200\r\n\r\n".as_slice(),
+            b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: test\r\n\r\n".as_slice(),
+        ] {
+            validate_http_connect_response(valid).expect("exact HTTP/1.1 200 must pass");
+        }
+        for invalid in [
+            b"HTTP/1.0 200 OK\r\n\r\n".as_slice(),
+            b"HTTP/1.1 2000 Not Really\r\n\r\n".as_slice(),
+            b"HTTP/1.1 204 No Content\r\n\r\n".as_slice(),
+            b"HTTP/1.1 200 OK\n\n".as_slice(),
+            b"HTTP/1.1 200 OK\r\nBadHeader\r\n\r\n".as_slice(),
+            b"HTTP/1.1 200 OK\r\nX-Test: bad\x01value\r\n\r\n".as_slice(),
+            b"HTTP/1.1 200 OK\r\nX-Test: value\r\n".as_slice(),
+        ] {
+            validate_http_connect_response(invalid).expect_err("malformed response must fail");
+        }
+    }
+    #[tokio::test]
+    async fn connect_tunnel_stops_exactly_after_header_and_rejects_eof_or_oversize() {
+        use iroha_primitives::addr::socket_addr;
+        let proxy = Proxy {
+            kind: ProxyKind::HttpConnect,
+            host: "proxy.example".to_owned(),
+            port: 8080,
+            auth: None,
+        };
+        let target = socket_addr!(192.0.2.1:443);
+        let (mut client, mut server) = tokio::io::duplex(16_384);
+        let server_task = tokio::spawn(async move {
+            let mut request = Vec::new();
+            loop {
+                let mut byte = [0u8; 1];
+                server.read_exact(&mut byte).await.expect("CONNECT request");
+                request.push(byte[0]);
+                if request.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            server
+                .write_all(b"HTTP/1.1 200 OK\r\nX: y\r\n\r\nPOST_HEADER")
+                .await
+                .expect("response");
+        });
+        http_connect_tunnel(&mut client, &proxy, &target, "proxy.example:8080")
+            .await
+            .expect("valid CONNECT response");
+        let mut tunnel_bytes = [0u8; 11];
+        client
+            .read_exact(&mut tunnel_bytes)
+            .await
+            .expect("post-header bytes must remain readable");
+        assert_eq!(&tunnel_bytes, b"POST_HEADER");
+        server_task.await.expect("server task");
+
+        for response in [b"HTTP/1.1 200 OK\r\nIncomplete".to_vec(), vec![b'A'; 8192]] {
+            let (mut client, mut server) = tokio::io::duplex(16_384);
+            let server_task = tokio::spawn(async move {
+                let mut request = Vec::new();
+                loop {
+                    let mut byte = [0u8; 1];
+                    server.read_exact(&mut byte).await.expect("CONNECT request");
+                    request.push(byte[0]);
+                    if request.ends_with(b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                server.write_all(&response).await.expect("response");
+            });
+            http_connect_tunnel(&mut client, &proxy, &target, "proxy.example:8080")
+                .await
+                .expect_err("unterminated response must fail");
+            server_task.await.expect("server task");
+        }
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn plaintext_proxy_credentials_are_rejected_before_any_proxy_bytes() {
+        use iroha_primitives::addr::socket_addr;
+        use tokio::net::TcpListener;
+
+        for kind in [ProxyKind::HttpConnect, ProxyKind::Socks5] {
+            let listener = match TcpListener::bind("127.0.0.1:0").await {
+                Ok(listener) => listener,
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => return,
+                Err(error) => panic!("bind: {error:?}"),
+            };
+            let endpoint = listener.local_addr().expect("proxy address");
+            let opts = TcpConnectOptions {
+                proxy: ProxyPolicy {
+                    proxy: Some(Proxy {
+                        kind,
+                        host: endpoint.ip().to_string(),
+                        port: endpoint.port(),
+                        auth: Some(Arc::new(ProxyCredentials::new("user", "password"))),
+                    }),
+                    no_proxy: Vec::new(),
+                },
+                ..TcpConnectOptions::default()
+            };
+            let error = match connect(&socket_addr!(192.0.2.1:443), &opts).await {
+                Err(error) => error,
+                Ok(_) => panic!("plaintext proxy credentials must fail closed"),
+            };
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(25), listener.accept())
+                    .await
+                    .is_err(),
+                "rejected plaintext proxy credentials must not even open the proxy channel"
+            );
+        }
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn unverified_or_unpinned_https_proxy_is_rejected_before_connect_auth() {
+        use iroha_primitives::addr::socket_addr;
+        use tokio::net::TcpListener;
+
+        for (verify, pin) in [(false, None), (true, None)] {
+            let listener = match TcpListener::bind("127.0.0.1:0").await {
+                Ok(listener) => listener,
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => return,
+                Err(error) => panic!("bind: {error:?}"),
+            };
+            let endpoint = listener.local_addr().expect("proxy address");
+            let proxy_url = format!(
+                "https://UNIQUE_USER:UNIQUE_PASSWORD@{}:{}",
+                endpoint.ip(),
+                endpoint.port()
+            );
+            let opts = TcpConnectOptions {
+                proxy: ProxyPolicy::from_config(Some(proxy_url), Vec::new()).expect("proxy policy"),
+                proxy_tls_verify: verify,
+                proxy_tls_pinned_cert_der: pin,
+                ..TcpConnectOptions::default()
+            };
+            let error = match connect(&socket_addr!(192.0.2.1:443), &opts).await {
+                Err(error) => error,
+                Ok(_) => panic!("unverified or unpinned HTTPS proxy must fail closed"),
+            };
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(25), listener.accept())
+                    .await
+                    .is_err(),
+                "rejected HTTPS proxy settings must not send CONNECT or authorization bytes"
+            );
+        }
     }
     #[test]
     fn apply_tcp_socket_options_enables_keepalive_when_configured() {
@@ -2192,68 +2151,6 @@ mod tests {
         server_res.expect("server should complete");
     }
     #[tokio::test(flavor = "current_thread")]
-    async fn socks5_connect_username_password_auth_roundtrips() {
-        use iroha_primitives::addr::socket_addr;
-        let (mut client, mut server) = tokio::io::duplex(1024);
-        let proxy = Proxy {
-            kind: ProxyKind::Socks5,
-            host: "proxy.example.com".into(),
-            port: 1080,
-            auth: Some(("user".into(), "pass".into())),
-        };
-        let target = socket_addr!(5.6.7.8:4321);
-        let client_fut = async { socks5_connect(&mut client, &proxy, &target).await };
-        let server_fut = async move {
-            // Greeting
-            let mut head = [0u8; 2];
-            server.read_exact(&mut head).await?;
-            assert_eq!(head[0], 0x05);
-            let n_methods = head[1] as usize;
-            let mut methods = vec![0u8; n_methods];
-            server.read_exact(&mut methods).await?;
-            assert!(methods.contains(&0x00));
-            assert!(methods.contains(&0x02), "auth method must be advertised");
-            // Choose username/password
-            server.write_all(&[0x05, 0x02]).await?;
-            // RFC 1929 auth request
-            let mut ver = [0u8; 1];
-            server.read_exact(&mut ver).await?;
-            assert_eq!(ver[0], 0x01);
-            let mut ulen = [0u8; 1];
-            server.read_exact(&mut ulen).await?;
-            let mut user = vec![0u8; ulen[0] as usize];
-            server.read_exact(&mut user).await?;
-            let mut plen = [0u8; 1];
-            server.read_exact(&mut plen).await?;
-            let mut pass = vec![0u8; plen[0] as usize];
-            server.read_exact(&mut pass).await?;
-            assert_eq!(user, b"user");
-            assert_eq!(pass, b"pass");
-            // Auth success
-            server.write_all(&[0x01, 0x00]).await?;
-            // CONNECT request
-            let mut req = [0u8; 4];
-            server.read_exact(&mut req).await?;
-            assert_eq!(req[0], 0x05);
-            assert_eq!(req[1], 0x01);
-            assert_eq!(req[2], 0x00);
-            assert_eq!(req[3], 0x01);
-            let mut ip = [0u8; 4];
-            server.read_exact(&mut ip).await?;
-            let mut port = [0u8; 2];
-            server.read_exact(&mut port).await?;
-            assert_eq!(ip, [5, 6, 7, 8]);
-            assert_eq!(u16::from_be_bytes(port), 4321);
-            server
-                .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
-                .await?;
-            Ok::<_, io::Error>(())
-        };
-        let (client_res, server_res) = tokio::join!(client_fut, server_fut);
-        client_res.expect("client should succeed");
-        server_res.expect("server should complete");
-    }
-    #[tokio::test(flavor = "current_thread")]
     async fn socks5_connect_uses_domain_type_for_hostname_targets() {
         use iroha_primitives::addr::SocketAddrHost;
         let (mut client, mut server) = tokio::io::duplex(1024);
@@ -2300,6 +2197,75 @@ mod tests {
         server_res.expect("server should complete");
     }
     #[cfg(feature = "p2p_tls")]
+    async fn spawn_test_tls_server(
+        alpn_protocols: Vec<Vec<u8>>,
+        connections: usize,
+    ) -> Option<(std::net::SocketAddr, Arc<[u8]>, tokio::task::JoinHandle<()>)> {
+        use tokio::net::TcpListener;
+        use tokio_rustls::TlsAcceptor;
+
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(["test.local".to_owned()])
+                .expect("generate test certificate");
+        let cert_chain = vec![rustls::pki_types::CertificateDer::from(
+            cert.der().as_ref().to_vec(),
+        )];
+        let private_key = rustls::pki_types::PrivateKeyDer::from(
+            rustls::pki_types::PrivatePkcs8KeyDer::from(signing_key.serialize_der()),
+        );
+        let mut server_config =
+            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_no_client_auth()
+                .with_single_cert(cert_chain, private_key)
+                .expect("test TLS server config");
+        server_config.alpn_protocols = alpn_protocols;
+        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => return None,
+            Err(error) => panic!("bind: {error:?}"),
+        };
+        let addr = listener.local_addr().expect("test TLS address");
+        let server = tokio::spawn(async move {
+            for _ in 0..connections {
+                let (tcp, _) = listener.accept().await.expect("accept test TLS client");
+                let _ = acceptor.accept(tcp).await;
+            }
+        });
+        Some((addr, Arc::from(cert.der().as_ref().to_vec()), server))
+    }
+    #[cfg(feature = "p2p_tls")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn raw_p2p_tls_requires_tls13_and_exact_alpn() {
+        use tokio::net::TcpStream;
+
+        for (server_alpn, should_succeed) in [
+            (vec![P2P_ALPN.to_vec()], true),
+            (Vec::new(), false),
+            (vec![b"http/1.1".to_vec()], false),
+        ] {
+            let Some((addr, _cert, server)) = spawn_test_tls_server(server_alpn, 1).await else {
+                return;
+            };
+            let tcp = TcpStream::connect(addr)
+                .await
+                .expect("connect test TLS server");
+            let result = crate::transport::tls::connect_tls("test.local", tcp).await;
+            if should_succeed {
+                assert!(result.is_ok(), "exact raw P2P TLS profile must succeed");
+            } else {
+                assert!(
+                    result.is_err(),
+                    "raw P2P TLS profile accepted an invalid protocol negotiation"
+                );
+            }
+            if let Ok(tls) = result {
+                assert_eq!(tls.get_ref().1.alpn_protocol(), Some(P2P_ALPN));
+            }
+            server.await.expect("test TLS server task");
+        }
+    }
+    #[cfg(feature = "p2p_tls")]
     #[tokio::test(flavor = "current_thread")]
     async fn self_signed_tls_rejects_certificate_signed_by_another_key() {
         use rustls::{
@@ -2331,9 +2297,11 @@ mod tests {
             .expect("parse unrelated signing key");
         let advertised_cert = rustls::pki_types::CertificateDer::from(cert.der().as_ref().to_vec());
         let certified_key = CertifiedKey::new(vec![advertised_cert], unrelated_key);
-        let server_cfg = rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_cert_resolver(Arc::new(FixedCertificate(Arc::new(certified_key))));
+        let mut server_cfg =
+            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+                .with_no_client_auth()
+                .with_cert_resolver(Arc::new(FixedCertificate(Arc::new(certified_key))));
+        server_cfg.alpn_protocols = vec![P2P_ALPN.to_vec()];
         let acceptor = TlsAcceptor::from(Arc::new(server_cfg));
         let listener = match TcpListener::bind("127.0.0.1:0").await {
             Ok(listener) => listener,
@@ -2358,56 +2326,32 @@ mod tests {
     #[cfg(feature = "p2p_tls")]
     #[tokio::test(flavor = "current_thread")]
     async fn https_proxy_tls_pinning_accepts_only_matching_cert() {
-        use std::sync::Arc;
-        use tokio::net::{TcpListener, TcpStream};
-        use tokio_rustls::TlsAcceptor;
-        // A self-signed TLS server stands in for an `https://` proxy.
-        let rcgen::CertifiedKey { cert, signing_key } =
-            rcgen::generate_simple_self_signed(["proxy.local".to_owned()]).expect("generate cert");
-        let cert_der = cert.der().clone();
-        let cert_chain = vec![rustls::pki_types::CertificateDer::from(cert_der).into_owned()];
-        let priv_key = rustls::pki_types::PrivateKeyDer::from(
-            rustls::pki_types::PrivatePkcs8KeyDer::from(signing_key.serialize_der()),
-        )
-        .clone_key();
-        let server_cfg = rustls::ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(cert_chain, priv_key)
-            .expect("server config");
-        let acceptor = TlsAcceptor::from(Arc::new(server_cfg));
-        let listener = match TcpListener::bind("127.0.0.1:0").await {
-            Ok(listener) => listener,
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => return,
-            Err(e) => panic!("bind: {e:?}"),
+        use tokio::net::TcpStream;
+
+        let Some((addr, pinned, server)) =
+            spawn_test_tls_server(vec![b"http/1.1".to_vec()], 2).await
+        else {
+            return;
         };
-        let addr = listener.local_addr().expect("local addr");
-        let server = tokio::spawn(async move {
-            for _ in 0..3 {
-                let (tcp, _) = listener.accept().await.expect("accept");
-                let _ = acceptor.accept(tcp).await;
-            }
-        });
-        // P2P TLS accepts the self-signed certificate after verifying key possession.
-        let tcp = TcpStream::connect(addr).await.expect("connect");
-        let self_signed = crate::transport::tls::connect_tls("proxy.local", tcp).await;
-        assert!(
-            self_signed.is_ok(),
-            "P2P TLS should accept a self-signed cert with a valid CertificateVerify"
-        );
         // Pinning should accept the exact end-entity certificate.
         let tcp = TcpStream::connect(addr).await.expect("connect");
-        let pinned = Arc::<[u8]>::from(cert.der().as_ref().to_vec());
-        let verified = crate::transport::tls::connect_tls_pinned("proxy.local", tcp, pinned).await;
+        let verified = crate::transport::tls::connect_https_proxy_tls_pinned(
+            "test.local",
+            tcp,
+            Arc::clone(&pinned),
+        )
+        .await;
         assert!(
             verified.is_ok(),
             "pinned TLS should accept the pinned certificate"
         );
         // A mismatched pin should be rejected.
         let tcp = TcpStream::connect(addr).await.expect("connect");
-        let mut wrong = cert.der().as_ref().to_vec();
+        let mut wrong = pinned.as_ref().to_vec();
         wrong[0] = wrong[0].wrapping_add(1);
         let wrong = Arc::<[u8]>::from(wrong);
-        let verified = crate::transport::tls::connect_tls_pinned("proxy.local", tcp, wrong).await;
+        let verified =
+            crate::transport::tls::connect_https_proxy_tls_pinned("test.local", tcp, wrong).await;
         assert!(
             verified.is_err(),
             "pinned TLS should reject mismatched certificates"

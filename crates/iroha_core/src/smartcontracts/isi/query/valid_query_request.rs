@@ -31,7 +31,6 @@ impl ValidQueryRequest {
         latest_block: Option<BlockHeader>,
         limits: QueryLimits,
     ) -> Result<Self, ValidationFail> {
-        ensure_query_registry_initialized();
         validate_query_request_limits(&request, limits)?;
         world_ro.executor().validate_query_with_world_parts(
             world_ro,
@@ -54,7 +53,6 @@ impl ValidQueryRequest {
         state: &mut impl IvmQueryValidator,
         limits: QueryLimits,
     ) -> Result<Self, ValidationFail> {
-        ensure_query_registry_initialized();
         if matches!(&query, QueryRequest::Continue(_)) {
             return Err(ValidationFail::NotPermitted(
                 "QueryRequest::Continue is not supported in IVM".to_string(),

@@ -14,6 +14,25 @@ struct RoutedReadSourceFixture {
     optional: Option<String>,
 }
 #[test]
+fn routed_read_source_accepts_only_canonical_uaid_literals() {
+    const HEX: &str =
+        "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    let canonical = format!("uaid:{HEX}");
+    assert!(parse_torii_space_directory_uaid_literal(&canonical).is_ok());
+    for literal in [
+        HEX.to_owned(),
+        format!("UAID:{HEX}"),
+        format!("uaid:{}", HEX.to_uppercase()),
+        format!(" {canonical}"),
+        format!("{canonical} "),
+    ] {
+        assert!(
+            parse_torii_space_directory_uaid_literal(&literal).is_err(),
+            "noncanonical routed-read UAID must reject: {literal:?}"
+        );
+    }
+}
+#[test]
 fn routed_read_borrowed_struct_is_wire_equivalent_to_owned_target() {
     let owned = RoutedReadSourceFixture {
         id: "alice".to_owned(),
@@ -335,7 +354,8 @@ fn routed_read_source_status(endpoint: ToriiReadEndpointV1) -> RoutedReadSourceS
         | ContractStateGet
         | InternalAccountGet
         | InternalAccountAssetGet
-        | ContractDeploymentState => Proven,
+        | ContractDeploymentState
+        | AccountOnboardingCurrentState => Proven,
         ExplorerAccountDetail
         | AccountAssetsGet
         | AccountAssetsQuery
@@ -366,7 +386,7 @@ fn routed_read_source_status(endpoint: ToriiReadEndpointV1) -> RoutedReadSourceS
     }
 }
 #[test]
-fn routed_read_source_inventory_classifies_all_45_endpoints() {
+fn routed_read_source_inventory_classifies_all_46_endpoints() {
     use ToriiReadEndpointV1::*;
     let endpoints = [
         AccountGet,
@@ -414,14 +434,15 @@ fn routed_read_source_inventory_classifies_all_45_endpoints() {
         InternalAccountTransactionGet,
         InternalAccountAssetGet,
         ContractDeploymentState,
+        AccountOnboardingCurrentState,
     ];
     let proven = endpoints
         .iter()
         .copied()
         .filter(|endpoint| routed_read_source_status(*endpoint) == RoutedReadSourceStatus::Proven)
         .count();
-    assert_eq!(endpoints.len(), 45);
-    assert_eq!(proven, 18);
+    assert_eq!(endpoints.len(), 46);
+    assert_eq!(proven, 19);
     assert_eq!(endpoints.len() - proven, 27);
 }
 #[test]

@@ -841,6 +841,15 @@ impl<'a> ParsedCar<'a> {
             let data_len = section_len_usize
                 .checked_sub(cid_len)
                 .ok_or(CarVerifyError::TruncatedSection { section_index })?;
+            if cid.codec == RAW_CODEC && data_len > crate::CHUNK_STORE_MAX_CHUNK_BYTES as usize {
+                return Err(CarVerifyError::ChunkSizeExceeded {
+                    section_index,
+                    len: u64::try_from(data_len).map_err(|_| {
+                        CarVerifyError::InternalInvariant("raw CAR section length exceeds u64")
+                    })?,
+                    max: u64::from(crate::CHUNK_STORE_MAX_CHUNK_BYTES),
+                });
+            }
             let data_start = cursor;
             let data_end = cursor
                 .checked_add(data_len)
@@ -2075,6 +2084,65 @@ mod tests {
         assert!(matches!(
             err,
             CarVerifyError::InvalidCarv1Header("header exceeds maximum size")
+        ));
+    }
+    #[test]
+    fn parser_rejects_oversized_raw_section_before_hashing() {
+        let payload = b"canonical CAR template";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let mut car = Vec::new();
+        CarWriter::new(&plan, payload)
+            .expect("writer")
+            .write_to(&mut car)
+            .expect("write CAR");
+        let data_offset = PRAGMA.len() + HEADER_LEN;
+        let (header_len, header_len_bytes) =
+            decode_uleb128(&car[data_offset..]).expect("CARv1 header length");
+        let section_start = data_offset
+            + header_len_bytes
+            + usize::try_from(header_len).expect("header length fits usize");
+        let old_index_offset = usize::try_from(u64::from_le_bytes(
+            car[PRAGMA.len() + 32..PRAGMA.len() + 40]
+                .try_into()
+                .expect("index offset bytes"),
+        ))
+        .expect("index offset fits usize");
+        let index = car[old_index_offset..].to_vec();
+        let raw_len = crate::CHUNK_STORE_MAX_CHUNK_BYTES as usize + 1;
+        let cid = encode_cid(RAW_CODEC, &[0u8; 32]);
+        let section_len = cid.len().checked_add(raw_len).expect("section length");
+        let mut section =
+            crate::encode_uleb128_vec(u64::try_from(section_len).expect("section length fits u64"));
+        section.extend_from_slice(&cid);
+        section.resize(section.len() + raw_len, 0);
+        car.truncate(section_start);
+        car.extend_from_slice(&section);
+        let new_index_offset = car.len();
+        car.extend_from_slice(&index);
+        let data_size = new_index_offset
+            .checked_sub(data_offset)
+            .expect("data size");
+        car[PRAGMA.len() + 24..PRAGMA.len() + 32].copy_from_slice(
+            &u64::try_from(data_size)
+                .expect("data size fits u64")
+                .to_le_bytes(),
+        );
+        car[PRAGMA.len() + 32..PRAGMA.len() + 40].copy_from_slice(
+            &u64::try_from(new_index_offset)
+                .expect("index offset fits u64")
+                .to_le_bytes(),
+        );
+
+        let err = ParsedCar::parse(&car).expect_err("oversized raw section must fail");
+
+        assert!(matches!(
+            err,
+            CarVerifyError::ChunkSizeExceeded {
+                section_index: 0,
+                len,
+                max,
+            } if len == u64::from(crate::CHUNK_STORE_MAX_CHUNK_BYTES) + 1
+                && max == u64::from(crate::CHUNK_STORE_MAX_CHUNK_BYTES)
         ));
     }
     #[test]

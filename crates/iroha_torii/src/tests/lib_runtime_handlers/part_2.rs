@@ -581,6 +581,38 @@ async fn handler_policy_reports_required_token_even_when_configuration_is_unavai
     );
 }
 #[tokio::test]
+async fn kaigi_signal_history_rate_bypass_still_requires_heavy_query_admission() {
+    let mut app = mk_app_state_for_tests();
+    {
+        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+        app_mut.api_rate_limit_bypass_nets = Arc::new(vec![
+            limits::parse_cidr("127.0.0.0/8").expect("loopback CIDR"),
+        ]);
+        app_mut.require_api_token = true;
+        app_mut.api_tokens_set = Arc::new(HashSet::new());
+        app_mut.query_heavy_inflight = Arc::new(tokio::sync::Semaphore::new(0));
+        app_mut.query_queue_timeout = Duration::ZERO;
+    }
+    let error = match super::handler_kaigi_call_signals(
+        State(app),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        AxPath("not-a-call".to_owned()),
+        AxQuery(routing::KaigiCallSignalsParams::default()),
+    )
+    .await
+    {
+        Ok(_) => panic!("saturated heavy admission must reject a rate-bypass caller"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        Error::Query(ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+        ))
+    ));
+}
+#[tokio::test]
 async fn handler_post_transaction_high_load_threshold_does_not_reject_before_enqueue() {
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
@@ -1766,6 +1798,34 @@ fn run_account_route_matrix_case(case: AccountRouteMatrixCase) {
     }
 }
 #[cfg(feature = "app_api")]
+#[test]
+fn internal_fanout_account_scopes_reject_surrounding_whitespace() {
+    let app = mk_app_state_for_tests();
+    let account_id = checked_torii_test_account_id(
+        0xf2,
+        "derive padded internal fanout account scope fixture key",
+    );
+    for scope in [
+        ToriiFanoutRouteScopeV1::TargetAccount {
+            account_id: format!(" {account_id}"),
+        },
+        ToriiFanoutRouteScopeV1::VisibleAccount {
+            caller_account_id: Some(format!("{account_id} ")),
+        },
+    ] {
+        let response = super::torii_fanout_scope_routes(app.as_ref(), &scope)
+            .expect_err("padded internal fanout account scope must fail closed");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("invalid_proxy_request")
+        );
+    }
+}
+#[cfg(feature = "app_api")]
 #[tokio::test]
 async fn torii_account_read_routes_use_target_account_scope_for_signed_and_internal_reads() {
     run_account_route_matrix_case(AccountRouteMatrixCase::AccountSigned);
@@ -1919,10 +1979,10 @@ async fn torii_target_account_routes_fan_out_when_local_scope_is_unknown() {
 async fn nexus_fanout_recomputes_unknown_target_account_routes_from_catalog() {
     run_account_route_matrix_case(AccountRouteMatrixCase::NexusTargetUnknown);
 }
-#[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+#[cfg(all(feature = "app_api", feature = "connect"))]
 #[test]
 fn nexus_fanout_proxy_variants_use_route_budget() {
-    let query_request = ToriiProxyRequestKindV4::SignedQueryFanout {
+    let query_request = ToriiProxyRequestKindV1::SignedQueryFanout {
         query_bytes: Vec::new(),
         response_format: ToriiProxyResponseFormatV1::Norito,
     };
@@ -1934,7 +1994,7 @@ fn nexus_fanout_proxy_variants_use_route_budget() {
         super::torii_proxy_request_kind_name(&query_request),
         "signed_query_fanout"
     );
-    let read_request = ToriiProxyRequestKindV4::ReadFanout(super::torii_read_fanout_request(
+    let read_request = ToriiProxyRequestKindV1::ReadFanout(super::torii_read_fanout_request(
         ToriiReadEndpointV1::AccountGet,
         ToriiFanoutRouteScopeV1::AllDataspaces,
         ToriiReadFanoutMergeV1::Account,
@@ -1955,10 +2015,10 @@ fn nexus_fanout_proxy_variants_use_route_budget() {
         "read_fanout"
     );
 }
-#[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+#[cfg(all(feature = "app_api", feature = "connect"))]
 #[test]
 fn http_route_timeout_covers_read_fanout_proxy_budget() {
-    let fanout_budget = super::torii_proxy_attempt_timeout(&ToriiProxyRequestKindV4::ReadFanout(
+    let fanout_budget = super::torii_proxy_attempt_timeout(&ToriiProxyRequestKindV1::ReadFanout(
         super::torii_read_fanout_request(
             ToriiReadEndpointV1::AccountPermissionsGet,
             ToriiFanoutRouteScopeV1::AllDataspaces,
@@ -1990,7 +2050,7 @@ fn http_route_timeout_covers_read_fanout_proxy_budget() {
         "ZK IVM prove can legitimately exceed the default route timeout"
     );
 }
-#[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+#[cfg(all(feature = "app_api", feature = "connect"))]
 #[test]
 fn client_default_timeout_covers_nexus_fanout_http_budget() {
     let fanout_http_budget = super::route_timeout_for_path("/v1/accounts/example/permissions");
@@ -2501,7 +2561,7 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
         AxPath(uaid.to_string()),
         crate::NoritoQuery(routing::SpaceDirectoryManifestQuery {
             dataspace: None,
-            status: Some("Inactive".to_owned()),
+            status: Some("inactive".to_owned()),
             limit: None,
             offset: None,
             count_mode: None,
@@ -2547,7 +2607,7 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
 fn space_directory_manifest_fanout_query_preserves_coordinator_window_and_filters() {
     let query = routing::SpaceDirectoryManifestQuery {
         dataspace: Some(10),
-        status: Some("Active".to_owned()),
+        status: Some("active".to_owned()),
         limit: Some(5),
         offset: Some(7),
         count_mode: Some("exact".to_owned()),
@@ -2653,7 +2713,7 @@ async fn handler_space_directory_manifests_executes_configured_dataspace_route_l
         AxPath(uaid.to_string()),
         AxQuery(routing::SpaceDirectoryManifestQuery {
             dataspace: Some(restricted_dataspace.as_u64()),
-            status: Some("Active".to_owned()),
+            status: Some("active".to_owned()),
             limit: Some(1),
             offset: Some(0),
             count_mode: None,

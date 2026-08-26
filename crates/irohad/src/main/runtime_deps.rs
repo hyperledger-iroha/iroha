@@ -8,8 +8,8 @@ use mv::storage::StorageReadOnly as _;
 /// exact-view billing queries, threshold/HSM signers, immutable publication, acknowledgement,
 /// sealed witness storage, authenticated Governance DAG publication/readback/head updates, sealed
 /// monotonic Governance DAG checkpoints, externally sealed reputation journal checkpoints, the
-/// Soracloud mutation/provenance signer, and the authenticated Hugging Face credential provider,
-/// plus the reserved Musubi provider- attestation clock, approval signer, and authenticated
+/// Soracloud mutation/provenance signer, plus the reserved Musubi provider-attestation clock,
+/// approval signer, and authenticated
 /// inventory, are the reference-node boundaries for ledger access, PKCS#11, managed-KMS, and
 /// threshold services. Provider credentials, unwrapped keys, PRF shares, seeds, and outputs must
 /// stay inside those implementations and must never be sourced from `iroha_config`.
@@ -142,8 +142,6 @@ pub struct IrohaRuntimeDeps {
         Option<Arc<dyn sorafs_node::PorFinalizedReplayArchiveV1>>,
     soracloud_runtime_mutation_signer:
         Option<Arc<dyn soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>>,
-    soracloud_hf_inference_credential_provider:
-        Option<Arc<dyn soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>>,
     sorafs_musubi_provider_attestation_clock_seal:
         Option<Arc<dyn sorafs_node::MusubiProviderAttestationClockSealV1>>,
     sorafs_musubi_provider_attestation_approval_signer:
@@ -321,7 +319,6 @@ impl IrohaRuntimeDeps {
             && self.sorafs_provider_ingest_retention_authority.is_none()
             && self.sorafs_por_finalized_replay_archive.is_none()
             && self.soracloud_runtime_mutation_signer.is_none()
-            && self.soracloud_hf_inference_credential_provider.is_none()
             && self.sorafs_musubi_provider_attestation_clock_seal.is_none()
             && self
                 .sorafs_musubi_provider_attestation_approval_signer
@@ -476,14 +473,6 @@ impl IrohaRuntimeDeps {
         with_soracloud_runtime_mutation_signer(
             signer: Arc<dyn soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>,
         ) => soracloud_runtime_mutation_signer;
-        /// Attach the raw deployment-owned authenticated HF credential provider.
-        ///
-        /// The registry resolver replaces this provider with an immutable facade qualified against the
-        /// exact configured handle, revision, policy digest, active posture, and non-test posture.
-        /// Bearer credentials remain inside the provider.
-        with_soracloud_hf_inference_credential_provider(
-            provider: Arc<dyn soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>,
-        ) => soracloud_hf_inference_credential_provider;
         /// Attach the runtime-only HSM/KMS signer for exact moderation native transaction envelopes.
         with_sorafs_moderation_transaction_signer(
             signer: Arc<

@@ -118,6 +118,7 @@ from .governance_ballot_client import create_governance_ballot_client_mixin
 from .governance_proposals import GovernanceProposalResult
 from .kaigi_relay_client import create_kaigi_relay_client_mixin
 from .native_amx import (
+    _hash_bytes as _iroha_hash_bytes,
     compute_native_amx_descriptor_hash,
     compute_native_amx_participant_settlement_hash,
     compute_native_amx_proposal_hash,
@@ -171,6 +172,7 @@ from .offline_models import (
     OfflineVerifyingKeyJson,
     OfflineVerifyingKeyRecordJson,
 )
+from .parliament_api import ParliamentApiV1Mixin
 from .runtime_governance_auth import RuntimeGovernanceAuthMixin
 from .sccp import (
     SccpBridgeSubmitResponse,
@@ -311,6 +313,7 @@ _VPN_PROFILE_RESPONSE_FIELDS = frozenset(
         "flow_label_bits",
         "padding_budget_ms",
         "relay_id_hex",
+        "relay_mldsa65_public_key_hex",
         "descriptor_commit_hex",
         "tls_server_name",
         "relay_tls_spki_sha256_hex",
@@ -342,6 +345,7 @@ _VPN_QUOTE_RESPONSE_FIELDS = frozenset(
         "flow_label_bits",
         "padding_budget_ms",
         "relay_id_hex",
+        "relay_mldsa65_public_key_hex",
         "descriptor_commit_hex",
         "tls_server_name",
         "relay_tls_spki_sha256_hex",
@@ -371,6 +375,7 @@ _VPN_SESSION_RESPONSE_FIELDS = frozenset(
         "flow_label_bits",
         "padding_budget_ms",
         "relay_id_hex",
+        "relay_mldsa65_public_key_hex",
         "descriptor_commit_hex",
         "tls_server_name",
         "relay_tls_spki_sha256_hex",
@@ -889,9 +894,18 @@ HEADER_OPERATOR_PUBLIC_KEY = "X-Iroha-Operator-Public-Key"
 HEADER_OPERATOR_TIMESTAMP_MS = "X-Iroha-Operator-Timestamp-Ms"
 HEADER_OPERATOR_NONCE = "X-Iroha-Operator-Nonce"
 HEADER_OPERATOR_SIGNATURE = "X-Iroha-Operator-Signature"
+KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS = 500
+KAIGI_U64_MAX = (1 << 64) - 1
+_KAIGI_RELAY_SUMMARY_REQUIRED_FIELDS = frozenset(
+    {"relay_id", "domain", "bandwidth_class", "hpke_fingerprint_hex"}
+)
+_KAIGI_RELAY_SUMMARY_OPTIONAL_FIELDS = frozenset({"status", "reported_at_ms"})
 _OPERATOR_FORBIDDEN_AUTH_HEADERS = frozenset(
     {
         "authorization",
+        "proxy-authorization",
+        "cookie",
+        "cookie2",
         "x-api-token",
         "x-iroha-account",
         "x-iroha-signature",
@@ -1375,6 +1389,18 @@ def _require_u64(value: Any, context: str) -> int:
     return value
 
 
+def _require_optional_exact_string(value: Any, context: str) -> Optional[str]:
+    if value is None:
+        return None
+    return _require_exact_non_empty_string(value, context)
+
+
+def _require_optional_u64(value: Any, context: str) -> Optional[int]:
+    if value is None:
+        return None
+    return _require_u64(value, context)
+
+
 
 @dataclass(frozen=True)
 class ExplorerAccountQr:
@@ -1674,7 +1700,7 @@ _OFFLINE_TOP_UP_PATH = "/v1/offline/top-up"
 _OFFLINE_REDEEM_PATH = "/v1/offline/redeem"
 _OFFLINE_OPERATIONS_PATH = "/v1/offline/operations"
 _OFFLINE_OPERATION_ID_RE = re.compile(r"^(?!0{64}$)[0-9a-f]{64}$")
-_OFFLINE_TRANSACTION_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+_OFFLINE_TRANSACTION_HASH_RE = re.compile(r"^[0-9a-f]{63}[13579bdf]$")
 _OFFLINE_ERROR_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
 _OFFLINE_ASSET_DEFINITION_ID_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{28}$")
 _OFFLINE_MAX_U32 = (1 << 32) - 1
@@ -1892,7 +1918,10 @@ def _require_offline_operation_id(value: Any, context: str = "operation_id") -> 
 
 def _offline_transaction_hash(value: Any, context: str) -> str:
     if not isinstance(value, str) or _OFFLINE_TRANSACTION_HASH_RE.fullmatch(value) is None:
-        raise RuntimeError(f"{context} must be a lowercase 64-character hexadecimal string")
+        raise RuntimeError(
+            f"{context} must match [0-9a-f]{{63}}[13579bdf] with the canonical "
+            "Iroha HashOf marker"
+        )
     return value
 
 
@@ -4445,6 +4474,7 @@ class VpnProfile:
     flow_label_bits: int
     padding_budget_ms: int
     relay_id_hex: str
+    relay_mldsa65_public_key_hex: str
     descriptor_commit_hex: str
     tls_server_name: str
     relay_tls_spki_sha256_hex: str
@@ -4478,6 +4508,7 @@ class VpnQuote:
     flow_label_bits: int
     padding_budget_ms: int
     relay_id_hex: str
+    relay_mldsa65_public_key_hex: str
     descriptor_commit_hex: str
     tls_server_name: str
     relay_tls_spki_sha256_hex: str
@@ -4509,6 +4540,7 @@ class VpnSession:
     flow_label_bits: int
     padding_budget_ms: int
     relay_id_hex: str
+    relay_mldsa65_public_key_hex: str
     descriptor_commit_hex: str
     tls_server_name: str
     relay_tls_spki_sha256_hex: str
@@ -4591,16 +4623,25 @@ class PipelineTransactionStatusResponse:
     resolved_from: str
 
     @property
-    def is_terminal(self) -> bool:
-        return self.status.kind in {"Committed", "Applied", "Rejected", "Expired"}
+    def is_authoritatively_applied(self) -> bool:
+        """Return whether this is exact global, state-resolved Applied finality."""
+
+        return (
+            self.status.kind == "Applied"
+            and self.scope == "global"
+            and self.resolved_from == "state"
+        )
 
     @property
-    def is_committed(self) -> bool:
-        return self.status.kind in {"Committed", "Applied"}
+    def is_authoritative_failure(self) -> bool:
+        """Return whether committed state proves rejection or expiry."""
 
-    @property
-    def is_rejected(self) -> bool:
-        return self.status.kind == "Rejected"
+        return (
+            self.status.kind in {"Rejected", "Expired"}
+            and self.scope == "global"
+            and self.resolved_from == "state"
+        )
+
 
 @dataclass(frozen=True)
 class ContractOperationReceipt:
@@ -4814,7 +4855,7 @@ class UaidManifestEntry:
 class UaidManifest:
     """Full manifest payload tracked by Space Directory."""
 
-    version: str
+    version: int
     uaid: str
     dataspace: int
     issued_ms: int
@@ -4841,10 +4882,15 @@ class UaidManifestsResponse:
     """Typed response for ``GET /v1/space-directory/uaids/{uaid}/manifests``."""
 
     uaid: str
+    total: int
+    has_more: bool
+    count_mode: str
     manifests: List[UaidManifestRecord]
 
 
 UAID_MANIFEST_STATUS_VALUES = {"Pending", "Active", "Expired", "Revoked"}
+UAID_MANIFEST_STATUS_FILTER_VALUES = {"active", "inactive", "all"}
+UAID_MANIFEST_COUNT_MODE_VALUES = {"bounded", "exact"}
 
 
 @dataclass(frozen=True)
@@ -4859,7 +4905,7 @@ class LaneRuntimeUpgradeHook:
 
 @dataclass(frozen=True)
 class LaneGovernanceSnapshot:
-    """Lane governance metadata referenced by `/v1/status`."""
+    """Lane governance metadata referenced by `/status`."""
 
     lane_id: int
     alias: str
@@ -4878,7 +4924,7 @@ class LaneGovernanceSnapshot:
 
 @dataclass(frozen=True)
 class DataspaceCatalogEntry:
-    """Configured Nexus dataspace joined with lane metadata from `/v1/status`."""
+    """Configured Nexus dataspace joined with lane metadata from `/status`."""
 
     lane_id: int
     lane_alias: str
@@ -4948,7 +4994,7 @@ class GovernanceManifestActivation:
 
 @dataclass(frozen=True)
 class GovernanceStatusSnapshot:
-    """Governance breakdown inside `/v1/status`."""
+    """Governance breakdown inside `/status`."""
 
     proposals: GovernanceProposalCounters
     protected_namespace: GovernanceProtectedNamespaceStats
@@ -4976,7 +5022,7 @@ class StatusMetrics:
 
 @dataclass(frozen=True)
 class StatusPayload:
-    """Raw `/v1/status` payload with typed fields."""
+    """Raw `/status` payload with typed fields."""
 
     observed_at_ms: int
     mode_tag: Optional[str]
@@ -5236,7 +5282,7 @@ class SumeragiPipelineExecutionStatus:
 
 @dataclass(frozen=True)
 class SumeragiNposDiagnostics:
-    """Validated NPoS-only diagnostics."""
+    """Validated current NPoS schedule and PRF context."""
 
     epoch_length_blocks: int
     vrf_commit_deadline_offset: int
@@ -5244,10 +5290,6 @@ class SumeragiNposDiagnostics:
     epoch_seed: Tuple[int, ...]
     prf_height: int
     prf_view: int
-    vrf_penalty_epoch: int
-    vrf_committed_no_reveal_total: int
-    vrf_no_participation_total: int
-    vrf_late_reveals_total: int
 
 
 @dataclass(frozen=True)
@@ -5413,6 +5455,8 @@ class PipelinePreflightPipeline:
     signature_batch_max_pqc: int
     signature_batch_max_bls: int
     overlay_max_instructions: int
+    ivm_max_cycles_upper_bound: int
+    ivm_admission_cycle_limit: int
     ivm_max_decoded_instructions: int
 
 
@@ -8067,10 +8111,6 @@ class _SumeragiDiagnosticsParser:
         "epoch_seed",
         "prf_height",
         "prf_view",
-        "vrf_penalty_epoch",
-        "vrf_committed_no_reveal_total",
-        "vrf_no_participation_total",
-        "vrf_late_reveals_total",
     )
 
     @classmethod
@@ -8258,18 +8298,6 @@ class _SumeragiDiagnosticsParser:
             epoch_seed=seed,
             prf_height=cls._unsigned(record, "prf_height", prefix="npos"),
             prf_view=cls._unsigned(record, "prf_view", prefix="npos"),
-            vrf_penalty_epoch=cls._unsigned(
-                record, "vrf_penalty_epoch", prefix="npos"
-            ),
-            vrf_committed_no_reveal_total=cls._unsigned(
-                record, "vrf_committed_no_reveal_total", prefix="npos"
-            ),
-            vrf_no_participation_total=cls._unsigned(
-                record, "vrf_no_participation_total", prefix="npos"
-            ),
-            vrf_late_reveals_total=cls._unsigned(
-                record, "vrf_late_reveals_total", prefix="npos"
-            ),
         )
 
     @classmethod
@@ -8938,6 +8966,7 @@ class ToriiClient(
     _ToriiClientKaigiRelayMixin,
     _ToriiClientSpaceDirectoryMixin,
     _ToriiClientGovernanceBallotMixin,
+    ParliamentApiV1Mixin,
     RuntimeGovernanceAuthMixin,
 ):
     """HTTP helper for Torii attachments, prover, and governance endpoints."""
@@ -9751,10 +9780,10 @@ class ToriiClient(
         return self._parse_runtime_upgrade_tx_response(payload, context="runtime upgrade cancel response")
 
     def get_status_snapshot(self) -> StatusSnapshot:
-        """Fetch Torii status snapshot (`GET /v1/status`)."""
+        """Fetch Torii status snapshot (`GET /status`)."""
 
         payload = self._get_json_object(
-            "/v1/status",
+            "/status",
             context="status snapshot",
         )
         status_payload = self._parse_status_payload(payload, context="status snapshot")
@@ -10526,13 +10555,40 @@ class ToriiClient(
         uaid: str,
         *,
         dataspace_id: Optional[int] = None,
+        status: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        count_mode: Optional[str] = None,
     ) -> UaidManifestsResponse:
         """Fetch Space Directory manifests for a UAID (`GET /v1/space-directory/uaids/{uaid}/manifests`)."""
 
         canonical = self._normalize_uaid_literal(uaid, context="uaid")
         params: Dict[str, Any] = {}
         if dataspace_id is not None:
-            params["dataspace"] = self._coerce_unsigned(dataspace_id, "get_uaid_manifests.dataspace_id")
+            params["dataspace"] = _require_u64(
+                dataspace_id,
+                "get_uaid_manifests.dataspace_id",
+            )
+        if status is not None:
+            status = _require_exact_non_empty_string(status, "get_uaid_manifests.status")
+            if status not in UAID_MANIFEST_STATUS_FILTER_VALUES:
+                raise ValueError("get_uaid_manifests.status must be active, inactive, or all")
+            params["status"] = status
+        if limit is not None:
+            checked_limit = _require_u64(limit, "get_uaid_manifests.limit")
+            if checked_limit == 0:
+                raise ValueError("get_uaid_manifests.limit must be positive")
+            params["limit"] = checked_limit
+        if offset is not None:
+            params["offset"] = _require_u64(offset, "get_uaid_manifests.offset")
+        if count_mode is not None:
+            count_mode = _require_exact_non_empty_string(
+                count_mode,
+                "get_uaid_manifests.count_mode",
+            )
+            if count_mode not in UAID_MANIFEST_COUNT_MODE_VALUES:
+                raise ValueError("get_uaid_manifests.count_mode must be bounded or exact")
+            params["count_mode"] = count_mode
         response = self._request(
             "GET",
             f"/v1/space-directory/uaids/{quote(canonical, safe='')}/manifests",
@@ -11370,7 +11426,7 @@ class ToriiClient(
             )
         instructions = self._parse_tx_instructions(body.get("tx_instructions"))
         if instructions[0].wire_id != (
-            "iroha_data_model::isi::governance::ProposeDeployContract"
+            "iroha.instruction.v1::governance::ProposeDeployContract"
         ):
             raise RuntimeError("deploy-contract response returned the wrong instruction wire_id")
         canonical_payload_hex = self._require_exact_lower_even_hex_string(
@@ -12164,6 +12220,14 @@ class ToriiClient(
                     )
         if getattr(self._session, "auth", None) is not None:
             raise ValueError("operator GETs reject Session.auth token fallback")
+        cookies = getattr(self._session, "cookies", None)
+        if cookies is not None:
+            try:
+                has_cookies = len(cookies) != 0
+            except TypeError as exc:
+                raise TypeError("operator GETs require a sized Session.cookies jar") from exc
+            if has_cookies:
+                raise ValueError("operator GETs reject Session.cookies token fallback")
         final_headers = _OperatorRequestHeaderPlan(final_headers, context)
         return self._request(
             "GET",
@@ -13458,7 +13522,7 @@ class ToriiClient(
         if any(ch.isspace() for ch in literal) or "@" in literal:
             raise ValueError(f"{context} must be an exact canonical I105 account id")
         try:
-            _decode_i105_string(literal)
+            _decode_canonical_i105_string(literal)
         except ValueError as exc:
             raise ValueError(f"{context} must be an exact canonical I105 account id") from exc
         return literal
@@ -14040,85 +14104,154 @@ class ToriiClient(
         fees = self._ensure_mapping(record.get("fees"), f"{context}.fees")
         raw = self._clone_json_payload(record, context=context)
 
+        def _preflight_unsigned(
+            container: Mapping[str, Any],
+            field: str,
+            prefix: str,
+            *,
+            positive: bool = False,
+        ) -> int:
+            value = container.get(field)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise RuntimeError(f"{prefix}.{field} must be an integer")
+            minimum = 1 if positive else 0
+            if value < minimum:
+                qualifier = "positive" if positive else "non-negative"
+                raise RuntimeError(f"{prefix}.{field} must be {qualifier}")
+            return value
+
+        fee_sink_account_id = self._require_exact_i105_account_id(
+            fees.get("fee_sink_account_id"),
+            f"{context}.fees.fee_sink_account_id",
+        )
+        sponsor_vault_custody_account_id = self._require_exact_i105_account_id(
+            fees.get("sponsor_vault_custody_account_id"),
+            f"{context}.fees.sponsor_vault_custody_account_id",
+        )
+        successful_claim_fee_exempt_authorities = [
+            self._require_exact_i105_account_id(
+                authority,
+                f"{context}.fees.successful_claim_fee_exempt_authorities[{index}]",
+            )
+            for index, authority in enumerate(
+                self._parse_string_array(
+                    fees.get("successful_claim_fee_exempt_authorities"),
+                    context=f"{context}.fees.successful_claim_fee_exempt_authorities",
+                )
+            )
+        ]
+
         return PipelinePreflight(
-            schema_version=self._coerce_int(record.get("schema_version"), f"{context}.schema_version"),
-            chain_height=self._coerce_int(record.get("chain_height"), f"{context}.chain_height"),
+            schema_version=_preflight_unsigned(
+                record,
+                "schema_version",
+                context,
+                positive=True,
+            ),
+            chain_height=_preflight_unsigned(record, "chain_height", context),
             sumeragi=PipelinePreflightSumeragi(
-                block_time_ms=self._coerce_int(
-                    sumeragi.get("block_time_ms"),
-                    f"{context}.sumeragi.block_time_ms",
+                block_time_ms=_preflight_unsigned(
+                    sumeragi,
+                    "block_time_ms",
+                    f"{context}.sumeragi",
                 ),
-                commit_time_ms=self._coerce_int(
-                    sumeragi.get("commit_time_ms"),
-                    f"{context}.sumeragi.commit_time_ms",
+                commit_time_ms=_preflight_unsigned(
+                    sumeragi,
+                    "commit_time_ms",
+                    f"{context}.sumeragi",
                 ),
-                stall_threshold_ms=self._coerce_int(
-                    sumeragi.get("stall_threshold_ms"),
-                    f"{context}.sumeragi.stall_threshold_ms",
+                stall_threshold_ms=_preflight_unsigned(
+                    sumeragi,
+                    "stall_threshold_ms",
+                    f"{context}.sumeragi",
                 ),
             ),
             admission=PipelinePreflightAdmission(
-                max_signatures=self._coerce_int(
-                    admission.get("max_signatures"),
-                    f"{context}.admission.max_signatures",
+                max_signatures=_preflight_unsigned(
+                    admission,
+                    "max_signatures",
+                    f"{context}.admission",
                 ),
-                max_instructions=self._coerce_int(
-                    admission.get("max_instructions"),
-                    f"{context}.admission.max_instructions",
+                max_instructions=_preflight_unsigned(
+                    admission,
+                    "max_instructions",
+                    f"{context}.admission",
                 ),
-                max_tx_bytes=self._coerce_int(
-                    admission.get("max_tx_bytes"),
-                    f"{context}.admission.max_tx_bytes",
+                max_tx_bytes=_preflight_unsigned(
+                    admission,
+                    "max_tx_bytes",
+                    f"{context}.admission",
                 ),
-                max_decompressed_bytes=self._coerce_int(
-                    admission.get("max_decompressed_bytes"),
-                    f"{context}.admission.max_decompressed_bytes",
+                max_decompressed_bytes=_preflight_unsigned(
+                    admission,
+                    "max_decompressed_bytes",
+                    f"{context}.admission",
                 ),
-                max_metadata_depth=self._coerce_int(
-                    admission.get("max_metadata_depth"),
-                    f"{context}.admission.max_metadata_depth",
+                max_metadata_depth=_preflight_unsigned(
+                    admission,
+                    "max_metadata_depth",
+                    f"{context}.admission",
                 ),
             ),
             block=PipelinePreflightBlock(
-                max_transactions=self._coerce_int(
-                    block.get("max_transactions"),
-                    f"{context}.block.max_transactions",
+                max_transactions=_preflight_unsigned(
+                    block,
+                    "max_transactions",
+                    f"{context}.block",
                 )
             ),
             pipeline=PipelinePreflightPipeline(
-                signature_batch_max_ed25519=self._coerce_int(
-                    pipeline.get("signature_batch_max_ed25519"),
-                    f"{context}.pipeline.signature_batch_max_ed25519",
+                signature_batch_max_ed25519=_preflight_unsigned(
+                    pipeline,
+                    "signature_batch_max_ed25519",
+                    f"{context}.pipeline",
                 ),
-                signature_batch_max_secp256k1=self._coerce_int(
-                    pipeline.get("signature_batch_max_secp256k1"),
-                    f"{context}.pipeline.signature_batch_max_secp256k1",
+                signature_batch_max_secp256k1=_preflight_unsigned(
+                    pipeline,
+                    "signature_batch_max_secp256k1",
+                    f"{context}.pipeline",
                 ),
-                signature_batch_max_pqc=self._coerce_int(
-                    pipeline.get("signature_batch_max_pqc"),
-                    f"{context}.pipeline.signature_batch_max_pqc",
+                signature_batch_max_pqc=_preflight_unsigned(
+                    pipeline,
+                    "signature_batch_max_pqc",
+                    f"{context}.pipeline",
                 ),
-                signature_batch_max_bls=self._coerce_int(
-                    pipeline.get("signature_batch_max_bls"),
-                    f"{context}.pipeline.signature_batch_max_bls",
+                signature_batch_max_bls=_preflight_unsigned(
+                    pipeline,
+                    "signature_batch_max_bls",
+                    f"{context}.pipeline",
                 ),
-                overlay_max_instructions=self._coerce_int(
-                    pipeline.get("overlay_max_instructions"),
-                    f"{context}.pipeline.overlay_max_instructions",
+                overlay_max_instructions=_preflight_unsigned(
+                    pipeline,
+                    "overlay_max_instructions",
+                    f"{context}.pipeline",
                 ),
-                ivm_max_decoded_instructions=self._coerce_int(
-                    pipeline.get("ivm_max_decoded_instructions"),
-                    f"{context}.pipeline.ivm_max_decoded_instructions",
+                ivm_max_cycles_upper_bound=_preflight_unsigned(
+                    pipeline,
+                    "ivm_max_cycles_upper_bound",
+                    f"{context}.pipeline",
+                    positive=True,
+                ),
+                ivm_admission_cycle_limit=_preflight_unsigned(
+                    pipeline,
+                    "ivm_admission_cycle_limit",
+                    f"{context}.pipeline",
+                    positive=True,
+                ),
+                ivm_max_decoded_instructions=_preflight_unsigned(
+                    pipeline,
+                    "ivm_max_decoded_instructions",
+                    f"{context}.pipeline",
                 ),
             ),
             queue=PipelinePreflightQueue(
-                size=self._coerce_int(queue.get("size"), f"{context}.queue.size"),
-                queued=self._coerce_int(queue.get("queued"), f"{context}.queue.queued"),
-                inflight=self._coerce_int(queue.get("inflight"), f"{context}.queue.inflight"),
+                size=_preflight_unsigned(queue, "size", f"{context}.queue"),
+                queued=_preflight_unsigned(queue, "queued", f"{context}.queue"),
+                inflight=_preflight_unsigned(queue, "inflight", f"{context}.queue"),
             ),
             fees=PipelinePreflightFees(
                 fee_asset_id=str(fees.get("fee_asset_id") or ""),
-                fee_sink_account_id=str(fees.get("fee_sink_account_id") or ""),
+                fee_sink_account_id=fee_sink_account_id,
                 base_fee=self._clone_json_value(fees.get("base_fee"), context=f"{context}.fees.base_fee"),
                 per_byte_fee=self._clone_json_value(
                     fees.get("per_byte_fee"),
@@ -14132,14 +14265,9 @@ class ToriiClient(
                     fees.get("per_gas_unit_fee"),
                     context=f"{context}.fees.per_gas_unit_fee",
                 ),
-                sponsor_vault_custody_account_id=str(
-                    fees.get("sponsor_vault_custody_account_id") or ""
-                ),
+                sponsor_vault_custody_account_id=sponsor_vault_custody_account_id,
                 settlement_mode=str(fees.get("settlement_mode") or ""),
-                successful_claim_fee_exempt_authorities=self._parse_string_array(
-                    fees.get("successful_claim_fee_exempt_authorities"),
-                    context=f"{context}.fees.successful_claim_fee_exempt_authorities",
-                ),
+                successful_claim_fee_exempt_authorities=successful_claim_fee_exempt_authorities,
             ),
             raw=raw,
         )
@@ -14403,19 +14531,25 @@ class ToriiClient(
     @staticmethod
     def _parse_uaid_portfolio_response(payload: Mapping[str, Any], *, context: str) -> UaidPortfolioResponse:
         record = ToriiClient._ensure_mapping(payload, context)
+        ToriiClient._validate_exact_fields(record, {"uaid", "totals", "dataspaces"}, context)
         uaid_literal = ToriiClient._normalize_uaid_literal(record.get("uaid"), context=f"{context}.uaid")
-        totals_record = ToriiClient._ensure_mapping(record.get("totals") or {}, context=f"{context}.totals")
+        totals_record = ToriiClient._ensure_mapping(record["totals"], context=f"{context}.totals")
+        ToriiClient._validate_exact_fields(
+            totals_record,
+            {"accounts", "positions"},
+            f"{context}.totals",
+        )
         totals = UaidPortfolioTotals(
-            accounts=ToriiClient._coerce_unsigned(
-                totals_record.get("accounts", 0),
+            accounts=_require_u64(
+                totals_record["accounts"],
                 f"{context}.totals.accounts",
             ),
-            positions=ToriiClient._coerce_unsigned(
-                totals_record.get("positions", 0),
+            positions=_require_u64(
+                totals_record["positions"],
                 f"{context}.totals.positions",
             ),
         )
-        dataspaces_value = record.get("dataspaces") or []
+        dataspaces_value = record["dataspaces"]
         if not isinstance(dataspaces_value, list):
             raise RuntimeError(f"{context}.dataspaces must be a list")
         dataspaces = [
@@ -14427,7 +14561,12 @@ class ToriiClient(
     @staticmethod
     def _parse_uaid_portfolio_dataspace(value: Any, *, context: str) -> UaidPortfolioDataspace:
         record = ToriiClient._ensure_mapping(value, context)
-        accounts_value = record.get("accounts") or []
+        ToriiClient._validate_exact_fields(
+            record,
+            {"dataspace_id", "dataspace_alias", "accounts"},
+            context,
+        )
+        accounts_value = record["accounts"]
         if not isinstance(accounts_value, list):
             raise RuntimeError(f"{context}.accounts must be a list")
         accounts = [
@@ -14435,10 +14574,10 @@ class ToriiClient(
             for index, entry in enumerate(accounts_value)
         ]
         return UaidPortfolioDataspace(
-            dataspace_id=ToriiClient._coerce_unsigned(record.get("dataspace_id"), f"{context}.dataspace_id"),
-            dataspace_alias=ToriiClient._coerce_optional_string(
-                record.get("dataspace_alias"),
-                context=f"{context}.dataspace_alias",
+            dataspace_id=_require_u64(record["dataspace_id"], f"{context}.dataspace_id"),
+            dataspace_alias=_require_optional_exact_string(
+                record["dataspace_alias"],
+                f"{context}.dataspace_alias",
             ),
             accounts=accounts,
         )
@@ -14446,7 +14585,12 @@ class ToriiClient(
     @staticmethod
     def _parse_uaid_portfolio_account(value: Any, *, context: str) -> UaidPortfolioAccount:
         record = ToriiClient._ensure_mapping(value, context)
-        assets_value = record.get("assets") or []
+        ToriiClient._validate_exact_fields(
+            record,
+            {"account_id", "label", "assets"},
+            context,
+        )
+        assets_value = record["assets"]
         if not isinstance(assets_value, list):
             raise RuntimeError(f"{context}.assets must be a list")
         assets = [
@@ -14454,28 +14598,34 @@ class ToriiClient(
             for index, entry in enumerate(assets_value)
         ]
         return UaidPortfolioAccount(
-            account_id=ToriiClient._require_string(record.get("account_id"), f"{context}.account_id"),
-            label=ToriiClient._coerce_optional_string(record.get("label"), context=f"{context}.label"),
+            account_id=_require_exact_non_empty_string(record["account_id"], f"{context}.account_id"),
+            label=_require_optional_exact_string(record["label"], f"{context}.label"),
             assets=assets,
         )
 
     @staticmethod
     def _parse_uaid_portfolio_asset(value: Any, *, context: str) -> UaidPortfolioAsset:
         record = ToriiClient._ensure_mapping(value, context)
+        ToriiClient._validate_exact_fields(
+            record,
+            {"asset_id", "asset_definition_id", "quantity"},
+            context,
+        )
         return UaidPortfolioAsset(
-            asset_id=ToriiClient._require_string(record.get("asset_id"), f"{context}.asset_id"),
-            asset_definition_id=ToriiClient._require_string(
-                record.get("asset_definition_id"),
+            asset_id=_require_exact_non_empty_string(record["asset_id"], f"{context}.asset_id"),
+            asset_definition_id=_require_exact_non_empty_string(
+                record["asset_definition_id"],
                 f"{context}.asset_definition_id",
             ),
-            quantity=ToriiClient._require_string(record.get("quantity"), f"{context}.quantity"),
+            quantity=_require_exact_non_empty_string(record["quantity"], f"{context}.quantity"),
         )
 
     @staticmethod
     def _parse_uaid_bindings_response(payload: Mapping[str, Any], *, context: str) -> UaidBindingsResponse:
         record = ToriiClient._ensure_mapping(payload, context)
+        ToriiClient._validate_exact_fields(record, {"uaid", "dataspaces"}, context)
         uaid_literal = ToriiClient._normalize_uaid_literal(record.get("uaid"), context=f"{context}.uaid")
-        dataspaces_value = record.get("dataspaces") or []
+        dataspaces_value = record["dataspaces"]
         if not isinstance(dataspaces_value, list):
             raise RuntimeError(f"{context}.dataspaces must be a list")
         dataspaces = [
@@ -14487,73 +14637,119 @@ class ToriiClient(
     @staticmethod
     def _parse_uaid_bindings_dataspace(value: Any, *, context: str) -> UaidBindingsDataspace:
         record = ToriiClient._ensure_mapping(value, context)
+        ToriiClient._validate_exact_fields(
+            record,
+            {"dataspace_id", "dataspace_alias", "accounts"},
+            context,
+        )
         return UaidBindingsDataspace(
-            dataspace_id=ToriiClient._coerce_unsigned(record.get("dataspace_id"), f"{context}.dataspace_id"),
-            dataspace_alias=ToriiClient._coerce_optional_string(
-                record.get("dataspace_alias"),
-                context=f"{context}.dataspace_alias",
+            dataspace_id=_require_u64(record["dataspace_id"], f"{context}.dataspace_id"),
+            dataspace_alias=_require_optional_exact_string(
+                record["dataspace_alias"],
+                f"{context}.dataspace_alias",
             ),
-            accounts=ToriiClient._parse_string_list(record.get("accounts"), context=f"{context}.accounts"),
+            accounts=ToriiClient._parse_exact_string_list(
+                record["accounts"],
+                context=f"{context}.accounts",
+            ),
         )
 
     @staticmethod
     def _parse_uaid_manifests_response(payload: Mapping[str, Any], *, context: str) -> UaidManifestsResponse:
         record = ToriiClient._ensure_mapping(payload, context)
+        ToriiClient._validate_exact_fields(
+            record,
+            {"uaid", "total", "has_more", "count_mode", "manifests"},
+            context,
+        )
         uaid_literal = ToriiClient._normalize_uaid_literal(record.get("uaid"), context=f"{context}.uaid")
-        manifests_value = record.get("manifests") or []
+        manifests_value = record["manifests"]
         if not isinstance(manifests_value, list):
             raise RuntimeError(f"{context}.manifests must be a list")
+        has_more = record["has_more"]
+        if not isinstance(has_more, bool):
+            raise RuntimeError(f"{context}.has_more must be a boolean")
+        count_mode = _require_exact_non_empty_string(
+            record["count_mode"],
+            f"{context}.count_mode",
+        )
+        if count_mode not in UAID_MANIFEST_COUNT_MODE_VALUES:
+            raise RuntimeError(f"{context}.count_mode must be bounded or exact")
         manifests = [
             ToriiClient._parse_uaid_manifest_record(entry, context=f"{context}.manifests[{index}]")
             for index, entry in enumerate(manifests_value)
         ]
-        return UaidManifestsResponse(uaid=uaid_literal, manifests=manifests)
+        return UaidManifestsResponse(
+            uaid=uaid_literal,
+            total=_require_u64(record["total"], f"{context}.total"),
+            has_more=has_more,
+            count_mode=count_mode,
+            manifests=manifests,
+        )
 
     @staticmethod
     def _parse_uaid_manifest_record(value: Any, *, context: str) -> UaidManifestRecord:
         record = ToriiClient._ensure_mapping(value, context)
-        status = ToriiClient._require_string(record.get("status"), f"{context}.status")
+        ToriiClient._validate_exact_fields(
+            record,
+            {
+                "dataspace_id",
+                "dataspace_alias",
+                "manifest_hash",
+                "status",
+                "lifecycle",
+                "accounts",
+                "manifest",
+            },
+            context,
+        )
+        status = _require_exact_non_empty_string(record["status"], f"{context}.status")
         if status not in UAID_MANIFEST_STATUS_VALUES:
             allowed = ", ".join(sorted(UAID_MANIFEST_STATUS_VALUES))
             raise RuntimeError(f"{context}.status must be one of {allowed}")
         lifecycle = ToriiClient._parse_uaid_manifest_lifecycle(record.get("lifecycle"), context=f"{context}.lifecycle")
         manifest = ToriiClient._parse_uaid_manifest(record.get("manifest"), context=f"{context}.manifest")
-        manifest_hash_value = ToriiClient._require_string(
-            record.get("manifest_hash"),
+        manifest_hash = _require_exact_non_empty_string(
+            record["manifest_hash"],
             f"{context}.manifest_hash",
         )
-        manifest_hash = ToriiClient._normalize_hex_string(
-            manifest_hash_value,
-            context=f"{context}.manifest_hash",
-            expected_length=64,
-        )
+        if re.fullmatch(r"[0-9a-f]{64}", manifest_hash) is None:
+            raise RuntimeError(f"{context}.manifest_hash must be exact lowercase 32-byte hex")
         return UaidManifestRecord(
-            dataspace_id=ToriiClient._coerce_unsigned(record.get("dataspace_id"), f"{context}.dataspace_id"),
-            dataspace_alias=ToriiClient._coerce_optional_string(
-                record.get("dataspace_alias"),
-                context=f"{context}.dataspace_alias",
+            dataspace_id=_require_u64(record["dataspace_id"], f"{context}.dataspace_id"),
+            dataspace_alias=_require_optional_exact_string(
+                record["dataspace_alias"],
+                f"{context}.dataspace_alias",
             ),
-            manifest_hash="0x" + manifest_hash,
+            manifest_hash=manifest_hash,
             status=status,
             lifecycle=lifecycle,
-            accounts=ToriiClient._parse_string_list(record.get("accounts"), context=f"{context}.accounts"),
+            accounts=ToriiClient._parse_exact_string_list(
+                record["accounts"],
+                context=f"{context}.accounts",
+            ),
             manifest=manifest,
         )
 
     @staticmethod
     def _parse_uaid_manifest_lifecycle(value: Any, *, context: str) -> UaidManifestLifecycle:
-        record = ToriiClient._ensure_mapping(value or {}, context)
-        revocation_value = record.get("revocation")
+        record = ToriiClient._ensure_mapping(value, context)
+        ToriiClient._validate_exact_fields(
+            record,
+            {"activated_epoch", "expired_epoch", "revocation"},
+            context,
+        )
+        revocation_value = record["revocation"]
         revocation = None
         if revocation_value is not None:
             revocation = ToriiClient._parse_uaid_manifest_revocation(revocation_value, context=f"{context}.revocation")
         return UaidManifestLifecycle(
-            activated_epoch=ToriiClient._coerce_optional_unsigned(
-                record.get("activated_epoch"),
+            activated_epoch=_require_optional_u64(
+                record["activated_epoch"],
                 context=f"{context}.activated_epoch",
             ),
-            expired_epoch=ToriiClient._coerce_optional_unsigned(
-                record.get("expired_epoch"),
+            expired_epoch=_require_optional_u64(
+                record["expired_epoch"],
                 context=f"{context}.expired_epoch",
             ),
             revocation=revocation,
@@ -14562,15 +14758,46 @@ class ToriiClient(
     @staticmethod
     def _parse_uaid_manifest_revocation(value: Any, *, context: str) -> UaidManifestRevocation:
         record = ToriiClient._ensure_mapping(value, context)
+        ToriiClient._validate_exact_fields(record, {"epoch", "reason"}, context)
         return UaidManifestRevocation(
-            epoch=ToriiClient._coerce_unsigned(record.get("epoch"), f"{context}.epoch"),
-            reason=ToriiClient._coerce_optional_string(record.get("reason"), context=f"{context}.reason"),
+            epoch=_require_u64(record["epoch"], f"{context}.epoch"),
+            reason=_require_optional_exact_string(record["reason"], f"{context}.reason"),
         )
 
     @staticmethod
     def _parse_uaid_manifest(value: Any, *, context: str) -> UaidManifest:
         record = ToriiClient._ensure_mapping(value, context)
-        entries_value = record.get("entries") or []
+        allowed_fields = {
+            "version",
+            "uaid",
+            "dataspace",
+            "issued_ms",
+            "activation_epoch",
+            "expiry_epoch",
+            "entries",
+        }
+        ToriiClient._reject_unknown_fields(record, allowed_fields, context)
+        required_fields = allowed_fields - {"expiry_epoch"}
+        missing = required_fields - set(record)
+        if missing:
+            raise RuntimeError(
+                f"{context} is missing required fields: {', '.join(sorted(missing))}"
+            )
+        version = _require_u64(record["version"], f"{context}.version")
+        if version != 1:
+            raise RuntimeError(f"{context}.version must be the first-release version 1")
+        if "expiry_epoch" in record:
+            if record["expiry_epoch"] is None:
+                raise RuntimeError(
+                    f"{context}.expiry_epoch must be omitted instead of null"
+                )
+            expiry_epoch = _require_u64(
+                record["expiry_epoch"],
+                f"{context}.expiry_epoch",
+            )
+        else:
+            expiry_epoch = None
+        entries_value = record["entries"]
         if not isinstance(entries_value, list):
             raise RuntimeError(f"{context}.entries must be a list")
         entries = [
@@ -14578,32 +14805,119 @@ class ToriiClient(
             for index, entry in enumerate(entries_value)
         ]
         return UaidManifest(
-            version=ToriiClient._require_string(record.get("version"), f"{context}.version"),
-            uaid=ToriiClient._normalize_uaid_literal(record.get("uaid"), context=f"{context}.uaid"),
-            dataspace=ToriiClient._coerce_unsigned(record.get("dataspace"), f"{context}.dataspace"),
-            issued_ms=ToriiClient._coerce_unsigned(record.get("issued_ms"), f"{context}.issued_ms"),
-            activation_epoch=ToriiClient._coerce_unsigned(
-                record.get("activation_epoch"),
+            version=version,
+            uaid=ToriiClient._normalize_uaid_literal(record["uaid"], context=f"{context}.uaid"),
+            dataspace=_require_u64(record["dataspace"], f"{context}.dataspace"),
+            issued_ms=_require_u64(record["issued_ms"], f"{context}.issued_ms"),
+            activation_epoch=_require_u64(
+                record["activation_epoch"],
                 f"{context}.activation_epoch",
             ),
-            expiry_epoch=ToriiClient._coerce_optional_unsigned(
-                record.get("expiry_epoch"),
-                context=f"{context}.expiry_epoch",
-            ),
+            expiry_epoch=expiry_epoch,
             entries=entries,
         )
 
     @staticmethod
     def _parse_uaid_manifest_entry(value: Any, *, context: str) -> UaidManifestEntry:
         record = ToriiClient._ensure_mapping(value, context)
-        scope_value = record.get("scope")
-        effect_value = record.get("effect")
-        if not isinstance(scope_value, Mapping):
-            raise RuntimeError(f"{context}.scope must be an object")
-        if not isinstance(effect_value, Mapping):
-            raise RuntimeError(f"{context}.effect must be an object")
-        notes = ToriiClient._coerce_optional_string(record.get("notes"), context=f"{context}.notes")
-        return UaidManifestEntry(scope=dict(scope_value), effect=dict(effect_value), notes=notes)
+        ToriiClient._reject_unknown_fields(record, {"scope", "effect", "notes"}, context)
+        missing = {"scope", "effect"} - set(record)
+        if missing:
+            raise RuntimeError(
+                f"{context} is missing required fields: {', '.join(sorted(missing))}"
+            )
+        scope = ToriiClient._parse_uaid_manifest_scope(
+            record["scope"],
+            context=f"{context}.scope",
+        )
+        effect = ToriiClient._parse_uaid_manifest_effect(
+            record["effect"],
+            context=f"{context}.effect",
+        )
+        if "notes" in record:
+            notes_value = record["notes"]
+            if notes_value is None:
+                raise RuntimeError(f"{context}.notes must be omitted instead of null")
+            if not isinstance(notes_value, str):
+                raise RuntimeError(f"{context}.notes must be a string")
+            notes = notes_value
+        else:
+            notes = None
+        return UaidManifestEntry(scope=scope, effect=effect, notes=notes)
+
+    @staticmethod
+    def _parse_uaid_manifest_scope(value: Any, *, context: str) -> Dict[str, Any]:
+        record = ToriiClient._ensure_mapping(value, context)
+        ToriiClient._reject_unknown_fields(
+            record,
+            {"asset", "dataspace", "method", "program", "role"},
+            context,
+        )
+        parsed: Dict[str, Any] = {}
+        for field, field_value in record.items():
+            if field_value is None:
+                raise RuntimeError(f"{context}.{field} must be omitted instead of null")
+            if field == "dataspace":
+                parsed[field] = _require_u64(field_value, f"{context}.{field}")
+                continue
+            literal = _require_exact_non_empty_string(field_value, f"{context}.{field}")
+            if field == "role" and literal not in {"Initiator", "Participant"}:
+                raise RuntimeError(
+                    f"{context}.role must be Initiator or Participant"
+                )
+            parsed[field] = literal
+        return parsed
+
+    @staticmethod
+    def _parse_uaid_manifest_effect(value: Any, *, context: str) -> Dict[str, Any]:
+        record = ToriiClient._ensure_mapping(value, context)
+        ToriiClient._reject_unknown_fields(record, {"Allow", "Deny"}, context)
+        if len(record) != 1:
+            raise RuntimeError(f"{context} must contain exactly one Allow or Deny decision")
+        decision, raw_details = next(iter(record.items()))
+        details = ToriiClient._ensure_mapping(raw_details, f"{context}.{decision}")
+        if decision == "Allow":
+            ToriiClient._reject_unknown_fields(
+                details,
+                {"max_amount", "window"},
+                f"{context}.Allow",
+            )
+            if "window" not in details:
+                raise RuntimeError(f"{context}.Allow is missing required field: window")
+            window = _require_exact_non_empty_string(
+                details["window"],
+                f"{context}.Allow.window",
+            )
+            if window not in {"PerSlot", "PerMinute", "PerDay"}:
+                raise RuntimeError(
+                    f"{context}.Allow.window must be PerSlot, PerMinute, or PerDay"
+                )
+            parsed_details: Dict[str, Any] = {"window": window}
+            if "max_amount" in details:
+                if details["max_amount"] is None:
+                    raise RuntimeError(
+                        f"{context}.Allow.max_amount must be omitted instead of null"
+                    )
+                parsed_details["max_amount"] = _require_exact_non_empty_string(
+                    details["max_amount"],
+                    f"{context}.Allow.max_amount",
+                )
+            return {"Allow": parsed_details}
+        if decision == "Deny":
+            ToriiClient._reject_unknown_fields(
+                details,
+                {"reason"},
+                f"{context}.Deny",
+            )
+            if "reason" not in details:
+                return {"Deny": {}}
+            reason = details["reason"]
+            if reason is None:
+                raise RuntimeError(f"{context}.Deny.reason must be omitted instead of null")
+            if not isinstance(reason, str):
+                raise RuntimeError(f"{context}.Deny.reason must be a string")
+            return {"Deny": {"reason": reason}}
+        raise RuntimeError(f"{context} must contain exactly one Allow or Deny decision")
 
     def _parse_lane_governance(
         self,
@@ -15297,53 +15611,166 @@ class ToriiClient(
         )
 
     @staticmethod
+    def _require_kaigi_fields(
+        record: Mapping[str, Any],
+        *,
+        required: frozenset[str],
+        optional: frozenset[str] = frozenset(),
+        context: str,
+    ) -> None:
+        """Require the exact first-release field set advertised by Torii."""
+
+        missing = required.difference(record)
+        if missing:
+            field = min(missing)
+            raise RuntimeError(f"{context}.{field} is required")
+        unexpected = set(record).difference(required | optional)
+        if unexpected:
+            field = min(unexpected)
+            raise RuntimeError(
+                f"{context}.{field} is not part of the first-release contract"
+            )
+
+    @staticmethod
+    def _require_kaigi_exact_string(value: Any, *, context: str) -> str:
+        """Parse one non-empty response string without normalizing wire bytes."""
+
+        try:
+            return _require_exact_non_empty_string(value, context)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(str(exc)) from exc
+
+    @staticmethod
+    def _require_kaigi_canonical_account_id(value: Any, *, context: str) -> str:
+        """Require a canonical I105 account literal emitted by Torii."""
+
+        literal = ToriiClient._require_kaigi_exact_string(value, context=context)
+        if "@" in literal:
+            raise RuntimeError(f"{context} must be a canonical I105 account id")
+        try:
+            _decode_canonical_i105_string(literal)
+        except ValueError as exc:
+            raise RuntimeError(f"{context} must be a canonical I105 account id") from exc
+        return literal
+
+    @staticmethod
+    def _require_kaigi_lower_hex_32(value: Any, *, context: str) -> str:
+        """Require the exact lowercase 32-byte fingerprint spelling from Torii."""
+
+        literal = ToriiClient._require_kaigi_exact_string(value, context=context)
+        if re.fullmatch(r"[0-9a-f]{64}", literal) is None:
+            raise RuntimeError(
+                f"{context} must contain exactly 64 lowercase hex characters"
+            )
+        return literal
+
+    @staticmethod
+    def _decode_kaigi_exact_base64(value: Any, *, context: str) -> Tuple[str, bytes]:
+        """Decode one non-empty canonical standard-base64 response field."""
+
+        literal = ToriiClient._require_kaigi_exact_string(value, context=context)
+        if any(character.isspace() for character in literal):
+            raise RuntimeError(f"{context} must be exact standard-base64")
+        try:
+            decoded = base64.b64decode(literal, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise RuntimeError(f"{context} must be exact standard-base64") from exc
+        if not decoded or base64.b64encode(decoded).decode("ascii") != literal:
+            raise RuntimeError(f"{context} must be exact non-empty standard-base64")
+        return literal, decoded
+
+    @staticmethod
+    def _parse_kaigi_unsigned(value: Any, *, context: str) -> int:
+        """Parse an exact unsigned Kaigi JSON integer without coercion."""
+
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise RuntimeError(f"{context} must be an unsigned integer")
+        if not 0 <= value <= KAIGI_U64_MAX:
+            raise RuntimeError(f"{context} must fit in a u64")
+        return value
+
+    @staticmethod
     def _parse_kaigi_relay_summary_list(
         payload: Mapping[str, Any],
         *,
         context: str,
     ) -> KaigiRelaySummaryList:
         record = ToriiClient._ensure_mapping(payload, context)
-        items_value = record.get("items") or []
+        ToriiClient._require_kaigi_fields(
+            record,
+            required=frozenset({"items", "total"}),
+            context=context,
+        )
+        items_value = record["items"]
         if not isinstance(items_value, list):
             raise RuntimeError(f"{context}.items must be a list")
+        if len(items_value) > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS:
+            raise RuntimeError(
+                f"{context}.items exceeds the {KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS}-entry limit"
+            )
         items = [
             ToriiClient._parse_kaigi_relay_summary(entry, context=f"{context}.items[{index}]")
             for index, entry in enumerate(items_value)
         ]
-        total = record.get("total", len(items))
-        return KaigiRelaySummaryList(
-            total=ToriiClient._coerce_unsigned(total, f"{context}.total"),
-            items=items,
+        total = ToriiClient._parse_kaigi_unsigned(
+            record["total"],
+            context=f"{context}.total",
         )
+        if total != len(items):
+            raise RuntimeError(f"{context}.total must equal the number of items")
+        relay_ids = [item.relay_id for item in items]
+        if len(set(relay_ids)) != len(relay_ids):
+            raise RuntimeError(f"{context}.items contains duplicate relay ids")
+        return KaigiRelaySummaryList(total=total, items=items)
 
     @staticmethod
     def _parse_kaigi_relay_summary(payload: Any, *, context: str) -> KaigiRelaySummary:
         record = ToriiClient._ensure_mapping(payload, context)
-        relay_id = record.get("relay_id")
-        domain = record.get("domain")
-        bandwidth_value = record.get("bandwidth_class") or 0
-        fingerprint_value = record.get("hpke_fingerprint_hex")
-        status_value = record.get("status")
+        ToriiClient._require_kaigi_fields(
+            record,
+            required=_KAIGI_RELAY_SUMMARY_REQUIRED_FIELDS,
+            optional=_KAIGI_RELAY_SUMMARY_OPTIONAL_FIELDS,
+            context=context,
+        )
+        bandwidth_value = record["bandwidth_class"]
+        if isinstance(bandwidth_value, bool) or not isinstance(bandwidth_value, int):
+            raise RuntimeError(f"{context}.bandwidth_class must be an integer")
+        if not 1 <= bandwidth_value <= 0xFF:
+            raise RuntimeError(f"{context}.bandwidth_class must be within 1..=255")
+        has_status = "status" in record
+        has_reported_at = "reported_at_ms" in record
+        if has_status != has_reported_at:
+            raise RuntimeError(
+                f"{context}.status and reported_at_ms must be present together"
+            )
         status: Optional[str] = None
-        if status_value is not None:
-            status_literal = ToriiClient._require_non_empty_string(status_value, f"{context}.status").lower()
+        reported_at_ms: Optional[int] = None
+        if has_status:
+            status_literal = ToriiClient._require_kaigi_exact_string(
+                record["status"],
+                context=f"{context}.status",
+            )
             if status_literal not in _KAIGI_HEALTH_STATUSES:
                 raise RuntimeError(
                     f"{context}.status must be one of {sorted(_KAIGI_HEALTH_STATUSES)}"
                 )
             status = status_literal
-        reported_at = record.get("reported_at_ms")
-        reported_at_ms = (
-            ToriiClient._coerce_unsigned(reported_at, f"{context}.reported_at_ms")
-            if reported_at is not None
-            else None
-        )
+            reported_at_ms = ToriiClient._parse_kaigi_unsigned(
+                record["reported_at_ms"],
+                context=f"{context}.reported_at_ms",
+            )
         return KaigiRelaySummary(
-            relay_id=ToriiClient._require_non_empty_string(relay_id, f"{context}.relay_id"),
-            domain=ToriiClient._require_non_empty_string(domain, f"{context}.domain"),
-            bandwidth_class=ToriiClient._coerce_unsigned(bandwidth_value, f"{context}.bandwidth_class"),
-            hpke_fingerprint_hex=ToriiClient._normalize_hex_string(
-                ToriiClient._require_hex_string(fingerprint_value, f"{context}.hpke_fingerprint_hex"),
+            relay_id=ToriiClient._require_kaigi_canonical_account_id(
+                record["relay_id"],
+                context=f"{context}.relay_id",
+            ),
+            domain=ToriiClient._require_kaigi_exact_string(
+                record["domain"],
+                context=f"{context}.domain",
+            ),
+            bandwidth_class=bandwidth_value,
+            hpke_fingerprint_hex=ToriiClient._require_kaigi_lower_hex_32(
+                record["hpke_fingerprint_hex"],
                 context=f"{context}.hpke_fingerprint_hex",
             ),
             status=status,
@@ -15351,70 +15778,150 @@ class ToriiClient(
         )
 
     @staticmethod
-    def _parse_kaigi_relay_detail(payload: Mapping[str, Any], *, context: str) -> KaigiRelayDetail:
+    def _parse_kaigi_relay_detail(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> KaigiRelayDetail:
         record = ToriiClient._ensure_mapping(payload, context)
-        relay_summary = ToriiClient._parse_kaigi_relay_summary(record.get("relay"), context=f"{context}.relay")
-        hpke_public_key = record.get("hpke_public_key_b64")
+        ToriiClient._require_kaigi_fields(
+            record,
+            required=frozenset({"relay", "hpke_public_key_b64"}),
+            optional=frozenset({"reported_call", "reported_by", "notes", "metrics"}),
+            context=context,
+        )
+        relay_summary = ToriiClient._parse_kaigi_relay_summary(
+            record.get("relay"),
+            context=f"{context}.relay",
+        )
+        hpke_public_key, hpke_bytes = ToriiClient._decode_kaigi_exact_base64(
+            record["hpke_public_key_b64"],
+            context=f"{context}.hpke_public_key_b64",
+        )
         reported_call_value = record.get("reported_call")
         metrics_value = record.get("metrics")
         reported_by_value = record.get("reported_by")
         notes_value = record.get("notes")
+        if "notes" in record:
+            if not isinstance(notes_value, str):
+                raise RuntimeError(f"{context}.notes must be a string")
+        if "reported_call" in record and not isinstance(reported_call_value, Mapping):
+            raise RuntimeError(f"{context}.reported_call must be an object")
+        if "metrics" in record and not isinstance(metrics_value, Mapping):
+            raise RuntimeError(f"{context}.metrics must be an object")
+        reported_by = (
+            ToriiClient._require_kaigi_canonical_account_id(
+                reported_by_value,
+                context=f"{context}.reported_by",
+            )
+            if "reported_by" in record
+            else None
+        )
+        expected_fingerprint = _iroha_hash_bytes(hpke_bytes).hex()
+        if relay_summary.hpke_fingerprint_hex != expected_fingerprint:
+            raise RuntimeError(
+                f"{context}.hpke_public_key_b64 does not match the relay fingerprint"
+            )
+        has_reported_call = "reported_call" in record
+        has_reported_by = "reported_by" in record
+        if has_reported_call != has_reported_by:
+            raise RuntimeError(
+                f"{context}.reported_call and reported_by must be present together"
+            )
+        has_feedback = relay_summary.status is not None
+        if has_feedback != has_reported_call:
+            raise RuntimeError(
+                f"{context} feedback fields must agree with the relay health summary"
+            )
+        if "notes" in record and not has_feedback:
+            raise RuntimeError(f"{context}.notes requires relay health feedback")
+        metrics = (
+            ToriiClient._parse_kaigi_relay_domain_metrics(
+                metrics_value,
+                context=f"{context}.metrics",
+            )
+            if "metrics" in record
+            else None
+        )
+        if metrics is not None and metrics.domain != relay_summary.domain:
+            raise RuntimeError(
+                f"{context}.metrics.domain must match the relay domain"
+            )
         return KaigiRelayDetail(
             relay=relay_summary,
-            hpke_public_key_b64=ToriiClient._require_non_empty_string(
-                hpke_public_key,
-                f"{context}.hpke_public_key_b64",
-            ),
+            hpke_public_key_b64=hpke_public_key,
             reported_call=ToriiClient._parse_kaigi_relay_reported_call(
                 reported_call_value,
                 context=f"{context}.reported_call",
             )
-            if reported_call_value is not None
+            if has_reported_call
             else None,
-            reported_by=ToriiClient._optional_string(reported_by_value, f"{context}.reported_by")
-            if reported_by_value is not None
-            else None,
-            notes=str(notes_value) if notes_value is not None else None,
-            metrics=ToriiClient._parse_kaigi_relay_domain_metrics(
-                metrics_value,
-                context=f"{context}.metrics",
-            )
-            if metrics_value is not None
-            else None,
+            reported_by=reported_by,
+            notes=notes_value,
+            metrics=metrics,
         )
 
     @staticmethod
-    def _parse_kaigi_relay_reported_call(payload: Any, *, context: str) -> KaigiRelayReportedCall:
+    def _parse_kaigi_relay_reported_call(
+        payload: Any,
+        *,
+        context: str,
+    ) -> KaigiRelayReportedCall:
         record = ToriiClient._ensure_mapping(payload, context)
-        domain = record.get("domain_id")
-        name = record.get("call_name")
+        ToriiClient._require_kaigi_fields(
+            record,
+            required=frozenset({"domain_id", "call_name"}),
+            context=context,
+        )
         return KaigiRelayReportedCall(
-            domain_id=ToriiClient._require_non_empty_string(domain, f"{context}.domain_id"),
-            call_name=ToriiClient._require_non_empty_string(name, f"{context}.call_name"),
+            domain_id=ToriiClient._require_kaigi_exact_string(
+                record["domain_id"],
+                context=f"{context}.domain_id",
+            ),
+            call_name=ToriiClient._require_kaigi_exact_string(
+                record["call_name"],
+                context=f"{context}.call_name",
+            ),
         )
 
     @staticmethod
-    def _parse_kaigi_relay_domain_metrics(payload: Any, *, context: str) -> KaigiRelayDomainMetrics:
+    def _parse_kaigi_relay_domain_metrics(
+        payload: Any,
+        *,
+        context: str,
+    ) -> KaigiRelayDomainMetrics:
         record = ToriiClient._ensure_mapping(payload, context)
-        domain = record.get("domain")
+        ToriiClient._require_kaigi_fields(
+            record,
+            required=frozenset(
+                {
+                    "domain",
+                    "registrations_total",
+                    "manifest_updates_total",
+                    "failovers_total",
+                    "health_reports_total",
+                }
+            ),
+            context=context,
+        )
+
+        def required_counter(name: str) -> int:
+            if name not in record:
+                raise RuntimeError(f"{context}.{name} is required")
+            return ToriiClient._parse_kaigi_unsigned(
+                record[name],
+                context=f"{context}.{name}",
+            )
+
         return KaigiRelayDomainMetrics(
-            domain=ToriiClient._require_non_empty_string(domain, f"{context}.domain"),
-            registrations_total=ToriiClient._coerce_unsigned(
-                record.get("registrations_total"),
-                f"{context}.registrations_total",
+            domain=ToriiClient._require_kaigi_exact_string(
+                record["domain"],
+                context=f"{context}.domain",
             ),
-            manifest_updates_total=ToriiClient._coerce_unsigned(
-                record.get("manifest_updates_total"),
-                f"{context}.manifest_updates_total",
-            ),
-            failovers_total=ToriiClient._coerce_unsigned(
-                record.get("failovers_total"),
-                f"{context}.failovers_total",
-            ),
-            health_reports_total=ToriiClient._coerce_unsigned(
-                record.get("health_reports_total"),
-                f"{context}.health_reports_total",
-            ),
+            registrations_total=required_counter("registrations_total"),
+            manifest_updates_total=required_counter("manifest_updates_total"),
+            failovers_total=required_counter("failovers_total"),
+            health_reports_total=required_counter("health_reports_total"),
         )
 
     @staticmethod
@@ -15424,28 +15931,89 @@ class ToriiClient(
         context: str,
     ) -> KaigiRelayHealthSnapshot:
         record = ToriiClient._ensure_mapping(payload, context)
-        domains_value = record.get("domains") or []
+        ToriiClient._require_kaigi_fields(
+            record,
+            required=frozenset(
+                {
+                    "healthy_total",
+                    "degraded_total",
+                    "unavailable_total",
+                    "reports_total",
+                    "registrations_total",
+                    "failovers_total",
+                    "domains",
+                }
+            ),
+            context=context,
+        )
+        domains_value = record["domains"]
         if not isinstance(domains_value, list):
             raise RuntimeError(f"{context}.domains must be a list")
+        if len(domains_value) > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS:
+            raise RuntimeError(
+                f"{context}.domains exceeds the {KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS}-entry limit"
+            )
         domains = [
-            ToriiClient._parse_kaigi_relay_domain_metrics(entry, context=f"{context}.domains[{index}]")
+            ToriiClient._parse_kaigi_relay_domain_metrics(
+                entry,
+                context=f"{context}.domains[{index}]",
+            )
             for index, entry in enumerate(domains_value)
         ]
-        return KaigiRelayHealthSnapshot(
-            healthy_total=ToriiClient._coerce_unsigned(record.get("healthy_total"), f"{context}.healthy_total"),
-            degraded_total=ToriiClient._coerce_unsigned(record.get("degraded_total"), f"{context}.degraded_total"),
-            unavailable_total=ToriiClient._coerce_unsigned(
-                record.get("unavailable_total"),
-                f"{context}.unavailable_total",
-            ),
-            reports_total=ToriiClient._coerce_unsigned(record.get("reports_total"), f"{context}.reports_total"),
-            registrations_total=ToriiClient._coerce_unsigned(
-                record.get("registrations_total"),
-                f"{context}.registrations_total",
-            ),
-            failovers_total=ToriiClient._coerce_unsigned(record.get("failovers_total"), f"{context}.failovers_total"),
+        domain_ids = [entry.domain for entry in domains]
+        if len(set(domain_ids)) != len(domain_ids):
+            raise RuntimeError(f"{context}.domains contains duplicate domains")
+
+        def required_counter(name: str) -> int:
+            if name not in record:
+                raise RuntimeError(f"{context}.{name} is required")
+            return ToriiClient._parse_kaigi_unsigned(
+                record[name],
+                context=f"{context}.{name}",
+            )
+
+        snapshot = KaigiRelayHealthSnapshot(
+            healthy_total=required_counter("healthy_total"),
+            degraded_total=required_counter("degraded_total"),
+            unavailable_total=required_counter("unavailable_total"),
+            reports_total=required_counter("reports_total"),
+            registrations_total=required_counter("registrations_total"),
+            failovers_total=required_counter("failovers_total"),
             domains=domains,
         )
+        current_status_total = (
+            snapshot.healthy_total
+            + snapshot.degraded_total
+            + snapshot.unavailable_total
+        )
+        if current_status_total > KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS:
+            raise RuntimeError(
+                f"{context} current status totals exceed the relay diagnostic cap"
+            )
+        aggregate_checks = (
+            (
+                "reports_total",
+                snapshot.reports_total,
+                sum(entry.health_reports_total for entry in domains),
+            ),
+            (
+                "registrations_total",
+                snapshot.registrations_total,
+                sum(entry.registrations_total for entry in domains),
+            ),
+            (
+                "failovers_total",
+                snapshot.failovers_total,
+                sum(entry.failovers_total for entry in domains),
+            ),
+        )
+        for field, actual, summed in aggregate_checks:
+            expected = min(summed, KAIGI_U64_MAX)
+            if actual != expected:
+                raise RuntimeError(
+                    f"{context}.{field} must equal the saturated domain total"
+                )
+        return snapshot
 
     @staticmethod
     def _parse_sumeragi_pacemaker(payload: Mapping[str, Any], *, context: str) -> SumeragiPacemakerSnapshot:
@@ -15710,6 +16278,18 @@ class ToriiClient(
             )
         return value
 
+    @staticmethod
+    def _require_exact_signed_transaction_hash(value: Any, *, context: str) -> str:
+        if (
+            not isinstance(value, str)
+            or re.fullmatch(r"[0-9a-f]{63}[13579bdf]", value) is None
+        ):
+            raise RuntimeError(
+                f"{context} must match [0-9a-f]{{63}}[13579bdf] with the canonical "
+                "Iroha HashOf marker"
+            )
+        return value
+
     _require_vpn_relay_id = staticmethod(_vpn_require_relay_id)
     _require_vpn_trust_digest = staticmethod(_vpn_require_trust_digest)
     _require_vpn_tls_server_name = staticmethod(_vpn_require_tls_server_name)
@@ -15749,27 +16329,13 @@ class ToriiClient(
         if not isinstance(value, str):
             raise RuntimeError(f"{context} must be a UAID string")
         literal = value
-        stripped = literal.strip()
-        if not stripped:
-            raise RuntimeError(f"{context} must be a UAID string")
-        if stripped != literal:
-            raise ValueError(f"{context} must not contain surrounding whitespace")
-        if literal.lower().startswith("uaid:"):
-            hex_portion = literal[5:]
-        else:
-            hex_portion = literal
-        normalized = hex_portion
-        if normalized.strip() != normalized:
-            raise ValueError(f"{context} must not contain surrounding whitespace")
-        if len(normalized) != 64:
-            raise RuntimeError(f"{context} must contain 64 hex characters")
-        try:
-            bytes.fromhex(normalized)
-        except ValueError as exc:
-            raise RuntimeError(f"{context} must contain valid hexadecimal characters") from exc
-        if int(normalized[-1], 16) % 2 == 0:
+        if re.fullmatch(r"uaid:[0-9a-f]{64}", literal) is None:
+            raise ValueError(
+                f"{context} must be an exact canonical uaid:<64 lowercase hex> literal"
+            )
+        if int(literal[-1], 16) % 2 == 0:
             raise RuntimeError(f"{context} must have least significant bit set to 1")
-        return f"uaid:{normalized.lower()}"
+        return literal
 
     @staticmethod
     def _require_string(value: Any, context: str) -> str:
@@ -15951,6 +16517,15 @@ class ToriiClient(
         return result
 
     @staticmethod
+    def _parse_exact_string_list(value: Any, *, context: str) -> List[str]:
+        if not isinstance(value, list):
+            raise RuntimeError(f"{context} must be a list of strings")
+        return [
+            _require_exact_non_empty_string(entry, f"{context}[{index}]")
+            for index, entry in enumerate(value)
+        ]
+
+    @staticmethod
     def _parse_int_list(value: Any, *, context: str) -> List[int]:
         if value is None:
             return []
@@ -16084,16 +16659,16 @@ class ToriiClient(
         )
         if "kind" not in status_record:
             raise RuntimeError(f"{context}.status is missing required field kind")
-        status_kind = ToriiClient._require_non_empty_string(
+        status_kind = _require_exact_non_empty_string(
             status_record.get("kind"),
             f"{context}.status.kind",
         )
         if status_kind not in {"Queued", "Approved", "Committed", "Applied", "Rejected", "Expired"}:
             raise RuntimeError(f"{context}.status.kind is unsupported")
-        scope = ToriiClient._require_non_empty_string(record.get("scope"), f"{context}.scope")
-        if scope not in {"local", "auto", "global"}:
+        scope = record.get("scope")
+        if not isinstance(scope, str) or scope not in {"local", "global"}:
             raise RuntimeError(f"{context}.scope is unsupported")
-        resolved_from = ToriiClient._require_non_empty_string(
+        resolved_from = _require_exact_non_empty_string(
             record.get("resolved_from"),
             f"{context}.resolved_from",
         )
@@ -16112,10 +16687,9 @@ class ToriiClient(
                 )
             block_height = raw_block_height
         return PipelineTransactionStatusResponse(
-            hash=ToriiClient._require_exact_lower_hex_string(
+            hash=ToriiClient._require_exact_signed_transaction_hash(
                 record.get("hash"),
                 context=f"{context}.hash",
-                expected_length=64,
             ),
             status=PipelineTransactionStatus(
                 kind=status_kind,
@@ -16175,18 +16749,16 @@ class ToriiClient(
         tx_hash_hex_value = record.get("tx_hash_hex")
         tx_hash_hex = None
         if tx_hash_hex_value is not None:
-            tx_hash_hex = ToriiClient._normalize_hex_string(
+            tx_hash_hex = ToriiClient._require_exact_signed_transaction_hash(
                 tx_hash_hex_value,
                 context=f"{context}.tx_hash_hex",
-                expected_length=64,
             )
         entrypoint_hash_hex_value = record.get("entrypoint_hash_hex")
         entrypoint_hash_hex = None
         if entrypoint_hash_hex_value is not None:
-            entrypoint_hash_hex = ToriiClient._normalize_hex_string(
+            entrypoint_hash_hex = ToriiClient._require_exact_signed_transaction_hash(
                 entrypoint_hash_hex_value,
                 context=f"{context}.entrypoint_hash_hex",
-                expected_length=64,
             )
         operation_receipt = ToriiClient._parse_contract_operation_receipt(
             ToriiClient._ensure_mapping(
@@ -16307,6 +16879,11 @@ class ToriiClient(
             value = record.get(field)
             if value is None:
                 return None
+            if field in {"tx_hash_hex", "entrypoint_hash_hex"}:
+                return ToriiClient._require_exact_signed_transaction_hash(
+                    value,
+                    context=f"{context}.{field}",
+                )
             return ToriiClient._normalize_hex_string(
                 value,
                 context=f"{context}.{field}",
@@ -16399,13 +16976,24 @@ class ToriiClient(
                 raw, context=f"{context}.{field}", expected_length=64
             )
 
+        def optional_transaction_hash(field: str) -> Optional[str]:
+            raw = record.get(field)
+            return (
+                None
+                if raw is None
+                else ToriiClient._require_exact_signed_transaction_hash(
+                    raw,
+                    context=f"{context}.{field}",
+                )
+            )
+
         creation_raw = record.get("creation_time_ms")
         creation_time_ms = None if creation_raw is None else ToriiClient._coerce_unsigned(
             creation_raw, f"{context}.creation_time_ms"
         )
         instructions_hash = optional_hash("instructions_hash")
-        tx_hash_hex = optional_hash("tx_hash_hex")
-        executed_tx_hash_hex = optional_hash("executed_tx_hash_hex")
+        tx_hash_hex = optional_transaction_hash("tx_hash_hex")
+        executed_tx_hash_hex = optional_transaction_hash("executed_tx_hash_hex")
         submitted = record.get("submitted")
         if not isinstance(submitted, bool):
             raise TypeError(f"{context}.submitted must be a boolean")

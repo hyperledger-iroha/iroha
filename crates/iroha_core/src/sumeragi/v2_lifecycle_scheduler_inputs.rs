@@ -1001,7 +1001,10 @@ pub(crate) enum ProductionIngressSchedulerInputsError {
     /// The I/O worker does not own the exact body store recovered by this owner.
     BodyStoreNotBound,
     /// The selected family could not seal its pending Fetch admission owner.
-    CertifiedFetchAdmissionPreparation,
+    CertifiedFetchAdmissionPreparation {
+        /// Complete selector retained after read-only admission preparation failed.
+        _prepared: PreparedLifecycleIngressSelector,
+    },
     /// The sealed pending Fetch could not enter or rejoin durable ownership.
     CertifiedFetchAdmissionSettlement,
     /// The admitted Fetch did not bind the exact waiting row and registry incumbent.
@@ -1051,7 +1054,7 @@ impl ProductionIngressSchedulerInputsError {
             Self::ForeignOutputGuard => "foreign output guard",
             Self::ForeignRunnerObservation => "foreign runner observation",
             Self::BodyStoreNotBound => "body store not bound",
-            Self::CertifiedFetchAdmissionPreparation => {
+            Self::CertifiedFetchAdmissionPreparation { .. } => {
                 "certified Fetch admission preparation failed"
             }
             Self::CertifiedFetchAdmissionSettlement => {
@@ -3769,30 +3772,17 @@ impl ProductionLifecycleOwnerV1 {
         {
             return Err(ProductionIngressSchedulerInputsError::CompetingReadyWork);
         }
-        let admission = selector
-            .prepare_selected_certified_fetch_admission(executor, &self.verified)
-            .map_err(|_| {
-                ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionPreparation
-            })?;
-        match self.settle_certified_fetch_admission(admission) {
-            ProductionCertifiedFetchAdmissionSettlementV1::Admitted
-            | ProductionCertifiedFetchAdmissionSettlementV1::Existing => {}
-            ProductionCertifiedFetchAdmissionSettlementV1::Deferred => {
-                return Err(
-                    ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionDeferred {
-                        _prepared: selector,
-                    },
-                );
-            }
-            ProductionCertifiedFetchAdmissionSettlementV1::RestartRequired => {
-                return Err(
-                    ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionSettlement,
-                );
-            }
-        }
-        let fetch = selector
-            .attest_scheduler_fetch_carrier(&self.coordinator, &mut self.registry)
-            .map_err(|_| ProductionIngressSchedulerInputsError::InvalidSelectedCarrier)?;
+        let admission =
+            match selector.prepare_selected_certified_fetch_admission(executor, &self.verified) {
+                Ok(admission) => admission,
+                Err(_) => {
+                    return Err(
+                        ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionPreparation {
+                            _prepared: selector,
+                        },
+                    );
+                }
+            };
         let capacity = services
             .capture_lifecycle_capacity_rank(selector)
             .map_err(|error| {
@@ -3806,6 +3796,10 @@ impl ProductionLifecycleOwnerV1 {
         let factory = AuthenticatedSchedulerInputsFactory::new();
         let (reservation, prepared) = match capacity.into_authenticated(&factory) {
             AuthenticatedLifecycleIoCapacity::Unavailable { wait, prepared } => {
+                // Capacity observation precedes durable Fetch admission. A stale
+                // response can therefore be reclassified after view/Decision
+                // cleanup without leaving a newly admitted Waiting row behind.
+                drop(admission);
                 drop(factory);
                 return Ok(ProductionIngressTurnPreparation::CapacityWait(
                     PreparedProductionIngressCapacityWait {
@@ -3828,6 +3822,32 @@ impl ProductionLifecycleOwnerV1 {
                 },
             );
         }
+        match self.settle_certified_fetch_admission(admission) {
+            ProductionCertifiedFetchAdmissionSettlementV1::Admitted
+            | ProductionCertifiedFetchAdmissionSettlementV1::Existing => {}
+            ProductionCertifiedFetchAdmissionSettlementV1::Deferred => {
+                let prepared = reservation.abort_into_prepared(prepared);
+                return Err(
+                    ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionDeferred {
+                        _prepared: prepared,
+                    },
+                );
+            }
+            ProductionCertifiedFetchAdmissionSettlementV1::RestartRequired => {
+                drop(reservation.abort_into_prepared(prepared));
+                return Err(
+                    ProductionIngressSchedulerInputsError::CertifiedFetchAdmissionSettlement,
+                );
+            }
+        }
+        let fetch =
+            match prepared.attest_scheduler_fetch_carrier(&self.coordinator, &mut self.registry) {
+                Ok(fetch) => fetch,
+                Err(_) => {
+                    drop(reservation.abort_into_prepared(prepared));
+                    return Err(ProductionIngressSchedulerInputsError::InvalidSelectedCarrier);
+                }
+            };
         let positions = prepared.selected_positions().components();
         let live_debts = [
             mode.debt(),

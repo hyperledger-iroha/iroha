@@ -3251,7 +3251,7 @@ fn durable_history_source_covers(
         ) => {
             if response.request_hash != *request_hash
                 || HashOf::new(response.as_ref()) != *response_hash
-                || response.version != super::message::LANE_HISTORICAL_RECOVERY_VERSION_V4
+                || response.version != super::message::LANE_HISTORICAL_RECOVERY_VERSION_V1
             {
                 return Err(
                     "historical lane recovery response changed its exact request binding"

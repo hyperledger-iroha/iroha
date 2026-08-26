@@ -20,8 +20,8 @@ authorization compares the transaction authority directly against that set.
 It never resolves aliases or other mutable world state while deciding the
 exemption.
 
-The `nexus` charge component uses canonical XOR (`xor#universal`, or its
-canonical asset definition literal). A `pipeline_gas` component may instead
+The `nexus` charge component uses canonical XOR (the exact lowercase
+`xor#universal` alias, or its exact canonical asset definition literal). A `pipeline_gas` component may instead
 use one exact asset accepted by the governed gas schedule. A signed intent
 identifies either the transaction authority or one exact on-chain sponsor
 program and immutable revision. It also contains a positive gas bound when the

@@ -274,46 +274,6 @@ mod tests {
         assert_eq!(outstanding, json_value(&Quantity::from(7_u64)));
         assert!(status_value_by_path(&status, "sorafs_micropayments/unknown").is_none());
     }
-    #[test]
-    fn status_block_visibility_falls_back_to_sumeragi_commit_height() {
-        let metrics = Metrics::default();
-        let mut status = Status::from(&metrics);
-        status.blocks = 0;
-        status.blocks_non_empty = 0;
-        let sumeragi = status.sumeragi.as_mut().expect("sumeragi status");
-        sumeragi.commit_qc_height = 4_274;
-        sumeragi.highest_qc_height = 4_275;
-        sumeragi.locked_qc_height = 4_273;
-        super::normalize_status_block_visibility(&mut status, None);
-        assert_eq!(status.blocks, 4_274);
-        assert_eq!(status.blocks_non_empty, 0);
-        status.blocks = 4_273;
-        super::normalize_status_block_visibility(&mut status, None);
-        assert_eq!(status.blocks, 4_274);
-    }
-    #[test]
-    fn status_block_visibility_uses_authoritative_applied_height() {
-        let metrics = Metrics::default();
-        metrics.block_height.inc_by(4_193);
-        let mut status = Status::from(&metrics);
-        let sumeragi = status.sumeragi.as_mut().expect("sumeragi status");
-        sumeragi.commit_qc_height = 4_275;
-        super::normalize_status_block_visibility(&mut status, Some(4_274));
-        assert_eq!(
-            status.blocks, 4_274,
-            "a CommitQC pending apply must not lead query-visible state"
-        );
-        let metrics = Metrics::default();
-        metrics.block_height.inc_by(4_275);
-        let mut status = Status::from(&metrics);
-        let sumeragi = status.sumeragi.as_mut().expect("sumeragi status");
-        sumeragi.commit_qc_height = 4_276;
-        super::normalize_status_block_visibility(&mut status, Some(4_274));
-        assert_eq!(
-            status.blocks, 4_274,
-            "a Kura-backed telemetry scan pending WSV apply must not lead state"
-        );
-    }
     #[tokio::test]
     async fn status_response_bounds_unavailable_fresh_block_counter_sync() {
         let metrics = Arc::new(Metrics::default());
@@ -327,7 +287,7 @@ mod tests {
             Some(axum::http::HeaderValue::from_static("application/json")),
             None,
             ActualLaneRoutingPolicy::default(),
-            Some(4_274),
+            4_274,
             None,
         )
         .await
@@ -369,7 +329,7 @@ mod tests {
             None,
             Some(&path),
             ActualLaneRoutingPolicy::default(),
-            None,
+            0,
             None,
         )
         .await
@@ -427,7 +387,7 @@ mod tests {
             Some(axum::http::HeaderValue::from_static("application/json")),
             None,
             policy,
-            None,
+            0,
             None,
         )
         .await
@@ -482,7 +442,7 @@ mod tests {
             Some(axum::http::HeaderValue::from_static("application/json")),
             None,
             ActualLaneRoutingPolicy::default(),
-            None,
+            0,
             Some(offline.clone()),
         )
         .await
@@ -513,7 +473,7 @@ mod tests {
             None,
             Some("offline/cash_handoff_capability"),
             ActualLaneRoutingPolicy::default(),
-            None,
+            0,
             Some(offline),
         )
         .await
@@ -835,7 +795,7 @@ mod tests {
             )),
             None,
             ActualLaneRoutingPolicy::default(),
-            None,
+            0,
             None,
         )
         .await

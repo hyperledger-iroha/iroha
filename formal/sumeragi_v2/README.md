@@ -608,7 +608,7 @@ height-context state are not migrated in place.
   keeper selection, local pinning, all-selected-remote freshness, TTL and
   restart invalidation, checked registry capacity, bounded refresh, and the
   final pre-stage recheck. The autonomous producer bindings additionally cover
-  the move-only Queue V4/V5 activation fence, frozen height-context slot-hash
+  the move-only Queue V1 activation fence, frozen height-context slot-hash
   recomputation, checked `ActivateKura`, and the Kura payload sink before
   publication. The first autonomous execution-input append is bound to a
   repair-disabled exact payload reconstruction, move-only authorization, and
@@ -673,7 +673,7 @@ height-context state are not migrated in place.
   complete vector before publication, requires the live buffer to be drained,
   and reconstructs the certified write-set root from the retained autonomous
   bytes at metadata mint and State commit.
-  The QueuePlan binding covers the shared V2 binding and coordinator quorum,
+  The QueuePlan binding covers the shared V1 binding and coordinator quorum,
   Kura-before-wake-before-WSV public acceptance, immutable registry CAS,
   Exact-gated autonomous ownership, restart/TTL retention, and exact
   authenticated loser cleanup.
@@ -684,8 +684,8 @@ height-context state are not migrated in place.
   the closure ledger. `tla_counterexample` entries cover every and only the 106
   production-refinement `_bug.cfg` files. Its separate
   `composed_state_action_relation_with_source_bound_trace_extraction` contract binds the
-  accepted payload schema V2 in `LaneExecutablePayloadV1`, QueuePlan journal
-  V4, reservation journal V5, the 4096 entry ceiling, exact queue durability
+  accepted payload schema V1 in `LaneExecutablePayloadV1`, QueuePlan journal
+  V1, reservation journal V1, the 4096 entry ceiling, exact queue durability
   order, and Kura execution-input persistence/recovery to
   `SumeragiV2InFlightFirstRelease.tla` and its twenty-two mutation controls. Its
   three-validator TLA+ instance requires authenticated custody by its selected
@@ -698,13 +698,13 @@ height-context state are not migrated in place.
   actions, including snapshot stutter and the direct-release terminal. The
   retired lane-wide removal operation is absent from the schema-bound V5
   journal and its old bytes fail closed without compatibility decoding. The
-  bounded production consumers now include QueuePlan selection/V5 fsync,
+  bounded production consumers now include QueuePlan selection/V1 fsync,
   producer Kura activation, execution-input persistence, READY
   authorization/signature/QC persistence,
   autonomous lane-Commit persistence,
   merge-source admission, canonical WSV application, post-carrier cleanup,
   Kura slot retirement and ordered claim-prefix replacement, and the pre-Kura
-  direct-release path. The latter revalidates the exact V4/V5,
+  direct-release path. The latter revalidates the exact V1,
   FIFO, group, and committee binding under the Queue transition and FIFO locks,
   consumes a move-only checked projection immediately before the durable
   release append, and publishes FIFO ownership afterward. These slices do not

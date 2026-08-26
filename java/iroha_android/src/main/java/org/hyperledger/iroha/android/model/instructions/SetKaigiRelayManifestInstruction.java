@@ -24,7 +24,7 @@ public final class SetKaigiRelayManifestInstruction implements InstructionTempla
       final Builder builder, final Map<String, String> argumentOrder) {
     this.callId = builder.callId;
     this.relayManifest = builder.buildRelayManifest();
-    this.arguments = Map.copyOf(argumentOrder);
+    this.arguments = Collections.unmodifiableMap(new LinkedHashMap<>(argumentOrder));
   }
 
   public KaigiInstructionUtils.CallId callId() {
@@ -46,6 +46,7 @@ public final class SetKaigiRelayManifestInstruction implements InstructionTempla
   }
 
   public static SetKaigiRelayManifestInstruction fromArguments(final Map<String, String> arguments) {
+    KaigiInstructionUtils.requireAction(arguments, ACTION);
     final Builder builder = builder();
     builder.setCallId(KaigiInstructionUtils.parseCallId(arguments, "call"));
     builder.setRelayManifest(KaigiInstructionUtils.parseRelayManifest(arguments, "relay_manifest"));
@@ -101,9 +102,6 @@ public final class SetKaigiRelayManifestInstruction implements InstructionTempla
     }
 
     public Builder setRelayManifestExpiryMs(final Long expiryMs) {
-      if (expiryMs != null && expiryMs < 0) {
-        throw new IllegalArgumentException("relay manifest expiry must be non-negative");
-      }
       this.relayManifestExpiry = expiryMs;
       return this;
     }
@@ -115,8 +113,8 @@ public final class SetKaigiRelayManifestInstruction implements InstructionTempla
       }
       final String normalizedKey =
           KaigiInstructionUtils.requireBase64(hpkePublicKeyBase64, "hpkePublicKey");
-      if (weight < 0 || weight > 0xFF) {
-        throw new IllegalArgumentException("relay hop weight must fit in an unsigned byte");
+      if (weight < 1 || weight > 0xFF) {
+        throw new IllegalArgumentException("relay hop weight must be between 1 and 255");
       }
       relayManifestHops.add(
           new KaigiInstructionUtils.RelayManifestHop()
@@ -164,7 +162,9 @@ public final class SetKaigiRelayManifestInstruction implements InstructionTempla
             new KaigiInstructionUtils.RelayManifestHop(
                 hop.relayId(), hop.hpkePublicKey(), hop.weight()));
       }
-      return new KaigiInstructionUtils.RelayManifest(relayManifestExpiry, Collections.unmodifiableList(copy));
+      return KaigiInstructionUtils.validateRelayManifest(
+          new KaigiInstructionUtils.RelayManifest(
+              relayManifestExpiry, Collections.unmodifiableList(copy)));
     }
 
     private Map<String, String> canonicalArguments() {

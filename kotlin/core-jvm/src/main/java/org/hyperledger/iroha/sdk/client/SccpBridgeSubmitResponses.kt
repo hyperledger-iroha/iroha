@@ -45,7 +45,7 @@ object SccpBridgeSubmitResponseParser {
         val start = long(value, "range_start_height", 1)
         val end = long(value, "range_end_height", start)
         val creationTime = long(value, "creation_time_ms", 1)
-        val txHash = optionalHash(value, "tx_hash_hex")
+        val txHash = optionalTransactionHash(value, "tx_hash_hex")
         val transactionPayload = optionalText(value, "transaction_payload_b64")
         val signingMessage = optionalText(value, "signing_message_b64")
         if (submitted) {
@@ -118,6 +118,14 @@ object SccpBridgeSubmitResponseParser {
         }
     }
     private fun optionalHash(value: Map<String, Any?>, field: String): String? = if (value[field] == null) null else hash(value, field)
+    private fun optionalTransactionHash(value: Map<String, Any?>, field: String): String? {
+        if (value[field] == null) return null
+        val literal = text(value, field)
+        require(Regex("[0-9a-f]{63}[13579bdf]").matches(literal)) {
+            "$field must match [0-9a-f]{63}[13579bdf] with the Iroha HashOf marker"
+        }
+        return literal
+    }
     private fun decodeCanonicalBase64(value: String, field: String, exactBytes: Int? = null): ByteArray {
         val maximumBytes = exactBytes ?: SCCP_MAX_TRANSACTION_PAYLOAD_BYTES
         require(value.length <= 4 * ((maximumBytes + 2) / 3)) {

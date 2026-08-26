@@ -485,8 +485,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         let mut it = rest.splitn(2, ':');
         if let (Some(acc_s), Some(name_s)) = (it.next(), it.next()) {
             if let (Ok(acc), Ok(name)) = (
-                iroha_data_model::account::AccountId::parse_encoded(acc_s)
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id),
+                iroha_data_model::account::AccountId::parse_encoded(acc_s),
                 Name::from_str(name_s),
             ) {
                 if let Ok(acct) = state_block.world.account(&acc) {
@@ -551,8 +550,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         let mut it = rest.splitn(2, ':');
         if let (Some(acc_s), Some(role_s)) = (it.next(), it.next()) {
             if let (Ok(acc), Ok(role)) = (
-                iroha_data_model::account::AccountId::parse_encoded(acc_s)
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id),
+                iroha_data_model::account::AccountId::parse_encoded(acc_s),
                 iroha_data_model::role::RoleId::from_str(role_s),
             ) {
                 let present = state_block
@@ -584,7 +582,6 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         let mut it = rest.splitn(2, ':');
         if let (Some(acc_s), Some(perm_s)) = (it.next(), it.next())
             && let Ok(acc) = iroha_data_model::account::AccountId::parse_encoded(acc_s)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         {
             let present = state_block
                 .world

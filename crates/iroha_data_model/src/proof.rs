@@ -3051,6 +3051,29 @@ mod tests {
         assert_eq!(dec.bytes, vec![7, 7, 7]);
     }
     #[test]
+    fn verifying_key_box_decodes_explicit_packed_struct_layouts() {
+        let expected = VerifyingKeyBox::new("halo2/ipa".into(), vec![3, 5, 8, 13]);
+        for flags in [
+            ncore::header_flags::PACKED_STRUCT | ncore::header_flags::COMPACT_LEN,
+            ncore::header_flags::PACKED_STRUCT
+                | ncore::header_flags::COMPACT_LEN
+                | ncore::header_flags::FIELD_BITSET,
+        ] {
+            let (payload, encoded_flags) = {
+                let _guard = ncore::DecodeFlagsGuard::enter(flags);
+                norito::codec::encode_with_header_flags(&expected)
+            };
+            assert_eq!(encoded_flags & flags, flags);
+            let (decoded, used) = {
+                let _guard = ncore::DecodeFlagsGuard::enter(encoded_flags);
+                <VerifyingKeyBox as ncore::DecodeFromSlice>::decode_from_slice(&payload)
+                    .expect("decode packed verifying-key box")
+            };
+            assert_eq!(used, payload.len());
+            assert_eq!(decoded, expected);
+        }
+    }
+    #[test]
     fn verifying_key_id_decode_from_slice_roundtrip() {
         let id = VerifyingKeyId::new("halo2/ipa", "vk_transfer");
         let encoded = id.encode();
@@ -4615,8 +4638,7 @@ mod tests {
         let authority = crate::account::AccountId::parse_encoded(
             "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         )
-        .expect("valid account id")
-        .into_account_id();
+        .expect("valid account id");
         let trigger_id: crate::trigger::TriggerId = "test_trigger".parse().expect("trigger id");
         let time_entry = crate::trigger::TimeTriggerEntrypoint {
             id: trigger_id,

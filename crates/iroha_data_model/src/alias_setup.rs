@@ -41,7 +41,7 @@ pub struct AccountAliasName {
     /// Canonical alias label.
     pub label: Name,
     /// Optional canonical domain label inside the dataspace.
-    #[norito(default)]
+    #[norito(required)]
     pub domain: Option<Name>,
     /// Canonical textual dataspace name.
     pub dataspace: Name,
@@ -459,7 +459,10 @@ pub struct AliasLeaseAcquisitionV1 {
     /// Requested lease term in whole years.
     pub term_years: u8,
     /// Optional pricing class expected by the caller.
-    #[norito(default)]
+    ///
+    /// The slot is always encoded in V1 JSON; `None` means that the active
+    /// policy may select the pricing class.
+    #[norito(required)]
     pub pricing_class_hint: Option<u8>,
 }
 impl AliasLeaseAcquisitionV1 {
@@ -747,10 +750,16 @@ pub struct AliasPlanResourceV1 {
     /// Planner classification.
     pub disposition: AliasPlanDispositionV1,
     /// Exact quote when this resource requires acquisition or renewal.
-    #[norito(default)]
+    ///
+    /// The slot is always encoded in V1 JSON; `None` is explicit for a
+    /// resource that does not require a quote.
+    #[norito(required)]
     pub quote: Option<AliasLeaseQuoteV1>,
     /// Index of the matching executable instruction, if any.
-    #[norito(default)]
+    ///
+    /// The slot is always encoded in V1 JSON; `None` is explicit when no
+    /// instruction is emitted.
+    #[norito(required)]
     pub instruction_index: Option<u32>,
 }
 /// Exact framed Norito instruction returned by the planner.
@@ -1111,7 +1120,6 @@ mod tests {
         version: u8,
         alias: String,
         account_id: String,
-        #[norito(default)]
         permissions: Vec<String>,
     }
     #[derive(
@@ -1135,7 +1143,7 @@ mod tests {
         acquisition: AliasLeaseAcquisitionV1,
         quote_guard: AliasQuoteGuardV1,
         instructions: Vec<AliasFramedInstructionV1>,
-        #[norito(default)]
+        #[norito(required)]
         owner_auto_renew_instruction: Option<AliasFramedInstructionV1>,
         valid_until_ms: u64,
     }
@@ -1314,6 +1322,71 @@ mod tests {
         let root: AccountAliasName = "Merchant@Paynet".parse().expect("root alias");
         assert_eq!(root.to_string(), "merchant@paynet");
         assert!(root.domain.is_none());
+    }
+    #[test]
+    fn account_alias_name_json_requires_explicit_domain_slot() {
+        let alias: AccountAliasName = "merchant@paynet".parse().expect("root alias");
+        let value = norito::json::to_value(&alias).expect("serialize current account alias name");
+        assert_eq!(
+            value.as_object().and_then(|object| object.get("domain")),
+            Some(&norito::json::Value::Null)
+        );
+        let mut missing = value;
+        missing
+            .as_object_mut()
+            .expect("account alias name object")
+            .remove("domain");
+        assert!(
+            norito::json::from_value::<AccountAliasName>(missing).is_err(),
+            "current account alias name must reject an omitted domain slot"
+        );
+    }
+    #[test]
+    fn onboarding_nested_v1_json_requires_explicit_optional_slots() {
+        let fixture = deterministic_account_onboarding_receipt_vector();
+        let acquisition = fixture.receipt_json.body.acquisition;
+        let acquisition_json = norito::json::to_value(&acquisition)
+            .expect("encode onboarding acquisition as exact V1 JSON");
+        assert_eq!(
+            norito::json::from_value::<AliasLeaseAcquisitionV1>(acquisition_json.clone())
+                .expect("round-trip exact onboarding acquisition"),
+            acquisition
+        );
+        let mut missing_pricing_class = acquisition_json;
+        assert!(
+            missing_pricing_class
+                .as_object_mut()
+                .expect("acquisition object")
+                .remove("pricing_class_hint")
+                .is_some()
+        );
+        assert!(
+            norito::json::from_value::<AliasLeaseAcquisitionV1>(missing_pricing_class).is_err(),
+            "V1 acquisition must not default an omitted pricing_class_hint to None"
+        );
+
+        let resource = fixture.receipt_json.body.resource;
+        let resource_json =
+            norito::json::to_value(&resource).expect("encode onboarding resource as exact V1 JSON");
+        assert_eq!(
+            norito::json::from_value::<AliasPlanResourceV1>(resource_json.clone())
+                .expect("round-trip exact onboarding resource"),
+            resource
+        );
+        for field in ["quote", "instruction_index"] {
+            let mut missing = resource_json.clone();
+            assert!(
+                missing
+                    .as_object_mut()
+                    .expect("resource object")
+                    .remove(field)
+                    .is_some()
+            );
+            assert!(
+                norito::json::from_value::<AliasPlanResourceV1>(missing).is_err(),
+                "V1 resource must reject an omitted {field} slot"
+            );
+        }
     }
     #[test]
     #[expect(

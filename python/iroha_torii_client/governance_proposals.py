@@ -121,6 +121,17 @@ def _sccp_uint(
     return _uint(value, context, min(maximum, _JSON_SAFE_UINT_MAX), positive=positive)
 
 
+def _proposal_exact_json_uint(
+    value: Any,
+    context: str,
+    *,
+    positive: bool = False,
+) -> int:
+    """Apply the Torii first-release exact public-JSON integer invariant."""
+
+    return _uint(value, context, _JSON_SAFE_UINT_MAX, positive=positive)
+
+
 def _sccp_route_token(value: Any, context: str) -> str:
     token = _string(value, context)
     if _ROUTE_TOKEN.fullmatch(token) is None:
@@ -354,8 +365,10 @@ class GovernanceRuntimeUpgradeManifest:
         abi = _uint(record["abi_version"], f"{context}.abi_version", 0xFFFF, positive=True)
         if abi != 1 or record["added_syscalls"] != [] or record["added_pointer_types"] != []:
             raise TypeError(f"{context} must use ABI 1 with empty syscall and pointer-type deltas")
-        start = _uint(record["start_height"], f"{context}.start_height")
-        end = _uint(record["end_height"], f"{context}.end_height")
+        start = _proposal_exact_json_uint(
+            record["start_height"], f"{context}.start_height"
+        )
+        end = _proposal_exact_json_uint(record["end_height"], f"{context}.end_height")
         if end <= start:
             raise TypeError(f"{context}.end_height must be greater than start_height")
         if not isinstance(record["sbom_digests"], list) or not isinstance(record["provenance"], list):
@@ -1846,7 +1859,7 @@ class GovernanceValidationFeePolicy:
         context = "ValidationFeePolicy payload.policy"
         fields = frozenset({"schema_version", "network_id", "policy_version", "previous_policy_hash", "ds_asset_id", "ds_scale", "fee", "treasury_account_id", "charging_mode", "effective_from_height", "expires_after_height", "exemption_classes", "treasury_payout_binding"})
         record = _exact(value, fields, context)
-        if record["schema_version"] != 1:
+        if _uint(record["schema_version"], f"{context}.schema_version", 1) != 1:
             raise TypeError(f"{context}.schema_version must be 1")
         mode = _exact(record["charging_mode"], frozenset({"charging_mode", "value"}), f"{context}.charging_mode")
         if mode["value"] is not None:
@@ -1943,7 +1956,9 @@ class GovernanceMusubiPackageId:
         record = _exact(value, frozenset({"home_dataspace", "scope", "name"}), context)
         name = _string_tuple(record["name"], f"{context}.name")
         return cls(
-            _uint(record["home_dataspace"], f"{context}.home_dataspace"),
+            _proposal_exact_json_uint(
+                record["home_dataspace"], f"{context}.home_dataspace"
+            ),
             GovernanceMusubiPackageScope.from_payload(record["scope"], f"{context}.scope"),
             _ascii_kebab(name, f"{context}.name[0]", 64),
         )
@@ -1973,7 +1988,10 @@ class GovernanceMusubiPrereleaseIdentifier:
         except (ValueError, TypeError) as exc:
             raise TypeError(f"{context}.kind is unsupported") from exc
         if kind is GovernanceMusubiPrereleaseIdentifierKind.NUMERIC:
-            return cls(kind, _uint(record["value"], f"{context}.value"))
+            return cls(
+                kind,
+                _proposal_exact_json_uint(record["value"], f"{context}.value"),
+            )
         literal = _string(record["value"], f"{context}.value")
         if (
             len(literal.encode("ascii", errors="ignore")) != len(literal)
@@ -2010,9 +2028,9 @@ class GovernanceMusubiVersion:
             for index, item in enumerate(record["prerelease"])
         )
         return cls(
-            _uint(record["major"], f"{context}.major"),
-            _uint(record["minor"], f"{context}.minor"),
-            _uint(record["patch"], f"{context}.patch"),
+            _proposal_exact_json_uint(record["major"], f"{context}.major"),
+            _proposal_exact_json_uint(record["minor"], f"{context}.minor"),
+            _proposal_exact_json_uint(record["patch"], f"{context}.patch"),
             prerelease,
         )
 
@@ -2067,7 +2085,9 @@ class GovernanceMusubiAliasPricingPolicy:
         record = _exact(value, frozenset(fields), context)
         return cls(
             *(
-                _uint(record[field], f"{context}.{field}", positive=True)
+                _proposal_exact_json_uint(
+                    record[field], f"{context}.{field}", positive=True
+                )
                 for field in fields
             )
         )
@@ -2089,7 +2109,7 @@ class GovernanceMusubiRegistryPolicy:
             {"version", "revision", "mode", "allowlisted_dataspaces", "alias_pricing"}
         )
         record = _exact(value, fields, context)
-        if record["version"] != 1:
+        if _uint(record["version"], f"{context}.version", 1) != 1:
             raise TypeError(f"{context}.version must be 1")
         mode_record = _exact(
             record["mode"], frozenset({"kind", "value"}), f"{context}.mode"
@@ -2103,7 +2123,9 @@ class GovernanceMusubiRegistryPolicy:
         if not isinstance(record["allowlisted_dataspaces"], list):
             raise TypeError(f"{context}.allowlisted_dataspaces must be an array")
         allowlisted = tuple(
-            _uint(item, f"{context}.allowlisted_dataspaces[{index}]")
+            _proposal_exact_json_uint(
+                item, f"{context}.allowlisted_dataspaces[{index}]"
+            )
             for index, item in enumerate(record["allowlisted_dataspaces"])
         )
         if len(allowlisted) > 1_024 or any(
@@ -2116,7 +2138,9 @@ class GovernanceMusubiRegistryPolicy:
             raise TypeError(f"{context}.allowlisted_dataspaces does not match mode")
         return cls(
             1,
-            _uint(record["revision"], f"{context}.revision", positive=True),
+            _proposal_exact_json_uint(
+                record["revision"], f"{context}.revision", positive=True
+            ),
             mode,
             allowlisted,
             GovernanceMusubiAliasPricingPolicy.from_payload(
@@ -2203,7 +2227,7 @@ class GovernanceProposalMusubiRegistryGovernance:
                     action["package"], f"{action_context}.package"
                 ),
                 owners,
-                _uint(
+                _proposal_exact_json_uint(
                     action["expected_revision"],
                     f"{action_context}.expected_revision",
                     positive=True,
@@ -2221,7 +2245,7 @@ class GovernanceProposalMusubiRegistryGovernance:
                 GovernanceMusubiPackageId.from_payload(
                     action["target"], f"{action_context}.target"
                 ),
-                _uint(
+                _proposal_exact_json_uint(
                     action["expected_revision"],
                     f"{action_context}.expected_revision",
                     positive=True,
@@ -2241,7 +2265,7 @@ class GovernanceProposalMusubiRegistryGovernance:
                     action["release"], f"{action_context}.release"
                 ),
                 reason,
-                _uint(
+                _proposal_exact_json_uint(
                     action["expected_artifact_governance_revision"],
                     f"{action_context}.expected_artifact_governance_revision",
                     positive=True,
@@ -2253,7 +2277,7 @@ class GovernanceProposalMusubiRegistryGovernance:
                 frozenset({"policy", "expected_revision"}),
                 action_context,
             )
-            expected_revision = _uint(
+            expected_revision = _proposal_exact_json_uint(
                 action["expected_revision"],
                 f"{action_context}.expected_revision",
                 positive=True,

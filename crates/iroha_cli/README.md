@@ -30,19 +30,22 @@ the current installation instructions.
 The CLI will attempt to detect your system language for messages. Use `--language <CODE>` to override this selection.
 For automation, prefer `--output-format json --machine` to suppress startup chatter and fail fast when `client.toml` is missing.
 
-The Taira write canary requires an explicit owner-only token file for account
-onboarding. The file must be a current-user-owned, regular non-symlink with no
-group/other permissions and must contain the exact 32–256 byte printable-ASCII
-credential without a trailing newline:
+Use `iroha taira doctor` for read-only public-testnet diagnostics. Authorized
+public reset writes belong to the durable `iroha taira public-reset apply`
+coordinator. Its low-level `write-canary` child accepts exactly one ordered
+operation and one prepare, retained-envelope submit, or read-only recovery
+action; it is not a one-shot operator command. Keep onboarding tokens and all
+signing inputs in owner-only runtime files outside the repository.
 
-```bash
-iroha --fee-payer authority taira write-canary \
-  --public-root https://taira.sora.org \
-  --onboarding-token-file "$HOME/.config/iroha/taira-onboarding.token"
-```
-
-The credential is sent only as `X-Iroha-Onboarding-Token` on the JSON onboarding
-request and is never forwarded across redirects.
+Public node onboarding is deliberately a single future surface:
+`iroha taira join --data-dir <owner-only-directory>`. It will consume the
+published signed bootstrap bundle, generate local keys, and join as a
+permissionless observer with no operator-issued admission token. Validator
+activation is a separate on-chain transition through the existing staking and
+peer lifecycle after the node has synchronized; it does not use a parallel
+off-chain token format. The command and bundle are not shipped yet. The
+disposable four-validator devnet is qualification tooling, not a way to join
+the public testnet.
 
 ### Client configuration
 
@@ -104,6 +107,15 @@ iroha --operator-private-key-file /run/secrets/iroha/operator.key \
   --output-format text ops sumeragi diagnostics
 ```
 
+Per-epoch VRF penalty membership is not duplicated in diagnostics. Query the
+authoritative finalized report for the exact epoch; an unavailable report is a
+hard not-found result rather than an all-zero placeholder:
+
+```bash
+iroha --operator-private-key-file /run/secrets/iroha/operator.key \
+  --output-format json ops sumeragi vrf-penalties --epoch 42
+```
+
 Tip: You can combine these with `jq` for consistency checks.
 
 ### SoraFS gateway helpers
@@ -160,7 +172,7 @@ This posts to `/v1/zk/vote/tally` and prints the snapshot-bound JSON response, e
 
 ### Governance helpers (app API convenience)
 
-Build governance transaction skeletons and query governance state via Torii app endpoints. The server does not sign or submit transactions; clients assemble and POST to `/transaction`.
+Build governance transaction skeletons and query governance state via Torii app endpoints. The server does not sign or submit transactions; clients assemble and POST to `/v1/pipeline/transactions`.
 
 - Propose deployment of IVM bytecode via governance:
 

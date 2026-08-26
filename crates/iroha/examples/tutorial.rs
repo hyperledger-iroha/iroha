@@ -35,7 +35,6 @@ fn account_definition_test() -> Result<(), Error> {
         .canonical_i105()
         .expect("Single-key account IDs can be rendered as I105");
     let account_id = AccountId::parse_encoded(&canonical_account_id)
-        .map(iroha::account_address::ParsedAccountId::into_account_id)
         .expect("Valid, because the I105 payload was generated from a valid AccountId");
     // Check that two ways to define an account match
     assert_eq!(account_id, longhand_account_id);

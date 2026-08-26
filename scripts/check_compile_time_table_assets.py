@@ -37,20 +37,13 @@ LINE_SPAN_HASH_SCOPE = "line-count-pinned Rust extraction span including trailin
 STRUCTURED_TABLE_HASH_SCOPE = (
     "line-count-pinned Rust structured-table projection span including trailing LF"
 )
-FORMAT_TEMPLATE_HASH_SCOPE = (
-    "line-count-pinned Rust format! template transformed to Soracloud symbolic asset"
+CURRENT_INCLUDE_CONSUMER_SCOPE = "current Rust compile-time include consumer"
+CURRENT_INCLUDE_CONSUMER_MANIFESTS = frozenset(
+    {
+        Path("crates/iroha_cli/src/soracloud/assets/v1/template_manifest.json"),
+        Path("crates/iroha_cli/src/soracloud/templates/v1/static/manifest.json"),
+    }
 )
-SORACLOUD_FORMAT_FIELDS = {
-    b"package_name": b"__SORACLOUD_PACKAGE_NAME__",
-    b"service_name": b"__SORACLOUD_SERVICE_NAME__",
-    b"service_name:?": b"__SORACLOUD_SERVICE_NAME_DEBUG__",
-    b"app_name": b"__SORACLOUD_APP_NAME__",
-    b"app_name:?": b"__SORACLOUD_APP_NAME_DEBUG__",
-    b"bundle_name": b"__SORACLOUD_BUNDLE_NAME__",
-    b"prelude": b"__SORACLOUD_SHELL_PRELUDE__",
-    b"seiyaku_name": b"__SORACLOUD_SEIYAKU_NAME__",
-    b"dns_host": b"__SORACLOUD_DNS_HOST__",
-}
 CONST_DECLARATION_RE = re.compile(
     r"\bconst\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*:"
 )
@@ -84,6 +77,7 @@ DECLARATION_PREIMAGE_FIELDS = frozenset(
 LINE_SPAN_PREIMAGE_FIELDS = frozenset(
     {"path", "start_line", "physical_lines", "sha256", "source_commit"}
 )
+CURRENT_INCLUDE_PREIMAGE_FIELDS = frozenset({"path"})
 
 
 class AssetError(ValueError):
@@ -224,44 +218,6 @@ def rust_raw_string_payload(source_slice: bytes) -> bytes:
     return source_slice[start:end]
 
 
-def soracloud_format_template_payload(source_slice: bytes) -> bytes:
-    """Reproduce the extraction from one historical Rust ``format!`` literal."""
-
-    literal_start = source_slice.find(b'r#"')
-    format_start = source_slice.find(b"format!(")
-    if format_start < 0 or literal_start < 0 or format_start > literal_start:
-        raise AssetError("sealed Rust extraction span has no format! raw string literal")
-    payload = rust_raw_string_payload(source_slice)
-    transformed = bytearray()
-    cursor = 0
-    while cursor < len(payload):
-        if payload.startswith(b"{{", cursor):
-            transformed.append(ord("{"))
-            cursor += 2
-            continue
-        if payload.startswith(b"}}", cursor):
-            transformed.append(ord("}"))
-            cursor += 2
-            continue
-        if payload[cursor] == ord("{"):
-            end = payload.find(b"}", cursor + 1)
-            if end < 0:
-                raise AssetError("Soracloud format template has an unterminated field")
-            field = payload[cursor + 1 : end]
-            placeholder = SORACLOUD_FORMAT_FIELDS.get(field)
-            if placeholder is None:
-                label = field.decode("utf-8", errors="replace")
-                raise AssetError(f"unsupported Soracloud format field: {{{label}}}")
-            transformed.extend(placeholder)
-            cursor = end + 1
-            continue
-        if payload[cursor] == ord("}"):
-            raise AssetError("Soracloud format template has an unmatched closing brace")
-        transformed.append(payload[cursor])
-        cursor += 1
-    return bytes(transformed)
-
-
 def _git_blob(root: Path, commit: str, relative: str) -> bytes:
     try:
         return subprocess.check_output(
@@ -354,6 +310,49 @@ def _verify_canonical_file(
         raise AssetError(f"{context} length or SHA-256 does not match its manifest")
 
 
+def _verify_current_include_preimage(
+    root: Path,
+    manifest_dir: Path,
+    preimages: Any,
+    consumer: IncludeConsumer,
+    context: str,
+) -> None:
+    """Verify one explicit provenance link to the live compile-time consumer."""
+
+    if not isinstance(preimages, list) or len(preimages) != 1:
+        raise AssetError(f"{context} must contain exactly one current include consumer")
+    preimage_context = f"{context}[0]"
+    preimage = _object(preimages[0], preimage_context)
+    _exact_fields(preimage, CURRENT_INCLUDE_PREIMAGE_FIELDS, preimage_context)
+    source = _safe_path(
+        root,
+        manifest_dir,
+        _string(preimage.get("path"), f"{preimage_context}.path"),
+        f"{preimage_context}.path",
+    )
+    if source != consumer.source:
+        raise AssetError(
+            f"{preimage_context}.path resolves to {source.relative_to(root)}, "
+            f"but the live include consumer is {consumer.source.relative_to(root)}"
+        )
+
+
+def _verify_manifest_scope(relative_manifest: Path, scope: str) -> None:
+    """Require explicitly selected manifests to use current include provenance."""
+
+    requires_current_include = relative_manifest in CURRENT_INCLUDE_CONSUMER_MANIFESTS
+    if requires_current_include and scope != CURRENT_INCLUDE_CONSUMER_SCOPE:
+        raise AssetError(
+            f"{relative_manifest}: source hash scope must be "
+            f"{CURRENT_INCLUDE_CONSUMER_SCOPE!r}"
+        )
+    if not requires_current_include and scope == CURRENT_INCLUDE_CONSUMER_SCOPE:
+        raise AssetError(
+            f"{relative_manifest}: current include provenance is not enabled for "
+            "this manifest"
+        )
+
+
 def audit_repository(root: Path) -> AuditCounts:
     """Verify every checked-in compile-time static manifest and consumer."""
 
@@ -373,11 +372,6 @@ def audit_repository(root: Path) -> AuditCounts:
         _exact_fields(manifest, MANIFEST_FIELDS, str(relative_manifest))
         if manifest.get("format_version") != 1:
             raise AssetError(f"{relative_manifest}: format_version must be 1")
-        commit = _string(
-            manifest.get("source_commit"), f"{relative_manifest}.source_commit"
-        )
-        if COMMIT_RE.fullmatch(commit) is None:
-            raise AssetError(f"{relative_manifest}: source_commit is not a full Git id")
         scope = _string(
             manifest.get("source_slice_hash_scope"),
             f"{relative_manifest}.source_slice_hash_scope",
@@ -386,9 +380,20 @@ def audit_repository(root: Path) -> AuditCounts:
             DECLARATION_HASH_SCOPE,
             LINE_SPAN_HASH_SCOPE,
             STRUCTURED_TABLE_HASH_SCOPE,
-            FORMAT_TEMPLATE_HASH_SCOPE,
+            CURRENT_INCLUDE_CONSUMER_SCOPE,
         }:
             raise AssetError(f"{relative_manifest}: unsupported source hash scope")
+        _verify_manifest_scope(relative_manifest, scope)
+        commit = manifest.get("source_commit")
+        if scope == CURRENT_INCLUDE_CONSUMER_SCOPE:
+            if "source_commit" in manifest:
+                raise AssetError(
+                    f"{relative_manifest}: current include provenance must omit source_commit"
+                )
+        else:
+            commit = _string(commit, f"{relative_manifest}.source_commit")
+            if COMMIT_RE.fullmatch(commit) is None:
+                raise AssetError(f"{relative_manifest}: source_commit is not a full Git id")
         inventory_suffix = manifest.get("asset_inventory_suffix")
         if inventory_suffix is not None:
             inventory_suffix = _string(
@@ -487,6 +492,19 @@ def audit_repository(root: Path) -> AuditCounts:
             preimages = row.get("source_preimages")
             if not isinstance(preimages, list) or not preimages:
                 raise AssetError(f"{context}.source_preimages must be non-empty")
+            if scope == CURRENT_INCLUDE_CONSUMER_SCOPE:
+                _verify_current_include_preimage(
+                    root,
+                    manifest_path.parent,
+                    preimages,
+                    consumer,
+                    f"{context}.source_preimages",
+                )
+                total_preimages += 1
+                manifest_assets.add(asset)
+                assets_seen.add(asset)
+                total_bytes += len(data)
+                continue
             for preimage_index, raw_preimage in enumerate(preimages):
                 preimage_context = f"{context}.source_preimages[{preimage_index}]"
                 preimage = _object(raw_preimage, preimage_context)
@@ -540,18 +558,10 @@ def audit_repository(root: Path) -> AuditCounts:
                     )
                     source_label = f":{start_line}+{physical_lines}"
                     if scope != STRUCTURED_TABLE_HASH_SCOPE:
-                        if scope == FORMAT_TEMPLATE_HASH_SCOPE:
-                            expected_asset = soracloud_format_template_payload(source_slice)
-                        else:
-                            expected_asset = rust_raw_string_payload(source_slice)
+                        expected_asset = rust_raw_string_payload(source_slice)
                         if expected_asset != data:
-                            transformation = (
-                                " transformed format template"
-                                if scope == FORMAT_TEMPLATE_HASH_SCOPE
-                                else " raw string"
-                            )
                             raise AssetError(
-                                f"historical {relative_source}{source_label}{transformation} "
+                                f"historical {relative_source}{source_label} raw string "
                                 f"does not equal {asset.relative_to(root)}"
                             )
                 observed_preimage_sha = _sha256(source_slice)

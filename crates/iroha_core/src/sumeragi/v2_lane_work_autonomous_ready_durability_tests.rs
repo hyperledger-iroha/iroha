@@ -151,7 +151,7 @@ fn enqueue_autonomous_test_transactions(
             let admission_context = queue
                 .plan_admission_context_with_state(adapter.state.as_ref(), &routing_plan)
                 .expect("capture autonomous fixture admission context");
-            let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
                 adapter.state.network_id_ref(),
                 accepted.entrypoint(),
                 &routing_plan,
@@ -175,7 +175,7 @@ fn enqueue_autonomous_test_transactions(
 
 fn install_autonomous_fixture_queue_plan_registry_value(
     state: &State,
-    binding: &crate::torii_proxy::QueuePlanAdmissionBindingV2,
+    binding: &crate::torii_proxy::QueuePlanAdmissionBindingV1,
 ) {
     state
         .install_queue_plan_pending_binding_for_test(binding)
@@ -993,7 +993,7 @@ fn autonomous_local_author_reserves_fifo_before_durable_hint_free_publication() 
             .expect("producer bootstrap publishes its exact Live cursor");
         assert!(matches!(
             lifecycle_cursor.phase(),
-            AutonomousLifecycleCursorPhaseV2::Live { .. }
+            AutonomousLifecycleCursorPhaseV1::Live { .. }
         ));
         assert_eq!(
             lifecycle_cursor.owner_generation(),
@@ -1620,8 +1620,8 @@ fn exercise_canonical_autonomous_carrier_after_direct_decision(
         proposal.descriptor.lane_id,
         proposal.descriptor.dataspace_id,
     ));
-    let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
-        version: crate::queue::LaneQueueReservationKeyV2::VERSION,
+    let mut reservation = crate::queue::LaneQueueReservationKeyV1 {
+        version: crate::queue::LaneQueueReservationKeyV1::VERSION,
         entrypoint_hash: entrypoint.hash(),
         queue_plan_admission_binding_hash: Hash::new(
             b"direct-decision-queue-plan-admission-binding",
