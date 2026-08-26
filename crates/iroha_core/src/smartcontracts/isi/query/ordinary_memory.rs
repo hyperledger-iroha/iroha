@@ -1367,16 +1367,23 @@ pub(super) fn preflight_server_singular_source_materialization(
                 sns_record_prefix_source_bytes(world, crate::sns::DATASPACE_ALIAS_SUFFIX_ID)?,
                 &mut remaining,
             )?;
-            if let Ok(alias) = crate::sns::resolve_active_dataspace_alias_by_id(
+            let alias = match crate::sns::resolve_active_dataspace_alias_by_id(
                 world,
                 catalog,
                 query.dataspace_id(),
                 now_ms,
-            ) && let Ok(selector) = crate::sns::selector_for_dataspace_alias(&alias)
-            {
+            ) {
+                Ok(alias) => Some(alias),
+                Err(crate::sns::SnsError::NotFound(_)) => None,
+                Err(error) => return Err(Error::Conversion(error.to_string())),
+            };
+            if let Some(alias) = alias {
+                let selector = crate::sns::selector_for_dataspace_alias(&alias)
+                    .map_err(|error| Error::Conversion(error.to_string()))?;
                 charge_fixed(sns_record_source_bytes(world, &selector)?, &mut remaining)?;
                 if let Some(owner) =
                     crate::sns::active_dataspace_owner_by_alias(world, &alias, now_ms)
+                        .map_err(|error| Error::Conversion(error.to_string()))?
                 {
                     charge(&owner, &mut remaining)?;
                 }

@@ -133,7 +133,7 @@ public sealed class ToriiIntegrationSmokeTests
         }
 
         var faucetPuzzle = await client.GetAccountFaucetPuzzleAsync(cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("scrypt-leading-zero-bits-v2", faucetPuzzle.Algorithm);
+        Assert.Equal("scrypt-leading-zero-bits-v1", faucetPuzzle.Algorithm);
         Assert.NotNull(faucetPuzzle.NetworkId);
         Assert.True(faucetPuzzle.DifficultyBits > 0);
         Assert.True(faucetPuzzle.AnchorHeight > 0);
@@ -153,7 +153,7 @@ public sealed class ToriiIntegrationSmokeTests
 
         var manifests = await client.GetUaidManifestsAsync(SmokeUaidLiteral, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(SmokeUaidLiteral, manifests.Uaid);
-        Assert.True(manifests.Total >= manifests.Manifests.Count);
+        Assert.True(manifests.Total >= (ulong)manifests.Manifests.Count);
 
         var aliases = await client.LookupAliasesByAccountAsync(accounts.Items[0].Id, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(aliases);

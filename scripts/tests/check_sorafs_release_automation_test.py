@@ -586,7 +586,7 @@ def test_pop_broker_hard_cut_contract_accepts_repository() -> None:
     assert automation._validate_pop_broker_hard_cut_contract(REPO_ROOT) == []
 
 
-def test_pop_broker_operation_60_cannot_be_reassigned(tmp_path: Path) -> None:
+def test_retired_pop_runtime_resolve_operation_cannot_return(tmp_path: Path) -> None:
     _copy_workflows(tmp_path)
     protocol = (
         tmp_path
@@ -594,10 +594,10 @@ def test_pop_broker_operation_60_cannot_be_reassigned(tmp_path: Path) -> None:
     )
     with protocol.open("a", encoding="utf-8") as destination:
         destination.write(
-            "\npub(super) const OPERATION_POP_RETIRED_TEST_V1: u16 = 60;\n"
+            "\npub(super) const OPERATION_POP_RUNTIME_RESOLVE_V1: u16 = 123;\n"
         )
 
-    with pytest.raises(ValueError, match="operation 60/runtime resolve must remain retired"):
+    with pytest.raises(ValueError, match="forbidden runtime-provider deployment marker"):
         automation.validate_release_automation(tmp_path)
 
 

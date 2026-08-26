@@ -1618,8 +1618,11 @@ pub mod extractors {
     fn version_from_json_value(value: &Value) -> Option<u8> {
         match value {
             Value::Number(number) => u8::try_from(number.as_u64()?).ok(),
-            Value::String(raw) => raw.parse::<u8>().ok(),
-            _ => None,
+            Value::Null
+            | Value::Bool(_)
+            | Value::String(_)
+            | Value::Array(_)
+            | Value::Object(_) => None,
         }
     }
     #[allow(clippy::result_large_err)]
@@ -1637,6 +1640,16 @@ pub mod extractors {
             )
                 .into_response()
         })?;
+        if let Some(unknown) = object
+            .keys()
+            .find(|key| !matches!(key.as_str(), "version" | "content"))
+        {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("invalid JSON body: unknown versioned envelope field `{unknown}`"),
+            )
+                .into_response());
+        }
         let version = object
             .get("version")
             .and_then(version_from_json_value)
@@ -2418,7 +2431,15 @@ pub mod extractors {
         use http_body_util::BodyExt as _;
         use iroha_version::{RawVersioned, UnsupportedVersion, Version};
         use norito::core::{NoritoDeserialize, NoritoSerialize};
-        #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
+        #[derive(
+            Clone,
+            Debug,
+            PartialEq,
+            NoritoSerialize,
+            NoritoDeserialize,
+            crate::json_macros::JsonSerialize,
+            crate::json_macros::JsonDeserialize,
+        )]
         struct Dummy(u32);
         #[test]
         fn bounded_decode_resource_failures_are_terminal_payload_limits() {
@@ -2926,6 +2947,31 @@ pub mod extractors {
                     )));
                 }
                 norito::decode_from_bytes(rest).map_err(Into::into)
+            }
+        }
+        #[test]
+        fn versioned_json_requires_numeric_version_and_exact_envelope_fields() {
+            let canonical = Bytes::from_static(br#"{"version":1,"content":[42]}"#);
+            assert_eq!(
+                decode_versioned_json::<Dummy>(&canonical, "Dummy")
+                    .expect("canonical numeric V1 envelope"),
+                Dummy(42)
+            );
+
+            for (label, body) in [
+                (
+                    "string version",
+                    br#"{"version":"1","content":[42]}"#.as_slice(),
+                ),
+                (
+                    "unknown envelope field",
+                    br#"{"version":1,"content":[42],"legacy":true}"#.as_slice(),
+                ),
+            ] {
+                let response =
+                    decode_versioned_json::<Dummy>(&Bytes::copy_from_slice(body), "Dummy")
+                        .expect_err(label);
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{label}");
             }
         }
         #[tokio::test]

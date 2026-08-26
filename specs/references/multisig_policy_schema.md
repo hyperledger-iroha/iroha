@@ -113,11 +113,11 @@ Three deterministic policies ship with the address compliance vectors and offer
 fixture coverage for both the CTAP2 payloads and the digests. The canonical JSON
 lives in `fixtures/account/address_vectors.json`.
 
-| Case ID | Domain | Threshold | Members (curve, weight) | `ctap2_cbor_hex` | `digest_blake2b256_hex` |
-|---------|--------|-----------|-------------------------|------------------|-------------------------|
-| `addr-multisig-council-threshold3` | `council` | 3 | `(1,2) · (1,1) · (1,1)` | `0xA3010102030383A301010201035820591B509F4A1B29C9D8CADA0F876EE97041CBD43C0DE3251B1E6C77BB621F40B0A30101020203582062FFA8DE6DA654EFEBFA3D80FDEF8F188034CFA3E211859346E41A5FEA06532BA301010201035820D4ABAFC1F385826A8EBC60DF90568C52CCFBF91E0B134DC66E42731A7561E4DA` | `0x24E6E8231BC3DCF93DA43F2ABAE739419340B0D532F671808A59239CB2E7A4D6` |
-| `addr-multisig-wonderland-threshold2` | `wonderland` | 2 | `(1,1) · (1,2)` | `0xA3010102020382A301010201035820590E3F8A4263537D1AECA330EDAADB5722597ACD54807B3B1C5A7F2CCAB13D45A3010102020358208C9C7A57B25A194205E227E1FE67780A0E8D54C9AEC7ABD9439CF69B5CFCCCB5` | `0x13F157FB9400EF6B096A5D50EE1AAD30E89EF523C22FCF845631F21089130F12` |
-| `addr-multisig-default-quorum3` | `default` (selector-free canonical payload) | 3 | `(1,1) · (1,1) · (1,1) · (1,1)` | `0xA3010102030384A3010102010358200DCE150576DC9D2677EBC1B5EE02C019CA69EB1892732157F7D551D2F83976C4A30101020103582032708B35523549F429E95F7AF11F7C8320B9BA29163D2F27AF7D81C1C5991041A301010201035820683BA155CD7E73B91FA9B0E61722DF50AE625E7F5DA9CF5013162891439C2C3FA301010201035820BEF1E6A19FC053B29945A3F1D2A4759B5297F9ADD0A5C3961405804EFD1780BB` | `0xD596346A497D45B9954EEE3BC71C82C8D4B33E9AC9A8A226D626C45891CD2378` |
+| Case ID | Threshold | Members (curve, weight) | `ctap2_cbor_hex` | `digest_blake2b256_hex` |
+|---------|-----------|-------------------------|------------------|-------------------------|
+| `addr-multisig-council-threshold3` | 3 | `(1,1) · (1,1) · (1,2)` | `0xA3010102030383A30101020103582068F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96A3010102010358207EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E413A301010202035820884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4201D9D0B` | `0x3CA0D464D52713DD60DDAA55B3B3F49A6EF114574864E2AADE63114C4DB06B9F` |
+| `addr-multisig-wonderland-threshold2` | 2 | `(1,1) · (1,2)` | `0xA3010102020382A3010102010358205C9C6DF261C9CB840475776AAEFCD944B405328FAB28F9B3A95EF40490D3DE84A301010202035820D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737` | `0xCDEFCDA0C30A91D0B2F2E4A9885A86A990D285B4E200AA0131E545C865C2E563` |
+| `addr-multisig-default-quorum3` | 3 | `(1,1) · (1,1) · (1,1) · (1,1)` | `0xA3010102030384A30101020103582065E8F9B0BC6EAE124169F0576F97362D295A8CF5F770B45E14357CE647D33EECA301010201035820ACF12B4ACC1C660A8326AED34039EFB728A5E496488240F50A932AB7ABA51751A301010201035820B533D8AD9FCFBDDE0B481C1B334DDC3C53412FD614564E7E5AFD020368D382C3A301010201035820BC7CBCB5636375FA1D82434D466724D92377F53B980695DD49D26D0CE12205A5` | `0xB32B7CEA6AE24A0E6746B5450392814A6E0A00CF645CD2FB9D2ECF03D88C0C1D` |
 
 Consumers should assert both strings when verifying their own encoders; the
 fixtures back the Rust, JS, Swift, and Android SDK tests as well as the Torii
@@ -128,7 +128,7 @@ admission suites.
 | Step | Command | Purpose |
 |------|---------|---------|
 | Generate/verify fixtures | `cargo xtask address-vectors --out fixtures/account/address_vectors.json` or `cargo xtask address-vectors --verify` | Regenerates the canonical JSON, including the multisig CTAP2 payloads and digests, or checks that the committed file matches the generator. |
-| Inspect payloads ad hoc | `cargo run -p iroha_data_model --example account_address_vectors | jq '.vectors[] | select(.category == "multisig")'` | Dumps the same JSON without writing to disk for quick experiments. |
+| Inspect payloads ad hoc | `cargo run -p iroha_data_model --example account_address_vectors | jq '.cases.positive[] | select(.category == "multisig")'` | Dumps the same JSON without writing to disk for quick experiments. |
 | Host validation tests | `crates/iroha_data_model/tests/account_address_vectors.rs` | Ensures `AccountController` parsing + multisig hashing match the fixtures. |
 
 ## References

@@ -231,6 +231,26 @@ final class TransactionInputValidatorTests: XCTestCase {
         }
     }
 
+    func testSanitizeDomainIdUsesExplicitDomainNormalization() throws {
+        XCTAssertEqual(
+            try TransactionInputValidator.sanitizeDomainId(
+                "Wonderland.UNIVERSAL",
+                field: "target"
+            ),
+            "wonderland.universal"
+        )
+        for invalid in ["wondérland.universal", "wonderland.uni@versal", "wonderland.uni versal"] {
+            XCTAssertThrowsError(
+                try TransactionInputValidator.sanitizeDomainId(invalid, field: "target")
+            ) { error in
+                XCTAssertEqual(
+                    error as? TransactionInputError,
+                    .malformedDomainId(field: "target", value: invalid)
+                )
+            }
+        }
+    }
+
     func testSanitizeAssetIdAcceptsCanonicalPublicLiteral() throws {
         let literal =
             "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"

@@ -1,8 +1,8 @@
 # SORA Adversarial Constitution
 
-Status: design draft v0.2
+Status: design draft v0.3
 
-Last revised: 2026-07-09
+Last revised: 2026-08-26
 
 This document defines a self-contained game-theoretic frame for SORA as an
 opt-in network state. It treats SORA as a set of games among self-interested
@@ -34,13 +34,15 @@ Current maturity snapshot:
 
 | Mechanism | Maturity |
 |---|---|
-| Equal signed ballots from seated Parliament members | Implemented |
-| Deterministic, domain-separated citizen sortition | Implemented |
+| Attempt-local multibody Parliament reducer and certificates | Implemented |
+| Future threshold-beacon, domain-separated citizen sortition | Implemented |
+| Mandatory ZK timed-OVN aggregate ballots for private juries | Implemented |
 | XOR purchasing-power target and reserve balance sheet | Specified |
 | Phoenix Capital Certificates | Specified |
 | Producer Credit Facilities | Specified |
 | Risk-tiered governance lanes | Specified |
 | Receipt-free, coercion-resistant Parliament voting | Research |
+| Equal signed clear Parliament ballots | Rejected |
 | Privacy-preserving uniqueness credentials | Research |
 | Prediction markets for governance outcomes | Research |
 | Token-weighted Parliament voting | Rejected |
@@ -222,9 +224,13 @@ Design intent:
 - temporary service;
 - no permanent seats;
 - no extra votes from extra XOR or Phoenix;
-- equal signed clear ballots in the current implementation;
-- private and receipt-free ballots only after the research mechanism is
-  implemented, audited, and separately activated;
+- authority-authenticated public findings for nonbinding public bodies;
+- mandatory ZK timed-OVN aggregate ballots for the binding Policy and
+  Confirmation juries, with threshold-BLS timed opening and no plaintext,
+  manual-opening, or fallback electorate path;
+- no claim that the implemented private ballot is receipt-free or fully
+  coercion-resistant; those stronger properties remain research and require a
+  separately reviewed protocol change;
 - challenge windows and delayed enactment for high-risk actions;
 - accountability through bonds, clawbacks, public records, and later review.
 
@@ -439,8 +445,10 @@ Desired equilibrium:
 - governance is temporary service;
 - citizens can rise into governance through sortition;
 - wealth cannot buy sovereignty;
-- current jurors cast equal signed ballots;
-- the target design lets jurors vote without giving bribers proof.
+- public bodies publish authority-authenticated findings while binding private
+  juries use attempt-bound ZK timed-OVN ballots;
+- the future research target prevents jurors from giving bribers transferable
+  proof without weakening the implemented aggregate-only opening boundary.
 
 Failure mode:
 
@@ -813,7 +821,9 @@ proposal submitted
 -> bonded expert briefs and red-team briefs
 -> public comment and prediction market window
 -> sortition roster commitment
--> equal signed ballots under the current implementation
+-> future-beacon multibody sortition
+-> public findings for public bodies
+-> mandatory ZK timed-OVN aggregate ballots for binding private juries
 -> aggregate result
 -> challenge window
 -> canary or staged rollout
@@ -822,9 +832,11 @@ proposal submitted
 -> clawback or rollback if needed
 ```
 
-After a coercion-resistant ballot protocol is implemented, audited, and
-activated, it may replace the clear-ballot step without changing the remaining
-lifecycle.
+The implemented private-jury step is confidential and aggregate-only but is
+not claimed to be receipt-free or fully coercion-resistant. A future protocol
+may strengthen those properties only through an audited, explicitly enacted
+change that preserves attempt binding, deterministic consensus validation, and
+the no-plaintext/no-manual-fallback rule.
 
 For high-risk proposals, require:
 

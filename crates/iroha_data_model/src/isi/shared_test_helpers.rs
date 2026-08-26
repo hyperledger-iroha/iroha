@@ -35,12 +35,15 @@ where
     assert_eq!(Instruction::dyn_encode(&*decoded), payload);
 }
 
-pub(super) fn assert_registry_decodes_type_name<T>(registry: &InstructionRegistry, value: T)
+pub(super) fn assert_registry_decodes_registered_type<T>(registry: &InstructionRegistry, value: T)
 where
     T: Instruction + Encode + 'static + norito::core::NoritoSerialize,
     for<'de> T: norito::core::NoritoDeserialize<'de>,
 {
-    assert_registry_decodes(registry, std::any::type_name::<T>(), value);
+    let wire_id = registry
+        .wire_id(std::any::type_name::<T>())
+        .expect("instruction type has an explicit wire identifier");
+    assert_registry_decodes(registry, wire_id, value);
 }
 
 #[cfg(test)]
@@ -91,7 +94,8 @@ mod tests {
             assert!(!source.contains("fn assert_slice_roundtrip"));
             assert!(!source.contains("fn assert_registry_decodes"));
             assert!(
-                source.contains("assert_registry_decodes_type_name as assert_registry_decodes")
+                source
+                    .contains("assert_registry_decodes_registered_type as assert_registry_decodes")
             );
             slice_calls += source.matches("assert_slice_roundtrip(").count();
             registry_calls += source.matches("assert_registry_decodes(").count();
@@ -126,7 +130,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "registered")]
     fn registry_helper_rejects_a_mutated_wire_id() {
-        let registry = InstructionRegistry::new().register_slice::<super::super::Log>();
+        let registry = InstructionRegistry::new()
+            .register_with_id_slice::<super::super::Log>(super::super::Log::WIRE_ID);
         let value = super::super::Log::new(crate::Level::INFO, "registry mutation".to_owned());
         assert_registry_decodes(&registry, "iroha.test.mutated", value);
     }

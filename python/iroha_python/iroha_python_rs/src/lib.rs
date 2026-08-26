@@ -39,6 +39,11 @@ use iroha_data_model::{
         Account,
         address::{AccountAddress, AccountAddressError},
     },
+    alias_setup::{
+        AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasFramedInstructionV1,
+        AliasIntentV1, AliasLeaseAcquisitionV1, AliasPlanAnchorV1, AliasPlanDispositionV1,
+        AliasPlanResourceV1, AliasQuoteGuardV1,
+    },
     asset::{
         AssetBalanceScope, AssetTransferAvailability, AssetTransferControlWindow,
         AssetTransferLimit,
@@ -158,7 +163,14 @@ use iroha_torii_shared::{
     connect_sdk,
 };
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
-use norito::{codec, codec::DecodeAll, decode_from_bytes, json, json::JsonSerialize};
+use norito::{
+    codec,
+    codec::DecodeAll,
+    decode_from_bytes,
+    derive::{Encode as NEnc, JsonDeserialize},
+    json,
+    json::JsonSerialize,
+};
 use pyo3::{
     Bound, FromPyObject, create_exception,
     exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError},
@@ -437,9 +449,9 @@ fn parse_account_id(value: &str) -> PyResult<AccountId> {
     let raw = value.trim();
     let parsed = match AccountAddress::parse_encoded(raw, None) {
         Ok(address) => address.to_account_id().map_err(|err| err.to_string()),
-        Err(AccountAddressError::UnsupportedAddressFormat) => AccountId::parse_encoded(raw)
-            .map(|parsed| parsed.into_account_id())
-            .map_err(|err| err.to_string()),
+        Err(AccountAddressError::UnsupportedAddressFormat) => {
+            AccountId::parse_encoded(raw).map_err(|err| err.to_string())
+        }
         Err(err) => Err(err.to_string()),
     };
     parsed.map_err(|err| PyValueError::new_err(format!("invalid account id: {err}")))
@@ -466,7 +478,7 @@ fn parse_exact_i105_account_id(value: &str, field: &str) -> PyResult<AccountId> 
         ))
     })
 }
-fn parse_nonzero_lower_hex_32(value: &str, field: &str) -> PyResult<[u8; 32]> {
+fn parse_lower_hex_32(value: &str, field: &str) -> PyResult<[u8; 32]> {
     if value.len() != 64
         || !value
             .bytes()
@@ -481,6 +493,10 @@ fn parse_nonzero_lower_hex_32(value: &str, field: &str) -> PyResult<[u8; 32]> {
     let bytes: [u8; 32] = decoded
         .try_into()
         .map_err(|_| PyValueError::new_err(format!("{field} must contain exactly 32 bytes")))?;
+    Ok(bytes)
+}
+fn parse_nonzero_lower_hex_32(value: &str, field: &str) -> PyResult<[u8; 32]> {
+    let bytes = parse_lower_hex_32(value, field)?;
     if bytes.iter().all(|byte| *byte == 0) {
         return Err(PyValueError::new_err(format!(
             "{field} must not be the zero identifier"
@@ -5714,6 +5730,40 @@ mod tests {
         PyNetworkId::from_exact_bytes(&[0xA5; Hash::LENGTH]).expect("marked test NetworkId")
     }
     #[test]
+    fn prepared_binding_parser_accepts_only_the_exact_v1_shape() {
+        let binding = r#"{
+            "schema":"iroha.taira.public-reset.mutation-binding.v1",
+            "authorization_sha256":"0000000000000000000000000000000000000000000000000000000000000000",
+            "authorization_nonce":"reset_nonce_00000000000000000000",
+            "kind":"faucet",
+            "phase":"pre_edge",
+            "idempotency_key":"1111111111111111111111111111111111111111111111111111111111111111",
+            "execution_expires_at_unix_ms":1
+        }"#;
+        assert!(require_prepared_binding_json_v1(binding, "faucet").is_ok());
+        assert!(require_prepared_binding_json_v1(binding, "onboarding").is_err());
+        let with_legacy_field = binding.replace(
+            "\"execution_expires_at_unix_ms\":1",
+            "\"execution_expires_at_unix_ms\":1,\"legacy\":true",
+        );
+        assert!(require_prepared_binding_json_v1(&with_legacy_field, "faucet").is_err());
+    }
+    #[test]
+    fn onboarding_receipt_verifier_rejects_non_v1_json_before_trust_pins() {
+        let network_id = python_test_network_id();
+        assert!(
+            verify_account_onboarding_receipt_v1_py(
+                "{}",
+                &network_id,
+                "not-an-account",
+                "not-an-account",
+                "merchant@universal",
+                "[]",
+            )
+            .is_err()
+        );
+    }
+    #[test]
     fn python_network_id_rejects_bare_labels_unmarked_hashes_and_noncanonical_literals() {
         ensure_python();
         assert!(PyNetworkId::parse("test-chain").is_err());
@@ -8457,7 +8507,9 @@ fn py_to_json_value(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResul
         None => Ok(Json::default()),
         Some(obj) => {
             let dumped = py_to_json_string(py, obj, "trigger arguments")?;
-            Json::from_str_norito(&dumped)
+            let value = json::from_str::<json::Value>(&dumped)
+                .map_err(|err| PyValueError::new_err(format!("invalid JSON payload: {err}")))?;
+            Json::from_norito_value_ref(&value)
                 .map_err(|err| PyValueError::new_err(format!("invalid JSON payload: {err}")))
         }
     }
@@ -12775,6 +12827,631 @@ fn canonical_signed_transaction_hash_v1_py(
     let hash = canonical_signed_transaction_hash_v1(signed_transaction_versioned)?;
     Ok(Py::from(PyBytes::new(py, &hash)))
 }
+
+const ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1: &[u8] =
+    b"iroha:account-onboarding-plan-receipt:v1\0";
+
+#[derive(Clone, Debug, NEnc, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PythonAccountOnboardingPlanRequestV1 {
+    version: u8,
+    alias: String,
+    account_id: String,
+    permissions: Vec<String>,
+}
+
+#[derive(Clone, Debug, NEnc, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PythonAccountOnboardingPlanBodyV1 {
+    version: u8,
+    request: PythonAccountOnboardingPlanRequestV1,
+    authority: AccountId,
+    network_id: NetworkId,
+    anchor: AliasPlanAnchorV1,
+    resource: AliasPlanResourceV1,
+    acquisition: AliasLeaseAcquisitionV1,
+    quote_guard: AliasQuoteGuardV1,
+    instructions: Vec<AliasFramedInstructionV1>,
+    owner_auto_renew_instruction: Option<AliasFramedInstructionV1>,
+    valid_until_ms: u64,
+}
+
+impl PythonAccountOnboardingPlanBodyV1 {
+    fn canonical_hash(&self) -> Hash {
+        use norito::codec::Encode as _;
+
+        let encoded = self.encode();
+        Hash::new_from_chunks(&[
+            ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1,
+            encoded.as_slice(),
+        ])
+    }
+}
+
+#[derive(Clone, Debug, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PythonAccountOnboardingPlanReceiptV1 {
+    body: PythonAccountOnboardingPlanBodyV1,
+    plan_hash: Hash,
+    signature: Signature,
+}
+
+fn verify_python_account_onboarding_receipt_v1(
+    receipt: &PythonAccountOnboardingPlanReceiptV1,
+    expected_network_id: &NetworkId,
+    expected_authority: &AccountId,
+    expected_account_id: &AccountId,
+    expected_account_literal: &str,
+    expected_alias: &str,
+    expected_permissions: &[String],
+) -> PyResult<(Hash, Vec<InstructionBox>)> {
+    let body = &receipt.body;
+    if body.version != 1
+        || body.request.version != 1
+        || &body.network_id != expected_network_id
+        || &body.authority != expected_authority
+        || body.request.account_id != expected_account_literal
+        || body.request.alias != expected_alias
+        || body.request.permissions != expected_permissions
+        || body.valid_until_ms == 0
+        || body.valid_until_ms == u64::MAX
+        || body.quote_guard.valid_until_ms != body.valid_until_ms
+        || body.resource.disposition == AliasPlanDispositionV1::Conflict
+    {
+        return Err(PyValueError::new_err(
+            "account onboarding receipt differs from its exact trust pins",
+        ));
+    }
+    let parsed_alias = body
+        .request
+        .alias
+        .parse::<AccountAliasName>()
+        .map_err(|_| PyValueError::new_err("account onboarding receipt alias is noncanonical"))?;
+    if parsed_alias.to_string() != body.request.alias {
+        return Err(PyValueError::new_err(
+            "account onboarding receipt alias is noncanonical",
+        ));
+    }
+    let mut previous_permission: Option<&str> = None;
+    for permission in &body.request.permissions {
+        let parsed = permission.parse::<Name>().map_err(|_| {
+            PyValueError::new_err("account onboarding receipt permission is noncanonical")
+        })?;
+        if parsed.to_string() != *permission
+            || previous_permission.is_some_and(|previous| previous >= permission.as_str())
+        {
+            return Err(PyValueError::new_err(
+                "account onboarding receipt permissions are not strictly canonical",
+            ));
+        }
+        previous_permission = Some(permission);
+    }
+    let AliasIntentV1::AccountAlias(intent) = &body.resource.intent else {
+        return Err(PyValueError::new_err(
+            "account onboarding receipt resource is not an account alias",
+        ));
+    };
+    if intent.alias.canonical_text() != body.request.alias
+        || &intent.target_account != expected_account_id
+        || intent.provision != AccountProvisionV1::Create
+        || intent.role != AccountAliasRoleV1::Primary
+    {
+        return Err(PyValueError::new_err(
+            "account onboarding receipt resource differs from its request",
+        ));
+    }
+    match (body.resource.disposition, &body.resource.quote) {
+        (AliasPlanDispositionV1::Create, Some(quote))
+            if quote.target == body.resource.intent.target()
+                && quote.guard == body.quote_guard
+                && quote.exact_amount <= quote.guard.max_amount => {}
+        (AliasPlanDispositionV1::Create, _) => {
+            return Err(PyValueError::new_err(
+                "account onboarding create receipt has an invalid quote",
+            ));
+        }
+        (_, None) => {}
+        (_, Some(_)) => {
+            return Err(PyValueError::new_err(
+                "account onboarding no-op or repair receipt carries a quote",
+            ));
+        }
+    }
+    if body.instructions.is_empty() {
+        if body.resource.disposition != AliasPlanDispositionV1::NoOp
+            || body.resource.instruction_index.is_some()
+        {
+            return Err(PyValueError::new_err(
+                "account onboarding receipt has an invalid empty instruction plan",
+            ));
+        }
+    } else if body.resource.instruction_index != Some(0) {
+        return Err(PyValueError::new_err(
+            "account onboarding receipt must reference instruction zero",
+        ));
+    }
+    let mut decoded_instructions = Vec::with_capacity(body.instructions.len());
+    for frame in &body.instructions {
+        let instruction = iroha_data_model::isi::decode_instruction_from_pair(
+            &frame.wire_id,
+            &frame.framed_payload,
+        )
+        .map_err(|_| PyValueError::new_err("account onboarding receipt instruction is invalid"))?;
+        let (wire_id, canonical_payload) =
+            iroha_data_model::isi::framed_instruction_payload(&instruction).ok_or_else(|| {
+                PyValueError::new_err("account onboarding receipt instruction is unregistered")
+            })?;
+        if wire_id != frame.wire_id || canonical_payload != frame.framed_payload {
+            return Err(PyValueError::new_err(
+                "account onboarding receipt instruction is noncanonical",
+            ));
+        }
+        decoded_instructions.push(instruction);
+    }
+    if let Some(first) = decoded_instructions.first() {
+        let ensure = first
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::alias_setup::EnsureAlias>()
+            .ok_or_else(|| {
+                PyValueError::new_err(
+                    "account onboarding receipt first instruction is not EnsureAlias",
+                )
+            })?;
+        if ensure.intent != body.resource.intent
+            || ensure.acquisition != body.acquisition
+            || ensure.quote_guard != body.quote_guard
+        {
+            return Err(PyValueError::new_err(
+                "account onboarding EnsureAlias differs from the receipt body",
+            ));
+        }
+    }
+    if let Some(frame) = &body.owner_auto_renew_instruction {
+        let instruction = iroha_data_model::isi::decode_instruction_from_pair(
+            &frame.wire_id,
+            &frame.framed_payload,
+        )
+        .map_err(|_| {
+            PyValueError::new_err("account onboarding owner auto-renew instruction is invalid")
+        })?;
+        let (wire_id, canonical_payload) =
+            iroha_data_model::isi::framed_instruction_payload(&instruction).ok_or_else(|| {
+                PyValueError::new_err(
+                    "account onboarding owner auto-renew instruction is unregistered",
+                )
+            })?;
+        let configuration = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew>()
+            .ok_or_else(|| {
+                PyValueError::new_err(
+                    "account onboarding owner auto-renew instruction has the wrong type",
+                )
+            })?;
+        if wire_id != frame.wire_id
+            || canonical_payload != frame.framed_payload
+            || configuration.target != body.resource.intent.target()
+        {
+            return Err(PyValueError::new_err(
+                "account onboarding owner auto-renew instruction is noncanonical",
+            ));
+        }
+    }
+    let canonical_hash = body.canonical_hash();
+    let signatory = expected_authority.try_signatory().ok_or_else(|| {
+        PyValueError::new_err("account onboarding authority must have one signatory")
+    })?;
+    if receipt.plan_hash != canonical_hash
+        || receipt
+            .signature
+            .verify(signatory, canonical_hash.as_ref())
+            .is_err()
+    {
+        return Err(PyValueError::new_err(
+            "account onboarding receipt hash or signature is invalid",
+        ));
+    }
+    Ok((canonical_hash, decoded_instructions))
+}
+
+#[pyfunction]
+#[pyo3(name = "verify_account_onboarding_receipt_v1")]
+/// Authenticate one exact canonical V1 onboarding receipt and its trust pins.
+fn verify_account_onboarding_receipt_v1_py(
+    receipt_json: &str,
+    network_id: &PyNetworkId,
+    expected_authority: &str,
+    expected_account_id: &str,
+    expected_alias: &str,
+    expected_permissions_json: &str,
+) -> PyResult<String> {
+    let receipt =
+        json::from_str::<PythonAccountOnboardingPlanReceiptV1>(receipt_json).map_err(|error| {
+            PyValueError::new_err(format!("invalid account onboarding receipt JSON: {error}"))
+        })?;
+    let expected_authority =
+        parse_exact_i105_account_id(expected_authority, "account onboarding expected authority")?;
+    let expected_account =
+        parse_exact_i105_account_id(expected_account_id, "account onboarding expected account")?;
+    let expected_permissions =
+        json::from_str::<Vec<String>>(expected_permissions_json).map_err(|error| {
+            PyValueError::new_err(format!(
+                "invalid account onboarding expected permissions JSON: {error}"
+            ))
+        })?;
+    let (hash, _) = verify_python_account_onboarding_receipt_v1(
+        &receipt,
+        network_id.as_inner(),
+        &expected_authority,
+        &expected_account,
+        expected_account_id,
+        expected_alias,
+        &expected_permissions,
+    )?;
+    Ok(hex_encode(hash.as_ref()))
+}
+
+fn require_prepared_binding_json_v1(
+    binding_json: &str,
+    expected_operation: &str,
+) -> PyResult<norito::json::Value> {
+    const SCHEMA: &str = "iroha.taira.public-reset.mutation-binding.v1";
+    const FIELDS: [&str; 7] = [
+        "schema",
+        "authorization_sha256",
+        "authorization_nonce",
+        "kind",
+        "phase",
+        "idempotency_key",
+        "execution_expires_at_unix_ms",
+    ];
+    let value = json::from_str::<norito::json::Value>(binding_json).map_err(|error| {
+        PyValueError::new_err(format!("invalid prepared mutation binding JSON: {error}"))
+    })?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| PyValueError::new_err("prepared mutation binding JSON must be an object"))?;
+    if object.len() != FIELDS.len() || FIELDS.iter().any(|field| !object.contains_key(*field)) {
+        return Err(PyValueError::new_err(
+            "prepared mutation binding must contain exactly the V1 fields",
+        ));
+    }
+    let exact_string = |field: &str| -> PyResult<&str> {
+        object
+            .get(field)
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "prepared mutation binding `{field}` must be a string"
+                ))
+            })
+    };
+    if exact_string("schema")? != SCHEMA || exact_string("kind")? != expected_operation {
+        return Err(PyValueError::new_err(
+            "prepared mutation binding schema or operation is invalid",
+        ));
+    }
+    for field in ["authorization_sha256", "idempotency_key"] {
+        let value = exact_string(field)?;
+        if value.len() != 64
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(PyValueError::new_err(format!(
+                "prepared mutation binding `{field}` must be 64 lowercase hex characters"
+            )));
+        }
+    }
+    let nonce = exact_string("authorization_nonce")?;
+    if nonce.len() != 32
+        || !nonce.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+    {
+        return Err(PyValueError::new_err(
+            "prepared mutation binding authorization_nonce is noncanonical",
+        ));
+    }
+    let phase = exact_string("phase")?;
+    if phase.is_empty()
+        || phase.len() > 128
+        || !phase.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+    {
+        return Err(PyValueError::new_err(
+            "prepared mutation binding phase is noncanonical",
+        ));
+    }
+    if object
+        .get("execution_expires_at_unix_ms")
+        .and_then(norito::json::Value::as_u64)
+        .is_none_or(|value| value == 0)
+    {
+        return Err(PyValueError::new_err(
+            "prepared mutation binding execution deadline must be a positive u64",
+        ));
+    }
+    Ok(value)
+}
+
+const ACCOUNT_FAUCET_CLAIM_HASH_DOMAIN_V1: &[u8] = b"iroha:accounts:faucet:claim:v1\0";
+
+#[derive(Clone, Debug, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PythonPreparedOnboardingContextV1 {
+    receipt: PythonAccountOnboardingPlanReceiptV1,
+    account_id: String,
+    alias: String,
+    disposition: AliasPlanDispositionV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, NEnc, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PythonAccountFaucetClaimV1 {
+    account_id: String,
+    #[norito(default)]
+    pow_anchor_height: Option<u64>,
+    #[norito(default)]
+    pow_nonce_hex: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct PythonPreparedFaucetContextV1 {
+    claim: PythonAccountFaucetClaimV1,
+    account_id: String,
+    asset_definition_id: String,
+    asset_id: String,
+    amount: Quantity,
+}
+
+fn python_instructions_are_ordered_subset(
+    actual: &[InstructionBox],
+    planned: &[InstructionBox],
+) -> bool {
+    let mut actual = actual.iter();
+    let mut next = actual.next();
+    for instruction in planned {
+        if next.is_some_and(|candidate| candidate == instruction) {
+            next = actual.next();
+        }
+    }
+    next.is_none()
+}
+
+fn python_onboarding_disposition_transition_allowed(
+    planned: AliasPlanDispositionV1,
+    prepared: AliasPlanDispositionV1,
+) -> bool {
+    use AliasPlanDispositionV1::{Create, NoOp, Repair};
+    matches!(
+        (planned, prepared),
+        (Create, Create | Repair | NoOp) | (Repair, Repair | NoOp) | (NoOp, NoOp)
+    )
+}
+
+fn verify_python_prepared_onboarding_context_v1(
+    context: &PythonPreparedOnboardingContextV1,
+    signed: &SignedTransaction,
+    expected_network_id: &NetworkId,
+    expected_authority: &AccountId,
+    expected_semantic_hash: &[u8; Hash::LENGTH],
+) -> PyResult<()> {
+    let expected_account_id =
+        parse_exact_i105_account_id(&context.account_id, "prepared onboarding account_id")?;
+    let (receipt_hash, planned_instructions) = verify_python_account_onboarding_receipt_v1(
+        &context.receipt,
+        expected_network_id,
+        expected_authority,
+        &expected_account_id,
+        &context.account_id,
+        &context.alias,
+        &context.receipt.body.request.permissions,
+    )?;
+    if receipt_hash.as_ref() != expected_semantic_hash
+        || !python_onboarding_disposition_transition_allowed(
+            context.receipt.body.resource.disposition,
+            context.disposition,
+        )
+    {
+        return Err(PyValueError::new_err(
+            "prepared onboarding semantic receipt or live disposition was substituted",
+        ));
+    }
+    let Executable::Instructions(instructions) = signed.instructions() else {
+        return Err(PyValueError::new_err(
+            "prepared onboarding transaction must contain direct instructions",
+        ));
+    };
+    if instructions.is_empty()
+        || !python_instructions_are_ordered_subset(instructions.as_ref(), &planned_instructions)
+    {
+        return Err(PyValueError::new_err(
+            "prepared onboarding instructions differ from the authenticated receipt",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_python_prepared_faucet_context_v1(
+    context: &PythonPreparedFaucetContextV1,
+    signed: &SignedTransaction,
+    expected_semantic_hash: &[u8; Hash::LENGTH],
+) -> PyResult<()> {
+    if context.claim.account_id != context.account_id {
+        return Err(PyValueError::new_err(
+            "prepared faucet account differs from its exact claim",
+        ));
+    }
+    let account_id =
+        parse_exact_i105_account_id(&context.account_id, "prepared faucet account_id")?;
+    if let Some(nonce) = context.claim.pow_nonce_hex.as_deref()
+        && (nonce.is_empty()
+            || nonce.len() % 2 != 0
+            || !nonce
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    {
+        return Err(PyValueError::new_err(
+            "prepared faucet proof nonce is not canonical lowercase hexadecimal",
+        ));
+    }
+    use norito::codec::Encode as _;
+    let encoded_claim = context.claim.encode();
+    let claim_hash = Hash::new_from_chunks(&[
+        ACCOUNT_FAUCET_CLAIM_HASH_DOMAIN_V1,
+        encoded_claim.as_slice(),
+    ]);
+    if claim_hash.as_ref() != expected_semantic_hash {
+        return Err(PyValueError::new_err(
+            "prepared faucet semantic hash differs from its exact claim",
+        ));
+    }
+    let asset_definition_id = context
+        .asset_definition_id
+        .parse::<AssetDefinitionId>()
+        .map_err(|error| {
+            PyValueError::new_err(format!(
+                "prepared faucet asset_definition_id is invalid: {error}"
+            ))
+        })?;
+    if asset_definition_id.to_string() != context.asset_definition_id {
+        return Err(PyValueError::new_err(
+            "prepared faucet asset_definition_id is not canonical",
+        ));
+    }
+    let destination_asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
+    let parsed_destination_asset_id = context.asset_id.parse::<AssetId>().map_err(|error| {
+        PyValueError::new_err(format!("prepared faucet asset_id is invalid: {error}"))
+    })?;
+    let expected_asset_literal = format!("{}#{}", context.asset_definition_id, context.account_id);
+    if context.asset_id != expected_asset_literal
+        || parsed_destination_asset_id != destination_asset_id
+    {
+        return Err(PyValueError::new_err(
+            "prepared faucet destination asset differs from its exact claim",
+        ));
+    }
+    let source_asset_id = AssetId::new(asset_definition_id, signed.authority().clone());
+    let transfer: InstructionBox =
+        Transfer::asset_quantity(source_asset_id, context.amount.clone(), account_id.clone())
+            .into();
+    let without_registration = vec![transfer.clone()];
+    let with_registration = vec![
+        InstructionBox::from(Register::account(Account::new(account_id))),
+        transfer,
+    ];
+    let Executable::Instructions(instructions) = signed.instructions() else {
+        return Err(PyValueError::new_err(
+            "prepared faucet transaction must contain direct instructions",
+        ));
+    };
+    if instructions.as_ref() != without_registration.as_slice()
+        && instructions.as_ref() != with_registration.as_slice()
+    {
+        return Err(PyValueError::new_err(
+            "prepared faucet instructions differ from its exact claim",
+        ));
+    }
+    Ok(())
+}
+
+#[pyfunction]
+#[pyo3(name = "verify_prepared_transaction_context_v1")]
+/// Authenticate one fixed-V1 prepared transaction and its exact public reset context.
+fn verify_prepared_transaction_context_v1_py(
+    signed_transaction_versioned: &[u8],
+    network_id: &PyNetworkId,
+    expected_authority: &str,
+    binding_json: &str,
+    operation: &str,
+    semantic_hash_hex: &str,
+    fee_payment_json: &str,
+    operation_context_json: &str,
+) -> PyResult<SignedTransactionEnvelope> {
+    if !matches!(operation, "onboarding" | "faucet") {
+        return Err(PyValueError::new_err(
+            "prepared transaction operation must be onboarding or faucet",
+        ));
+    }
+    let semantic_hash = parse_lower_hex_32(semantic_hash_hex, "prepared semantic hash")?;
+    let expected_authority = parse_exact_i105_account_id(
+        expected_authority,
+        "prepared transaction expected authority",
+    )?;
+    let binding_value = require_prepared_binding_json_v1(binding_json, operation)?;
+    let binding = Json::from_norito_value_ref(&binding_value).map_err(|error| {
+        PyValueError::new_err(format!("invalid prepared mutation binding: {error}"))
+    })?;
+    let expected_fee_payment = parse_fee_payment_intent_json(fee_payment_json)?;
+    let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
+    signed.verify_signature().map_err(|_| {
+        PyValueError::new_err("prepared transaction has an invalid authority signature")
+    })?;
+    if signed.network_id() != Some(network_id.as_inner())
+        || signed.authority() != &expected_authority
+        || signed.payload().fee_payment != expected_fee_payment
+    {
+        return Err(PyValueError::new_err(
+            "prepared transaction network, authority, or fee payment was substituted",
+        ));
+    }
+    let mut expected_metadata = Metadata::default();
+    expected_metadata.insert(
+        "taira_public_reset_binding"
+            .parse::<Name>()
+            .expect("static prepared binding metadata key"),
+        binding,
+    );
+    expected_metadata.insert(
+        "taira_prepared_operation"
+            .parse::<Name>()
+            .expect("static prepared operation metadata key"),
+        Json::new(operation.to_owned()),
+    );
+    expected_metadata.insert(
+        "taira_prepared_semantic_hash"
+            .parse::<Name>()
+            .expect("static prepared semantic-hash metadata key"),
+        Json::new(semantic_hash_hex.to_owned()),
+    );
+    if signed.metadata() != &expected_metadata {
+        return Err(PyValueError::new_err(
+            "prepared transaction metadata differs from its exact binding",
+        ));
+    }
+    match operation {
+        "onboarding" => {
+            let context =
+                json::from_str::<PythonPreparedOnboardingContextV1>(operation_context_json)
+                    .map_err(|error| {
+                        PyValueError::new_err(format!(
+                            "invalid prepared onboarding operation context JSON: {error}"
+                        ))
+                    })?;
+            verify_python_prepared_onboarding_context_v1(
+                &context,
+                &signed,
+                network_id.as_inner(),
+                &expected_authority,
+                &semantic_hash,
+            )?;
+        }
+        "faucet" => {
+            let context = json::from_str::<PythonPreparedFaucetContextV1>(operation_context_json)
+                .map_err(|error| {
+                PyValueError::new_err(format!(
+                    "invalid prepared faucet operation context JSON: {error}"
+                ))
+            })?;
+            verify_python_prepared_faucet_context_v1(&context, &signed, &semantic_hash)?;
+        }
+        _ => unreachable!("operation was closed above"),
+    }
+    signed_transaction_envelope_from_model_v1(&signed)
+}
 const PRIVACY_EXACT12_ACTION_DRIVER_SEED_DOMAIN_V1: &[u8] =
     b"iroha.taira.privacy_action_driver_seed.v1\0";
 fn privacy_exact12_action_driver_signing_seed_v1(
@@ -14494,6 +15171,14 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
+        verify_prepared_transaction_context_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        verify_account_onboarding_receipt_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         inspect_privacy_exact12_action_driver_transaction_context_v1_py,
         module
     )?)?;
@@ -14646,6 +15331,14 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         sorafs_orderbook_submission::decode_transaction_receipt_json_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_orderbook_submission::inspect_transaction_submission_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_orderbook_submission::verify_transaction_submission_receipt_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

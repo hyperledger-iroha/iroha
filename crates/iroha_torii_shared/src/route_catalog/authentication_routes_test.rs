@@ -316,16 +316,13 @@ named_route_policy_test!(
             .collect::<Vec<_>>();
         assert_eq!(
             commands.len(),
-            41,
+            38,
             "every SoraCloud POST must be classified"
         );
         assert_route_policies(commands.iter().map(|route| **route), ACCOUNT_AUTHENTICATED);
         for route in commands {
             let expected_effect = match route.stable_route_id() {
                 "application.soracloud_ciphertext_query_post" => RouteEffect::ReadOnly,
-                "application.soracloud_model_upload_private_execute_post" => {
-                    RouteEffect::ExpensiveCompute
-                }
                 _ => RouteEffect::Mutation,
             };
             assert_eq!(
@@ -352,16 +349,14 @@ named_route_policy_test!(
             application_api::SORACLOUD_MODEL_WEIGHT_STATUS_GET,
             application_api::SORACLOUD_MODEL_ARTIFACT_STATUS_GET,
             application_api::SORACLOUD_MODEL_UPLOAD_STATUS_GET,
-            application_api::SORACLOUD_MODEL_UPLOAD_PRIVATE_RECEIPTS_GET,
-            application_api::SORACLOUD_HF_STATUS_GET,
-            application_api::SORACLOUD_MODEL_HOST_STATUS_GET,
+            application_api::SORACLOUD_HF_SHARED_LEASE_STATUS_GET,
             application_api::SORACLOUD_AGENT_STATUS_GET,
             application_api::SORACLOUD_AGENT_MAILBOX_STATUS_GET,
             application_api::SORACLOUD_AGENT_AUTONOMY_STATUS_GET,
         ];
         assert_eq!(
             protected.len(),
-            16,
+            14,
             "every sensitive Soracloud GET must be classified"
         );
         assert_route_policies(
@@ -382,7 +377,6 @@ named_route_policy_test!(
         [
             application_api::SORACLOUD_SERVICES_BY_SERVICE_NAME_PUBLIC_DISCOVERY_GET,
             application_api::SORACLOUD_SERVICES_BY_SERVICE_NAME_REVISIONS_BY_SERVICE_VERSION_PUBLIC_DISCOVERY_GET,
-            application_api::SORACLOUD_MODEL_UPLOAD_ENCRYPTION_RECIPIENT_GET,
         ],
         PUBLIC_READ,
     );

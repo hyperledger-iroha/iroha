@@ -438,6 +438,7 @@ fn wait_for_manifest_status(
             status: Some(UaidManifestStatusFilter::All),
             limit: Some(16),
             offset: Some(0),
+            count_mode: None,
         };
         match client.get_uaid_manifests(uaid_literal, Some(query)) {
             Ok(response) => {
@@ -497,6 +498,7 @@ fn wait_for_all_peers_manifest_status(
             status: Some(UaidManifestStatusFilter::All),
             limit: Some(16),
             offset: Some(0),
+            count_mode: None,
         };
         for peer_index in pending.iter().copied() {
             let client = network.peers()[peer_index].client();

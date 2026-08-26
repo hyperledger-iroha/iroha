@@ -9,9 +9,8 @@ This template provides:
 - `dev.sh` to boot the frontend plus both local API processes
 - `build-and-sync.sh` to rebuild every artifact and refresh manifest hashes
 - `doctor.sh` to rebuild every artifact and fail-close on the split-app release contract
-- `release.sh` to rebuild, validate, and submit the full app release
-- `deploy.sh` to rebuild and submit the exact create-deployment flow
-- `upgrade.sh` to rebuild, resync, and submit the app-wide upgrade flow
+- `release.sh` to run the mandatory build, validation, publication, deploy,
+  authoritative-status, and live-verification flow
 
 ## Local dev
 
@@ -57,18 +56,17 @@ iroha soracloud app build --manifest ./app_manifest.json --dry-run
 iroha soracloud app build --manifest ./app_manifest.json
 ```
 
-The root scripts resolve `IROHA_BIN`, then `iroha` from `PATH`, then explicit source checkout settings (`IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`), so split-app workspaces can
-target a local `iroha_cli` checkout without requiring a globally installed
-wrapper. If you are driving the fallback through `IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`, set
-`IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to keep Cargo package and
-artifact state isolated from other local builds.
+Root scripts require `IROHA_BIN` to be an absolute path to an
+operator-qualified binary built from the same revision as the scaffold and
+`IROHA_BIN_SHA256` to match that exact file. They never resolve `iroha` from
+`PATH` or compile a source checkout while releasing. Contract build scripts
+likewise require an absolute same-revision `KOTO_BIN` and matching
+`KOTO_BIN_SHA256`.
 
 ## Doctor the release contract
 
 ```bash
 ./doctor.sh
-iroha soracloud app doctor --manifest ./app_manifest.json
-iroha soracloud app doctor --manifest ./app_manifest.json --dry-run
 iroha soracloud app doctor --manifest ./app_manifest.json
 ```
 
@@ -92,9 +90,6 @@ CID gateway URL template for the frontend.
 
 ```bash
 TORII_URL=http://127.0.0.1:8080 ./release.sh
-TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
 iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
 iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
 ```
@@ -103,11 +98,12 @@ iroha soracloud app release --manifest ./app_manifest.json --torii-url http://12
 bytecode, refreshes every manifest hash with `sync-manifests --app-manifest`,
 and then runs `iroha soracloud app doctor`.
 
-`release.sh` runs `doctor.sh` first and then executes
-`iroha soracloud app release` as the validated release flow without manual pin
-registration or SSH-only steps. `deploy.sh` runs `build-and-sync.sh` and then
-executes the distinct `iroha soracloud app deploy` create-deployment operation.
-The manifest-driven
+`release.sh` executes `iroha soracloud app release`, whose single V1 path runs
+the build and doctor checks before publication and submission. It then requires
+authoritative status reconciliation plus a real live 2xx health response. The
+CLI performs the publication without manual pin or SSH-only steps; no build
+bypass or direct app deploy exists.
+
 Each service entry in the app manifest carries a `bundle_file`, so the sync
 step refreshes both `container.bundle_hash` and the referenced service
 container hash before deploy.
@@ -117,21 +113,6 @@ Direct `iroha soracloud app release` responses keep the root
 `workspace_scripts`, the frontend publish projection, one manifest-derived
 child service entry per app service, and the top-level mixed `routes` split
 that `app plan` reports.
-
-## Upgrade the mixed app
-
-```bash
-TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
-```
-
-`upgrade.sh` runs `doctor.sh` first so the same rebuild and validation path
-applies before `iroha soracloud app upgrade`.
-
-Direct `iroha soracloud app upgrade` responses keep the same root
-manifest/hostname/workspace metadata, frontend, service, and top-level
-`routes` projection as app deploy.
 
 ## Inspect deployed status
 

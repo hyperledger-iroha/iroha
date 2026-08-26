@@ -14,8 +14,14 @@ class JoinKaigiInstruction(
 
     init {
         require(participant.isNotBlank()) { "participant must not be blank" }
-        if (nullifierIssuedAtMs != null) {
-            require(nullifierIssuedAtMs >= 0) { "nullifier issuedAtMs must be non-negative" }
+        require(commitmentAliasTag == null) {
+            "commitment aliasTag is off-chain only and must be omitted"
+        }
+        require(nullifierIssuedAtMs == null || nullifierIssuedAtMs == 0L) {
+            "nullifier issuedAtMs is off-chain only and must be zero when provided"
+        }
+        require(nullifierIssuedAtMs == null || nullifierDigest != null) {
+            "nullifier issuedAtMs requires nullifier digest"
         }
         if (proofBase64 != null) {
             KaigiInstructionUtils.requireBase64(proofBase64, "proof")
@@ -33,9 +39,6 @@ class JoinKaigiInstruction(
         args["participant"] = participant
         if (commitment != null) {
             args["commitment.commitment"] = commitment
-            if (commitmentAliasTag != null) {
-                args["commitment.alias_tag"] = commitmentAliasTag
-            }
         }
         if (nullifierDigest != null) {
             args["nullifier.digest"] = nullifierDigest
@@ -80,21 +83,27 @@ class JoinKaigiInstruction(
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): JoinKaigiInstruction {
+            KaigiInstructionUtils.requireAction(arguments, "JoinKaigi")
             val callId = KaigiInstructionUtils.parseCallId(arguments, "call")
             val participant = KaigiInstructionUtils.require(arguments, "participant")
 
             val commitmentValue = arguments["commitment.commitment"]
-            val aliasTag = if (commitmentValue != null) arguments["commitment.alias_tag"] else null
+            require(arguments["commitment.alias_tag"] == null) {
+                "commitment aliasTag is off-chain only and must be omitted"
+            }
 
             val nullifier = arguments["nullifier.digest"]
-            val nullifierIssuedAt = if (nullifier != null) {
-                KaigiInstructionUtils.parseOptionalUnsignedLong(
-                    arguments["nullifier.issued_at_ms"],
-                    "nullifier.issued_at_ms",
-                )
-            } else {
-                null
+            val parsedNullifierIssuedAt = KaigiInstructionUtils.parseOptionalUnsignedLong(
+                arguments["nullifier.issued_at_ms"],
+                "nullifier.issued_at_ms",
+            )
+            require(parsedNullifierIssuedAt == null || parsedNullifierIssuedAt == 0L) {
+                "nullifier issuedAtMs is off-chain only and must be zero when provided"
             }
+            require(parsedNullifierIssuedAt == null || nullifier != null) {
+                "nullifier issuedAtMs requires nullifier digest"
+            }
+            val nullifierIssuedAt = parsedNullifierIssuedAt.takeIf { nullifier != null }
 
             val proof = arguments["proof"]
 
@@ -102,7 +111,7 @@ class JoinKaigiInstruction(
                 callId = callId,
                 participant = participant,
                 commitment = commitmentValue,
-                commitmentAliasTag = aliasTag,
+                commitmentAliasTag = null,
                 nullifierDigest = nullifier,
                 nullifierIssuedAtMs = nullifierIssuedAt,
                 rosterRoot = arguments["roster_root"],

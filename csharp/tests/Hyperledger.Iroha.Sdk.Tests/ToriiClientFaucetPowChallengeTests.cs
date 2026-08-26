@@ -16,7 +16,7 @@ public sealed partial class ToriiClientTests
             "d5c0016a6345e8ea379da42aab1fdc16ba82756e19e0b63c48c14735e8caf7ef");
 
         Assert.Equal(
-            "46e77c4ed7d3215221044194e7750d91bcad7d38af58478eb14962552b7955a4",
+            "21e547302359214b28f0d1e0b04b6aeaf62a0e597dbad018d93ab0ce6af81a05",
             Convert.ToHexString(challenge).ToLowerInvariant());
     }
 

@@ -2,7 +2,7 @@
 use crate::{
     capability,
     config::{
-        AdaptiveDifficultyConfig, ConfigError, EmergencyThrottleConfig, PowConfig, QuotaConfig,
+        ConfigError, EmergencyThrottleConfig, PowConfig, QuotaConfig,
         RELAY_CONFIG_JSON_MAX_SEQUENCE_ELEMENTS_V1, RelayMode, SlowlorisConfig, TokenPolicySource,
         read_bounded_direct_regular_file,
     },
@@ -24,7 +24,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, RwLock,
-        atomic::{AtomicU8, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime},
 };
@@ -68,12 +68,13 @@ const fn emergency_throttle_preflight_limits_v1() -> json::JsonPreflightLimits {
 }
 /// Aggregated controls applied to inbound handshakes.
 pub struct DoSControls {
-    adaptive: AdaptiveDifficulty,
+    pow_params: Parameters,
     remote_limiter: Mutex<RateLimiter<IpAddr>>,
     descriptor_limiter: Mutex<Option<RateLimiter<[u8; 16]>>>,
     slowloris: SlowlorisDetector,
     require_pow: bool,
     puzzle: Option<PuzzlePolicy>,
+    signed_ticket_public_key: Option<Arc<Vec<u8>>>,
     token: Option<TokenPolicy>,
     replay_filter: Option<Mutex<ReplayFilter>>,
     metrics: Arc<Metrics>,
@@ -91,12 +92,9 @@ impl DoSControls {
         metrics: Arc<Metrics>,
         mode: RelayMode,
     ) -> Result<Self, ConfigError> {
-        let mut adaptive_cfg = config.adaptive.clone();
-        adaptive_cfg.apply_defaults();
         let quotas_cfg = config.quotas_for_mode(mode);
         let mut slowloris_cfg = config.slowloris.clone();
         slowloris_cfg.apply_defaults();
-        let adaptive = AdaptiveDifficulty::new(base_params, adaptive_cfg, Arc::clone(&metrics));
         let remote_params = RateLimitParams::from_remote(&quotas_cfg);
         let descriptor_params = RateLimitParams::from_descriptor(&quotas_cfg);
         let remote_limits = QuotaLimits::from(&remote_params);
@@ -109,12 +107,19 @@ impl DoSControls {
             }
             None => (None, Mutex::new(None)),
         };
-        metrics.set_pow_difficulty(adaptive.current_difficulty());
+        metrics.set_pow_difficulty(base_params.difficulty());
         metrics.set_active_remote_cooldowns(0);
         if descriptor_limits.is_none() {
             metrics.set_active_descriptor_cooldowns(0);
         }
         let puzzle_policy = puzzle.map(PuzzlePolicy::new);
+        let signed_ticket_public_key = config.signed_ticket_public_key()?.map(Arc::new);
+        if signed_ticket_public_key.is_some() && puzzle_policy.is_none() {
+            return Err(ConfigError::Puzzle(
+                "pow.signed_ticket_public_key_hex requires the mandatory Argon2 puzzle policy"
+                    .to_owned(),
+            ));
+        }
         let replay_filter = if config.replay_filter().is_enabled() {
             Some(Mutex::new(ReplayFilter::new(
                 config.replay_filter().bits_usize(),
@@ -129,12 +134,13 @@ impl DoSControls {
             .map(|cfg| EmergencyThrottle::new(cfg.clone()))
             .transpose()?;
         Ok(Self {
-            adaptive,
+            pow_params: base_params,
             remote_limiter,
             descriptor_limiter,
             slowloris: SlowlorisDetector::new(slowloris_cfg),
             require_pow: config.required,
             puzzle: puzzle_policy,
+            signed_ticket_public_key,
             token: token.map(TokenPolicy::from_source),
             replay_filter,
             metrics,
@@ -143,14 +149,18 @@ impl DoSControls {
             emergency,
         })
     }
-    /// Returns the current PoW parameters (possibly adapted).
+    /// Returns the static configured first-release PoW parameters.
     pub fn current_pow_parameters(&self) -> Parameters {
-        self.adaptive.current_parameters()
+        self.pow_params
     }
-    /// Returns the current puzzle parameters if a puzzle policy is enabled.
+    /// Returns the static configured first-release puzzle parameters.
     pub fn current_puzzle_parameters(&self) -> Option<puzzle::Parameters> {
         let policy = self.puzzle.as_ref()?;
-        Some(policy.current_parameters(self.adaptive.current_difficulty()))
+        Some(policy.parameters())
+    }
+    /// Return the authenticated signed-puzzle verifier key, when configured.
+    pub fn signed_ticket_public_key(&self) -> Option<Arc<Vec<u8>>> {
+        self.signed_ticket_public_key.as_ref().map(Arc::clone)
     }
     /// Returns the configured admission token policy, if any.
     pub(crate) fn has_token_policy(&self) -> bool {
@@ -207,14 +217,29 @@ impl DoSControls {
         now: Instant,
     ) -> Result<AttemptContext, Throttle> {
         let ip = remote.ip();
-        if let (Some(emergency), Some(commit_bytes)) = (&self.emergency, descriptor_commit)
-            && let Some(duration) = emergency.should_throttle(commit_bytes)
-        {
-            self.metrics.record_emergency_throttle();
+        if let Some(cooldown) = self.slowloris.unavailable_cooldown() {
             return Err(Throttle {
-                cooldown: duration,
-                reason: ThrottleReason::Emergency,
+                cooldown,
+                reason: ThrottleReason::RemoteQuota,
             });
+        }
+        if let Some(emergency) = &self.emergency {
+            if let Some(duration) = emergency.unavailable_cooldown() {
+                self.metrics.record_emergency_throttle();
+                return Err(Throttle {
+                    cooldown: duration,
+                    reason: ThrottleReason::Emergency,
+                });
+            }
+            if let Some(commit_bytes) = descriptor_commit
+                && let Some(duration) = emergency.should_throttle(commit_bytes)
+            {
+                self.metrics.record_emergency_throttle();
+                return Err(Throttle {
+                    cooldown: duration,
+                    reason: ThrottleReason::Emergency,
+                });
+            }
         }
         if let Err(cooldown) = self.check_remote_limit(ip, now) {
             return Err(Throttle {
@@ -224,7 +249,24 @@ impl DoSControls {
         }
         if let (Some(filter), Some(commit_bytes)) = (self.replay_filter.as_ref(), descriptor_commit)
         {
-            let mut guard = filter.lock().expect("replay filter mutex poisoned");
+            let mut guard = match filter.lock() {
+                Ok(guard) => guard,
+                Err(error) => {
+                    // Poisoned replay state is not trustworthy enough to make
+                    // an allow decision. Preserve the configured TTL for the
+                    // controlled throttle without observing the filter's
+                    // partially-mutated counters or entries.
+                    let cooldown = error.get_ref().ttl();
+                    warn!(
+                        %error,
+                        "descriptor replay-filter mutex poisoned; rejecting admission"
+                    );
+                    return Err(Throttle {
+                        cooldown,
+                        reason: ThrottleReason::DescriptorReplay,
+                    });
+                }
+            };
             let is_new = guard.observe(commit_bytes, now);
             if !is_new {
                 return Err(Throttle {
@@ -259,7 +301,6 @@ impl DoSControls {
     }
     /// Same as [`Self::record_success`] but accepts an explicit timestamp.
     pub fn record_success_at(&self, attempt: &AttemptContext, elapsed: Duration, now: Instant) {
-        self.adaptive.observe_success(now);
         self.observe_slowloris_success_at(attempt.remote, elapsed, now);
     }
     /// Records a PoW verification failure.
@@ -268,7 +309,6 @@ impl DoSControls {
     }
     /// Same as [`Self::record_pow_failure`] but accepts an explicit timestamp.
     pub fn record_pow_failure_at(&self, attempt: &AttemptContext, elapsed: Duration, now: Instant) {
-        self.adaptive.observe_pow_failure(now);
         self.observe_slowloris_success_at(attempt.remote, elapsed, now);
     }
     /// Records a timeout while reading the handshake.
@@ -304,34 +344,44 @@ impl DoSControls {
         if cooldown.is_zero() {
             return;
         }
-        if let Ok(mut limiter) = self.remote_limiter.lock() {
-            limiter.impose_cooldown(ip, now, cooldown);
-            let count = limiter.cooldown_count(now);
-            self.metrics.set_active_remote_cooldowns(count);
+        match self.remote_limiter.lock() {
+            Ok(mut limiter) => {
+                limiter.impose_cooldown(ip, now, cooldown);
+                let count = limiter.cooldown_count(now);
+                self.metrics.set_active_remote_cooldowns(count);
+            }
+            Err(error) => {
+                // Future admission checks reject while this mutex is poisoned;
+                // make the failed state update observable instead of silently
+                // pretending that the cooldown was installed.
+                warn!(%error, "remote quota mutex poisoned; cooldown was not recorded");
+            }
         }
     }
     fn check_remote_limit(&self, ip: IpAddr, now: Instant) -> Result<(), Duration> {
-        if let Ok(mut limiter) = self.remote_limiter.lock() {
-            let result = limiter.check(ip, now);
-            let count = limiter.cooldown_count(now);
-            self.metrics.set_active_remote_cooldowns(count);
-            result
-        } else {
-            Ok(())
-        }
+        let mut limiter = self.remote_limiter.lock().map_err(|error| {
+            warn!(%error, "remote quota mutex poisoned; rejecting admission");
+            self.remote_limits.cooldown()
+        })?;
+        let result = limiter.check(ip, now);
+        let count = limiter.cooldown_count(now);
+        self.metrics.set_active_remote_cooldowns(count);
+        result
     }
     fn check_descriptor_limit(&self, key: [u8; 16], now: Instant) -> Result<(), Duration> {
-        if let Ok(mut guard) = self.descriptor_limiter.lock() {
-            if let Some(limiter) = guard.as_mut() {
-                let result = limiter.check(key, now);
-                let count = limiter.cooldown_count(now);
-                self.metrics.set_active_descriptor_cooldowns(count);
-                result
-            } else {
-                self.metrics.set_active_descriptor_cooldowns(0);
-                Ok(())
-            }
+        let mut guard = self.descriptor_limiter.lock().map_err(|error| {
+            warn!(%error, "descriptor quota mutex poisoned; rejecting admission");
+            self.descriptor_limits
+                .as_ref()
+                .map_or_else(|| self.remote_limits.cooldown(), QuotaLimits::cooldown)
+        })?;
+        if let Some(limiter) = guard.as_mut() {
+            let result = limiter.check(key, now);
+            let count = limiter.cooldown_count(now);
+            self.metrics.set_active_descriptor_cooldowns(count);
+            result
         } else {
+            self.metrics.set_active_descriptor_cooldowns(0);
             Ok(())
         }
     }
@@ -384,16 +434,7 @@ fn descriptor_key(bytes: &[u8]) -> Option<[u8; 16]> {
     out.copy_from_slice(&digest.as_bytes()[..16]);
     Some(out)
 }
-/// Adaptive PoW difficulty controller.
-struct AdaptiveDifficulty {
-    enabled: bool,
-    base: Parameters,
-    current: AtomicU8,
-    cfg: AdaptiveDifficultyConfig,
-    window: Mutex<WindowStats>,
-    metrics: Arc<Metrics>,
-}
-/// Puzzle parameters tied to the current difficulty.
+/// Static first-release puzzle policy.
 struct PuzzlePolicy {
     base: puzzle::Parameters,
 }
@@ -401,8 +442,8 @@ impl PuzzlePolicy {
     fn new(base: puzzle::Parameters) -> Self {
         Self { base }
     }
-    fn current_parameters(&self, difficulty: u8) -> puzzle::Parameters {
-        self.base.with_difficulty(difficulty)
+    fn parameters(&self) -> puzzle::Parameters {
+        self.base
     }
 }
 /// Admission-token verifier plus local revocation set.
@@ -479,6 +520,7 @@ struct EmergencyThrottle {
     file_path: Option<PathBuf>,
     static_descriptors: HashSet<[u8; 16]>,
     state: RwLock<EmergencyThrottleState>,
+    unavailable: AtomicBool,
 }
 struct EmergencyThrottleState {
     last_loaded: Instant,
@@ -491,13 +533,10 @@ impl EmergencyThrottle {
         let refresh = Duration::from_secs(config.refresh_secs);
         let mut cooldown_secs = config.cooldown_secs.max(1);
         let (dynamic_descriptors, override_secs) = match &config.file_path {
-            Some(path) => match Self::load_document(path) {
-                Ok(doc) => (doc.descriptors, doc.cooldown_override_secs),
-                Err(err) => {
-                    warn!(path = %path.display(), %err, "failed to load emergency throttle document");
-                    (HashSet::new(), None)
-                }
-            },
+            Some(path) => {
+                let document = Self::load_document(path).map_err(ConfigError::EmergencyThrottle)?;
+                (document.descriptors, document.cooldown_override_secs)
+            }
             None => (HashSet::new(), None),
         };
         if let Some(secs) = override_secs
@@ -516,7 +555,21 @@ impl EmergencyThrottle {
             file_path: config.file_path.clone(),
             static_descriptors,
             state: RwLock::new(state),
+            unavailable: AtomicBool::new(false),
         })
+    }
+    fn mark_unavailable(&self) {
+        if !self.unavailable.swap(true, Ordering::AcqRel) {
+            warn!("emergency throttle state lock poisoned; rejecting future admission");
+        }
+    }
+    fn unavailable_cooldown(&self) -> Option<Duration> {
+        if self.state.is_poisoned() {
+            self.mark_unavailable();
+        }
+        self.unavailable
+            .load(Ordering::Acquire)
+            .then(|| self.cooldown_duration())
     }
     fn should_throttle(&self, descriptor_commit: &[u8]) -> Option<Duration> {
         let key = descriptor_key(descriptor_commit)?;
@@ -524,14 +577,26 @@ impl EmergencyThrottle {
             return Some(self.cooldown_duration());
         }
         if self.file_path.is_none() {
-            let state = self.state.read().expect("emergency state poisoned");
+            let state = match self.state.read() {
+                Ok(state) => state,
+                Err(_) => {
+                    self.mark_unavailable();
+                    return Some(self.cooldown_duration());
+                }
+            };
             if state.dynamic_descriptors.contains(&key) {
                 return Some(self.cooldown_duration());
             }
             return None;
         }
         let needs_reload = {
-            let state = self.state.read().expect("emergency state poisoned");
+            let state = match self.state.read() {
+                Ok(state) => state,
+                Err(_) => {
+                    self.mark_unavailable();
+                    return Some(self.cooldown_duration());
+                }
+            };
             if state.dynamic_descriptors.contains(&key) {
                 return Some(self.cooldown_duration());
             }
@@ -540,7 +605,13 @@ impl EmergencyThrottle {
         if !needs_reload {
             return None;
         }
-        let mut guard = self.state.write().expect("emergency state poisoned");
+        let mut guard = match self.state.write() {
+            Ok(guard) => guard,
+            Err(_) => {
+                self.mark_unavailable();
+                return Some(self.cooldown_duration());
+            }
+        };
         if guard.last_loaded.elapsed() >= self.refresh
             && let Err(err) = self.reload_locked(&mut guard)
         {
@@ -646,106 +717,6 @@ struct EmergencyThrottleDocument {
     descriptor_commit_hex: Vec<String>,
     #[norito(default)]
     cooldown_secs: Option<u64>,
-}
-struct WindowStats {
-    start: Instant,
-    successes: u32,
-    pow_failures: u32,
-}
-impl AdaptiveDifficulty {
-    fn new(base: Parameters, mut cfg: AdaptiveDifficultyConfig, metrics: Arc<Metrics>) -> Self {
-        let base_diff = base.difficulty();
-        if base_diff == 0 {
-            cfg.min_difficulty = 0;
-        }
-        if cfg.max_difficulty < cfg.min_difficulty {
-            cfg.max_difficulty = cfg.min_difficulty;
-        }
-        if cfg.max_difficulty == 0 {
-            cfg.enabled = false;
-        }
-        let current = if cfg.enabled {
-            base_diff.clamp(cfg.min_difficulty, cfg.max_difficulty)
-        } else {
-            base_diff
-        };
-        metrics.set_pow_difficulty(current);
-        Self {
-            enabled: cfg.enabled,
-            base,
-            current: AtomicU8::new(current),
-            cfg,
-            window: Mutex::new(WindowStats {
-                start: Instant::now(),
-                successes: 0,
-                pow_failures: 0,
-            }),
-            metrics,
-        }
-    }
-    fn current_parameters(&self) -> Parameters {
-        let difficulty = if self.enabled {
-            self.current.load(Ordering::Relaxed)
-        } else {
-            self.base.difficulty()
-        };
-        self.base.with_difficulty(difficulty)
-    }
-    fn current_difficulty(&self) -> u8 {
-        if self.enabled {
-            self.current.load(Ordering::Relaxed)
-        } else {
-            self.base.difficulty()
-        }
-    }
-    fn observe_success(&self, now: Instant) {
-        if !self.enabled {
-            return;
-        }
-        let mut guard = self.window.lock().expect("adaptive window mutex poisoned");
-        guard.successes = guard.successes.saturating_add(1);
-        Self::maybe_adjust(&self.cfg, &self.metrics, &self.current, &mut guard, now);
-    }
-    fn observe_pow_failure(&self, now: Instant) {
-        if !self.enabled {
-            return;
-        }
-        let mut guard = self.window.lock().expect("adaptive window mutex poisoned");
-        guard.pow_failures = guard.pow_failures.saturating_add(1);
-        Self::maybe_adjust(&self.cfg, &self.metrics, &self.current, &mut guard, now);
-    }
-    fn maybe_adjust(
-        cfg: &AdaptiveDifficultyConfig,
-        metrics: &Metrics,
-        current: &AtomicU8,
-        stats: &mut WindowStats,
-        now: Instant,
-    ) {
-        let elapsed = now.checked_duration_since(stats.start).unwrap_or_default();
-        if elapsed < Duration::from_secs(cfg.window_secs) {
-            return;
-        }
-        let mut updated = current.load(Ordering::Relaxed);
-        if stats.pow_failures >= cfg.pow_failure_threshold && updated < cfg.max_difficulty {
-            updated = updated
-                .saturating_add(cfg.increase_step)
-                .min(cfg.max_difficulty);
-        } else if stats.pow_failures == 0
-            && stats.successes >= cfg.success_threshold
-            && updated > cfg.min_difficulty
-        {
-            updated = updated
-                .saturating_sub(cfg.decrease_step)
-                .max(cfg.min_difficulty);
-        }
-        stats.start = now;
-        stats.successes = 0;
-        stats.pow_failures = 0;
-        if updated != current.load(Ordering::Relaxed) {
-            current.store(updated, Ordering::Relaxed);
-            metrics.set_pow_difficulty(updated);
-        }
-    }
 }
 /// Rate limiter entry.
 struct RateEntry {
@@ -1016,19 +987,50 @@ struct SlowlorisEntry {
 struct SlowlorisDetector {
     cfg: SlowlorisConfig,
     entries: Mutex<HashMap<IpAddr, SlowlorisEntry>>,
+    unavailable: AtomicBool,
 }
 impl SlowlorisDetector {
     fn new(cfg: SlowlorisConfig) -> Self {
         Self {
             cfg,
             entries: Mutex::new(HashMap::new()),
+            unavailable: AtomicBool::new(false),
         }
+    }
+    fn penalty(&self) -> Duration {
+        Duration::from_secs(self.cfg.penalty_secs)
+    }
+    fn mark_unavailable(&self) {
+        if !self.unavailable.swap(true, Ordering::AcqRel) {
+            warn!("slowloris mutex poisoned; rejecting future admission");
+        }
+    }
+    fn unavailable_cooldown(&self) -> Option<Duration> {
+        if !self.cfg.enabled {
+            return None;
+        }
+        if self.entries.is_poisoned() {
+            self.mark_unavailable();
+        }
+        self.unavailable
+            .load(Ordering::Acquire)
+            .then(|| self.penalty())
     }
     fn observe(&self, ip: IpAddr, event: SlowlorisEvent, now: Instant) -> Option<Duration> {
         if !self.cfg.enabled {
             return None;
         }
-        let mut guard = self.entries.lock().expect("slowloris mutex poisoned");
+        let mut guard = match self.entries.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                // The score map can no longer make a trustworthy allow or
+                // penalty decision. Latch the failure so every later begin is
+                // rejected, and apply the deterministic configured penalty to
+                // this just-completed attempt without inspecting poisoned data.
+                self.mark_unavailable();
+                return Some(self.penalty());
+            }
+        };
         let entry = guard.entry(ip).or_insert(SlowlorisEntry {
             window_start: now,
             score: 0,
@@ -1055,7 +1057,7 @@ impl SlowlorisDetector {
         if entry.score >= self.cfg.timeout_threshold {
             entry.score = 0;
             entry.window_start = now;
-            return Some(Duration::from_secs(self.cfg.penalty_secs));
+            return Some(self.penalty());
         }
         None
     }
@@ -1069,12 +1071,7 @@ mod tests {
     };
     use iroha_crypto::soranet::token::compute_issuer_fingerprint;
     use rand::{SeedableRng, rngs::StdRng};
-    use std::{
-        fs,
-        net::SocketAddr,
-        thread,
-        time::{Duration as StdDuration, UNIX_EPOCH},
-    };
+    use std::{fs, net::SocketAddr, time::UNIX_EPOCH};
     use tempfile::tempdir;
     fn base_params() -> Parameters {
         Parameters::new(8, Duration::from_secs(600), Duration::from_secs(30))
@@ -1116,83 +1113,6 @@ mod tests {
         assert!(!limiter.entries.contains_key(&overflow));
     }
     #[test]
-    fn adaptive_difficulty_respects_thresholds() {
-        let metrics = Arc::new(Metrics::new());
-        let cfg = AdaptiveDifficultyConfig {
-            min_difficulty: 4,
-            max_difficulty: 10,
-            pow_failure_threshold: 2,
-            success_threshold: 2,
-            window_secs: 1,
-            ..AdaptiveDifficultyConfig::default()
-        };
-        let adaptive = AdaptiveDifficulty::new(base_params(), cfg, metrics.clone());
-        let now = Instant::now();
-        adaptive.observe_pow_failure(now);
-        adaptive.observe_pow_failure(now);
-        thread::sleep(StdDuration::from_millis(1100));
-        adaptive.observe_pow_failure(Instant::now());
-        let diff = adaptive.current_difficulty();
-        assert!(diff >= 8);
-    }
-    #[test]
-    fn adaptive_difficulty_counters_saturate_without_panic() {
-        let metrics = Arc::new(Metrics::new());
-        let cfg = AdaptiveDifficultyConfig {
-            min_difficulty: 4,
-            max_difficulty: 10,
-            pow_failure_threshold: u32::MAX,
-            success_threshold: u32::MAX,
-            window_secs: 60,
-            ..AdaptiveDifficultyConfig::default()
-        };
-        let adaptive = AdaptiveDifficulty::new(base_params(), cfg, metrics);
-        let now = Instant::now();
-        {
-            let mut stats = adaptive.window.lock().expect("window lock");
-            stats.start = now;
-            stats.successes = u32::MAX;
-            stats.pow_failures = u32::MAX;
-        }
-        adaptive.observe_success(now);
-        adaptive.observe_pow_failure(now);
-        let stats = adaptive.window.lock().expect("window lock");
-        assert_eq!(stats.successes, u32::MAX);
-        assert_eq!(stats.pow_failures, u32::MAX);
-    }
-    #[test]
-    fn adaptive_difficulty_steps_saturate_before_clamp() {
-        let metrics = Metrics::new();
-        let cfg = AdaptiveDifficultyConfig {
-            min_difficulty: 3,
-            max_difficulty: u8::MAX,
-            pow_failure_threshold: 1,
-            success_threshold: 1,
-            window_secs: 1,
-            increase_step: 250,
-            decrease_step: 250,
-            ..AdaptiveDifficultyConfig::default()
-        };
-        let start = Instant::now();
-        let now = start + Duration::from_secs(2);
-        let current = AtomicU8::new(250);
-        let mut stats = WindowStats {
-            start,
-            successes: 0,
-            pow_failures: 1,
-        };
-        AdaptiveDifficulty::maybe_adjust(&cfg, &metrics, &current, &mut stats, now);
-        assert_eq!(current.load(Ordering::Relaxed), u8::MAX);
-        let current = AtomicU8::new(4);
-        let mut stats = WindowStats {
-            start,
-            successes: 1,
-            pow_failures: 0,
-        };
-        AdaptiveDifficulty::maybe_adjust(&cfg, &metrics, &current, &mut stats, now);
-        assert_eq!(current.load(Ordering::Relaxed), cfg.min_difficulty);
-    }
-    #[test]
     fn remote_quota_throttle_sets_active_gauge() {
         let metrics = Arc::new(Metrics::new());
         let mut pow_cfg = PowConfig {
@@ -1223,6 +1143,100 @@ mod tests {
         assert!(matches!(throttle.reason, ThrottleReason::RemoteQuota));
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.active_remote_cooldowns, 1);
+    }
+    #[test]
+    fn poisoned_remote_quota_fails_closed() {
+        let metrics = Arc::new(Metrics::new());
+        let mut pow_cfg = PowConfig {
+            required: true,
+            quotas: QuotaConfig {
+                per_remote_burst: 4,
+                cooldown_secs: 7,
+                ..QuotaConfig::default()
+            },
+            ..PowConfig::default()
+        };
+        pow_cfg.apply_defaults().expect("pow defaults");
+        let controls = Arc::new(
+            DoSControls::new(
+                base_params(),
+                &pow_cfg,
+                None,
+                None,
+                metrics,
+                RelayMode::Entry,
+            )
+            .expect("dos controls"),
+        );
+        let poison_target = Arc::clone(&controls);
+        let poisoned = std::thread::spawn(move || {
+            let _guard = poison_target
+                .remote_limiter
+                .lock()
+                .expect("remote quota lock");
+            panic!("poison remote quota state");
+        })
+        .join();
+        assert!(poisoned.is_err(), "poisoning worker must panic");
+
+        let remote: SocketAddr = "127.0.0.8:2000".parse().expect("remote addr");
+        let throttle = controls
+            .begin(remote, None)
+            .expect_err("poisoned remote quota must reject admission");
+        assert_eq!(throttle.reason, ThrottleReason::RemoteQuota);
+        assert_eq!(throttle.cooldown, Duration::from_secs(7));
+    }
+    #[test]
+    fn poisoned_slowloris_state_latches_fail_closed_admission() {
+        let metrics = Arc::new(Metrics::new());
+        let mut pow_cfg = PowConfig {
+            required: true,
+            quotas: QuotaConfig {
+                per_remote_burst: 4,
+                ..QuotaConfig::default()
+            },
+            slowloris: SlowlorisConfig {
+                enabled: true,
+                penalty_secs: 13,
+                ..SlowlorisConfig::default()
+            },
+            ..PowConfig::default()
+        };
+        pow_cfg.apply_defaults().expect("pow defaults");
+        let controls = Arc::new(
+            DoSControls::new(
+                base_params(),
+                &pow_cfg,
+                None,
+                None,
+                metrics,
+                RelayMode::Entry,
+            )
+            .expect("dos controls"),
+        );
+        let first_remote: SocketAddr = "127.0.0.11:2000".parse().expect("remote addr");
+        let attempt = controls
+            .begin(first_remote, None)
+            .expect("healthy slowloris state must admit");
+        let poison_target = Arc::clone(&controls);
+        let poisoned = std::thread::spawn(move || {
+            let _guard = poison_target
+                .slowloris
+                .entries
+                .lock()
+                .expect("slowloris lock");
+            panic!("poison slowloris state");
+        })
+        .join();
+        assert!(poisoned.is_err(), "poisoning worker must panic");
+
+        controls.record_timeout_at(&attempt, Duration::ZERO, Instant::now());
+        let next_remote: SocketAddr = "127.0.0.12:2000".parse().expect("remote addr");
+        let throttle = controls
+            .begin(next_remote, None)
+            .expect_err("poisoned slowloris state must reject future admission");
+        assert_eq!(throttle.reason, ThrottleReason::RemoteQuota);
+        assert_eq!(throttle.cooldown, Duration::from_secs(13));
     }
     #[test]
     fn descriptor_quota_throttle_sets_active_gauge() {
@@ -1262,6 +1276,50 @@ mod tests {
         assert_eq!(snapshot.active_descriptor_cooldowns, 1);
     }
     #[test]
+    fn poisoned_descriptor_quota_fails_closed() {
+        let metrics = Arc::new(Metrics::new());
+        let mut pow_cfg = PowConfig {
+            required: true,
+            quotas: QuotaConfig {
+                per_remote_burst: 4,
+                per_descriptor_burst: 2,
+                cooldown_secs: 9,
+                ..QuotaConfig::default()
+            },
+            ..PowConfig::default()
+        };
+        pow_cfg.apply_defaults().expect("pow defaults");
+        let controls = Arc::new(
+            DoSControls::new(
+                base_params(),
+                &pow_cfg,
+                None,
+                None,
+                metrics,
+                RelayMode::Entry,
+            )
+            .expect("dos controls"),
+        );
+        let poison_target = Arc::clone(&controls);
+        let poisoned = std::thread::spawn(move || {
+            let _guard = poison_target
+                .descriptor_limiter
+                .lock()
+                .expect("descriptor quota lock");
+            panic!("poison descriptor quota state");
+        })
+        .join();
+        assert!(poisoned.is_err(), "poisoning worker must panic");
+
+        let remote: SocketAddr = "127.0.0.9:2000".parse().expect("remote addr");
+        let descriptor = [0xC3; 32];
+        let throttle = controls
+            .begin(remote, Some(&descriptor))
+            .expect_err("poisoned descriptor quota must reject admission");
+        assert_eq!(throttle.reason, ThrottleReason::DescriptorQuota);
+        assert_eq!(throttle.cooldown, Duration::from_secs(9));
+    }
+    #[test]
     fn emergency_throttle_blocks_descriptor() {
         let metrics = Arc::new(Metrics::new());
         let descriptor = [0x42u8; 32];
@@ -1293,6 +1351,91 @@ mod tests {
         assert!(matches!(throttle.reason, ThrottleReason::Emergency));
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.throttled_emergency, 1);
+    }
+    #[test]
+    fn poisoned_emergency_state_latches_fail_closed_admission() {
+        let metrics = Arc::new(Metrics::new());
+        let mut pow_cfg = PowConfig {
+            required: true,
+            quotas: QuotaConfig {
+                per_remote_burst: 4,
+                ..QuotaConfig::default()
+            },
+            emergency: Some(EmergencyThrottleConfig {
+                descriptor_commit_hex: Vec::new(),
+                file_path: None,
+                cooldown_secs: 17,
+                refresh_secs: 60,
+            }),
+            ..PowConfig::default()
+        };
+        pow_cfg.apply_defaults().expect("pow defaults");
+        let controls = Arc::new(
+            DoSControls::new(
+                base_params(),
+                &pow_cfg,
+                None,
+                None,
+                Arc::clone(&metrics),
+                RelayMode::Entry,
+            )
+            .expect("dos controls"),
+        );
+        let poison_target = Arc::clone(&controls);
+        let poisoned = std::thread::spawn(move || {
+            let emergency = poison_target
+                .emergency
+                .as_ref()
+                .expect("configured emergency throttle");
+            let _guard = emergency.state.write().expect("emergency state lock");
+            panic!("poison emergency throttle state");
+        })
+        .join();
+        assert!(poisoned.is_err(), "poisoning worker must panic");
+
+        let remote: SocketAddr = "127.0.0.13:3030".parse().expect("remote addr");
+        let throttle = controls
+            .begin(remote, None)
+            .expect_err("poisoned emergency state must reject even without a descriptor");
+        assert_eq!(throttle.reason, ThrottleReason::Emergency);
+        assert_eq!(throttle.cooldown, Duration::from_secs(17));
+        assert_eq!(metrics.snapshot().throttled_emergency, 1);
+    }
+    #[test]
+    fn configured_emergency_file_must_load_at_startup() {
+        let directory = tempdir().expect("temporary directory");
+        let missing_path = directory.path().join("missing-emergency-policy.json");
+        let mut pow_cfg = PowConfig {
+            required: true,
+            emergency: Some(EmergencyThrottleConfig {
+                descriptor_commit_hex: Vec::new(),
+                file_path: Some(missing_path),
+                cooldown_secs: 19,
+                refresh_secs: 60,
+            }),
+            ..PowConfig::default()
+        };
+        pow_cfg.apply_defaults().expect("pow defaults");
+
+        let error = match DoSControls::new(
+            base_params(),
+            &pow_cfg,
+            None,
+            None,
+            Arc::new(Metrics::new()),
+            RelayMode::Entry,
+        ) {
+            Ok(_) => panic!("missing configured emergency document must prevent startup"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(
+                &error,
+                ConfigError::EmergencyThrottle(message)
+                    if message.contains("failed to read emergency throttle file")
+            ),
+            "unexpected startup error: {error}"
+        );
     }
     #[test]
     fn emergency_throttle_descriptor_count_accepts_exact_limit() {
@@ -1372,6 +1515,55 @@ mod tests {
         assert_eq!(throttle.cooldown, filter_ttl);
     }
     #[test]
+    fn poisoned_replay_filter_returns_controlled_throttle() {
+        let metrics = Arc::new(Metrics::new());
+        let mut pow_cfg = PowConfig {
+            required: true,
+            quotas: QuotaConfig {
+                per_remote_burst: 4,
+                ..QuotaConfig::default()
+            },
+            replay_filter: ReplayFilterConfig {
+                enabled: true,
+                bits: 512,
+                hash_functions: 3,
+                ttl_secs: 11,
+            },
+            ..PowConfig::default()
+        };
+        pow_cfg.apply_defaults().expect("pow defaults");
+        let controls = Arc::new(
+            DoSControls::new(
+                base_params(),
+                &pow_cfg,
+                None,
+                None,
+                metrics,
+                RelayMode::Entry,
+            )
+            .expect("dos controls"),
+        );
+        let poison_target = Arc::clone(&controls);
+        let poisoned = std::thread::spawn(move || {
+            let filter = poison_target
+                .replay_filter
+                .as_ref()
+                .expect("configured replay filter");
+            let _guard = filter.lock().expect("replay-filter lock");
+            panic!("poison replay-filter state");
+        })
+        .join();
+        assert!(poisoned.is_err(), "poisoning worker must panic");
+
+        let remote: SocketAddr = "127.0.0.10:4040".parse().expect("remote addr");
+        let descriptor = [0xD4; 32];
+        let throttle = controls
+            .begin(remote, Some(&descriptor))
+            .expect_err("poisoned replay filter must reject without panicking");
+        assert_eq!(throttle.reason, ThrottleReason::DescriptorReplay);
+        assert_eq!(throttle.cooldown, Duration::from_secs(11));
+    }
+    #[test]
     fn replay_filter_allows_reentry_after_ttl() {
         let ttl = Duration::from_millis(200);
         let mut filter = ReplayFilter::new(128, 3, ttl).expect("replay filter");
@@ -1402,7 +1594,7 @@ mod tests {
         }
     }
     #[test]
-    fn puzzle_parameters_follow_current_difficulty() {
+    fn puzzle_parameters_share_static_configured_difficulty() {
         let metrics = Arc::new(Metrics::new());
         let mut pow_cfg = PowConfig {
             required: true,

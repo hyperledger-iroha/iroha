@@ -508,13 +508,6 @@ fn validate_prepared_network_projection(
         path.display()
     );
     ensure!(
-        !config.network.tls_enabled
-            && config.network.tls_listen_address.is_none()
-            && !config.network.tls_inbound_only,
-        "prepared validator config {} uses P2P TLS listeners that require an explicit container certificate/address projection",
-        path.display()
-    );
-    ensure!(
         config.network.p2p_proxy.is_none() && !config.network.p2p_proxy_required,
         "prepared validator config {} uses a P2P proxy that would bypass the exact Compose committee topology",
         path.display()

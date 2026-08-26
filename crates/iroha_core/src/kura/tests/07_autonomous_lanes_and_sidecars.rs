@@ -392,7 +392,7 @@ fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
         Kura::decode_autonomous_lane_entrypoint_claim(&claim_path).expect("pending claim");
     assert_eq!(
         pending.state,
-        AutonomousLaneEntrypointClaimStateV3::ReleasePending(
+        AutonomousLaneEntrypointClaimStateV1::ReleasePending(
             retirement.digest().expect("retirement digest")
         ),
     );
@@ -403,7 +403,7 @@ fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
     );
     // Model a crash immediately after the slot tombstone reached disk but
     // before this particular claim replacement did.
-    let active = AutonomousLaneEntrypointClaimV3::new(&payload, payload.entrypoint_hashes[0]);
+    let active = AutonomousLaneEntrypointClaimV1::new(&payload, payload.entrypoint_hashes[0]);
     fs::write(
         &claim_path,
         norito::to_bytes(&active).expect("encode active claim"),
@@ -419,7 +419,7 @@ fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
         Kura::decode_autonomous_lane_entrypoint_claim(&claim_path).expect("repaired claim");
     assert_eq!(
         repaired.state,
-        AutonomousLaneEntrypointClaimStateV3::ReleasePending(
+        AutonomousLaneEntrypointClaimStateV1::ReleasePending(
             retirement.digest().expect("retirement digest")
         ),
     );
@@ -498,7 +498,7 @@ fn autonomous_entrypoint_claim_release_repairs_crash_and_allows_reproposal() {
         Kura::decode_autonomous_lane_entrypoint_claim(&claim_path).expect("released claim");
     assert_eq!(
         released.state,
-        AutonomousLaneEntrypointClaimStateV3::Released(
+        AutonomousLaneEntrypointClaimStateV1::Released(
             retirement.digest().expect("retirement digest")
         ),
     );
@@ -685,29 +685,14 @@ fn autonomous_claim_inventory_rejects_unexpected_artifacts_before_any_cleanup_or
     );
 }
 #[test]
-fn autonomous_entrypoint_claim_rejects_legacy_and_unknown_states() {
-    #[derive(Encode)]
-    struct LegacyClaimV2 {
-        version: u16,
-        network_id: iroha_data_model::NetworkId,
-        epoch: u64,
-        entrypoint_hash: Hash,
-        lane_id: LaneId,
-        dataspace_id: DataSpaceId,
-        lane_incarnation: Hash,
-        proposal_height: u64,
-        lane_block_height: u64,
-        origin_proposal_hash: Hash,
-        executable_payload_hash: Hash,
-        released_by_retirement_hash: Option<Hash>,
-    }
+fn autonomous_entrypoint_claim_rejects_unknown_state_tag() {
     #[derive(Encode)]
     enum UnknownClaimState {
         #[codec(index = 99)]
         Unknown,
     }
     #[derive(Encode)]
-    struct UnknownClaimV3 {
+    struct UnknownClaimFixture {
         version: u16,
         network_id: iroha_data_model::NetworkId,
         epoch: u64,
@@ -722,8 +707,8 @@ fn autonomous_entrypoint_claim_rejects_legacy_and_unknown_states() {
         state: UnknownClaimState,
     }
     let temp_dir = TempDir::new().expect("temp dir");
-    let network_id = test_network_id(b"legacy-claim-genesis");
-    let entrypoint_hash = Hash::new(b"legacy-claim-entrypoint");
+    let network_id = test_network_id(b"unknown-claim-state-genesis");
+    let entrypoint_hash = Hash::new(b"unknown-claim-state-entrypoint");
     let path =
         Kura::autonomous_lane_entrypoint_claim_path(temp_dir.path(), &network_id, &entrypoint_hash);
     fs::create_dir_all(path.parent().expect("claim parent")).expect("create claim parent");
@@ -732,35 +717,12 @@ fn autonomous_entrypoint_claim_rejects_legacy_and_unknown_states() {
         entrypoint_hash,
         LaneId::new(1),
         DataSpaceId::new(3),
-        Hash::new(b"legacy-claim-incarnation"),
-        Hash::new(b"legacy-claim-proposal"),
-        Hash::new(b"legacy-claim-payload"),
+        Hash::new(b"unknown-claim-state-incarnation"),
+        Hash::new(b"unknown-claim-state-proposal"),
+        Hash::new(b"unknown-claim-state-payload"),
     );
-    let legacy = LegacyClaimV2 {
-        version: 2,
-        network_id: common.0,
-        epoch: 4,
-        entrypoint_hash: common.1,
-        lane_id: common.2,
-        dataspace_id: common.3,
-        lane_incarnation: common.4,
-        proposal_height: 8,
-        lane_block_height: 5,
-        origin_proposal_hash: common.5,
-        executable_payload_hash: common.6,
-        released_by_retirement_hash: None,
-    };
-    fs::write(
-        &path,
-        norito::to_bytes(&legacy).expect("encode legacy claim"),
-    )
-    .expect("write legacy claim");
-    assert!(
-        Kura::decode_autonomous_lane_entrypoint_claim(&path).is_err(),
-        "version-two claim layouts must fail closed"
-    );
-    let unknown = UnknownClaimV3 {
-        version: AutonomousLaneEntrypointClaimV3::VERSION,
+    let unknown = UnknownClaimFixture {
+        version: AutonomousLaneEntrypointClaimV1::VERSION,
         network_id: common.0,
         epoch: 4,
         entrypoint_hash: common.1,
@@ -783,6 +745,196 @@ fn autonomous_entrypoint_claim_rejects_legacy_and_unknown_states() {
         "unknown claim state tags must fail closed"
     );
 }
+
+#[test]
+fn first_release_kura_enum_tags_are_contiguous_and_unknown_tags_fail_closed() {
+    fn assert_tag<T: Encode>(value: &T, expected: u32) {
+        let encoded = value.encode();
+        assert_eq!(
+            u32::from_le_bytes(encoded[..4].try_into().expect("four-byte enum tag")),
+            expected,
+            "unexpected tag for {}",
+            core::any::type_name::<T>(),
+        );
+    }
+
+    fn assert_unknown_tag_rejected<T: Decode>() {
+        let encoded = u32::MAX.encode();
+        let mut input = encoded.as_slice();
+        assert!(
+            <T as DecodeAll>::decode_all(&mut input).is_err(),
+            "unknown tag must fail for {}",
+            core::any::type_name::<T>(),
+        );
+    }
+
+    assert_tag(&PipelineRecoveryFormat::Current, 0);
+    assert_tag(&CertifiedLaneBlockArtifactFormat::Current, 0);
+    assert_tag(&AutonomousLaneBlockArtifactFormat::Current, 0);
+    assert_tag(&AutonomousLaneBlockViewStateFormat::Current, 0);
+    assert_tag(&LaneBlockArtifactFormat::Current, 0);
+    assert_tag(&LaneBlockExecutionInputArtifactFormat::Current, 0);
+    assert_tag(&LaneBlockExecutionPreflightArtifactFormat::Current, 0);
+    assert_tag(&LaneBlockApplicationReceiptArtifactFormat::Current, 0);
+    assert_tag(
+        &LaneBlockApplicationReceiptArtifactFormat::DirectExecution,
+        1,
+    );
+    assert_tag(
+        &LaneBlockApplicationReceiptArtifactFormat::MergeExecution,
+        2,
+    );
+
+    let stable = AutonomousLifecycleStableStateV1::terminal_outcome_pending_reservation();
+    let action = AutonomousLifecycleActionV1 {
+        action: 0,
+        actor: 0,
+        target: 0,
+    };
+    assert_tag(
+        &AutonomousLifecycleCursorPhaseV1::Prepared {
+            owner_generation: 1,
+            before: stable,
+            action,
+            after: stable,
+        },
+        0,
+    );
+    assert_tag(
+        &AutonomousLifecycleCursorPhaseV1::Live {
+            owner_generation: 1,
+            projection: stable,
+        },
+        1,
+    );
+    assert_tag(
+        &AutonomousLifecycleCursorPhaseV1::Crashed {
+            source_generation: 1,
+            observing_generation: 2,
+            before: stable,
+            after: stable,
+        },
+        2,
+    );
+    assert_tag(
+        &AutonomousLifecycleCursorPhaseV1::Terminal {
+            owner_generation: 2,
+            projection: stable,
+        },
+        3,
+    );
+
+    assert_tag(&AutonomousLaneEntrypointClaimStateV1::Active, 0);
+    assert_tag(
+        &AutonomousLaneEntrypointClaimStateV1::ReleasePending(Hash::new(
+            b"first-release pending claim tag",
+        )),
+        1,
+    );
+    assert_tag(
+        &AutonomousLaneEntrypointClaimStateV1::Released(Hash::new(
+            b"first-release released claim tag",
+        )),
+        2,
+    );
+
+    assert_tag(
+        &AutonomousLifecycleTerminalOutcomeSourceV1::CanonicalCarrier {
+            merge_epoch_id: 1,
+            merge_entry_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"first-release merge-entry tag",
+            )),
+            carrier_block_height: 1,
+            carrier_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"first-release carrier tag",
+            )),
+            application_receipt_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"first-release application-receipt tag",
+            )),
+        },
+        0,
+    );
+    assert_tag(
+        &AutonomousLifecycleTerminalOutcomeSourceV1::RetiredRelease {
+            retirement_hash: Hash::new(b"first-release retirement tag"),
+        },
+        1,
+    );
+    assert_tag(
+        &AutonomousLifecycleTerminalOutcomeStageV1::Pending {
+            reserved_terminal: stable,
+        },
+        0,
+    );
+    assert_tag(
+        &AutonomousLifecycleTerminalOutcomeStageV1::Complete { terminal: stable },
+        1,
+    );
+
+    for (source, expected) in [
+        (AutonomousLifecyclePayloadCustodySourceV1::ProducerQueue, 0),
+        (
+            AutonomousLifecyclePayloadCustodySourceV1::LosingRetirement,
+            1,
+        ),
+        (
+            AutonomousLifecyclePayloadCustodySourceV1::CanonicalCarrierRepair,
+            2,
+        ),
+        (
+            AutonomousLifecyclePayloadCustodySourceV1::ProtectedCarrierReceive,
+            3,
+        ),
+        (
+            AutonomousLifecyclePayloadCustodySourceV1::HistoricalQcResponse,
+            4,
+        ),
+        (
+            AutonomousLifecyclePayloadCustodySourceV1::CanonicalHistoricalRecoveryRecord,
+            5,
+        ),
+    ] {
+        assert_tag(&source, expected);
+    }
+
+    let global_block =
+        dummy_block_with_lane_payload_ownership(LaneId::new(1), DataSpaceId::new(1), 1);
+    let global_ownership = global_block
+        .execution_context()
+        .expect("tag fixture execution context")
+        .lane_payload_ownerships[0]
+        .clone();
+    assert_tag(
+        &LaneBlockExecutionSourceV1::GlobalBlock {
+            artifact: LaneBlockArtifact::new(global_block.hash(), global_ownership),
+        },
+        0,
+    );
+    assert_tag(
+        &LaneBlockExecutionSourceV1::AutonomousLane {
+            network_id: test_network_id(b"first-release execution-source tag"),
+            epoch: 1,
+            payload_hash: Hash::new(b"first-release execution payload tag"),
+        },
+        1,
+    );
+
+    assert_unknown_tag_rejected::<PipelineRecoveryFormat>();
+    assert_unknown_tag_rejected::<CertifiedLaneBlockArtifactFormat>();
+    assert_unknown_tag_rejected::<AutonomousLaneBlockArtifactFormat>();
+    assert_unknown_tag_rejected::<AutonomousLaneBlockViewStateFormat>();
+    assert_unknown_tag_rejected::<LaneBlockArtifactFormat>();
+    assert_unknown_tag_rejected::<LaneBlockExecutionInputArtifactFormat>();
+    assert_unknown_tag_rejected::<LaneBlockExecutionPreflightArtifactFormat>();
+    assert_unknown_tag_rejected::<LaneBlockApplicationReceiptArtifactFormat>();
+    assert_unknown_tag_rejected::<AutonomousLifecycleCursorPhaseV1>();
+    assert_unknown_tag_rejected::<AutonomousLaneEntrypointClaimStateV1>();
+    assert_unknown_tag_rejected::<AutonomousLifecycleTerminalOutcomeSourceV1>();
+    assert_unknown_tag_rejected::<AutonomousLifecycleTerminalOutcomeStageV1>();
+    assert_unknown_tag_rejected::<AutonomousLifecyclePayloadCustodySourceV1>();
+    assert_unknown_tag_rejected::<LaneBlockExecutionSourceV1>();
+}
+
 #[test]
 fn autonomous_lane_slot_retirement_rejects_conflict_and_incarnation_aba() {
     let (_temp_dir, config, lane_config) = autonomous_lane_storage_fixture();
@@ -1930,16 +2082,16 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
             ..ProductionInFlightFirstReleaseSessionProjection::default()
         },
         history: ProductionInFlightFirstReleaseHistoryProjection {
-            ever_queue_plan_v4: true,
-            ever_reservation_v5: true,
+            ever_queue_plan_v1: true,
+            ever_reservation_v1: true,
             ..ProductionInFlightFirstReleaseHistoryProjection::default()
         },
         decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
         release: ProductionInFlightFirstReleaseReleaseProjection::default(),
     };
     assert!(production_in_flight_first_release_state_kernel(initial));
-    let sign_cursor = |sequence, previous_cursor_hash, phase: AutonomousLifecycleCursorPhaseV2| {
-        let unsigned = AutonomousLifecycleCursorUnsignedV2::new(
+    let sign_cursor = |sequence, previous_cursor_hash, phase: AutonomousLifecycleCursorPhaseV1| {
+        let unsigned = AutonomousLifecycleCursorUnsignedV1::new(
             sequence,
             previous_cursor_hash,
             binding.clone(),
@@ -2001,7 +2153,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let unsound_pre_persistence_live = sign_cursor(
         1,
         None,
-        AutonomousLifecycleCursorPhaseV2::live(1, initial)
+        AutonomousLifecycleCursorPhaseV1::live(1, initial)
             .expect("construct deliberately pre-persistence live lifecycle phase"),
     );
     assert!(
@@ -2018,7 +2170,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let live_activated = sign_cursor(
         1,
         None,
-        AutonomousLifecycleCursorPhaseV2::live(1, activated)
+        AutonomousLifecycleCursorPhaseV1::live(1, activated)
             .expect("construct already-durable Kura live lifecycle phase"),
     );
     assert_eq!(
@@ -2072,7 +2224,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let prepared_execution_input = sign_cursor(
         2,
         Some(live_activated.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::prepared(1, persist_execution_input_transition)
+        AutonomousLifecycleCursorPhaseV1::prepared(1, persist_execution_input_transition)
             .expect("construct prepared PersistExecutionInput phase"),
     );
     assert!(
@@ -2102,7 +2254,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let live_execution_input = sign_cursor(
         3,
         Some(prepared_execution_input.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::live(1, execution_input_durable)
+        AutonomousLifecycleCursorPhaseV1::live(1, execution_input_durable)
             .expect("construct execution-input-durable live phase"),
     );
     let execution_input_read = kura
@@ -2148,7 +2300,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .expect("inventory includes local cursor");
     assert_eq!(
         inventory_cursor.phase_kind(),
-        AutonomousLifecycleCursorPhaseKindV2::Live
+        AutonomousLifecycleCursorPhaseKindV1::Live
     );
     assert_eq!(inventory_cursor.owner_generation(), 1);
     assert_eq!(inventory_cursor.source_generation(), None);
@@ -2252,7 +2404,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let prepared_crash = sign_cursor(
         4,
         Some(live_execution_input.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::prepared(2, crash_transition)
+        AutonomousLifecycleCursorPhaseV1::prepared(2, crash_transition)
             .expect("the production gate accepts the exact Crash transition"),
     );
     assert!(
@@ -2267,7 +2419,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let crashed_cursor = sign_cursor(
         4,
         Some(live_execution_input.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::crashed(1, 2, execution_input_durable, crashed)
+        AutonomousLifecycleCursorPhaseV1::crashed(1, 2, execution_input_durable, crashed)
             .expect("construct generation-aware crash phase"),
     );
     assert_eq!(
@@ -2289,7 +2441,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let prepared_recover = sign_cursor(
         5,
         Some(crashed_cursor.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::prepared(2, recover_transition)
+        AutonomousLifecycleCursorPhaseV1::prepared(2, recover_transition)
             .expect("construct exact Recover transition"),
     );
     let (_, recover_lease) = kura
@@ -2315,7 +2467,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let direct_live_three = sign_cursor(
         6,
         Some(prepared_recover.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::live(3, recovered)
+        AutonomousLifecycleCursorPhaseV1::live(3, recovered)
             .expect("construct deliberately direct recovered live phase"),
     );
     let (_, direct_live_lease) = kura
@@ -2330,7 +2482,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let takeover_three = sign_cursor(
         6,
         Some(prepared_recover.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::observed_crashed(2, 3, crashed)
+        AutonomousLifecycleCursorPhaseV1::observed_crashed(2, 3, crashed)
             .expect("transfer the already-crashed prepared state to generation three"),
     );
     let (_, takeover_three_lease) = kura
@@ -2359,7 +2511,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let takeover_four = sign_cursor(
         7,
         Some(takeover_three.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::observed_crashed(3, 4, crashed)
+        AutonomousLifecycleCursorPhaseV1::observed_crashed(3, 4, crashed)
             .expect("transfer an already-crashed observation again"),
     );
     let (_, takeover_four_lease) = kura
@@ -2379,7 +2531,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let prepared_recover_four = sign_cursor(
         8,
         Some(takeover_four.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::prepared(4, recover_transition)
+        AutonomousLifecycleCursorPhaseV1::prepared(4, recover_transition)
             .expect("construct generation-four Recover transition"),
     );
     let (_, recover_four_lease) = kura
@@ -2396,7 +2548,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let live_recovered = sign_cursor(
         9,
         Some(prepared_recover_four.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::live(4, recovered)
+        AutonomousLifecycleCursorPhaseV1::live(4, recovered)
             .expect("construct generation-four recovered live phase"),
     );
     assert_eq!(
@@ -2409,10 +2561,10 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         Some(&live_recovered),
         "successful Live recovery must return its exact durable cursor",
     );
-    let crashed_live_phase = AutonomousLifecycleCursorPhaseV2::live(4, crashed)
+    let crashed_live_phase = AutonomousLifecycleCursorPhaseV1::live(4, crashed)
         .expect("the state kernel alone admits a crashed-member projection");
     assert!(
-        AutonomousLifecycleCursorUnsignedV2::new(
+        AutonomousLifecycleCursorUnsignedV1::new(
             10,
             Some(live_recovered.cursor_hash()),
             binding.clone(),
@@ -2431,7 +2583,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     let prepared_recover_bypass = sign_cursor(
         10,
         Some(live_recovered.cursor_hash()),
-        AutonomousLifecycleCursorPhaseV2::prepared(4, recover_transition)
+        AutonomousLifecycleCursorPhaseV1::prepared(4, recover_transition)
             .expect("rebuild exact Recover phase for direct successor check"),
     );
     assert!(
@@ -2502,7 +2654,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         Some((1, proposal_height)),
     );
     assert!(
-        Kura::autonomous_lifecycle_cursor_coordinates("autonomous_lifecycle_v2_1_42.norito")
+        Kura::autonomous_lifecycle_cursor_coordinates("autonomous_lifecycle_v1_1_42.norito")
             .is_none(),
         "unpadded attempt coordinates are noncanonical",
     );
@@ -2511,7 +2663,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
             "autonomous_lifecycle_v1_00000000000000000001_00000000000000000042.norito"
         )
         .is_none(),
-        "the first-release V2 hard cut must never recognize a V1 cursor path",
+        "overpadded attempt coordinates are noncanonical",
     );
     assert!(
         Kura::autonomous_lifecycle_cursor_coordinates(&format!("{lifecycle_name}.tmp")).is_none(),
@@ -2519,7 +2671,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     assert!(
         Kura::autonomous_lifecycle_cursor_coordinates(
-            "autonomous_lifecycle_v2_00000000000000000000_00000000000000000042.norito"
+            "autonomous_lifecycle_v1_00000000000000000000_00000000000000000042.norito"
         )
         .is_none(),
         "zero lane heights are noncanonical",
@@ -2862,15 +3014,6 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     fs::write(&process_generation_path, &process_generation_bytes)
         .expect("restore process generation after local-peer drift rejection");
-    let obsolete_cursor_path = artifact_dir
-        .join("autonomous_lifecycle_v1_00000000000000000001_00000000000000000042.norito");
-    fs::write(&obsolete_cursor_path, &canonical_cursor_bytes)
-        .expect("write obsolete V1 cursor path fixture");
-    assert!(
-        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
-        "startup must fail closed on a legacy V1 cursor path instead of decoding it",
-    );
-    fs::remove_file(&obsolete_cursor_path).expect("remove obsolete V1 cursor path fixture");
     let mut exhausted_generation = process_generation_record.clone();
     exhausted_generation.body.generation = u64::MAX;
     exhausted_generation.record_hash = exhausted_generation

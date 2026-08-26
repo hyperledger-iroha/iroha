@@ -518,7 +518,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RevokeTwitterBinding {
 mod tests {
     use super::*;
     use crate::isi::test_support::{
-        assert_registry_decodes_type_name as assert_registry_decodes, assert_slice_roundtrip,
+        assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
     use crate::{
         nexus::UniversalAccountId,
@@ -751,19 +751,41 @@ mod tests {
         assert_framed_rejects_truncated(&revoke_binding);
     }
     #[test]
-    fn oracle_registry_decodes_type_names() {
+    fn oracle_registry_decodes_canonical_wire_ids() {
         let registry = crate::isi::InstructionRegistry::new()
-            .register_slice::<RegisterOracleFeed>()
-            .register_slice::<SubmitOracleObservation>()
-            .register_slice::<AggregateOracleFeed>()
-            .register_slice::<OpenOracleDispute>()
-            .register_slice::<ResolveOracleDispute>()
-            .register_slice::<ProposeOracleChange>()
-            .register_slice::<VoteOracleChangeStage>()
-            .register_slice::<RollbackOracleChange>()
-            .register_slice::<SubmitDefiOracleAttestation>()
-            .register_slice::<RecordTwitterBinding>()
-            .register_slice::<RevokeTwitterBinding>();
+            .register_with_id_slice::<RegisterOracleFeed>(
+                "iroha.instruction.v1::oracle::RegisterOracleFeed",
+            )
+            .register_with_id_slice::<SubmitOracleObservation>(
+                "iroha.instruction.v1::oracle::SubmitOracleObservation",
+            )
+            .register_with_id_slice::<AggregateOracleFeed>(
+                "iroha.instruction.v1::oracle::AggregateOracleFeed",
+            )
+            .register_with_id_slice::<OpenOracleDispute>(
+                "iroha.instruction.v1::oracle::OpenOracleDispute",
+            )
+            .register_with_id_slice::<ResolveOracleDispute>(
+                "iroha.instruction.v1::oracle::ResolveOracleDispute",
+            )
+            .register_with_id_slice::<ProposeOracleChange>(
+                "iroha.instruction.v1::oracle::ProposeOracleChange",
+            )
+            .register_with_id_slice::<VoteOracleChangeStage>(
+                "iroha.instruction.v1::oracle::VoteOracleChangeStage",
+            )
+            .register_with_id_slice::<RollbackOracleChange>(
+                "iroha.instruction.v1::oracle::RollbackOracleChange",
+            )
+            .register_with_id_slice::<SubmitDefiOracleAttestation>(
+                "iroha.instruction.v1::oracle::SubmitDefiOracleAttestation",
+            )
+            .register_with_id_slice::<RecordTwitterBinding>(
+                "iroha.instruction.v1::oracle::RecordTwitterBinding",
+            )
+            .register_with_id_slice::<RevokeTwitterBinding>(
+                "iroha.instruction.v1::oracle::RevokeTwitterBinding",
+            );
         let (
             register,
             submit,

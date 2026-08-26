@@ -28,11 +28,20 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
 
   private final KeystoreBackend backend;
   private final KeyGenParameters parameters;
+  private final IrohaKeyManager.KeySecurityPreference defaultPreference;
   private final Map<CacheKey, KeyAttestation> attestationCache = new ConcurrentHashMap<>();
 
   public KeystoreKeyProvider(final KeystoreBackend backend, final KeyGenParameters parameters) {
+    this(backend, parameters, null);
+  }
+
+  private KeystoreKeyProvider(
+      final KeystoreBackend backend,
+      final KeyGenParameters parameters,
+      final IrohaKeyManager.KeySecurityPreference defaultPreference) {
     this.backend = Objects.requireNonNull(backend, "backend");
     this.parameters = Objects.requireNonNull(parameters, "parameters");
+    this.defaultPreference = defaultPreference;
   }
 
   @Override
@@ -42,32 +51,30 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
 
   @Override
   public KeyPair generate(final String alias) throws KeyManagementException {
+    if (defaultPreference != null) {
+      return generateWithOutcome(alias, defaultPreference).keyPair();
+    }
     evictAttestations(alias);
-    final KeyGenerationResult result = backend.generate(alias, parameters);
-    if (parameters.requireStrongBox()
-        && !result.strongBoxBacked()
-        && !backend.metadata().strongBoxBacked()) {
+    if (parameters.requireStrongBox() && !backend.metadata().strongBoxBacked()) {
       throw new KeyManagementException("StrongBox required but backend is not StrongBox-capable");
     }
-    return result.keyPair();
+    final KeyGenerationResult result = backend.generate(alias, parameters);
+    final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcome =
+        outcomeFor(alias, result.keyPair());
+    if (parameters.requireStrongBox()
+        && outcome.route()
+            != org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.STRONGBOX) {
+      throw new KeyManagementException(
+          "StrongBox required but backend produced a weaker security level");
+    }
+    return outcome.keyPair();
   }
 
   @Override
   public KeyPair generate(
       final String alias, final org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference preference)
       throws KeyManagementException {
-    evictAttestations(alias);
-    final KeyGenParameters effective = parametersFor(preference);
-    if (effective.requireStrongBox() && !backend.metadata().strongBoxBacked()) {
-      throw new KeyManagementException("StrongBox required but backend is not StrongBox-capable");
-    }
-    final KeyGenerationResult result = backend.generate(alias, effective);
-    if (preference == org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference.STRONGBOX_REQUIRED
-        && !result.strongBoxBacked()) {
-      throw new KeyManagementException(
-          "StrongBox required but backend fell back to a weaker security level");
-    }
-    return result.keyPair();
+    return generateWithOutcome(alias, preference).keyPair();
   }
 
   @Override
@@ -76,21 +83,30 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
       throws KeyManagementException {
     evictAttestations(alias);
     final KeyGenParameters effective = parametersFor(preference);
+    if (effective.requireStrongBox() && !backend.metadata().strongBoxBacked()) {
+      throw new KeyManagementException("StrongBox required but backend is not StrongBox-capable");
+    }
     final KeyGenerationResult result = backend.generate(alias, effective);
+    final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcome =
+        outcomeFor(alias, result.keyPair());
+    enforcePreference(preference, outcome);
+    return outcome;
+  }
+
+  /** Returns the measured security route for an existing or newly generated key. */
+  @Override
+  public org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcomeFor(
+      final String alias, final KeyPair keyPair) throws KeyManagementException {
+    final KeyProviderMetadata keyMetadata = backend.keyMetadata(alias, keyPair);
     final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route route;
-    if (result.strongBoxBacked()) {
+    if (keyMetadata.strongBoxBacked()) {
       route = org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.STRONGBOX;
-    } else if (backend.metadata().hardwareBacked()) {
+    } else if (keyMetadata.hardwareBacked()) {
       route = org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.HARDWARE;
     } else {
       route = org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.SOFTWARE;
     }
-    if (preference == org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference.STRONGBOX_REQUIRED
-        && route != org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.STRONGBOX) {
-      throw new KeyManagementException(
-          "StrongBox required but backend fell back to a weaker security level");
-    }
-    return new org.hyperledger.iroha.android.crypto.KeyGenerationOutcome(result.keyPair(), route);
+    return new org.hyperledger.iroha.android.crypto.KeyGenerationOutcome(keyPair, route);
   }
 
   @Override
@@ -111,6 +127,26 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
   @Override
   public String name() {
     return backend.name();
+  }
+
+  private static void enforcePreference(
+      final org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference preference,
+      final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcome)
+      throws KeyManagementException {
+    if (preference
+            == org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference.STRONGBOX_REQUIRED
+        && outcome.route()
+            != org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.STRONGBOX) {
+      throw new KeyManagementException(
+          "StrongBox required but backend produced a weaker security level");
+    }
+    if (preference
+            == org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference.HARDWARE_REQUIRED
+        && outcome.route()
+            == org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.SOFTWARE) {
+      throw new KeyManagementException(
+          "Hardware-backed key required but backend produced a software key");
+    }
   }
 
   /** Returns attestation material recorded for {@code alias}, when available. */
@@ -200,12 +236,13 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
 
   /** Returns a copy of this provider with adjusted generation parameters. */
   public KeystoreKeyProvider withParameters(final KeyGenParameters parameters) {
-    return new KeystoreKeyProvider(this.backend, parameters);
+    return new KeystoreKeyProvider(this.backend, parameters, defaultPreference);
   }
 
   /** Returns a copy of this provider tuned for the requested security preference. */
-  public KeystoreKeyProvider withPreference(final org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference preference) {
-    return new KeystoreKeyProvider(this.backend, parametersFor(preference));
+  public KeystoreKeyProvider withPreference(
+      final org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference preference) {
+    return new KeystoreKeyProvider(this.backend, parametersFor(preference), preference);
   }
 
   private KeyGenParameters parametersFor(

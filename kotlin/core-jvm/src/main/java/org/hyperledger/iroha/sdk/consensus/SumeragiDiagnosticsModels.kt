@@ -88,7 +88,7 @@ data class SumeragiPipelineExecutionStatus(
     val quarantineExecutedTotal: BigInteger,
 )
 
-/** Permissionless-election diagnostics present only while NPoS mode is active. */
+/** Current permissionless-election schedule and PRF context while NPoS mode is active. */
 @Serializable
 data class SumeragiNposDiagnostics(
     @Serializable(with = SumeragiU64Serializer::class)
@@ -107,18 +107,6 @@ data class SumeragiNposDiagnostics(
     @Serializable(with = SumeragiU64Serializer::class)
     @SerialName("prf_view")
     val prfView: BigInteger,
-    @Serializable(with = SumeragiU64Serializer::class)
-    @SerialName("vrf_penalty_epoch")
-    val vrfPenaltyEpoch: BigInteger,
-    @Serializable(with = SumeragiU64Serializer::class)
-    @SerialName("vrf_committed_no_reveal_total")
-    val vrfCommittedNoRevealTotal: BigInteger,
-    @Serializable(with = SumeragiU64Serializer::class)
-    @SerialName("vrf_no_participation_total")
-    val vrfNoParticipationTotal: BigInteger,
-    @Serializable(with = SumeragiU64Serializer::class)
-    @SerialName("vrf_late_reveals_total")
-    val vrfLateRevealsTotal: BigInteger,
 ) {
     init {
         requireU64(epochLengthBlocks, "epochLengthBlocks")
@@ -134,14 +122,7 @@ data class SumeragiNposDiagnostics(
         require(epochSeed.size == 32 && epochSeed.all { it in 0..255 } && epochSeed.any { it != 0 }) {
             "NPoS diagnostics epoch seed must be an exact non-zero 32-byte vector"
         }
-        listOf(
-            prfHeight,
-            prfView,
-            vrfPenaltyEpoch,
-            vrfCommittedNoRevealTotal,
-            vrfNoParticipationTotal,
-            vrfLateRevealsTotal,
-        ).forEach { requireU64(it, "NPoS diagnostics counter") }
+        listOf(prfHeight, prfView).forEach { requireU64(it, "NPoS diagnostics PRF context") }
     }
 }
 

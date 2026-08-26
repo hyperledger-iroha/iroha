@@ -2,9 +2,7 @@ namespace Hyperledger.Iroha;
 
 public enum AccountAddressErrorCode
 {
-    CanonicalHashFailure,
     ChecksumMismatch,
-    InvalidDomainLabel,
     InvalidI105Base,
     InvalidI105Char,
     InvalidI105Digit,

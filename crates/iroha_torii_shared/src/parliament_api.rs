@@ -2224,9 +2224,7 @@ mod tests {
             Some(4)
         );
         assert_eq!(
-            progress
-                .get("corpus_open")
-                .and_then(json::Value::as_str),
+            progress.get("corpus_open").and_then(json::Value::as_str),
             Some(
                 "accepted_ballot_prefix_count is the proof-verified next contiguous offset and is strictly less than frozen_survivor_count"
             )

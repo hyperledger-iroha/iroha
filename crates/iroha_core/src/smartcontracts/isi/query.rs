@@ -71,43 +71,6 @@ use std::{
     ops::ControlFlow,
     sync::{Arc, Mutex, Weak},
 };
-#[inline]
-fn ensure_query_registry_initialized() {
-    // Initialize the global query registry once. Safe to call multiple times:
-    // iroha_data_model uses `OnceLock` and ignores subsequent sets.
-    use iroha_data_model as dm;
-    use iroha_data_model::query as dm_query;
-    dm_query::set_query_registry(dm::query_registry![
-        dm_query::ErasedIterQuery<dm::domain::Domain>,
-        dm_query::ErasedIterQuery<dm::account::Account>,
-        dm_query::ErasedIterQuery<dm::account::AccountId>,
-        dm_query::ErasedIterQuery<dm::asset::value::Asset>,
-        dm_query::ErasedIterQuery<dm::asset::definition::AssetDefinition>,
-        dm_query::ErasedIterQuery<dm::repo::RepoAgreement>,
-        dm_query::ErasedIterQuery<dm::nft::Nft>,
-        dm_query::ErasedIterQuery<dm::rwa::Rwa>,
-        dm_query::ErasedIterQuery<dm::role::Role>,
-        dm_query::ErasedIterQuery<dm::role::RoleId>,
-        dm_query::ErasedIterQuery<dm::peer::PeerId>,
-        dm_query::ErasedIterQuery<dm::trigger::TriggerId>,
-        dm_query::ErasedIterQuery<dm::trigger::Trigger>,
-        dm_query::ErasedIterQuery<dm_query::CommittedTransaction>,
-        dm_query::ErasedIterQuery<dm::block::SignedBlock>,
-        dm_query::ErasedIterQuery<dm::block::BlockHeader>,
-        dm_query::ErasedIterQuery<dm::proof::ProofRecord>,
-        dm_query::ErasedIterQuery<dm::oracle::FeedConfig>,
-        dm_query::ErasedIterQuery<dm::events::data::oracle::FeedEventRecord>,
-        dm_query::ErasedIterQuery<dm::oracle::OracleProviderStatsRecord>,
-        dm_query::ErasedIterQuery<dm::oracle::OracleDispute>,
-        dm_query::ErasedIterQuery<dm::oracle::OracleChangeProposal>,
-        dm_query::ErasedIterQuery<dm::oracle::TwitterBindingRecord>,
-        dm_query::ErasedIterQuery<dm::oracle::DefiOracleAttestation>,
-        dm_query::ErasedIterQuery<dm::permission::Permission>,
-        dm_query::ErasedIterQuery<dm::escrow::AssetEscrowRecord>,
-        dm_query::ErasedIterQuery<dm::nexus::FeeSponsorProgram>,
-        dm_query::ErasedIterQuery<dm::nexus::FeeSponsorProgramId>,
-    ]);
-}
 /// Allows to generalize retrieving the metadata key for all the query output types
 pub trait SortableQueryOutput {
     /// Type used for deterministic tie-breaking when metadata sort keys are equal.

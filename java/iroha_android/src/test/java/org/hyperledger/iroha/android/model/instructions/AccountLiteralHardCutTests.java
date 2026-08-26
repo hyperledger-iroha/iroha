@@ -21,7 +21,7 @@ public final class AccountLiteralHardCutTests {
     tests.accountBuildersRejectDomainSuffixedLiterals();
     tests.accountTargetInstructionsRejectDomainSuffixedLiterals();
     tests.persistCouncilRejectsDomainSuffixedMembers();
-    tests.uaidPortfolioQueryAcceptsAssetSelectorsAndRejectsMalformedSelectors();
+    tests.uaidPortfolioQueryUsesOnlyExactAssetId();
     tests.connectApprovePreimageRejectsDomainSuffix();
     System.out.println("[IrohaAndroid] AccountLiteralHardCutTests passed.");
   }
@@ -72,19 +72,15 @@ public final class AccountLiteralHardCutTests {
   }
 
   @Test
-  public void uaidPortfolioQueryAcceptsAssetSelectorsAndRejectsMalformedSelectors() {
+  public void uaidPortfolioQueryUsesOnlyExactAssetId() {
     final String asset = "61CtjvNd9T3THAR65GsMVHr82Bjc";
-    final UaidPortfolioQuery query =
-        UaidPortfolioQuery.builder().setAsset(asset).setScope("global").build();
-    final String normalizedAsset = query.toQueryParameters().get("asset");
-    final String normalizedScope = query.toQueryParameters().get("scope");
-    assert asset.equals(normalizedAsset) : "asset selector must be preserved";
-    assert "global".equals(normalizedScope) : "scope must be preserved";
+    final UaidPortfolioQuery query = UaidPortfolioQuery.builder().setAssetId(asset).build();
+    final String normalizedAsset = query.toQueryParameters().get("asset_id");
+    assert asset.equals(normalizedAsset) : "asset_id must be preserved";
+    assert query.toQueryParameters().size() == 1 : "only asset_id may be emitted";
 
-    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAsset("not:an-asset"));
-    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAsset(" " + asset));
-    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAsset(asset + " "));
-    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAsset(asset).setScope(" global"));
+    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAssetId(" " + asset));
+    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAssetId(asset + " "));
   }
 
   @Test

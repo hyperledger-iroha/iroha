@@ -1,0 +1,48 @@
+{
+  "label": "smoke_video",
+  "payload_hex": "5461696b61692064657465726d696e697374696320736d6f6b6520766964656f207061796c6f61642e0a",
+  "args": {
+    "event_id": "smoke-event",
+    "stream_id": "stage-a",
+    "rendition_id": "1080p",
+    "track_kind": "video",
+    "codec": "av1-main",
+    "bitrate_kbps": 8000,
+    "resolution": "1920x1080",
+    "segment_sequence": 42,
+    "segment_start_pts": 3600000,
+    "segment_duration": 2000000,
+    "wallclock_unix_ms": 1702560000000,
+    "manifest_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+    "storage_ticket": "2222222222222222222222222222222222222222222222222222222222222222",
+    "ingest_latency_ms": 215,
+    "live_edge_drift_ms": -33,
+    "ingest_node_id": "ingest-smoke-01"
+  },
+  "expected": {
+    "car_digest_hex": "a92c0ee59f533b289bad2d4ad1f9bd04ab587332244c35fb16b939146609685b",
+    "car_size_bytes": 416,
+    "chunk_root_hex": "e069982517110d8c8904808b1bab83b982900f1f980aa2e6b14722342b072787",
+    "chunk_count": 1,
+    "cid_multibase": "bafkr6ifjfqholh2thmujxljnjli7tpievnmhgmrejq27wfvzhekgmclilm",
+    "indexes": {
+      "segment_start_pts": 3600000
+    },
+    "ingest_fields": {
+      "taikai.event_id": "smoke-event",
+      "taikai.stream_id": "stage-a",
+      "taikai.rendition_id": "1080p",
+      "taikai.track.kind": "video",
+      "taikai.track.codec": "av1-main",
+      "taikai.track.bitrate_kbps": "8000",
+      "taikai.track.resolution": "1920x1080",
+      "taikai.segment.sequence": "42",
+      "taikai.segment.start_pts": "3600000",
+      "taikai.segment.duration": "2000000",
+      "taikai.wallclock_unix_ms": "1702560000000",
+      "taikai.instrumentation.ingest_latency_ms": "215",
+      "taikai.instrumentation.live_edge_drift_ms": "-33",
+      "taikai.instrumentation.ingest_node_id": "ingest-smoke-01"
+    }
+  }
+}

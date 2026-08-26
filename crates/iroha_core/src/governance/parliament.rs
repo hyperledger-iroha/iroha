@@ -417,19 +417,7 @@ enum ParliamentPulseConsumerV1 {
 }
 
 /// One globally unique threshold-beacon output slot.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Encode,
-    Decode,
-    JsonSerialize,
-    JsonDeserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 struct ParliamentPulseSlotV1 {
     beacon_session_id: BeaconSessionId,
     height: u64,
@@ -441,6 +429,69 @@ impl ParliamentPulseSlotV1 {
             beacon_session_id,
             height,
         }
+    }
+
+    fn canonical_json_key(&self) -> String {
+        format!(
+            "{}:{}",
+            hex::encode(self.beacon_session_id.as_bytes()),
+            self.height
+        )
+    }
+
+    fn from_canonical_json_key(encoded: &str) -> Result<Self, norito::json::Error> {
+        let (session_hex, height_text) = encoded.split_once(':').ok_or_else(|| {
+            norito::json::Error::Message(
+                "Parliament pulse-slot key must contain one session/height separator".into(),
+            )
+        })?;
+        let session_bytes: [u8; 32] = hex::decode(session_hex)
+            .map_err(|error| {
+                norito::json::Error::Message(format!(
+                    "invalid Parliament pulse-slot session hex: {error}"
+                ))
+            })?
+            .try_into()
+            .map_err(|_| {
+                norito::json::Error::Message(
+                    "Parliament pulse-slot session must contain exactly 32 bytes".into(),
+                )
+            })?;
+        let height = height_text.parse::<u64>().map_err(|error| {
+            norito::json::Error::Message(format!("invalid Parliament pulse-slot height: {error}"))
+        })?;
+        if session_hex != hex::encode(session_bytes) || height_text != height.to_string() {
+            return Err(norito::json::Error::Message(
+                "Parliament pulse-slot key must use canonical lowercase hex and decimal".into(),
+            ));
+        }
+        Ok(Self::new(BeaconSessionId::new(session_bytes), height))
+    }
+}
+
+impl norito::json::JsonSerialize for ParliamentPulseSlotV1 {
+    fn json_serialize(&self, out: &mut String) {
+        norito::json::write_json_string(&self.canonical_json_key(), out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(&self.canonical_json_key(), out)
+    }
+}
+
+impl norito::json::JsonDeserialize for ParliamentPulseSlotV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let encoded = <String as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        Self::from_canonical_json_key(&encoded)
+    }
+
+    fn json_from_map_key(key: &str) -> Result<Self, norito::json::Error> {
+        Self::from_canonical_json_key(key)
     }
 }
 
@@ -8449,6 +8500,28 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn parliament_pulse_slot_uses_one_canonical_json_map_key() {
+        let slot = ParliamentPulseSlotV1::new(beacon_session(13), 20);
+        let map = BTreeMap::from([(slot, pulse_id(14))]);
+        let json = norito::json::to_json(&map).expect("encode pulse-slot map");
+        assert!(json.contains(&format!("\"{}:20\"", "0d".repeat(32))));
+        let decoded: BTreeMap<ParliamentPulseSlotV1, BeaconPulseId> =
+            norito::json::from_json(&json).expect("decode pulse-slot map");
+        assert_eq!(decoded, map);
+
+        assert!(
+            ParliamentPulseSlotV1::from_canonical_json_key(&format!("{}:20", "0D".repeat(32)))
+                .is_err(),
+            "uppercase session hex must not alias the canonical map key"
+        );
+        assert!(
+            ParliamentPulseSlotV1::from_canonical_json_key(&format!("{}:020", "0d".repeat(32)))
+                .is_err(),
+            "zero-padded heights must not alias the canonical map key"
+        );
+    }
+
+    #[test]
     fn reducer_norito_roundtrip_is_deterministic_and_revalidated() {
         let mut fixture = opened_policy_ballot(3, 3);
         finalize_policy(&mut fixture, 2, 1, 0);
@@ -8468,15 +8541,7 @@ pub(crate) mod tests {
         );
         let json = norito::json::to_json(&decoded).expect("encode reducer state as Norito JSON");
         let json_decoded: ParliamentAttemptStateV1 =
-            norito::json::from_json(&json).unwrap_or_else(|error| {
-                let bytes = json.as_bytes();
-                let start = 12_200.min(bytes.len());
-                let end = 12_340.min(bytes.len());
-                panic!(
-                    "decode reducer state from Norito JSON: {error}; nearby bytes: {}",
-                    String::from_utf8_lossy(&bytes[start..end]).escape_debug()
-                )
-            });
+            norito::json::from_json(&json).expect("decode reducer state from Norito JSON");
         json_decoded
             .validate()
             .expect("JSON-decoded state validates");

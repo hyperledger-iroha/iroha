@@ -57,7 +57,7 @@ fn status_and_consensus_envelope_json_reject_unknown_nested_fields() {
 )]
 fn current_consensus_json_requires_explicit_nullable_slots() {
     macro_rules! assert_required_nullable_field {
-        ($ty:ty, $value:expr, $field:literal) => {{
+        ($ty:ty, $value:expr, $field:expr) => {{
             let canonical: $ty = $value;
             let value = norito::json::to_value(&canonical).expect("serialize current layout");
             assert!(
@@ -81,7 +81,7 @@ fn current_consensus_json_requires_explicit_nullable_slots() {
             assert!(
                 error
                     .to_string()
-                    .contains(concat!("missing field `", $field, "`")),
+                    .contains(&format!("missing field `{}`", $field)),
                 "unexpected missing-field diagnostic for `{}`: {error}",
                 $field
             );
@@ -187,6 +187,161 @@ fn current_consensus_json_requires_explicit_nullable_slots() {
             highest_prepare_qc: None,
         },
         "highest_prepare_qc"
+    );
+
+    let status = status(&context);
+    for field in [
+        "locked_prepare_qc",
+        "highest_prepare_qc",
+        "last_timeout_certificate",
+        "pending_persistence_id",
+        "last_committed_subject",
+        "last_commit_qc",
+    ] {
+        assert_required_nullable_field!(SumeragiV2Status, status.clone(), field);
+    }
+    for field in ["last_progress", "blocker"] {
+        assert_required_nullable_field!(
+            SumeragiV2LivenessStatus,
+            SumeragiV2LivenessStatus::default(),
+            field
+        );
+    }
+    let timeout_intent = SumeragiV2OutboundIntentStatus {
+        kind: SumeragiV2OutboundIntentKind::TimeoutVote,
+        round,
+        proposal_round: None,
+        subject: None,
+        execution_commitment: None,
+        stage: SumeragiV2OutboundIntentStage::Sent,
+    };
+    for field in ["proposal_round", "subject", "execution_commitment"] {
+        assert_required_nullable_field!(SumeragiV2OutboundIntentStatus, timeout_intent, field);
+    }
+    assert_required_nullable_field!(
+        SumeragiV2QueueStatus,
+        SumeragiV2QueueStatus {
+            queue: SumeragiV2QueueKind::RuntimeProgress,
+            depth: 0,
+            capacity: 1,
+            oldest_age_ms: None,
+            service_debt: 0,
+        },
+        "oldest_age_ms"
+    );
+    let qc_response = SumeragiV2QcResponse::default();
+    assert_required_nullable_field!(SumeragiV2QcResponse, qc_response, "highest_prepare_qc");
+    assert_required_nullable_field!(SumeragiV2QcResponse, qc_response, "locked_prepare_qc");
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn sumeragi_v2_status_json_rejects_every_omitted_current_field() {
+    macro_rules! assert_fields_required {
+        ($ty:ty, $value:expr, [$($field:literal),+ $(,)?]) => {{
+            let canonical: $ty = $value;
+            let value = norito::json::to_value(&canonical).expect("serialize current status layout");
+            $(
+                let mut missing = value.clone();
+                missing
+                    .as_object_mut()
+                    .expect("current status layout is an object")
+                    .remove($field);
+                let error = norito::json::from_value::<$ty>(missing)
+                    .expect_err("omitted current status field must reject");
+                assert!(
+                    error.to_string().contains(concat!("missing field `", $field, "`")),
+                    "unexpected missing-field diagnostic for `{}`: {error}",
+                    $field
+                );
+            )+
+        }};
+    }
+
+    let context = context(&[1, 1, 1, 1]);
+    assert_fields_required!(
+        SumeragiV2Status,
+        status(&context),
+        [
+            "protocol_version",
+            "node_fingerprint",
+            "build_fingerprint",
+            "config_fingerprint",
+            "restart_required",
+            "height_context_id",
+            "height",
+            "view",
+            "phase",
+            "leader",
+            "locked_prepare_qc",
+            "highest_prepare_qc",
+            "last_timeout_certificate",
+            "body_state",
+            "pending_persistence_id",
+            "last_committed_height",
+            "last_committed_subject",
+            "height_context",
+            "last_commit_qc",
+            "liveness",
+        ]
+    );
+    assert_fields_required!(
+        SumeragiV2LivenessStatus,
+        SumeragiV2LivenessStatus::default(),
+        [
+            "generation",
+            "prepare_quorums",
+            "commit_quorums",
+            "timeout_quorums",
+            "outbound_intents",
+            "work",
+            "queues",
+            "last_progress",
+            "no_progress_age_ms",
+            "blocker",
+            "ignore_counts",
+        ]
+    );
+    assert_fields_required!(
+        SumeragiV2OutboundIntentStatus,
+        SumeragiV2OutboundIntentStatus {
+            kind: SumeragiV2OutboundIntentKind::TimeoutVote,
+            round: round(&context, 0),
+            proposal_round: None,
+            subject: None,
+            execution_commitment: None,
+            stage: SumeragiV2OutboundIntentStage::Sent,
+        },
+        [
+            "kind",
+            "round",
+            "proposal_round",
+            "subject",
+            "execution_commitment",
+            "stage",
+        ]
+    );
+    assert_fields_required!(
+        SumeragiV2QueueStatus,
+        SumeragiV2QueueStatus {
+            queue: SumeragiV2QueueKind::RuntimeProgress,
+            depth: 0,
+            capacity: 1,
+            oldest_age_ms: None,
+            service_debt: 0,
+        },
+        [
+            "queue",
+            "depth",
+            "capacity",
+            "oldest_age_ms",
+            "service_debt",
+        ]
+    );
+    assert_fields_required!(
+        SumeragiV2QcResponse,
+        SumeragiV2QcResponse::default(),
+        ["highest_prepare_qc", "locked_prepare_qc"]
     );
 }
 #[cfg(feature = "json")]

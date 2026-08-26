@@ -18,9 +18,9 @@ summary: Operational plan for bringing the core Nexus validator cluster online b
 ## Network Environments
 - Operate two Nexus environments with distinct network prefixes:
 - **Sora Nexus (mainnet)** – production network prefix `nexus`, hosting canonical governance and SoraFS/SoraNet piggyback services (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Taira (testnet)** – staging network prefix `taira`, mirroring mainnet configuration for integration testing and pre-release validation (public Sumeragi-v2 chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`; the pre-v2 UUID is archived).
+- **Sora Taira (testnet)** – persistent public testnet with prefix `taira`, mirroring mainnet configuration for integration testing and pre-release validation (chain UUID `fc56984b-2be7-431d-840e-21514d1883f0`).
 - Maintain separate genesis files, governance keys, and infrastructure footprints for each environment. Taira acts as the proving ground for all SoraFS/SoraNet rollouts before promotion to Nexus.
-- Operator-owned deployment pipelines should deploy to Taira first, execute automated smoke tests, and require manual promotion to Nexus once checks pass; this repository does not ship a public-network deployment pipeline.
+- Operator-owned release pipelines should deploy to Taira first, execute automated smoke tests, and require manual promotion to Nexus once checks pass. This repository ships the durable `iroha taira public-reset` coordinator for authorized reset mutations; ordinary public-node joining remains a separate signed-bootstrap workflow.
 - Reference configuration bundles live under `configs/soranexus/nexus/` (mainnet) and `configs/soranexus/taira/` (testnet). Both contain `config.toml` and `genesis.json`; Taira also retains `configs/soranexus/taira/sorafs_admission/`. Minamoto admission material remains operator-owned.
 
 ## Step 1 – Configuration Review
@@ -36,13 +36,13 @@ summary: Operational plan for bringing the core Nexus validator cluster online b
 
 ## Step 2 – Bootstrap Cluster Deployment
 1. Provision validator nodes:
-   - Deploy `iroha3d` instances (validators) with persistent volumes.
+   - Deploy the Taira `iroha3d_taira` launcher (validators) with persistent volumes.
    - Ensure network firewall rules allow consensus & Torii traffic between nodes.
 2. Start Torii services (REST/WebSocket) on each validator with TLS.
 3. Deploy observer nodes (read-only) for extra resilience.
-4. Use the operator-owned deployment pipeline to provision runtime secrets and the final signed genesis/topology, distribute per-node configs, and start `iroha3d`. This repository does not ship a public-network bootstrap script; `scripts/taira_devnet.py` is only for disposable local Taira networks.
+4. Use the operator-owned deployment pipeline to provision runtime secrets and the final signed genesis/topology, distribute per-node configs, and start `iroha3d_taira`. The dedicated permissionless-observer `iroha taira join` signed-bootstrap flow is tracked as first-release work; validator activation remains an on-chain staking and peer-lifecycle transition, not a separate admission-token bootstrap. `scripts/taira_devnet.py` is only for disposable local Taira-compatible networks and must never be presented as joining the public testnet.
 5. Execute smoke tests:
-   - Submit test transactions via Torii (`iroha_cli tx submit`).
+   - Submit test transactions via Torii (`iroha tx submit`).
    - Verify block production/finality through telemetry.
    - Check ledger replication across validators/observers.
 

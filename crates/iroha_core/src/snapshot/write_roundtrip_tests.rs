@@ -57,7 +57,7 @@ async fn generated_snapshot_passes_restart_validation_before_publication() {
         .expect("writer-generated snapshot must survive restart initialization exactly");
 }
 #[tokio::test]
-async fn canonicalized_account_metadata_survives_the_snapshot_restart_boundary() {
+async fn canonical_account_metadata_survives_the_snapshot_restart_boundary() {
     let state = state_factory();
     let owner = state
         .world
@@ -68,8 +68,7 @@ async fn canonicalized_account_metadata_survives_the_snapshot_restart_boundary()
         .map(|(account_id, _)| account_id.clone())
         .expect("snapshot fixture account");
     let key = "snapshot_probe".parse().expect("metadata key");
-    let value = Json::from_raw_json("1 ".to_owned())
-        .expect("valid alternate JSON spelling must canonicalize at construction");
+    let value = Json::from_raw_json("1".to_owned()).expect("canonical JSON spelling");
     assert_eq!(value.get(), "1");
     let mut accounts = state.world.accounts.block();
     accounts
@@ -297,7 +296,7 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
     )
     .expect("read signed snapshot without canonical payload drift");
     let mut roundtrip = String::new();
-    serialize_state_snapshot(&restored, &mut roundtrip, true);
+    serialize_state_snapshot(&restored, &mut roundtrip);
     assert_eq!(
         roundtrip.as_bytes(),
         payload,
@@ -393,7 +392,7 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
         let kura = Kura::blank_kura_for_testing();
         let state = state_factory_with_kura(Arc::clone(&kura));
         let mut serialized = String::new();
-        serialize_state_snapshot(&state, &mut serialized, true);
+        serialize_state_snapshot(&state, &mut serialized);
         let mut snapshot: json::Value =
             json::from_str(&serialized).expect("valid baseline snapshot JSON");
         let json::Value::Object(snapshot_object) = &mut snapshot else {
@@ -460,7 +459,7 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
         .expect("persist canonical WSV checkpoint");
     let key_pair = checked_random_snapshot_keypair();
     let mut serialized = String::new();
-    serialize_state_snapshot(&state, &mut serialized, true);
+    serialize_state_snapshot(&state, &mut serialized);
     write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
     let restored = try_read_snapshot(
         &store_dir,
@@ -497,7 +496,7 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
         "hostile WSV mutation must affect its checkpoint"
     );
     serialized.clear();
-    serialize_state_snapshot(&state, &mut serialized, true);
+    serialize_state_snapshot(&state, &mut serialized);
     write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
     let error = match try_read_snapshot(
         &store_dir,
@@ -552,7 +551,7 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
             iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
         );
         let mut serialized = String::new();
-        serialize_state_snapshot(&state, &mut serialized, true);
+        serialize_state_snapshot(&state, &mut serialized);
         let mut snapshot: json::Value =
             json::from_str(&serialized).expect("valid baseline snapshot JSON");
         let json::Value::Object(snapshot_object) = &mut snapshot else {
@@ -767,7 +766,7 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
         let (state, key, pending_record) =
             state_with_exact_pending_sccp_snapshot_fixture(Arc::clone(&kura));
         let mut serialized = String::new();
-        serialize_state_snapshot(&state, &mut serialized, true);
+        serialize_state_snapshot(&state, &mut serialized);
         let mut snapshot: json::Value =
             json::from_str(&serialized).expect("valid baseline snapshot JSON");
         let json::Value::Object(snapshot_object) = &mut snapshot else {
@@ -1377,8 +1376,8 @@ async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history
     let block = signed_block_with_transaction(accepted_manifest_transaction());
     store_block_and_mark_state_height(&mut state, &kura, block);
     let key_pair = checked_random_snapshot_keypair();
-    let legacy_bytes = legacy_snapshot_bytes_without_space_directory_section(&state);
-    write_snapshot_bundle_from_bytes(&store_dir, &legacy_bytes, &key_pair);
+    let incomplete_bytes = snapshot_payload_without_space_directory_manifest_section(&state);
+    write_snapshot_bundle_from_bytes(&store_dir, &incomplete_bytes, &key_pair);
     let error = match try_read_snapshot(
         &store_dir,
         &kura,
@@ -1405,11 +1404,11 @@ async fn snapshot_missing_space_directory_section_rejects_without_manifest_histo
     let store_dir = tmp_root.path().join("snapshot");
     let kura = Kura::blank_kura_for_testing();
     let mut state = state_factory_with_kura(Arc::clone(&kura));
-    let block = signed_block_with_transaction(accepted_log_transaction("legacy"));
+    let block = signed_block_with_transaction(accepted_log_transaction("missing-section"));
     store_block_and_mark_state_height(&mut state, &kura, block);
     let key_pair = checked_random_snapshot_keypair();
-    let legacy_bytes = legacy_snapshot_bytes_without_space_directory_section(&state);
-    write_snapshot_bundle_from_bytes(&store_dir, &legacy_bytes, &key_pair);
+    let incomplete_bytes = snapshot_payload_without_space_directory_manifest_section(&state);
+    write_snapshot_bundle_from_bytes(&store_dir, &incomplete_bytes, &key_pair);
     let error = match try_read_snapshot(
         &store_dir,
         &kura,

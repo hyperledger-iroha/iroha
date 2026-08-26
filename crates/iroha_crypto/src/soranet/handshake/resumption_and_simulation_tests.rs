@@ -51,6 +51,11 @@ fn process_client_hello_rejects_resume_hash_mismatch() {
                 message.contains("resume hash mismatch"),
                 "unexpected message: {message}"
             );
+            assert!(
+                !message.contains(&hex::encode(resume_a))
+                    && !message.contains(&hex::encode(resume_b)),
+                "resume bindings must be redacted: {message}"
+            );
         }
         Err(err) => panic!("expected resume mismatch, got {err:?}"),
         Ok(_) => panic!("expected resume mismatch, got Ok"),
@@ -66,6 +71,37 @@ fn process_client_hello_rejects_resume_hash_mismatch() {
         Err(err) => panic!("expected unexpected resume hash error, got {err:?}"),
         Ok(_) => panic!("expected unexpected resume hash error, got Ok"),
     }
+}
+
+#[test]
+fn client_hello_metadata_debug_redacts_resume_binding() {
+    let resume_hash = [0xA5; TRANSCRIPT_BINDING_LEN];
+    let metadata = ClientHelloMetadata {
+        handshake_suite: HandshakeSuite::Nk2Hybrid,
+        kem_id: 1,
+        sig_id: 1,
+        client_capabilities: Vec::new(),
+        resume_hash: Some(resume_hash.to_vec()),
+    };
+
+    let rendered = format!("{metadata:?}");
+    assert!(rendered.contains("resume_hash_present: true"));
+    assert!(!rendered.contains(&hex::encode(resume_hash)));
+}
+#[test]
+fn client_hello_metadata_clear_scrubs_owned_buffers() {
+    let mut metadata = ClientHelloMetadata {
+        handshake_suite: HandshakeSuite::Nk2Hybrid,
+        kem_id: 1,
+        sig_id: 1,
+        client_capabilities: vec![0x5A; 64],
+        resume_hash: Some(vec![0xA5; TRANSCRIPT_BINDING_LEN]),
+    };
+
+    metadata.clear_sensitive_fields();
+
+    assert!(metadata.client_capabilities.is_empty());
+    assert!(metadata.resume_hash.is_none());
 }
 #[test]
 fn simulate_handshake_produces_transcript_hash() {

@@ -189,10 +189,6 @@ fn npos_diagnostics() -> SumeragiNposDiagnostics {
         epoch_seed: [0xA5; 32],
         prf_height: 7,
         prf_view: 2,
-        vrf_penalty_epoch: 3,
-        vrf_committed_no_reveal_total: 1,
-        vrf_no_participation_total: 2,
-        vrf_late_reveals_total: 3,
     }
 }
 fn diagnostics(npos: Option<SumeragiNposDiagnostics>) -> SumeragiDiagnosticsStatus {

@@ -51,6 +51,7 @@ public final class SubscriptionToriiClientTests {
     listPlansParsesResponse();
     responseNumbersRejectUnsignedAndOverflowValues();
     responseIdentifiersRejectNonStringValues();
+    responseTransactionHashesRequireIrohaHashOfMarker();
     createPlanBuildsBody();
     createPlanRejectsInsecureTransportForPrivateKeyBody();
     planJsonBuilderParses();
@@ -115,6 +116,49 @@ public final class SubscriptionToriiClientTests {
                 "{\"ok\":true,\"subscription_id\":false,\"tx_hash_hex\":\"00\"}"
                     .getBytes(StandardCharsets.UTF_8)),
         "boolean subscription identifier must be rejected");
+  }
+
+  private static void responseTransactionHashesRequireIrohaHashOfMarker() {
+    final String canonical = "ab".repeat(32);
+    assert canonical.equals(
+        SubscriptionJsonParser.parsePlanCreateResponse(
+                ("{\"ok\":true,\"plan_id\":\"plan-1\",\"tx_hash_hex\":\""
+                        + canonical
+                        + "\"}")
+                    .getBytes(StandardCharsets.UTF_8))
+            .txHashHex());
+    assert canonical.equals(
+        SubscriptionJsonParser.parseSubscriptionCreateResponse(
+                ("{\"ok\":true,\"subscription_id\":\"sub-1\","
+                        + "\"billing_trigger_id\":\"bill-1\",\"usage_trigger_id\":null,"
+                        + "\"first_charge_ms\":1,\"tx_hash_hex\":\""
+                        + canonical
+                        + "\"}")
+                    .getBytes(StandardCharsets.UTF_8))
+            .txHashHex());
+    assert canonical.equals(
+        SubscriptionJsonParser.parseActionResponse(
+                ("{\"ok\":true,\"subscription_id\":\"sub-1\",\"tx_hash_hex\":\""
+                        + canonical
+                        + "\"}")
+                    .getBytes(StandardCharsets.UTF_8))
+            .txHashHex());
+    expectInvalidResponse(
+        () ->
+            SubscriptionJsonParser.parsePlanCreateResponse(
+                ("{\"ok\":true,\"plan_id\":\"plan-1\",\"tx_hash_hex\":\""
+                        + "aa".repeat(32)
+                        + "\"}")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "even-marker plan transaction hash must be rejected");
+    expectInvalidResponse(
+        () ->
+            SubscriptionJsonParser.parseActionResponse(
+                ("{\"ok\":true,\"subscription_id\":\"sub-1\",\"tx_hash_hex\":\""
+                        + "aa".repeat(32)
+                        + "\"}")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "even-marker action transaction hash must be rejected");
   }
 
   private static void expectInvalidResponse(final Runnable action, final String message) {

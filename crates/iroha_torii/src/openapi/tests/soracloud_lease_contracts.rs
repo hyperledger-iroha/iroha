@@ -88,12 +88,14 @@ fn soracloud_control_plane_openapi_exposes_authoritative_lease_accounting() {
             "SoraServiceLeaseReportingEpochRolloverV1",
             &[
                 "schema_version",
+                "economic_clock",
                 "lease_started_height",
                 "previous_reporting_epoch",
                 "new_reporting_epoch",
                 "reporter_account_id",
                 "active_service_version",
                 "replica_slot",
+                "placement_incarnation",
                 "finalized_checkpoint_count",
                 "settled_egress_bytes_delta",
                 "settled_egress_bytes",
@@ -103,8 +105,10 @@ fn soracloud_control_plane_openapi_exposes_authoritative_lease_accounting() {
             "SoraServiceLeaseStateV1",
             &[
                 "schema_version",
+                "economic_clock",
                 "status",
                 "quota_class",
+                "replica_count",
                 "deployment_deposit",
                 "prepaid_runtime_balance",
                 "runtime_price_per_block",
@@ -142,6 +146,34 @@ fn soracloud_control_plane_openapi_exposes_authoritative_lease_accounting() {
     for (name, fields) in contracts {
         assert_strict_object_schema(schemas, name, fields, &[]);
     }
+    let lease_state = component_properties(schemas, "SoraServiceLeaseStateV1");
+    assert_eq!(
+        lease_state["economic_clock"]["$ref"].as_str(),
+        Some("#/components/schemas/SoraServiceLeaseClockV1")
+    );
+    assert_eq!(lease_state["replica_count"]["minimum"].as_u64(), Some(1));
+    assert_eq!(
+        lease_state["replica_count"]["maximum"].as_u64(),
+        Some(u64::from(
+            iroha_data_model::soracloud::SORA_HTTP_SERVICE_REPLICA_MAX_V1
+        ))
+    );
+    assert_eq!(
+        lease_state["egress_reporter_checkpoints"]["maxItems"].as_u64(),
+        Some(
+            iroha_data_model::soracloud::SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1
+                as u64
+        )
+    );
+    let reporter_assignment = component_properties(schemas, "SoraServiceLeaseReporterAssignmentV1");
+    assert_eq!(
+        reporter_assignment["service_version"]["minLength"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        reporter_assignment["placement_reconciled_at_ms"]["minimum"].as_u64(),
+        Some(1)
+    );
     assert_eq!(
         nullable_property_ref(schemas, "ControlPlaneServiceSnapshot", "service_lease"),
         "#/components/schemas/ControlPlaneServiceLeaseSnapshot"
@@ -342,53 +374,28 @@ fn soracloud_runtime_execution_host_openapi_is_first_release_exact() {
         &["lane_id", "validator_account_id", "peer_id"],
         &[],
     );
-    assert_strict_object_schema(
-        schemas,
-        "SoraRuntimeHfModelHostV1",
-        &[
-            "placement_id",
-            "source_id",
-            "pool_id",
-            "selection_seed_hash",
-            "validator_account_id",
-            "peer_id",
-        ],
-        &[],
-    );
-    let variants = schemas["SoraRuntimeExecutionHostV1"]["oneOf"]
-        .as_array()
-        .expect("runtime execution host variants")
-        .iter()
-        .map(|variant| {
-            (
-                variant["properties"]["host_kind"]["const"]
-                    .as_str()
-                    .expect("runtime host tag")
-                    .to_owned(),
-                variant["properties"]["value"]["$ref"]
-                    .as_str()
-                    .expect("runtime host value schema")
-                    .to_owned(),
-            )
-        })
-        .collect::<BTreeSet<_>>();
+    let variants =
+        contract_property(schemas, "AgentRuntimeReceiptRecord", "execution_host")["anyOf"]
+            .as_array()
+            .expect("nullable deterministic-validator host")
+            .iter()
+            .collect::<Vec<_>>();
+    assert_eq!(variants.len(), 2);
     assert_eq!(
-        variants,
-        BTreeSet::from([
-            (
-                "DeterministicValidator".to_owned(),
-                "#/components/schemas/SoraRuntimeDeterministicValidatorHostV1".to_owned(),
-            ),
-            (
-                "HfModelHost".to_owned(),
-                "#/components/schemas/SoraRuntimeHfModelHostV1".to_owned(),
-            ),
-        ])
+        variants[0]["$ref"].as_str(),
+        Some("#/components/schemas/SoraRuntimeDeterministicValidatorHostV1")
     );
-    assert!(
-        !schemas.contains_key("SoraRuntimeInrouReplicaHostV1"),
-        "retired Inrou runtime-host schema must not remain public"
-    );
+    assert_eq!(variants[1]["type"].as_str(), Some("null"));
+    for retired in [
+        "SoraRuntimeExecutionHostV1",
+        "SoraRuntimeHfModelHostV1",
+        "SoraRuntimeInrouReplicaHostV1",
+    ] {
+        assert!(
+            !schemas.contains_key(retired),
+            "retired runtime-host schema `{retired}` must not remain public"
+        );
+    }
 }
 
 #[test]

@@ -52,7 +52,6 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.client.NoritoRpcClientTests",
         "org.hyperledger.iroha.android.client.SubscriptionToriiClientTests",
         "org.hyperledger.iroha.android.client.PipelineStatusExtractorTests",
-        "org.hyperledger.iroha.android.client.SoracloudPrivateUploadedModelJsonParserTests",
         "org.hyperledger.iroha.android.client.mock.ToriiMockServerTests",
         "org.hyperledger.iroha.android.client.queue.DirectoryPendingTransactionQueueTests",
         "org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueueTests",

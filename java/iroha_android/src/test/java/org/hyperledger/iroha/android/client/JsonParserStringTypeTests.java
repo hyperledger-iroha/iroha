@@ -5,14 +5,12 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import org.junit.Test;
 
 /** Regression tests for strict JSON string wire types. */
 public final class JsonParserStringTypeTests {
   private static final String VALID_PUBLIC_KEY =
       "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29";
-  private static final String RECEIPT_CURSOR = repeated('A', 114);
 
   @Test
   public void identifierParserRejectsNonStringRequiredAndOptionalFields() {
@@ -138,44 +136,6 @@ public final class JsonParserStringTypeTests {
                         "\"output_hash_matches\":null", "\"output_hash_matches\":0"))));
   }
 
-  @Test
-  public void soracloudParserRejectsNonStringRequiredAndOptionalFields() {
-    final SoracloudPrivateUploadedModelReceiptListResponse canonical =
-        SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-            bytes(soracloudReceiptListJson("\"exact\"", "\"" + RECEIPT_CURSOR + "\"")));
-    assertEquals("exact", canonical.countMode());
-    assertEquals(RECEIPT_CURSOR, canonical.continueCursor());
-
-    assertRejects(
-        "soracloud private receipt list.count_mode",
-        () ->
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                bytes(soracloudReceiptListJson("7", "null"))));
-    assertRejects(
-        "soracloud private receipt list.continue_cursor",
-        () ->
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                bytes(soracloudReceiptListJson("\"exact\"", "7"))));
-  }
-
-  @Test
-  public void soracloudParserRejectsMissingOrMalformedHasMore() {
-    final String canonical = soracloudReceiptListJson("\"exact\"", "null");
-    assertFalse(
-        SoracloudPrivateUploadedModelJsonParser.parseReceiptList(bytes(canonical)).hasMore());
-
-    assertRejects(
-        "soracloud private receipt list.has_more",
-        () ->
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                bytes(canonical.replace("\"has_more\":false", "\"has_more\":0"))));
-    assertRejects(
-        "soracloud private receipt list.has_more",
-        () ->
-            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
-                bytes(canonical.replace("\"has_more\":false,", ""))));
-  }
-
   private static String identifierPolicyJson() {
     return "{"
         + "\"total\":1,"
@@ -223,36 +183,6 @@ public final class JsonParserStringTypeTests {
         + "\"error\":"
         + error
         + "}";
-  }
-
-  private static String soracloudReceiptListJson(
-      final String countMode, final String continueCursor) {
-    final boolean hasMore = !"null".equals(continueCursor);
-    return "{"
-        + "\"schema_version\":1,"
-        + "\"receipts\":[],"
-        + "\"total\":"
-        + (hasMore ? 1 : 0)
-        + ","
-        + "\"returned_items\":0,"
-        + "\"remaining_items\":"
-        + (hasMore ? 1 : 0)
-        + ","
-        + "\"has_more\":"
-        + hasMore
-        + ","
-        + "\"count_mode\":"
-        + countMode
-        + ","
-        + "\"continue_cursor\":"
-        + continueCursor
-        + "}";
-  }
-
-  private static String repeated(final char value, final int count) {
-    final char[] chars = new char[count];
-    Arrays.fill(chars, value);
-    return new String(chars);
   }
 
   private static byte[] bytes(final String json) {

@@ -37,7 +37,6 @@
         }
       ]
     },
-    "allow_wallet_signing": true,
     "allow_state_writes": true,
     "allow_model_inference": true,
     "allow_model_training": false
@@ -46,7 +45,7 @@
     "cpu_millis": 750,
     "memory_bytes": 536870912,
     "ephemeral_storage_bytes": 2147483648,
-    "max_open_files": 512,
+    "max_open_files_per_process": 512,
     "max_tasks": 64
   },
   "lifecycle": {

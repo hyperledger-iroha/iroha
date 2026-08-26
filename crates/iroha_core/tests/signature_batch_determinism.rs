@@ -205,7 +205,7 @@ fn run_validate(
     let header = block.header();
     let (_time_handle, validation_time) =
         iroha_primitives::time::TimeSource::new_mock(header.creation_time());
-    ValidBlock::validate_replay_fixture(
+    ValidBlock::validate_sumeragi_v2_fixture(
         block,
         &topology,
         authority,

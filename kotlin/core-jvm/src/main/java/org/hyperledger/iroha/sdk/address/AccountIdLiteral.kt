@@ -16,21 +16,18 @@ fun requireCanonicalI105Address(accountId: String, field: String): String {
     require(value.indexOf('@') < 0) {
         "$field must use canonical I105 encoded account without @domain"
     }
-    val parsed = try {
-        AccountAddress.parseAny(value, null)
+    val address = try {
+        AccountAddress.parseEncoded(value, null)
     } catch (ex: AccountAddressException) {
         throw IllegalArgumentException(
             "$field must use a canonical I105 encoded account literal",
             ex,
         )
     }
-    require(parsed.format == AccountAddressFormat.I105) {
-        "$field must use a canonical I105 encoded account literal"
-    }
     val discriminant = AccountAddress.detectI105Discriminant(value)
         ?: throw IllegalArgumentException("$field must use a canonical I105 encoded account literal")
     val canonical = try {
-        parsed.address.toI105(discriminant)
+        address.toI105(discriminant)
     } catch (ex: AccountAddressException) {
         throw IllegalArgumentException(
             "$field must use a canonical I105 encoded account literal",

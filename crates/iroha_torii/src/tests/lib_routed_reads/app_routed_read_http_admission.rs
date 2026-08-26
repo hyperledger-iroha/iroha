@@ -127,9 +127,10 @@ mod app_routed_read_http_admission_tests {
         InternalAccountTransactionGet,
         InternalAccountAssetGet,
         ContractDeploymentState,
+        AccountOnboardingCurrentState,
     );
     #[test]
-    fn all_45_endpoint_and_stable_route_id_mappings_are_exact_and_unique() {
+    fn all_46_endpoint_and_stable_route_id_mappings_are_exact_and_unique() {
         let expected = ENDPOINT_INVENTORY;
         assert_eq!(APP_ROUTED_READ_HTTP_ENDPOINTS_V1.len(), expected.len());
         for &endpoint in expected {
@@ -166,7 +167,7 @@ mod app_routed_read_http_admission_tests {
                 }
             }
         }
-        assert_eq!(route_ids.len(), 45);
+        assert_eq!(route_ids.len(), 46);
     }
     #[test]
     fn catalog_bounds_axum_url_parameter_topology() {

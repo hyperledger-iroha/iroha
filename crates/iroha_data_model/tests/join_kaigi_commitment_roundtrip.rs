@@ -25,7 +25,6 @@ fn join_kaigi_accepts_canonical_commitment_literal() {
     );
     let participant =
         AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("account id");
     let commitment_literal =
         "hash:1111111111111111111111111111111111111111111111111111111111111111#4667";

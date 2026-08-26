@@ -4,7 +4,7 @@
 
                 #[test]
                 fn drive_run() {
-                    let pair = test::invoke_kotoage(kotoage: "run", arguments: Json::parse("{\"count\": 7}"));
+                    let pair = test::invoke_kotoage(kotoage: "run", arguments: Json::parse("{\"count\":7}"));
                     test::assert_eq(actual: pair.0, expected: 7);
                     test::assert_eq(actual: pair.1, expected: 8);
                 }

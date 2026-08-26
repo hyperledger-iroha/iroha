@@ -42,6 +42,8 @@ pub const VPN_HELPER_TICKET_LEN: usize = 788;
 /// Exact lowercase-hex length of a helper-authenticated VPN ticket.
 pub const VPN_HELPER_TICKET_HEX_LEN: usize = VPN_HELPER_TICKET_LEN * 2;
 const VPN_HELPER_TICKET_SIGNATURE_LEN: usize = 64;
+/// Exact byte length of the ML-DSA-65 relay identity authenticated by an SRCv2 certificate.
+pub const VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1: usize = 1_952;
 /// Magic prefix for VPN control cells that carry client-signed usage vouchers.
 pub const VPN_USAGE_VOUCHER_CONTROL_MAGIC: &[u8; 8] = b"SVPNUV1\0";
 /// Default MTU advertised to Sora VPN clients and local tunnel helpers.
@@ -319,7 +321,7 @@ impl json::JsonDeserialize for VpnFlowLabelV1 {
     }
 }
 /// Fixed header carried by every VPN cell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct VpnCellHeaderV1 {
     /// Protocol version (currently `1`).
     pub version: u8,
@@ -341,6 +343,22 @@ pub struct VpnCellHeaderV1 {
     /// Payload length prior to padding.
     pub payload_len: u16,
 }
+impl fmt::Debug for VpnCellHeaderV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VpnCellHeaderV1")
+            .field("version", &self.version)
+            .field("class", &self.class)
+            .field("flags", &self.flags)
+            .field("circuit_id", &"<redacted>")
+            .field("flow_label", &"<redacted>")
+            .field("sequence", &self.sequence)
+            .field("ack", &self.ack)
+            .field("padding_budget_ms", &self.padding_budget_ms)
+            .field("payload_len", &self.payload_len)
+            .finish()
+    }
+}
 impl VpnCellHeaderV1 {
     /// Returns the serialized header length.
     #[must_use]
@@ -349,7 +367,7 @@ impl VpnCellHeaderV1 {
     }
 }
 /// VPN cell with payload (unpadded).
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[derive(Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct VpnCellV1 {
     /// Cell header.
     pub header: VpnCellHeaderV1,
@@ -357,11 +375,35 @@ pub struct VpnCellV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub payload: Vec<u8>,
 }
+impl fmt::Debug for VpnCellV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VpnCellV1")
+            .field("header", &self.header)
+            .field("payload", &"<redacted>")
+            .field("payload_bytes", &self.payload.len())
+            .finish()
+    }
+}
+impl Drop for VpnCellV1 {
+    fn drop(&mut self) {
+        clear_vpn_plaintext(&mut self.payload);
+    }
+}
 impl VpnCellV1 {
     /// Maximum payload length (bytes) permitted in a single cell.
     #[must_use]
     pub const fn max_payload_len() -> usize {
         VPN_CELL_LEN - VPN_HEADER_LEN
+    }
+    /// Consume the cell and transfer ownership of its plaintext payload.
+    ///
+    /// The cell otherwise scrubs its payload on drop. Callers taking ownership
+    /// become responsible for keeping and clearing the returned plaintext only
+    /// as long as needed.
+    #[must_use]
+    pub fn into_payload(mut self) -> Vec<u8> {
+        core::mem::take(&mut self.payload)
     }
     /// Pad the cell into a fixed-length frame suitable for transport.
     ///
@@ -405,21 +447,142 @@ impl VpnCellV1 {
         frame[cursor..cursor + 2].copy_from_slice(&self.header.payload_len.to_be_bytes());
         cursor += 2;
         frame[cursor..cursor + usize::from(payload_len)].copy_from_slice(&self.payload);
-        Ok(VpnPaddedCellV1 { bytes: frame })
+        Ok(VpnPaddedCellV1::from_bytes(frame))
     }
 }
 /// Fixed-length padded cell frame.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct VpnPaddedCellV1 {
     /// Raw frame bytes (always [`VPN_CELL_LEN`] long).
-    pub bytes: [u8; VPN_CELL_LEN],
+    bytes: [u8; VPN_CELL_LEN],
+}
+impl fmt::Debug for VpnPaddedCellV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VpnPaddedCellV1")
+            .field("bytes", &"<redacted>")
+            .field("frame_bytes", &self.bytes.len())
+            .finish()
+    }
+}
+impl Drop for VpnPaddedCellV1 {
+    fn drop(&mut self) {
+        clear_vpn_frame(&mut self.bytes);
+    }
+}
+
+fn clear_vpn_plaintext(payload: &mut Vec<u8>) {
+    // This helper is called only while disposing of the cell. Extending to the
+    // existing capacity initializes and exposes every spare byte so the whole
+    // allocation can be scrubbed before it is released.
+    let allocation_len = payload.capacity();
+    payload.resize(allocation_len, 0);
+    clear_vpn_bytes(payload);
+    payload.clear();
+    std::hint::black_box(payload);
+}
+
+fn clear_vpn_frame(frame: &mut [u8; VPN_CELL_LEN]) {
+    clear_vpn_bytes(frame);
+}
+
+fn clear_helper_ticket_frame(frame: &mut [u8; VPN_HELPER_TICKET_LEN]) {
+    clear_vpn_bytes(frame);
+}
+
+fn clear_vpn_bytes(bytes: &mut [u8]) {
+    bytes.fill(0);
+    std::hint::black_box(bytes);
+}
+
+/// Fixed-width, operator-signed VPN helper bearer frame.
+///
+/// Debug output is redacted and the owned frame is scrubbed on drop. Callers
+/// that explicitly extract the raw array become responsible for clearing it.
+#[derive(PartialEq, Eq)]
+pub struct VpnHelperTicketFrameV1([u8; VPN_HELPER_TICKET_LEN]);
+
+impl VpnHelperTicketFrameV1 {
+    /// Transfer the raw bearer frame to the caller.
+    ///
+    /// The returned array is no longer protected by this type's drop-time
+    /// scrubbing and should be retained only as long as transport requires.
+    #[must_use]
+    pub fn into_bytes(mut self) -> [u8; VPN_HELPER_TICKET_LEN] {
+        core::mem::replace(&mut self.0, [0u8; VPN_HELPER_TICKET_LEN])
+    }
+}
+
+impl AsRef<[u8]> for VpnHelperTicketFrameV1 {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsMut<[u8]> for VpnHelperTicketFrameV1 {
+    fn as_mut(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+}
+
+impl core::ops::Deref for VpnHelperTicketFrameV1 {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for VpnHelperTicketFrameV1 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl fmt::Debug for VpnHelperTicketFrameV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("VpnHelperTicketFrameV1(<redacted 788-byte bearer>)")
+    }
+}
+
+impl Drop for VpnHelperTicketFrameV1 {
+    fn drop(&mut self) {
+        clear_helper_ticket_frame(&mut self.0);
+    }
 }
 impl AsRef<[u8]> for VpnPaddedCellV1 {
     fn as_ref(&self) -> &[u8] {
         &self.bytes
     }
 }
+impl AsMut<[u8]> for VpnPaddedCellV1 {
+    fn as_mut(&mut self) -> &mut [u8] {
+        &mut self.bytes
+    }
+}
 impl VpnPaddedCellV1 {
+    /// Place an existing fixed-width frame under drop-time scrubbing custody.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; VPN_CELL_LEN]) -> Self {
+        Self { bytes }
+    }
+
+    /// Allocate an all-zero frame suitable for guarded receive-buffer use.
+    #[must_use]
+    pub const fn zeroed() -> Self {
+        Self::from_bytes([0; VPN_CELL_LEN])
+    }
+
+    /// Transfer the raw frame to the caller.
+    ///
+    /// The returned array is no longer protected by this type's drop-time
+    /// scrubbing and should be retained and cleared only as long as transport
+    /// or explicit wire manipulation requires.
+    #[must_use]
+    pub fn into_bytes(mut self) -> [u8; VPN_CELL_LEN] {
+        core::mem::replace(&mut self.bytes, [0; VPN_CELL_LEN])
+    }
+
     /// Parse a padded cell frame back into the header and payload components.
     ///
     /// # Errors
@@ -915,6 +1078,9 @@ pub struct VpnQuotePolicyV1 {
     /// Exact Ed25519 relay identity authenticated by the guard directory.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub relay_id: RelayId,
+    /// Exact ML-DSA-65 relay identity authenticated by the same guard-directory certificate.
+    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    pub relay_mldsa65_public_key: [u8; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1],
     /// Relay descriptor commitment authenticated by the certificate.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub descriptor_commit: [u8; 32],
@@ -1554,7 +1720,7 @@ pub enum VpnRelayReceiptSignatureError {
     Signature(#[source] iroha_crypto::Error),
 }
 /// Operator-signed ticket carried by the local VPN controller when opening a relay session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct VpnHelperTicketV1 {
     /// Session identifier bound to the tunnel runtime.
     pub session_id: [u8; 16],
@@ -1583,8 +1749,28 @@ pub struct VpnHelperTicketV1 {
     /// Absolute expiry time in milliseconds since the Unix epoch.
     pub expires_at_ms: u64,
 }
+impl fmt::Debug for VpnHelperTicketV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VpnHelperTicketV1")
+            .field("session_id", &"[REDACTED]")
+            .field("quote_id", &"[REDACTED]")
+            .field("lease_id", &"[REDACTED]")
+            .field("account_hash", &"[REDACTED]")
+            .field("relay_id", &"[REDACTED]")
+            .field("payment_tx_hash", &"[REDACTED]")
+            .field("metering_public_key", &"[REDACTED]")
+            .field("tariff", &"[REDACTED]")
+            .field("client_ipv4_address", &"[REDACTED]")
+            .field("client_ipv6_address", &"[REDACTED]")
+            .field("network_policy_hash", &"[REDACTED]")
+            .field("valid_after_ms", &"[REDACTED]")
+            .field("expires_at_ms", &"[REDACTED]")
+            .finish()
+    }
+}
 impl VpnHelperTicketV1 {
-    /// Fallibly serialize the helper ticket into its fixed-length on-wire representation.
+    /// Fallibly serialize the helper ticket into a guarded fixed-length bearer frame.
     ///
     /// # Errors
     ///
@@ -1594,7 +1780,7 @@ impl VpnHelperTicketV1 {
     pub fn try_to_bytes(
         &self,
         issuer_private_key: &PrivateKey,
-    ) -> Result<[u8; VPN_HELPER_TICKET_LEN], VpnHelperTicketError> {
+    ) -> Result<VpnHelperTicketFrameV1, VpnHelperTicketError> {
         if issuer_private_key.algorithm() != Algorithm::Ed25519 {
             return Err(VpnHelperTicketError::InvalidIssuerPrivateKey);
         }
@@ -1607,7 +1793,7 @@ impl VpnHelperTicketV1 {
         if !self.has_canonical_client_addresses() {
             return Err(VpnHelperTicketError::InvalidClientAddresses);
         }
-        let mut bytes = [0u8; VPN_HELPER_TICKET_LEN];
+        let mut bytes = VpnHelperTicketFrameV1([0u8; VPN_HELPER_TICKET_LEN]);
         bytes[..VPN_HELPER_TICKET_MAGIC.len()].copy_from_slice(VPN_HELPER_TICKET_MAGIC);
         let mut cursor = VPN_HELPER_TICKET_MAGIC.len();
         bytes[cursor..cursor + self.session_id.len()].copy_from_slice(&self.session_id);
@@ -1662,9 +1848,9 @@ impl VpnHelperTicketV1 {
             .copy_from_slice(signature.payload());
         Ok(bytes)
     }
-    /// Serialize the helper ticket into its fixed-length on-wire representation.
+    /// Serialize the helper ticket into a guarded fixed-length bearer frame.
     #[must_use]
-    pub fn to_bytes(&self, issuer_private_key: &PrivateKey) -> [u8; VPN_HELPER_TICKET_LEN] {
+    pub fn to_bytes(&self, issuer_private_key: &PrivateKey) -> VpnHelperTicketFrameV1 {
         self.try_to_bytes(issuer_private_key)
             .expect("invalid VPN helper ticket issuer, metering key, addresses, or tariff")
     }
@@ -1678,7 +1864,8 @@ impl VpnHelperTicketV1 {
         &self,
         issuer_private_key: &PrivateKey,
     ) -> Result<String, VpnHelperTicketError> {
-        Ok(hex::encode(self.try_to_bytes(issuer_private_key)?))
+        let ticket = self.try_to_bytes(issuer_private_key)?;
+        Ok(hex::encode(ticket.as_ref()))
     }
     /// Serialize the helper ticket as hex for transport through JSON control-plane payloads.
     #[must_use]
@@ -1766,9 +1953,9 @@ impl VpnHelperTicketV1 {
         {
             return Err(VpnHelperTicketError::NonCanonicalHex);
         }
-        let mut decoded = [0u8; VPN_HELPER_TICKET_LEN];
-        hex::decode_to_slice(hex_ticket, &mut decoded).map_err(VpnHelperTicketError::Hex)?;
-        Self::parse(&decoded, issuer_public_key, now_ms)
+        let mut decoded = VpnHelperTicketFrameV1([0u8; VPN_HELPER_TICKET_LEN]);
+        hex::decode_to_slice(hex_ticket, decoded.as_mut()).map_err(VpnHelperTicketError::Hex)?;
+        Self::parse(decoded.as_ref(), issuer_public_key, now_ms)
     }
 }
 fn validate_helper_ticket_frame(bytes: &[u8]) -> Result<(), VpnHelperTicketError> {
@@ -1871,6 +2058,7 @@ fn decode_helper_ticket_fields(bytes: &[u8]) -> Result<VpnHelperTicketV1, VpnHel
 pub fn vpn_helper_network_policy_hash_v1(
     relay_endpoint: &str,
     relay_id: &[u8; 32],
+    relay_mldsa65_public_key: &[u8; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1],
     descriptor_commit: &[u8; 32],
     tls_server_name: &str,
     relay_tls_spki_sha256: &[u8; 32],
@@ -1903,6 +2091,7 @@ pub fn vpn_helper_network_policy_hash_v1(
     hasher.update(b"iroha.soranet.vpn.helper-network-policy.v1");
     update_value(&mut hasher, relay_endpoint.as_bytes());
     update_value(&mut hasher, relay_id);
+    update_value(&mut hasher, relay_mldsa65_public_key);
     update_value(&mut hasher, descriptor_commit);
     update_value(&mut hasher, tls_server_name.as_bytes());
     update_value(&mut hasher, relay_tls_spki_sha256);
@@ -1918,7 +2107,7 @@ pub fn vpn_helper_network_policy_hash_v1(
 }
 const VPN_HELPER_TICKET_QUANTITY_SLOT_LEN: usize = 1 + MAX_QUANTITY_FRAME_BYTES_V1;
 fn encode_helper_ticket_quantity(
-    output: &mut [u8; VPN_HELPER_TICKET_LEN],
+    output: &mut [u8],
     cursor: &mut usize,
     quantity: &Quantity,
 ) -> Result<(), VpnHelperTicketError> {
@@ -2091,7 +2280,7 @@ impl fmt::Display for VpnHelperTicketError {
 }
 impl std::error::Error for VpnHelperTicketError {}
 /// Errors surfaced while building or validating VPN cells.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum VpnCellError {
     /// Flow label exceeded 24-bit bounds.
     FlowLabelOverflow {
@@ -2170,11 +2359,81 @@ pub enum VpnCellError {
         actual: u64,
     },
 }
+impl fmt::Debug for VpnCellError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FlowLabelOverflow { max_bits, .. } => formatter
+                .debug_struct("FlowLabelOverflow")
+                .field("value", &"<redacted>")
+                .field("max_bits", max_bits)
+                .finish(),
+            Self::InvalidFlowLabelBits(bits) => formatter
+                .debug_tuple("InvalidFlowLabelBits")
+                .field(bits)
+                .finish(),
+            Self::FrameLengthMismatch { expected, actual } => formatter
+                .debug_struct("FrameLengthMismatch")
+                .field("expected", expected)
+                .field("actual", actual)
+                .finish(),
+            Self::UnsupportedVersion(version) => formatter
+                .debug_tuple("UnsupportedVersion")
+                .field(version)
+                .finish(),
+            Self::InvalidClass(class) => {
+                formatter.debug_tuple("InvalidClass").field(class).finish()
+            }
+            Self::InvalidFlags { bits, allowed } => formatter
+                .debug_struct("InvalidFlags")
+                .field("bits", bits)
+                .field("allowed", allowed)
+                .finish(),
+            Self::PayloadTooLarge { max, actual } => formatter
+                .debug_struct("PayloadTooLarge")
+                .field("max", max)
+                .field("actual", actual)
+                .finish(),
+            Self::PayloadOverrun {
+                declared,
+                available,
+            } => formatter
+                .debug_struct("PayloadOverrun")
+                .field("declared", declared)
+                .field("available", available)
+                .finish(),
+            Self::PayloadLengthMismatch { declared, actual } => formatter
+                .debug_struct("PayloadLengthMismatch")
+                .field("declared", declared)
+                .field("actual", actual)
+                .finish(),
+            Self::NonZeroPadding { index, value } => formatter
+                .debug_struct("NonZeroPadding")
+                .field("index", index)
+                .field("value", value)
+                .finish(),
+            Self::FlagClassMismatch { class, flags } => formatter
+                .debug_struct("FlagClassMismatch")
+                .field("class", class)
+                .field("flags", flags)
+                .finish(),
+            Self::PaddingBudgetMismatch { expected, actual } => formatter
+                .debug_struct("PaddingBudgetMismatch")
+                .field("expected", expected)
+                .field("actual", actual)
+                .finish(),
+            Self::NonMonotonicSequence { last, actual } => formatter
+                .debug_struct("NonMonotonicSequence")
+                .field("last", last)
+                .field("actual", actual)
+                .finish(),
+        }
+    }
+}
 impl fmt::Display for VpnCellError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::FlowLabelOverflow { value, max_bits } => {
-                write!(f, "flow label {value:#x} exceeds {max_bits}-bit width")
+            Self::FlowLabelOverflow { max_bits, .. } => {
+                write!(f, "flow label exceeds {max_bits}-bit width")
             }
             Self::InvalidFlowLabelBits(bits) => {
                 write!(f, "flow label bits must be between 1 and 24 (got {bits})")
@@ -2376,6 +2635,7 @@ mod tests {
                 exit_class: VpnExitClassV1::Standard,
                 relay_endpoint: "/dns/relay.example/udp/9443/quic".to_owned(),
                 relay_id: [0x11; 32],
+                relay_mldsa65_public_key: [0x12; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1],
                 descriptor_commit: [0x22; 32],
                 tls_server_name: "relay.example".to_owned(),
                 relay_tls_spki_sha256: [0x33; 32],
@@ -2429,10 +2689,7 @@ mod tests {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed derives helper-ticket issuer keypair")
     }
-    fn resign_helper_ticket_fields(
-        bytes: &mut [u8; VPN_HELPER_TICKET_LEN],
-        issuer_private_key: &PrivateKey,
-    ) {
+    fn resign_helper_ticket_fields(bytes: &mut [u8], issuer_private_key: &PrivateKey) {
         let signature_offset = VPN_HELPER_TICKET_LEN - VPN_HELPER_TICKET_SIGNATURE_LEN;
         let digest = helper_ticket_signing_digest(&bytes[..signature_offset]);
         let signature = Signature::try_new(issuer_private_key, digest.as_bytes())
@@ -2503,6 +2760,22 @@ mod tests {
         ));
     }
     #[test]
+    fn flow_label_overflow_formatting_redacts_the_routing_identifier() {
+        let error = VpnCellError::FlowLabelOverflow {
+            value: 0x00AB_CDEF,
+            max_bits: 8,
+        };
+        let debug = format!("{error:?}");
+        assert!(debug.contains("FlowLabelOverflow"));
+        assert!(debug.contains("value: \"<redacted>\""));
+        assert!(debug.contains("max_bits: 8"));
+        assert!(!debug.contains("11259375"));
+
+        let display = error.to_string();
+        assert!(display.contains("8-bit width"));
+        assert!(!display.contains("abcdef"));
+    }
+    #[test]
     fn parse_rejects_flow_label_overflow_for_width() {
         let mut frame = [0u8; VPN_CELL_LEN];
         // version + class + flags
@@ -2521,7 +2794,7 @@ mod tests {
         // padding budget and payload length = 0
         frame[38..40].copy_from_slice(&1u16.to_be_bytes());
         frame[40..42].copy_from_slice(&0u16.to_be_bytes());
-        let result = VpnPaddedCellV1 { bytes: frame }.parse_with_flow_label_bits(8);
+        let result = VpnPaddedCellV1::from_bytes(frame).parse_with_flow_label_bits(8);
         assert!(matches!(
             result,
             Err(VpnCellError::FlowLabelOverflow { max_bits: 8, .. })
@@ -2548,6 +2821,28 @@ mod tests {
         let parsed_hex = VpnHelperTicketV1::parse_hex(&hex, issuer.public_key(), 1_699_999_999_000)
             .expect("helper ticket hex should verify");
         assert_eq!(ticket, parsed_hex);
+    }
+    #[test]
+    fn helper_ticket_owners_redact_and_explicitly_transfer_bearer_bytes() {
+        let issuer = helper_ticket_issuer(0x42);
+        let ticket = sample_helper_ticket(1_700_000_000_000);
+        let ticket_debug = format!("{ticket:?}");
+        assert!(ticket_debug.contains("session_id: \"[REDACTED]\""));
+        assert!(ticket_debug.contains("network_policy_hash: \"[REDACTED]\""));
+        assert!(!ticket_debug.contains(&format!("{:?}", ticket.session_id)));
+        assert!(!ticket_debug.contains(&format!("{:?}", ticket.quote_id)));
+
+        let frame = ticket.to_bytes(issuer.private_key());
+        assert!(std::mem::needs_drop::<VpnHelperTicketFrameV1>());
+        assert_eq!(
+            format!("{frame:?}"),
+            "VpnHelperTicketFrameV1(<redacted 788-byte bearer>)"
+        );
+        let expected = frame.as_ref().to_vec();
+        let mut transferred = frame.into_bytes();
+        assert_eq!(transferred.as_slice(), expected.as_slice());
+        clear_helper_ticket_frame(&mut transferred);
+        assert!(transferred.iter().all(|byte| *byte == 0));
     }
     #[test]
     fn helper_ticket_rejects_empty_or_reversed_validity_window() {
@@ -2614,6 +2909,7 @@ mod tests {
         struct Policy {
             relay_endpoint: String,
             relay_id: [u8; 32],
+            relay_mldsa65_public_key: [u8; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1],
             descriptor_commit: [u8; 32],
             tls_server_name: String,
             relay_tls_spki_sha256: [u8; 32],
@@ -2631,6 +2927,7 @@ mod tests {
                 vpn_helper_network_policy_hash_v1(
                     &self.relay_endpoint,
                     &self.relay_id,
+                    &self.relay_mldsa65_public_key,
                     &self.descriptor_commit,
                     &self.tls_server_name,
                     &self.relay_tls_spki_sha256,
@@ -2648,6 +2945,7 @@ mod tests {
         let policy = Policy {
             relay_endpoint: "/dns/relay.example/udp/9443/quic".to_owned(),
             relay_id: [0x11; 32],
+            relay_mldsa65_public_key: [0x12; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1],
             descriptor_commit: [0x22; 32],
             tls_server_name: "relay.example".to_owned(),
             relay_tls_spki_sha256: [0x33; 32],
@@ -2676,6 +2974,10 @@ mod tests {
             "/dns/other.example/udp/9443/quic".to_owned()
         );
         changed!(relay_id, [0x12; 32]);
+        changed!(
+            relay_mldsa65_public_key,
+            [0x13; VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1]
+        );
         changed!(descriptor_commit, [0x23; 32]);
         changed!(tls_server_name, "other.example".to_owned());
         changed!(relay_tls_spki_sha256, [0x34; 32]);
@@ -3520,18 +3822,19 @@ mod tests {
         let payload = vec![0xBB; 32];
         let cell = VpnCellV1 { header, payload };
         let padded = cell.into_padded_frame().expect("frame padded");
-        assert_eq!(VPN_CELL_LEN, padded.bytes.len());
-        assert_eq!(1, padded.bytes[0]);
-        assert_eq!(VpnCellClassV1::Data.tag(), padded.bytes[1]);
-        assert_eq!(VpnCellFlagsV1::REQUIRE_ACK, padded.bytes[2]);
-        assert_eq!(&[0xAA; 16], &padded.bytes[3..19]);
-        assert_eq!(&[0xA5, 0xA5, 0xA5], &padded.bytes[19..22]);
-        assert_eq!(42u64.to_be_bytes(), padded.bytes[22..30]);
-        assert_eq!(17u64.to_be_bytes(), padded.bytes[30..38]);
-        assert_eq!(15u16.to_be_bytes(), padded.bytes[38..40]);
-        assert_eq!(32u16.to_be_bytes(), padded.bytes[40..42]);
-        assert_eq!(&[0xBB; 32], &padded.bytes[42..74]);
-        assert!(padded.bytes[74..].iter().all(|byte| *byte == 0));
+        let padded_bytes = padded.as_ref();
+        assert_eq!(VPN_CELL_LEN, padded_bytes.len());
+        assert_eq!(1, padded_bytes[0]);
+        assert_eq!(VpnCellClassV1::Data.tag(), padded_bytes[1]);
+        assert_eq!(VpnCellFlagsV1::REQUIRE_ACK, padded_bytes[2]);
+        assert_eq!(&[0xAA; 16], &padded_bytes[3..19]);
+        assert_eq!(&[0xA5, 0xA5, 0xA5], &padded_bytes[19..22]);
+        assert_eq!(42u64.to_be_bytes(), padded_bytes[22..30]);
+        assert_eq!(17u64.to_be_bytes(), padded_bytes[30..38]);
+        assert_eq!(15u16.to_be_bytes(), padded_bytes[38..40]);
+        assert_eq!(32u16.to_be_bytes(), padded_bytes[40..42]);
+        assert_eq!(&[0xBB; 32], &padded_bytes[42..74]);
+        assert!(padded_bytes[74..].iter().all(|byte| *byte == 0));
     }
     #[test]
     fn padded_cell_rejects_oversized_payload() {
@@ -3551,6 +3854,87 @@ mod tests {
         let result = cell.into_padded_frame();
         assert!(matches!(result, Err(VpnCellError::PayloadTooLarge { .. })));
     }
+
+    #[test]
+    fn vpn_cell_debug_redacts_plaintext_and_routing_identifiers() {
+        let payload = vec![0xAB, 0xCD, 0xEF];
+        let cell = VpnCellV1 {
+            header: VpnCellHeaderV1 {
+                version: 1,
+                class: VpnCellClassV1::Data,
+                flags: VpnCellFlagsV1::new(false, false, false, false),
+                circuit_id: [0xA5; 16],
+                flow_label: VpnFlowLabelV1::from_u32(0x00AB_CD).expect("flow label"),
+                sequence: 7,
+                ack: 6,
+                padding_budget_ms: 9,
+                payload_len: payload.len() as u16,
+            },
+            payload,
+        };
+
+        let rendered = format!("{cell:?}");
+        assert!(rendered.contains("payload: \"<redacted>\""));
+        assert!(rendered.contains("payload_bytes: 3"));
+        assert!(rendered.contains("circuit_id: \"<redacted>\""));
+        assert!(rendered.contains("flow_label: \"<redacted>\""));
+        assert!(!rendered.contains("171, 205, 239"));
+        assert!(!rendered.contains("165, 165"));
+
+        let padded = cell.into_padded_frame().expect("pad redaction fixture");
+        let padded_debug = format!("{padded:?}");
+        assert!(padded_debug.contains("bytes: \"<redacted>\""));
+        assert!(!padded_debug.contains("171, 205, 239"));
+
+        let expected = padded.as_ref().to_vec();
+        let mut transferred = padded.into_bytes();
+        assert_eq!(transferred.as_slice(), expected.as_slice());
+        clear_vpn_frame(&mut transferred);
+        assert!(transferred.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn vpn_plaintext_clear_helpers_zero_buffers() {
+        let mut payload = vec![0xA5; 64];
+        payload.truncate(17);
+        let allocation_len = payload.capacity();
+        assert!(allocation_len > payload.len());
+        clear_vpn_plaintext(&mut payload);
+        assert!(payload.is_empty());
+        assert_eq!(payload.capacity(), allocation_len);
+
+        let mut frame = [0x5A; VPN_CELL_LEN];
+        clear_vpn_frame(&mut frame);
+        assert!(frame.iter().all(|byte| *byte == 0));
+
+        let mut helper_ticket = [0xC3; VPN_HELPER_TICKET_LEN];
+        clear_helper_ticket_frame(&mut helper_ticket);
+        assert!(helper_ticket.iter().all(|byte| *byte == 0));
+        assert!(std::mem::needs_drop::<VpnCellV1>());
+        assert!(std::mem::needs_drop::<VpnPaddedCellV1>());
+    }
+
+    #[test]
+    fn vpn_cell_into_payload_transfers_plaintext_explicitly() {
+        let expected = vec![0xA5; 17];
+        let cell = VpnCellV1 {
+            header: VpnCellHeaderV1 {
+                version: 1,
+                class: VpnCellClassV1::Data,
+                flags: VpnCellFlagsV1::new(false, false, false, false),
+                circuit_id: [0x11; 16],
+                flow_label: VpnFlowLabelV1::from_u32(1).expect("flow label"),
+                sequence: 1,
+                ack: 0,
+                padding_budget_ms: 5,
+                payload_len: expected.len() as u16,
+            },
+            payload: expected.clone(),
+        };
+
+        assert_eq!(cell.into_payload(), expected);
+    }
+
     #[test]
     fn padded_cell_parses_roundtrip() {
         let header = VpnCellHeaderV1 {
@@ -3602,7 +3986,7 @@ mod tests {
         let mut padded = VpnCellV1 { header, payload }
             .into_padded_frame()
             .expect("frame padded");
-        padded.bytes[1] = 9;
+        padded.as_mut()[1] = 9;
         let parsed = padded.parse();
         assert!(matches!(parsed, Err(VpnCellError::InvalidClass(9))));
     }
@@ -3626,7 +4010,7 @@ mod tests {
         .into_padded_frame()
         .expect("frame");
         // Scribble a non-zero padding byte beyond the payload length.
-        padded.bytes[VPN_HEADER_LEN + 4] = 0xAA;
+        padded.as_mut()[VPN_HEADER_LEN + 4] = 0xAA;
         let parsed = padded.parse();
         assert!(matches!(
             parsed,
@@ -3652,7 +4036,7 @@ mod tests {
             .into_padded_frame()
             .expect("frame padded");
         // Set a reserved flag bit.
-        padded.bytes[2] = 0x80;
+        padded.as_mut()[2] = 0x80;
         let parsed = padded.parse();
         assert!(matches!(
             parsed,
@@ -3677,7 +4061,7 @@ mod tests {
             .into_padded_frame()
             .expect("frame padded");
         let overrun = u16::try_from(VpnCellV1::max_payload_len() + 1).expect("fits in u16");
-        padded.bytes[40..42].copy_from_slice(&overrun.to_be_bytes());
+        padded.as_mut()[40..42].copy_from_slice(&overrun.to_be_bytes());
         let parsed = padded.parse();
         assert!(matches!(parsed, Err(VpnCellError::PayloadTooLarge { .. })));
     }
@@ -3708,7 +4092,7 @@ mod tests {
             .into_padded_frame()
             .expect("frame");
         let last = VPN_CELL_LEN - 1;
-        frame.bytes[last] = 1;
+        frame.as_mut()[last] = 1;
         let parsed = frame.parse();
         assert!(matches!(
             parsed,
@@ -4039,11 +4423,9 @@ mod tests {
                 "encoded frame did not match fixture for {}",
                 vector.name
             );
-            let parsed = VpnPaddedCellV1 {
-                bytes: vector.frame_bytes(),
-            }
-            .parse()
-            .expect("fixture frame should parse");
+            let parsed = VpnPaddedCellV1::from_bytes(vector.frame_bytes())
+                .parse()
+                .expect("fixture frame should parse");
             assert_eq!(
                 1, parsed.header.version,
                 "version mismatch for {}",

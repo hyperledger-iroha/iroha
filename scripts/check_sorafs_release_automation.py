@@ -268,9 +268,9 @@ RUNTIME_PROVIDER_RELEASE_WORKFLOW_MARKERS: tuple[str, ...] = (
     "run: python3 scripts/tests/check_runtime_provider_broker_install_test.py",
 )
 POP_BROKER_OPERATION_IDS: dict[str, int] = {
-    "OPERATION_POP_RUNTIME_OPEN_V1": 118,
-    "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1": 119,
-    "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1": 120,
+    "OPERATION_POP_RUNTIME_OPEN_V1": 60,
+    "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1": 117,
+    "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1": 118,
 }
 POP_BROKER_RETIRED_SECRET_MARKERS: tuple[str, ...] = (
     "PopRuntimeResolveResultWireV1",
@@ -392,6 +392,8 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
         "test_consumer_drop_in_hardlink_is_rejected",
     ),
     "crates/irohad/src/runtime_provider_broker.rs": (
+        "mod api;",
+        "mod launcher;",
         'include!("runtime_provider_broker/protocol.rs");',
     ),
     "crates/irohad/src/runtime_provider_broker/platform.rs": (
@@ -408,9 +410,9 @@ RUNTIME_PROVIDER_DEPLOYMENT_ASSET_MARKERS: dict[str, tuple[str, ...]] = {
         "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1",
     ),
     "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs": (
-        "OPERATION_POP_RUNTIME_OPEN_V1: u16 = 118",
-        "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1: u16 = 119",
-        "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1: u16 = 120",
+        "OPERATION_POP_RUNTIME_OPEN_V1: u16 = 60",
+        "OPERATION_POP_ENROLLMENT_RECIPIENT_OPEN_V1: u16 = 117",
+        "OPERATION_POP_WALLET_RECIPIENT_OPEN_V1: u16 = 118",
         "PopRuntimeOpenResultWireV1 {",
         "PopRecipientOpenRequestWireV1 {",
         "PopRecipientOpenResultWireV1 {",
@@ -494,7 +496,6 @@ RUNTIME_PROVIDER_DEPLOYMENT_FORBIDDEN_MARKERS: dict[str, tuple[str, ...]] = {
     ),
     "crates/irohad/src/runtime_provider_broker/protocol_primitives.rs": (
         "OPERATION_POP_RUNTIME_RESOLVE_V1",
-        "u16 = 60;",
         "HybridSecretKey",
         *POP_BROKER_RETIRED_SECRET_MARKERS,
     ),
@@ -1466,7 +1467,7 @@ def _rust_struct_field_inventory(
 
 
 def _validate_pop_broker_hard_cut_contract(root: Path) -> list[str]:
-    """Pin the secret-free PoP broker open protocol and retired operation 60."""
+    """Pin the compact secret-free PoP broker open protocol."""
 
     relative_sources = {
         "broker": "crates/irohad/src/runtime_provider_broker.rs",
@@ -1500,11 +1501,8 @@ def _validate_pop_broker_hard_cut_contract(root: Path) -> list[str]:
             errors.append(
                 f"PoP broker operation {operation} must retain wire id {wire_id}"
             )
-    if "OPERATION_POP_RUNTIME_RESOLVE_V1" in "\n".join(sources.values()) or re.search(
-        r"(?m)^\s*pub\(super\)\s+const\s+[A-Z0-9_]+\s*:\s*u16\s*=\s*60\s*;",
-        protocol,
-    ):
-        errors.append("PoP broker operation 60/runtime resolve must remain retired")
+    if "OPERATION_POP_RUNTIME_RESOLVE_V1" in "\n".join(sources.values()):
+        errors.append("PoP broker retired runtime-resolve operation name must remain absent")
 
     for struct_name, expected_fields in POP_BROKER_WIRE_FIELD_INVENTORIES.items():
         observed_fields = _rust_struct_field_inventory(protocol, struct_name)

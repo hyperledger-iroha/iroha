@@ -47,19 +47,9 @@ fn print_usage() {
     eprintln!(
         "    Lint and migrate Iroha 2 configs/genesis to Iroha 3 defaults (Nexus lanes, SoraFS, fee asset). Writes migrated copies when output paths are provided."
     );
-    eprintln!("  cargo xtask address-manifest verify --bundle <dir> [--previous <dir>]");
-    eprintln!(
-        "    Validate address manifest bundles (checksums, entry schema, monotonic sequence/digest). See specs/runbooks/address_manifest_ops.md for required inputs."
-    );
     eprintln!("  cargo xtask address-vectors [--out <path>] [--stdout] [--verify]");
     eprintln!(
         "    Emit or verify the ADDR-2 I105/multisig fixture. Defaults to fixtures/account/address_vectors.json"
-    );
-    eprintln!(
-        "  cargo xtask address-local8-gate --input <prom-range.json> [--window-days 30] [--json-out <path|->] [--skip-collisions]"
-    );
-    eprintln!(
-        "    Check torii_address_local8_total / torii_address_collision_total counters over a Prometheus range query response and fail when the 30-day zero-usage gate is not met."
     );
     eprintln!(
         "  cargo xtask zk-vote-tally-bundle [--out <path>] [--verify] [--print-hashes] [--summary-json <path|->] [--attestation <path|->]"
@@ -133,7 +123,7 @@ fn print_usage() {
     );
     eprintln!("  cargo xtask soranet-gateway-m2 [--config <path>] [--output-dir <path>]");
     eprintln!(
-        "    Build the SNNet-15M2 beta bundle (DoQ/ODoH preview configs, trustless verifier wiring, PQ readiness, compliance + hardening summaries, prepaid billing). Defaults to configs/soranet/gateway_m2/beta_config.json and artifacts/soranet/gateway_m2/beta."
+        "    Build the SNNet-15M2 beta bundle (DoQ/ODoH preview configs, trustless verifier wiring, compliance + hardening summaries, prepaid billing). Qualify PQ separately with the strict soranet-gateway-pq command. Defaults to configs/soranet/gateway_m2/beta_config.json and artifacts/soranet/gateway_m2/beta."
     );
     eprintln!(
         "  cargo xtask soranet-gateway-m3 --m2-summary <path> --autoscale-plan <path> --worker-pack <path> [--out <path>] [--sla-target <label>]"
@@ -146,10 +136,10 @@ fn print_usage() {
         "    Emit the SN15-M0 ops pack (OTEL pipeline, alerts, GameDay, GAR/security outlines) with a JSON summary. Defaults to configs/soranet/gateway_m0/observability."
     );
     eprintln!(
-        "  cargo xtask soranet-gateway-pq --srcv2 <path> --tls-bundle <dir> --trustless-config <path> [--pop <name>] [--out <dir>] [--canary <host> ...] [--phase <1|2|3>]"
+        "  cargo xtask soranet-gateway-pq --srcv2 <path> --issuer-ed25519-hex <hex> --issuer-mldsa65-hex <hex> --tls-bundle <dir> --trustless-config <path> --at-unix <unix-seconds> [--pop <name>] [--out <dir>]"
     );
     eprintln!(
-        "    Generate the SNNet-15PQ readiness bundle (SRCv2 dual-sig validation, TLS/ECH evidence, trustless verifier config, canary host list) under artifacts/soranet/gateway_pq unless overridden."
+        "    Generate the SNNet-15PQ readiness bundle (time-bound SRCv2 dual-signature validation, TLS/ECH evidence, and trustless verifier config) under artifacts/soranet/gateway_pq unless overridden."
     );
     eprintln!("  cargo xtask soranet-bug-bounty --config <path> [--output-dir <path>]");
     eprintln!(
@@ -283,10 +273,10 @@ fn print_usage() {
         "    Scan the Taikai spool for anchor artefacts, emit a JSON summary (pending + delivered), optionally copy files into a bundle dir, and sign the report with an Ed25519 key."
     );
     eprintln!(
-        "  cargo xtask taikai-rpt-verify --envelope <path> [--gar <path>] [--cek-receipt <path>] [--bundle <path>] [--json-out <path|->]"
+        "  cargo xtask taikai-rpt-verify --envelope <path> --gar <path> --cek-receipt <path> --bundle <path> [--json-out <path|->]"
     );
     eprintln!(
-        "    Decode a replication proof token (.to or JSON) and optionally verify the referenced GAR, CEK receipt, and bundle digests. Use --json-out - to emit the structured report on stdout."
+        "    Decode a replication proof token (.to or JSON) and verify every referenced GAR, CEK receipt, and bundle digest. Use --json-out - to emit the structured report on stdout."
     );
     eprintln!(
         "  cargo xtask sorafs-burn-in-check --log <telemetry.log> [--log <telemetry.log>] [--window-days <days>] [--min-pq-ratio <ratio>] [--max-brownout-ratio <ratio>] [--max-no-provider-errors <count>] [--min-fetches <count>] [--out <path>]"

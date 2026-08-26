@@ -490,6 +490,10 @@ fn rekey_account_id(
             format!("account `{new_account}` already exists").into(),
         ));
     }
+    crate::smartcontracts::isi::kaigi::ensure_account_id_is_not_retired_rekey_predecessor(
+        state_transaction,
+        new_account,
+    )?;
     let account_value = state_transaction
         .world
         .accounts
@@ -524,6 +528,12 @@ fn rekey_account_id(
     );
     if let Some(label) = account_value.label().cloned() {
         labels_to_repoint.insert(label);
+    }
+    if labels_to_repoint.is_empty() {
+        crate::smartcontracts::isi::kaigi::ensure_kaigi_account_can_rekey_without_continuity(
+            state_transaction,
+            old_account,
+        )?;
     }
     // Alias bindings and authoritative SNS ownership are one invariant. Scan the authoritative
     // namespace, rather than only the binding indexes, so acquired-but-unbound and
@@ -3089,7 +3099,7 @@ mod tests {
         query::store::LiveQueryStore,
         sns::{
             SnsNamespace, get_name_record, policy_by_id, quote_resolved_name_registration,
-            seed_default_namespace_policies, sync_default_namespace_policy_payment_asset,
+            seed_default_namespace_policies_for_payment_asset,
         },
         state::{State, World},
     };
@@ -3117,10 +3127,11 @@ mod tests {
                 SettlementReceipt,
             },
         },
+        kaigi::{KaigiId, KaigiRecord, NewKaigi, kaigi_metadata_key},
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, UniversalAccountId},
         oracle::{FeedConfigVersion, FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         permission::Permission,
-        prelude::{Domain, InstructionBox, Quantity, Register},
+        prelude::{Domain, InstructionBox, Json, Quantity, Register},
         transaction::IvmBytecode,
     };
     use iroha_executor_data_model::isi::multisig::{
@@ -3218,13 +3229,9 @@ mod tests {
             )
             .build(&signer1_id)],
         );
-        seed_default_namespace_policies(&mut world);
-        assert!(
-            sync_default_namespace_policy_payment_asset(
-                &mut world,
-                &payment_asset_definition_id.to_string()
-            ),
-            "fixture SNS policies must use the configured Nexus fee asset"
+        seed_default_namespace_policies_for_payment_asset(
+            &mut world,
+            &payment_asset_definition_id.to_string(),
         );
         let state = State::new_with_chain(
             world,
@@ -3322,6 +3329,7 @@ mod tests {
         .expect("FI account alias quote");
         let policy_version =
             policy_by_id(tx.world(), iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID)
+                .expect("valid account alias policy state")
                 .expect("account alias policy")
                 .policy_version;
         let instructions = vec![
@@ -4212,6 +4220,60 @@ mod tests {
         }
     }
     #[test]
+    fn aliasless_rekey_rejects_active_kaigi_host_without_partial_mutation() {
+        tx!(
+            state,
+            block,
+            tx,
+            World::new(),
+            "multisig-aliasless-rekey-kaigi-continuity"
+        );
+        let domain_id = DomainId::try_new("rekey", "universal").expect("domain id");
+        let old_account = new_account_id(&checked_keypair());
+        let new_account = new_account_id(&checked_keypair());
+        domain!(tx, old_account, domain_id, "register rekey domain");
+        account!(
+            tx,
+            old_account,
+            domain_id,
+            old_account,
+            "register old account"
+        );
+        let call_id = KaigiId::new(domain_id.clone(), "active-call".parse().expect("call name"));
+        let record = KaigiRecord::from_new(
+            &NewKaigi::with_defaults(call_id.clone(), old_account.clone()),
+            0,
+        );
+        tx.world
+            .domain_mut(&domain_id)
+            .expect("domain")
+            .metadata_mut()
+            .insert(
+                kaigi_metadata_key(&call_id.call_name).expect("Kaigi key"),
+                Json::try_new(record).expect("serialize Kaigi record"),
+            );
+
+        let error = rekey_account_id(&mut tx, &old_account, &new_account, Some(&domain_id))
+            .expect_err("aliasless rekey must not strand the active Kaigi host ID");
+        assert!(
+            error
+                .to_string()
+                .contains("rekey without durable account-alias continuity"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            tx.world.account(&old_account).is_ok(),
+            "rejected rekey must preserve the old account"
+        );
+        assert!(
+            matches!(
+                tx.world.account(&new_account),
+                Err(FindError::Account(account)) if account == new_account
+            ),
+            "rejected rekey must not create the replacement account"
+        );
+    }
+    #[test]
     fn rekey_account_id_preflights_every_alias_lease_without_partial_mutation() {
         tx!(
             state,
@@ -4353,7 +4415,7 @@ mod tests {
         let mut malformed_rekey_record = canonical_rekey_record.clone();
         malformed_rekey_record
             .transition_provenance
-            .push(AccountRekeyTransitionProvenance::LegacyUnspecified);
+            .push(AccountRekeyTransitionProvenance::AccountIdRekey);
         tx.world
             .account_rekey_records
             .insert(aliases[0].clone(), malformed_rekey_record);
@@ -6092,18 +6154,7 @@ seiyaku TriggerDispatch {
             .execute(&multisig_id, &mut tx)
             .expect("register event-argument-aware staged mint trigger");
         let args_json = format!(
-            r#"{{
-                "ev": {{
-                    "action":"create",
-                    "request_id":"mrtest",
-                    "asset_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa",
-                    "to_account_id":"{multisig_id}",
-                    "amount":"111",
-                    "requested_by_actor_hex":"0x7b226163746f72223a226f70657261746f7231227d",
-                    "created_at_ms":1779225455574,
-                    "expires_at_ms":1779311855574
-                }}
-            }}"#,
+            r#"{{"ev":{{"action":"create","amount":"111","asset_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","created_at_ms":1779225455574,"expires_at_ms":1779311855574,"request_id":"mrtest","requested_by_actor_hex":"0x7b226163746f72223a226f70657261746f7231227d","to_account_id":"{multisig_id}"}}}}"#,
             multisig_id = multisig_id,
         );
         let instructions = vec![InstructionBox::from(

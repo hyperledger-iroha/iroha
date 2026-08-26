@@ -65,25 +65,6 @@ fn promote_commit_marker_temp_and_sync(temporary_path: &Path, stable_path: &Path
     }
     Ok(())
 }
-fn rollback_fault_point(point: RollbackFaultPoint) -> Result<()> {
-    #[cfg(test)]
-    if FAIL_ROLLBACK_AT.with(|fault| {
-        if fault.get() == Some(point) {
-            fault.set(None);
-            true
-        } else {
-            false
-        }
-    }) {
-        return Err(Error::IO(
-            std::io::Error::other(format!("injected rollback interruption at {point:?}")),
-            PathBuf::from("rollback_intent_test_fail"),
-        ));
-    }
-    #[cfg(not(test))]
-    let _ = point;
-    Ok(())
-}
 fn sync_bound_progress_intent_file(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_BOUND_PROGRESS_INTENT_FILE_SYNC.with(|flag| flag.replace(false)) {
@@ -306,13 +287,6 @@ pub enum Error {
         /// Proposal height whose authenticated consensus epoch could not be resolved.
         proposal_height: u64,
         /// Fail-closed epoch-schedule diagnostic.
-        reason: String,
-    },
-    /// Invalid or unrecoverable Kura rollback intent at `{path:?}`: {reason}
-    RollbackIntentInvalid {
-        /// Durable intent path whose transaction cannot be trusted or completed.
-        path: PathBuf,
-        /// Stable diagnostic describing the violated rollback invariant.
         reason: String,
     },
     /// Failed reading/writing {1:?} from disk: {0}

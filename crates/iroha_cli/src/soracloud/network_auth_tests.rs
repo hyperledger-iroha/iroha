@@ -16,7 +16,11 @@ fn build_soracloud_mutation_auth_headers_adds_single_sig_freshness_headers() {
         reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
     let headers = build_soracloud_mutation_auth_headers(&config, &endpoint, br#"{"noop":true}"#)
         .expect("single-sig headers");
-    let header_map: BTreeMap<_, _> = headers.into_iter().collect();
+    assert_eq!(
+        headers.expected_response_signers,
+        vec![config.key_pair.public_key().clone()]
+    );
+    let header_map: BTreeMap<_, _> = headers.headers.into_iter().collect();
     assert_eq!(
         header_map.get(HEADER_IROHA_ACCOUNT),
         Some(
@@ -245,7 +249,11 @@ fn build_soracloud_mutation_auth_headers_uses_witness_file_when_configured() {
             body,
         )
         .expect("bounded canonical witness request hash"),
-        signatures: Vec::new(),
+        signatures: vec![CanonicalRequestSignatureWitnessV1 {
+            signer: config.key_pair.public_key().clone(),
+            signature: Signature::try_new(config.key_pair.private_key(), b"fixture witness")
+                .expect("fixture witness signature"),
+        }],
     };
     let dir = temp_dir("witness_headers");
     let witness_path = dir.join("witness.json");
@@ -256,12 +264,49 @@ fn build_soracloud_mutation_auth_headers_uses_witness_file_when_configured() {
     .expect("write witness file");
     config.soracloud_http_witness_file = Some(witness_path);
     let headers = build_soracloud_mutation_auth_headers(&config, &endpoint, body).expect("headers");
-    let header_map: BTreeMap<_, _> = headers.into_iter().collect();
+    assert_eq!(
+        headers.expected_response_signers,
+        vec![config.key_pair.public_key().clone()]
+    );
+    let header_map: BTreeMap<_, _> = headers.headers.into_iter().collect();
     assert!(!header_map.contains_key(HEADER_IROHA_ACCOUNT));
     assert!(header_map.contains_key(HEADER_IROHA_WITNESS));
     assert!(!header_map.contains_key(HEADER_IROHA_SIGNATURE));
     assert!(!header_map.contains_key(HEADER_IROHA_TIMESTAMP_MS));
     assert!(!header_map.contains_key(HEADER_IROHA_NONCE));
+}
+
+#[test]
+fn build_soracloud_mutation_auth_headers_rejects_empty_witness_signer_set() {
+    let mut config = crate::fallback_config();
+    let endpoint =
+        reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
+    let body = br#"{"noop":true}"#;
+    let witness = CanonicalRequestWitnessV1 {
+        schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+        subject_account: config.account.clone(),
+        timestamp_ms: 42,
+        nonce: "empty-witness-signers".to_owned(),
+        canonical_request_hash: canonical_network_request_hash(
+            &config.network_id,
+            &reqwest::Method::POST,
+            &endpoint,
+            body,
+        )
+        .expect("bounded canonical witness request hash"),
+        signatures: Vec::new(),
+    };
+    let dir = temp_dir("empty_witness_signers");
+    let witness_path = dir.join("witness.json");
+    fs::write(
+        &witness_path,
+        json::to_vec(&witness).expect("encode witness json"),
+    )
+    .expect("write witness file");
+    config.soracloud_http_witness_file = Some(witness_path);
+    let error = build_soracloud_mutation_auth_headers(&config, &endpoint, body)
+        .expect_err("empty canonical request witness signer set must fail");
+    assert!(error.to_string().contains("at least one signature"));
 }
 
 #[test]

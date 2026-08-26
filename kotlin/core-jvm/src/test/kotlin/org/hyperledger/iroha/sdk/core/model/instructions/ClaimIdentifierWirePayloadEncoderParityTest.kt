@@ -221,12 +221,23 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
         for ((label, payload) in listOf(
             "opaque_id" to samplePayload(opaqueId = " " + "opaque:" + "44".repeat(32)),
             "receipt_hash" to samplePayload(receiptHash = "55".repeat(32) + " "),
-            "uaid" to samplePayload(uaid = " " + "uaid:" + "66".repeat(32)),
+            "uaid" to samplePayload(uaid = " " + "uaid:" + "66".repeat(31) + "67"),
             "program_digest" to samplePayload(programDigest = " " + "11".repeat(32)),
             "opening input_ciphertext_hash" to samplePayload(openingInputCiphertextHash = "ee".repeat(32) + " "),
         )) {
             assertFailsWith<IllegalArgumentException>("hash exactness $label") {
                 IdentifierReceiptCanonicalEncoder.encodePayload(payload)
+            }
+        }
+
+        val canonicalUaid = "uaid:" + "66".repeat(31) + "67"
+        for (uaid in listOf(
+            canonicalUaid.removePrefix("uaid:"),
+            canonicalUaid.uppercase(),
+            "uaid:" + "66".repeat(32),
+        )) {
+            assertFailsWith<IllegalArgumentException>("canonical UAID $uaid") {
+                IdentifierReceiptCanonicalEncoder.encodePayload(samplePayload(uaid = uaid))
             }
         }
 
@@ -351,7 +362,7 @@ class ClaimIdentifierWirePayloadEncoderParityTest {
         openingSignature: String = "a1b2c3d4",
         opaqueId: String = "opaque:" + "44".repeat(32),
         receiptHash: String = "55".repeat(32),
-        uaid: String = "uaid:" + "66".repeat(32),
+        uaid: String = "uaid:" + "66".repeat(31) + "67",
         programDigest: String = "11".repeat(32),
         openingInputCiphertextHash: String = "ee".repeat(32),
         executedAtMs: Long = 42L,

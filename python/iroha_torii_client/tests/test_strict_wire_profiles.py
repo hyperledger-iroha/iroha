@@ -330,6 +330,17 @@ def test_identifier_resolution_receipt_matches_shared_vectors() -> None:
             with pytest.raises(ValueError, match=context.replace(".", r"\.")):
                 verify_identifier_resolution_receipt(padded_hash, fixture["policy"])
 
+    canonical_uaid = fixture["receipt"]["payload"]["uaid"]
+    for noncanonical_uaid in (
+        canonical_uaid.removeprefix("uaid:"),
+        canonical_uaid.upper(),
+        "uaid:" + canonical_uaid.removeprefix("uaid:").upper(),
+    ):
+        mutated = json.loads(json.dumps(fixture["receipt"]))
+        mutated["payload"]["uaid"] = noncanonical_uaid
+        with pytest.raises(ValueError, match=r"payload\.uaid"):
+            verify_identifier_resolution_receipt(mutated, fixture["policy"])
+
     timestamp_exactness_cases = (
         (
             "payload.execution.executed_at_ms",

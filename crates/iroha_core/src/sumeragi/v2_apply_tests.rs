@@ -325,8 +325,8 @@ fn install_live_lifecycle_cursor_for_apply_test(
             ..ProductionInFlightFirstReleaseSessionProjection::default()
         },
         history: ProductionInFlightFirstReleaseHistoryProjection {
-            ever_queue_plan_v4: true,
-            ever_reservation_v5: true,
+            ever_queue_plan_v1: true,
+            ever_reservation_v1: true,
             ..ProductionInFlightFirstReleaseHistoryProjection::default()
         },
         decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
@@ -339,7 +339,7 @@ fn install_live_lifecycle_cursor_for_apply_test(
         1,
         None,
         binding.clone(),
-        crate::kura::AutonomousLifecycleCursorPhaseV2::live(generation.generation(), live_state)
+        crate::kura::AutonomousLifecycleCursorPhaseV1::live(generation.generation(), live_state)
             .expect("construct apply lifecycle Live cursor"),
     )
     .expect("sign apply lifecycle Live cursor");

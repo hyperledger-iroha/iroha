@@ -16,8 +16,17 @@ class LeaveKaigiInstruction(
 
     init {
         require(participant.isNotBlank()) { "participant must not be blank" }
-        if (nullifierIssuedAtMs != null) {
-            require(nullifierIssuedAtMs >= 0) { "nullifier issuedAtMs must be non-negative" }
+        require(commitmentAliasTag == null) {
+            "commitment aliasTag is off-chain only and must be omitted"
+        }
+        require(
+            commitment == null &&
+                nullifierDigest == null &&
+                nullifierIssuedAtMs == null &&
+                rosterRoot == null &&
+                proofBase64 == null
+        ) {
+            "LeaveKaigi privacy artifacts are reserved and must be omitted in V1"
         }
     }
 
@@ -32,9 +41,6 @@ class LeaveKaigiInstruction(
         args["participant"] = participant
         if (commitment != null) {
             args["commitment.commitment"] = commitment
-            if (commitmentAliasTag != null) {
-                args["commitment.alias_tag"] = commitmentAliasTag
-            }
         }
         if (nullifierDigest != null) {
             args["nullifier.digest"] = nullifierDigest
@@ -79,34 +85,31 @@ class LeaveKaigiInstruction(
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): LeaveKaigiInstruction {
+            KaigiInstructionUtils.requireAction(arguments, ACTION)
             val callId = KaigiInstructionUtils.parseCallId(arguments, "call")
             val participant = KaigiInstructionUtils.require(arguments, "participant")
 
-            val commitmentValue = arguments["commitment.commitment"]
-            val commitmentAliasTag = if (commitmentValue != null) arguments["commitment.alias_tag"] else null
-
-            val nullifierDigest = arguments["nullifier.digest"]
-            val nullifierIssuedAtMs = if (nullifierDigest != null) {
-                KaigiInstructionUtils.parseOptionalUnsignedLong(
-                    arguments["nullifier.issued_at_ms"],
-                    "nullifier.issued_at_ms",
-                )
-            } else {
-                null
+            val reservedPrivacyKeys = listOf(
+                "commitment.commitment",
+                "commitment.alias_tag",
+                "nullifier.digest",
+                "nullifier.issued_at_ms",
+                "roster_root",
+                "proof",
+            )
+            require(reservedPrivacyKeys.none(arguments::containsKey)) {
+                "LeaveKaigi privacy artifacts are reserved and must be omitted in V1"
             }
-
-            val rosterRoot = arguments["roster_root"]
-            val proof = arguments["proof"]
 
             return LeaveKaigiInstruction(
                 callId = callId,
                 participant = participant,
-                commitment = commitmentValue,
-                commitmentAliasTag = commitmentAliasTag,
-                nullifierDigest = nullifierDigest,
-                nullifierIssuedAtMs = nullifierIssuedAtMs,
-                rosterRoot = rosterRoot,
-                proofBase64 = proof,
+                commitment = null,
+                commitmentAliasTag = null,
+                nullifierDigest = null,
+                nullifierIssuedAtMs = null,
+                rosterRoot = null,
+                proofBase64 = null,
             )
         }
     }

@@ -1094,6 +1094,147 @@ fn chunk_effect_executor(
     .expect("construct productive-chunk effect executor")
 }
 #[test]
+fn productive_chunk_waits_for_exact_fetch_before_runtime_handoff() {
+    let (mut service, keys) = fixture_with_block_payload();
+    service.max_orphan_chunks = 1;
+    service.max_orphan_chunk_bytes = service.context.da_layout.max_payload_size_bytes;
+    let _chunk_root = install_temporary_chunk_root(&mut service);
+    let gate_directory = TempDir::new().expect("temporary productive-chunk ingress gate");
+    let ingress = bind_productive_orphan_test_ingress(&mut service, &gate_directory);
+    let (_, manifest, proposal, chunk, sender) = productive_chunk_at_view(&service, &keys, 0);
+    admit_and_terminalize_productive_proposal(&ingress, proposal, sender.clone());
+
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            BlockMessage::V2(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::PayloadChunk(chunk.clone()),
+            )),
+            sender.clone(),
+        )),
+        Ok(FairV2IngressPushDisposition::Enqueued)
+    ));
+    let token = {
+        let state = ingress.state.lock();
+        let record = state
+            .leader_wire_lifecycles
+            .values()
+            .find(|record| record.token.matches_chunk_manifest(chunk.manifest_hash))
+            .expect("productive chunk owns one exact ingress lifecycle");
+        assert_eq!(
+            record.status,
+            super::super::FairV2IngressLeaderWireStatus::Ingress
+        );
+        record.token.clone()
+    };
+    let physical_cut = ingress.next_physical_admission_ordinal();
+
+    let mut executor = chunk_effect_executor(&service, BTreeMap::new());
+    assert!(
+        ingress
+            .capture_next_ingress_turn_cut_before(physical_cut, |occurrence| {
+                super::super::v2_effects::v2_ingress_head_can_drain(
+                    occurrence.inbound(),
+                    &executor,
+                    None,
+                )
+            })
+            .expect("classify the productive pre-fetch chunk")
+            .is_none(),
+        "a current productive chunk must retain durable Ingress ownership until its exact fetch exists"
+    );
+    assert_eq!(service.orphan_chunk_count, 0);
+    assert_eq!(service.orphan_chunk_bytes, 0);
+    assert_eq!(
+        ingress.state.lock().leader_wire_lifecycles[&token.slot].status,
+        super::super::FairV2IngressLeaderWireStatus::Ingress
+    );
+
+    let durable = DurableBodyReceipt::for_test(
+        service.context.id(),
+        manifest.round,
+        manifest.subject,
+        HashOf::new(&manifest),
+    );
+    let durable_executor = chunk_effect_executor(
+        &service,
+        BTreeMap::from([(
+            (manifest.round, manifest.subject),
+            (manifest.clone(), durable),
+        )]),
+    );
+    let durable_cut = ingress
+        .capture_next_ingress_turn_cut_before(physical_cut, |occurrence| {
+            super::super::v2_effects::v2_ingress_head_can_drain(
+                occurrence.inbound(),
+                &durable_executor,
+                None,
+            )
+        })
+        .expect("classify the exact durable-body chunk")
+        .expect("durable body ownership makes the productive chunk drainable");
+    assert_eq!(
+        durable_cut.selected_disposition(),
+        super::super::FairV2IngressDequeueDisposition::Admit
+    );
+    drop(durable_cut);
+
+    let tag = service.active_tag;
+    executor
+        .consume_effects(
+            vec![AdapterEffect::FetchBody {
+                tag,
+                round: manifest.round,
+                subject: manifest.subject,
+                manifest: Some(manifest),
+                certified_sources: Vec::new(),
+                certificate: None,
+            }],
+            &mut service,
+        )
+        .expect("open the exact manifest-bearing chunk fetch");
+    let fetch_cut = ingress
+        .capture_next_ingress_turn_cut_before(physical_cut, |occurrence| {
+            super::super::v2_effects::v2_ingress_head_can_drain(
+                occurrence.inbound(),
+                &executor,
+                None,
+            )
+        })
+        .expect("classify the exact fetch-owned chunk")
+        .expect("an exact manifest fetch makes the productive chunk drainable");
+    let (mut inbound, disposition) = fetch_cut
+        .dequeue_exact_retaining()
+        .unwrap_or_else(|_| panic!("dequeue the exact fetch-owned productive chunk"));
+    assert_eq!(
+        disposition,
+        super::super::FairV2IngressDequeueDisposition::Admit
+    );
+    let ownership = inbound
+        .take_ingress_ownership()
+        .expect("dequeued productive chunk retains fair-ingress ownership");
+    assert!(ownership.leader_wire_runtime_receipt().is_some());
+    let (message, routed_sender) = inbound.into_message_and_sender();
+    let BlockMessage::V2(message) = message else {
+        panic!("productive chunk changed its v2 envelope")
+    };
+    let wire::ConsensusMessageV2Payload::PayloadChunk(routed_chunk) = message.payload else {
+        panic!("productive chunk changed its payload family")
+    };
+    assert_eq!(routed_sender, sender);
+    assert_eq!(
+        service
+            .route_payload_chunk(&mut executor, routed_sender, routed_chunk, ownership)
+            .expect("route the exact fetch-owned productive chunk"),
+        PayloadChunkDisposition::Delivered
+    );
+    assert_eq!(service.orphan_chunk_count, 0);
+    assert_eq!(service.orphan_chunk_bytes, 0);
+    assert_eq!(
+        ingress.state.lock().leader_wire_lifecycles[&token.slot].status,
+        super::super::FairV2IngressLeaderWireStatus::VolatileTerminal
+    );
+}
+#[test]
 #[allow(clippy::too_many_lines)]
 fn durable_reconstructed_body_terminalizes_late_chunk_across_arrival_order() {
     for durable_before_late_chunk in [false, true] {
@@ -1840,6 +1981,18 @@ fn orphan_chunk_cheap_checks_reject_spoofing_and_oversize_without_allocation() {
     assert_eq!(
         service
             .buffer_orphan_payload_chunk(validator_zero.clone(), chunk(hash, 0, b"123456789", 0)),
+        PayloadChunkDisposition::Rejected
+    );
+    let mut missing_signature = chunk(hash, 0, b"a", 0);
+    missing_signature.signature.clear();
+    assert_eq!(
+        service.buffer_orphan_payload_chunk(validator_zero.clone(), missing_signature),
+        PayloadChunkDisposition::Rejected
+    );
+    let mut oversized_signature = chunk(hash, 0, b"a", 0);
+    oversized_signature.signature = vec![0xA5; wire::MAX_CONSENSUS_SIGNATURE_BYTES + 1];
+    assert_eq!(
+        service.buffer_orphan_payload_chunk(validator_zero.clone(), oversized_signature),
         PayloadChunkDisposition::Rejected
     );
     service.max_orphan_chunk_bytes = 1;

@@ -2256,76 +2256,259 @@ async fn explorer_cursor_query_rejects_invalid_bounds_before_http() {
     );
 }
 #[test]
-fn parse_pipeline_smoke_status_accepts_approved_height() {
+fn encode_lower_hex_is_exact() {
+    assert_eq!(encode_lower_hex(&[0x00, 0x0f, 0xa0, 0xff]), "000fa0ff");
+}
+#[test]
+fn parse_pipeline_smoke_status_accepts_only_state_applied_as_commit() {
+    let hash = "ab".repeat(32);
     let value = norito::json!({
-        "hash": "abcd",
+        "hash": hash.clone(),
         "status": {
-            "kind": "Approved",
+            "kind": "Applied",
             "block_height": 7
         },
-        "scope": "local",
-        "resolved_from": "cache"
+        "scope": "global",
+        "resolved_from": "state"
     });
-    let status = parse_pipeline_smoke_status(&value)
-        .expect("status")
-        .expect("terminal status");
+    let status = parse_pipeline_smoke_status(&value, &hash).expect("exact Applied status");
     assert_eq!(status, SmokeTransactionStatus::Committed(7));
 }
 #[test]
-fn parse_pipeline_smoke_status_reports_rejection_reason() {
+fn parse_pipeline_smoke_status_reports_exact_state_rejection() {
+    let hash = "cd".repeat(32);
     let value = norito::json!({
-        "hash": "abcd",
-        "status": {
-            "kind": "Rejected",
-            "rejection_reason": { "Validation": "TooComplex" }
-        },
-        "scope": "local",
-        "resolved_from": "cache"
+        "hash": hash.clone(),
+        "status": { "kind": "Rejected" },
+        "scope": "global",
+        "resolved_from": "state"
     });
-    let status = parse_pipeline_smoke_status(&value)
-        .expect("status")
-        .expect("terminal status");
-    match status {
-        SmokeTransactionStatus::Rejected(reason) => {
-            assert!(reason.contains("TooComplex"), "reason was `{reason}`");
-        }
-        other => panic!("expected rejection, got {other:?}"),
-    }
+    assert_eq!(
+        parse_pipeline_smoke_status(&value, &hash).expect("exact Rejected status"),
+        SmokeTransactionStatus::Rejected("rejected".to_owned())
+    );
 }
 #[test]
-fn parse_pipeline_smoke_status_preserves_queued_reconciliation_evidence() {
+fn parse_pipeline_smoke_status_keeps_cache_hints_as_progress() {
+    let hash = "ef".repeat(32);
     let value = norito::json!({
-        "hash": "abcd",
-        "status": { "kind": "Queued" },
-        "scope": "local",
+        "hash": hash.clone(),
+        "status": { "kind": "Applied", "block_height": 11 },
+        "scope": "global",
         "resolved_from": "cache"
     });
-    let status = parse_pipeline_smoke_status(&value)
-        .expect("status")
-        .expect("queued status remains observable");
-    assert_eq!(status, SmokeTransactionStatus::Queued);
+    assert_eq!(
+        parse_pipeline_smoke_status(&value, &hash).expect("cache hint"),
+        SmokeTransactionStatus::Queued
+    );
+}
+#[test]
+fn parse_pipeline_smoke_status_rejects_open_or_noncanonical_shapes() {
+    let hash = "13".repeat(32);
+    let other_hash = "35".repeat(32);
+    let invalid = [
+        (
+            "unknown root field",
+            norito::json!({
+                "hash": hash.clone(),
+                "status": { "kind": "Applied", "block_height": 7 },
+                "scope": "global",
+                "resolved_from": "state",
+                "legacy_status": "Applied"
+            }),
+        ),
+        (
+            "missing root field",
+            norito::json!({
+                "hash": hash.clone(),
+                "status": { "kind": "Applied", "block_height": 7 },
+                "scope": "global"
+            }),
+        ),
+        (
+            "status alias field",
+            norito::json!({
+                "hash": hash.clone(),
+                "status": { "kind": "Applied", "blockHeight": 7 },
+                "scope": "global",
+                "resolved_from": "state"
+            }),
+        ),
+        (
+            "retired rejection detail",
+            norito::json!({
+                "hash": hash.clone(),
+                "status": { "kind": "Rejected", "rejection_reason": "legacy" },
+                "scope": "global",
+                "resolved_from": "state"
+            }),
+        ),
+        (
+            "mismatched hash",
+            norito::json!({
+                "hash": other_hash,
+                "status": { "kind": "Applied", "block_height": 7 },
+                "scope": "global",
+                "resolved_from": "state"
+            }),
+        ),
+        (
+            "uppercase hash",
+            norito::json!({
+                "hash": hash.to_uppercase(),
+                "status": { "kind": "Applied", "block_height": 7 },
+                "scope": "global",
+                "resolved_from": "state"
+            }),
+        ),
+        (
+            "prefixed hash",
+            norito::json!({
+                "hash": format!("0x{hash}"),
+                "status": { "kind": "Applied", "block_height": 7 },
+                "scope": "global",
+                "resolved_from": "state"
+            }),
+        ),
+        (
+            "padded hash",
+            norito::json!({
+                "hash": format!(" {hash}"),
+                "status": { "kind": "Applied", "block_height": 7 },
+                "scope": "global",
+                "resolved_from": "state"
+            }),
+        ),
+        (
+            "short hash",
+            norito::json!({
+                "hash": "abcd",
+                "status": { "kind": "Applied", "block_height": 7 },
+                "scope": "global",
+                "resolved_from": "state"
+            }),
+        ),
+        (
+            "byte-shaped hash",
+            norito::json!({
+                "hash": [18, 18],
+                "status": { "kind": "Applied", "block_height": 7 },
+                "scope": "global",
+                "resolved_from": "state"
+            }),
+        ),
+        (
+            "local scope",
+            norito::json!({
+                "hash": hash.clone(),
+                "status": { "kind": "Applied", "block_height": 7 },
+                "scope": "local",
+                "resolved_from": "state"
+            }),
+        ),
+        (
+            "unknown resolution source",
+            norito::json!({
+                "hash": hash.clone(),
+                "status": { "kind": "Applied", "block_height": 7 },
+                "scope": "global",
+                "resolved_from": "ledger"
+            }),
+        ),
+        (
+            "unknown status kind",
+            norito::json!({
+                "hash": hash.clone(),
+                "status": { "kind": "Pending" },
+                "scope": "global",
+                "resolved_from": "cache"
+            }),
+        ),
+        (
+            "missing status kind",
+            norito::json!({
+                "hash": hash.clone(),
+                "status": {},
+                "scope": "global",
+                "resolved_from": "cache"
+            }),
+        ),
+        (
+            "string height",
+            norito::json!({
+                "hash": hash.clone(),
+                "status": { "kind": "Applied", "block_height": "7" },
+                "scope": "global",
+                "resolved_from": "state"
+            }),
+        ),
+        (
+            "zero height",
+            norito::json!({
+                "hash": hash.clone(),
+                "status": { "kind": "Applied", "block_height": 0 },
+                "scope": "global",
+                "resolved_from": "state"
+            }),
+        ),
+        (
+            "missing Applied height",
+            norito::json!({
+                "hash": hash.clone(),
+                "status": { "kind": "Applied" },
+                "scope": "global",
+                "resolved_from": "state"
+            }),
+        ),
+    ];
+    for (label, value) in invalid {
+        assert!(
+            parse_pipeline_smoke_status(&value, &hash).is_err(),
+            "{label} must fail closed"
+        );
+    }
+
+    for invalid_hash in [
+        "abcd".to_owned(),
+        "12".repeat(32),
+        hash.to_uppercase(),
+        format!("0x{hash}"),
+    ] {
+        let value = norito::json!({
+            "hash": hash.clone(),
+            "status": { "kind": "Applied", "block_height": 7 },
+            "scope": "global",
+            "resolved_from": "state"
+        });
+        assert!(
+            parse_pipeline_smoke_status(&value, &invalid_hash).is_err(),
+            "noncanonical request hash must fail: {invalid_hash}"
+        );
+    }
 }
 #[tokio::test(flavor = "current_thread")]
 async fn fetch_smoke_transaction_status_uses_pipeline_status() {
     let Some(server) = try_start_mock_server() else {
         return;
     };
+    let hash = "ab".repeat(32);
     let body = norito::json!({
-        "hash": "abcd",
-        "status": { "kind": "Committed", "block_height": 9 },
-        "scope": "local",
-        "resolved_from": "cache"
+        "hash": hash.clone(),
+        "status": { "kind": "Applied", "block_height": 9 },
+        "scope": "global",
+        "resolved_from": "state"
     });
     let mock = server.mock(|when, then| {
         when.method(GET)
             .path("/v1/pipeline/transactions/status")
-            .query_param("hash", "abcd");
+            .query_param("hash", hash.as_str())
+            .query_param("scope", "global");
         then.status(200)
             .body(norito::json::to_string(&body).expect("serialize"));
     });
     let client = ToriiClient::new(server.url("/")).expect("client");
     let status = client
-        .fetch_smoke_transaction_status("abcd")
+        .fetch_smoke_transaction_status(&hash)
         .await
         .expect("status")
         .expect("terminal status");
@@ -2333,21 +2516,24 @@ async fn fetch_smoke_transaction_status_uses_pipeline_status() {
     assert_eq!(status, SmokeTransactionStatus::Committed(9));
 }
 #[tokio::test(flavor = "current_thread")]
-async fn fetch_smoke_transaction_status_falls_back_to_explorer() {
+async fn fetch_smoke_transaction_status_does_not_fall_back_to_explorer() {
     let Some(server) = try_start_mock_server() else {
         return;
     };
+    let hash = "cd".repeat(32);
     let pipeline = server.mock(|when, then| {
         when.method(GET)
             .path("/v1/pipeline/transactions/status")
-            .query_param("hash", "abcd");
+            .query_param("hash", hash.as_str())
+            .query_param("scope", "global");
         then.status(404);
     });
     let explorer = server.mock(|when, then| {
-        when.method(GET).path("/v1/explorer/transactions/abcd");
+        when.method(GET)
+            .path(format!("/v1/explorer/transactions/{hash}"));
         then.status(200).body(
             norito::json::to_string(&norito::json!({
-                "hash": "abcd",
+                "hash": hash.clone(),
                 "status": "Committed",
                 "block": 12
             }))
@@ -2356,13 +2542,57 @@ async fn fetch_smoke_transaction_status_falls_back_to_explorer() {
     });
     let client = ToriiClient::new(server.url("/")).expect("client");
     let status = client
+        .fetch_smoke_transaction_status(&hash)
+        .await
+        .expect("404 is pending");
+    pipeline.assert();
+    assert_eq!(status, None);
+    assert_eq!(explorer.hits(), 0, "pipeline 404 must not query Explorer");
+}
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_smoke_transaction_status_rejects_retired_pending_http_statuses() {
+    for status in [202_u16, 204] {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+        let hash = "ab".repeat(32);
+        let mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/v1/pipeline/transactions/status")
+                .query_param("hash", hash.as_str())
+                .query_param("scope", "global");
+            then.status(status);
+        });
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let error = client
+            .fetch_smoke_transaction_status(&hash)
+            .await
+            .expect_err("retired pending response status must fail");
+        mock.assert();
+        assert!(
+            error.to_string().contains(&status.to_string()),
+            "unexpected HTTP {status} error: {error}"
+        );
+    }
+}
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_smoke_transaction_status_rejects_noncanonical_hash_before_http() {
+    let Some(server) = try_start_mock_server() else {
+        return;
+    };
+    let short_hash = server.mock(|when, then| {
+        when.method(GET)
+            .path("/v1/pipeline/transactions/status")
+            .query_param("hash", "abcd");
+        then.status(404);
+    });
+    let client = ToriiClient::new(server.url("/")).expect("client");
+    let error = client
         .fetch_smoke_transaction_status("abcd")
         .await
-        .expect("status")
-        .expect("terminal status");
-    pipeline.assert();
-    explorer.assert();
-    assert_eq!(status, SmokeTransactionStatus::Committed(12));
+        .expect_err("short transaction hash must fail locally");
+    assert!(error.to_string().contains("64 lowercase hexadecimal"));
+    assert_eq!(short_hash.hits(), 0, "invalid hash must not reach Torii");
 }
 #[tokio::test(flavor = "current_thread")]
 async fn list_triggers_parses_results() {

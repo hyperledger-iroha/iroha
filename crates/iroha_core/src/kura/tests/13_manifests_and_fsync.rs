@@ -542,11 +542,21 @@ fn fast_init_defers_body_validation_without_rewriting_hashes() {
     let merge_path = RuntimeLaneConfig::default()
         .primary()
         .merge_log_path(temp_dir.path());
-    let invalid_merge_tail = [0xFF, 0xFF, 0xFF];
-    std::fs::write(&merge_path, invalid_merge_tail).expect("forge partial merge-log tail");
+    std::fs::remove_file(&merge_path).expect("remove deferred merge log");
     let geometry_path = temp_dir.path().join("lane_geometry_journal.norito");
     let invalid_geometry = [0xA5; 1024];
     std::fs::write(&geometry_path, invalid_geometry).expect("forge opaque geometry journal");
+    let deferred_geometry_artifacts = [
+        temp_dir.path().join("lane_geometry_journal.norito.tmp"),
+        temp_dir
+            .path()
+            .join("lane_geometry_journal.norito.restore.tmp"),
+        primary_blocks_dir(&temp_dir).join(".lane-incarnation.norito.tmp"),
+    ];
+    for path in &deferred_geometry_artifacts {
+        std::fs::write(path, b"Strict recovery required")
+            .expect("forge deferred geometry artifact");
+    }
     let hash_path = primary_blocks_dir(&temp_dir).join(HASHES_FILE_NAME);
     let forged =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
@@ -591,16 +601,22 @@ fn fast_init_defers_body_validation_without_rewriting_hashes() {
             subsystem: "merge ledger"
         })
     ));
-    assert_eq!(
-        std::fs::read(&merge_path).expect("reread deferred merge log"),
-        invalid_merge_tail,
-        "Fast startup must not decode or repair the merge log"
+    assert!(
+        !merge_path.exists(),
+        "Fast startup must neither require nor recreate the deferred merge log"
     );
     assert_eq!(
         std::fs::read(&geometry_path).expect("reread deferred geometry journal"),
         invalid_geometry,
         "Fast startup must not decode or repair lane geometry"
     );
+    for path in deferred_geometry_artifacts {
+        assert_eq!(
+            std::fs::read(path).expect("reread deferred geometry artifact"),
+            b"Strict recovery required",
+            "Fast startup must ignore auxiliary geometry recovery artifacts",
+        );
+    }
     assert!(matches!(
         kura.latest_autonomous_lane_block_artifacts_snapshot(
             test_network_id(b"fast-startup"),
@@ -838,42 +854,65 @@ fn fast_init_leaves_unpublished_journal_suffix_for_strict_recovery() {
     );
 }
 #[test]
-fn fast_init_rejects_canonical_association_recovery_without_mutation() {
+fn fast_init_ignores_auxiliary_storage_recovery_without_mutation() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 3);
-    let stage_path = primary_blocks_dir(&temp_dir).join(CANONICAL_ASSOCIATION_STAGE_FILE_NAME);
+    let blocks_dir = primary_blocks_dir(&temp_dir);
     let staged_bytes = b"Strict recovery required";
-    std::fs::write(&stage_path, staged_bytes).expect("forge pending association stage");
+    let stage_paths = [
+        blocks_dir
+            .join(COUNT_FILE_NAME)
+            .with_extension("norito.tmp"),
+        blocks_dir.join(DA_BLOCK_REWRITE_STAGE_FILE_NAME),
+        blocks_dir.join(EVICTION_COMPACTION_STAGE_FILE_NAME),
+        blocks_dir.join(CANONICAL_ASSOCIATION_STAGE_FILE_NAME),
+    ];
+    for path in &stage_paths {
+        std::fs::write(path, staged_bytes).expect("forge pending storage stage");
+    }
+    let retained_stage = blocks_dir.join(RETAINED_BLOCK_REWRITE_STAGING_DIR_NAME);
+    std::fs::create_dir(&retained_stage).expect("create retained rewrite stage");
+    std::fs::write(retained_stage.join("opaque"), staged_bytes)
+        .expect("forge retained rewrite stage payload");
+    let before = snapshot_regular_test_tree(&blocks_dir);
 
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.init_mode = InitMode::Fast;
-    Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-        .expect_err("Fast must not decode or recover a canonical association stage");
+    let (kura, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("Fast must ignore a canonical association stage");
+    assert_eq!(count, 3);
+    drop(kura);
 
     assert_eq!(
-        std::fs::read(&stage_path).expect("pending stage remains"),
-        staged_bytes,
-        "Fast rejection must leave the recovery artifact untouched"
+        snapshot_regular_test_tree(&blocks_dir),
+        before,
+        "Fast startup must leave every auxiliary recovery artifact untouched"
     );
 }
 #[test]
-fn fast_init_rejects_prune_recovery_without_root_inventory() {
+fn fast_init_ignores_prune_recovery_without_root_inventory() {
     let temp_dir = TempDir::new().unwrap();
     populate_store(&temp_dir, 3);
-    let intent_path = temp_dir.path().join(PRUNE_INTENT_FILE_NAME);
     let intent_bytes = b"Strict recovery required";
-    std::fs::write(&intent_path, intent_bytes).expect("forge pending prune intent");
+    let intent_paths = [
+        temp_dir.path().join(PRUNE_INTENT_FILE_NAME),
+        temp_dir.path().join(PRUNE_INTENT_TEMP_FILE_NAME),
+    ];
+    for path in &intent_paths {
+        std::fs::write(path, intent_bytes).expect("forge pending prune intent");
+    }
+    let before = snapshot_regular_test_tree(temp_dir.path());
 
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.init_mode = InitMode::Fast;
-    Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-        .expect_err("Fast must not inventory or recover prune artifacts");
+    let (kura, BlockCount(count)) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("Fast must ignore prune artifacts");
+    assert_eq!(count, 3);
+    drop(kura);
 
-    assert_eq!(
-        std::fs::read(&intent_path).expect("pending intent remains"),
-        intent_bytes,
-        "Fast rejection must leave the recovery artifact untouched"
-    );
+    assert_eq!(snapshot_regular_test_tree(temp_dir.path()), before);
 }
 #[test]
 fn fast_init_poisoned_oversized_interior_index_before_body_read() {

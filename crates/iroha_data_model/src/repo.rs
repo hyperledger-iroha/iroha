@@ -284,9 +284,7 @@ mod tests {
     }
     const ALICE_ID_STR: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     fn sample_agreement(initiated_ms: u64, margin_frequency_secs: u64) -> RepoAgreement {
-        let initiator = AccountId::parse_encoded(ALICE_ID_STR)
-            .expect("valid initiator account")
-            .into_account_id();
+        let initiator = AccountId::parse_encoded(ALICE_ID_STR).expect("valid initiator account");
         let counterparty = AccountId::new(
             "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016"
                 .parse()

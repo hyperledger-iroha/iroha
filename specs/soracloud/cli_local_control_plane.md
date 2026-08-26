@@ -28,10 +28,11 @@ ambiguous transport failure, and fails before network I/O when that signer is
 unavailable. A listener API token may be sent in addition, but never replaces
 the account proof.
 
-Only the exact service discovery object, exact service-revision discovery
-object, and current upload encryption-recipient object remain public. Each is
-a single-object read with a 64 KiB encoded-JSON response cap; aggregate or
-sensitive Soracloud state is not part of the public discovery surface.
+Only the exact service discovery and service-revision discovery objects remain
+public. Each is a single-object read with a 64 KiB encoded-JSON response cap;
+aggregate or sensitive Soracloud state is not part of the public discovery
+surface. Uploaded-model registration and status require exact-network account
+authentication, and no recipient-discovery or execution route exists in V1.
 
 ## Runtime Scope
 
@@ -46,17 +47,23 @@ sensitive Soracloud state is not part of the public discovery surface.
 - `PersistentRootLeaseVolume` is required for `HttpService + Inrou`, must mount
   at `/`, and is materialized per replica.
 - Non-root `ServiceLeaseVolume` and `ConfidentialLeaseVolume` attachments are
-  shared across replicas of the same service revision by default.
+  also materialized separately per replica. Inrou V1 never shares or
+  multi-attaches a lease disk between replicas; applications that need shared
+  state must use a separately authenticated distributed service or protocol.
+- A placed Inrou replica is pinned to its exact validator, peer, guest ISA, and
+  placement incarnation for the whole economic lease. Loss of host eligibility
+  marks that assignment unavailable and stops it; V1 never moves the replica or
+  its disks in-lease, and only the exact original host may reactivate it.
 - At runtime, each mounted volume is exposed as:
   - `SORACLOUD_LEASE_VOLUME_<NAME>_DIR`
   - `SORACLOUD_LEASE_VOLUME_<NAME>_MOUNT_PATH`
 - Config and secret materialization is still authoritative. Deploy, upgrade,
   and rollback fail closed when required config/secret bindings are missing or
   inconsistent with the active manifests.
-- Runtime health-report and generated-HF reconciliation cooldown histories
-  expire with their cooldown window and have a hard process-wide entry bound.
-  Identity churn cannot grow either tracker without limit; a full live window
-  fails closed until an entry expires.
+- Runtime health-report cooldown histories expire with their cooldown window
+  and have a hard process-wide entry bound. Identity churn cannot grow the
+  tracker without limit; a full live window fails closed until an entry
+  expires.
 - The current local workflow validates both planes together with
   `iroha soracloud app plan`, resolves manifest-adjacent workspace
   scripts with `iroha soracloud app dev` and
@@ -66,12 +73,12 @@ sensitive Soracloud state is not part of the public discovery surface.
 
 ## Runtime Provenance Signature Framing
 
-Model-host heartbeats and Inrou host advertisements use one canonical V1
-signature preimage. It is the canonical Norito tuple
+Inrou host advertisements and withdrawals use one canonical V1 signature
+preimage. It is the canonical Norito tuple
 `(domain_tag_bytes, version, purpose_wire_id, canonical_payload_bytes)`, where
 the fixed domain is `iroha:soracloud:runtime-provenance:v1\0`, the version is
-`1`, and the immutable purpose ids are `1` for model-host heartbeat and `2` for
-Inrou host advertisement. The byte fields are length-delimited by Norito.
+`1`, and the immutable purpose ids are `1` for Inrou host advertisement and `2`
+for Inrou host withdrawal. The byte fields are length-delimited by Norito.
 
 External signing adapters receive the expected purpose and framed preimage as
 separate inputs and must reject any disagreement before signing. Ledger
@@ -130,7 +137,7 @@ fails verification.
   - prints each child service `workspace_dir` plus discovered child scripts such
     as `dev.sh`, `build.sh`, and `verify-build.sh` when present
   - reports the manifest-adjacent root script paths for `dev.sh`,
-    `build-and-sync.sh`, `deploy.sh`, and `upgrade.sh`
+    `build-and-sync.sh`, `doctor.sh`, and `release.sh`
 - `iroha soracloud app dev`
   - resolves `dev.sh` adjacent to the app manifest
   - `--dry-run` prints the resolved working directory, script path, mixed-plane
@@ -148,31 +155,21 @@ fails verification.
   - fail-closes on CID-only frontend publication, same-origin `/api`, mixed
     hosted-live plus deterministic-vault planes, lease-backed live storage,
     vault-only auth/user bindings, and cross-service route collisions
-- `iroha soracloud app doctor`
-  - resolves `doctor.sh` adjacent to the app manifest
-  - `--dry-run` prints the resolved working directory, script path, mixed-plane
-    summary, the same root app identity fields that `app plan` reports,
-    and the same child service plus route plan
-  - without `--dry-run`, executes the root doctor entrypoint in place
+  - runs directly as a non-mutating local check; the generated `doctor.sh`
+    rebuilds the workspace before invoking it
+- `iroha soracloud app simulate`
+  - projects manifest synchronization and artifact publication locally
+  - does not run build scripts, publish artifacts, query Torii, or submit a
+    transaction
 - `iroha soracloud app release`
-  - resolves `release.sh` adjacent to the app manifest
-  - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
-  - `--dry-run` prints the resolved working directory, script path, mixed-plane
-    summary, the same root app identity fields that `app plan` reports,
-    and the same child service plus route plan
-  - without `--dry-run`, executes the root release entrypoint in place
-- `iroha soracloud app deploy`
-  - resolves `deploy.sh` adjacent to the app manifest
-  - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
-  - `--dry-run` prints the resolved working directory, script path, mixed-plane
-    summary, the same root app identity fields that `app plan` reports,
-    and the same child service plus route plan
-- `iroha soracloud app upgrade`
-  - resolves `upgrade.sh` adjacent to the app manifest
-  - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
-  - `--dry-run` prints the resolved working directory, script path, mixed-plane
-    summary, the same root app identity fields that `app plan` reports,
-    and the same child service plus route plan
+  - is the sole first-release app mutation command and requires `--torii-url`
+  - `--dry-run` resolves the build and release plan only; its report remains
+    blocked because nothing was built, published, submitted, reconciled, or
+    live-verified
+  - without `--dry-run`, runs the manifest-adjacent build-and-sync entrypoint,
+    runs the local doctor, publishes immutable artifacts, signs and submits one
+    deploy mutation, reconciles authoritative status, and verifies exact live
+    route/health responses
 - `iroha soracloud service sync-manifests`
   - recomputes `container.bundle_hash`, the service-side referenced container
     hash, and matching schema versions after local edits
@@ -211,9 +208,9 @@ fails verification.
 
 ## Network-Backed Commands
 
-All deploy, upgrade, rollback, rollout, status, config, secret, HF lease,
-training-job, model registry/status, and app mutation commands are
-Torii-backed and require `--torii-url`.
+All service deploy, upgrade, rollback, rollout, status, config, secret, HF
+lease, training-job, model registry/status, app release, and app status
+commands are Torii-backed and require `--torii-url`.
 
 - `iroha soracloud service deploy`
   - validates a single `SoraDeploymentBundleV1` locally and submits it to
@@ -225,26 +222,14 @@ Torii-backed and require `--torii-url`.
     `POST /v1/soracloud/upgrade`
   - returns the same local route and workspace-script projection that
     `plan` reports, plus the live mutation response
-- `iroha soracloud app deploy`
-  - loads `app_manifest.json`
-  - synchronizes every referenced service pair before submission
-  - publishes the declared static site from `static_site.dist_dir`
-  - deploys every referenced service in one pass
-  - returns the root app `manifest_path`, root `workspace_dir`, root
-    `workspace_scripts`, root `hostname`, the frontend publish projection, the
-    top-level app `routes` split, and one manifest-derived service entry per
-    app service alongside the mutation responses
-- `iroha soracloud app upgrade`
-  - follows the same app-wide flow, but uses upgrade semantics
-  - returns the same app-scoped root manifest/hostname/workspace metadata,
-    frontend, top-level `routes`, and service projection
 - `iroha soracloud app release`
-  - composes the manifest-adjacent `build-and-sync` path with deploy-then-upgrade-on-conflict semantics
-  - is the recommended one-command mixed-app operator path for split apps
+  - composes the manifest-adjacent build-and-sync path, local doctor, immutable
+    artifact publication, and one canonical deploy submission
+  - is the first-release app mutation path for single-service and split apps
   - returns the same root app `manifest_path`, root `workspace_dir`, root
     `workspace_scripts`, root `hostname`, the frontend publish projection, the
-    top-level app `routes` split, and one manifest-derived service entry per
-    app service alongside the live mutation response
+    top-level app `routes` split, one manifest-derived service entry per app
+    service, authoritative status, and exact live-verification results
 - `iroha soracloud service status`
   - accepts `--service-name` directly or resolves the filter from
     `--container` plus `--service`
@@ -267,10 +252,15 @@ Torii-backed and require `--torii-url`.
   - keep rollback and rollout control aligned with manifest workspaces
   - when driven by `--container` plus `--service`, attach the same local
     `service_plan` projection that `plan` reports
-- `iroha soracloud hf deploy`, `hf-status`, `hf-lease-renew`, and `hf-lease-leave`
+- `iroha soracloud hf join`, `hf-status`, `hf-lease-renew`, and `hf-lease-leave`
   - accept `--service-name` directly or resolve the bound service from
     `--container` plus `--service` when a service name applies
   - keep HF shared-lease membership aligned with manifest workspaces
+  - HF lease/source records are metadata-only in V1: no service or apartment
+    runtime is generated, and no inference handler, inference tool, peer
+    inference proxy, or `agent autonomy-run` command is exposed
+  - the authoritative HF source status is `Admitted`; V1 does not advertise
+    inert metadata as inference-ready
   - when driven by `--container` plus `--service`, attach the same local
     `service_plan` projection that `plan` reports
 - `iroha soracloud model training-job-*`
@@ -280,8 +270,7 @@ Torii-backed and require `--torii-url`.
   - when driven by `--container` plus `--service`, attach the same local
     `service_plan` projection that `plan` reports
 - `iroha soracloud model artifact-*`, `model-weight-*`,
-  `model-upload-encryption-recipient`, `model-upload-register`, and
-  `model-upload-status`
+  `model-upload-register`, and `model-upload-status`
   - accept `--service-name` directly or resolve the owning service from
     `--container` plus `--service` when a service name applies
   - keep model registry and uploaded-model status control aligned with
@@ -301,8 +290,10 @@ Torii-backed and require `--torii-url`.
 
 ## Hosted Service Lease Volumes
 
-Hosted HTTP services can persist mutable shared state without inventing their
-own local directory contract.
+Hosted HTTP services can persist replica-local mutable state without inventing
+their own local directory contract. Every declared volume is materialized as a
+different disk for each replica, even when the declaration belongs to the
+service revision. Lease volumes are not a cross-replica coordination channel.
 
 Example manifest shape:
 
@@ -310,10 +301,10 @@ Example manifest shape:
 {
   "lease_volumes": [
     { "volume_name": "root_disk", "mount_path": "/" },
-    { "volume_name": "shared_cache", "mount_path": "/var/lib/soracloud/shared-cache" },
-    { "volume_name": "search_sessions", "mount_path": "/var/lib/soracloud/search-sessions" },
-    { "volume_name": "collector_state", "mount_path": "/var/lib/soracloud/collector-state" },
-    { "volume_name": "runtime_cache", "mount_path": "/var/lib/soracloud/runtime-cache" }
+    { "volume_name": "shared_cache", "mount_path": "/var/lib/soracloud/volumes/shared_cache" },
+    { "volume_name": "search_sessions", "mount_path": "/var/lib/soracloud/volumes/search_sessions" },
+    { "volume_name": "collector_state", "mount_path": "/var/lib/soracloud/volumes/collector_state" },
+    { "volume_name": "runtime_cache", "mount_path": "/var/lib/soracloud/volumes/runtime_cache" }
   ]
 }
 ```
@@ -332,7 +323,12 @@ For the example above, the service receives:
 - `SORACLOUD_LEASE_VOLUME_RUNTIME_CACHE_MOUNT_PATH`
 
 The `_DIR` value is the materialized runtime path. The `_MOUNT_PATH` value is
-the logical mount path declared in the manifest.
+the admission-validated guest mount path. `PersistentRootLeaseVolume` alone
+uses `/`. Every other volume name must be one portable ASCII path component
+and mounts at exactly `/var/lib/soracloud/volumes/<volume_name>`; the subtree
+root, nested paths, and service, materialization, or system paths are rejected.
+Admission accepts at most 32 non-root volumes, exactly matching the V1 launcher
+device-slot budget.
 
 ## Inrou Smoke
 
@@ -344,7 +340,12 @@ derives its sole supplementary gid from the validated `/dev/kvm` device.
 Firecracker and TCG labels are configuration and wire-schema errors; no mixed
 backend smoke mode is exposed. `inrou.enabled` remains false by default.
 Explicit enablement selects only PortableVM V1, and the manager advertises or
-hosts nothing until its exact production preflight succeeds.
+hosts nothing until its exact production preflight succeeds. Enablement requires
+one exact operator-approved, operator-preseeded guest artifact. Its immutable
+materialization has a separate non-zero byte bound, defaulting to 4 GiB with a
+16 GiB production ceiling; it is not charged to the hosted workload's writable
+storage budget. Taira explicitly raises this bound to 10 GiB for its canonical
+guest stage.
 
 Persisted V1 runtime state is exact rather than migratory. The top-level
 snapshot and every nested mailbox, artifact, lease-volume, apartment, HF-source,
@@ -398,6 +399,11 @@ shutdown, and cleanup all use bounded deadlines.
 To qualify a deployment, prepare verified native-ISA Debian guest assets and
 run the ignored privileged smoke on the target Linux/KVM host:
 
+Preparation requires `gpgv` or `gpg` and a trusted Debian keyring selected via
+`--debian-keyring`, `DEBIAN_ARCHIVE_KEYRING`, or an installed Debian archive
+keyring. The detached `SHA512SUMS.sign`, its authenticated archive digest, and
+the repository-pinned SHA512 are all mandatory.
+
 ```bash
 eval "$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)"
 cargo xtask soracloud-inrou-smoke portable
@@ -410,26 +416,39 @@ do not select shipping behavior. Shipping enablement comes only from the exact
 `soracloud_runtime.inrou` configuration.
 
 PortableVm atomically copies the verified base image into a standalone mutable
-raw root disk. The sandbox never needs the host base-image path, and startup
-never gives root `qemu-img` a guest-mutated root image to parse. Shared lease
-volumes are exact-size persistent raw block devices. For a new lease disk, the
-supervisor runs root-custodied standard-path `mke2fs` against an exclusive
-staging file with an empty `mke2fs.conf` and the exact V1 feature, 4-KiB block,
-256-byte inode, inode-count, block-group, flex-group, 16-MiB journal, label, and
-logical-volume-derived UUID profile. That UUID also binds the service revision,
-volume kind, storage class, and authoritative generation, so a generation
-rollover fails closed instead of inheriting old contents. Lease sizes are
+raw root disk. Its authenticated replica-and-base-image binding is persisted
+before the copy, so interruption cannot strand an unbound published root disk.
+The sandbox never needs the host base-image path, and startup never gives root
+`qemu-img` a guest-mutated root image to parse. Every root and non-root lease
+volume is an exact-size persistent raw block device for one replica only; no
+disk image is shared or multi-attached between replica slots. Each
+replica-private disk has a root-private authenticated sidecar binding its
+service, revision, bundle, volume kind/path/size, storage class, authoritative
+generation, filesystem, and deterministic ext4 UUID.
+
+For a new lease disk, the supervisor runs root-custodied standard-path `mke2fs`
+against an exclusive staging file with an empty `mke2fs.conf` and the exact V1
+feature, 4-KiB block, 256-byte inode, inode-count, block-group, flex-group,
+16-MiB journal, label, and logical-volume-derived UUID profile. Lease sizes are
 positive multiples of one 128-MiB block group. The supervisor validates that
 complete static superblock contract, syncs the file, and only then atomically
 publishes `lease.raw`. An existing published disk must retain the exact size,
-logical-volume UUID, geometry, and feature masks; the only additional
-incompatible feature accepted is ext4's dynamic journal-recovery bit. The
-supervisor never reformats it.
-Guest cloud-init verifies the filesystem type before mounting it and never
-runs a formatter. The subsequent read-write mount can replay the journal and
-the health probe intentionally writes into the filesystem; a mismatch or
-failure aborts startup without destructive reinitialization. The NoCloud seed
-and application archive remain separate read-only devices.
+UUID, geometry, and feature masks; the only additional incompatible feature
+accepted is ext4's dynamic journal-recovery bit. The supervisor never
+reformats it.
+
+PID 1 owns one mandatory hardened `.mount` unit per volume; preparation never
+mounts storage and has no `CAP_SYS_ADMIN`. A bound oneshot attester verifies the
+exact device, target, filesystem, UUID, options, owner, mode, and a fresh
+create/fsync/remove probe before the tenant unit may start. Guest cloud-init
+verifies the filesystem type before mounting it and never runs a formatter.
+Missing or lost mounts stop the tenant unit, and a separate initialized marker
+is committed only after the mounted guest has passed its health check. Every
+signature, sidecar, geometry, or generation mismatch fails closed without
+destructive reinitialization. Tenant stdout/stderr and the QEMU serial console
+are disabled, core dumps are prohibited, and undeclared service scratch state
+is a private tmpfs; persistent state must use declared lease volumes. The
+NoCloud seed and application archive remain separate read-only devices.
 
 Inrou V1 accepts only `Isolated` networking. `Open` and `Allowlist` are
 rejected until kernel-owned counters can meter every guest byte; no unmetered
@@ -504,8 +523,8 @@ For local development, the scaffold also includes:
 - `./dev.sh` to boot the frontend plus the local API shim
 - `./build-and-sync.sh` to rebuild the frontend and deterministic bytecode and
   refresh manifest hashes
-- `./deploy.sh` to run the full app-wide publish + deploy flow
-- `./upgrade.sh` to rerun the same rebuild path and submit the app upgrade
+- `./doctor.sh` to rebuild and validate the app release contract
+- `./release.sh` to invoke the single app release path
 
 Run the root-bound apply:
 
@@ -515,20 +534,14 @@ cd .soracloud-docs-portal
 iroha soracloud app dev --manifest ./app_manifest.json --dry-run
 ```
 
-Deploy the root-bound frontend plus the API service in one step:
+Validate and release the root-bound frontend plus the API service:
 
 ```bash
 cd .soracloud-docs-portal
-TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha soracloud app deploy --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-```
-
-Upgrade the root-bound frontend plus the API service in one step:
-
-```bash
-cd .soracloud-docs-portal
-TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
-iroha soracloud app upgrade --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha soracloud app simulate --manifest ./app_manifest.json
+iroha soracloud app doctor --manifest ./app_manifest.json
+iroha soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+TORII_URL=http://127.0.0.1:8080 ./release.sh
 ```
 
 This path keeps the frontend at `/` and the API at `/api/healthz` on the same
@@ -542,8 +555,8 @@ The split-app scaffold models apps that need:
 - a hosted live API on Inrou
 - a deterministic IVM vault or auth plane
 
-Non-dry-run deploy, release, and upgrade require an explicitly enabled,
-qualified PortableVM V1 host for the hosted member.
+A live app release requires an explicitly enabled, qualified PortableVM V1
+host for the hosted member.
 
 ```bash
 iroha soracloud app init \
@@ -566,9 +579,7 @@ For local development, the scaffold includes:
 - `./dev.sh` to boot the frontend plus both local API processes
 - `./build-and-sync.sh` to rebuild all artifacts and refresh manifest hashes
 - `./doctor.sh` to rebuild and fail-close on the split-app release contract
-- `./release.sh` to rebuild, validate, and then deploy-or-upgrade the full app
-- `./deploy.sh` to rebuild and submit the exact create-deployment flow
-- `./upgrade.sh` to rerun the same rebuild path, validate, and submit the app upgrade
+- `./release.sh` to run the single build, validation, and deploy path
 
 The scaffolded Vite proxy strips the shared `/api` prefix before forwarding to
 the live and vault child processes, which matches the hosted longest-prefix
@@ -601,20 +612,16 @@ Validate the split-app release contract locally:
 
 ```bash
 cd .soracloud-hayahi
-iroha soracloud app doctor --manifest ./app_manifest.json --dry-run
+iroha soracloud app doctor --manifest ./app_manifest.json
 ```
 
-Run `release.sh`, `deploy.sh`, `upgrade.sh`, or their non-dry-run CLI
-counterparts only when the target validator advertises a currently qualified
-PortableVM V1 capability.
+Run `release.sh` or `iroha soracloud app release` without `--dry-run` only when
+the target validator advertises a currently qualified PortableVM V1
+capability.
 
-The generated local root scripts resolve `IROHA_BIN`, then `iroha` from `PATH`,
-then an explicit source checkout via `IROHA_SOURCE_DIR` or
-`IROHA_MANIFEST_PATH`, so local app workspaces can target a nearby
-`iroha_cli` checkout without requiring a globally installed source wrapper.
-When you drive the fallback through `IROHA_SOURCE_DIR` or `IROHA_MANIFEST_PATH`,
-set `IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to keep Cargo package and
-artifact state isolated from other local builds.
+Generated root scripts require `IROHA_BIN` to name an absolute, executable,
+non-symlinked same-revision binary and `IROHA_BIN_SHA256` to match that exact
+file before invoking it.
 
 For Taira deployment of shipping deterministic apps, keep Torii root bound to
 Torii itself and use the gateway host only as:

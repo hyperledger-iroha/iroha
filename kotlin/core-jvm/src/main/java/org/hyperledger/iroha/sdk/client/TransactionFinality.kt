@@ -7,7 +7,10 @@ object TransactionFinality {
      */
     @JvmStatic
     fun requireApplied(payload: Map<String, Any>, hashHex: String) {
-        check(PipelineStatusExtractor.requireAuthoritativeStatus(payload, hashHex) == "Applied") {
+        check(
+            PipelineStatusExtractor.requireAuthoritativeStatus(payload, hashHex) == "Applied" &&
+                payload["resolved_from"] == "state",
+        ) {
             "Transaction did not reach exact Applied execution finality"
         }
     }

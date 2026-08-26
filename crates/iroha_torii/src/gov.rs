@@ -55,8 +55,7 @@ use iroha_torii_shared::parliament_api::{
     ParliamentTleAdaptiveDealerCommitmentV1, ParliamentTleAdaptivePublicShareV1,
     ParliamentTleKeySessionBindingV1, ParliamentTleReleaseContextResponseV1,
     ParliamentTransitionDraftRequestV1, ParliamentTransitionDraftResponseV1,
-    RequiredParliamentBodyProjectionV1,
-    parliament_timed_ovn_casting_proof_page_tip,
+    RequiredParliamentBodyProjectionV1, parliament_timed_ovn_casting_proof_page_tip,
 };
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -1060,9 +1059,7 @@ fn project_parliament_timed_ovn_progress_v1(
         TimedOvnLifecycleStateV1::CorpusOpen(state) => {
             Some(state.frozen().survivor_participant_hashes().len())
         }
-        TimedOvnLifecycleStateV1::Sealed(state) => {
-            Some(state.survivor_participant_hashes.len())
-        }
+        TimedOvnLifecycleStateV1::Sealed(state) => Some(state.survivor_participant_hashes.len()),
         TimedOvnLifecycleStateV1::Released(state) => {
             Some(state.sealed.survivor_participant_hashes.len())
         }
@@ -3004,18 +3001,15 @@ mod tests {
     fn canonical_literal(raw: &str) -> String {
         iroha_data_model::account::AccountId::parse_encoded(raw)
             .expect("literal parses")
-            .canonical()
             .to_string()
     }
     fn canonical_account(raw: &str) -> AccountId {
-        AccountId::parse_encoded(raw)
-            .expect("literal parses")
-            .into_account_id()
+        AccountId::parse_encoded(raw).expect("literal parses")
     }
     fn noncanonical_literal(raw: &str) -> String {
         AccountId::parse_encoded(raw)
             .expect("literal parses")
-            .canonical()
+            .to_string()
             .replacen("sora", "ｓｏｒａ", 1)
     }
     fn mk_basic_context() -> (Arc<State>, Arc<Queue>, Arc<ChainId>) {
@@ -4250,9 +4244,7 @@ seiyaku GovernedReadFixture {
     #[tokio::test]
     async fn ballot_plain_accepts_account_aliases() {
         let (state, _queue, _chain_id) = mk_basic_context();
-        let authority = AccountId::parse_encoded(ACCOUNT_AUTHORITY)
-            .expect("account parses")
-            .into_account_id();
+        let authority = AccountId::parse_encoded(ACCOUNT_AUTHORITY).expect("account parses");
         bind_account_alias_for_test(&state, &authority, "ballot@universal");
         let body = crate::json_object(vec![
             crate::json_entry("authority", "ballot@universal"),
@@ -4719,9 +4711,7 @@ seiyaku GovernedReadFixture {
         state.set_gov(cfg);
         let custody = generic_lock_custody(&state);
         let rid = "rid-tally-overflow".to_string();
-        let other = AccountId::parse_encoded(ACCOUNT_OWNER_ALT)
-            .expect("alternate account id")
-            .into_account_id();
+        let other = AccountId::parse_encoded(ACCOUNT_OWNER_ALT).expect("alternate account id");
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         {
             let mut block = state.block(header);

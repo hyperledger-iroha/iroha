@@ -20,9 +20,7 @@ FEE_PAYMENT = {
 }
 CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
 NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
-SETTLEMENT_ACCOUNT_ID = AccountAddress.from_account(
-    domain="", public_key=bytes([0xA5]) * 32
-).to_i105()
+SETTLEMENT_ACCOUNT_ID = AccountAddress.from_account(public_key=bytes([0xA5]) * 32).to_i105()
 SETTLEMENT_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc"
 
 
@@ -355,21 +353,15 @@ def test_client_dataspace_smoke_rejects_wrong_expected_dataspace_id() -> None:
         client.smoke_dataspace("is", expected_dataspace_id=42, status=status)
 
 
-def test_get_status_falls_back_to_public_status_endpoint() -> None:
-    session = FakeSession(
-        [
-            response(404),
-            response(200, {"dataspace_catalog": [{"alias": "is", "dataspace_id": 42}]}),
-        ]
-    )
+def test_get_status_rejects_missing_canonical_route_without_fallback() -> None:
+    session = FakeSession([response(404)])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
-    status = client.get_status()
+    with pytest.raises(RuntimeError, match="unexpected status 404"):
+        client.get_status()
 
-    assert status["dataspace_catalog"][0]["alias"] == "is"
-    assert [call["path"] for call in session.calls] == ["/v1/status", "/status"]
+    assert [call["path"] for call in session.calls] == ["/status"]
     assert session.calls[0]["headers"]["Accept"] == "application/json"
-    assert session.calls[1]["headers"]["Accept"] == "application/json"
 
 
 def test_get_status_does_not_fallback_on_non_404_failure() -> None:
@@ -379,7 +371,19 @@ def test_get_status_does_not_fallback_on_non_404_failure() -> None:
     with pytest.raises(RuntimeError, match="temporary failure"):
         client.get_status()
 
-    assert [call["path"] for call in session.calls] == ["/v1/status"]
+    assert [call["path"] for call in session.calls] == ["/status"]
+
+
+def test_get_status_snapshot_typed_uses_canonical_route() -> None:
+    session = FakeSession(
+        [response(200, {"peers": 1, "queue_size": 0, "commit_time_ms": 1})]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    snapshot = client.get_status_snapshot_typed()
+
+    assert snapshot.status.peers == 1
+    assert [call["path"] for call in session.calls] == ["/status"]
 
 
 def test_operator_signature_headers_sign_canonical_request() -> None:
@@ -636,7 +640,8 @@ def test_nexus_lane_lifecycle_submits_native_signed_set_parameter(monkeypatch: p
     assert captured["private_key"] == bytes([9] * 32)
     assert captured["instructions"] == ["set-parameter-instruction"]
     assert captured["wait"] is True
-    assert captured["success_statuses"] == ("Applied",)
+    assert "scope" not in captured
+    assert "success_statuses" not in captured
 
 
 def test_nexus_lane_lifecycle_rejects_malformed_inputs() -> None:

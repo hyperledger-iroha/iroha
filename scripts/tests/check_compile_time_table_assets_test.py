@@ -24,9 +24,9 @@ def test_checked_in_compile_time_assets_and_preimages_are_exact() -> None:
     counts = MODULE.audit_repository(ROOT)
     assert counts == MODULE.AuditCounts(
         manifests=11,
-        assets=85,
-        bytes=271_751,
-        source_preimages=93,
+        assets=82,
+        bytes=269_821,
+        source_preimages=90,
     )
 
 
@@ -59,23 +59,6 @@ def test_raw_string_payload_recovers_exact_literal_bytes() -> None:
         MODULE.rust_raw_string_payload(b'let value = r#"unterminated\n')
 
 
-def test_soracloud_format_template_transform_is_exact_and_strict() -> None:
-    span = b'''fn demo(service_name: &str, prelude: &str) -> String {
-    format!(r#"{{"service": {service_name:?}, "literal": "{{literal}}"}}
-{prelude}
-"#)
-}
-'''
-    assert MODULE.soracloud_format_template_payload(span) == (
-        b'{"service": __SORACLOUD_SERVICE_NAME_DEBUG__, "literal": "{literal}"}\n'
-        b"__SORACLOUD_SHELL_PRELUDE__\n"
-    )
-    with pytest.raises(MODULE.AssetError, match="unsupported Soracloud format field"):
-        MODULE.soracloud_format_template_payload(
-            b'fn demo() { format!(r#"{unknown}"#) }\n'
-        )
-
-
 def test_suffix_include_inventory_rejects_unmanifested_consumers(tmp_path: Path) -> None:
     root = tmp_path.resolve()
     manifest_path = root / "crate/src/assets/template_manifest.json"
@@ -93,4 +76,53 @@ def test_suffix_include_inventory_rejects_unmanifested_consumers(tmp_path: Path)
             {manifested},
             {manifested: [consumer], extra: [consumer]},
             ".tmpl",
+        )
+
+
+def test_current_include_preimage_is_exact_and_rejects_historical_fields(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path.resolve()
+    manifest_dir = root / "crate/src/assets"
+    source = root / "crate/src/lib.rs"
+    consumer = MODULE.IncludeConsumer(source, "include_str", None)
+    exact = [{"path": "../lib.rs"}]
+
+    MODULE._verify_current_include_preimage(
+        root, manifest_dir, exact, consumer, "asset.source_preimages"
+    )
+    with pytest.raises(MODULE.AssetError, match="unknown fields: start_line"):
+        MODULE._verify_current_include_preimage(
+            root,
+            manifest_dir,
+            [{"path": "../lib.rs", "start_line": 1}],
+            consumer,
+            "asset.source_preimages",
+        )
+    with pytest.raises(MODULE.AssetError, match="live include consumer"):
+        MODULE._verify_current_include_preimage(
+            root,
+            manifest_dir,
+            [{"path": "../other.rs"}],
+            consumer,
+            "asset.source_preimages",
+        )
+    with pytest.raises(MODULE.AssetError, match="exactly one"):
+        MODULE._verify_current_include_preimage(
+            root, manifest_dir, [], consumer, "asset.source_preimages"
+        )
+
+
+def test_current_include_scope_is_explicitly_limited_to_soracloud_manifests() -> None:
+    soracloud_manifest = next(iter(MODULE.CURRENT_INCLUDE_CONSUMER_MANIFESTS))
+    MODULE._verify_manifest_scope(
+        soracloud_manifest, MODULE.CURRENT_INCLUDE_CONSUMER_SCOPE
+    )
+
+    with pytest.raises(MODULE.AssetError, match="source hash scope must be"):
+        MODULE._verify_manifest_scope(soracloud_manifest, MODULE.LINE_SPAN_HASH_SCOPE)
+    with pytest.raises(MODULE.AssetError, match="not enabled"):
+        MODULE._verify_manifest_scope(
+            Path("crates/example/src/assets/manifest.json"),
+            MODULE.CURRENT_INCLUDE_CONSUMER_SCOPE,
         )

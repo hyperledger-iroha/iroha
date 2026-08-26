@@ -224,7 +224,6 @@ object CanonicalRequestSigner {
     private fun canonicalAccountHeaderValue(accountId: String): String {
         try {
             return AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null)
-                .address
                 .canonicalHex()
         } catch (_: AccountAddressException) {
             require(accountId.all { it.code in 0x21..0x7e }) {

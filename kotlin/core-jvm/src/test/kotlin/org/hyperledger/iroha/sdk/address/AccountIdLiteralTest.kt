@@ -76,12 +76,12 @@ class AccountIdLiteralTest {
     }
 
     @Test
-    fun parseAnyRejectsFullwidthSentinelLiteral() {
+    fun parseEncodedRejectsFullwidthSentinelLiteral() {
         val canonical = sampleI105(0x55)
         val noncanonical = canonical.replaceFirst("sora", "ｓｏｒａ")
 
         val parseError = assertFailsWith<AccountAddressException> {
-            AccountAddress.parseAny(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT)
+            AccountAddress.parseEncoded(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT)
         }
         assertEquals(AccountAddressErrorCode.MISSING_I105_SENTINEL, parseError.code)
 

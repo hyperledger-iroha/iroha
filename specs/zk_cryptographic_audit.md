@@ -140,9 +140,10 @@ Regression coverage:
 transition fail-closure. The four-peer exact-12 lifecycle tests also reject
 ZK-ACE activation and proof submission before and after restart.
 
-Residual recommendation: keep `trust_committed_execution_results` restricted to
-committed-block replay/recovery contexts for all other proof-bearing flows, and avoid
-adding new proof-authorizing bypasses.
+The retired `trust_committed_execution_results` switch is absent from the
+first-release implementation. Committed-block replay/recovery must execute the
+same proof-authorizing checks as new blocks; do not add a replay-only verifier
+bypass.
 
 ### ZK-AUDIT-02: Diagnostic proof endpoints require an explicit non-ledger contract
 
@@ -614,9 +615,8 @@ authoritative finalized source-state statement.
   transcript APIs correctly.
 - Norito encoding is deterministic and rejects malformed payloads according to its
   API contract.
-- `trust_committed_execution_results` remains a replay/recovery compatibility flag;
-  ZK-ACE no longer relies on that assumption because verifier failure is always
-  rejected.
+- Committed replay does not bypass proof verification; ZK-ACE verifier failure
+  is always rejected.
 - Mock privacy features such as Kaigi privacy mock modes are not enabled in
   production.
 

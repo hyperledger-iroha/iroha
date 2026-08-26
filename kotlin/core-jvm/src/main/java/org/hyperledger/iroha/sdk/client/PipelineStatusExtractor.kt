@@ -38,8 +38,8 @@ internal object PipelineStatusExtractor {
         }
         val hash = payload["hash"] as? String
             ?: error("Pipeline status hash is missing or malformed")
-        check(hash.matches(Regex("[0-9a-f]{64}"))) {
-            "Pipeline status hash must be exact lowercase 32-byte hex"
+        check(hash.matches(Regex("[0-9a-f]{63}[13579bdf]"))) {
+            "Pipeline status hash must be an exact lowercase marked 32-byte hash"
         }
         val rawStatus = payload["status"] as? Map<*, *>
             ?: error("Pipeline status kind is missing or unsupported")
@@ -63,7 +63,7 @@ internal object PipelineStatusExtractor {
         }
         val scope = payload["scope"] as? String
             ?: error("Pipeline status scope is missing")
-        check(scope in setOf("local", "auto", "global")) {
+        check(scope in setOf("local", "global")) {
             "Pipeline status has an unsupported scope"
         }
         val resolvedFrom = payload["resolved_from"] as? String
@@ -79,9 +79,12 @@ internal object PipelineStatusExtractor {
         return Collections.unmodifiableMap(normalized)
     }
 
-    /** Require exact global, state-backed terminal semantics for polling. */
+    /** Validate one exact global status observation and return its canonical kind. */
     @JvmStatic
     fun requireAuthoritativeStatus(payload: Map<String, Any>?, expectedHash: String): String {
+        check(expectedHash.matches(Regex("[0-9a-f]{63}[13579bdf]"))) {
+            "Requested transaction hash must be an exact lowercase marked 32-byte hash"
+        }
         val normalized = normalizePublicStatus(payload)
         check(normalized["hash"] == expectedHash) {
             "Pipeline status hash does not match the requested transaction hash"
@@ -90,17 +93,9 @@ internal object PipelineStatusExtractor {
         val status = normalized["status"] as Map<*, *>
         val kind = status["kind"] as String
         val resolvedFrom = normalized["resolved_from"] as String
-        when (kind) {
-            "Applied" -> {
-                check(resolvedFrom == "state" && hasPositiveBlockHeight(status["block_height"])) {
-                    "Applied pipeline status must be state-resolved with a positive block height"
-                }
-            }
-            "Rejected", "Expired" -> check(resolvedFrom == "state") {
-                "Terminal pipeline failure must be resolved from state"
-            }
-            else -> check(resolvedFrom in setOf("queue", "cache", "state")) {
-                "Pipeline status has an unsupported resolution source"
+        if (kind == "Applied") {
+            check(hasPositiveBlockHeight(status["block_height"])) {
+                "Applied pipeline status must have a positive block height"
             }
         }
         return kind

@@ -11,6 +11,20 @@ public sealed class IrohaClient : IDisposable
         Ledger = new LedgerClient(Torii);
     }
 
+    internal IrohaClient(
+        Uri toriiBaseUri,
+        HttpClient httpClient,
+        ToriiClientOptions? toriiOptions,
+        TransactionSubmissionTransportAssurance transportAssurance)
+    {
+        Torii = new ToriiClient(
+            toriiBaseUri,
+            httpClient,
+            toriiOptions,
+            transportAssurance);
+        Ledger = new LedgerClient(Torii);
+    }
+
     public ToriiClient Torii { get; }
 
     public LedgerClient Ledger { get; }

@@ -788,7 +788,7 @@ impl ProveAvailabilityArgs {
             transport_policy_override: None,
             anonymity_policy_override: None,
             guard_cache: None,
-            guard_cache_key: None,
+            guard_cache_key_file: None,
             guard_directory: None,
             guard_directory_digest: None,
             guard_target: None,

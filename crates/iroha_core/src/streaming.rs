@@ -56,7 +56,6 @@ use norito::{
         TransportCapabilityResolution, crypto::TransportKeys, default_bundle_tables,
         load_bundle_tables_from_toml,
     },
-    to_bytes,
 };
 use soranet_pq::MlKemSuite;
 use std::{
@@ -65,11 +64,7 @@ use std::{
     fmt, fs, io,
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex, OnceLock, RwLock,
-        atomic::{AtomicU64, Ordering},
-        mpsc,
-    },
+    sync::{Arc, Mutex, OnceLock, RwLock, mpsc},
     thread,
 };
 use thiserror::Error;
@@ -173,11 +168,23 @@ impl From<&actual::StreamingSoranet> for SoranetRouteDefaults {
         }
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct RouteProvisionState {
     route: StreamingPrivacyRoute,
     last_provisioned_segment: Option<u64>,
     acked: bool,
+}
+impl fmt::Debug for RouteProvisionState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RouteProvisionState")
+            .field("route_id", &self.route.route_id)
+            .field("expiry_segment", &self.route.expiry_segment)
+            .field("route_credentials", &"<redacted>")
+            .field("last_provisioned_segment", &self.last_provisioned_segment)
+            .field("acked", &self.acked)
+            .finish()
+    }
 }
 #[derive(Clone, Debug)]
 struct StreamTicketState {
@@ -187,12 +194,36 @@ struct StreamTicketState {
     order: Vec<Hash>,
 }
 /// Prepared privacy-route update coupled with the corresponding exit relay metadata.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PreparedPrivacyRouteUpdate {
     /// Exit relay that must receive the update.
     pub exit_relay: PrivacyRelay,
     /// Payload delivered over the control plane.
     pub update: PrivacyRouteUpdate,
+}
+impl fmt::Debug for PreparedPrivacyRouteUpdate {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedPrivacyRouteUpdate")
+            .field("exit_relay", &self.exit_relay)
+            .field("route_id", &self.update.route_id)
+            .field("stream_id", &self.update.stream_id)
+            .field("content_key_id", &self.update.content_key_id)
+            .field("valid_from_segment", &self.update.valid_from_segment)
+            .field("valid_until_segment", &self.update.valid_until_segment)
+            .field(
+                "exit_token",
+                &format_args!("<redacted:{} bytes>", self.update.exit_token.len()),
+            )
+            .field("soranet", &self.update.soranet)
+            .finish()
+    }
+}
+impl Drop for PreparedPrivacyRouteUpdate {
+    fn drop(&mut self) {
+        self.update.exit_token.fill(0);
+        std::hint::black_box(self.update.exit_token.as_mut_slice());
+    }
 }
 #[derive(Clone, Debug)]
 struct PendingPrivacyRouteUpdate {
@@ -258,6 +289,12 @@ struct SoranetProvisionJob {
     exit_relay: PrivacyRelay,
     expiry: u64,
 }
+impl Drop for SoranetProvisionJob {
+    fn drop(&mut self) {
+        self.update.exit_token.fill(0);
+        std::hint::black_box(self.update.exit_token.as_mut_slice());
+    }
+}
 #[derive(Debug)]
 struct SoranetProvisionQueue {
     sender: mpsc::SyncSender<SoranetProvisionJob>,
@@ -295,161 +332,39 @@ impl SoranetProvisionQueue {
         self.sender.try_send(job)
     }
 }
-/// Filesystem-backed transport that spools privacy-route updates for `SoraNet` exits.
-#[derive(Debug)]
-pub struct FilesystemSoranetProvisioner {
-    spool_dir: PathBuf,
-    counter: AtomicU64,
-    max_spool_bytes: u64,
-    #[cfg(feature = "telemetry")]
-    telemetry: Option<StreamingTelemetry>,
-}
+/// Disabled first-release filesystem route-publication endpoint.
+///
+/// Persisting replayable exit bearer tokens is intentionally unavailable until
+/// RouteOpen carries authenticated current-segment proof and the producer has a
+/// race-safe durable tombstone/unpublish lifecycle.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FilesystemSoranetProvisioner;
 impl FilesystemSoranetProvisioner {
-    /// Construct a new filesystem provisioner rooted at the provided directory.
+    /// Construct the disabled first-release provisioner.
     #[must_use]
-    pub fn new(spool_dir: PathBuf, max_spool_bytes: u64) -> Self {
-        Self {
-            spool_dir,
-            counter: AtomicU64::new(0),
-            max_spool_bytes,
-            #[cfg(feature = "telemetry")]
-            telemetry: None,
-        }
+    pub const fn new() -> Self {
+        Self
     }
-    /// Attach a telemetry sink for budget reporting.
-    #[cfg(feature = "telemetry")]
-    #[must_use]
-    pub fn with_telemetry(mut self, telemetry: StreamingTelemetry) -> Self {
-        self.telemetry = Some(telemetry);
-        self
-    }
-    fn exit_directory(&self, exit: &PrivacyRelay) -> PathBuf {
-        let relay_hex = hex::encode(exit.relay_id);
-        self.spool_dir.join(format!("exit-{relay_hex}"))
-    }
-    fn exit_directory_for_update(
-        &self,
-        exit: &PrivacyRelay,
-        update: &PrivacyRouteUpdate,
-    ) -> PathBuf {
-        let base = self.exit_directory(exit);
-        let Some(route) = update.soranet.as_ref() else {
-            return base;
-        };
-        match route.stream_tag {
-            SoranetStreamTag::NoritoStream => base.join(NORITO_STREAM_SUBDIR),
-            SoranetStreamTag::Kaigi => base.join(KAIGI_STREAM_SUBDIR),
-        }
-    }
-    fn file_names(&self, update: &PrivacyRouteUpdate) -> (String, String) {
-        let counter = self.counter.fetch_add(1, Ordering::Relaxed);
-        let route_hex = hex::encode(update.route_id);
-        let stream_hex = hex::encode(update.stream_id);
-        let file = format!("{counter:016x}-route-{route_hex}-stream-{stream_hex}.norito");
-        let tmp = Path::new(&file)
-            .with_added_extension("tmp")
-            .into_os_string()
-            .into_string()
-            .expect("spool path is valid UTF-8");
-        (file, tmp)
-    }
-    fn spool_usage_bytes(&self) -> Result<u64, SoranetTransportError> {
-        if !self.spool_dir.exists() {
-            return Ok(0);
-        }
-        dir_size(&self.spool_dir).map_err(|error| {
-            SoranetTransportError::with_source(
-                format!(
-                    "failed to measure SoraNet spool directory {}",
-                    self.spool_dir.display()
-                ),
-                error,
-            )
-        })
-    }
+}
+fn validate_first_release_spooled_route(
+    _update: &PrivacyRouteUpdate,
+) -> Result<(), SoranetTransportError> {
+    // TODO(soranet-route-open-proof): Re-enable an exit publication transport
+    // only after RouteOpen binds a replay-protected viewer authorization and
+    // an authoritative current-segment proof.
+    // TODO(soranet-route-revocation): Require durable, race-safe tombstones so
+    // queued or stale jobs cannot resurrect a revoked bearer after unpublish.
+    Err(SoranetTransportError::new(
+        "filesystem SoraNet route publication is disabled until RouteOpen proof and durable revocation are implemented",
+    ))
 }
 impl SoranetRouteProvisionTx for FilesystemSoranetProvisioner {
     fn provision_privacy_route(
         &self,
         update: &PrivacyRouteUpdate,
-        exit: &PrivacyRelay,
+        _exit: &PrivacyRelay,
     ) -> Result<(), SoranetTransportError> {
-        let exit_dir = self.exit_directory_for_update(exit, update);
-        fs::create_dir_all(&exit_dir).map_err(|error| {
-            SoranetTransportError::with_source(
-                format!(
-                    "failed to initialise SoraNet spool directory {}",
-                    exit_dir.display()
-                ),
-                error,
-            )
-        })?;
-        let (file_name, tmp_name) = self.file_names(update);
-        let final_path = exit_dir.join(file_name);
-        let tmp_path = exit_dir.join(tmp_name);
-        let bytes = to_bytes(update).map_err(|error| {
-            SoranetTransportError::with_source("failed to encode privacy route update", error)
-        })?;
-        if self.max_spool_bytes > 0 {
-            let used = self.spool_usage_bytes()?;
-            #[cfg(feature = "telemetry")]
-            if let Some(telemetry) = &self.telemetry {
-                telemetry.record_storage_budget_usage("soranet_spool", used, self.max_spool_bytes);
-            }
-            let required = used.saturating_add(bytes.len() as u64);
-            if required > self.max_spool_bytes {
-                iroha_logger::warn!(
-                    used,
-                    required,
-                    limit = self.max_spool_bytes,
-                    path = %self.spool_dir.display(),
-                    "SoraNet spool budget exceeded"
-                );
-                #[cfg(feature = "telemetry")]
-                if let Some(telemetry) = &self.telemetry {
-                    telemetry.inc_storage_budget_exceeded("soranet_spool");
-                }
-                return Err(SoranetTransportError::new(format!(
-                    "SoraNet spool budget exceeded: used {used} bytes, update {update_len} bytes, limit {limit} bytes",
-                    update_len = bytes.len(),
-                    limit = self.max_spool_bytes
-                )));
-            }
-        }
-        {
-            let mut file = fs::File::create(&tmp_path).map_err(|error| {
-                SoranetTransportError::with_source(
-                    format!("failed to create SoraNet spool file {}", tmp_path.display()),
-                    error,
-                )
-            })?;
-            file.write_all(&bytes).map_err(|error| {
-                SoranetTransportError::with_source(
-                    format!("failed to write SoraNet spool file {}", tmp_path.display()),
-                    error,
-                )
-            })?;
-            file.sync_all().map_err(|error| {
-                SoranetTransportError::with_source(
-                    format!("failed to sync SoraNet spool file {}", tmp_path.display()),
-                    error,
-                )
-            })?;
-        }
-        fs::rename(&tmp_path, &final_path).map_err(|error| {
-            SoranetTransportError::with_source(
-                format!(
-                    "failed to finalise SoraNet spool file rename to {}",
-                    final_path.display()
-                ),
-                error,
-            )
-        })?;
-        iroha_logger::trace!(
-            ?final_path,
-            "Queued streaming privacy route update for SoraNet exit relay"
-        );
-        Ok(())
+        validate_first_release_spooled_route(update)
     }
 }
 fn mark_privacy_route_provisioned_in_state(
@@ -577,28 +492,6 @@ fn soranet_provision_worker(
         }
     }
 }
-fn dir_size(path: &Path) -> io::Result<u64> {
-    if !path.exists() {
-        return Ok(0);
-    }
-    let mut total = 0u64;
-    let mut stack = vec![path.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in fs::read_dir(&dir)? {
-            let entry = entry?;
-            let file_type = entry.file_type()?;
-            let entry_path = entry.path();
-            if file_type.is_dir() {
-                stack.push(entry_path);
-            } else if file_type.is_file() {
-                total = total.saturating_add(entry.metadata()?.len());
-            }
-        }
-    }
-    Ok(total)
-}
-const NORITO_STREAM_SUBDIR: &str = "norito-stream";
-const KAIGI_STREAM_SUBDIR: &str = "kaigi-stream";
 const SNAPSHOT_VERSION: u8 = 1;
 const SNAPSHOT_AAD: &[u8] = b"iroha.streaming.snapshot.v1";
 /// First-release ceiling across viewer and publisher entries in one snapshot.
@@ -1781,6 +1674,38 @@ impl StreamingHandle {
             }
         }
         let ticket_nullifier = stream_hash_from_crypto(ready.ticket().nullifier());
+        // Build and cryptographically validate the complete replacement before
+        // touching authoritative state. A rejected candidate must not erase a
+        // previously valid ticket, route index, or nullifier binding.
+        let mut seen = BTreeSet::new();
+        let mut order = Vec::with_capacity(routes.len());
+        let mut route_states = BTreeMap::new();
+        for route in routes {
+            let route_id = route.route_id;
+            if !seen.insert(route_id) {
+                return Err(StreamingProcessError::DuplicatePrivacyRoute {
+                    route_id,
+                    stream: stream_id,
+                });
+            }
+            if let Some(envelope) = route.ticket_envelope() {
+                envelope.verify_commitment().map_err(|error| {
+                    StreamingProcessError::TicketEnvelopeInvalid {
+                        route_id,
+                        source: error,
+                    }
+                })?;
+            }
+            order.push(route_id);
+            route_states.insert(
+                route_id,
+                RouteProvisionState {
+                    route,
+                    last_provisioned_segment: None,
+                    acked: false,
+                },
+            );
+        }
         let mut route_index = self
             .inner
             .route_index
@@ -1796,13 +1721,6 @@ impl StreamingHandle {
             .ticket_nullifiers
             .write()
             .map_err(|_| StreamingProcessError::StatePoisoned)?;
-        if let Some(previous) = tickets.remove(&stream_id) {
-            for route_id in previous.order {
-                route_index.remove(&route_id);
-            }
-            let previous_nullifier = stream_hash_from_crypto(previous.ticket.nullifier());
-            nullifiers.remove(&previous_nullifier);
-        }
         if let Some(existing_stream) = nullifiers.get(&ticket_nullifier) {
             if *existing_stream != stream_id {
                 return Err(StreamingProcessError::DuplicateTicketNullifier {
@@ -1811,50 +1729,25 @@ impl StreamingHandle {
                 });
             }
         }
-        let mut seen = BTreeSet::new();
-        for route in &routes {
-            let route_id = route.route_id;
-            if !seen.insert(route_id) {
-                return Err(StreamingProcessError::DuplicatePrivacyRoute {
-                    route_id,
-                    stream: stream_id,
-                });
-            }
-        }
-        for route in &routes {
-            let route_id = route.route_id;
-            if let Some(owner) = route_index.get(&route_id) {
+        for route_id in &order {
+            if let Some(owner) = route_index.get(route_id) {
                 if *owner != stream_id {
                     return Err(StreamingProcessError::DuplicatePrivacyRoute {
-                        route_id,
+                        route_id: *route_id,
                         stream: *owner,
                     });
                 }
             }
         }
-        let mut order = Vec::with_capacity(routes.len());
-        let mut route_states = BTreeMap::new();
-        for route in routes {
-            if let Some(envelope) = route.ticket_envelope() {
-                let route_id = route.route_id;
-                envelope.verify_commitment().map_err(|error| {
-                    StreamingProcessError::TicketEnvelopeInvalid {
-                        route_id,
-                        source: error,
-                    }
-                })?;
+        if let Some(previous) = tickets.remove(&stream_id) {
+            for route_id in previous.order {
+                route_index.remove(&route_id);
             }
-            let route_id = route.route_id;
-            route_index.insert(route_id, stream_id);
-            order.push(route_id);
-            route_states.insert(
-                route_id,
-                RouteProvisionState {
-                    route,
-                    last_provisioned_segment: None,
-                    acked: false,
-                },
-            );
+            let previous_nullifier = stream_hash_from_crypto(previous.ticket.nullifier());
+            nullifiers.remove(&previous_nullifier);
+        }
+        for route_id in &order {
+            route_index.insert(*route_id, stream_id);
         }
         nullifiers.insert(ticket_nullifier, stream_id);
         tickets.insert(
@@ -1968,6 +1861,11 @@ impl StreamingHandle {
             let route_id = pending.prepared.update.route_id;
             let stream_id = pending.prepared.update.stream_id;
             let expiry = pending.expiry;
+            if pending.prepared.update.soranet.is_some()
+                && let Err(source) = validate_first_release_spooled_route(&pending.prepared.update)
+            {
+                return Err(StreamingProcessError::SoranetProvision { route_id, source });
+            }
             if let Some(transport) = transport.as_ref() {
                 if pending.prepared.update.soranet.is_some() {
                     let provisioner = if let Some(existing) = queue.as_ref() {
@@ -2041,7 +1939,7 @@ impl StreamingHandle {
                 pending.prepared.update.stream_id,
                 pending.prepared.update.route_id,
             )?;
-            updates.push(pending.prepared);
+            updates.push(pending.prepared.clone());
         }
         Ok(updates)
     }
@@ -3469,22 +3367,18 @@ mod tests {
     };
     use iroha_data_model::{domain::DomainId, events::SharedDataEvent, peer::PeerId};
     use iroha_primitives::addr::SocketAddr;
-    use norito::{
-        decode_from_bytes,
-        streaming::{
-            CapabilityFlags, ChunkDescriptor, EncryptionSuite, EntropyMode, FecScheme,
-            FeedbackHintFrame, HpkeSuite, ManifestAnnounceFrame, ManifestV1, Multiaddr,
-            PrivacyBucketGranularity, PrivacyCapabilities, PrivacyRelay, PrivacyRoute,
-            PrivacyRouteUpdate, ProfileId, ReceiverReport, Resolution, SoranetAccessKind,
-            SoranetChannelId, SoranetRoute, StreamMetadata, TransportCapabilityResolution,
-        },
+    use norito::streaming::{
+        CapabilityFlags, ChunkDescriptor, EncryptionSuite, EntropyMode, FecScheme,
+        FeedbackHintFrame, HpkeSuite, ManifestAnnounceFrame, ManifestV1, Multiaddr,
+        PrivacyBucketGranularity, PrivacyCapabilities, PrivacyRelay, PrivacyRoute,
+        PrivacyRouteUpdate, ProfileId, ReceiverReport, Resolution, SoranetAccessKind,
+        SoranetChannelId, SoranetRoute, StreamMetadata, TransportCapabilityResolution,
     };
     use std::{
         fs,
         path::PathBuf,
         str::FromStr,
         sync::{Arc, Mutex, mpsc},
-        time::{Duration, Instant},
     };
     use tempfile::tempdir;
     fn checked_random_keypair() -> KeyPair {
@@ -3539,24 +3433,6 @@ mod tests {
             StreamingSnapshotError::Io(ref source)
                 if source.kind() == io::ErrorKind::InvalidData
         ));
-    }
-    #[test]
-    fn file_names_append_tmp_extension() {
-        let provisioner = FilesystemSoranetProvisioner::new(PathBuf::from("/tmp/spool"), 0);
-        let update = PrivacyRouteUpdate {
-            route_id: hash_with(0xAA),
-            stream_id: hash_with(0xBB),
-            content_key_id: 0,
-            valid_from_segment: 0,
-            valid_until_segment: 0,
-            exit_token: Vec::new(),
-            soranet: None,
-        };
-        let (_, tmp_name) = provisioner.file_names(&update);
-        assert!(
-            tmp_name.ends_with(".norito.tmp"),
-            "tmp path should append extension, got {tmp_name:?}"
-        );
     }
     #[cfg(feature = "telemetry")]
     #[test]
@@ -3923,7 +3799,8 @@ mod tests {
     #[test]
     fn register_stream_ticket_populates_soranet_defaults() {
         let mut handle = StreamingHandle::new();
-        let config = actual::StreamingSoranet::from_defaults();
+        let mut config = actual::StreamingSoranet::from_defaults();
+        config.enabled = true;
         handle.set_soranet_config(&config);
         let ready = sample_ticket_ready("stream-soranet-defaults", 0xD1, 0xE1);
         let stream_key = stream_hash_from_crypto(ready.stream_id());
@@ -4064,18 +3941,6 @@ mod tests {
     impl RecordingSoranetTransport {
         fn calls(&self) -> Vec<(PrivacyRouteUpdate, PrivacyRelay)> {
             self.calls.lock().expect("calls lock").clone()
-        }
-        fn wait_for_calls(&self, expected: usize, timeout: Duration) -> bool {
-            let deadline = Instant::now() + timeout;
-            loop {
-                if self.calls.lock().expect("calls lock").len() >= expected {
-                    return true;
-                }
-                if Instant::now() >= deadline {
-                    return false;
-                }
-                std::thread::sleep(Duration::from_millis(5));
-            }
         }
     }
     impl SoranetRouteProvisionTx for RecordingSoranetTransport {
@@ -4562,6 +4427,58 @@ mod tests {
         assert_eq!(manifest.privacy_routes[0].route_id, expected_route_id);
     }
     #[test]
+    fn invalid_ticket_replacement_preserves_prior_authoritative_state() {
+        let handle = StreamingHandle::new();
+        let ready = sample_ticket_ready("replacement-state", 0x31, 0xA4);
+        let stream_id = stream_hash_from_crypto(ready.stream_id());
+        let nullifier = stream_hash_from_crypto(ready.ticket().nullifier());
+        let original = streaming_route_from_privacy(&sample_privacy_route());
+        let original_route_id = original.route_id;
+        handle
+            .register_stream_ticket(&ready, vec![original])
+            .expect("register original ticket");
+
+        let mut duplicate = streaming_route_from_privacy(&sample_privacy_route());
+        duplicate.route_id = hash_with(0xA6);
+        let duplicate_route_id = duplicate.route_id;
+        let error = handle
+            .register_stream_ticket(&ready, vec![duplicate.clone(), duplicate])
+            .expect_err("duplicate replacement must fail");
+        assert!(matches!(
+            error,
+            StreamingProcessError::DuplicatePrivacyRoute { route_id, stream }
+                if route_id == duplicate_route_id && stream == stream_id
+        ));
+
+        let tickets = handle
+            .inner
+            .stream_tickets
+            .read()
+            .expect("ticket state lock");
+        let retained = tickets.get(&stream_id).expect("original ticket retained");
+        assert_eq!(retained.order, vec![original_route_id]);
+        assert!(retained.routes.contains_key(&original_route_id));
+        drop(tickets);
+        assert_eq!(
+            handle
+                .inner
+                .route_index
+                .read()
+                .expect("route index lock")
+                .get(&original_route_id),
+            Some(&stream_id)
+        );
+        assert_eq!(
+            handle
+                .inner
+                .ticket_nullifiers
+                .read()
+                .expect("nullifier lock")
+                .get(&nullifier),
+            Some(&stream_id)
+        );
+    }
+    #[test]
     fn apply_manifest_requires_acknowledged_routes() {
         let handle = StreamingHandle::new();
         let mut manifest = sample_manifest();
@@ -4919,10 +4836,13 @@ mod tests {
         );
     }
     #[test]
-    fn manifest_publisher_triggers_privacy_route_provisioning() {
+    fn manifest_publisher_rejects_unverifiable_route_provisioning() {
         let viewer_keys = checked_random_keypair();
         let viewer_peer = make_peer(&viewer_keys, 13961);
         let mut handle = StreamingHandle::new();
+        let mut config = actual::StreamingSoranet::from_defaults();
+        config.enabled = true;
+        handle.set_soranet_config(&config);
         let recorder = RecordingSoranetTransport::default();
         handle.set_soranet_transport(Some(Arc::new(recorder.clone())));
         let route = soranet_privacy_route(0xB6, 24);
@@ -4952,14 +4872,16 @@ mod tests {
         let publisher = ManifestPublisher::new(handle, tx);
         let err = publisher
             .announce(&viewer_peer, manifest, None)
-            .expect_err("manifest must be gated until privacy route is acknowledged");
+            .expect_err("finite authenticated route must fail before transport emission");
         assert!(matches!(
             err,
-            StreamingProcessError::PrivacyRouteUnacknowledged { route_id } if route_id == route.route_id
+            StreamingProcessError::SoranetProvision { route_id, ref source }
+                if route_id == route.route_id
+                    && source.to_string().contains("authoritative segment proof")
         ));
         assert!(
-            recorder.wait_for_calls(1, Duration::from_millis(250)),
-            "auto-provisioning should call the SoraNet transport"
+            recorder.calls().is_empty(),
+            "unverifiable route metadata must never reach the SoraNet transport"
         );
     }
     #[test]
@@ -5007,6 +4929,7 @@ mod tests {
     fn prepare_privacy_route_updates_for_manifest_uses_window_segments() {
         let mut handle = StreamingHandle::new();
         let mut config = actual::StreamingSoranet::from_defaults();
+        config.enabled = true;
         config.provision_window_segments = 4;
         handle.set_soranet_config(&config);
         let route = soranet_privacy_route(0xB7, 24);
@@ -5077,9 +5000,8 @@ mod tests {
         );
     }
     #[test]
-    fn filesystem_soranet_provisioner_writes_updates_to_disk() {
-        let dir = tempdir().expect("create temp dir");
-        let provisioner = FilesystemSoranetProvisioner::new(dir.path().to_path_buf(), 0);
+    fn filesystem_soranet_provisioner_is_an_explicit_rejecting_stub() {
+        let provisioner = FilesystemSoranetProvisioner::new();
         let exit = PrivacyRelay {
             relay_id: hash_with(0xE1),
             endpoint: Multiaddr::from("/dns/exit-relay/udp/9443/quic"),
@@ -5101,138 +5023,45 @@ mod tests {
                 stream_tag: SoranetStreamTag::NoritoStream,
             }),
         };
-        provisioner
+
+        let error = provisioner
             .provision_privacy_route(&update, &exit)
-            .expect("provision privacy route");
-        let exit_dir = dir
-            .path()
-            .join(format!("exit-{}", hex::encode(exit.relay_id)))
-            .join(NORITO_STREAM_SUBDIR);
-        assert!(
-            exit_dir.is_dir(),
-            "provisioner should create exit-specific directory"
-        );
-        let mut entries = fs::read_dir(&exit_dir)
-            .expect("read spool directory")
-            .map(|res| res.expect("dir entry").path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "norito"))
-            .collect::<Vec<_>>();
-        entries.sort();
-        assert_eq!(
-            entries.len(),
-            1,
-            "exactly one queued privacy route update expected"
-        );
-        let encoded = fs::read(&entries[0]).expect("read spooled file");
-        let decoded: PrivacyRouteUpdate =
-            decode_from_bytes(&encoded).expect("decode privacy route update");
-        assert_eq!(decoded, update);
+            .expect_err("every filesystem route publication must be disabled");
+        assert!(error.to_string().contains("RouteOpen proof"));
+        assert!(error.to_string().contains("durable revocation"));
     }
     #[test]
-    fn filesystem_soranet_provisioner_rejects_when_budget_exceeded() {
-        let dir = tempdir().expect("create temp dir");
-        #[cfg(feature = "telemetry")]
-        let metrics = Arc::new(crate::telemetry::Metrics::default());
-        #[cfg(feature = "telemetry")]
-        let telemetry = crate::telemetry::StreamingTelemetry::new(metrics.clone(), true);
-        let provisioner = {
-            let base = FilesystemSoranetProvisioner::new(dir.path().to_path_buf(), 1);
-            #[cfg(feature = "telemetry")]
-            let base = base.with_telemetry(telemetry);
-            base
+    fn prepared_privacy_route_debug_redacts_and_owned_copies_require_drop() {
+        let prepared = PreparedPrivacyRouteUpdate {
+            exit_relay: PrivacyRelay {
+                relay_id: hash_with(0xE1),
+                endpoint: Multiaddr::from("/dns/exit-relay/udp/9443/quic"),
+                key_fingerprint: hash_with(0xE2),
+                capabilities: PrivacyCapabilities::from_bits(1),
+            },
+            update: PrivacyRouteUpdate {
+                route_id: hash_with(0xA1),
+                stream_id: hash_with(0xB2),
+                content_key_id: 17,
+                valid_from_segment: 0,
+                valid_until_segment: u64::MAX,
+                exit_token: vec![0xDE, 0xAD, 0xBE, 0xEF],
+                soranet: None,
+            },
         };
-        let exit = PrivacyRelay {
-            relay_id: hash_with(0xE1),
-            endpoint: Multiaddr::from("/dns/exit-relay/udp/9443/quic"),
-            key_fingerprint: hash_with(0xE2),
-            capabilities: PrivacyCapabilities::from_bits(0b101),
-        };
-        let update = PrivacyRouteUpdate {
-            route_id: hash_with(0xA1),
-            stream_id: hash_with(0xB2),
-            content_key_id: 17,
-            valid_from_segment: 4,
-            valid_until_segment: 9,
-            exit_token: vec![0xDE, 0xAD, 0xBE, 0xEF],
-            soranet: Some(SoranetRoute {
-                channel_id: SoranetChannelId::new(hash_with(0xC3)),
-                exit_multiaddr: Multiaddr::from("/dns/torii/udp/9443/quic"),
-                padding_budget_ms: Some(25),
-                access_kind: SoranetAccessKind::Authenticated,
-                stream_tag: SoranetStreamTag::NoritoStream,
-            }),
-        };
-        let err = provisioner
-            .provision_privacy_route(&update, &exit)
-            .expect_err("spool budget should reject updates");
-        assert!(err.to_string().contains("spool budget"));
-        #[cfg(feature = "telemetry")]
-        {
-            assert_eq!(
-                metrics
-                    .storage_budget_exceeded_total
-                    .with_label_values(&["soranet_spool"])
-                    .get(),
-                1
-            );
-            assert_eq!(
-                metrics
-                    .storage_budget_bytes_limit
-                    .with_label_values(&["soranet_spool"])
-                    .get(),
-                1
-            );
-        }
-    }
-    #[test]
-    fn filesystem_soranet_provisioner_routes_kaigi_updates() {
-        let dir = tempdir().expect("create temp dir");
-        let provisioner = FilesystemSoranetProvisioner::new(dir.path().to_path_buf(), 0);
-        let exit = PrivacyRelay {
-            relay_id: hash_with(0xE9),
-            endpoint: Multiaddr::from("/dns/exit-kaigi/udp/9443/quic"),
-            key_fingerprint: hash_with(0xEA),
-            capabilities: PrivacyCapabilities::from_bits(0b110),
-        };
-        let update = PrivacyRouteUpdate {
-            route_id: hash_with(0xB1),
-            stream_id: hash_with(0xB3),
-            content_key_id: 24,
-            valid_from_segment: 8,
-            valid_until_segment: 11,
-            exit_token: vec![0xCA, 0xFE, 0xBA, 0xBE],
-            soranet: Some(SoranetRoute {
-                channel_id: SoranetChannelId::new(hash_with(0xC7)),
-                exit_multiaddr: Multiaddr::from("/dns/kaigi-hub/tcp/9922/ws"),
-                padding_budget_ms: Some(15),
-                access_kind: SoranetAccessKind::Authenticated,
-                stream_tag: SoranetStreamTag::Kaigi,
-            }),
-        };
-        provisioner
-            .provision_privacy_route(&update, &exit)
-            .expect("provision kaigi route");
-        let exit_dir = dir
-            .path()
-            .join(format!("exit-{}", hex::encode(exit.relay_id)))
-            .join(KAIGI_STREAM_SUBDIR);
-        assert!(
-            exit_dir.is_dir(),
-            "provisioner should create kaigi-specific directory"
-        );
-        let entries = fs::read_dir(&exit_dir)
-            .expect("read kaigi spool directory")
-            .map(|res| res.expect("dir entry").path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "norito"))
-            .collect::<Vec<_>>();
-        assert_eq!(entries.len(), 1);
+        let rendered = format!("{prepared:?}");
+        assert!(rendered.contains("exit_token: <redacted:4 bytes>"));
+        assert!(!rendered.contains("222, 173, 190, 239"));
+        assert!(std::mem::needs_drop::<PreparedPrivacyRouteUpdate>());
+        assert!(std::mem::needs_drop::<SoranetProvisionJob>());
     }
     #[test]
     fn prepare_privacy_route_updates_uses_soranet_defaults() {
         let mut handle = StreamingHandle::new();
         let recorder = RecordingSoranetTransport::default();
         handle.set_soranet_transport(Some(Arc::new(recorder.clone())));
-        let config = actual::StreamingSoranet::from_defaults();
+        let mut config = actual::StreamingSoranet::from_defaults();
+        config.enabled = true;
         handle.set_soranet_config(&config);
         let streaming_route = streaming_route_from_privacy(&sample_privacy_route());
         let base_ready = sample_ticket_ready("nsc", 0x52, 0x62);
@@ -5264,18 +5093,23 @@ mod tests {
         );
     }
     #[test]
-    fn soranet_provision_queue_reports_backpressure() {
+    fn soranet_provision_queue_hard_cut_runs_before_enqueue() {
         let mut handle = StreamingHandle::new();
         let mut config = actual::StreamingSoranet::from_defaults();
         config.provision_queue_capacity = 1;
         handle.set_soranet_config(&config);
-        let (transport, release_tx) = BlockingSoranetTransport::new();
+        let (transport, _release_tx) = BlockingSoranetTransport::new();
         handle.set_soranet_transport(Some(Arc::new(transport)));
-        let routes = [
+        let mut routes = [
             soranet_privacy_route(0xC7, 18),
             soranet_privacy_route(0xC8, 18),
             soranet_privacy_route(0xC9, 18),
         ];
+        for route in &mut routes {
+            route.expiry_segment = u64::MAX;
+            route.soranet.as_mut().expect("SoraNet route").access_kind =
+                SoranetAccessKind::ReadOnly;
+        }
         let bindings = routes
             .iter()
             .map(|route| {
@@ -5296,16 +5130,13 @@ mod tests {
             .expect("register stream ticket");
         let stream_id = stream_hash_from_crypto(ready.stream_id());
         let err = handle
-            .queue_privacy_route_updates(&stream_id, 61, 0, 5)
-            .expect_err("queue capacity should trigger backpressure");
+            .queue_privacy_route_updates(&stream_id, 61, 0, u64::MAX)
+            .expect_err("filesystem route transport is hard-disabled before enqueue");
         match err {
             StreamingProcessError::SoranetProvision { source, .. } => {
-                assert_eq!(source.to_string(), "soranet provision queue full");
+                assert!(source.to_string().contains("durable revocation"));
             }
             other => panic!("unexpected error: {other:?}"),
-        }
-        for _ in 0..3 {
-            let _ = release_tx.send(());
         }
     }
     #[test]
@@ -5335,6 +5166,7 @@ mod tests {
     #[test]
     fn set_soranet_config_populates_missing_metadata() {
         let mut config = actual::StreamingSoranet::from_defaults();
+        config.enabled = true;
         config.exit_multiaddr = "/dns/exit-default.test/quic".to_owned();
         config.padding_budget_ms = Some(37);
         config.access_kind = actual::StreamingSoranetAccessKind::ReadOnly;

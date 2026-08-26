@@ -11,6 +11,9 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -22,8 +25,12 @@ import org.hyperledger.iroha.android.alias.AccountOnboardingPlanBodyV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingPlanReceiptV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingPlanRequestV1;
 import org.hyperledger.iroha.android.alias.AccountOnboardingReceiptVerifier;
-import org.hyperledger.iroha.android.alias.AccountOnboardingResponseV1;
-import org.hyperledger.iroha.android.alias.AccountOnboardingStatusV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingBlockHashV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingCurrentStateResponseV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingCurrentStateV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingProofRequiredPrepareResponseV1;
+import org.hyperledger.iroha.android.alias.PreparedTransactionSignatureV1;
+import org.hyperledger.iroha.android.alias.TairaPublicResetMutationBindingV1;
 import org.hyperledger.iroha.android.alias.AliasLeaseRenewPlanRequestV1;
 import org.hyperledger.iroha.android.alias.AliasLifecycleOperationV1;
 import org.hyperledger.iroha.android.alias.AliasLifecyclePlanDispositionV1;
@@ -39,6 +46,7 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.testing.TestNetworkIds;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.junit.Test;
 
 /** HTTP parity tests for safe alias lifecycle, typed reads, and sponsored onboarding. */
@@ -186,7 +194,7 @@ public final class AliasLifecycleClientTests {
         () -> transport(aliasExecutor).resolveAccountAlias("merchant@paynet").join());
   }
 
-  /** Sponsored onboarding keeps its token in one header for plan, apply, and readiness. */
+  /** Sponsored onboarding keeps its token in one header and rejects the retired one-shot shape. */
   @Test
   public void sponsoredOnboardingUsesOnlyTheDedicatedTokenHeader() throws Exception {
     final byte[] seed = new byte[32];
@@ -244,22 +252,36 @@ public final class AliasLifecycleClientTests {
         "POST",
         "https://torii.example/api/v1/accounts/onboard/plan");
 
-    final String applyResponse =
+    final TairaPublicResetMutationBindingV1 binding =
+        new TairaPublicResetMutationBindingV1(
+            "11".repeat(32),
+            "onboarding-fixture-nonce-0000001",
+            TairaPublicResetMutationBindingV1.ONBOARDING,
+            "onboarding",
+            "22".repeat(32),
+            4_102_444_800_000L);
+    final String retiredApplyResponse =
         "{\"account_id\":\""
             + account
             + "\",\"alias\":\"merchant@banka.paynet\",\"status\":\"Unchanged\","
             + "\"disposition\":{\"kind\":\"no_op\",\"value\":null}}";
-    final CapturingExecutor applyExecutor = new CapturingExecutor(200, applyResponse);
-    final AccountOnboardingResponseV1 applied =
-        transport(applyExecutor)
-            .applySponsoredAccountOnboarding(
-                receipt, ONBOARDING_TOKEN, authority, TestNetworkIds.canonical())
-            .join();
-    assertEquals(AccountOnboardingStatusV1.UNCHANGED, applied.status());
+    final CapturingExecutor prepareExecutor =
+        new CapturingExecutor(200, retiredApplyResponse);
+    expectCompletionFailure(
+        () ->
+            transport(prepareExecutor)
+                .prepareSponsoredAccountOnboarding(
+                    intent,
+                    receipt,
+                    binding,
+                    ONBOARDING_TOKEN,
+                    authority,
+                    TestNetworkIds.canonical())
+                .join());
     assertTokenOnlyRequest(
-        applyExecutor.lastRequest,
+        prepareExecutor.lastRequest,
         "POST",
-        "https://torii.example/api/v1/accounts/onboard");
+        "https://torii.example/api/v1/accounts/onboard/prepare");
 
     final CapturingExecutor readinessExecutor =
         new CapturingExecutor(
@@ -276,89 +298,217 @@ public final class AliasLifecycleClientTests {
     assertEquals(0, readinessExecutor.lastRequest.body().length);
   }
 
-  /** Apply responses remain bound to the receipt, semantic status, hash, and HTTP status. */
+  /** ProofRequired reopens through one atomic POST and returns all three closed outcomes. */
   @Test
-  public void sponsoredOnboardingApplyBindsReceiptStatusHashAndDisposition()
-      throws Exception {
-    final OnboardingFixture fixture =
-        onboardingFixture(AliasSetupModels.AliasPlanDispositionV1.CREATE);
-    final String hash = "ab".repeat(32);
-    final String queuedBody =
-        onboardingApplyResponse(
-            fixture.accountId,
-            fixture.alias,
-            hash,
-            AccountOnboardingStatusV1.QUEUED,
-            AliasSetupModels.AliasPlanDispositionV1.CREATE);
-    final AccountOnboardingResponseV1 applied =
-        transport(new CapturingExecutor(202, queuedBody))
-            .applySponsoredAccountOnboarding(
-                fixture.receipt,
-                ONBOARDING_TOKEN,
-                fixture.authority,
-                fixture.receipt.body().networkId())
-            .join();
-    assertEquals(AccountOnboardingStatusV1.QUEUED, applied.status());
-    assertEquals(hash, applied.transactionHashHex());
+  public void proofRequiredCurrentStateUsesOneAtomicPostAndClassifiesSnapshot() throws Exception {
+    final AtomicOnboardingProofFixture fixture = atomicOnboardingProofFixture();
+    final ToriiCanonicalRequestAuth canonicalAuth = canonicalAuth(fixture.authority);
+    final AccountOnboardingBlockHashV1 blockHash =
+        new AccountOnboardingBlockHashV1(TestNetworkIds.canonical().literal());
+    final String[] targets = {fixture.accountId, null, TestAccountIds.ed25519Authority(0x49)};
+    final AccountOnboardingCurrentStateV1.Outcome[] outcomes = {
+      AccountOnboardingCurrentStateV1.Outcome.APPLIED,
+      AccountOnboardingCurrentStateV1.Outcome.ALIAS_ABSENT,
+      AccountOnboardingCurrentStateV1.Outcome.ALIAS_CONFLICT
+    };
+    for (int index = 0; index < targets.length; index++) {
+      final AccountOnboardingCurrentStateResponseV1 response =
+          new AccountOnboardingCurrentStateResponseV1(
+              AccountOnboardingCurrentStateResponseV1.VERSION,
+              TestNetworkIds.canonical(),
+              fixture.accountId,
+              fixture.alias,
+              true,
+              targets[index],
+              BigInteger.valueOf(41),
+              blockHash);
+      final CapturingExecutor executor =
+          new CapturingExecutor(200, JsonEncoder.encode(response.toJsonMap()));
 
-    final String unchangedBody =
-        onboardingApplyResponse(
-            fixture.accountId,
-            fixture.alias,
-            null,
-            AccountOnboardingStatusV1.UNCHANGED,
-            AliasSetupModels.AliasPlanDispositionV1.NO_OP);
-    expectOnboardingApplyFailure(fixture, 200, queuedBody);
-    expectOnboardingApplyFailure(fixture, 201, queuedBody);
-    expectOnboardingApplyFailure(fixture, 202, unchangedBody);
-    expectOnboardingApplyFailure(
-        fixture,
-        200,
-        onboardingApplyResponse(
-            TestAccountIds.ed25519Authority(0x43),
-            fixture.alias,
-            null,
-            AccountOnboardingStatusV1.UNCHANGED,
-            AliasSetupModels.AliasPlanDispositionV1.NO_OP));
-    expectOnboardingApplyFailure(
-        fixture,
-        200,
-        onboardingApplyResponse(
-            fixture.accountId,
-            "substituted@paynet",
-            null,
-            AccountOnboardingStatusV1.UNCHANGED,
-            AliasSetupModels.AliasPlanDispositionV1.NO_OP));
-    expectOnboardingApplyFailure(
-        fixture,
-        202,
-        onboardingApplyResponse(
-            fixture.accountId,
-            fixture.alias,
-            hash,
-            AccountOnboardingStatusV1.QUEUED,
-            AliasSetupModels.AliasPlanDispositionV1.REPAIR));
-    expectOnboardingApplyFailure(
-        fixture,
-        202,
-        onboardingApplyResponse(
-            fixture.accountId,
-            fixture.alias,
-            null,
-            AccountOnboardingStatusV1.QUEUED,
-            AliasSetupModels.AliasPlanDispositionV1.CREATE));
+      final AccountOnboardingCurrentStateV1 result =
+          transport(executor)
+              .verifyAccountOnboardingCurrentState(
+                  fixture.proofRequired,
+                  fixture.request,
+                  fixture.receipt,
+                  fixture.binding,
+                  fixture.authority,
+                  TestNetworkIds.canonical(),
+                  canonicalAuth)
+              .join();
 
-    final OnboardingFixture noOpFixture =
-        onboardingFixture(AliasSetupModels.AliasPlanDispositionV1.NO_OP);
-    expectOnboardingApplyFailure(
-        noOpFixture,
-        202,
-        onboardingApplyResponse(
-            noOpFixture.accountId,
-            noOpFixture.alias,
-            hash,
-            AccountOnboardingStatusV1.QUEUED,
-            AliasSetupModels.AliasPlanDispositionV1.CREATE));
+      assertEquals(outcomes[index], result.outcome());
+      assertEquals(BigInteger.valueOf(41), result.blockHeight());
+      assertEquals(blockHash, result.blockHash());
+      assertEquals(1, executor.requestCount);
+      assertEquals("POST", executor.lastRequest.method());
+      assertEquals(
+          "https://torii.example/api/v1/accounts/onboarding/current-state",
+          executor.lastRequest.uri().toString());
+      assertFalse(executor.lastRequest.headers().containsKey("X-Iroha-Onboarding-Token"));
+      assertTrue(executor.lastRequest.headers().containsKey("X-Iroha-Account"));
+      assertTrue(executor.lastRequest.headers().containsKey("X-Iroha-Signature"));
+      assertTrue(executor.lastRequest.headers().containsKey("X-Iroha-Timestamp-Ms"));
+      assertTrue(executor.lastRequest.headers().containsKey("X-Iroha-Nonce"));
+      final String sent = new String(executor.lastRequest.body(), StandardCharsets.UTF_8);
+      assertEquals(
+          "{\"account_id\":\""
+              + fixture.accountId
+              + "\",\"alias\":\""
+              + fixture.alias
+              + "\",\"version\":1}",
+          sent);
+    }
+  }
+
+  /** Atomic onboarding state rejects substitutions, noncanonical anchors, and open shapes. */
+  @Test
+  public void proofRequiredCurrentStateRejectsStrictNegativeCases() throws Exception {
+    final AtomicOnboardingProofFixture fixture = atomicOnboardingProofFixture();
+    final ToriiCanonicalRequestAuth canonicalAuth = canonicalAuth(fixture.authority);
+    final Map<String, Object> exact = new LinkedHashMap<>();
+    exact.put("version", Integer.valueOf(1));
+    exact.put("network_id", TestNetworkIds.canonical().literal());
+    exact.put("account_id", fixture.accountId);
+    exact.put("alias", fixture.alias);
+    exact.put("account_exists", Boolean.TRUE);
+    exact.put("alias_target_account_id", fixture.accountId);
+    exact.put("observed_block_height", Integer.valueOf(51));
+    exact.put("observed_block_hash", TestNetworkIds.canonical().literal());
+    final byte[] foreignBytes = new byte[32];
+    Arrays.fill(foreignBytes, (byte) 0x25);
+    final List<Map<String, Object>> invalid = new java.util.ArrayList<>();
+    invalid.add(changed(exact, "version", Integer.valueOf(2)));
+    invalid.add(changed(exact, "network_id", NetworkId.fromBytes(foreignBytes).literal()));
+    invalid.add(changed(exact, "account_id", TestAccountIds.ed25519Authority(0x4a)));
+    invalid.add(changed(exact, "alias", "other@banka.paynet"));
+    final Map<String, Object> absent = changed(exact, "account_exists", Boolean.FALSE);
+    absent.put("alias_target_account_id", null);
+    invalid.add(absent);
+    invalid.add(changed(exact, "observed_block_height", Integer.valueOf(0)));
+    invalid.add(
+        changed(
+            exact,
+            "observed_block_hash",
+            TestNetworkIds.canonical().literal().toLowerCase(java.util.Locale.ROOT)));
+    invalid.add(changed(exact, "alias_target_account_id", " " + fixture.accountId));
+    final Map<String, Object> open = new LinkedHashMap<>(exact);
+    open.put("legacy_account_state", "Applied");
+    invalid.add(open);
+    final Map<String, Object> missingTarget = new LinkedHashMap<>(exact);
+    missingTarget.remove("alias_target_account_id");
+    invalid.add(missingTarget);
+
+    for (final Map<String, Object> body : invalid) {
+      final CapturingExecutor executor =
+          new CapturingExecutor(200, JsonEncoder.encode(body));
+      expectCompletionFailure(
+          () ->
+              transport(executor)
+                  .verifyAccountOnboardingCurrentState(
+                      fixture.proofRequired,
+                      fixture.request,
+                      fixture.receipt,
+                      fixture.binding,
+                      fixture.authority,
+                      TestNetworkIds.canonical(),
+                      canonicalAuth)
+                  .join());
+      assertEquals(
+          "https://torii.example/api/v1/accounts/onboarding/current-state",
+          executor.lastRequest.uri().toString());
+      assertEquals(1, executor.requestCount);
+    }
+  }
+
+  private static Map<String, Object> changed(
+      final Map<String, Object> source, final String field, final Object value) {
+    final Map<String, Object> changed = new LinkedHashMap<>(source);
+    changed.put(field, value);
+    return changed;
+  }
+
+  private static AtomicOnboardingProofFixture atomicOnboardingProofFixture() throws Exception {
+    final byte[] seed = new byte[32];
+    Arrays.fill(seed, (byte) 0x53);
+    final Ed25519PrivateKeyParameters privateKey =
+        new Ed25519PrivateKeyParameters(seed, 0);
+    final String authority =
+        AccountAddress.fromAccount(privateKey.generatePublicKey().getEncoded(), "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    final String accountId = TestAccountIds.ed25519Authority(0x48);
+    final String alias = "merchant@banka.paynet";
+    final ResolvedAccountAliasV1 resolvedAlias =
+        new ResolvedAccountAliasV1(AccountAliasName.parse(alias), 7L);
+    final AccountOnboardingPlanRequestV1 request =
+        new AccountOnboardingPlanRequestV1(alias, accountId, Collections.emptyList());
+    final AliasSetupModels.AccountAliasIntent intent =
+        new AliasSetupModels.AccountAliasIntent(
+            new AliasSetupModels.AliasAccountIntentV1(
+                resolvedAlias,
+                accountId,
+                AliasSetupModels.AccountProvisionV1.CREATE,
+                AliasSetupModels.AccountAliasRoleV1.PRIMARY));
+    final AliasQuoteGuardV1 guard =
+        new AliasQuoteGuardV1(
+            3, TestAssetDefinitionIds.PRIMARY, "5", 4_102_444_800_000L);
+    final AccountOnboardingPlanBodyV1 body =
+        new AccountOnboardingPlanBodyV1(
+            1,
+            request,
+            authority,
+            TestNetworkIds.canonical(),
+            new AliasSetupModels.AliasPlanAnchorV1(
+                9, TestNetworkIds.canonical().literal()),
+            new AliasSetupModels.AliasPlanResourceV1(
+                intent, AliasSetupModels.AliasPlanDispositionV1.NO_OP, null, null),
+            new AliasSetupModels.AliasLeaseAcquisitionV1(1, null),
+            guard,
+            Collections.emptyList(),
+            null,
+            guard.validUntilMs());
+    final AccountOnboardingPlanReceiptV1 receipt =
+        signedOnboardingReceipt(body, privateKey);
+    final TairaPublicResetMutationBindingV1 binding =
+        new TairaPublicResetMutationBindingV1(
+            "11".repeat(32),
+            "onboarding-fixture-nonce-0000001",
+            TairaPublicResetMutationBindingV1.ONBOARDING,
+            "onboarding",
+            "22".repeat(32),
+            4_102_444_800_000L);
+    final AccountOnboardingProofRequiredPrepareResponseV1 unsigned =
+        new AccountOnboardingProofRequiredPrepareResponseV1(
+            AccountOnboardingProofRequiredPrepareResponseV1.SCHEMA,
+            binding,
+            "onboarding",
+            AccountOnboardingProofRequiredPrepareResponseV1.OUTCOME,
+            AccountOnboardingProofRequiredPrepareResponseV1.PROOF_KIND,
+            receipt.planHash().toLowerCase(java.util.Locale.ROOT),
+            accountId,
+            alias,
+            AliasSetupModels.AliasPlanDispositionV1.NO_OP,
+            "00");
+    final byte[] digest =
+        PreparedTransactionSignatureV1.digest(
+            PreparedTransactionSignatureV1.onboardingProofRequired(unsigned));
+    final Ed25519Signer signer = new Ed25519Signer();
+    signer.init(true, privateKey);
+    signer.update(digest, 0, digest.length);
+    final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired =
+        new AccountOnboardingProofRequiredPrepareResponseV1(
+            AccountOnboardingProofRequiredPrepareResponseV1.SCHEMA,
+            binding,
+            "onboarding",
+            AccountOnboardingProofRequiredPrepareResponseV1.OUTCOME,
+            AccountOnboardingProofRequiredPrepareResponseV1.PROOF_KIND,
+            receipt.planHash().toLowerCase(java.util.Locale.ROOT),
+            accountId,
+            alias,
+            AliasSetupModels.AliasPlanDispositionV1.NO_OP,
+            hex(signer.generateSignature()));
+    return new AtomicOnboardingProofFixture(
+        request, receipt, binding, proofRequired, authority, accountId, alias);
   }
 
   private static HttpClientTransport transport(final CapturingExecutor executor) {
@@ -393,96 +543,6 @@ public final class AliasLifecycleClientTests {
         body, hex(hash), hex(signer.generateSignature()));
   }
 
-  private static OnboardingFixture onboardingFixture(
-      final AliasSetupModels.AliasPlanDispositionV1 disposition) throws Exception {
-    final byte[] seed = new byte[32];
-    Arrays.fill(seed, (byte) 0x53);
-    final Ed25519PrivateKeyParameters signer =
-        new Ed25519PrivateKeyParameters(seed, 0);
-    final String authority =
-        AccountAddress.fromAccount(signer.generatePublicKey().getEncoded(), "ed25519")
-            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    final String accountId = TestAccountIds.ed25519Authority(0x42);
-    final ResolvedAccountAliasV1 alias =
-        new ResolvedAccountAliasV1(
-            AccountAliasName.parse("merchant@banka.paynet"), 7L);
-    final AliasSetupModels.AccountAliasIntent intent =
-        new AliasSetupModels.AccountAliasIntent(
-            new AliasSetupModels.AliasAccountIntentV1(
-                alias,
-                accountId,
-                AliasSetupModels.AccountProvisionV1.CREATE,
-                AliasSetupModels.AccountAliasRoleV1.PRIMARY));
-    final AliasQuoteGuardV1 guard =
-        new AliasQuoteGuardV1(
-            3, TestAssetDefinitionIds.PRIMARY, "5", 1_700_000_100_000L);
-    final AccountOnboardingPlanBodyV1 body =
-        new AccountOnboardingPlanBodyV1(
-            1,
-            new AccountOnboardingPlanRequestV1(
-                alias.canonicalName().canonicalText(),
-                accountId,
-                Collections.emptyList()),
-            authority,
-            TestNetworkIds.canonical(),
-            new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
-            new AliasSetupModels.AliasPlanResourceV1(
-                intent,
-                disposition,
-                null,
-                disposition == AliasSetupModels.AliasPlanDispositionV1.NO_OP
-                    ? null
-                    : 0L),
-            new AliasSetupModels.AliasLeaseAcquisitionV1(1, null),
-            guard,
-            disposition == AliasSetupModels.AliasPlanDispositionV1.NO_OP
-                ? Collections.emptyList()
-                : Collections.singletonList(
-                    new AliasSetupModels.AliasFramedInstructionV1(
-                        EnsureAlias.WIRE_ID, new byte[] {4, 5, 6})),
-            null,
-            guard.validUntilMs());
-    return new OnboardingFixture(
-        signedOnboardingReceipt(body, signer),
-        authority,
-        accountId,
-        alias.canonicalName().canonicalText());
-  }
-
-  private static String onboardingApplyResponse(
-      final String accountId,
-      final String alias,
-      final String transactionHashHex,
-      final AccountOnboardingStatusV1 status,
-      final AliasSetupModels.AliasPlanDispositionV1 disposition) {
-    return "{\"account_id\":\""
-        + accountId
-        + "\",\"alias\":\""
-        + alias
-        + "\""
-        + (transactionHashHex == null
-            ? ""
-            : ",\"tx_hash_hex\":\"" + transactionHashHex + "\"")
-        + ",\"status\":\""
-        + status.wireValue()
-        + "\",\"disposition\":{\"kind\":\""
-        + disposition.wireValue()
-        + "\",\"value\":null}}";
-  }
-
-  private static void expectOnboardingApplyFailure(
-      final OnboardingFixture fixture, final int status, final String body) {
-    expectCompletionFailure(
-        () ->
-            transport(new CapturingExecutor(status, body))
-                .applySponsoredAccountOnboarding(
-                    fixture.receipt,
-                    ONBOARDING_TOKEN,
-                    fixture.authority,
-                    fixture.receipt.body().networkId())
-                .join());
-  }
-
   private static String hex(final byte[] bytes) {
     final StringBuilder result = new StringBuilder(bytes.length * 2);
     for (final byte value : bytes) result.append(String.format("%02x", value & 0xff));
@@ -512,18 +572,27 @@ public final class AliasLifecycleClientTests {
     }
   }
 
-  private static final class OnboardingFixture {
+  private static final class AtomicOnboardingProofFixture {
+    private final AccountOnboardingPlanRequestV1 request;
     private final AccountOnboardingPlanReceiptV1 receipt;
+    private final TairaPublicResetMutationBindingV1 binding;
+    private final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired;
     private final String authority;
     private final String accountId;
     private final String alias;
 
-    private OnboardingFixture(
+    private AtomicOnboardingProofFixture(
+        final AccountOnboardingPlanRequestV1 request,
         final AccountOnboardingPlanReceiptV1 receipt,
+        final TairaPublicResetMutationBindingV1 binding,
+        final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
         final String authority,
         final String accountId,
         final String alias) {
+      this.request = request;
       this.receipt = receipt;
+      this.binding = binding;
+      this.proofRequired = proofRequired;
       this.authority = authority;
       this.accountId = accountId;
       this.alias = alias;
@@ -533,6 +602,7 @@ public final class AliasLifecycleClientTests {
   private static final class CapturingExecutor implements HttpTransportExecutor {
     private final TransportResponse response;
     private TransportRequest lastRequest;
+    private int requestCount;
 
     private CapturingExecutor(final int status, final String body) {
       this.response =
@@ -540,11 +610,13 @@ public final class AliasLifecycleClientTests {
               status,
               body.getBytes(StandardCharsets.UTF_8),
               "stub",
-              Collections.emptyMap());
+              Collections.singletonMap(
+                  "Content-Type", Collections.singletonList("application/json")));
     }
 
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+      requestCount++;
       lastRequest = request;
       return CompletableFuture.completedFuture(response);
     }

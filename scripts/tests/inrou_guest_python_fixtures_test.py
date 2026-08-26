@@ -11,7 +11,6 @@ FIXTURE_DIR = (
 )
 FIXTURES = (
     FIXTURE_DIR / "inrou_health_server.py",
-    FIXTURE_DIR / "inrou_shared_volume_server.py",
 )
 
 

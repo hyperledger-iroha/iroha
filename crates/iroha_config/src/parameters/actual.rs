@@ -55,6 +55,7 @@ use iroha_data_model::{
     oracle::KeyedHash,
     peer::{Peer, PeerId},
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
+    soracloud::SoraPublishedInrouGuestImageArtifactV1,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
@@ -207,8 +208,6 @@ pub struct SoracloudRuntime {
     pub submission: SoracloudRuntimeSubmission,
     /// Outbound egress policy enforced by the embedded runtime manager.
     pub egress: SoracloudRuntimeEgress,
-    /// Hugging Face importer and inference bridge settings.
-    pub hf: SoracloudRuntimeHuggingFace,
 }
 impl_default!(SoracloudRuntime => {
         Self {
@@ -222,7 +221,6 @@ impl_default!(SoracloudRuntime => {
             inrou: SoracloudRuntimeInrou::default(),
             submission: SoracloudRuntimeSubmission::default(),
             egress: SoracloudRuntimeEgress::default(),
-            hf: SoracloudRuntimeHuggingFace::default(),
         }
 });
 impl SoracloudRuntime {
@@ -238,10 +236,6 @@ impl SoracloudRuntime {
         assert!(
             !self.inrou.enabled || self.production_mode,
             "soracloud_runtime.inrou.enabled requires soracloud_runtime.production_mode = true"
-        );
-        assert!(
-            !self.hf.local_execution_enabled,
-            "soracloud_runtime.hf.local_execution_enabled is unavailable until generated HF execution is isolated by Inrou"
         );
         if !self.production_mode {
             return;
@@ -291,7 +285,7 @@ impl_default!(SoracloudRuntimeCacheBudgets => {
         }
 });
 /// Resource ceilings for mutable Inrou microVM workloads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SoracloudRuntimeInrou {
     /// Whether this node advertises and materializes local Inrou workloads.
     pub enabled: bool,
@@ -299,9 +293,13 @@ pub struct SoracloudRuntimeInrou {
     pub portable_vm_uid: Option<NonZeroU32>,
     /// Canonical slot gid of the locked local `iroha-inrou-{slot}` primary group.
     pub portable_vm_gid: Option<NonZeroU32>,
-    /// Maximum aggregate hosted CPU budget in millicores.
+    /// Exact operator-approved guest artifact accepted by this host.
+    pub trusted_guest_artifact: Option<SoraPublishedInrouGuestImageArtifactV1>,
+    /// Maximum immutable guest-image bytes materialized from the operator-preseed store.
+    pub guest_image_max_bytes: NonZeroU64,
+    /// Maximum aggregate physical host CPU reservation, including VMM overhead, in millicores.
     pub max_cpu_millis: NonZeroU32,
-    /// Maximum aggregate hosted memory budget in bytes.
+    /// Maximum aggregate physical host memory reservation, including VMM overhead, in bytes.
     pub max_memory_bytes: NonZeroU64,
     /// Maximum aggregate hosted writable-storage budget in bytes.
     pub max_storage_bytes: NonZeroU64,
@@ -329,6 +327,8 @@ impl_default!(SoracloudRuntimeInrou => {
             enabled: defaults::soracloud_runtime::INROU_ENABLED,
             portable_vm_uid: defaults::soracloud_runtime::INROU_PORTABLE_VM_UID,
             portable_vm_gid: defaults::soracloud_runtime::INROU_PORTABLE_VM_GID,
+            trusted_guest_artifact: None,
+            guest_image_max_bytes: defaults::soracloud_runtime::INROU_GUEST_IMAGE_MAX_BYTES,
             max_cpu_millis: defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS,
             max_memory_bytes: defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES,
             max_storage_bytes: defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES,
@@ -348,10 +348,17 @@ impl_default!(SoracloudRuntimeInrou => {
 });
 impl SoracloudRuntimeInrou {
     fn assert_portable_vm_v1_shape(&self) {
+        assert!(
+            self.guest_image_max_bytes.get()
+                <= defaults::soracloud_runtime::INROU_GUEST_IMAGE_MAX_BYTES_LIMIT,
+            "soracloud_runtime.inrou.guest_image_max_bytes exceeds its hard ceiling"
+        );
         if !self.enabled {
             assert!(
-                self.portable_vm_uid.is_none() && self.portable_vm_gid.is_none(),
-                "disabled soracloud_runtime.inrou must not retain a PortableVM identity"
+                self.portable_vm_uid.is_none()
+                    && self.portable_vm_gid.is_none()
+                    && self.trusted_guest_artifact.is_none(),
+                "disabled soracloud_runtime.inrou must not retain a PortableVM identity or trusted guest artifact"
             );
             return;
         }
@@ -369,6 +376,11 @@ impl SoracloudRuntimeInrou {
             defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_BASE,
             defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_MAX_EXCLUSIVE,
         );
+        self.trusted_guest_artifact
+            .as_ref()
+            .expect("enabled soracloud_runtime.inrou requires trusted_guest_artifact")
+            .validate()
+            .expect("enabled soracloud_runtime.inrou requires a valid trusted guest artifact");
     }
 
     fn assert_archive_resource_bounds(&self) {
@@ -500,85 +512,6 @@ impl_default!(SoracloudRuntimeEgress => {
                 .and_then(NonZeroU32::new),
             max_bytes_per_minute: defaults::soracloud_runtime::EGRESS_MAX_BYTES_PER_MINUTE
                 .and_then(NonZeroU64::new),
-        }
-});
-/// Hugging Face importer/inference settings for the embedded Soracloud runtime manager.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SoracloudRuntimeHuggingFace {
-    /// Base URL used to resolve repo files from the Hub.
-    pub hub_base_url: String,
-    /// Base URL used to fetch model metadata from the Hub API.
-    pub api_base_url: String,
-    /// Base URL used to forward `/infer` requests to HF Inference when bridge fallback is enabled.
-    pub inference_base_url: String,
-    /// Timeout applied to Hugging Face API and file requests.
-    pub request_timeout: Duration,
-    /// Exact HTTPS origins admitted for cross-origin importer redirects.
-    pub import_redirect_allowed_origins: Vec<String>,
-    /// Reserved host-local execution switch; V1 requires this to be `false`.
-    pub local_execution_enabled: bool,
-    /// Reserved local runner program; host-local execution is unavailable in V1.
-    pub local_runner_program: String,
-    /// Timeout applied to one local runner invocation.
-    pub local_runner_timeout: Duration,
-    /// Reserved local-probe heartbeat TTL; host-local probing is unavailable in V1.
-    pub model_host_heartbeat_ttl: Duration,
-    /// Maximum number of files imported into the node-local shared cache for one source.
-    pub import_max_files: u32,
-    /// Maximum size of one imported Hub file.
-    pub import_max_file_bytes: u64,
-    /// Maximum aggregate size imported for one Hub source.
-    pub import_max_total_bytes: u64,
-    /// Maximum in-memory response accepted from the Hub model-info API.
-    pub model_info_max_response_bytes: u64,
-    /// Maximum in-memory response accepted from the HF inference bridge.
-    pub inference_max_response_bytes: u64,
-    /// File-selection allowlist used by the local importer.
-    pub import_file_allowlist: Vec<String>,
-    /// Exact public binding for the deployment-owned inference credential provider.
-    pub inference_credential_provider: Option<SoracloudRuntimeHfCredentialProviderBinding>,
-}
-/// Public identity and qualification of the Hugging Face credential provider.
-///
-/// The provider retains bearer credentials and vendor connection material
-/// outside configuration and executes authenticated inference requests through
-/// runtime injection.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SoracloudRuntimeHfCredentialProviderBinding {
-    /// Stable opaque production provider handle.
-    pub handle: String,
-    /// Exact non-zero deployment adapter and public-policy revision.
-    pub revision: u64,
-    /// Exact non-zero digest of the provider's public policy.
-    pub policy_digest: [u8; 32],
-}
-impl_default!(SoracloudRuntimeHuggingFace => {
-        Self {
-            hub_base_url: defaults::soracloud_runtime::hf::HUB_BASE_URL.to_owned(),
-            api_base_url: defaults::soracloud_runtime::hf::API_BASE_URL.to_owned(),
-            inference_base_url: defaults::soracloud_runtime::hf::INFERENCE_BASE_URL.to_owned(),
-            request_timeout: Duration::from_millis(
-                defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS,
-            ),
-            import_redirect_allowed_origins:
-                defaults::soracloud_runtime::hf::import_redirect_allowed_origins(),
-            local_execution_enabled: defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED,
-            local_runner_program: defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_owned(),
-            local_runner_timeout: Duration::from_millis(
-                defaults::soracloud_runtime::hf::LOCAL_RUNNER_TIMEOUT_MS,
-            ),
-            model_host_heartbeat_ttl: Duration::from_millis(
-                defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS,
-            ),
-            import_max_files: defaults::soracloud_runtime::hf::IMPORT_MAX_FILES,
-            import_max_file_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES,
-            import_max_total_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES,
-            model_info_max_response_bytes:
-                defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES,
-            inference_max_response_bytes:
-                defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES,
-            import_file_allowlist: defaults::soracloud_runtime::hf::import_file_allowlist(),
-            inference_credential_provider: None,
         }
 });
 /// See [`Root::from_toml_source`]
@@ -1327,8 +1260,7 @@ impl_default!(SoranetVpn => {
             operator_account_id: AccountId::parse_encoded(
                 &defaults::soranet::vpn::operator_account_id(),
             )
-            .expect("default vpn operator account id")
-            .into_account_id(),
+            .expect("default vpn operator account id"),
             operator_key_pair: None,
             lease_fee: defaults::soranet::vpn::lease_fee(),
             settlement_grace: Duration::from_secs(defaults::soranet::vpn::SETTLEMENT_GRACE_SECS),
@@ -1368,7 +1300,7 @@ pub struct SoranetPow {
     pub revocation_store_path: Cow<'static, str>,
     /// Optional puzzle parameters for Argon2-based challenges.
     pub puzzle: Option<SoranetPuzzle>,
-    /// ML-DSA-44 public key used to verify signed PoW tickets.
+    /// ML-DSA-44 public key used to verify signed Argon2 ticket envelopes.
     pub signed_ticket_public_key: Option<Vec<u8>>,
 }
 /// Argon2 puzzle parameters shared with peers.
@@ -1700,29 +1632,6 @@ pub struct Network {
     pub quic_datagram_receive_buffer_bytes: usize,
     /// Send buffer reserved for QUIC datagrams per active QUIC connection (bytes).
     pub quic_datagram_send_buffer_bytes: usize,
-    /// Enable TLS-over-TCP transport for outbound dials (feature-gated).
-    /// When enabled and built with the `iroha_p2p/p2p_tls` feature, the dialer will
-    /// attempt to establish a TLS 1.3 session to the peer's host:port and run the
-    /// existing signed application handshake over it.
-    pub tls_enabled: bool,
-    /// When `tls_enabled` is true, fall back to plain TCP if the TLS dial fails.
-    ///
-    /// Set to `false` to enforce TLS-only outbound dials.
-    pub tls_fallback_to_plain: bool,
-    /// Optional TLS listener address for inbound TLS-over-TCP connections (feature-gated).
-    /// If set (and `tls_enabled` is true), a TLS listener is started on this address.
-    /// Plain TCP listener remains active on `address` unless `tls_inbound_only=true`.
-    pub tls_listen_address: Option<WithOrigin<SocketAddr>>,
-    /// Disable the plain TCP listener and accept inbound P2P connections only via TLS-over-TCP.
-    ///
-    /// Requires `tls_enabled=true` and a build with the `iroha_p2p/p2p_tls` feature.
-    ///
-    /// When enabled, the node binds a TLS listener on `tls_listen_address` when set, otherwise on
-    /// `address`.
-    pub tls_inbound_only: bool,
-    /// Prefer WebSocket fallback for outbound dials when available (feature `p2p_ws`).
-    /// Useful for constrained environments and tests that need deterministic WS dialing.
-    pub prefer_ws_fallback: bool,
     /// Capacity for the high-priority network message queue and inbound peer dispatch buffer
     /// (bounded mode only).
     pub p2p_queue_cap_high: NonZeroUsize,
@@ -1840,8 +1749,6 @@ pub struct Network {
     pub max_frame_bytes_health: usize,
     /// Per-topic frame caps (bytes) for Other messages.
     pub max_frame_bytes_other: usize,
-    /// TLS policy: restrict to TLS 1.3 only when using TLS-over-TCP.
-    pub tls_only_v1_3: bool,
     /// QUIC max idle timeout for stream inactivity (if QUIC is enabled).
     pub quic_max_idle_timeout: Option<Duration>,
 }
@@ -2664,53 +2571,25 @@ impl_default!(NexusRelayWorker => {
 pub struct NexusHfSharedLeases {
     /// Drain grace window applied after the last member leaves a shared lease pool.
     pub drain_grace: Duration,
-    /// Slash ratio applied when an assigned host never finishes warmup before expiry.
-    pub warmup_no_show_slash_bps: u16,
-    /// Slash ratio applied when repeated assigned-host heartbeat misses cross the threshold.
-    pub assigned_heartbeat_miss_slash_bps: u16,
-    /// Strike threshold for assigned-host heartbeat misses within one reservation window.
-    pub assigned_heartbeat_miss_strike_threshold: u32,
-    /// Slash ratio applied when a host advert is provably self-contradictory.
-    pub advert_contradiction_slash_bps: u16,
 }
 impl_default!(NexusHfSharedLeases => {
         Self {
             drain_grace: Duration::from_millis(defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS),
-            warmup_no_show_slash_bps: defaults::nexus::hf_shared_leases::WARMUP_NO_SHOW_SLASH_BPS,
-            assigned_heartbeat_miss_slash_bps:
-                defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_SLASH_BPS,
-            assigned_heartbeat_miss_strike_threshold:
-                defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_STRIKE_THRESHOLD,
-            advert_contradiction_slash_bps:
-                defaults::nexus::hf_shared_leases::ADVERT_CONTRADICTION_SLASH_BPS,
         }
 });
-/// Uploaded private-model quota policy.
+/// Encrypted uploaded-model registry quota policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NexusUploadedModels {
-    /// Plaintext chunk size admitted before envelope encryption.
-    pub chunk_plaintext_bytes: u64,
     /// Maximum plaintext bytes admitted for one uploaded model.
     pub max_plaintext_bytes_per_model: u64,
     /// Maximum encrypted chunk count admitted for one uploaded model.
     pub max_chunk_count_per_model: u32,
-    /// Maximum concurrent private sessions admitted for one apartment.
-    pub max_active_private_sessions_per_apartment: u32,
-    /// Maximum token budget admitted for one private session.
-    pub max_session_token_budget: u32,
-    /// Maximum image budget admitted for one private session.
-    pub max_session_image_budget: u16,
 }
 impl_default!(NexusUploadedModels => {
         Self {
-            chunk_plaintext_bytes: defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES,
             max_plaintext_bytes_per_model:
                 defaults::nexus::uploaded_models::MAX_PLAINTEXT_BYTES_PER_MODEL,
             max_chunk_count_per_model: defaults::nexus::uploaded_models::MAX_CHUNK_COUNT_PER_MODEL,
-            max_active_private_sessions_per_apartment:
-                defaults::nexus::uploaded_models::MAX_ACTIVE_PRIVATE_SESSIONS_PER_APARTMENT,
-            max_session_token_budget: defaults::nexus::uploaded_models::MAX_SESSION_TOKEN_BUDGET,
-            max_session_image_budget: defaults::nexus::uploaded_models::MAX_SESSION_IMAGE_BUDGET,
         }
 });
 /// Committee and quorum settings for protected-domain endorsements.
@@ -3000,7 +2879,7 @@ pub struct Nexus {
     pub relay_worker: NexusRelayWorker,
     /// Shared Hugging Face lease policy.
     pub hf_shared_leases: NexusHfSharedLeases,
-    /// Uploaded private-model quota policy.
+    /// Uploaded-model registry quota policy.
     pub uploaded_models: NexusUploadedModels,
     /// Domain endorsement controls.
     pub endorsement: NexusEndorsement,
@@ -3200,19 +3079,11 @@ struct NexusConsensusFeesV1 {
 #[derive(Encode)]
 struct NexusConsensusHfSharedLeasesV1 {
     drain_grace: NexusConsensusDurationV1,
-    warmup_no_show_slash_bps: u16,
-    assigned_heartbeat_miss_slash_bps: u16,
-    assigned_heartbeat_miss_strike_threshold: u32,
-    advert_contradiction_slash_bps: u16,
 }
 #[derive(Encode)]
 struct NexusConsensusUploadedModelsV1 {
-    chunk_plaintext_bytes: u64,
     max_plaintext_bytes_per_model: u64,
     max_chunk_count_per_model: u32,
-    max_active_private_sessions_per_apartment: u32,
-    max_session_token_budget: u32,
-    max_session_image_budget: u16,
 }
 #[derive(Encode)]
 struct NexusConsensusEndorsementV1 {
@@ -3482,24 +3353,10 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
         },
         hf_shared_leases: NexusConsensusHfSharedLeasesV1 {
             drain_grace: nexus.hf_shared_leases.drain_grace.into(),
-            warmup_no_show_slash_bps: nexus.hf_shared_leases.warmup_no_show_slash_bps,
-            assigned_heartbeat_miss_slash_bps: nexus
-                .hf_shared_leases
-                .assigned_heartbeat_miss_slash_bps,
-            assigned_heartbeat_miss_strike_threshold: nexus
-                .hf_shared_leases
-                .assigned_heartbeat_miss_strike_threshold,
-            advert_contradiction_slash_bps: nexus.hf_shared_leases.advert_contradiction_slash_bps,
         },
         uploaded_models: NexusConsensusUploadedModelsV1 {
-            chunk_plaintext_bytes: nexus.uploaded_models.chunk_plaintext_bytes,
             max_plaintext_bytes_per_model: nexus.uploaded_models.max_plaintext_bytes_per_model,
             max_chunk_count_per_model: nexus.uploaded_models.max_chunk_count_per_model,
-            max_active_private_sessions_per_apartment: nexus
-                .uploaded_models
-                .max_active_private_sessions_per_apartment,
-            max_session_token_budget: nexus.uploaded_models.max_session_token_budget,
-            max_session_image_budget: nexus.uploaded_models.max_session_image_budget,
         },
         endorsement: NexusConsensusEndorsementV1 {
             committee_keys: endorsement_committee_keys,
@@ -7834,8 +7691,6 @@ pub struct Torii {
     pub soracloud_mutation_max_inflight: NonZeroUsize,
     /// Maximum signed Soracloud mutation body size before signature verification.
     pub soracloud_mutation_max_body_bytes: Bytes<u64>,
-    /// Maximum signed Soracloud upload body size before signature verification.
-    pub soracloud_upload_max_body_bytes: Bytes<u64>,
     /// Require a valid API token for app-facing endpoints.
     pub require_api_token: bool,
     /// Allowed API tokens (opaque strings). Empty means no tokens defined.
@@ -8711,7 +8566,8 @@ impl_default!(TransactionIngress => {
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_field_names)]
 pub struct DaIngest {
-    /// Maximum cached manifests tracked per `(lane, epoch)` window.
+    /// Per-`(lane, epoch)` bounds for committed manifests and, independently, in-flight
+    /// reservations. At most twice this many fingerprints can be present during active ingests.
     pub replay_cache_capacity: NonZeroUsize,
     /// Maximum number of distinct `(lane, epoch)` windows retained globally.
     pub replay_cache_max_lane_epochs: NonZeroUsize,
@@ -10523,24 +10379,9 @@ impl_default!(SorafsTelemetryPolicy => {
             reject_zero_capacity: defaults::governance::sorafs_telemetry::REJECT_ZERO_CAPACITY,
             submitters: defaults::governance::sorafs_telemetry::submitters()
                 .iter()
-                .map(|id| match AccountId::parse_encoded(id) {
-                    Ok(parsed) => parsed.into_account_id(),
-                    Err(err)
-                        if err.reason()
-                            == iroha_data_model::account::address::AccountAddressErrorCode::UnexpectedNetworkPrefix
-                                .as_str()
-                            && iroha_data_model::account::address::chain_discriminant()
-                                != defaults::common::chain_discriminant() =>
-                    {
-                        let _fallback =
-                            iroha_data_model::account::address::ChainDiscriminantGuard::enter(
-                                defaults::common::chain_discriminant(),
-                            );
-                        AccountId::parse_encoded(id)
-                            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                            .expect("default SoraFS telemetry submitter account id")
-                    }
-                    Err(err) => panic!("default SoraFS telemetry submitter account id: {err}"),
+                .map(|id| {
+                    AccountId::parse_encoded(id)
+                        .expect("default SoraFS telemetry submitter account id")
                 })
                 .collect(),
             per_provider_submitters: BTreeMap::new(),
@@ -11626,7 +11467,7 @@ impl_default!(StreamingSync => {
 /// SoraNet bridge defaults applied when provisioning streaming privacy routes.
 #[derive(Debug, Clone)]
 pub struct StreamingSoranet {
-    /// Enable automatic SoraNet provisioning for streaming routes.
+    /// Reserved exit-publication switch; V1 startup rejects `true`.
     pub enabled: bool,
     /// Exit relay multiaddr used when manifests omit explicit routing metadata.
     pub exit_multiaddr: String,
@@ -11636,9 +11477,9 @@ pub struct StreamingSoranet {
     pub access_kind: StreamingSoranetAccessKind,
     /// Domain-separated salt used to derive blinded channel identifiers.
     pub channel_salt: String,
-    /// Filesystem spool where privacy-route updates are staged for exit relays.
+    /// Reserved legacy spool path; V1 never creates or writes it.
     pub provision_spool_dir: PathBuf,
-    /// Maximum on-disk footprint for the SoraNet provision spool (0 = unlimited).
+    /// Reserved spool budget; unused while V1 publication is disabled.
     pub provision_spool_max_bytes: Bytes<u64>,
     /// Segment window (inclusive) used when provisioning privacy routes.
     pub provision_window_segments: u64,

@@ -1989,6 +1989,8 @@ impl ProductionV2Services {
             || !index_in_range
             || chunk.bytes.is_empty()
             || chunk_len > u64::from(self.context.da_layout.chunk_size_bytes)
+            || chunk.signature.is_empty()
+            || chunk.signature.len() > wire::MAX_CONSENSUS_SIGNATURE_BYTES
         {
             return OrphanPayloadChunkBufferResult::Disposition(PayloadChunkDisposition::Rejected);
         }

@@ -1136,6 +1136,75 @@ fn canonical_account_and_pipeline_tools_use_first_class_routes() {
     );
 }
 #[test]
+fn transaction_wait_descriptors_are_closed_and_use_exact_canonical_hashes() {
+    const HASH_PATTERN: &str = "^[0-9a-f]{63}[13579bdf]$";
+    for tool in [
+        iroha_contracts_call_and_wait_tool(),
+        iroha_transactions_submit_and_wait_tool(),
+        iroha_transactions_wait_tool(),
+        iroha_transactions_status_tool(),
+    ] {
+        let schema = tool.input_schema.as_object().expect("input schema object");
+        assert_eq!(
+            schema.get("additionalProperties").and_then(Value::as_bool),
+            Some(false),
+            "{} must reject unknown root arguments",
+            tool.name
+        );
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("input properties");
+        assert!(
+            !properties.contains_key("terminal_statuses"),
+            "{} must not expose configurable terminal outcomes",
+            tool.name
+        );
+        let hash = if matches!(
+            tool.name.as_str(),
+            "iroha.transactions.wait" | "iroha.transactions.status"
+        ) {
+            properties
+                .get("query")
+                .and_then(|query| query.get("properties"))
+                .and_then(|properties| properties.get("hash"))
+        } else {
+            properties.get("hash")
+        }
+        .and_then(Value::as_object)
+        .expect("exact hash schema");
+        assert_eq!(hash.get("minLength").and_then(Value::as_u64), Some(64));
+        assert_eq!(hash.get("maxLength").and_then(Value::as_u64), Some(64));
+        assert_eq!(
+            hash.get("pattern").and_then(Value::as_str),
+            Some(HASH_PATTERN)
+        );
+        if matches!(
+            tool.name.as_str(),
+            "iroha.contracts.call_and_wait"
+                | "iroha.transactions.submit_and_wait"
+                | "iroha.transactions.wait"
+        ) {
+            assert!(
+                tool.description
+                    .contains("decodes only exact HTTP 200 payloads"),
+                "{} must document the only body-bearing status response",
+                tool.name
+            );
+            assert!(
+                tool.description.contains("only HTTP 404 as pending"),
+                "{} must document the only pending status response",
+                tool.name
+            );
+            assert!(
+                tool.description.contains("rejects every other HTTP status"),
+                "{} must document fail-closed status polling",
+                tool.name
+            );
+        }
+    }
+}
+#[test]
 fn tool_descriptor_sanitizes_top_level_function_schema_keywords() {
     let tool = ToolSpec {
         name: "iroha.test.invalid_schema".to_owned(),
@@ -1579,7 +1648,11 @@ fn onboarding_token_is_forwarded_only_to_exact_onboarding_routes() {
         api_header.clone(),
         HeaderValue::from_static("global-api-token"),
     );
-    for route in ["/v1/accounts/onboard/plan", "/v1/accounts/onboard"] {
+    for route in [
+        "/v1/accounts/onboard/plan",
+        "/v1/accounts/onboard/prepare",
+        "/v1/accounts/onboard",
+    ] {
         let mut out = HeaderMap::new();
         forward_dispatch_auth_headers(&mut out, &inbound, &Method::POST, route)
             .expect("single onboarding token accepted");
@@ -1622,7 +1695,7 @@ fn onboarding_token_cannot_be_injected_or_overridden_by_tool_headers() {
     let injected = norito::json!({
         "X-Iroha-Onboarding-Token": "attacker-controlled-token"
     });
-    for route in ["/v1/accounts/onboard"] {
+    for route in ["/v1/accounts/onboard/prepare", "/v1/accounts/onboard"] {
         let mut without_outer = HeaderMap::new();
         forward_dispatch_auth_headers(&mut without_outer, &HeaderMap::new(), &Method::POST, route)
             .expect("missing outer token is left for inner authentication to reject");
@@ -1658,7 +1731,7 @@ fn wrong_onboarding_token_is_forwarded_unchanged_for_inner_rejection() {
         onboarding_header.clone(),
         HeaderValue::from_static("wrong-onboarding-token-value"),
     );
-    for route in ["/v1/accounts/onboard"] {
+    for route in ["/v1/accounts/onboard/prepare", "/v1/accounts/onboard"] {
         let mut out = HeaderMap::new();
         forward_dispatch_auth_headers(&mut out, &inbound, &Method::POST, route)
             .expect("single syntactically valid header forwarded");
@@ -1684,7 +1757,7 @@ fn duplicate_outer_onboarding_tokens_fail_closed_without_secret_leakage() {
         onboarding_header.clone(),
         HeaderValue::from_static("second-private-onboarding-token"),
     );
-    for route in ["/v1/accounts/onboard"] {
+    for route in ["/v1/accounts/onboard/prepare", "/v1/accounts/onboard"] {
         let mut out = HeaderMap::new();
         let error = forward_dispatch_auth_headers(&mut out, &inbound, &Method::POST, route)
             .expect_err("duplicates must fail before inner dispatch");
@@ -1967,7 +2040,7 @@ fn every_openapi_derived_tool_has_an_enabled_exact_catalog_projection() {
         assert!(!tool.path_template.ends_with("/sse"));
         assert!(!matches!(
             tool.path_template.as_str(),
-            "/metrics" | "/debug/pprof/profile" | "/p2p"
+            "/metrics" | "/debug/pprof/profile"
         ));
     }
     assert!(derived_count > 0, "the guard must exercise derived tools");

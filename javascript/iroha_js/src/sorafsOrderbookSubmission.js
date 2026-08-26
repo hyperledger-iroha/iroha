@@ -22,8 +22,8 @@ export class SorafsOrderbookSubmissionAmbiguousError extends Error {
   }
 }
 
-const HASH_HEX_PATTERN = /^[0-9a-f]{64}$/u;
-const RECEIPT_HASH_LITERAL_PATTERN = /^hash:[0-9A-F]{64}#[0-9A-F]{4}$/u;
+const HASH_HEX_PATTERN = /^[0-9a-f]{63}[13579bdf]$/u;
+const RECEIPT_HASH_LITERAL_PATTERN = /^hash:[0-9A-F]{63}[13579BDF]#[0-9A-F]{4}$/u;
 const MAX_SIGNATURE_HEX_LENGTH = 2 * 3_309;
 const AbortControllerConstructor = globalThis.AbortController;
 const abortControllerAbort = AbortControllerConstructor?.prototype?.abort;
@@ -94,7 +94,7 @@ function requireOwnData(record, key, context) {
 
 function requireHashHex(value, context) {
   if (typeof value !== "string" || !HASH_HEX_PATTERN.test(value)) {
-    throw new TypeError(`${context} must be exactly 32 lowercase hexadecimal bytes`);
+    throw new TypeError(`${context} must be an exact canonical lowercase 32-byte Iroha hash`);
   }
   return value;
 }

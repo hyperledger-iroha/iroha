@@ -68,7 +68,6 @@ const MAX_APPEAL_FINANCE_CHECKPOINT_FRAME_BYTES_V1: usize =
 const MAX_BROKER_FRAME_ENVELOPE_BYTES_V1: usize = 128 * 1024;
 const MAX_BROKER_UNARY_PAYLOAD_BYTES_V1: usize = 32 * 1024 * 1024;
 const MAX_BROKER_UNARY_FRAME_BYTES_V1: usize = 33 * 1024 * 1024;
-const MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1: usize = 65 * 1024 * 1024;
 const MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_BYTES_V1: usize =
     fixed_u64_bound(
         iroha_config::parameters::defaults::torii::
@@ -149,17 +148,11 @@ const MAX_PROVIDER_INGEST_RETENTION_APPROVAL_BYTES_V1: usize = 64 * 1024;
 const MAX_PROVIDER_INGEST_CONTROL_FRAME_BYTES_V1: usize = 128 * 1024;
 const MAX_PROVIDER_INGEST_SIGNER_FRAME_BYTES_V1: usize =
     MAX_PROVIDER_INGEST_SIGNED_TRANSACTION_BYTES_V1 + 128 * 1024;
-const MAX_NON_HF_OPERATION_FRAME_BYTES_V1: usize =
+const MAX_OPERATION_FRAME_BYTES_V1: usize =
     if MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1 > MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1 {
         MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1
     } else {
         MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1
-    };
-const MAX_OPERATION_FRAME_BYTES_V1: usize =
-    if MAX_NON_HF_OPERATION_FRAME_BYTES_V1 > MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1 {
-        MAX_NON_HF_OPERATION_FRAME_BYTES_V1
-    } else {
-        MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1
     };
 const MAX_PROVIDER_INGEST_CHECKPOINT_RECORD_BYTES_V1: usize =
     MAX_PROVIDER_INGEST_CHECKPOINT_BYTES_V1
@@ -557,24 +550,6 @@ const OPAQUE_BLOB_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolic
         5,
     ),
 );
-const SORACLOUD_HF_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 96 * 1024 * 1024;
-const SORACLOUD_HF_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeResourcePolicyV1::new(
-    (
-        MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
-        MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
-    ),
-    (
-        112 * 1024 * 1024,
-        SORACLOUD_HF_MAX_DECODE_ALLOCATION_BYTES_V1,
-    ),
-    (4 * 1024 * 1024, 24 * 1024 * 1024),
-    32,
-    operation_resource_caps(
-        MAX_SORACLOUD_HF_INFERENCE_FRAME_BYTES_V1,
-        SORACLOUD_HF_MAX_DECODE_ALLOCATION_BYTES_V1,
-        5,
-    ),
-);
 // Billing validation retains the framed response, operation envelope,
 // request/result cross-checks, and caller result. The policy admits the
 // service's full 128 MiB epoch-witness checkpoint.
@@ -957,24 +932,6 @@ fn soracloud_runtime_signer_binding_from_wire(
         inner.authority.clone(),
         inner.public_key.clone(),
         crate::soracloud_runtime_signer::SoracloudRuntimeSignerQualificationV1::new(
-            required_binding_value!(binding, revision),
-            required_binding_value!(binding, policy_digest),
-            true,
-            false,
-        ),
-    )
-    .map_err(|_| BrokerError::BindingMismatch)
-}
-fn soracloud_hf_credential_binding_from_wire(
-    binding: &ProviderBindingWireV1,
-) -> Result<crate::soracloud_hf_credential::SoracloudHfCredentialProviderBindingV1, BrokerError> {
-    if binding.slot != IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id()
-    {
-        return Err(BrokerError::BindingMismatch);
-    }
-    crate::soracloud_hf_credential::SoracloudHfCredentialProviderBindingV1::try_new(
-        binding.handle.clone(),
-        crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationV1::new(
             required_binding_value!(binding, revision),
             required_binding_value!(binding, policy_digest),
             true,
@@ -1538,8 +1495,6 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
     let native_transaction_signer = native_transaction_signer_role_for_slot(binding.slot).is_some();
     let soracloud_runtime_signer =
         binding.slot == IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
-    let soracloud_hf_credential = binding.slot
-        == IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id();
     let consensus_threshold_signer = binding.slot
         == IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id()
         || binding.slot == IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner.wire_id();
@@ -1602,7 +1557,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
         || binding
             .provider_ingest_max_signed_transaction_bytes
             .is_some();
-    // Slot 55 is a hard-cut protocol: its dedicated identity must be
+    // Slot 54 is a hard-cut protocol: its dedicated identity must be
     // present exactly on that slot and can never alias evidence-viewer
     // archive metadata on slot 47 (or any other provider role).
     if moderation_panel_notification_archive != has_moderation_archive_metadata {
@@ -1660,7 +1615,6 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
         || reputation_retention
         || billing_runtime
         || gateway_runtime
-        || soracloud_hf_credential
         || consensus_threshold_signer
     {
         if binding.native_signer_binding.is_some()
@@ -2184,27 +2138,6 @@ fn decode_bootle_lantern_issue_request(
 }
 define_broker_wire_struct!(copy SoracloudSignerQualificationWireV1 { revision: u64, policy_digest: [u8; 32], active: bool, test_only: bool, });
 define_broker_wire_struct!(owned SoracloudProvenanceSignRequestWireV1 { purpose: u8, preimage: Vec<u8>, });
-define_broker_wire_struct!(sensitive SoracloudHfAuthenticatedInferenceRequestWireV1 { repo_id: String, resolved_revision: String, url: String, content_type: String, accept: Option<String>, body: Vec<u8>, maximum_response_bytes: u64, });
-impl_broker_debug_fields!(SoracloudHfAuthenticatedInferenceRequestWireV1 as value {
-    "repo_id_len" => value.repo_id.len(),
-    "has_exact_revision" => !value.resolved_revision.is_empty(),
-    "url_len" => value.url.len(),
-    "content_type_len" => value.content_type.len(),
-    "has_accept" => value.accept.is_some(),
-    "body_len" => value.body.len(),
-    "maximum_response_bytes" => value.maximum_response_bytes,
-} => finish_non_exhaustive);
-impl_scrub_fields_on_drop!(SoracloudHfAuthenticatedInferenceRequestWireV1 { body });
-define_broker_wire_struct!(sensitive SoracloudHfAuthenticatedInferenceResponseWireV1 { served_repo_id: String, served_revision: String, status: u16, content_type: Option<String>, content_encoding: Option<String>, body: Vec<u8>, });
-impl_broker_debug_fields!(SoracloudHfAuthenticatedInferenceResponseWireV1 as value {
-    "served_repo_id_len" => value.served_repo_id.len(),
-    "has_exact_served_revision" => !value.served_revision.is_empty(),
-    "status" => value.status,
-    "has_content_type" => value.content_type.is_some(),
-    "has_content_encoding" => value.content_encoding.is_some(),
-    "body_len" => value.body.len(),
-} => finish_non_exhaustive);
-impl_scrub_fields_on_drop!(SoracloudHfAuthenticatedInferenceResponseWireV1 { body });
 define_broker_wire_struct!(copy PrivacyCyclePrfRequestWireV1 { version: u16, query_id: [u8; 32], policy_digest: [u8; 32], population_inventory_digest: [u8; 32], metric_schema_digest: [u8; 32], cycle_id: [u8; 16], cycle_start_unix: u64, cycle_end_unix: u64, binding_digest: [u8; 32], });
 impl PrivacyCyclePrfRequestWireV1 {
     fn from_request(request: &sorafs_node::PrivacyCyclePrfRequestV1) -> Self {

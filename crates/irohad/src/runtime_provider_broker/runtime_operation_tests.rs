@@ -605,7 +605,7 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         );
     }
     assert_eq!(
-        operation_frame_limit(OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2),
+        operation_frame_limit(OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1),
         MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1
     );
     for operation in [
@@ -617,7 +617,7 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         OPERATION_PROVIDER_INGEST_RETENTION_LOAD_V1,
         OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1,
         OPERATION_PROVIDER_INGEST_SOURCE_READINESS_V1,
-        OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
+        OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
     ] {
         assert!(operation_is_known(operation));
         assert!(

@@ -119,7 +119,7 @@ impl Kura {
         let capacity_path = self.store_root.join("blocks");
         let mut capacity = AutonomousClaimMutationPeak::default();
         for entrypoint_hash in &payload.entrypoint_hashes {
-            let incoming = AutonomousLaneEntrypointClaimV3::new(payload, *entrypoint_hash);
+            let incoming = AutonomousLaneEntrypointClaimV1::new(payload, *entrypoint_hash);
             let path = Self::autonomous_lane_entrypoint_claim_path(
                 &self.store_root,
                 &incoming.network_id,
@@ -155,7 +155,7 @@ impl Kura {
                     |message| Self::invalid_lane_artifact_error(temp_path.clone(), message),
                 )?;
                 if !self.autonomous_lane_entrypoint_claim_path_matches(&pending, &path)
-                    || !matches!(pending.state, AutonomousLaneEntrypointClaimStateV3::Active)
+                    || !matches!(pending.state, AutonomousLaneEntrypointClaimStateV1::Active)
                 {
                     return Err(Self::invalid_lane_artifact_error(
                         temp_path,
@@ -208,7 +208,7 @@ impl Kura {
             if let Some(existing) = existing.as_ref()
                 && !matches!(
                     existing.state,
-                    AutonomousLaneEntrypointClaimStateV3::Released(_)
+                    AutonomousLaneEntrypointClaimStateV1::Released(_)
                 )
                 && !self
                     .autonomous_lane_entrypoint_claim_is_superseded_by_active_recreation_locked(

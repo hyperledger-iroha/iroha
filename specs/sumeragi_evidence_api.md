@@ -52,7 +52,9 @@ Additional consensus status
   status and adds all five canonical lane arrays, `local_peer_removed`, and bounded local
   `operator` diagnostics. Tagged unit enums retain their Norito object form, fixed byte arrays are
   uppercase exact-width hex, and lane settlement `u128` totals and receipt amounts are canonical
-  unsigned decimal strings. Optional reducer artifacts are omitted when absent. See
+  unsigned decimal strings. Every current reducer-status field is required; nullable QC/TC,
+  persistence, commit-frontier, outbound-intent, queue-age, and liveness artifacts use explicit
+  `null` when absent. A sparse projection that omits one of those slots is rejected. See
   `specs/sumeragi_v2.md` and the `SumeragiStatusResponse` OpenAPI schema for the exact fields.
 - GET `/v1/sumeragi/qc` — returns the canonical `SumeragiV2QcResponse` by default. Its required `highest_prepare_qc` and `locked_prepare_qc` slots are nullable; each non-null value carries the full context-bound `QuorumCertificateRef`. Set `Accept: application/json` for the identical schema, including explicit `null` for an unavailable reference.
 - GET `/v1/sumeragi/status/sse` — SSE stream of the same payload (≈1s cadence).

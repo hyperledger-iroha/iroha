@@ -861,7 +861,7 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
                     test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: Json::parse("{{}}"));
                     test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{\"value\":\"not-an-int\"}}"));
                     test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{}}"));
-                    test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{\"value\":7,\"unexpected\":true}}"));
+                    test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{\"unexpected\":true,\"value\":7}}"));
                     test::assert(counter == 1);
                 }}
                 }}

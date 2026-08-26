@@ -1425,6 +1425,7 @@ fn parse_account_header_value(
         .unwrap_or(0);
     let world = state.world_view();
     resolve_active_account_alias(&world, &nexus.dataspace_catalog, &alias, now_ms)
+        .map_err(|error| crate::Error::Query(ValidationFail::InternalError(error.to_string())))?
         .ok_or_else(invalid_account_header)
 }
 

@@ -88,6 +88,37 @@ fileprivate func decodeCanonicalVpnTrustHex<K: CodingKey>(
     return value
 }
 
+fileprivate func decodeCanonicalVpnMldsa65PublicKey<K: CodingKey>(
+    from container: KeyedDecodingContainer<K>,
+    forKey key: K,
+    field: String,
+    allowEmpty: Bool = false
+) throws -> String {
+    let value = try container.decode(String.self, forKey: key)
+    if allowEmpty, value.isEmpty {
+        return value
+    }
+    guard value.utf8.count == 3_904,
+          value.utf8.allSatisfy({ byte in
+              (48...57).contains(byte) || (97...102).contains(byte)
+          }) else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription:
+                "\(field) must be exactly 3904 lowercase hexadecimal characters."
+        )
+    }
+    guard value.utf8.contains(where: { $0 != 48 }) else {
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "\(field) must not be the all-zero ML-DSA-65 public key."
+        )
+    }
+    return value
+}
+
 fileprivate func decodeCanonicalVpnTlsServerName<K: CodingKey>(
     from container: KeyedDecodingContainer<K>,
     forKey key: K,
@@ -332,6 +363,7 @@ public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
     public let flowLabelBits: UInt8
     public let paddingBudgetMilliseconds: UInt16
     public let relayIdHex: String
+    public let relayMldsa65PublicKeyHex: String
     public let descriptorCommitHex: String
     public let tlsServerName: String
     public let relayTlsSpkiSha256Hex: String
@@ -358,6 +390,7 @@ public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
         case flowLabelBits = "flow_label_bits"
         case paddingBudgetMilliseconds = "padding_budget_ms"
         case relayIdHex = "relay_id_hex"
+        case relayMldsa65PublicKeyHex = "relay_mldsa65_public_key_hex"
         case descriptorCommitHex = "descriptor_commit_hex"
         case tlsServerName = "tls_server_name"
         case relayTlsSpkiSha256Hex = "relay_tls_spki_sha256_hex"
@@ -463,6 +496,12 @@ public struct ToriiVpnProfile: Decodable, Sendable, Equatable {
             field: "vpn profile relay_id_hex",
             allowEmpty: !available,
             requireEd25519Point: true
+        )
+        relayMldsa65PublicKeyHex = try decodeCanonicalVpnMldsa65PublicKey(
+            from: container,
+            forKey: .relayMldsa65PublicKeyHex,
+            field: "vpn profile relay_mldsa65_public_key_hex",
+            allowEmpty: !available
         )
         descriptorCommitHex = try decodeCanonicalVpnTrustHex(
             from: container,
@@ -574,6 +613,7 @@ public struct ToriiVpnQuote: Decodable, Sendable, Equatable {
     public let flowLabelBits: UInt8
     public let paddingBudgetMilliseconds: UInt16
     public let relayIdHex: String
+    public let relayMldsa65PublicKeyHex: String
     public let descriptorCommitHex: String
     public let tlsServerName: String
     public let relayTlsSpkiSha256Hex: String
@@ -605,6 +645,7 @@ public struct ToriiVpnQuote: Decodable, Sendable, Equatable {
         case flowLabelBits = "flow_label_bits"
         case paddingBudgetMilliseconds = "padding_budget_ms"
         case relayIdHex = "relay_id_hex"
+        case relayMldsa65PublicKeyHex = "relay_mldsa65_public_key_hex"
         case descriptorCommitHex = "descriptor_commit_hex"
         case tlsServerName = "tls_server_name"
         case relayTlsSpkiSha256Hex = "relay_tls_spki_sha256_hex"
@@ -723,6 +764,11 @@ public struct ToriiVpnQuote: Decodable, Sendable, Equatable {
             field: "vpn quote relay_id_hex",
             requireEd25519Point: true
         )
+        relayMldsa65PublicKeyHex = try decodeCanonicalVpnMldsa65PublicKey(
+            from: container,
+            forKey: .relayMldsa65PublicKeyHex,
+            field: "vpn quote relay_mldsa65_public_key_hex"
+        )
         descriptorCommitHex = try decodeCanonicalVpnTrustHex(
             from: container,
             forKey: .descriptorCommitHex,
@@ -819,6 +865,7 @@ public struct ToriiVpnSession: Decodable, Sendable, Equatable {
     public let flowLabelBits: UInt8
     public let paddingBudgetMilliseconds: UInt16
     public let relayIdHex: String
+    public let relayMldsa65PublicKeyHex: String
     public let descriptorCommitHex: String
     public let tlsServerName: String
     public let relayTlsSpkiSha256Hex: String
@@ -853,6 +900,7 @@ public struct ToriiVpnSession: Decodable, Sendable, Equatable {
         case flowLabelBits = "flow_label_bits"
         case paddingBudgetMilliseconds = "padding_budget_ms"
         case relayIdHex = "relay_id_hex"
+        case relayMldsa65PublicKeyHex = "relay_mldsa65_public_key_hex"
         case descriptorCommitHex = "descriptor_commit_hex"
         case tlsServerName = "tls_server_name"
         case relayTlsSpkiSha256Hex = "relay_tls_spki_sha256_hex"
@@ -972,6 +1020,11 @@ public struct ToriiVpnSession: Decodable, Sendable, Equatable {
             forKey: .relayIdHex,
             field: "vpn session relay_id_hex",
             requireEd25519Point: true
+        )
+        relayMldsa65PublicKeyHex = try decodeCanonicalVpnMldsa65PublicKey(
+            from: container,
+            forKey: .relayMldsa65PublicKeyHex,
+            field: "vpn session relay_mldsa65_public_key_hex"
         )
         descriptorCommitHex = try decodeCanonicalVpnTrustHex(
             from: container,

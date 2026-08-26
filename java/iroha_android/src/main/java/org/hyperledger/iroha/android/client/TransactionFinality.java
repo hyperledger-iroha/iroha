@@ -16,7 +16,7 @@ public final class TransactionFinality {
   public static void requireApplied(
       final Map<String, Object> payload, final String hashHex) {
     final String kind = PipelineStatusExtractor.requireAuthoritativeStatus(payload, hashHex);
-    if (!"Applied".equals(kind)) {
+    if (!"Applied".equals(kind) || !"state".equals(payload.get("resolved_from"))) {
       throw new IllegalStateException(
           "Transaction did not reach exact Applied execution finality");
     }

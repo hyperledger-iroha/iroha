@@ -36,7 +36,7 @@ type ApplyNativeReceiptBuilder =
         iroha_data_model::NetworkId,
         &LaneBlockProposalV1,
         &[TransactionEntrypoint],
-        &[crate::queue::LaneQueueReservationKeyV2],
+        &[crate::queue::LaneQueueReservationKeyV1],
         &[crate::queue::RoutingPlan],
     ) -> Vec<Option<iroha_data_model::block::consensus::NativeAmxReceipt>>;
 fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightContext) {
@@ -145,7 +145,7 @@ fn native_amx_receipts_for_apply_fixture(
     network_id: iroha_data_model::NetworkId,
     coordinator_proposal: &LaneBlockProposalV1,
     entrypoints: &[TransactionEntrypoint],
-    reservation_keys: &[crate::queue::LaneQueueReservationKeyV2],
+    reservation_keys: &[crate::queue::LaneQueueReservationKeyV1],
     routing_plans: &[crate::queue::RoutingPlan],
 ) -> Vec<Option<iroha_data_model::block::consensus::NativeAmxReceipt>> {
     use crate::{

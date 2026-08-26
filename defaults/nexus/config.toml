@@ -96,8 +96,8 @@ identity_private_key_file = "/run/secrets/iroha/nexus-streaming-identity-private
 feature_bits = 0b11
 
 [streaming.soranet]
-# Auto-provision manifests onto SoraNet circuits using the default Torii egress.
-enabled = true
+# Token-bearing exit publication remains disabled until proof-bound RouteOpen and durable revocation.
+enabled = false
 exit_multiaddr = "/dns/torii/udp/9443/quic"
 padding_budget_ms = 25
 access_kind = "authenticated"

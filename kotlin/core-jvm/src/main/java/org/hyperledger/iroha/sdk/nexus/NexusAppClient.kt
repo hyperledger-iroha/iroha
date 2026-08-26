@@ -138,7 +138,16 @@ data class NexusTransferReceipt(
     @JvmField val signedTransaction: SignedTransaction,
     @JvmField val submission: ClientResponse,
     @JvmField val finalStatus: Map<String, Any>? = null,
-)
+) {
+    init {
+        require(transactionHashHex.matches(Regex("[0-9a-f]{63}[13579bdf]"))) {
+            "transactionHashHex must match [0-9a-f]{63}[13579bdf] with the Iroha HashOf marker"
+        }
+        require(transactionHashHex == SignedTransactionHasher.hashHex(signedTransaction)) {
+            "transactionHashHex must identify the exact signed transaction"
+        }
+    }
+}
 
 /** App-role Connect dependency used by [NexusAppClient]. */
 interface NexusConnectTransport {
@@ -424,7 +433,7 @@ class NexusAppClient @JvmOverloads constructor(
             AccountAddress.parseEncodedIgnoringCurveSupport(
                 value,
                 config.chainDiscriminant,
-            ).address
+            )
         } catch (error: Exception) {
             throw NexusAppError(
                 "invalid_account_id",
@@ -459,7 +468,7 @@ class NexusAppClient @JvmOverloads constructor(
             AccountAddress.parseEncodedIgnoringCurveSupport(
                 requireCanonicalAccountId(accountId, context),
                 config.chainDiscriminant,
-            ).address
+            )
         } catch (error: NexusAppError) {
             throw error
         } catch (error: Exception) {

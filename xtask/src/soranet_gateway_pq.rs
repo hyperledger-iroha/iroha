@@ -7,11 +7,11 @@ use blake3::Hasher as Blake3;
 use ed25519_dalek::VerifyingKey;
 use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::soranet::{
-    certificate::{CertificateValidationPhase, RelayCertificateBundleV2},
-    handshake::HandshakeSuite,
+    certificate::RelayCertificateBundleV2, directory::compute_issuer_fingerprint,
 };
-use norito::json::{self, Map, Number, Value};
+use norito::json::{self, Map, Value};
 use sorafs_car::trustless::TrustlessVerifierConfig;
+use soranet_pq::MlDsaSuite;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -25,14 +25,16 @@ pub struct GatewayPqOptions {
     pub pop: String,
     /// Path to the SRCv2 bundle (CBOR).
     pub srcv2_bundle: PathBuf,
+    /// Canonical lowercase hex for the independently trusted issuer Ed25519 public key.
+    pub issuer_ed25519_hex: String,
+    /// Canonical lowercase hex for the independently trusted issuer ML-DSA-65 public key.
+    pub issuer_mldsa65_hex: String,
     /// Directory containing the TLS/ECH bundle (fullchain.pem, privkey.pem, ech.json).
     pub tls_bundle_dir: PathBuf,
     /// Trustless verifier config (TOML).
     pub trustless_config: PathBuf,
-    /// Optional canary hosts to exercise PQ handshakes; defaults derived from the PoP.
-    pub canary_hosts: Vec<String>,
-    /// Certificate validation phase; defaults to Phase3 (dual signatures required).
-    pub validation_phase: CertificateValidationPhase,
+    /// Explicit Unix second at which the SRCv2 certificate must be valid.
+    pub at_unix: i64,
 }
 /// Paths to generated outputs.
 #[derive(Debug)]
@@ -75,25 +77,22 @@ pub fn run_gateway_pq_readiness(options: GatewayPqOptions) -> Result<GatewayPqOu
     let mut overall = ComponentState::Ok;
     let mut summary_root = Map::new();
     summary_root.insert("pop".into(), Value::String(options.pop.clone()));
-    let (src_state, src_summary) =
-        load_srcv2_status(&options.srcv2_bundle, options.validation_phase)?;
+    let (src_state, src_summary) = readiness_component(load_srcv2_status(
+        &options.srcv2_bundle,
+        &options.issuer_ed25519_hex,
+        &options.issuer_mldsa65_hex,
+        options.at_unix,
+    ));
     summary_root.insert("srcv2".into(), src_summary);
     overall = overall.elevate(src_state);
-    let (tls_state, tls_summary) = load_tls_status(&options.tls_bundle_dir)?;
+    let (tls_state, tls_summary) = readiness_component(load_tls_status(&options.tls_bundle_dir));
     summary_root.insert("tls".into(), tls_summary);
     overall = overall.elevate(tls_state);
-    let (trustless_state, trustless_summary) = load_trustless_status(&options.trustless_config)?;
+    let (trustless_state, trustless_summary) =
+        readiness_component(load_trustless_status(&options.trustless_config));
     summary_root.insert("trustless".into(), trustless_summary);
     overall = overall.elevate(trustless_state);
-    let canary_hosts = if options.canary_hosts.is_empty() {
-        default_canaries(&options.pop)
-    } else {
-        options.canary_hosts
-    };
-    summary_root.insert(
-        "canary_hosts".into(),
-        Value::Array(canary_hosts.into_iter().map(Value::String).collect()),
-    );
+    summary_root.insert("evaluated_at_unix".into(), Value::from(options.at_unix));
     // Dashboards/operators follow the SNNet-16 telemetry artefacts.
     summary_root.insert(
         "dashboards".into(),
@@ -126,24 +125,64 @@ pub fn run_gateway_pq_readiness(options: GatewayPqOptions) -> Result<GatewayPqOu
             summary_markdown.display()
         )
     })?;
-    Ok(GatewayPqOutcome {
+    let outcome = GatewayPqOutcome {
         summary_json,
         summary_markdown,
+    };
+    if overall != ComponentState::Ok {
+        return Err(eyre!(
+            "SoraNet gateway PQ readiness is {}; evidence written to `{}` and `{}`",
+            overall.as_str(),
+            outcome.summary_json.display(),
+            outcome.summary_markdown.display()
+        ));
+    }
+    Ok(outcome)
+}
+fn readiness_component(result: Result<(ComponentState, Value)>) -> (ComponentState, Value) {
+    result.unwrap_or_else(|error| {
+        let error = error.to_string();
+        (
+            ComponentState::Error,
+            norito::json!({
+                "state": "error",
+                "error": error,
+            }),
+        )
     })
 }
 fn load_srcv2_status(
     path: &Path,
-    phase: CertificateValidationPhase,
+    issuer_ed25519_hex: &str,
+    issuer_mldsa65_hex: &str,
+    at_unix: i64,
 ) -> Result<(ComponentState, Value)> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read SRCv2 bundle from `{}`", path.display()))?;
     let bundle = RelayCertificateBundleV2::from_cbor(&bytes)
         .wrap_err_with(|| format!("failed to parse SRCv2 bundle from `{}`", path.display()))?;
     let certificate = bundle.certificate.clone();
-    let ed_pub = parse_srcv2_identity_ed25519_key(&certificate.identity_ed25519)?;
-    let mldsa_key = certificate.identity_mldsa65.clone();
+    let trusted_issuer = parse_trusted_issuer_keys(issuer_ed25519_hex, issuer_mldsa65_hex)?;
+    if trusted_issuer.ed25519_bytes == certificate.identity_ed25519
+        || trusted_issuer.mldsa65 == certificate.identity_mldsa65
+    {
+        return Err(eyre!(
+            "SRCv2 issuer keys must be operationally distinct from the relay identity keys"
+        ));
+    }
+    if trusted_issuer.fingerprint != certificate.issuer_fingerprint {
+        return Err(eyre!(
+            "trusted SRCv2 issuer fingerprint {} does not match certificate issuer_fingerprint {}",
+            hex::encode(trusted_issuer.fingerprint),
+            hex::encode(certificate.issuer_fingerprint)
+        ));
+    }
     let mut state = ComponentState::Ok;
     let mut details = Map::new();
+    details.insert(
+        "issuer_fingerprint_hex".into(),
+        Value::String(hex::encode(trusted_issuer.fingerprint)),
+    );
     details.insert(
         "handshake_suites".into(),
         Value::Array(
@@ -154,22 +193,11 @@ fn load_srcv2_status(
                 .collect(),
         ),
     );
+    let has_pq_suite = certificate.supports_pq_handshake();
     details.insert(
-        "kem_policy_mode".into(),
-        Value::String(format!("{:?}", certificate.kem_policy.mode)),
+        "pq_handshake_suite_present".into(),
+        Value::Bool(has_pq_suite),
     );
-    details.insert(
-        "kem_preferred_suite".into(),
-        Value::Number(Number::from(u64::from(
-            certificate.kem_policy.preferred_suite,
-        ))),
-    );
-    let has_pq_suite = certificate.handshake_suites.iter().any(|suite| {
-        matches!(
-            suite,
-            HandshakeSuite::Nk2Hybrid | HandshakeSuite::Nk3PqForwardSecure
-        )
-    });
     if !has_pq_suite {
         state = ComponentState::Error;
         details.insert(
@@ -195,36 +223,80 @@ fn load_srcv2_status(
         Value::Bool(certificate.capability_flags.supports_kaigi_bridge()),
     );
     details.insert("capability_flags".into(), Value::Object(capability_flags));
-    details.insert(
-        "has_pq_kem_public".into(),
-        Value::Bool(!certificate.pq_kem_public.is_empty()),
-    );
-    let dual_signature = bundle.signatures.mldsa65.is_some();
-    details.insert("dual_signature".into(), Value::Bool(dual_signature));
-    if !dual_signature {
-        state = ComponentState::Error;
-    }
-    // Validate signatures when possible.
-    match bundle.verify_signatures(&ed_pub, &mldsa_key, phase) {
+    details.insert("verified_at_unix".into(), Value::from(at_unix));
+    // First-release readiness requires both signatures and an in-window certificate.
+    match bundle.verify_at(&trusted_issuer.ed25519, &trusted_issuer.mldsa65, at_unix) {
         Ok(()) => {
-            details.insert("signature_valid".into(), Value::Bool(true));
+            details.insert(
+                "certificate_and_signatures_valid_at_unix".into(),
+                Value::Bool(true),
+            );
         }
         Err(err) => {
             details.insert(
-                "signature_valid".into(),
-                Value::String(format!("invalid: {err}")),
+                "certificate_and_signatures_valid_at_unix".into(),
+                Value::Bool(false),
             );
+            details.insert("verification_error".into(), Value::String(err.to_string()));
             state = ComponentState::Error;
         }
     }
     details.insert("state".into(), Value::String(state.as_str().to_string()));
     Ok((state, Value::Object(details)))
 }
-fn parse_srcv2_identity_ed25519_key(public_key: &[u8; 32]) -> Result<VerifyingKey> {
-    let parsed = iroha_crypto::ed25519_parse_public_key(public_key)
-        .map_err(|err| eyre!("invalid Ed25519 identity key in SRCv2: {err}"))?;
-    VerifyingKey::from_bytes(parsed.as_bytes())
-        .map_err(|err| eyre!("invalid Ed25519 identity key in SRCv2: {err}"))
+#[derive(Debug)]
+struct TrustedIssuerKeys {
+    ed25519_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
+    ed25519: VerifyingKey,
+    mldsa65: Vec<u8>,
+    fingerprint: [u8; 32],
+}
+fn parse_trusted_issuer_keys(
+    issuer_ed25519_hex: &str,
+    issuer_mldsa65_hex: &str,
+) -> Result<TrustedIssuerKeys> {
+    let ed25519_bytes = decode_exact_lowercase_hex(
+        issuer_ed25519_hex,
+        ed25519_dalek::PUBLIC_KEY_LENGTH,
+        "trusted SRCv2 issuer Ed25519 public key",
+    )?;
+    let ed25519_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = ed25519_bytes
+        .try_into()
+        .expect("exact Ed25519 public-key length checked above");
+    let parsed = iroha_crypto::ed25519_parse_public_key(&ed25519_bytes)
+        .map_err(|err| eyre!("invalid trusted SRCv2 issuer Ed25519 public key: {err}"))?;
+    let ed25519 = VerifyingKey::from_bytes(parsed.as_bytes())
+        .map_err(|err| eyre!("invalid trusted SRCv2 issuer Ed25519 public key: {err}"))?;
+    let mldsa65 = decode_exact_lowercase_hex(
+        issuer_mldsa65_hex,
+        MlDsaSuite::MlDsa65.public_key_len(),
+        "trusted SRCv2 issuer ML-DSA-65 public key",
+    )?;
+    let fingerprint = compute_issuer_fingerprint(&ed25519_bytes, &mldsa65)
+        .map_err(|err| eyre!("invalid trusted SRCv2 issuer key pair: {err}"))?;
+    Ok(TrustedIssuerKeys {
+        ed25519_bytes,
+        ed25519,
+        mldsa65,
+        fingerprint,
+    })
+}
+fn decode_exact_lowercase_hex(value: &str, expected_bytes: usize, label: &str) -> Result<Vec<u8>> {
+    let expected_hex = expected_bytes
+        .checked_mul(2)
+        .ok_or_else(|| eyre!("{label} length overflow"))?;
+    if value.len() != expected_hex
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(eyre!(
+            "{label} must contain exactly {expected_hex} lowercase hexadecimal characters"
+        ));
+    }
+    let decoded = hex::decode(value).map_err(|err| eyre!("failed to decode {label}: {err}"))?;
+    debug_assert_eq!(decoded.len(), expected_bytes);
+    Ok(decoded)
 }
 fn load_tls_status(dir: &Path) -> Result<(ComponentState, Value)> {
     let mut state = ComponentState::Ok;
@@ -300,7 +372,7 @@ fn load_trustless_status(path: &Path) -> Result<(ComponentState, Value)> {
         state = ComponentState::Error;
     }
     if config.sdr_receipt_dir.trim().is_empty() || config.kzg_trusted_setup.trim().is_empty() {
-        state = ComponentState::Warn;
+        state = state.elevate(ComponentState::Warn);
     }
     details.insert("state".into(), Value::String(state.as_str().to_string()));
     Ok((state, Value::Object(details)))
@@ -328,12 +400,6 @@ fn render_markdown(summary: &Map) -> String {
 - Trustless verifier: {trustless_state}\n\
 - Dashboards: {dashboards_text}\n",
     )
-}
-fn default_canaries(pop: &str) -> Vec<String> {
-    vec![
-        format!("canary1.{pop}.gw.sora.id"),
-        format!("canary2.{pop}.gw.sora.id"),
-    ]
 }
 fn file_blake3_hex(path: &Path) -> Result<String> {
     let mut hasher = Blake3::new();
@@ -374,9 +440,11 @@ fn dashboards_label(dashboards: &Value) -> String {
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
-    use iroha_crypto::soranet::certificate::{RelayCapabilityFlagsV1, RelayCertificateV2};
-    use rand_core_06::OsRng;
-    use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
+    use iroha_crypto::soranet::{
+        certificate::{RelayCapabilityFlagsV1, RelayCertificateV2},
+        handshake::HandshakeSuite,
+    };
+    use soranet_pq::{HedgedRngSeed, generate_mldsa_keypair_from_seed};
     use tempfile::TempDir;
     const NONCANONICAL_ED25519_IDENTITY: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -388,12 +456,15 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-    fn sample_certificate() -> RelayCertificateV2 {
-        let identity_ed25519 = [0x22; 32];
+    fn sample_certificate(
+        identity_ed25519: [u8; 32],
+        identity_mldsa65: Vec<u8>,
+        issuer_fingerprint: [u8; 32],
+    ) -> RelayCertificateV2 {
         RelayCertificateV2 {
             relay_id: identity_ed25519,
             identity_ed25519,
-            identity_mldsa65: vec![0x33; 1952],
+            identity_mldsa65,
             descriptor_commit: [0x44; 32],
             roles: iroha_crypto::soranet::certificate::RelayRolesV2 {
                 entry: true,
@@ -416,13 +487,6 @@ mod tests {
                 iroha_crypto::soranet::certificate::CapabilityToggle::Enabled,
                 iroha_crypto::soranet::certificate::CapabilityToggle::Enabled,
             ),
-            kem_policy: iroha_crypto::soranet::certificate::KemRotationPolicyV1 {
-                mode: iroha_crypto::soranet::certificate::KemRotationModeV1::Static,
-                preferred_suite: 1,
-                fallback_suite: None,
-                rotation_interval_hours: 0,
-                grace_period_hours: 0,
-            },
             handshake_suites: vec![
                 HandshakeSuite::Nk3PqForwardSecure,
                 HandshakeSuite::Nk2Hybrid,
@@ -431,15 +495,49 @@ mod tests {
             valid_after: 1_734_000_000,
             valid_until: 1_734_086_400,
             directory_hash: [0x55; 32],
-            issuer_fingerprint: [0x66; 32],
-            pq_kem_public: vec![0x77; 1184],
+            issuer_fingerprint,
         }
     }
-    #[test]
-    fn generates_readiness_summary() {
-        let temp = TempDir::new().expect("tempdir");
-        let out_dir = temp.path().join("out");
-        let tls_dir = temp.path().join("tls");
+    struct IssuedBundleFixture {
+        bundle: RelayCertificateBundleV2,
+        issuer_ed25519_hex: String,
+        issuer_mldsa65_hex: String,
+    }
+    fn issued_bundle_fixture() -> IssuedBundleFixture {
+        let relay_ed25519 = SigningKey::from_bytes(&[0x21; 32]).verifying_key();
+        let relay_mldsa65 = generate_mldsa_keypair_from_seed(
+            MlDsaSuite::MlDsa65,
+            HedgedRngSeed::from_entropy([0x31; 32]),
+            b"xtask:soranet-gateway-pq:relay-identity",
+        )
+        .expect("relay ML-DSA keypair");
+        let issuer_ed25519 = SigningKey::from_bytes(&[0x41; 32]);
+        let issuer_mldsa65 = generate_mldsa_keypair_from_seed(
+            MlDsaSuite::MlDsa65,
+            HedgedRngSeed::from_entropy([0x51; 32]),
+            b"xtask:soranet-gateway-pq:issuer",
+        )
+        .expect("issuer ML-DSA keypair");
+        let issuer_ed25519_bytes = issuer_ed25519.verifying_key().to_bytes();
+        let issuer_fingerprint =
+            compute_issuer_fingerprint(&issuer_ed25519_bytes, issuer_mldsa65.public_key())
+                .expect("issuer fingerprint");
+        let certificate = sample_certificate(
+            relay_ed25519.to_bytes(),
+            relay_mldsa65.public_key().to_vec(),
+            issuer_fingerprint,
+        );
+        let bundle = certificate
+            .issue(&issuer_ed25519, issuer_mldsa65.secret_key())
+            .expect("issue certificate");
+        IssuedBundleFixture {
+            bundle,
+            issuer_ed25519_hex: hex::encode(issuer_ed25519_bytes),
+            issuer_mldsa65_hex: hex::encode(issuer_mldsa65.public_key()),
+        }
+    }
+    fn write_ready_dependencies(root: &Path) -> (PathBuf, PathBuf) {
+        let tls_dir = root.join("tls");
         fs::create_dir_all(&tls_dir).expect("tls dir");
         fs::write(tls_dir.join("fullchain.pem"), "CERT").expect("fullchain");
         fs::write(tls_dir.join("privkey.pem"), "KEY").expect("privkey");
@@ -448,26 +546,7 @@ mod tests {
             r#"{"ech_config_b64":"ZmFrZS1jb25maWc="}"#,
         )
         .expect("ech");
-        let mut rng = OsRng;
-        let ed_signing = SigningKey::generate(&mut rng);
-        let ed_public = ed_signing.verifying_key();
-        let ml_keypair = generate_mldsa_keypair_from_seed(
-            MlDsaSuite::MlDsa65,
-            HedgedRngSeed::from_entropy([0x65; 32]),
-            b"xtask:soranet-gateway-pq:readiness",
-        )
-        .expect("ml keypair");
-        let ml_public = ml_keypair.public_key.clone();
-        let ml_secret = ml_keypair.secret_key;
-        let mut certificate = sample_certificate();
-        certificate.identity_ed25519 = ed_public.to_bytes();
-        certificate.identity_mldsa65 = ml_public.clone();
-        let bundle = certificate
-            .issue(&ed_signing, &ml_secret)
-            .expect("issue certificate");
-        let src_path = temp.path().join("srcv2.cbor");
-        fs::write(&src_path, bundle.to_cbor()).expect("write srcv2");
-        let trustless_path = temp.path().join("trustless.toml");
+        let trustless_path = root.join("trustless.toml");
         fs::write(
             &trustless_path,
             r#"
@@ -497,14 +576,29 @@ emit_metrics = true
 "#,
         )
         .expect("trustless config");
+        (tls_dir, trustless_path)
+    }
+    #[test]
+    fn generates_readiness_summary() {
+        let temp = TempDir::new().expect("tempdir");
+        let out_dir = temp.path().join("out");
+        let (tls_dir, trustless_path) = write_ready_dependencies(temp.path());
+        let issued = issued_bundle_fixture();
+        let src_path = temp.path().join("srcv2.cbor");
+        fs::write(
+            &src_path,
+            issued.bundle.try_to_cbor().expect("encode srcv2"),
+        )
+        .expect("write srcv2");
         let outcome = run_gateway_pq_readiness(GatewayPqOptions {
             output_dir: out_dir.clone(),
             pop: "sjc-01".to_string(),
             srcv2_bundle: src_path,
+            issuer_ed25519_hex: issued.issuer_ed25519_hex,
+            issuer_mldsa65_hex: issued.issuer_mldsa65_hex,
             tls_bundle_dir: tls_dir,
             trustless_config: trustless_path,
-            canary_hosts: Vec::new(),
-            validation_phase: CertificateValidationPhase::Phase3RequireDual,
+            at_unix: 1_734_000_001,
         })
         .expect("runs readiness");
         let raw = fs::read_to_string(outcome.summary_json).expect("read summary");
@@ -518,34 +612,290 @@ emit_metrics = true
             .get("srcv2")
             .and_then(Value::as_object)
             .expect("srcv2 summary");
-        assert_eq!(src.get("dual_signature"), Some(&Value::Bool(true)));
-        assert_eq!(src.get("signature_valid"), Some(&Value::Bool(true)));
+        assert_eq!(
+            src.get("certificate_and_signatures_valid_at_unix"),
+            Some(&Value::Bool(true))
+        );
         let tls = summary
             .get("tls")
             .and_then(Value::as_object)
             .expect("tls summary");
         assert_eq!(tls.get("fullchain_present"), Some(&Value::Bool(true)));
         assert_eq!(tls.get("ech_present"), Some(&Value::Bool(true)));
-        let canaries = summary
-            .get("canary_hosts")
-            .and_then(Value::as_array)
-            .expect("canaries");
-        assert!(!canaries.is_empty());
+        assert_eq!(
+            summary.get("evaluated_at_unix").and_then(Value::as_i64),
+            Some(1_734_000_001)
+        );
+        assert!(summary.get("canary_hosts").is_none());
     }
     #[test]
-    fn rejects_noncanonical_srcv2_identity_key() {
+    fn expired_certificate_fails_after_writing_error_evidence() {
+        let temp = TempDir::new().expect("tempdir");
+        let out_dir = temp.path().join("out");
+        let (tls_dir, trustless_path) = write_ready_dependencies(temp.path());
+        let issued = issued_bundle_fixture();
+        let src_path = temp.path().join("srcv2.cbor");
+        fs::write(
+            &src_path,
+            issued.bundle.try_to_cbor().expect("encode srcv2"),
+        )
+        .expect("write srcv2");
+        let error = run_gateway_pq_readiness(GatewayPqOptions {
+            output_dir: out_dir.clone(),
+            pop: "sjc-01".to_owned(),
+            srcv2_bundle: src_path,
+            issuer_ed25519_hex: issued.issuer_ed25519_hex,
+            issuer_mldsa65_hex: issued.issuer_mldsa65_hex,
+            tls_bundle_dir: tls_dir,
+            trustless_config: trustless_path,
+            at_unix: 1_734_086_400,
+        })
+        .expect_err("a certificate at its exclusive validity end must fail readiness");
+        assert!(error.to_string().contains("readiness is error"));
+        let summary_json = out_dir.join("gateway_pq_summary.json");
+        let summary_markdown = out_dir.join("gateway_pq_summary.md");
+        assert!(summary_json.is_file());
+        assert!(summary_markdown.is_file());
+        let summary: Value = json::from_str(
+            &fs::read_to_string(summary_json).expect("read error readiness evidence"),
+        )
+        .expect("parse error readiness evidence");
+        assert_eq!(
+            summary.get("overall_status").and_then(Value::as_str),
+            Some("error")
+        );
+        assert_eq!(
+            summary
+                .get("srcv2")
+                .and_then(Value::as_object)
+                .and_then(|srcv2| srcv2.get("certificate_and_signatures_valid_at_unix")),
+            Some(&Value::Bool(false))
+        );
+    }
+    #[test]
+    fn invalid_in_window_signature_fails_after_writing_error_evidence() {
+        let temp = TempDir::new().expect("tempdir");
+        let out_dir = temp.path().join("out");
+        let (tls_dir, trustless_path) = write_ready_dependencies(temp.path());
+        let mut issued = issued_bundle_fixture();
+        issued.bundle.signatures.ed25519[0] ^= 0x80;
+        let src_path = temp.path().join("srcv2.cbor");
+        fs::write(
+            &src_path,
+            issued.bundle.try_to_cbor().expect("encode srcv2"),
+        )
+        .expect("write srcv2");
+        let error = run_gateway_pq_readiness(GatewayPqOptions {
+            output_dir: out_dir.clone(),
+            pop: "sjc-01".to_owned(),
+            srcv2_bundle: src_path,
+            issuer_ed25519_hex: issued.issuer_ed25519_hex,
+            issuer_mldsa65_hex: issued.issuer_mldsa65_hex,
+            tls_bundle_dir: tls_dir,
+            trustless_config: trustless_path,
+            at_unix: 1_734_000_001,
+        })
+        .expect_err("an invalid in-window signature must fail readiness");
+        assert!(error.to_string().contains("readiness is error"));
+        let summary: Value = json::from_str(
+            &fs::read_to_string(out_dir.join("gateway_pq_summary.json"))
+                .expect("read signature-error evidence"),
+        )
+        .expect("parse signature-error evidence");
+        assert_eq!(
+            summary
+                .get("srcv2")
+                .and_then(Value::as_object)
+                .and_then(|srcv2| srcv2.get("certificate_and_signatures_valid_at_unix")),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
+            summary.get("overall_status").and_then(Value::as_str),
+            Some("error")
+        );
+    }
+    #[test]
+    fn unreadable_component_fails_after_writing_error_evidence() {
+        let temp = TempDir::new().expect("tempdir");
+        let out_dir = temp.path().join("out");
+        let (tls_dir, trustless_path) = write_ready_dependencies(temp.path());
+        let issued = issued_bundle_fixture();
+        let error = run_gateway_pq_readiness(GatewayPqOptions {
+            output_dir: out_dir.clone(),
+            pop: "sjc-01".to_owned(),
+            srcv2_bundle: temp.path().join("missing.srcv2.cbor"),
+            issuer_ed25519_hex: issued.issuer_ed25519_hex,
+            issuer_mldsa65_hex: issued.issuer_mldsa65_hex,
+            tls_bundle_dir: tls_dir,
+            trustless_config: trustless_path,
+            at_unix: 1_734_000_001,
+        })
+        .expect_err("an unreadable SRCv2 component must fail readiness");
+        assert!(error.to_string().contains("readiness is error"));
+        let summary: Value = json::from_str(
+            &fs::read_to_string(out_dir.join("gateway_pq_summary.json"))
+                .expect("read loader-error evidence"),
+        )
+        .expect("parse loader-error evidence");
+        assert_eq!(
+            summary
+                .get("srcv2")
+                .and_then(Value::as_object)
+                .and_then(|srcv2| srcv2.get("state"))
+                .and_then(Value::as_str),
+            Some("error")
+        );
+    }
+    #[test]
+    fn missing_trustless_paths_never_demote_policy_error() {
+        let temp = TempDir::new().expect("tempdir");
+        let trustless_path = temp.path().join("trustless.toml");
+        fs::write(
+            &trustless_path,
+            r#"
+version = 1
+
+[merkle]
+chunk_window = 16
+max_parallel_streams = 4
+
+[kzg]
+trusted_setup = ""
+proof_cache = "/tmp/cache"
+max_gap_ms = 100
+
+[sdr]
+receipt_dir = ""
+max_lag_seconds = 8
+
+[pipeline]
+allow_hybrid_manifest = false
+reject_stale_cache_versions = false
+verify_cache_binding_header = false
+
+[logging]
+level = "info"
+emit_metrics = true
+"#,
+        )
+        .expect("write invalid trustless config");
+        let (state, summary) =
+            load_trustless_status(&trustless_path).expect("parse invalid readiness policy");
+        assert_eq!(state, ComponentState::Error);
+        assert_eq!(
+            summary
+                .as_object()
+                .and_then(|object| object.get("state"))
+                .and_then(Value::as_str),
+            Some("error")
+        );
+    }
+    #[test]
+    fn rejects_noncanonical_trusted_issuer_ed25519_key() {
+        let issued = issued_bundle_fixture();
         for public_key in [
             NONCANONICAL_ED25519_IDENTITY,
             NONCANONICAL_NON_SMALL_ORDER_ED25519_POINT,
         ] {
-            let err = parse_srcv2_identity_ed25519_key(&public_key)
-                .expect_err("noncanonical SRCv2 identity key must fail readiness");
+            let err =
+                parse_trusted_issuer_keys(&hex::encode(public_key), &issued.issuer_mldsa65_hex)
+                    .expect_err("noncanonical trusted issuer key must fail readiness");
             let message = format!("{err:?}");
             assert!(
-                message.contains("invalid Ed25519 identity key in SRCv2")
+                message.contains("invalid trusted SRCv2 issuer Ed25519 public key")
                     && message.contains("non-canonical"),
                 "unexpected error: {message}"
             );
         }
+    }
+    #[test]
+    fn trusted_issuer_hex_is_exact_and_canonical() {
+        let issued = issued_bundle_fixture();
+        let shortened = &issued.issuer_ed25519_hex[..issued.issuer_ed25519_hex.len() - 2];
+        assert!(
+            parse_trusted_issuer_keys(shortened, &issued.issuer_mldsa65_hex).is_err(),
+            "short issuer key must fail"
+        );
+        assert!(
+            parse_trusted_issuer_keys(
+                &issued.issuer_ed25519_hex.to_ascii_uppercase(),
+                &issued.issuer_mldsa65_hex,
+            )
+            .is_err(),
+            "uppercase issuer key must fail"
+        );
+        assert!(
+            parse_trusted_issuer_keys(
+                &issued.issuer_ed25519_hex,
+                &issued.issuer_mldsa65_hex[..issued.issuer_mldsa65_hex.len() - 2],
+            )
+            .is_err(),
+            "short ML-DSA issuer key must fail"
+        );
+    }
+    #[test]
+    fn readiness_rejects_self_signed_relay_certificate() {
+        let temp = TempDir::new().expect("tempdir");
+        let relay_ed25519 = SigningKey::from_bytes(&[0x61; 32]);
+        let relay_mldsa65 = generate_mldsa_keypair_from_seed(
+            MlDsaSuite::MlDsa65,
+            HedgedRngSeed::from_entropy([0x71; 32]),
+            b"xtask:soranet-gateway-pq:self-signed-relay",
+        )
+        .expect("relay ML-DSA keypair");
+        let relay_ed25519_bytes = relay_ed25519.verifying_key().to_bytes();
+        let fingerprint =
+            compute_issuer_fingerprint(&relay_ed25519_bytes, relay_mldsa65.public_key())
+                .expect("self-signed fingerprint");
+        let certificate = sample_certificate(
+            relay_ed25519_bytes,
+            relay_mldsa65.public_key().to_vec(),
+            fingerprint,
+        );
+        let bundle = certificate
+            .issue(&relay_ed25519, relay_mldsa65.secret_key())
+            .expect("self-sign relay certificate");
+        let src_path = temp.path().join("srcv2.cbor");
+        fs::write(&src_path, bundle.try_to_cbor().expect("encode srcv2")).expect("write srcv2");
+        let error = load_srcv2_status(
+            &src_path,
+            &hex::encode(relay_ed25519_bytes),
+            &hex::encode(relay_mldsa65.public_key()),
+            1_734_000_001,
+        )
+        .expect_err("self-signed relay identity must never establish issuer trust");
+        assert!(
+            error.to_string().contains("operationally distinct"),
+            "unexpected error: {error:?}"
+        );
+    }
+    #[test]
+    fn readiness_rejects_trusted_keys_that_do_not_bind_issuer_fingerprint() {
+        let temp = TempDir::new().expect("tempdir");
+        let issued = issued_bundle_fixture();
+        let src_path = temp.path().join("srcv2.cbor");
+        fs::write(
+            &src_path,
+            issued.bundle.try_to_cbor().expect("encode srcv2"),
+        )
+        .expect("write srcv2");
+        let wrong_ed25519 = SigningKey::from_bytes(&[0x72; 32]);
+        let wrong_mldsa65 = generate_mldsa_keypair_from_seed(
+            MlDsaSuite::MlDsa65,
+            HedgedRngSeed::from_entropy([0x73; 32]),
+            b"xtask:soranet-gateway-pq:wrong-issuer",
+        )
+        .expect("wrong issuer ML-DSA keypair");
+        let error = load_srcv2_status(
+            &src_path,
+            &hex::encode(wrong_ed25519.verifying_key().to_bytes()),
+            &hex::encode(wrong_mldsa65.public_key()),
+            1_734_000_001,
+        )
+        .expect_err("unbound trusted issuer keys must fail readiness");
+        assert!(
+            error.to_string().contains("issuer fingerprint"),
+            "unexpected error: {error:?}"
+        );
     }
 }

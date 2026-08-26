@@ -14,7 +14,7 @@ public final class UaidPortfolioResponse {
       final String uaid,
       final UaidPortfolioTotals totals,
       final List<UaidPortfolioDataspace> dataspaces) {
-    this.uaid = Objects.requireNonNull(uaid, "uaid");
+    this.uaid = UaidLiteral.canonicalize(uaid, "uaid");
     this.totals = Objects.requireNonNull(totals, "totals");
     this.dataspaces = List.copyOf(Objects.requireNonNull(dataspaces, "dataspaces"));
   }

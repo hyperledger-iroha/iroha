@@ -14,6 +14,11 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import org.hyperledger.iroha.android.alias.AccountOnboardingCurrentStateV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPlanReceiptV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPlanRequestV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingProofRequiredPrepareResponseV1;
+import org.hyperledger.iroha.android.alias.TairaPublicResetMutationBindingV1;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.consensus.SumeragiStatusModels;
@@ -125,6 +130,20 @@ public final class SumeragiHttpTransportTests {
 
     final IrohaClient defaultClient =
         new IrohaClient() {
+          @Override
+          public CompletableFuture<AccountOnboardingCurrentStateV1>
+              verifyAccountOnboardingCurrentState(
+                  final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
+                  final AccountOnboardingPlanRequestV1 request,
+                  final AccountOnboardingPlanReceiptV1 receipt,
+                  final TairaPublicResetMutationBindingV1 binding,
+                  final String expectedAuthority,
+                  final NetworkId expectedNetworkId,
+                  final ToriiCanonicalRequestAuth canonicalAuth) {
+            throw new AssertionError(
+                "account onboarding is not used by this interface-default test");
+          }
+
           @Override
           public CompletableFuture<ClientResponse> submitTransaction(
               final SignedTransaction transaction) {

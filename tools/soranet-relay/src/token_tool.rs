@@ -1016,8 +1016,7 @@ pub fn parse_rfc3339(value: &str, field: &'static str) -> Result<SystemTime, Tok
 pub fn encode_token_base64(token: &AdmissionToken) -> String {
     let mut encoded = token.encode();
     let output = BASE64.encode(&encoded);
-    encoded.fill(0);
-    std::hint::black_box(encoded.as_mut_slice());
+    crate::config::clear_sensitive_bytes(&mut encoded);
     output
 }
 /// Encode a token frame as hexadecimal.
@@ -1025,8 +1024,7 @@ pub fn encode_token_base64(token: &AdmissionToken) -> String {
 pub fn encode_token_hex(token: &AdmissionToken) -> String {
     let mut encoded = token.encode();
     let output = hex::encode(&encoded);
-    encoded.fill(0);
-    std::hint::black_box(encoded.as_mut_slice());
+    crate::config::clear_sensitive_bytes(&mut encoded);
     output
 }
 /// Helper used by configuration parsing to load revocation IDs from disk.

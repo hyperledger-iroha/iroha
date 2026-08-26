@@ -27,6 +27,7 @@ import org.hyperledger.iroha.android.testing.TestNetworkIds;
 final class HttpClientTransportVpnParserTests {
   private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(780);
   private static final String VALID_ED25519_PUBLIC_KEY_HEX = TestEd25519Keys.publicKeyHex(0x22);
+  private static final String VALID_MLDSA65_PUBLIC_KEY_HEX = "ab".repeat(1_952);
 
   private HttpClientTransportVpnParserTests() {}
 
@@ -63,6 +64,9 @@ final class HttpClientTransportVpnParserTests {
             + "\"relay_id_hex\":\""
             + VALID_ED25519_PUBLIC_KEY_HEX
             + "\","
+            + "\"relay_mldsa65_public_key_hex\":\""
+            + VALID_MLDSA65_PUBLIC_KEY_HEX
+            + "\","
             + "\"descriptor_commit_hex\":\""
             + "cd".repeat(32)
             + "\","
@@ -92,6 +96,8 @@ final class HttpClientTransportVpnParserTests {
     assert profile.dnsPushIntervalSecs() == 60L : "VPN DNS push interval mismatch";
     assert profile.settlementGraceSecs() == 120L : "VPN settlement grace mismatch";
     assert VALID_ED25519_PUBLIC_KEY_HEX.equals(profile.relayIdHex()) : "VPN relay id mismatch";
+    assert VALID_MLDSA65_PUBLIC_KEY_HEX.equals(profile.relayMldsa65PublicKeyHex())
+        : "VPN relay ML-DSA-65 public key mismatch";
     assert "cd".repeat(32).equals(profile.descriptorCommitHex())
         : "VPN descriptor digest mismatch";
     assert "relay.example".equals(profile.tlsServerName()) : "VPN TLS SNI mismatch";
@@ -128,6 +134,28 @@ final class HttpClientTransportVpnParserTests {
                 json.replace("ab".repeat(32), "AB".repeat(32))
                     .getBytes(StandardCharsets.UTF_8)),
         "VPN profile parser must reject uppercase TLS pins");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseProfile(
+                json.replace(
+                        VALID_MLDSA65_PUBLIC_KEY_HEX,
+                        VALID_MLDSA65_PUBLIC_KEY_HEX.toUpperCase(Locale.ROOT))
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN profile parser must reject uppercase ML-DSA-65 public keys");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseProfile(
+                json.replace(VALID_MLDSA65_PUBLIC_KEY_HEX, "00".repeat(1_952))
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN profile parser must reject the all-zero ML-DSA-65 public key");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseProfile(
+                json.replace(
+                        VALID_MLDSA65_PUBLIC_KEY_HEX,
+                        VALID_MLDSA65_PUBLIC_KEY_HEX.substring(2))
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN profile parser must reject short ML-DSA-65 public keys");
   }
 
   private static void vpnSessionParserRejectsNonCanonicalHelperTicketHex() {
@@ -308,6 +336,9 @@ final class HttpClientTransportVpnParserTests {
             () ->
                 VpnJsonParser.parseProfile(
                     vpnJsonWithoutField(profile, "relay_tls_spki_sha256_hex")),
+            () ->
+                VpnJsonParser.parseProfile(
+                    vpnJsonWithoutField(profile, "relay_mldsa65_public_key_hex")),
             () ->
                 VpnJsonParser.parseQuote(vpnJsonWithoutField(quote, "open_lease_instruction")),
             () -> VpnJsonParser.parseSession(vpnJsonWithoutField(session, "route_pushes")),

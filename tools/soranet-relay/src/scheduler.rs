@@ -72,7 +72,8 @@ impl Cell {
     /// Serialize the cell into a fixed-size byte buffer with a deterministic envelope.
     ///
     /// Layout: `[Type (1B) | Length (2B) | Payload | Padding]`
-    /// where `Length` is big-endian and `Payload + Padding = MAX_PAYLOAD_BYTES`.
+    /// where `Length` is big-endian, `Payload + Padding = MAX_PAYLOAD_BYTES`,
+    /// and every padding byte is the canonical zero value.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = vec![0u8; CELL_SIZE_BYTES];
         let (payload_len, cell_type) = if self.is_dummy {
@@ -88,7 +89,7 @@ impl Cell {
         }
         buf
     }
-    /// Parse a cell from a raw byte buffer.
+    /// Parse a cell from a raw byte buffer, rejecting non-canonical non-zero padding.
     pub fn from_bytes(raw: &[u8], class: CellClass) -> Option<Self> {
         if raw.len() != CELL_SIZE_BYTES {
             return None;
@@ -96,6 +97,10 @@ impl Cell {
         let ty = raw[0];
         let payload_len = u16::from_be_bytes([raw[1], raw[2]]) as usize;
         if payload_len > MAX_PAYLOAD_BYTES {
+            return None;
+        }
+        let payload_end = CELL_HEADER_BYTES + payload_len;
+        if raw[payload_end..].iter().any(|byte| *byte != 0) {
             return None;
         }
         let is_dummy = ty == CELL_TYPE_DUMMY;
@@ -112,9 +117,8 @@ impl Cell {
         if ty != CELL_TYPE_DATA {
             return None;
         }
-        let end = CELL_HEADER_BYTES + payload_len;
         let mut data = Vec::with_capacity(payload_len);
-        data.extend_from_slice(&raw[CELL_HEADER_BYTES..end]);
+        data.extend_from_slice(&raw[CELL_HEADER_BYTES..payload_end]);
         Some(Self {
             class,
             data,
@@ -179,7 +183,7 @@ pub struct CellScheduler {
     config: SchedulerConfig,
     queues: [VecDeque<Cell>; 3], // Indexed by class ordinal
     last_tick: Instant,
-    deficit: [i32; 3], // WFQ deficit counters
+    deficit: [i32; 3], // Smooth weighted round-robin current weights
 }
 impl CellScheduler {
     /// Create a new scheduler with the given configuration.
@@ -254,78 +258,41 @@ impl CellScheduler {
         }
     }
     fn select_next_cell(&mut self) -> Cell {
-        // Simple WFQ implementation
-        // We replenish deficits and check queues in priority order (conceptually).
-        // But standard WFQ iterates and consumes based on deficit.
-        // Replenish deficits based on weights
         let classes = [CellClass::Control, CellClass::Interactive, CellClass::Bulk];
+        let mut active_weight = 0_i32;
+        let mut selected = None;
+
+        // All cells have the same wire size, so smooth weighted round-robin is
+        // equivalent to weighted fair queuing here. Accruing each active
+        // class's weight and charging the winner the total active weight keeps
+        // the scheduler work-conserving without letting the fixed scan order
+        // starve lower-weight classes.
         for (idx, class) in classes.iter().enumerate() {
-            if !self.queues[idx].is_empty() {
-                self.deficit[idx] += class.weight() as i32;
-            }
-        }
-        // Try to find a queue with positive deficit and available cells
-        // Iterate multiple times if needed (though with simple weights and single dequeue per tick,
-        // we just pick the "winner").
-        // Actually, for a single cell emission per tick, we can just prioritize queues that have data
-        // and "allowance". Or simpler: Round-robin with weights.
-        // Let's implement a strict priority with deficit logic?
-        // No, WFQ implies fairness.
-        // A simple Deficit Round Robin (DRR) approach:
-        // Loop through queues (Control -> Interactive -> Bulk)
-        for (idx, _) in classes.iter().enumerate() {
             if self.queues[idx].is_empty() {
-                self.deficit[idx] = 0; // Reset deficit if empty
+                self.deficit[idx] = 0;
                 continue;
             }
-            if self.deficit[idx] > 0 {
-                self.deficit[idx] -= 1; // "Cost" of one cell (abstract unit)
-                if let Some(cell) = self.queues[idx].pop_front() {
-                    return cell;
-                }
-                self.deficit[idx] = 0;
+
+            let weight = class.weight() as i32;
+            active_weight += weight;
+            self.deficit[idx] += weight;
+            if selected.is_none_or(|winner| self.deficit[idx] > self.deficit[winner]) {
+                selected = Some(idx);
             }
         }
-        // If we are here, either all queues are empty, or deficits are exhausted (but queues non-empty).
-        // In a single-threaded poll loop, if we have data but no deficit, we should probably
-        // accumulate deficit until someone can send? Or just reset and try again?
-        // Standard DRR accumulates deficit in rounds. Here we are doing one cell per tick.
-        // So we need to persist state across calls if we don't send.
-        // BUT, we MUST emit a cell every tick (constant rate).
-        // If all empty -> Dummy.
-        if self.queues.iter().all(|q| q.is_empty()) {
+
+        let Some(selected) = selected else {
             return Cell::dummy();
+        };
+        self.deficit[selected] -= active_weight;
+        let Some(cell) = self.queues[selected].pop_front() else {
+            self.deficit[selected] = 0;
+            return Cell::dummy();
+        };
+        if self.queues[selected].is_empty() {
+            self.deficit[selected] = 0;
         }
-        // If we have data but deficits prevented sending (e.g. everything was 0 or negative?),
-        // we should force-replenish to ensure work conservation (we must send *something* if we have it,
-        // otherwise we violate constant-rate by sending a dummy when real data waits, which might be okay
-        // for strict timing but suboptimal for throughput).
-        // Wait, constant rate means we send *a* cell. If we send a dummy while real data is queued,
-        // we are wasting bandwidth.
-        // So we must pick a real cell if any queue is non-empty.
-        // Re-run DRR logic: if no one could send, increment deficits and try again.
-        // Since we only send 1 cell, we can loop until we find one.
-        loop {
-            let mut any_non_empty = false;
-            for (idx, class) in classes.iter().enumerate() {
-                if !self.queues[idx].is_empty() {
-                    any_non_empty = true;
-                    self.deficit[idx] += class.weight() as i32;
-                }
-            }
-            if !any_non_empty {
-                return Cell::dummy();
-            }
-            for (idx, _) in classes.iter().enumerate() {
-                if !self.queues[idx].is_empty() && self.deficit[idx] > 0 {
-                    self.deficit[idx] -= 1;
-                    if let Some(cell) = self.queues[idx].pop_front() {
-                        return cell;
-                    }
-                    self.deficit[idx] = 0;
-                }
-            }
-        }
+        cell
     }
     fn class_index(&self, class: CellClass) -> usize {
         match class {
@@ -377,48 +344,43 @@ mod tests {
     #[test]
     fn scheduler_respects_weights() {
         let mut scheduler = CellScheduler::new(SchedulerConfig::default());
-        // Enqueue many cells
-        for _ in 0..10 {
+        for _ in 0..9 {
             scheduler.enqueue(Cell::new(CellClass::Bulk, vec![0xBB]));
             scheduler.enqueue(Cell::new(CellClass::Control, vec![0xCC]));
         }
-        // Control (wt=8) vs Bulk (wt=1). Control should drain much faster.
-        // DRR isn't strict priority, but with 1 cell per tick,
-        // Round 1: Deficits increase. C+=8, B+=1.
-        // C sends 1 (def=7). B sends 1 (def=0).
-        // Round 2: C+=8 (def=15). B sends nothing (def=0, empty? no).
-        // Actually, let's trace the simple logic:
-        // Tick 1: C+=8 (8), B+=1 (1). C sends (7). Return C.
-        // Tick 2: B still has 1? No, I reset deficit in loop if not picked? No.
-        // My logic:
-        // Loop 1: C=8, B=1.
-        // Check C: >0? Yes. Decr -> 7. Return C. (B stays 1).
-        // Loop 2 (Next Tick):
-        // Replenish: C+=8->15, B+=1->2.
-        // Check C: >0? Yes. Decr -> 14. Return C.
-        // Wait, my implementation adds weight *inside* the loop only if "we looped".
-        // But `poll` calls `select_next_cell` which *starts* with replenishment?
-        // In `select_next_cell`: "Replenish deficits...". Yes.
-        // Tick 1: C=8, B=1. C picked. def[C]=7, def[B]=1.
-        // Tick 2: C=15, B=2. C picked. def[C]=14, def[B]=2.
-        // ...
-        // This logic seems to favor Control heavily (which is intended) but Bulk accumulates.
-        // Eventually Bulk will send.
-        // Let's just verify we get *mostly* Control first but some Bulk.
         let mut c_count = 0;
         let mut b_count = 0;
-        for _ in 0..15 {
+        for _ in 0..9 {
             let c = scheduler.force_tick();
-            if !c.is_dummy {
-                match c.class {
-                    CellClass::Control => c_count += 1,
-                    CellClass::Bulk => b_count += 1,
-                    _ => {}
-                }
+            assert!(!c.is_dummy, "queued data must take precedence over cover");
+            match c.class {
+                CellClass::Control => c_count += 1,
+                CellClass::Bulk => b_count += 1,
+                CellClass::Interactive => unreachable!("interactive queue is empty"),
             }
         }
-        assert!(c_count > b_count, "Control should be prioritized");
-        assert!(b_count > 0, "Bulk should not be starved");
+        assert_eq!((c_count, b_count), (8, 1));
+    }
+    #[test]
+    fn sustained_higher_priority_backlog_does_not_starve_other_classes() {
+        let mut scheduler = CellScheduler::new(SchedulerConfig::default());
+        for _ in 0..13 {
+            scheduler.enqueue(Cell::new(CellClass::Control, vec![0xCC]));
+            scheduler.enqueue(Cell::new(CellClass::Interactive, vec![0x11]));
+            scheduler.enqueue(Cell::new(CellClass::Bulk, vec![0xBB]));
+        }
+
+        let mut counts = [0_u8; 3];
+        for _ in 0..13 {
+            let cell = scheduler.force_tick();
+            assert!(
+                !cell.is_dummy,
+                "queued data must take precedence over cover"
+            );
+            counts[scheduler.class_index(cell.class)] += 1;
+        }
+
+        assert_eq!(counts, [8, 4, 1], "scheduler must honor the 8:4:1 weights");
     }
     #[test]
     fn scheduler_dequeue_path_clears_drained_positive_deficit_queue() {
@@ -477,6 +439,16 @@ mod tests {
         let mut dummy = vec![0u8; CELL_SIZE_BYTES];
         dummy[0] = CELL_TYPE_DUMMY;
         dummy[1..CELL_HEADER_BYTES].copy_from_slice(&1u16.to_be_bytes());
+        assert!(Cell::from_bytes(&dummy, CellClass::Bulk).is_none());
+    }
+    #[test]
+    fn rejecting_nonzero_padding_bytes() {
+        let mut data = Cell::new(CellClass::Bulk, vec![0xAB]).to_bytes();
+        data[CELL_HEADER_BYTES + 1] = 0x01;
+        assert!(Cell::from_bytes(&data, CellClass::Bulk).is_none());
+
+        let mut dummy = Cell::dummy().to_bytes();
+        dummy[CELL_HEADER_BYTES] = 0x01;
         assert!(Cell::from_bytes(&dummy, CellClass::Bulk).is_none());
     }
     #[test]

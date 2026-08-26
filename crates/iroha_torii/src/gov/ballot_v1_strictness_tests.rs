@@ -300,11 +300,7 @@ async fn ballot_zk_v1_ballotproof_builds_instruction_skeleton() {
         backend: "halo2/ipa".into(),
         envelope_bytes: vec![1u8, 2, 3, 4],
         root_hint: Some([0xAA; 32]),
-        owner: Some(
-            AccountId::parse_encoded(&owner)
-                .expect("valid account id")
-                .into_account_id(),
-        ),
+        owner: Some(AccountId::parse_encoded(&owner).expect("valid account id")),
         nullifier: Some([0x11; 32]),
         amount: Some(200_u64.into()),
         duration_blocks: Some(256),

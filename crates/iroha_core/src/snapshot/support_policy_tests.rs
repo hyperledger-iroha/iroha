@@ -361,6 +361,48 @@ fn assert_snapshot_bundle_absent(store_dir: &Path) {
         "rejected snapshot must not leave a selectable immutable generation"
     );
 }
+#[test]
+fn emergency_fast_manifest_decode_requires_canonical_v1_boundary() {
+    let path = Path::new(SNAPSHOT_FAST_MANIFEST_FILE_NAME);
+    let valid = EmergencyFastSnapshotManifestV1 {
+        version: SNAPSHOT_FAST_MANIFEST_VERSION,
+        payload_len: 4096,
+        chain_id: ChainId::from(TEST_CHAIN_ID),
+        network_id: snapshot_test_network_id(),
+        committed_height: 1,
+        tip_hash: Some(dummy_block_hash(0xA5)),
+        sccp_policy_hash: [0x5A; 32],
+        has_snapshot_bootstrap_lineage: false,
+    };
+    let bytes = valid.encode();
+    assert!(
+        u64::try_from(bytes.len()).expect("manifest length fits u64")
+            <= SNAPSHOT_FAST_MANIFEST_MAX_BYTES
+    );
+    assert_eq!(
+        decode_emergency_fast_manifest(&bytes, path).expect("canonical V1 manifest"),
+        valid
+    );
+
+    let mut trailing = bytes;
+    trailing.push(0);
+    assert!(
+        decode_emergency_fast_manifest(&trailing, path).is_err(),
+        "trailing Norito bytes must fail exact decode"
+    );
+
+    let mut unsupported = valid.clone();
+    unsupported.version = SNAPSHOT_FAST_MANIFEST_VERSION.saturating_add(1);
+    assert!(decode_emergency_fast_manifest(&unsupported.encode(), path).is_err());
+
+    let mut missing_tip = valid.clone();
+    missing_tip.tip_hash = None;
+    assert!(decode_emergency_fast_manifest(&missing_tip.encode(), path).is_err());
+
+    let mut unexpected_tip = valid;
+    unexpected_tip.committed_height = 0;
+    assert!(decode_emergency_fast_manifest(&unexpected_tip.encode(), path).is_err());
+}
 #[tokio::test]
 async fn bounded_snapshot_reader_rejects_oversized_regular_file() {
     let root = tempdir().expect("tempdir");
@@ -839,7 +881,9 @@ fn state_with_exact_pending_sccp_snapshot_fixture(
     (state, key, record)
 }
 fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsize) -> KuraConfig {
-    KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_dir.to_path_buf()),
+    KuraConfig {
+        init_mode: iroha_config::kura::InitMode::Strict,
+        store_dir: WithOrigin::inline(store_dir.to_path_buf()),
         max_disk_usage_bytes: MAX_DISK_USAGE_BYTES,
         blocks_in_memory,
         lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
@@ -1256,15 +1300,22 @@ fn signed_block_after_transaction(
             .into(),
     )
 }
-fn legacy_snapshot_bytes_without_space_directory_section(state: &State) -> Vec<u8> {
-    let mut payload = String::new();
-    serialize_state_snapshot(state, &mut payload, false);
-    payload.into_bytes()
-}
 fn exact_snapshot_payload_bytes(state: &State) -> Vec<u8> {
     let mut payload = String::new();
-    serialize_state_snapshot(state, &mut payload, true);
+    serialize_state_snapshot(state, &mut payload);
     payload.into_bytes()
+}
+fn snapshot_payload_without_space_directory_manifest_section(state: &State) -> Vec<u8> {
+    let mut snapshot: json::Value = json::from_slice(&exact_snapshot_payload_bytes(state))
+        .expect("first-release snapshot must be canonical JSON");
+    snapshot
+        .as_object_mut()
+        .expect("first-release snapshot must be an object")
+        .remove("space_directory_manifests")
+        .expect("first-release snapshot must carry Space Directory manifests");
+    json::to_json(&snapshot)
+        .expect("missing-section rejection fixture must remain valid JSON")
+        .into_bytes()
 }
 fn publish_test_snapshot_generation(
     store_dir: &std::path::Path,

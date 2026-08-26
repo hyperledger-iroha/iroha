@@ -70,9 +70,12 @@ Each stage emits deterministic manifests:
 - Configuration: `configs/taikai_ingest/srt.toml`, `.../rtmp.toml`.
 - Auth: tokens minted by GAR v2 (`specs/taikai_policy.md`), sent via
   `Sora-Auth` headers or RTMP `connect` parameters.
-- Telemetry: `taikai_ingest_edge_total{protocol,outcome}` increments on connect/
-  disconnect events. Runs under `sorafs_orchestrator::runtime::taikai`.
-- Clock sampling: embed sender PCR every 2 s and store in `drift_monitor.bin`.
+- The checked-in `iroha app taikai ingest edge` command is a deterministic
+  rehearsal emitter, not a live SRT/RTMP receiver. It records protocol and
+  drift samples in `ingest_edge.ndjson` plus `drift_monitor.json`; it does not
+  advertise a Prometheus connect/disconnect counter.
+- TODO: wire authenticated live SRT/RTMP receivers and their connection
+  telemetry before treating the rehearsal command as a production edge.
 
 ### 3.2 Mezzanine Normalizer
 
@@ -111,7 +114,7 @@ Each stage emits deterministic manifests:
 - Metrics:
   - `taikai_ingest_segment_latency_ms` (encoder→ingest).
   - `taikai_ingest_live_edge_drift_ms`.
-  - `taikai_ingest_segment_errors_total{reason}`.
+  - `taikai_ingest_errors_total{reason}`.
 - Logs: `telemetry::taikai.ingest.*` spans produced by ingest workers.
 - Dashboards:
   - `dashboards/grafana/taikai_viewer.json` — viewer telemetry (latency, live

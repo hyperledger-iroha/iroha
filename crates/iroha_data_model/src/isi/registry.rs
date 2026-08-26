@@ -21,8 +21,7 @@ type Registrar = fn(InstructionRegistry) -> InstructionRegistry;
 /// Create an [`InstructionRegistry`] populated with all instructions supported
 /// by Iroha out of the box.
 pub fn default() -> InstructionRegistry {
-    let registry = wire_ids::register_all();
-    wire_ids::remap_all(registry)
+    wire_ids::register_all()
 }
 /// Return whether `wire_id` identifies a built-in instruction accepted by the default registry.
 ///
@@ -76,7 +75,7 @@ mod tests {
         let registry = default();
         let wire_id = registry
             .wire_id(std::any::type_name::<T>())
-            .unwrap_or_else(|| std::any::type_name::<T>());
+            .expect("instruction type has an explicit V1 wire identifier");
         let (payload, flags) = norito::codec::encode_with_header_flags(&value);
         let framed = norito::core::frame_bare_with_header_flags::<T>(&payload, flags)
             .expect("frame instruction payload");
@@ -178,8 +177,8 @@ mod tests {
         for active in [
             crate::isi::governance::CreateParliamentGovernanceAttemptV1::WIRE_ID,
             crate::isi::governance::SubmitParliamentLifecycleTransitionV1::WIRE_ID,
-            "iroha_data_model::isi::governance::CastZkBallot",
-            "iroha_data_model::isi::governance::CastPlainBallot",
+            "iroha.instruction.v1::governance::CastZkBallot",
+            "iroha.instruction.v1::governance::CastPlainBallot",
         ] {
             assert!(
                 registry.contains(active),
@@ -206,23 +205,23 @@ mod tests {
     #[test]
     fn default_registry_registers_public_lane_validator() {
         let registry = default();
-        assert!(registry.contains(std::any::type_name::<
-            crate::isi::staking::RegisterPublicLaneValidator,
-        >()));
+        let type_name = std::any::type_name::<crate::isi::staking::RegisterPublicLaneValidator>();
+        assert!(registry.wire_id(type_name).is_some());
+        assert!(!registry.contains(type_name));
     }
     #[test]
     fn default_registry_registers_public_lane_validator_rebind() {
         let registry = default();
-        assert!(registry.contains(std::any::type_name::<
-            crate::isi::staking::RebindPublicLaneValidatorPeer,
-        >()));
+        let type_name = std::any::type_name::<crate::isi::staking::RebindPublicLaneValidatorPeer>();
+        assert!(registry.wire_id(type_name).is_some());
+        assert!(!registry.contains(type_name));
     }
     #[test]
     fn default_registry_registers_kaigi_relay_health_report() {
         let registry = default();
-        assert!(registry.contains(std::any::type_name::<
-            crate::isi::kaigi::ReportKaigiRelayHealth,
-        >()));
+        let type_name = std::any::type_name::<crate::isi::kaigi::ReportKaigiRelayHealth>();
+        assert!(registry.wire_id(type_name).is_some());
+        assert!(!registry.contains(type_name));
     }
     #[test]
     fn instruction_registry_inventory_is_complete_unique_and_registered() {
@@ -234,6 +233,10 @@ mod tests {
             let type_name = (entry.type_name)();
             let wire_id = entry.wire_id;
             assert!(
+                !wire_id.starts_with("iroha_data_model::"),
+                "wire identifier must not encode a Rust crate path: {wire_id}"
+            );
+            assert!(
                 inventoried_type_names.insert(type_name),
                 "duplicate built-in instruction type in wire-ID inventory: {type_name}"
             );
@@ -242,9 +245,13 @@ mod tests {
                 Some(wire_id),
                 "explicit wire id must be applied for {type_name}"
             );
+            assert_ne!(
+                type_name, wire_id,
+                "wire identifiers must not collapse to concrete Rust type names"
+            );
             assert!(
-                registry.contains(type_name),
-                "Rust type name must remain a lookup key for {type_name}"
+                !registry.contains(type_name),
+                "Rust type name must not remain a decoding key for {type_name}"
             );
             assert!(
                 registry.contains(wire_id),
@@ -252,7 +259,7 @@ mod tests {
             );
             assert_eq!(
                 registry
-                    .entry_for_key(type_name)
+                    .entry_for_type_name(type_name)
                     .expect("registered type-name lookup")
                     .type_name,
                 type_name,
@@ -260,7 +267,7 @@ mod tests {
             );
             assert_eq!(
                 registry
-                    .entry_for_key(wire_id)
+                    .entry_for_wire_id(wire_id)
                     .expect("registered wire-id lookup")
                     .type_name,
                 type_name,
@@ -277,28 +284,30 @@ mod tests {
         assert_eq!(registry.len(), wire_ids::ALL.len());
     }
     #[test]
-    fn stable_wire_id_remapping_preserves_every_codec_byte_path() {
-        let typed = wire_ids::register_all();
-        let remapped = wire_ids::remap_all(typed.clone());
+    fn direct_wire_id_registration_preserves_every_codec_byte_path() {
+        let registry = wire_ids::register_all();
         for inventory in wire_ids::ALL {
             let type_name = (inventory.type_name)();
-            let before = typed
+            let encoding = registry
                 .entry_for_type_name(type_name)
                 .expect("typed registrar entry");
-            let after = remapped
-                .entry_for_type_name(type_name)
-                .expect("wire-id-remapped entry");
-            assert_eq!(after.type_name, before.type_name, "{type_name}");
-            assert!(std::ptr::fn_addr_eq(after.ctor, before.ctor), "{type_name}");
+            let decoding = registry
+                .entry_for_wire_id(inventory.wire_id)
+                .expect("canonical wire-id entry");
+            assert_eq!(decoding.type_name, encoding.type_name, "{type_name}");
             assert!(
-                std::ptr::fn_addr_eq(after.frame, before.frame),
+                std::ptr::fn_addr_eq(decoding.ctor, encoding.ctor),
                 "{type_name}"
             );
             assert!(
-                std::ptr::fn_addr_eq(after.frame_len, before.frame_len),
+                std::ptr::fn_addr_eq(decoding.frame, encoding.frame),
                 "{type_name}"
             );
-            assert_eq!(after.wire_id, inventory.wire_id, "{type_name}");
+            assert!(
+                std::ptr::fn_addr_eq(decoding.frame_len, encoding.frame_len),
+                "{type_name}"
+            );
+            assert_eq!(encoding.wire_id, inventory.wire_id, "{type_name}");
         }
     }
     #[test]
@@ -321,11 +330,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 348;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 343;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 348;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 343;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 332;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 327;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -358,29 +367,26 @@ mod tests {
                 },
             "source feature scope and enabled inventory length diverged"
         );
-        for (forbidden, expected_provider_owners) in [
-            ("register::<", 1),
-            ("register_slice::<", 2),
-            ("register_with_id::<", 1),
-            ("register_with_id_slice::<", 0),
-        ] {
+        for forbidden in ["register::<", "register_slice::<", "remap_wire_id"] {
             assert!(
-                provider.matches(forbidden).count() == expected_provider_owners
+                !provider.contains(forbidden)
                     && !production.contains(forbidden)
                     && !inventory.contains(forbidden)
                     && !tail.contains(forbidden),
-                "typed codec registration escaped the sole bounded inventory: {forbidden}"
+                "implicit or remapped codec registration remains: {forbidden}"
             );
         }
+        assert_eq!(provider.matches("register_with_id::<").count(), 1);
+        assert_eq!(provider.matches("register_with_id_slice::<").count(), 2);
     }
     #[test]
     fn instruction_wire_ids_match_v1_golden_inventory_hash() {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "47c62a1853521dddeaac11ea403dd26bd5966f61c4d8880396b4dcd26a41839d";
+            "1771dea20955903e5e77663978ccf3d268bd7cbd7fc104e35d9a0bbb4b6a70bf";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "b7df8811dbc67975f5b0c29bbe2b5cecdee9e6c473ef6be7a86360cc55ad65a2";
+            "998e1d3bb28afe26a7e7f86379ee7db8168e191c855883502d7513eeaaacb054";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -425,6 +431,33 @@ mod tests {
             .register_with_id::<Upgrade>("instruction.collision");
     }
     #[test]
+    #[should_panic(expected = "instruction registry key collision")]
+    fn instruction_registry_rejects_alternate_id_for_same_type() {
+        let _registry = InstructionRegistry::new()
+            .register_with_id::<Log>("instruction.log.v1")
+            .register_with_id::<Log>("instruction.log.alias");
+    }
+    #[test]
+    #[should_panic(expected = "instruction registry key collision")]
+    fn instruction_registry_rejects_own_type_name_as_wire_id() {
+        let _registry =
+            InstructionRegistry::new().register_with_id::<Log>(std::any::type_name::<Log>());
+    }
+    #[test]
+    #[should_panic(expected = "instruction registry key collision")]
+    fn instruction_registry_rejects_wire_id_and_type_name_collisions() {
+        let _registry = InstructionRegistry::new()
+            .register_with_id::<Log>("instruction.log.v1")
+            .register_with_id::<Upgrade>(std::any::type_name::<Log>());
+    }
+    #[test]
+    #[should_panic(expected = "instruction registry key collision")]
+    fn instruction_registry_rejects_type_name_and_existing_wire_id_collisions() {
+        let _registry = InstructionRegistry::new()
+            .register_with_id::<Log>(std::any::type_name::<Upgrade>())
+            .register_with_id::<Upgrade>("instruction.upgrade.v1");
+    }
+    #[test]
     fn bootle_lantern_governance_instructions_have_unique_canonical_registrations() {
         let static_registry = wire_ids::register_all();
         let registry = default();
@@ -434,7 +467,7 @@ mod tests {
                 let type_name = std::any::type_name::<$instruction>();
                 let wire_id = <$instruction>::WIRE_ID;
                 assert!(
-                    static_registry.contains(type_name),
+                    static_registry.wire_id(type_name) == Some(wire_id),
                     "{type_name} must be present in the built-in registrar list"
                 );
                 assert_eq!(
@@ -469,7 +502,7 @@ mod tests {
                 let type_name = std::any::type_name::<$instruction>();
                 let wire_id = <$instruction>::WIRE_ID;
                 assert!(
-                    static_registry.contains(type_name),
+                    static_registry.wire_id(type_name) == Some(wire_id),
                     "{type_name} must be present in the built-in registrar list"
                 );
                 assert_eq!(
@@ -507,6 +540,15 @@ mod tests {
         assert!(!is_instruction_wire_id_registered(
             "nexus::UpsertFeeSponsorPolicy"
         ));
+    }
+    #[test]
+    fn retired_private_uploaded_model_receipt_wire_id_stays_unknown() {
+        const RETIRED_WIRE_ID: &str =
+            "soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt";
+        let registry = default();
+        assert!(!registry.contains(RETIRED_WIRE_ID));
+        assert!(registry.decode(RETIRED_WIRE_ID, &[0xFF; 64]).is_none());
+        assert!(!is_instruction_wire_id_registered(RETIRED_WIRE_ID));
     }
     #[test]
     fn only_declarative_alias_instruction_ids_are_registered() {
@@ -1251,10 +1293,9 @@ mod tests {
         assert!(registry.contains(rwa::RwaInstructionBox::WIRE_ID));
         assert!(registry.contains(repo::RepoInstructionBox::WIRE_ID));
         assert!(registry.contains(settlement::SettlementInstructionBox::WIRE_ID));
-        assert!(
-            registry.contains(std::any::type_name::<bridge::ApplySccpRouteGovernance>()),
-            "atomic SCCP route-governance type path missing from default registry"
-        );
+        let type_name = std::any::type_name::<bridge::ApplySccpRouteGovernance>();
+        assert!(registry.wire_id(type_name).is_some());
+        assert!(!registry.contains(type_name));
     }
     #[test]
     fn instruction_registry_registers_and_decodes_standalone_surface() {
@@ -1282,10 +1323,14 @@ mod tests {
             std::any::type_name::<crate::isi::staking::RecordPublicLaneRewards>(),
             std::any::type_name::<crate::isi::staking::ClaimPublicLaneRewards>(),
         ];
-        for name in expected {
+        for type_name in expected {
             assert!(
-                registry.contains(name),
-                "{name} missing from default registry"
+                registry.wire_id(type_name).is_some(),
+                "{type_name} missing from default registry"
+            );
+            assert!(
+                !registry.contains(type_name),
+                "{type_name} remained a decode alias"
             );
         }
         assert_default_registry_decodes(content::PublishContentBundle {
@@ -1414,11 +1459,15 @@ mod tests {
             std::any::type_name::<offline::TopUpKagemushaRecursiveV4>(),
             std::any::type_name::<offline::RedeemKagemushaRecursiveV4>(),
         ] {
+            let wire_id = registry
+                .wire_id(specialized)
+                .expect("protocol-bound confidential instruction has a V1 wire ID");
             assert!(
-                registry.contains(specialized),
+                registry.contains(wire_id),
                 "protocol-bound confidential instruction must remain registered: {specialized}"
             );
-            assert_eq!(registry.wire_id(specialized), Some(specialized));
+            assert_ne!(wire_id, specialized);
+            assert!(!registry.contains(specialized));
         }
     }
     #[cfg(feature = "json")]
@@ -1445,14 +1494,13 @@ mod tests {
     #[test]
     fn default_registry_registers_citizenship_instructions() {
         let registry = default();
-        assert!(
-            registry.contains(std::any::type_name::<crate::isi::governance::RegisterCitizen>())
-        );
-        assert!(registry.contains(std::any::type_name::<
-            crate::isi::governance::UnregisterCitizen,
-        >()));
-        assert!(registry.contains(std::any::type_name::<
-            crate::isi::governance::RecordCitizenServiceOutcome,
-        >()));
+        for type_name in [
+            std::any::type_name::<crate::isi::governance::RegisterCitizen>(),
+            std::any::type_name::<crate::isi::governance::UnregisterCitizen>(),
+            std::any::type_name::<crate::isi::governance::RecordCitizenServiceOutcome>(),
+        ] {
+            assert!(registry.wire_id(type_name).is_some());
+            assert!(!registry.contains(type_name));
+        }
     }
 }

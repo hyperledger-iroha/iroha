@@ -40,11 +40,15 @@ final class CanonicalRequestTests: XCTestCase {
         let timestampMs: UInt64 = 1_717_171_717_000
         let nonce = "swift-canonical-nonce"
         let accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+        let encodedAccountId = try XCTUnwrap(
+            accountId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+        )
+        let accountAssetsPath = "/v1/accounts/\(encodedAccountId)/assets"
         let body = Data("{\"account_id\":\"\(accountId)\"}".utf8)
         let message = try CanonicalRequest.signatureMessage(
             networkId: TestNetworkIds.canonical,
             method: "get",
-            path: "/v1/accounts/\(accountId)/assets",
+            path: accountAssetsPath,
             query: "limit=1",
             body: body,
             timestampMs: timestampMs,
@@ -54,7 +58,7 @@ final class CanonicalRequestTests: XCTestCase {
             accountId: accountId,
             networkId: TestNetworkIds.canonical,
             method: "get",
-            path: "/v1/accounts/\(accountId)/assets",
+            path: accountAssetsPath,
             query: "limit=1",
             body: body,
             signer: signingKey,

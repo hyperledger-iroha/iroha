@@ -214,25 +214,78 @@ impl Signature {
     /// Returns [`Error::Signing`] when an algorithm-specific signing backend
     /// rejects the private-key material or message.
     pub fn try_new(private_key: &PrivateKey, payload: &[u8]) -> Result<Self, Error> {
+        Self::try_new_with_context(private_key, &[], payload)
+    }
+    /// Creates a new signature with an algorithm-specific signing context.
+    ///
+    /// ML-DSA accepts the FIPS 204 context directly. Other algorithms have no
+    /// compatible context field and therefore reject a nonempty context instead
+    /// of silently dropping domain-separation input. An empty context is exactly
+    /// equivalent to [`Self::try_new`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Signing`] when a non-ML-DSA key is paired with a
+    /// nonempty context, or when the algorithm-specific signing backend rejects
+    /// the private-key material, context, or message.
+    pub fn try_new_with_context(
+        private_key: &PrivateKey,
+        context: &[u8],
+        payload: &[u8],
+    ) -> Result<Self, Error> {
         use crate::secrecy::ExposeSecret;
         let signature = match private_key.0.expose_secret() {
-            crate::PrivateKeyInner::Ed25519(sk) => ed25519::Ed25519Sha512::sign(payload, sk),
+            crate::PrivateKeyInner::Ed25519(sk) => {
+                reject_unsupported_signing_context(context, Algorithm::Ed25519)?;
+                ed25519::Ed25519Sha512::sign(payload, sk)
+            }
             crate::PrivateKeyInner::Secp256k1(sk) => {
+                reject_unsupported_signing_context(context, Algorithm::Secp256k1)?;
                 secp256k1::EcdsaSecp256k1Sha256::try_sign(payload, sk)?
             }
             #[cfg(feature = "pqc")]
-            crate::PrivateKeyInner::MlDsa(sk) => sk.try_sign(payload)?,
+            crate::PrivateKeyInner::MlDsa(sk) if context.is_empty() => sk.try_sign(payload)?,
+            #[cfg(feature = "pqc")]
+            crate::PrivateKeyInner::MlDsa(sk) => sk.try_sign_with_context(context, payload)?,
             #[cfg(feature = "gost")]
             crate::PrivateKeyInner::Gost { algorithm, secret } => {
+                reject_unsupported_signing_context(context, *algorithm)?;
                 gost::sign(*algorithm, payload, secret)?
             }
             #[cfg(feature = "bls")]
-            crate::PrivateKeyInner::BlsSmall(sk) => bls::BlsSmall::try_sign(payload, sk)?,
+            crate::PrivateKeyInner::BlsSmall(sk) => {
+                reject_unsupported_signing_context(context, Algorithm::BlsSmall)?;
+                bls::BlsSmall::try_sign(payload, sk)?
+            }
             #[cfg(feature = "bls")]
-            crate::PrivateKeyInner::BlsNormal(sk) => bls::BlsNormal::try_sign(payload, sk)?,
+            crate::PrivateKeyInner::BlsNormal(sk) => {
+                reject_unsupported_signing_context(context, Algorithm::BlsNormal)?;
+                bls::BlsNormal::try_sign(payload, sk)?
+            }
             #[cfg(feature = "sm")]
-            crate::PrivateKeyInner::Sm2(sk) => sk.try_sign(payload)?.as_bytes().to_vec(),
+            crate::PrivateKeyInner::Sm2(sk) => {
+                reject_unsupported_signing_context(context, Algorithm::Sm2)?;
+                sk.try_sign(payload)?.as_bytes().to_vec()
+            }
         };
+        Ok(Self {
+            payload: ConstVec::new(signature),
+        })
+    }
+    #[cfg(feature = "pqc")]
+    pub(crate) fn try_new_mldsa_with_context_and_hedged_rng(
+        private_key: &PrivateKey,
+        context: &[u8],
+        payload: &[u8],
+        rng: &mut soranet_pq::HedgedChaCha20Rng,
+    ) -> Result<Self, Error> {
+        use crate::secrecy::ExposeSecret;
+        let crate::PrivateKeyInner::MlDsa(secret_key) = private_key.0.expose_secret() else {
+            return Err(Error::Signing(
+                "context-bound hedged signing requires an ML-DSA private key".to_owned(),
+            ));
+        };
+        let signature = secret_key.try_sign_with_context_and_hedged_rng(context, payload, rng)?;
         Ok(Self {
             payload: ConstVec::new(signature),
         })
@@ -393,6 +446,15 @@ impl Signature {
             }
         }?;
         Ok(())
+    }
+}
+fn reject_unsupported_signing_context(context: &[u8], algorithm: Algorithm) -> Result<(), Error> {
+    if context.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::Signing(format!(
+            "{algorithm} does not support a signing context"
+        )))
     }
 }
 fn signature_payload_is_all_zero(payload: &[u8]) -> bool {
@@ -772,6 +834,65 @@ mod tests {
         let signature = Signature::try_new(key_pair.private_key(), message)
             .expect("checked secp256k1 signature");
         signature.verify(key_pair.public_key(), message).unwrap();
+    }
+    #[test]
+    fn empty_signing_context_preserves_ed25519_signature_bytes() {
+        let key_pair = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519)
+            .expect("seeded Ed25519 keypair");
+        let message = b"empty-context compatibility";
+        let legacy = Signature::try_new(key_pair.private_key(), message)
+            .expect("legacy empty-context signature");
+        let explicit = Signature::try_new_with_context(key_pair.private_key(), &[], message)
+            .expect("explicit empty-context signature");
+        assert_eq!(legacy, explicit);
+    }
+    #[test]
+    fn non_mldsa_signing_rejects_nonempty_context() {
+        let key_pair = KeyPair::try_from_seed(vec![0x53; 32], Algorithm::Ed25519)
+            .expect("seeded Ed25519 keypair");
+        let error = Signature::try_new_with_context(
+            key_pair.private_key(),
+            b"unsupported-context",
+            b"message",
+        )
+        .expect_err("Ed25519 must not silently discard an ML-DSA context");
+        assert!(matches!(error, Error::Signing(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("does not support a signing context")
+        );
+    }
+    #[cfg(feature = "pqc")]
+    #[test]
+    fn mldsa_signing_binds_nonempty_context_without_copying_private_payload() {
+        let key_pair = KeyPair::try_from_seed(vec![0x54; 32], Algorithm::MlDsa)
+            .expect("seeded ML-DSA-65 keypair");
+        let context = b"iroha.crypto.signature.context-test.v1";
+        let message = b"context-bound ML-DSA message";
+        let signature = Signature::try_new_with_context(key_pair.private_key(), context, message)
+            .expect("context-bound ML-DSA signature");
+        let (algorithm, public_key) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("ML-DSA public key bytes");
+        assert_eq!(algorithm, Algorithm::MlDsa);
+        soranet_pq::verify_mldsa(
+            soranet_pq::MlDsaSuite::MlDsa65,
+            public_key,
+            context,
+            message,
+            signature.payload(),
+        )
+        .expect("matching ML-DSA context verifies");
+        soranet_pq::verify_mldsa(
+            soranet_pq::MlDsaSuite::MlDsa65,
+            public_key,
+            b"wrong-context",
+            message,
+            signature.payload(),
+        )
+        .expect_err("different ML-DSA context must fail verification");
     }
     #[test]
     #[cfg(feature = "sm")]

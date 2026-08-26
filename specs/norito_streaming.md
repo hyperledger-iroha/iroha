@@ -241,9 +241,10 @@ captures the key points so implementers can line them up with the codec spec.
   negotiated limit as well as the DATAGRAM-off path.【F:crates/iroha_p2p/src/streaming/quic.rs:982】
 - Restricted environments (enterprise firewalls and other restricted networks) should enable the
   deterministic fallback by muxing chunk payloads over per-segment unidirectional
-  streams or tunnelling the QUIC control plane through the existing `/p2p` TCP
-  listener. Chunk framing, Norito manifest commitments, and privacy masks must be
-  identical across DATAGRAM and fallback modes so viewers cannot distinguish paths.
+  streams, with mandatory authenticated TLS-over-TCP as the transport fallback
+  when QUIC is unavailable. Torii exposes no peer-transport tunnel. Chunk framing,
+  Norito manifest commitments, and privacy masks must be identical across
+  DATAGRAM and fallback modes so viewers cannot distinguish paths.
 
 ### Congestion and FEC model
 
@@ -364,11 +365,22 @@ gas deterministically:
 
 - `CreateKaigi` registers a call under a domain with host-provided billing
   metadata (`gas_rate_per_minute`, optional billing account, capacity limits).
+  Initial relay manifests pass the same future-expiry, configured-allowlist,
+  registration, and HPKE-key checks as later manifest replacements.
 - `JoinKaigi`/`LeaveKaigi` manage participant rosters while enforcing the
   configured capacity caps and host authorization.
-- `EndKaigi` freezes the session and stamps the closing timestamp.
+- `EndKaigi` freezes the session and stamps a closing timestamp between call
+  creation and the current block time; subsequent roster, usage,
+  relay-manifest, and relay-health mutations are rejected.
 - `RecordKaigiUsage` appends metered segments so billing totals (duration and
-  gas) accumulate inside the call record.
+  gas) accumulate inside the call record. Counter overflow rejects the segment
+  instead of silently clamping an accepted usage record.
+- `ReportKaigiRelayHealth` retains only monotonically newer observations per
+  relay. Reports beyond the current block time and older observations reject;
+  every non-identical equal-timestamp report rejects, including reports from a
+  different call. Exact duplicates succeed without rewriting state or emitting
+  events. Feedback is diagnostic and does not override relay governance or
+  manifest admission.
 - The ledger emits `KaigiRosterSummary`, `KaigiRelayManifestUpdated`, and
   `KaigiUsageSummary` domain events whenever rosters, relay manifests, or
   aggregate usage change, letting subscribers monitor sessions without
@@ -380,16 +392,16 @@ Operators can curate Kaigi calls directly from the CLI:
 
 ```bash
 # Register a session
-iroha kaigi create --domain streaming --call-name daily --host <i105-account-id> \
+iroha kaigi create --domain streaming.universal --call-name daily --host <i105-account-id> \
   --privacy-mode transparent --room-policy public \
   --relay-manifest manifests/torii.json
 
 # Join/leave flows for participants
-iroha kaigi join --domain streaming --call-name daily --participant <i105-account-id>
-iroha kaigi leave --domain streaming --call-name daily --participant <i105-account-id>
+iroha kaigi join --domain streaming.universal --call-name daily --participant <i105-account-id>
+iroha kaigi leave --domain streaming.universal --call-name daily --participant <i105-account-id>
 
 # Record billable usage (milliseconds + gas)
-iroha kaigi record-usage --domain streaming --call-name daily \
+iroha kaigi record-usage --domain streaming.universal --call-name daily \
   --duration-ms 120000 --billed-gas 1500
 ```
 
@@ -402,10 +414,13 @@ participant list, accumulated usage, and arbitrary metadata for downstream
 applications. Because the records live alongside canonical `DomainEvent`
 metadata updates, downstream indexers can subscribe to standard metadata events
 to monitor call creation, join/leave churn, and usage reporting.
-Hosts choose whether exit relays enforce viewer authentication via
-`--room-policy` (`public` maps to `stream.kaigi.public`; `authenticated` maps to
-`stream.kaigi.authenticated`). When omitted, rooms default to requiring
-authentication.
+Hosts record the intended viewer policy via `--room-policy`. Public rooms map
+to the reserved `stream.kaigi.public` category and authenticated rooms to the
+reserved authenticated category. These remain on-chain intent only: V1 disables
+all token-bearing filesystem exit publication/catalog admission until RouteOpen
+binds a cryptographic viewer credential and authoritative segment proof and the
+producer supports durable revocation. A caller-provided flag is never authority.
+When omitted, rooms default to requiring authentication.
 Hosts may optionally advertise a `scheduled_start_ms`, which is preserved
 alongside the actual `created_at_ms` timestamp recorded at admission time.
 Sessions can opt into `privacy_mode = ZkRosterV1`, replacing the on-ledger

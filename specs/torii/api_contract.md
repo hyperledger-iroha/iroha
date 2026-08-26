@@ -220,9 +220,9 @@ before a typed extractor or SoraCloud handler runs; the same verified principal
 then feeds the account-and-route rate gate before the global in-flight gate.
 `Origin` remains CORS metadata, not an authenticated rate-limit identity:
 changing or spoofing it cannot manufacture another mutation bucket. The route
-catalog marks the ciphertext query as a bounded read, private uploaded-model
-execution as expensive compute, and all retained or ledger-changing commands as
-mutations.
+catalog marks ciphertext queries as bounded reads and all retained or
+ledger-changing commands as mutations. Uploaded-model V1 is registry-only; no
+private execution or receipt route is cataloged.
 This rule does not apply to the separately cataloged public-runtime gateway
 exceptions below.
 
@@ -256,7 +256,7 @@ authentication and network policy rather than by claiming a separate socket.
 | any method on `/api` or `/api/{*tail}` with the registered alias or Taira Mon alias in `Host` | protocol | proxied SoraCloud HTTP runtime | no route-specific credential; listener-wide API-token and gateway rate/inflight policy apply | reviewed host-routed public-runtime gateways; path-encoded aliases are rejected and these are not OpenAPI, SDK, or MCP operations |
 | query-projection, attachment, and SoraFS export reads documented as binary | operator/protocol | `application/octet-stream` or declared artifact media | route policy | exact binary artifacts |
 | `/v1/events/sse`, `/v1/contracts/events/sse`, the documented `*/events/stream` and explorer/governance SSE routes | protocol stream | `text/event-stream` | route policy | long-lived SSE cannot switch to an HTTP error envelope after establishment |
-| `/v1/events/ws`, `/v1/blocks/stream`, `/p2p`, `/v1/connect/ws`, and documented `*/events/ws` routes | protocol stream | WebSocket upgrade/subprotocol | route policy | bidirectional framed protocol |
+| `/v1/events/ws`, `/v1/blocks/stream`, `/v1/connect/ws`, and documented `*/events/ws` routes | protocol stream | WebSocket upgrade/subprotocol | route policy | bidirectional framed protocol; peer transport is not exposed through Torii |
 | Norito-RPC ingress | protocol | Norito-RPC framing | staged ingress policy | RPC transport has its own gate errors and retry contract |
 
 The canonical event/block handshake, ordering, heartbeat, lag, reconnect, and

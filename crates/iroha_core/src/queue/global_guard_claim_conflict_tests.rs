@@ -54,13 +54,13 @@ fn globally_bound_gossip_waits_for_certificate_and_retains_it_after_exact_marker
         iroha_crypto::KeyPair::from_seed(vec![0xB9; 32], iroha_crypto::Algorithm::Ed25519);
     let binding_hash = fixture.binding.canonical_hash();
     let preimage =
-        crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v2(binding_hash, 0)
+        crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1(binding_hash, 0)
             .expect("build exact QueuePlan attestation preimage");
-    let certificate = crate::torii_proxy::QueuePlanAdmissionCertificateV2 {
-        version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+    let certificate = crate::torii_proxy::QueuePlanAdmissionCertificateV1 {
+        version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
         binding: fixture.binding.clone(),
-        attestations: vec![crate::torii_proxy::QueuePlanAdmissionAttestationV2 {
-            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+        attestations: vec![crate::torii_proxy::QueuePlanAdmissionAttestationV1 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1,
             validator_index: 0,
             signature: iroha_crypto::Signature::try_new(validator_key.private_key(), &preimage)
                 .expect("sign exact QueuePlan attestation"),
@@ -171,7 +171,7 @@ fn popped_expired_conflicting_global_admission_remains_fail_closed() {
         .binding
         .routing_plan()
         .expect("fixture binding routing plan");
-    let conflicting_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+    let conflicting_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
         fixture.state.network_id_ref(),
         fixture.transaction.entrypoint(),
         &routing_plan,
@@ -240,7 +240,7 @@ fn exact_pending_body_handoff_preserves_historical_admission_after_ttl() {
     let admission_context = queue
         .plan_admission_context_with_state(&state, &routing_plan)
         .expect("capture exact pending historical context");
-    let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+    let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
         state.network_id_ref(),
         transaction.entrypoint(),
         &routing_plan,
@@ -270,7 +270,7 @@ fn exact_pending_body_handoff_preserves_historical_admission_after_ttl() {
         .expect("read exact pending durable handoff")
         .expect("exact pending handoff must own one durable claim");
     let reconstructed =
-        crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(&durable)
+        crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(&durable)
             .expect("reconstruct exact pending handoff binding");
     assert_eq!(reconstructed, binding);
     assert_eq!(queue.queued_len(), 1);
@@ -294,7 +294,7 @@ fn exact_pending_body_handoff_preserves_historical_admission_after_ttl() {
         .expect("read replayed exact pending durable handoff")
         .expect("replayed exact pending handoff must own one durable claim");
     let replayed_binding =
-        crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
+        crate::torii_proxy::QueuePlanAdmissionBindingV1::try_from_durable_admission(
             &replayed_durable,
         )
         .expect("reconstruct replayed exact pending handoff binding");
@@ -452,7 +452,7 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
         .binding
         .routing_plan()
         .expect("fixture binding routing plan");
-    let conflicting_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+    let conflicting_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
         fixture.state.network_id_ref(),
         fixture.transaction.entrypoint(),
         &routing_plan,

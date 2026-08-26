@@ -72,7 +72,7 @@ public final class SccpBridgeSubmitResponse {
     final long start = longValue(value, "range_start_height", 1);
     final long end = longValue(value, "range_end_height", start);
     final long creationTime = longValue(value, "creation_time_ms", 1);
-    final String txHash = optionalHash(value, "tx_hash_hex");
+    final String txHash = optionalTransactionHash(value, "tx_hash_hex");
     final String transactionPayload = optionalText(value, "transaction_payload_b64");
     final String signingMessage = optionalText(value, "signing_message_b64");
     if (submitted) {
@@ -157,6 +157,16 @@ public final class SccpBridgeSubmitResponse {
     return result;
   }
   private static String optionalHash(final Map<String, Object> value, final String field) { return value.get(field) == null ? null : hash(value, field); }
+  private static String optionalTransactionHash(
+      final Map<String, Object> value, final String field) {
+    if (value.get(field) == null) return null;
+    final String literal = text(value, field);
+    if (!literal.matches("[0-9a-f]{63}[13579bdf]")) {
+      throw new IllegalArgumentException(
+          field + " must match [0-9a-f]{63}[13579bdf] with the Iroha HashOf marker");
+    }
+    return literal;
+  }
   private static byte[] canonicalBase64(
       final String value, final String field, final Integer exactBytes) {
     final int maximumBytes =

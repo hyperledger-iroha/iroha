@@ -68,7 +68,6 @@ EXPECTED_OPTIONAL_METHODS = (
     "with_evidence_viewer_compaction_archive",
     "with_evidence_viewer_transparency_publisher",
     "with_soracloud_runtime_mutation_signer",
-    "with_soracloud_hf_inference_credential_provider",
     "with_global_beacon_partial_signer",
     "with_parliament_tle_partial_release_signer",
 )
@@ -92,7 +91,7 @@ EXPECTED_CONSENSUS_SIGNERS = {
     ),
 }
 EXPECTED_INVENTORY_SHA256 = (
-    "c7a42445e880435413d679a36e489a4977061dbf1999c8f23ab9241e6af2b1f0"
+    "bdf62c939ed697a662f65782d7e865f0361606330e871120ad9ac9c93783d73a"
 )
 GENERATOR_MACROS = (
     "runtime_provider_backend_collection_v1",
@@ -196,7 +195,7 @@ def _generator_hashes(source: str) -> dict[str, str]:
 
 def _validate_source(source: str) -> None:
     records = _inventory(source)
-    _require(len(records) == 57, f"expected 57 frozen backends, found {len(records)}")
+    _require(len(records) == 56, f"expected 56 frozen backends, found {len(records)}")
     _require(
         len({record[2] for record in records}) == len(records),
         "backend fields must be unique",
@@ -208,7 +207,7 @@ def _validate_source(source: str) -> None:
 
     optional = [record for record in records if record[1] == "optional"]
     repeated = [record for record in records if record[1] == "repeated"]
-    _require(len(optional) == 56, f"expected 56 optional backends, found {len(optional)}")
+    _require(len(optional) == 55, f"expected 55 optional backends, found {len(optional)}")
     _require(len(repeated) == 1, f"expected one repeated backend, found {len(repeated)}")
     _require(
         tuple(record[5] for record in optional) == EXPECTED_OPTIONAL_METHODS,

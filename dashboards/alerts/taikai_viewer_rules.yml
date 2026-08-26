@@ -20,7 +20,7 @@ groups:
             Cluster {{ $labels.cluster }} drift exceeded 1.5s at p99 for 10 minutes.
             Check ingest ladder health and confirm clocks are synchronized.
       - alert: TaikaiIngestFailure
-        expr: sum by (cluster, stream) (rate(taikai_ingest_segment_errors_total{reason!="none"}[5m])) > 0
+        expr: sum by (cluster, stream) (rate(taikai_ingest_errors_total{reason!="none"}[5m])) > 0
         for: 5m
         labels:
           severity: warn
@@ -28,8 +28,8 @@ groups:
         annotations:
           summary: "Taikai ingest errors detected"
           description: >
-            Segment errors detected for {{ $value }} occurrences over 5 minutes.
-            Inspect taikai_ingest_segment_errors_total counters for reasons.
+            Segment error rate is {{ $value }} errors per second over the 5-minute window.
+            Inspect taikai_ingest_errors_total counters for reasons.
       - alert: TaikaiCekRotationLag
         expr: taikai_viewer_cek_rotation_seconds_ago > 180
         for: 15m

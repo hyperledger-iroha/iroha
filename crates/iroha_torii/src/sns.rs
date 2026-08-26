@@ -330,9 +330,11 @@ pub async fn handle_get_policy(
     let app_for_job = Arc::clone(&app);
     let policy = run_blocking_sns("get_policy", move || {
         let view = app_for_job.state.view();
-        policy_by_id(view.world(), suffix_id).ok_or_else(|| {
-            SnsError::NotFound(format!("suffix policy {suffix_id} is not registered"))
-        })
+        policy_by_id(view.world(), suffix_id)
+            .map_err(SnsError::from)?
+            .ok_or_else(|| {
+                SnsError::NotFound(format!("suffix policy {suffix_id} is not registered"))
+            })
     })
     .await?;
     Ok(JsonBody(policy))

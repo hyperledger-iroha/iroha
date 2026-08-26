@@ -7,12 +7,14 @@ edition = "2024"
 publish = false
 
 [features]
-default = []
+default = ["runtime"]
 dev-tools = []
+runtime = []
 
 [[bin]]
 name = "soranet-relay"
 path = "src/main.rs"
+required-features = ["runtime"]
 
 [[bin]]
 name = "directory"
@@ -31,7 +33,7 @@ required-features = ["dev-tools"]
 [[bin]]
 name = "soranet_vpn_settlement"
 path = "src/bin/soranet_vpn_settlement.rs"
-required-features = ["dev-tools"]
+required-features = ["dev-tools", "runtime"]
 
 [package.metadata]
 description = "Reference SoraNet relay daemon"
@@ -53,7 +55,7 @@ bytes = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["application"] }
 iroha_data_model = { workspace = true, features = ["application-model"], default-features = false }
 rand = { workspace = true, features = ["std_rng"] }
-blake3 = { workspace = true }
+blake3 = { workspace = true, features = ["zeroize"] }
 time = { workspace = true }
 iroha_primitives = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
@@ -61,9 +63,11 @@ tokio-tungstenite = { workspace = true }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
 soranet_pq = { workspace = true }
 tempfile = "3.23.0"
+zeroize = { version = "1.8.2", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 
 [[test]]
 name = "soranet_relay_integration"
 path = "tests/soranet_relay_integration.rs"
+required-features = ["runtime"]

@@ -13,6 +13,7 @@ _ED25519_D = (
     -121665 * pow(121666, _ED25519_FIELD_MODULUS - 2, _ED25519_FIELD_MODULUS)
 ) % _ED25519_FIELD_MODULUS
 _ED25519_SQRT_M1 = pow(2, (_ED25519_FIELD_MODULUS - 1) // 4, _ED25519_FIELD_MODULUS)
+_ML_DSA_65_PUBLIC_KEY_HEX_LENGTH = 1_952 * 2
 
 
 def _ed25519_extended_add(
@@ -113,6 +114,27 @@ def require_vpn_relay_id(
             f"{context} must encode a canonical prime-order Ed25519 public key"
         )
     return literal
+
+
+def require_vpn_mldsa65_public_key(
+    value: Any, *, context: str, allow_empty: bool = False
+) -> str:
+    """Require one nonzero canonical ML-DSA-65 relay public key."""
+
+    if allow_empty and value == "":
+        return ""
+    if (
+        not isinstance(value, str)
+        or len(value) != _ML_DSA_65_PUBLIC_KEY_HEX_LENGTH
+        or re.fullmatch(r"[0-9a-f]+", value) is None
+    ):
+        raise RuntimeError(
+            f"{context} must be exactly {_ML_DSA_65_PUBLIC_KEY_HEX_LENGTH} "
+            "lowercase hexadecimal characters"
+        )
+    if not any(character != "0" for character in value):
+        raise RuntimeError(f"{context} must not be the all-zero ML-DSA-65 key")
+    return value
 
 
 def require_vpn_trust_digest(
@@ -239,6 +261,11 @@ def parse_vpn_trust_fields(
         "relay_id_hex": require_vpn_relay_id(
             record.get("relay_id_hex"),
             context=f"{context}.relay_id_hex",
+            allow_empty=allow_empty,
+        ),
+        "relay_mldsa65_public_key_hex": require_vpn_mldsa65_public_key(
+            record.get("relay_mldsa65_public_key_hex"),
+            context=f"{context}.relay_mldsa65_public_key_hex",
             allow_empty=allow_empty,
         ),
         "descriptor_commit_hex": require_vpn_trust_digest(

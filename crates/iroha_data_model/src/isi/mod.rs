@@ -222,14 +222,9 @@ impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudDecryptionReq
 impl_direct_instruction_box!(crate::isi::soracloud::JoinSoracloudHfSharedLease);
 impl_direct_instruction_box!(crate::isi::soracloud::LeaveSoracloudHfSharedLease);
 impl_direct_instruction_box!(crate::isi::soracloud::RenewSoracloudHfSharedLease);
-impl_direct_instruction_box!(crate::isi::soracloud::AdvertiseSoracloudModelHost);
-impl_direct_instruction_box!(crate::isi::soracloud::HeartbeatSoracloudModelHost);
-impl_direct_instruction_box!(crate::isi::soracloud::WithdrawSoracloudModelHost);
-impl_direct_instruction_box!(crate::isi::soracloud::ReconcileSoracloudModelHosts);
 impl_direct_instruction_box!(crate::isi::soracloud::AdvertiseSoracloudInrouHost);
 impl_direct_instruction_box!(crate::isi::soracloud::WithdrawSoracloudInrouHost);
 impl_direct_instruction_box!(crate::isi::soracloud::ReconcileSoracloudInrouPlacements);
-impl_direct_instruction_box!(crate::isi::soracloud::ReportSoracloudModelHostViolation);
 impl_direct_instruction_box!(crate::isi::soracloud::DeploySoracloudAgentApartment);
 impl_direct_instruction_box!(crate::isi::soracloud::RenewSoracloudAgentLease);
 impl_direct_instruction_box!(crate::isi::soracloud::RestartSoracloudAgentApartment);
@@ -258,10 +253,6 @@ impl_direct_instruction_box!(crate::isi::soracloud::ReportSoracloudServiceLeaseU
 impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudMailboxMessage);
 impl_direct_instruction_box!(crate::isi::soracloud::RecordSoracloudRuntimeReceipt);
 impl_direct_instruction_box!(crate::isi::soracloud::ApplySoracloudOrderedMailboxResult);
-impl_direct_instruction_box!(crate::isi::soracloud::PrepareSoracloudPrivateUploadedModelExecution);
-impl_direct_instruction_box!(
-    crate::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt
-);
 // Allow direct boxing of runtime upgrade instructions
 impl_direct_instruction_box!(crate::isi::runtime_upgrade::ProposeRuntimeUpgrade);
 impl_direct_instruction_box!(crate::isi::runtime_upgrade::ActivateRuntimeUpgrade);
@@ -812,7 +803,7 @@ impl norito::core::NoritoSerialize for InstructionBox {
     where
         Self: Sized,
     {
-        // Match the archived layout used in `serialize`: `(type_name, payload_with_header)`.
+        // Match the archived layout used in `serialize`: `(wire_id, payload_with_header)`.
         norito::core::type_name_schema_hash::<(String, Vec<u8>)>()
     }
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
@@ -1061,7 +1052,6 @@ fn json_asset_transfer_target(
     let account_id = crate::account::AccountId::parse_encoded(
         json_required_string(params, "account_id")?.as_str(),
     )
-    .map(crate::account::ParsedAccountId::into_account_id)
     .map_err(|err| norito::json::Error::Message(err.to_string()))?;
     let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
         json_required_string(params, "asset_definition_id")?.as_str(),
@@ -1192,27 +1182,28 @@ impl iroha_schema::TypeId for InstructionBox {
 }
 /// Decode a wire-framed ISI payload into a typed [`InstructionBox`].
 ///
-/// The `name` must be either the canonical Rust `type_name` or a wire-id
-/// registered in the instruction registry. The `payload` must be framed with
-/// the Norito header as produced by [`frame_instruction_payload`].
+/// The `wire_id` must be the canonical stable identifier registered for the instruction. Concrete
+/// Rust type names are encoding-side implementation details and are never accepted as decode
+/// aliases. The `payload` must be framed with the Norito header as produced by
+/// [`frame_instruction_payload`].
 ///
 /// # Errors
-/// Returns `norito::Error` if the instruction name is not registered or payload decoding fails.
+/// Returns `norito::Error` if the wire identifier is not registered or payload decoding fails.
 pub fn decode_instruction_from_pair(
-    name: &str,
+    wire_id: &str,
     payload: &[u8],
 ) -> Result<InstructionBox, norito::Error> {
     let entry = {
         let registry = instruction_registry();
-        registry.entry_for_key(name).copied()
+        registry.entry_for_wire_id(wire_id).copied()
     };
     if let Some(entry) = entry {
         let header_flags = framed_instruction_payload_header_flags(payload)?;
         return InstructionRegistry::decode_entry(&entry, header_flags, payload);
     }
-    Err(norito::Error::Message(format!(
-        "unknown instruction `{name}` (not registered)"
-    )))
+    Err(norito::Error::Message(
+        "unknown instruction wire identifier".to_owned(),
+    ))
 }
 fn framed_instruction_payload_header_flags(payload: &[u8]) -> Result<u8, norito::Error> {
     let flags = *payload
@@ -1286,24 +1277,22 @@ fn decode_instruction_from_borrowed_pair(
     let instruction = decode_instruction_from_pair(name, payload)?;
     Ok((instruction, used))
 }
-/// Frame a bare instruction payload with its Norito header using the registry metadata.
+/// Frame a bare instruction payload with its Norito header using its canonical wire identifier.
 ///
 /// # Errors
-/// Returns `norito::Error` if the type name is not registered or framing fails for the payload.
-pub fn frame_instruction_payload(
-    type_name: &str,
-    payload: &[u8],
-) -> Result<Vec<u8>, norito::Error> {
+/// Returns `norito::Error` if the wire identifier is not registered or framing fails for the
+/// payload. Concrete Rust type names are not accepted as aliases.
+pub fn frame_instruction_payload(wire_id: &str, payload: &[u8]) -> Result<Vec<u8>, norito::Error> {
     let entry = {
         let registry = instruction_registry();
-        registry.entry_for_key(type_name).copied()
+        registry.entry_for_wire_id(wire_id).copied()
     };
     if let Some(entry) = entry {
         return (entry.frame)(payload, norito::core::default_encode_flags());
     }
-    Err(norito::Error::Message(format!(
-        "unknown instruction `{type_name}` (not registered)"
-    )))
+    Err(norito::Error::Message(
+        "unknown instruction wire identifier".to_owned(),
+    ))
 }
 impl IntoSchema for InstructionBox {
     fn type_name() -> iroha_schema::Ident {
@@ -1322,13 +1311,13 @@ impl IntoSchema for InstructionBox {
 /// constructors ignore the value, but keeping it in the signature allows future instructions to
 /// react to packed-layout flags without widening the registry interface again.
 pub type InstructionConstructor = fn(u8, &[u8]) -> Result<InstructionBox, norito::Error>;
-/// Registry storing constructors for [`crate::isi::Instruction`] types keyed by their type names.
+/// Registry mapping concrete Rust type names for encoding and stable wire identifiers for decoding.
 #[derive(Default, Clone)]
 pub struct InstructionRegistry {
-    /// Concrete Rust `type_name` -> entry with preferred wire id.
+    /// Encoding-side lookup keyed only by the concrete Rust `type_name`.
     entries: HashMap<&'static str, RegistryEntry>,
-    /// Lookup table mapping either `type_name` or wire-id -> registry entry.
-    lookup: HashMap<&'static str, RegistryEntry>,
+    /// Decoding-side lookup keyed only by the canonical wire identifier.
+    wire_entries: HashMap<&'static str, RegistryEntry>,
 }
 #[derive(Clone, Copy)]
 struct RegistryEntry {
@@ -1343,52 +1332,10 @@ impl InstructionRegistry {
     pub fn new() -> Self {
         Self::default()
     }
-    /// Register a new [`crate::isi::Instruction`] type.
-    #[must_use]
-    pub fn register<T>(mut self) -> Self
-    where
-        T: Instruction + Decode + 'static + norito::NoritoSerialize,
-        for<'a> T: norito::NoritoDeserialize<'a>,
-    {
-        fn ctor<T>(header_flags: u8, input: &[u8]) -> Result<InstructionBox, norito::Error>
-        where
-            T: Instruction + Decode + 'static + norito::NoritoSerialize,
-            for<'a> T: norito::NoritoDeserialize<'a>,
-        {
-            decode_instruction_payload::<T>(input, header_flags)
-        }
-        fn frame<T>(payload: &[u8], header_flags: u8) -> Result<Vec<u8>, norito::core::Error>
-        where
-            T: Instruction
-                + Decode
-                + 'static
-                + norito::NoritoSerialize
-                + for<'a> norito::NoritoDeserialize<'a>,
-        {
-            norito::core::frame_bare_with_header_flags::<T>(payload, header_flags)
-        }
-        fn frame_len<T>(payload_len: usize) -> Option<usize>
-        where
-            T: Instruction
-                + Decode
-                + 'static
-                + norito::NoritoSerialize
-                + for<'a> norito::NoritoDeserialize<'a>,
-        {
-            framed_instruction_payload_len_for::<T>(payload_len)
-        }
-        let name = std::any::type_name::<T>();
-        let entry = RegistryEntry {
-            type_name: name,
-            ctor: ctor::<T>,
-            wire_id: name,
-            frame: frame::<T>,
-            frame_len: frame_len::<T>,
-        };
-        self.insert_entry(entry);
-        self
-    }
-    /// Register a new [`crate::isi::Instruction`] type using a stable wire identifier.
+    /// Register an [`crate::isi::Instruction`] with an explicit, path-independent wire identifier.
+    ///
+    /// The concrete Rust [`std::any::type_name`] is retained only as the encoding-side key;
+    /// decoders accept only `wire_id`.
     #[must_use]
     pub fn register_with_id<T>(mut self, wire_id: &'static str) -> Self
     where
@@ -1433,56 +1380,7 @@ impl InstructionRegistry {
         self.insert_entry(entry);
         self
     }
-    /// Register a new [`crate::isi::Instruction`] type using the direct slice decoder.
-    ///
-    /// This is intentionally opt-in because not every built-in instruction has a
-    /// slice-safe decoder for all of its nested fields yet.
-    #[must_use]
-    pub(crate) fn register_slice<T>(mut self) -> Self
-    where
-        T: Instruction + Decode + 'static + norito::NoritoSerialize,
-        for<'a> T: norito::NoritoDeserialize<'a> + norito::core::DecodeFromSlice<'a>,
-    {
-        fn ctor<T>(header_flags: u8, input: &[u8]) -> Result<InstructionBox, norito::Error>
-        where
-            T: Instruction + Decode + 'static + norito::NoritoSerialize,
-            for<'a> T: norito::NoritoDeserialize<'a> + norito::core::DecodeFromSlice<'a>,
-        {
-            decode_instruction_payload_from_slice::<T>(input, header_flags)
-        }
-        fn frame<T>(payload: &[u8], header_flags: u8) -> Result<Vec<u8>, norito::core::Error>
-        where
-            T: Instruction
-                + Decode
-                + 'static
-                + norito::NoritoSerialize
-                + for<'a> norito::NoritoDeserialize<'a>,
-        {
-            norito::core::frame_bare_with_header_flags::<T>(payload, header_flags)
-        }
-        fn frame_len<T>(payload_len: usize) -> Option<usize>
-        where
-            T: Instruction
-                + Decode
-                + 'static
-                + norito::NoritoSerialize
-                + for<'a> norito::NoritoDeserialize<'a>,
-        {
-            framed_instruction_payload_len_for::<T>(payload_len)
-        }
-        let name = std::any::type_name::<T>();
-        let entry = RegistryEntry {
-            type_name: name,
-            ctor: ctor::<T>,
-            wire_id: name,
-            frame: frame::<T>,
-            frame_len: frame_len::<T>,
-        };
-        self.insert_entry(entry);
-        self
-    }
-    #[cfg(test)]
-    /// Register a new [`crate::isi::Instruction`] type using a stable wire identifier
+    /// Register an [`crate::isi::Instruction`] with an explicit wire identifier
     /// and the direct slice decoder.
     ///
     /// This is intentionally opt-in because not every built-in instruction has a
@@ -1531,13 +1429,13 @@ impl InstructionRegistry {
         self.insert_entry(entry);
         self
     }
-    /// Decode an [`crate::isi::Instruction`] using the registered constructor for the given type name.
+    /// Decode an [`crate::isi::Instruction`] using its canonical wire identifier.
     pub fn decode(
         &self,
-        name: &str,
+        wire_id: &str,
         bytes: &[u8],
     ) -> Option<Result<InstructionBox, norito::Error>> {
-        self.entry_for_key(name).map(|entry| {
+        self.entry_for_wire_id(wire_id).map(|entry| {
             let header_flags = framed_instruction_payload_header_flags(bytes)?;
             Self::decode_entry(entry, header_flags, bytes)
         })
@@ -1548,11 +1446,11 @@ impl InstructionRegistry {
     /// [`norito::codec::encode_with_header_flags`] and selects the payload layout explicitly.
     pub fn decode_with_flags(
         &self,
-        name: &str,
+        wire_id: &str,
         header_flags: u8,
         bytes: &[u8],
     ) -> Option<Result<InstructionBox, norito::Error>> {
-        self.entry_for_key(name)
+        self.entry_for_wire_id(wire_id)
             .map(|entry| Self::decode_entry(entry, header_flags, bytes))
     }
     /// Number of registered instruction types.
@@ -1567,53 +1465,34 @@ impl InstructionRegistry {
     pub fn names(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.entries.keys().copied()
     }
-    /// Check whether the registry can decode the given type name.
-    pub fn contains(&self, name: &str) -> bool {
-        self.entry_for_key(name).is_some()
+    /// Check whether the registry can decode the canonical wire identifier.
+    pub fn contains(&self, wire_id: &str) -> bool {
+        self.entry_for_wire_id(wire_id).is_some()
     }
     /// Return the stable wire identifier for the given type name, if registered.
-    pub fn wire_id(&self, type_name: &'static str) -> Option<&'static str> {
+    pub fn wire_id(&self, type_name: &str) -> Option<&'static str> {
         self.entries.get(type_name).map(|entry| entry.wire_id)
     }
     fn insert_entry(&mut self, entry: RegistryEntry) {
-        for key in [entry.type_name, entry.wire_id] {
-            if let Some(previous) = self.lookup.get(key)
-                && previous.type_name != entry.type_name
-            {
-                panic!(
-                    "instruction registry key collision: `{key}` belongs to both `{}` and `{}`",
-                    previous.type_name, entry.type_name
-                );
-            }
+        let collision = entry.type_name == entry.wire_id
+            || self.entries.contains_key(entry.type_name)
+            || self.entries.contains_key(entry.wire_id)
+            || self.wire_entries.contains_key(entry.type_name)
+            || self.wire_entries.contains_key(entry.wire_id);
+        if collision {
+            panic!(
+                "instruction registry key collision for type `{}` and wire identifier `{}`",
+                entry.type_name, entry.wire_id
+            );
         }
-        if let Some(previous) = self.entries.insert(entry.type_name, entry)
-            && previous.wire_id != entry.wire_id
-        {
-            self.lookup.remove(previous.wire_id);
-        }
-        self.lookup.insert(entry.type_name, entry);
-        self.lookup.insert(entry.wire_id, entry);
-    }
-    fn remap_wire_id<T>(mut self, wire_id: &'static str) -> Self
-    where
-        T: 'static,
-    {
-        let type_name = std::any::type_name::<T>();
-        let previous = *self.entries.get(type_name).unwrap_or_else(|| {
-            panic!("cannot assign a wire id to unregistered type `{type_name}`")
-        });
-        let entry = RegistryEntry {
-            wire_id,
-            ..previous
-        };
-        self.insert_entry(entry);
-        self
+        self.entries.insert(entry.type_name, entry);
+        self.wire_entries.insert(entry.wire_id, entry);
     }
     fn entry_for_type_name(&self, type_name: &'static str) -> Option<RegistryEntry> {
         self.entries.get(type_name).copied()
     }
-    fn entry_for_key(&self, key: &str) -> Option<&RegistryEntry> {
-        self.lookup.get(key)
+    fn entry_for_wire_id(&self, wire_id: &str) -> Option<&RegistryEntry> {
+        self.wire_entries.get(wire_id)
     }
     fn decode_entry(
         entry: &RegistryEntry,
@@ -1707,22 +1586,6 @@ where
     }
     norito::core::note_payload_access(bytes, used);
     Ok((decoded, used))
-}
-/// Build an [`InstructionRegistry`] populated with the provided instruction types.
-#[macro_export]
-macro_rules! instruction_registry {
-    ($($ty:ty),* $(,)?) => {{
-        let mut registry = $crate::isi::InstructionRegistry::new();
-        let registrars = [
-            $(
-                $crate::isi::InstructionRegistry::register::<$ty>
-            ),*
-        ];
-        for register in registrars {
-            registry = register(registry);
-        }
-        registry
-    }};
 }
 /// Build an [`InstructionRegistry`] registering each type with its annotated stable
 /// wire identifier by reading its `WIRE_ID` associated constant.
@@ -2867,9 +2730,8 @@ pub mod prelude {
         social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
         soracloud::{
             AdvanceSoracloudRollout, ApplySoracloudOrderedMailboxResult, DeploySoracloudService,
-            MutateSoracloudState, PrepareSoracloudPrivateUploadedModelExecution,
-            RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
-            RecordSoracloudMailboxMessage, RecordSoracloudPrivateUploadedModelExecutionReceipt,
+            MutateSoracloudState, RecordSoracloudAgentAutonomyExecution,
+            RecordSoracloudDecryptionRequest, RecordSoracloudMailboxMessage,
             RecordSoracloudRuntimeReceipt, ReportSoracloudServiceLeaseUsage,
             RollbackSoracloudService, RunSoracloudFheJob, SetSoracloudRuntimeState,
             UpgradeSoracloudService,

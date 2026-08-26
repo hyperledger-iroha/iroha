@@ -10,6 +10,7 @@ namespace Hyperledger.Iroha.Transactions;
 public sealed class TransactionBuilder
 {
     public const ulong DefaultTimeToLiveMilliseconds = 100_000;
+    private const byte SignedTransactionWireVersion = 1;
 
     private static readonly HashSet<string> RetiredFeeMetadataKeys =
         new(["fee_sponsor", "gas_asset_id", "gas_limit"], StringComparer.Ordinal);
@@ -409,13 +410,20 @@ public sealed class TransactionBuilder
         signedTransaction.WriteField(transactionPayload);
         signedTransaction.WriteField(new byte[] { 0 });
         var signedTransactionBytes = signedTransaction.ToArray();
+        var versionedNoritoBytes = new byte[signedTransactionBytes.Length + 1];
+        versionedNoritoBytes[0] = SignedTransactionWireVersion;
+        signedTransactionBytes.CopyTo(versionedNoritoBytes.AsSpan(1));
 
         var entrypoint = new CanonicalNoritoWriter();
         entrypoint.WriteUInt32LittleEndian(0);
         entrypoint.WriteField(transactionPayload);
         var transactionHash = IrohaHash.Hash(entrypoint.ToArray());
 
-        return new SignedTransactionEnvelope(signedTransactionBytes, signedTransactionBytes, transactionPayload, transactionHash);
+        return new SignedTransactionEnvelope(
+            versionedNoritoBytes,
+            signedTransactionBytes,
+            transactionPayload,
+            transactionHash);
     }
 
     internal byte[] BuildPayloadBytes(TransactionEncodingContext context)

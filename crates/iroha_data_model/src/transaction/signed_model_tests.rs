@@ -51,6 +51,84 @@ fn sample_signed_transaction() -> SignedTransaction {
     .with_instructions([Log::new(Level::INFO, "exact slice".into())])
     .sign(&private_key)
 }
+fn split_default_norito_fields(bytes: &[u8], count: usize) -> Vec<Vec<u8>> {
+    let flags = norito::core::default_encode_flags();
+    let mut offset = 0usize;
+    let mut fields = Vec::with_capacity(count);
+    for _ in 0..count {
+        let (len, prefix) = norito::core::read_len_from_slice_with_flags(
+            bytes.get(offset..).expect("Norito field prefix"),
+            flags,
+        )
+        .expect("Norito field length");
+        let start = offset.checked_add(prefix).expect("Norito field start");
+        let end = start.checked_add(len).expect("Norito field end");
+        fields.push(
+            bytes
+                .get(start..end)
+                .expect("complete Norito field")
+                .to_vec(),
+        );
+        offset = end;
+    }
+    assert_eq!(offset, bytes.len(), "unexpected trailing Norito fields");
+    fields
+}
+fn encode_default_norito_fields(fields: &[Vec<u8>]) -> Vec<u8> {
+    let flags = norito::core::default_encode_flags();
+    let mut encoded = Vec::new();
+    for field in fields {
+        norito::core::write_len_to_vec_with_flags(
+            &mut encoded,
+            u64::try_from(field.len()).expect("Norito field length fits u64"),
+            flags,
+        );
+        encoded.extend_from_slice(field);
+    }
+    encoded
+}
+fn signed_transaction_with_log_type_name_alias(canonical: &[u8]) -> Vec<u8> {
+    assert_eq!(canonical.first(), Some(&1), "signed transaction V1 prefix");
+    let mut signed = split_default_norito_fields(&canonical[1..], 3);
+    let mut payload = split_default_norito_fields(&signed[1], 10);
+
+    assert_eq!(&payload[3][..4], &0_u32.to_le_bytes());
+    let executable_fields = split_default_norito_fields(&payload[3][4..], 1);
+    let sequence = &executable_fields[0];
+    assert_eq!(&sequence[..8], &1_u64.to_le_bytes());
+    let sequence_fields = split_default_norito_fields(&sequence[8..], 1);
+    let mut instruction = split_default_norito_fields(&sequence_fields[0], 2);
+    let wire_id = split_default_norito_fields(&instruction[0], 1);
+    assert_eq!(wire_id[0], b"iroha.log");
+
+    instruction[0] =
+        encode_default_norito_fields(&[std::any::type_name::<Log>().as_bytes().to_vec()]);
+    let mut sequence = 1_u64.to_le_bytes().to_vec();
+    sequence.extend_from_slice(&encode_default_norito_fields(&[
+        encode_default_norito_fields(&instruction),
+    ]));
+    let mut executable = 0_u32.to_le_bytes().to_vec();
+    executable.extend_from_slice(&encode_default_norito_fields(&[sequence]));
+    payload[3] = executable;
+    signed[1] = encode_default_norito_fields(&payload);
+
+    let mut alternate = vec![1];
+    alternate.extend_from_slice(&encode_default_norito_fields(&signed));
+    alternate
+}
+fn external_entrypoint_wire(signed_transaction_wire: &[u8]) -> Vec<u8> {
+    assert_eq!(
+        signed_transaction_wire.first(),
+        Some(&1),
+        "nested signed transaction V1 prefix"
+    );
+    let mut wire = vec![1];
+    wire.extend_from_slice(&0_u32.to_le_bytes());
+    wire.extend_from_slice(&encode_default_norito_fields(&[signed_transaction_wire
+        [1..]
+        .to_vec()]));
+    wire
+}
 #[test]
 fn queue_plan_admission_intent_is_a_required_signature_bound_field() {
     let ordinary = sample_signed_transaction();
@@ -2272,6 +2350,16 @@ fn signed_transaction_versioned_roundtrip() {
     assert_eq!(decoded, signed_tx);
 }
 #[test]
+fn signed_transaction_versioned_decode_rejects_instruction_type_name_alias() {
+    let signed_tx = sample_signed_transaction();
+    let canonical = signed_tx.encode_versioned();
+    let alternate = signed_transaction_with_log_type_name_alias(&canonical);
+    assert_ne!(alternate, canonical);
+    let error = SignedTransaction::decode_all_versioned(&alternate)
+        .expect_err("concrete Rust type names are not canonical V1 instruction wire ids");
+    assert!(matches!(error, iroha_version::error::Error::NoritoCodec(_)));
+}
+#[test]
 fn signed_transaction_fixed_v1_wire_binds_full_authorization_proof() {
     let signer_a = checked_random_keypair();
     let signer_b = checked_random_keypair();
@@ -2508,6 +2596,22 @@ fn transaction_entrypoint_versioned_roundtrip_matches_fixed_v1_wire() {
     assert_eq!(decoded, entrypoint);
 }
 #[test]
+fn transaction_entrypoint_versioned_decode_rejects_nested_instruction_type_name_alias() {
+    let signed_tx = sample_signed_transaction();
+    let canonical_signed = signed_tx.encode_versioned();
+    let canonical_entrypoint = TransactionEntrypoint::from(signed_tx).encode_versioned();
+    assert_eq!(
+        external_entrypoint_wire(&canonical_signed),
+        canonical_entrypoint,
+        "test fixture must reproduce the canonical external-entrypoint wire"
+    );
+    let alternate_signed = signed_transaction_with_log_type_name_alias(&canonical_signed);
+    let alternate_entrypoint = external_entrypoint_wire(&alternate_signed);
+    let error = TransactionEntrypoint::decode_all_versioned(&alternate_entrypoint)
+        .expect_err("nested instruction aliases are not canonical V1 entrypoint wires");
+    assert!(matches!(error, iroha_version::error::Error::NoritoCodec(_)));
+}
+#[test]
 fn signed_transaction_roundtrip_preserves_instruction_order() {
     use crate::parameter::{Parameter, system::SumeragiParameter};
     let chain = test_network_id(0x1D);
@@ -2698,6 +2802,62 @@ fn verify_signature_accepts_multisig_with_quorum() {
             .verify_signature()
             .expect_err("the primary signature must duplicate the first canonical bundle item"),
         TransactionSignatureError::NonCanonicalMultisigSignatures
+    );
+}
+#[cfg(feature = "json")]
+#[test]
+fn signed_transaction_json_rejects_unknown_authorization_envelope_fields() {
+    let mut single = norito::json::to_value(&sample_signed_transaction())
+        .expect("serialize signed transaction JSON");
+    single
+        .as_object_mut()
+        .expect("signed transaction envelope")
+        .insert("legacy".to_owned(), norito::json::Value::Null);
+    assert!(
+        norito::json::from_value::<SignedTransaction>(single).is_err(),
+        "unknown signed-transaction field must fail closed"
+    );
+
+    let signer = checked_random_keypair();
+    let member =
+        MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
+    let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
+    let payload = empty_multisig_payload(0x2F, policy);
+    let member_signature = checked_transaction_payload_signature(signer.private_key(), &payload);
+    let transaction = SignedTransaction {
+        signature: TransactionSignature(member_signature.clone()),
+        payload,
+        multisig_signatures: Some(MultisigSignatures::new(vec![MultisigSignature::new(
+            signer.public_key().clone(),
+            member_signature,
+        )])),
+    };
+    let canonical =
+        norito::json::to_value(&transaction).expect("serialize multisig transaction JSON");
+
+    let mut bundle = canonical.clone();
+    bundle
+        .get_mut("multisig_signatures")
+        .and_then(norito::json::Value::as_object_mut)
+        .expect("multisig bundle envelope")
+        .insert("legacy".to_owned(), norito::json::Value::Null);
+    assert!(
+        norito::json::from_value::<SignedTransaction>(bundle).is_err(),
+        "unknown multisig bundle field must fail closed"
+    );
+
+    let mut entry = canonical;
+    entry
+        .get_mut("multisig_signatures")
+        .and_then(|bundle| bundle.get_mut("signatures"))
+        .and_then(norito::json::Value::as_array_mut)
+        .and_then(|signatures| signatures.first_mut())
+        .and_then(norito::json::Value::as_object_mut)
+        .expect("multisig signature envelope")
+        .insert("legacy".to_owned(), norito::json::Value::Null);
+    assert!(
+        norito::json::from_value::<SignedTransaction>(entry).is_err(),
+        "unknown multisig signature field must fail closed"
     );
 }
 #[test]

@@ -3,25 +3,31 @@
 The `soranet-puzzle-service` daemon (`tools/soranet-puzzle-service/`) issues
 Argon2-backed admission tickets that mirror the relay’s `pow.puzzle.*` policy
 and, when configured, brokers ML-DSA admission tokens on behalf of edge relays.
+The first release uses one static configured difficulty; the retired
+`adaptive` key is rejected as unknown so the issuer and verifier cannot drift
+while tickets are in flight.
 It exposes five HTTP endpoints:
 
 - `GET /healthz` – liveness probe.
 - `GET /v1/puzzle/config` – returns the effective PoW/puzzle parameters pulled
   from the relay JSON (`handshake.descriptor_commit_hex`, `pow.*`).
   The response also echoes the PoW revocation store capacity/TTL so operators
-  can validate the shared replay cache settings.
+  can validate the shared replay cache settings. This unauthenticated metadata
+  route neither exposes revocation IDs nor reads or refreshes their file.
 - `POST /v1/puzzle/mint` – mints an Argon2 ticket. The JSON body must contain
   `"transcript_hash_hex"` with exactly 32 non-zero bytes; `"ttl_secs"` and
-  `"signed"` are optional:
+  `"signed"` are optional when no signed-ticket verifier key is configured;
+  `"signed": true` is mandatory when one is configured:
   `{ "transcript_hash_hex": "<32-byte hex>", "ttl_secs": <u64>, "signed": true }`.
   The service clamps TTL overrides to the policy window and returns a
-  relay-signed ticket plus signature fingerprint when signing keys are
-  configured.
+  canonical ML-DSA envelope over the Argon2 ticket plus its replay fingerprint
+  when signing keys are configured. Signed envelopes never select hashcash.
 - `GET /v1/token/config` – when `pow.token.enabled = true`, returns the active
   admission-token policy (issuer fingerprint, TTL/clock-skew bounds, relay ID,
   and the merged revocation set).
 - `POST /v1/token/mint` – mints an ML-DSA admission token bound to the supplied
-  resume hash; the request body accepts `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
+  resume hash; the request body accepts `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": 0 }`.
+  All token flag bits are reserved in v1, so non-zero values are rejected.
 
 `POST /v1/puzzle/mint`, `GET /v1/token/config`, and
 `POST /v1/token/mint` require `Authorization: Bearer <token>`, where the token is
@@ -31,10 +37,18 @@ TLS and any remote client authentication at a local proxy. The token minting
 endpoint assigns `issued_at` from the service clock and never accepts a
 caller-supplied issuance timestamp. Protected responses send
 `Cache-Control: no-store` and `Pragma: no-cache` so proxies do not retain minted
-credentials or token-policy output. Relay identity is taken only from the
+credentials or token-policy output. Serialized mint-response allocations retain
+a zeroizing owner until the HTTP body and every backing-buffer clone are
+released, and credential-bearing response Debug output is redacted. Relay identity is taken only from the
 verified SRCv2 certificate, whose descriptor commitment must match
 `handshake.descriptor_commit_hex`; do not mount the relay's private descriptor
 manifest into this service.
+
+At most four protected mint requests may run concurrently. A disconnected
+client does not release its permit while non-cancellable Argon2 or ML-DSA work
+continues. Public metadata uses a non-blocking issuer lookup and fails fast if a
+mint owns the issuer; the protected revocation summary performs mutex waiting,
+file refresh, and parsing on the blocking pool rather than a Tokio reactor.
 
 Tickets produced by the service are verified in the
 `volumetric_dos_soak_preserves_puzzle_and_latency_slo`
@@ -69,7 +83,9 @@ revocation list:
 ```
 
 The replay store enforces single-use admission tokens with a bounded capacity
-and retains each record through the token's late clock-skew allowance. Its
+and retains each record through the token's late clock-skew allowance.
+`AdmissionTokenVerifier` requires that store at construction; there is no
+storeless verification mode. Its
 admissible retention window is derived from
 `max_ttl_secs + 2 * clock_skew_secs`, covering both early and late skew edges,
 so replay retention cannot undercut a token the verifier still accepts. The
@@ -112,7 +128,9 @@ service account. The relay verifier schema contains no issuer-private-key field;
 the puzzle service accepts that key only through `--token-secret-path`, so it
 cannot leak through process arguments or distributed relay configuration. Secret
 key files contain exactly the lowercase hex encoding, with no newline or other
-whitespace and no all-zero placeholder. The
+whitespace and no all-zero placeholder. Startup derives the public key from the
+secret and rejects a mismatch with `pow.token.issuer_public_key_hex` before
+serving requests. The
 revocation file watcher keeps
 `/v1/token/config` current; coordinate updates with the
 `soranet-admission-token revoke` command to avoid lagging revocation state.
@@ -120,8 +138,10 @@ revocation file watcher keeps
 ## Signed-ticket revocation store
 
 Accepted puzzle/PoW tickets are consumed in a Norito replay snapshot on disk.
-The store keys signed tickets by a BLAKE3 fingerprint of the ML-DSA signature
-and unsigned tickets by a fingerprint of their canonical payload. Configure
+The store keys both signed and unsigned presentations by the same
+domain-separated BLAKE3 fingerprint of the fixed 74-byte underlying Ticket.
+The Ticket already commits to descriptor, relay, and transcript, so randomized
+re-signing cannot create a fresh replay identity. Configure
 `network.soranet_handshake.pow.{revocation_store_capacity,revocation_store_ttl_secs,revocation_store_path}`
 for nodes, or the equivalent top-level `pow.*` fields for the standalone relay.
 Place the snapshot on durable storage, keep the directory writable by the relay
@@ -145,11 +165,13 @@ Tickets that exceed `revocation_store_ttl_secs` are rejected with the same `stor
 label; keep the TTL cap aligned with `pow.ticket_ttl` (or lower it only when you
 intentionally want shorter replay retention windows).
 Set `pow.signed_ticket_public_key_hex` in the relay JSON to advertise the ML-DSA-44 public
-key used to verify signed PoW tickets; the `/v1/puzzle/config` endpoint now echoes both the
+key used to verify signed Argon2 tickets; the `/v1/puzzle/config` endpoint now echoes both the
 public key and its BLAKE3 fingerprint (`signed_ticket_public_key_fingerprint_hex`) so clients
 can pin the verifier key. Signed tickets are validated against the relay ID and transcript
-bindings and still share the same revocation store. Relays with a configured
-signed-ticket verifier key reject raw 74-byte PoW tickets; raw tickets are only
+bindings and still share the same revocation store. Both Iroha P2P and the
+standalone relay authenticate the envelope, apply the configured Argon2 timing
+and work policy, then consume the underlying ticket identity. Relays with a
+configured signed-ticket verifier key reject raw 74-byte tickets; raw tickets are only
 accepted by relays that do not configure a signed-ticket verifier key.
 For both raw and signed tickets, the 32-byte `client_nonce` field carries the
 domain-separated commitment to the exact descriptor, relay ID, and admission
@@ -158,11 +180,12 @@ relay or transcript fails deterministically rather than with the puzzle's
 probabilistic false-accept rate.
 Pass the signer secret via the private `--signed-ticket-secret-path` file when
 launching the puzzle service; startup rejects mismatched keypairs if the secret does not
-validate against `pow.signed_ticket_public_key_hex`. The same exact lowercase-hex,
+validate against `pow.signed_ticket_public_key_hex`, and rejects a verifier key
+without both an Argon2 policy and signer secret. The same exact lowercase-hex,
 no-whitespace file rule applies. `POST /v1/puzzle/mint` accepts
 `"signed": true` together with the required `"transcript_hash_hex"` to return a
-Norito-encoded signed ticket alongside the raw ticket bytes; responses include
-`signed_ticket_b64` and
+Norito-encoded signed ticket instead of a second raw bearer credential;
+responses include `signed_ticket_b64` and
 `signed_ticket_fingerprint_hex` so clients can pin the replay fingerprint. Requests with
 `signed = true` are rejected if the signer secret is not configured.
 The p2p handshake path now records every accepted PoW ticket into the same Norito
@@ -214,9 +237,9 @@ deterministic purge without deleting the snapshot on disk.
 - **Quota pressure:** Use `soranet_guard_capacity_report.py` with relay metrics
   to tune `pow.quotas` cooldowns (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【specs/soranet/relay_audit_pipeline.md:68】
-- **Puzzle alignment:** `soranet_handshake_pow_difficulty` should match the
-  difficulty returned by `/v1/puzzle/config`. Divergence indicates stale relay
-  config or a failed restart.
+- **Puzzle alignment:** `soranet_handshake_pow_difficulty` must match the static
+  difficulty returned by `/v1/puzzle/config`. Divergence means the issuer and
+  relay loaded different configuration and should fail deployment readiness.
 - **Token readiness:** Alert if `/v1/token/config` drops to `enabled = false`
   unexpectedly or if `revocation_source` reports stale timestamps. Operators
   should rotate the Norito revocation file via the CLI whenever a token is

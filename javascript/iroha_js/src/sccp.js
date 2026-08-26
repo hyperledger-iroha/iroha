@@ -3688,6 +3688,9 @@ export function normalizeSccpBridgeSubmitResponse(value, expectations = {}) {
     record.tx_hash_hex === null
       ? null
       : exactLowerHex(record.tx_hash_hex, "tx_hash_hex", 32);
+  if (txHash !== null && !/[13579bdf]$/u.test(txHash)) {
+    throw new TypeError("tx_hash_hex must carry the canonical Iroha hash marker");
+  }
   const transaction =
     record.transaction_payload_b64 === null
       ? null

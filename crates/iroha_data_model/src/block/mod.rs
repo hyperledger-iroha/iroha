@@ -1607,7 +1607,17 @@ fn decode_versioned_signed_block_inner(
     bare_versioned: &[u8],
     raw_for_error: &[u8],
 ) -> Result<SignedBlock, iroha_version::error::Error> {
-    iroha_version::codec::decode_exact_versioned_with_raw(bare_versioned, raw_for_error)
+    let block: SignedBlock =
+        iroha_version::codec::decode_exact_versioned_with_raw(bare_versioned, raw_for_error)?;
+    let canonical = block
+        .canonical_wire()
+        .map_err(|error| iroha_version::error::Error::NoritoCodec(error.to_string()))?;
+    if canonical.as_versioned() != bare_versioned {
+        return Err(iroha_version::error::Error::from(
+            norito::core::Error::NonCanonicalEncoding,
+        ));
+    }
+    Ok(block)
 }
 fn decode_framed_versioned_signed_block_inner(
     version: u8,
@@ -1621,7 +1631,16 @@ fn decode_framed_versioned_signed_block_inner(
         )));
     }
     let view = norito::core::from_bytes_view(framed_payload).map_err(VersionError::from)?;
-    view.decode::<SignedBlock>().map_err(VersionError::from)
+    let block = view.decode::<SignedBlock>().map_err(VersionError::from)?;
+    let canonical = block
+        .canonical_wire()
+        .map_err(|error| VersionError::NoritoCodec(error.to_string()))?;
+    if canonical.as_framed() != raw_for_error {
+        return Err(VersionError::from(
+            norito::core::Error::NonCanonicalEncoding,
+        ));
+    }
+    Ok(block)
 }
 pub mod prelude {
     //! For glob-import
@@ -1676,6 +1695,109 @@ mod tests {
         crate::NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x15; Hash::LENGTH]),
         ))
+    }
+    fn split_default_norito_fields(bytes: &[u8], count: usize) -> Vec<Vec<u8>> {
+        let flags = norito::core::default_encode_flags();
+        let mut offset = 0usize;
+        let mut fields = Vec::with_capacity(count);
+        for _ in 0..count {
+            let (len, prefix) = norito::core::read_len_from_slice_with_flags(
+                bytes.get(offset..).expect("Norito field prefix"),
+                flags,
+            )
+            .expect("Norito field length");
+            let start = offset.checked_add(prefix).expect("Norito field start");
+            let end = start.checked_add(len).expect("Norito field end");
+            fields.push(
+                bytes
+                    .get(start..end)
+                    .expect("complete Norito field")
+                    .to_vec(),
+            );
+            offset = end;
+        }
+        assert_eq!(offset, bytes.len(), "unexpected trailing Norito fields");
+        fields
+    }
+    fn encode_default_norito_fields(fields: &[Vec<u8>]) -> Vec<u8> {
+        let flags = norito::core::default_encode_flags();
+        let mut encoded = Vec::new();
+        for field in fields {
+            norito::core::write_len_to_vec_with_flags(
+                &mut encoded,
+                u64::try_from(field.len()).expect("Norito field length fits u64"),
+                flags,
+            );
+            encoded.extend_from_slice(field);
+        }
+        encoded
+    }
+    fn signed_transaction_with_log_type_name_alias(canonical: &[u8]) -> Vec<u8> {
+        assert_eq!(canonical.first(), Some(&1), "signed transaction V1 prefix");
+        let mut signed = split_default_norito_fields(&canonical[1..], 3);
+        let mut payload = split_default_norito_fields(&signed[1], 10);
+
+        assert_eq!(&payload[3][..4], &0_u32.to_le_bytes());
+        let executable_fields = split_default_norito_fields(&payload[3][4..], 1);
+        let sequence = &executable_fields[0];
+        assert_eq!(&sequence[..8], &1_u64.to_le_bytes());
+        let sequence_fields = split_default_norito_fields(&sequence[8..], 1);
+        let mut instruction = split_default_norito_fields(&sequence_fields[0], 2);
+        let wire_id = split_default_norito_fields(&instruction[0], 1);
+        assert_eq!(wire_id[0], b"iroha.log");
+
+        instruction[0] =
+            encode_default_norito_fields(&[std::any::type_name::<crate::prelude::Log>()
+                .as_bytes()
+                .to_vec()]);
+        let mut sequence = 1_u64.to_le_bytes().to_vec();
+        sequence.extend_from_slice(&encode_default_norito_fields(&[
+            encode_default_norito_fields(&instruction),
+        ]));
+        let mut executable = 0_u32.to_le_bytes().to_vec();
+        executable.extend_from_slice(&encode_default_norito_fields(&[sequence]));
+        payload[3] = executable;
+        signed[1] = encode_default_norito_fields(&payload);
+
+        let mut alternate = vec![1];
+        alternate.extend_from_slice(&encode_default_norito_fields(&signed));
+        alternate
+    }
+    fn external_entrypoint_wire(signed_transaction_wire: &[u8]) -> Vec<u8> {
+        assert_eq!(
+            signed_transaction_wire.first(),
+            Some(&1),
+            "nested signed transaction V1 prefix"
+        );
+        let mut wire = vec![1];
+        wire.extend_from_slice(&0_u32.to_le_bytes());
+        wire.extend_from_slice(&encode_default_norito_fields(&[signed_transaction_wire
+            [1..]
+            .to_vec()]));
+        wire
+    }
+    fn block_with_nested_transaction_wire_alias(
+        canonical_block: &[u8],
+        canonical_entrypoint: &[u8],
+        alternate_entrypoint: &[u8],
+    ) -> Vec<u8> {
+        assert_eq!(canonical_block.first(), Some(&1), "signed block V1 prefix");
+        let mut block = split_default_norito_fields(&canonical_block[1..], 3);
+        let mut payload = split_default_norito_fields(&block[1], 7);
+        assert_eq!(&payload[1][..8], &1_u64.to_le_bytes());
+        let entrypoints = split_default_norito_fields(&payload[1][8..], 1);
+        assert_eq!(entrypoints[0], canonical_entrypoint[1..]);
+
+        let mut alternate_entrypoints = 1_u64.to_le_bytes().to_vec();
+        alternate_entrypoints.extend_from_slice(&encode_default_norito_fields(&[
+            alternate_entrypoint[1..].to_vec(),
+        ]));
+        payload[1] = alternate_entrypoints;
+        block[1] = encode_default_norito_fields(&payload);
+
+        let mut alternate = vec![1];
+        alternate.extend_from_slice(&encode_default_norito_fields(&block));
+        alternate
     }
     #[cfg(feature = "json")]
     #[test]
@@ -2706,6 +2828,69 @@ mod tests {
         let decoded = decode_framed_signed_block(canonical.as_framed())
             .expect("decode canonical framed block");
         assert_eq!(decoded, block);
+    }
+    #[test]
+    fn signed_block_decoders_reject_nested_instruction_type_name_alias() {
+        let key_pair = checked_random_keypair();
+        let authority = crate::account::AccountId::new(key_pair.public_key().clone());
+        let transaction = TransactionBuilder::new(
+            test_network_id(),
+            authority,
+            crate::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([crate::prelude::Log::new(
+            crate::Level::INFO,
+            "canonical block wire".into(),
+        )])
+        .sign(key_pair.private_key());
+        let canonical_transaction = transaction.encode_versioned();
+        let alternate_transaction =
+            signed_transaction_with_log_type_name_alias(&canonical_transaction);
+        let canonical_entrypoint =
+            TransactionEntrypoint::from(transaction.clone()).encode_versioned();
+        let alternate_entrypoint = external_entrypoint_wire(&alternate_transaction);
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let block = SignedBlock {
+            signatures: BTreeSet::new(),
+            payload: BlockPayload {
+                header,
+                external_entrypoints: vec![TransactionEntrypoint::from(transaction)],
+                execution_context: None,
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+                npos_consensus_effects: None,
+            },
+            result: None,
+        };
+        let canonical_block = block.encode_versioned();
+        let alternate_block = block_with_nested_transaction_wire_alias(
+            &canonical_block,
+            &canonical_entrypoint,
+            &alternate_entrypoint,
+        );
+
+        let structurally_decoded: SignedBlock =
+            iroha_version::codec::decode_exact_versioned(&alternate_block)
+                .expect("the alternate nested alias remains structurally decodable");
+        assert_eq!(structurally_decoded, block);
+        let bare_error = SignedBlock::decode_all_versioned(&alternate_block)
+            .expect_err("bare V1 blocks must reject nested instruction aliases");
+        assert!(matches!(
+            bare_error,
+            iroha_version::error::Error::NoritoCodec(reason)
+                if reason == "non-canonical encoding"
+        ));
+        let framed = frame_versioned_signed_block_bytes(&alternate_block)
+            .expect("frame alternate versioned block");
+        let framed_error = decode_framed_signed_block(&framed)
+            .expect_err("framed V1 blocks must reject nested instruction aliases");
+        assert!(matches!(
+            framed_error,
+            iroha_version::error::Error::NoritoCodec(reason)
+                if reason == "non-canonical encoding"
+        ));
     }
     #[test]
     fn canonical_wire_roundtrips_genesis_block() {

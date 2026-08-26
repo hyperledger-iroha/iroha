@@ -19,10 +19,12 @@ use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     consensus::VrfEpochRecord,
     domain::DomainId,
+    level::Level,
     peer::PeerId,
-    prelude::{Account, AssetDefinition, Domain, InstructionBox, Mint},
+    prelude::{Account, AssetDefinition, Domain, InstructionBox, Log, Mint, SignedTransaction},
 };
 use iroha_torii::{Torii, json_entry, json_object};
+use iroha_version::codec::DecodeVersioned as _;
 use mv::storage::StorageReadOnly;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
 use sha2::{Digest as _, Sha256};
@@ -37,6 +39,7 @@ struct FaucetTestContext {
     chain_id: iroha_data_model::ChainId,
     asset_definition_id: AssetDefinitionId,
     authority_id: AccountId,
+    authority_key_pair: KeyPair,
     user_id: AccountId,
     other_user_id: AccountId,
     pow_difficulty_bits: u8,
@@ -296,6 +299,7 @@ fn build_faucet_test_context_with_registration(
         chain_id,
         asset_definition_id,
         authority_id,
+        authority_key_pair: authority_kp,
         user_id,
         other_user_id,
         pow_difficulty_bits,
@@ -305,7 +309,7 @@ fn build_faucet_test_context_with_registration(
         pow_max_anchor_age_blocks,
     }
 }
-const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v3";
+const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v1";
 fn leading_zero_bits(bytes: &[u8]) -> u32 {
     let mut total = 0u32;
     for byte in bytes {
@@ -347,16 +351,58 @@ async fn expect_status(resp: Response, expected: StatusCode) -> Response {
         String::from_utf8_lossy(&body)
     );
 }
-fn faucet_post_request(body: String) -> Request<axum::body::Body> {
+fn faucet_post_request(path: &str, body: String) -> Request<axum::body::Body> {
     Request::builder()
         .method("POST")
-        .uri("/v1/accounts/faucet")
+        .uri(path)
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .extension(axum::extract::connect_info::ConnectInfo(
             std::net::SocketAddr::from(([127, 0, 0, 1], 8080)),
         ))
         .body(axum::body::Body::from(body))
         .expect("faucet request")
+}
+fn faucet_mutation_binding() -> norito::json::Value {
+    json_object(vec![
+        json_entry("schema", "iroha.taira.public-reset.mutation-binding.v1"),
+        json_entry("authorization_sha256", "11".repeat(32)),
+        json_entry("authorization_nonce", "reset_nonce_00000000000000000000"),
+        json_entry("kind", "faucet"),
+        json_entry("phase", "prepare_faucet"),
+        json_entry("idempotency_key", "22".repeat(32)),
+        json_entry("execution_expires_at_unix_ms", u64::MAX),
+    ])
+}
+async fn prepare_faucet_envelope(app: &axum::Router, claim_body: String) -> Response {
+    let claim: norito::json::Value =
+        norito::json::from_str(&claim_body).expect("decode faucet claim body");
+    let request = json_object(vec![
+        json_entry("schema", "iroha.accounts.faucet.prepare.v1"),
+        json_entry("binding", faucet_mutation_binding()),
+        json_entry("claim", claim),
+    ]);
+    let request = norito::json::to_json(&request).expect("encode faucet prepare request");
+    app.clone()
+        .oneshot(faucet_post_request("/v1/accounts/faucet/prepare", request))
+        .await
+        .expect("faucet prepare response")
+}
+async fn prepare_and_submit_faucet(app: &axum::Router, claim_body: String) -> Response {
+    let prepared = expect_status(
+        prepare_faucet_envelope(app, claim_body).await,
+        StatusCode::OK,
+    )
+    .await;
+    let body = to_bytes(prepared.into_body(), usize::MAX)
+        .await
+        .expect("prepared faucet body");
+    app.clone()
+        .oneshot(faucet_post_request(
+            "/v1/accounts/faucet",
+            String::from_utf8(body.to_vec()).expect("prepared faucet UTF-8 JSON"),
+        ))
+        .await
+        .expect("faucet submit response")
 }
 fn faucet_pow_challenge(state: &State, account_id: &AccountId, anchor_height: u64) -> [u8; 32] {
     let anchor_block = state
@@ -399,6 +445,30 @@ fn solve_faucet_pow(
     }
     unreachable!("u64 nonce space exhausted");
 }
+fn advance_faucet_chain(context: &FaucetTestContext, blocks: u64) {
+    for index in 0..blocks {
+        let tx = TransactionBuilder::new(
+            *context.state.network_id_ref(),
+            context.authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, format!("age faucet anchor {index}"))])
+        .sign(context.authority_key_pair.private_key());
+        let leader = checked_faucet_block_leader_fixture();
+        let unverified =
+            BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))])
+                .chain(0, context.state.view().latest_block().as_deref())
+                .sign(leader.private_key())
+                .unpack(|_| {});
+        let mut state_block = context.state.block(unverified.header());
+        state_block.chain_id = context.chain_id.clone();
+        let valid = unverified
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        iroha_torii::test_utils::finalize_committed_block(&context.state, state_block, committed);
+    }
+}
 #[tokio::test]
 async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
     let FaucetTestContext {
@@ -424,11 +494,7 @@ async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
         json_entry("pow_nonce_hex", pow_nonce_hex),
     ]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
-    let resp = app
-        .clone()
-        .oneshot(faucet_post_request(body))
-        .await
-        .expect("faucet response");
+    let resp = prepare_and_submit_faucet(&app, body).await;
     let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
     let expected_height = u64::try_from(state.view().height())
         .unwrap_or(0)
@@ -478,11 +544,41 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
         json_entry("pow_nonce_hex", pow_nonce_hex),
     ]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
+    let prepared = expect_status(prepare_faucet_envelope(&app, body).await, StatusCode::OK).await;
+    assert_eq!(queue.active_len(), 0, "faucet prepare must not enqueue");
+    assert!(state.view().world().account(&user_id).is_err());
+    let prepared_body = to_bytes(prepared.into_body(), usize::MAX)
+        .await
+        .expect("prepared faucet body");
+    let prepared_json: norito::json::Value =
+        norito::json::from_slice(&prepared_body).expect("prepared faucet JSON");
+    let prepared_hash = prepared_json["transaction_hash_hex"]
+        .as_str()
+        .expect("prepared transaction hash")
+        .to_owned();
+    let prepared_wire = hex::decode(
+        prepared_json["signed_transaction_wire_hex"]
+            .as_str()
+            .expect("prepared transaction wire"),
+    )
+    .expect("decode prepared transaction wire");
+    let prepared_tx =
+        SignedTransaction::decode_all_versioned(&prepared_wire).expect("decode prepared tx");
+    let prepared_instructions: Vec<_> =
+        prepared_tx.instructions().explicit_instructions().collect();
+    assert_eq!(prepared_instructions.len(), 2);
+    assert!(matches!(
+        prepared_instructions[0]
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::RegisterBox>(),
+        Some(iroha_data_model::isi::RegisterBox::Account(_))
+    ));
+    let prepared_body = String::from_utf8(prepared_body.to_vec()).expect("prepared UTF-8 JSON");
     let resp = app
         .clone()
-        .oneshot(faucet_post_request(body))
+        .oneshot(faucet_post_request("/v1/accounts/faucet", prepared_body))
         .await
-        .expect("faucet response");
+        .expect("faucet submit response");
     let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
     let expected_height = u64::try_from(state.view().height())
         .unwrap_or(0)
@@ -505,6 +601,50 @@ async fn accounts_faucet_registers_missing_account_before_transfer() {
         .asset(&user_asset_id)
         .expect("user faucet asset");
     assert_eq!(user_asset.value().as_ref().to_string(), "25000");
+    drop(view);
+
+    let (pow_anchor_height, pow_nonce_hex) = solve_faucet_pow(
+        &state,
+        &user_id,
+        pow_difficulty_bits.saturating_add(1),
+        &scrypt_params,
+    );
+    let post_onboarding_claim = json_object(vec![
+        json_entry("account_id", user_id.to_string()),
+        json_entry("pow_anchor_height", pow_anchor_height),
+        json_entry("pow_nonce_hex", pow_nonce_hex),
+    ]);
+    let post_onboarding_claim =
+        norito::json::to_json(&post_onboarding_claim).expect("serialize post-onboarding claim");
+    let post_onboarding = expect_status(
+        prepare_faucet_envelope(&app, post_onboarding_claim).await,
+        StatusCode::OK,
+    )
+    .await;
+    let post_body = to_bytes(post_onboarding.into_body(), usize::MAX)
+        .await
+        .expect("post-onboarding prepared body");
+    let post_json: norito::json::Value =
+        norito::json::from_slice(&post_body).expect("post-onboarding prepared JSON");
+    assert_ne!(
+        post_json["transaction_hash_hex"]
+            .as_str()
+            .expect("post-onboarding hash"),
+        prepared_hash
+    );
+    let post_wire = hex::decode(
+        post_json["signed_transaction_wire_hex"]
+            .as_str()
+            .expect("post-onboarding wire"),
+    )
+    .expect("decode post-onboarding wire");
+    let post_tx =
+        SignedTransaction::decode_all_versioned(&post_wire).expect("decode post-onboarding tx");
+    assert_eq!(
+        post_tx.instructions().explicit_instructions().count(),
+        1,
+        "post-onboarding faucet preparation must not be interchangeable with registration"
+    );
 }
 #[tokio::test]
 async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
@@ -531,11 +671,7 @@ async fn accounts_faucet_adds_amount_to_prefunded_accounts() {
         json_entry("pow_nonce_hex", pow_nonce_hex),
     ]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
-    let resp = app
-        .clone()
-        .oneshot(faucet_post_request(body))
-        .await
-        .expect("faucet response");
+    let resp = prepare_and_submit_faucet(&app, body).await;
     let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
     let expected_height = u64::try_from(state.view().height())
         .unwrap_or(0)
@@ -588,11 +724,7 @@ async fn accounts_faucet_allows_repeated_claims_for_same_account() {
             json_entry("pow_nonce_hex", pow_nonce_hex),
         ]);
         let body = norito::json::to_json(&body).expect("serialize faucet request");
-        let resp = app
-            .clone()
-            .oneshot(faucet_post_request(body))
-            .await
-            .expect("faucet response");
+        let resp = prepare_and_submit_faucet(&app, body).await;
         let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
         let expected_height = u64::try_from(state.view().height())
             .unwrap_or(0)
@@ -645,11 +777,7 @@ async fn accounts_faucet_accepts_alias_selector_config() {
         json_entry("pow_nonce_hex", pow_nonce_hex),
     ]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
-    let resp = app
-        .clone()
-        .oneshot(faucet_post_request(body))
-        .await
-        .expect("faucet response");
+    let resp = prepare_and_submit_faucet(&app, body).await;
     let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
     let expected_height = u64::try_from(state.view().height())
         .unwrap_or(0)
@@ -675,6 +803,188 @@ async fn accounts_faucet_accepts_alias_selector_config() {
         .expect("authority faucet asset");
     assert_eq!(authority_asset.value().as_ref().to_string(), "25000");
 }
+
+#[tokio::test]
+async fn faucet_prepared_envelope_survives_pow_anchor_aging() {
+    let context = build_faucet_test_context(false);
+    let scrypt_params = faucet_pow_scrypt_params(
+        context.pow_scrypt_log_n,
+        context.pow_scrypt_r,
+        context.pow_scrypt_p,
+    );
+    let (pow_anchor_height, pow_nonce_hex) = solve_faucet_pow(
+        &context.state,
+        &context.user_id,
+        context.pow_difficulty_bits,
+        &scrypt_params,
+    );
+    let claim = json_object(vec![
+        json_entry("account_id", context.user_id.to_string()),
+        json_entry("pow_anchor_height", pow_anchor_height),
+        json_entry("pow_nonce_hex", pow_nonce_hex),
+    ]);
+    let claim = norito::json::to_json(&claim).expect("serialize faucet claim");
+    let prepared = expect_status(
+        prepare_faucet_envelope(&context.app, claim).await,
+        StatusCode::OK,
+    )
+    .await;
+    let prepared_body = to_bytes(prepared.into_body(), usize::MAX)
+        .await
+        .expect("prepared faucet body");
+    assert_eq!(context.queue.active_len(), 0);
+    advance_faucet_chain(
+        &context,
+        context.pow_max_anchor_age_blocks.saturating_add(1),
+    );
+    let submitted = context
+        .app
+        .clone()
+        .oneshot(faucet_post_request(
+            "/v1/accounts/faucet",
+            String::from_utf8(prepared_body.to_vec()).expect("prepared UTF-8 JSON"),
+        ))
+        .await
+        .expect("aged faucet submit response");
+    let _submitted = expect_status(submitted, StatusCode::ACCEPTED).await;
+    assert_eq!(context.queue.active_len(), 1);
+}
+
+#[tokio::test]
+async fn faucet_submit_rejects_old_and_tampered_shapes_and_deduplicates_exact_replay() {
+    let context = build_faucet_test_context(false);
+    let scrypt_params = faucet_pow_scrypt_params(
+        context.pow_scrypt_log_n,
+        context.pow_scrypt_r,
+        context.pow_scrypt_p,
+    );
+    let (pow_anchor_height, pow_nonce_hex) = solve_faucet_pow(
+        &context.state,
+        &context.user_id,
+        context.pow_difficulty_bits,
+        &scrypt_params,
+    );
+    let claim = json_object(vec![
+        json_entry("account_id", context.user_id.to_string()),
+        json_entry("pow_anchor_height", pow_anchor_height),
+        json_entry("pow_nonce_hex", pow_nonce_hex),
+    ]);
+    let claim_body = norito::json::to_json(&claim).expect("serialize faucet claim");
+    let old = context
+        .app
+        .clone()
+        .oneshot(faucet_post_request(
+            "/v1/accounts/faucet",
+            claim_body.clone(),
+        ))
+        .await
+        .expect("old faucet request response");
+    let _old = expect_status(old, StatusCode::BAD_REQUEST).await;
+
+    let prepared = expect_status(
+        prepare_faucet_envelope(&context.app, claim_body).await,
+        StatusCode::OK,
+    )
+    .await;
+    let prepared_body = to_bytes(prepared.into_body(), usize::MAX)
+        .await
+        .expect("prepared faucet body");
+    let prepared_json: norito::json::Value =
+        norito::json::from_slice(&prepared_body).expect("prepared faucet JSON");
+    for field in [
+        "transaction_hash_hex",
+        "signed_transaction_wire_sha256",
+        "signed_transaction_wire_hex",
+    ] {
+        let mut tampered = prepared_json.clone();
+        tampered.as_object_mut().expect("prepared object").insert(
+            field.to_owned(),
+            norito::json::Value::String("00".repeat(32)),
+        );
+        let response = context
+            .app
+            .clone()
+            .oneshot(faucet_post_request(
+                "/v1/accounts/faucet",
+                norito::json::to_json(&tampered).expect("tampered JSON"),
+            ))
+            .await
+            .expect("tampered submit response");
+        let _response = expect_status(response, StatusCode::BAD_REQUEST).await;
+    }
+    assert_eq!(context.queue.active_len(), 0);
+
+    let exact_body = String::from_utf8(prepared_body.to_vec()).expect("prepared UTF-8 JSON");
+    let submitted = context
+        .app
+        .clone()
+        .oneshot(faucet_post_request(
+            "/v1/accounts/faucet",
+            exact_body.clone(),
+        ))
+        .await
+        .expect("faucet submit response");
+    let _submitted = expect_status(submitted, StatusCode::ACCEPTED).await;
+    let response_loss_replay = context
+        .app
+        .clone()
+        .oneshot(faucet_post_request(
+            "/v1/accounts/faucet",
+            exact_body.clone(),
+        ))
+        .await
+        .expect("faucet replay response");
+    let replay = expect_status(response_loss_replay, StatusCode::OK).await;
+    let replay_body = to_bytes(replay.into_body(), usize::MAX)
+        .await
+        .expect("faucet replay body");
+    let replay_json: norito::json::Value =
+        norito::json::from_slice(&replay_body).expect("faucet replay JSON");
+    assert_eq!(replay_json["outcome"].as_str(), Some("Pending"));
+    assert_eq!(context.queue.active_len(), 1);
+
+    let expected_height = u64::try_from(context.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    assert_eq!(
+        iroha_torii::test_utils::apply_queued_in_one_block(
+            &context.state,
+            &context.queue,
+            &context.chain_id,
+            expected_height,
+        ),
+        1
+    );
+    let applied_replay = context
+        .app
+        .clone()
+        .oneshot(faucet_post_request("/v1/accounts/faucet", exact_body))
+        .await
+        .expect("applied faucet replay response");
+    let applied_replay = expect_status(applied_replay, StatusCode::OK).await;
+    let applied_body = to_bytes(applied_replay.into_body(), usize::MAX)
+        .await
+        .expect("applied replay body");
+    let applied_json: norito::json::Value =
+        norito::json::from_slice(&applied_body).expect("applied replay JSON");
+    assert_eq!(applied_json["outcome"].as_str(), Some("Applied"));
+    assert_eq!(context.queue.active_len(), 0);
+    let destination = AssetId::new(context.asset_definition_id.clone(), context.user_id.clone());
+    assert_eq!(
+        context
+            .state
+            .view()
+            .world()
+            .asset(&destination)
+            .expect("funded destination")
+            .value()
+            .as_ref()
+            .to_string(),
+        "25000",
+        "exact replay must not charge or transfer twice"
+    );
+}
+
 #[tokio::test]
 async fn accounts_faucet_puzzle_exposes_current_anchor() {
     let FaucetTestContext {
@@ -747,15 +1057,12 @@ async fn accounts_faucet_puzzle_exposes_current_anchor() {
         object
             .get("algorithm")
             .and_then(norito::json::Value::as_str),
-        Some("scrypt-leading-zero-bits-v2")
+        Some("scrypt-leading-zero-bits-v1")
     );
-    let expected_network_id = state.network_id_ref().to_string();
-    assert_eq!(
-        object
-            .get("network_id")
-            .and_then(norito::json::Value::as_str),
-        Some(expected_network_id.as_str())
-    );
+    let puzzle_network_id: iroha_data_model::NetworkId =
+        norito::json::from_value(object.get("network_id").expect("puzzle network id").clone())
+            .expect("canonical puzzle network id");
+    assert_eq!(&puzzle_network_id, state.network_id_ref());
     assert!(!object.contains_key("chain_id"));
 }
 #[tokio::test]
@@ -763,11 +1070,7 @@ async fn accounts_faucet_rejects_missing_pow_when_required() {
     let FaucetTestContext { app, user_id, .. } = build_faucet_test_context(false);
     let body = json_object(vec![json_entry("account_id", user_id.to_string())]);
     let body = norito::json::to_json(&body).expect("serialize faucet request");
-    let resp = app
-        .clone()
-        .oneshot(faucet_post_request(body))
-        .await
-        .expect("faucet response");
+    let resp = prepare_faucet_envelope(&app, body).await;
     let _resp = expect_status(resp, StatusCode::BAD_REQUEST).await;
 }
 #[tokio::test]
@@ -793,11 +1096,7 @@ async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
     ]);
     let initial_claim_body =
         norito::json::to_json(&initial_claim_body).expect("serialize initial faucet request");
-    let resp = app
-        .clone()
-        .oneshot(faucet_post_request(initial_claim_body))
-        .await
-        .expect("initial faucet response");
+    let resp = prepare_and_submit_faucet(&app, initial_claim_body).await;
     let _resp = expect_status(resp, StatusCode::ACCEPTED).await;
     let resp = app
         .clone()

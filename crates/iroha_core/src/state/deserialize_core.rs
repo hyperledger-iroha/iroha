@@ -417,21 +417,6 @@ impl KuraSeed {
             take_required(&mut map, "nexus_runtime")?;
         let chain_id: ChainId = take_required(&mut map, "chain_id")?;
         let network_id: NetworkId = take_required(&mut map, "network_id")?;
-        let world_view = world.view();
-        for (_receipt_id, receipt) in world_view
-            .soracloud_private_uploaded_model_execution_receipts()
-            .iter()
-        {
-            if receipt.network_id != network_id {
-                return Err(json::Error::InvalidField {
-                    field: "state.world.soracloud_private_uploaded_model_execution_receipts"
-                        .to_owned(),
-                    message: "private receipt network_id must match the snapshot network_id"
-                        .to_owned(),
-                });
-            }
-        }
-        drop(world_view);
         let block_hashes: Vec<HashOf<BlockHeader>> = take_required(&mut map, "block_hashes")?;
         let committed_height =
             u64::try_from(block_hashes.len()).map_err(|_| json::Error::InvalidField {
@@ -439,7 +424,6 @@ impl KuraSeed {
                 message: "committed height does not fit u64".to_owned(),
             })?;
         validate_replication_order_completion_anchors(&world, &block_hashes)?;
-        validate_private_uploaded_model_execution_height_anchors(&world, committed_height)?;
         validate_musubi_resolver_checkpoint_anchors(&world, &block_hashes)?;
         world
             .privacy_consensus_policy
@@ -485,13 +469,12 @@ impl KuraSeed {
             },
         )?;
         let public_lane_validator_records: Vec<PublicLaneValidatorRecord> =
-            decode_snapshot_records(public_lane_validators, "public_lane_validators", true)?;
+            decode_snapshot_records(public_lane_validators, "public_lane_validators")?;
         let public_lane_stake_share_records: Vec<PublicLaneStakeShare> =
-            decode_snapshot_records(public_lane_stake_shares, "public_lane_stake_shares", true)?;
+            decode_snapshot_records(public_lane_stake_shares, "public_lane_stake_shares")?;
         let public_lane_reward_records = decode_snapshot_records::<PublicLaneRewardRecord>(
             public_lane_rewards,
             "public_lane_rewards",
-            true,
         )?;
         validate_canonical_snapshot_record_order(
             &public_lane_validator_records,
@@ -555,7 +538,7 @@ impl KuraSeed {
             })
             .collect();
         world.space_directory_manifests =
-            decode_space_directory_manifest_sets(space_directory_manifests, true)?;
+            decode_space_directory_manifest_sets(space_directory_manifests)?;
         world
             .validate_quantity_ledger_invariants()
             .map_err(|message| json::Error::InvalidField {
@@ -991,7 +974,6 @@ fn validate_snapshot_autoscale_sample_history(
 fn decode_snapshot_records<T>(
     records: Vec<SnapshotNoritoBlob>,
     field: &str,
-    validate_canonical: bool,
 ) -> Result<Vec<T>, json::Error>
 where
     T: DecodeAll + Encode,
@@ -1010,15 +992,13 @@ where
                 field: field.to_owned(),
                 message: format!("record {index} norito decode failed: {err}"),
             })?;
-            if validate_canonical {
-                #[cfg(test)]
-                SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(passes.get() + 1));
-                if decoded.encode() != bytes {
-                    return Err(json::Error::InvalidField {
-                        field: field.to_owned(),
-                        message: format!("record {index} is not canonical Norito"),
-                    });
-                }
+            #[cfg(test)]
+            SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(passes.get() + 1));
+            if decoded.encode() != bytes {
+                return Err(json::Error::InvalidField {
+                    field: field.to_owned(),
+                    message: format!("record {index} is not canonical Norito"),
+                });
             }
             Ok(decoded)
         })
@@ -1052,7 +1032,6 @@ where
 }
 fn decode_space_directory_manifest_sets(
     records: Vec<SnapshotSpaceDirectoryManifestSet>,
-    validate_canonical: bool,
 ) -> Result<Storage<UniversalAccountId, SpaceDirectoryManifestSet>, json::Error> {
     let mut storage = Storage::default();
     for (index, record) in records.into_iter().enumerate() {
@@ -1067,15 +1046,13 @@ fn decode_space_directory_manifest_sets(
                 message: format!("record {index} norito decode failed: {err}"),
             }
         })?;
-        if validate_canonical {
-            #[cfg(test)]
-            SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(passes.get() + 1));
-            if manifest_set.encode() != bytes {
-                return Err(json::Error::InvalidField {
-                    field: "space_directory_manifests".to_owned(),
-                    message: format!("record {index} is not canonical Norito"),
-                });
-            }
+        #[cfg(test)]
+        SNAPSHOT_NORITO_CANONICAL_PASSES.with(|passes| passes.set(passes.get() + 1));
+        if manifest_set.encode() != bytes {
+            return Err(json::Error::InvalidField {
+                field: "space_directory_manifests".to_owned(),
+                message: format!("record {index} is not canonical Norito"),
+            });
         }
         if storage.insert(record.uaid, manifest_set).is_some() {
             return Err(json::Error::InvalidField {
@@ -1303,51 +1280,6 @@ fn validate_replication_order_completion_anchors(
                     ),
                 });
             }
-        }
-    }
-    Ok(())
-}
-fn validate_private_uploaded_model_execution_height_anchors(
-    world: &World,
-    committed_height: u64,
-) -> Result<(), json::Error> {
-    for ((service_name, request_id), claim) in world
-        .soracloud_private_uploaded_model_execution_claims
-        .view()
-        .iter()
-    {
-        if claim.claimed_block_height > committed_height {
-            return Err(json::Error::InvalidField {
-                field: "state.world.soracloud_private_uploaded_model_execution_claims".to_owned(),
-                message: format!(
-                    "private execution claim {service_name}/{request_id} anchors future block height {} beyond snapshot committed height {committed_height}",
-                    claim.claimed_block_height,
-                ),
-            });
-        }
-    }
-    for (receipt_id, receipt) in world
-        .soracloud_private_uploaded_model_execution_receipts
-        .view()
-        .iter()
-    {
-        if receipt.authorization_claim_block_height > committed_height {
-            return Err(json::Error::InvalidField {
-                field: "state.world.soracloud_private_uploaded_model_execution_receipts".to_owned(),
-                message: format!(
-                    "private execution receipt {receipt_id} anchors future authorization-claim block height {} beyond snapshot committed height {committed_height}",
-                    receipt.authorization_claim_block_height,
-                ),
-            });
-        }
-        if receipt.emitted_block_height > committed_height {
-            return Err(json::Error::InvalidField {
-                field: "state.world.soracloud_private_uploaded_model_execution_receipts".to_owned(),
-                message: format!(
-                    "private execution receipt {receipt_id} anchors future emission block height {} beyond snapshot committed height {committed_height}",
-                    receipt.emitted_block_height,
-                ),
-            });
         }
     }
     Ok(())

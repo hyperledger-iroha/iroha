@@ -10,12 +10,23 @@ import org.hyperledger.iroha.android.client.JsonParser;
 public final class UaidManifestsResponse {
   private final String uaid;
   private final long total;
+  private final boolean hasMore;
+  private final UaidManifestCountMode countMode;
   private final List<UaidManifestRecord> manifests;
 
   public UaidManifestsResponse(
-      final String uaid, final long total, final List<UaidManifestRecord> manifests) {
-    this.uaid = Objects.requireNonNull(uaid, "uaid");
-    this.total = Math.max(0L, total);
+      final String uaid,
+      final long total,
+      final boolean hasMore,
+      final UaidManifestCountMode countMode,
+      final List<UaidManifestRecord> manifests) {
+    this.uaid = UaidLiteral.canonicalize(uaid, "uaid");
+    if (total < 0L) {
+      throw new IllegalArgumentException("total must be non-negative");
+    }
+    this.total = total;
+    this.hasMore = hasMore;
+    this.countMode = Objects.requireNonNull(countMode, "countMode");
     this.manifests = List.copyOf(Objects.requireNonNull(manifests, "manifests"));
   }
 
@@ -25,6 +36,14 @@ public final class UaidManifestsResponse {
 
   public long total() {
     return total;
+  }
+
+  public boolean hasMore() {
+    return hasMore;
+  }
+
+  public UaidManifestCountMode countMode() {
+    return countMode;
   }
 
   public List<UaidManifestRecord> manifests() {
@@ -52,10 +71,20 @@ public final class UaidManifestsResponse {
       this.dataspaceId = dataspaceId;
       this.dataspaceAlias = dataspaceAlias;
       this.manifestHash = Objects.requireNonNull(manifestHash, "manifestHash");
+      if (dataspaceId < 0L) {
+        throw new IllegalArgumentException("dataspaceId must be non-negative");
+      }
+      if (!manifestHash.matches("[0-9a-f]{64}")) {
+        throw new IllegalArgumentException(
+            "manifestHash must be exactly 64 lowercase hexadecimal characters");
+      }
       this.status = Objects.requireNonNull(status, "status");
       this.lifecycle = Objects.requireNonNull(lifecycle, "lifecycle");
       this.accounts = List.copyOf(Objects.requireNonNull(accounts, "accounts"));
       this.manifestJson = Objects.requireNonNull(manifestJson, "manifestJson");
+      if (manifestJson.isBlank()) {
+        throw new IllegalArgumentException("manifestJson must be a JSON object");
+      }
     }
 
     public long dataspaceId() {
@@ -94,9 +123,6 @@ public final class UaidManifestsResponse {
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> manifestAsMap() {
-      if (manifestJson.isBlank()) {
-        return Collections.emptyMap();
-      }
       final Object parsed = JsonParser.parse(manifestJson);
       if (!(parsed instanceof Map)) {
         throw new IllegalStateException("manifest is not a JSON object");
@@ -116,6 +142,12 @@ public final class UaidManifestsResponse {
       this.activatedEpoch = activatedEpoch;
       this.expiredEpoch = expiredEpoch;
       this.revocation = revocation;
+      if (activatedEpoch != null && activatedEpoch < 0L) {
+        throw new IllegalArgumentException("activatedEpoch must be non-negative");
+      }
+      if (expiredEpoch != null && expiredEpoch < 0L) {
+        throw new IllegalArgumentException("expiredEpoch must be non-negative");
+      }
     }
 
     public Long activatedEpoch() {
@@ -137,6 +169,9 @@ public final class UaidManifestsResponse {
     private final String reason;
 
     public UaidManifestRevocation(final long epoch, final String reason) {
+      if (epoch < 0L) {
+        throw new IllegalArgumentException("epoch must be non-negative");
+      }
       this.epoch = epoch;
       this.reason = reason;
     }

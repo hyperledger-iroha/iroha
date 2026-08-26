@@ -93,7 +93,6 @@ fn guard_directory_summary_reports_expected_counts() {
     assert_eq!(summary.entry_guards, 1);
     assert_eq!(summary.entry_guards_pq, 1);
     assert_eq!(summary.exit_relays, 0);
-    assert_eq!(summary.dual_signed_relays, 1);
     let expected_hash = "ab".repeat(32);
     assert_eq!(
         summary.directory_hash_hex.as_deref(),

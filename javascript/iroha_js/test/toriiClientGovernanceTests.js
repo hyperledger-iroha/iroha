@@ -1055,7 +1055,7 @@ export function registerToriiClientGovernanceTests({
           jsonData: {
             ok: true,
             agenda_proposal_id: "AC-2026-001",
-            authority: "i105-test-account",
+            authority: FIXTURE_ALICE_ID,
             tx_instructions: [
               { wire_id: "SubmitAgendaProposal", payload_hex: "aa55" },
             ],
@@ -1095,8 +1095,8 @@ export function registerToriiClientGovernanceTests({
     };
     const draft = await client.draftMinistryAgendaProposal({
       proposal,
-      authority: "i105-test-account",
-    });
+      authority: FIXTURE_ALICE_ID,
+    }, governanceReadOptions());
 
     const withOrdinaryObjectPrototypes = (value) => {
       if (Array.isArray(value)) return value.map(withOrdinaryObjectPrototypes);
@@ -1115,12 +1115,12 @@ export function registerToriiClientGovernanceTests({
         ...proposal,
         duplicates: [],
       },
-      authority: "i105-test-account",
+      authority: FIXTURE_ALICE_ID,
     });
     assert.deepEqual(draft, {
       ok: true,
       agenda_proposal_id: "AC-2026-001",
-      authority: "i105-test-account",
+      authority: FIXTURE_ALICE_ID,
       tx_instructions: [
         { wire_id: "SubmitAgendaProposal", payload_hex: "aa55" },
       ],
@@ -1214,7 +1214,7 @@ export function registerToriiClientGovernanceTests({
                 proposal_id: "AC-2026-001",
                 action: "add-to-denylist",
               },
-              authority: "i105-test-account",
+              authority: FIXTURE_ALICE_ID,
               submitted_tx_hash_hex: "ab".repeat(32),
               submitted_height: 44,
             },
@@ -1224,8 +1224,14 @@ export function registerToriiClientGovernanceTests({
       },
     });
 
-    const missing = await client.getMinistryAgendaProposal(" AC-2026-001 ");
-    const found = await client.getMinistryAgendaProposal("AC-2026-001");
+    const missing = await client.getMinistryAgendaProposal(
+      " AC-2026-001 ",
+      governanceReadOptions(),
+    );
+    const found = await client.getMinistryAgendaProposal(
+      "AC-2026-001",
+      governanceReadOptions(),
+    );
 
     assert.deepEqual(missing, {
       found: false,
@@ -1238,7 +1244,7 @@ export function registerToriiClientGovernanceTests({
           proposal_id: "AC-2026-001",
           action: "add-to-denylist",
         },
-        authority: "i105-test-account",
+        authority: FIXTURE_ALICE_ID,
         submitted_tx_hash_hex: "ab".repeat(32),
         submitted_height: 44,
       },
@@ -1287,7 +1293,7 @@ export function registerToriiClientGovernanceTests({
     assert.equal(Object.hasOwn(result, "ok"), false);
     assert.deepEqual(result.tx_instructions, [
       {
-        wire_id: "iroha_data_model::isi::governance::ProposeDeployContract",
+wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         payload_hex: "00",
       },
     ]);
@@ -1305,7 +1311,7 @@ export function registerToriiClientGovernanceTests({
       {
         ...canonical,
         tx_instructions: [{
-          wire_id: "iroha_data_model::isi::governance::ProposeDeployContract",
+          wire_id: "iroha.instruction.v1::governance::ProposeDeployContract",
         }],
       },
       {
@@ -2295,7 +2301,9 @@ export function registerToriiClientGovernanceTests({
     assert.equal(applyResponse.ok, true);
     assert.equal(applyResponse.applied, 2);
 
-    const getResponse = await client.getProtectedNamespaces({ signal: controller.signal });
+    const getResponse = await client.getProtectedNamespaces(
+      governanceReadOptions({ signal: controller.signal }),
+    );
     assert.equal(captures[1].url, `${BASE_URL}/v1/gov/protected-namespaces`);
     assert.equal(captures[1].init.method, "GET");
     assert.equal(captures[1].init.signal, controller.signal);
@@ -2843,7 +2851,7 @@ export function registerToriiClientGovernanceTests({
           headers: { "content-type": "application/json" },
         }),
     });
-    const result = await client.getProtectedNamespaces();
+    const result = await client.getProtectedNamespaces(governanceReadOptions());
     assert.deepEqual(result, { found: true, namespaces: ["apps", "system"] });
   });
 
@@ -2857,7 +2865,7 @@ export function registerToriiClientGovernanceTests({
         }),
     });
     await assert.rejects(
-      () => client.getProtectedNamespaces(),
+      () => client.getProtectedNamespaces(governanceReadOptions()),
       /protected namespaces response\.namespaces\[0\] must not contain surrounding whitespace/,
     );
   });

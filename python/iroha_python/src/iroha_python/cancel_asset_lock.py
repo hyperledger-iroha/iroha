@@ -9,7 +9,7 @@ from typing import Any, Final
 
 from .numeric_v1 import MAX_MANTISSA_BYTES, KotodamaQuantity, NumericV1Codec
 
-CANCEL_ASSET_LOCK_WIRE_ID_V1: Final[str] = "iroha_data_model::isi::escrow::CancelAssetLock"
+CANCEL_ASSET_LOCK_WIRE_ID_V1: Final[str] = "iroha.instruction.v1::escrow::CancelAssetLock"
 """Schema type name for the first-release bare cancellation archive."""
 
 _FRAME_HEADER_BYTES: Final[int] = 40

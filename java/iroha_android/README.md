@@ -1360,10 +1360,18 @@ reimplementing the hashing logic. If no authoritative admission outcome arrives,
 `reconcileWith(client)` or query its `hashHex()` before constructing and signing a replacement.
 The SDK never resends the same signed bytes.
 
-Public pipeline status contains only the canonical transaction hash, closed status kind,
+Public pipeline status contains only the canonical transaction hash—exactly
+`[0-9a-f]{63}[13579bdf]`, including the Iroha `HashOf` marker—closed status kind,
 optional committed height, read scope, and resolution source. The Java mirror rejects
 rejection text, diagnostics, trigger completions, batch outcomes, unknown kinds, and
-noncanonical metadata. Detailed transaction reads require an involved account or operator to
+noncanonical metadata. Status scope is exactly `local` or `global`; `auto` is not a
+first-release value, and `waitForTransactionStatus(...)` always requests `global`.
+Transaction-hash request values, status responses, and Torii receipt headers are never trimmed,
+case-folded, prefix-stripped, or decoded from byte-shaped values. Status reads accept only an exact
+HTTP `200` envelope or `404` not-found response; `202` and `204` are protocol errors.
+State-resolved `Rejected` and `Expired` are the only failures; every other non-success status
+remains progress. Negative polling intervals and timeouts are rejected rather than clamped. Detailed
+transaction reads require an involved account or operator to
 send a one-shot canonical signed `FindTransactions` query bound to the exact genesis-derived
 `NetworkId`; the Java mirror intentionally exposes no details helper until its signed-query
 surface supports that contract.
@@ -1494,14 +1502,26 @@ describes the required hardware tier:
 - `SOFTWARE_ONLY` — bypass hardware providers entirely (useful for emulator or
   deterministic testing scenarios).
 
+Provider metadata is used only to choose candidate providers. For an existing
+or newly generated Android Keystore alias, required policies inspect that
+specific private key's `KeyInfo`: `STRONGBOX_REQUIRED` accepts only an exact
+StrongBox result, while `HARDWARE_REQUIRED` accepts any proven secure-hardware
+result. An unavailable or unrecognized per-key security level fails closed;
+preferred policies may downgrade and report the measured route. Custom
+`KeyProvider` implementations must override `outcomeFor(...)` to report proven
+per-key provenance; its default is deliberately software-backed. A preference
+set with `KeystoreKeyProvider.withPreference(...)` also governs later plain
+`generate(...)` calls.
+
 Aliases follow a predictable lifecycle: the manager looks up existing keys
 across all providers in priority order, reuses the first match, and only
 generates a new key when no provider has material for the alias. Hardware-backed
 aliases remain pinned to the provider that created them, while software
 providers are consulted only when the chosen preference allows a downgrade (for
-example, `STRONGBOX_PREFERRED` on a device without StrongBox support). When an
-alias is generated on a weaker route than requested, the manager records the
-software copy so future lookups remain deterministic.
+example, `STRONGBOX_PREFERRED` on a device without StrongBox support). Required
+policies reject weaker existing or newly generated aliases instead of treating
+provider capability or a request flag as proof of the selected key's security
+level.
 
 Call `IrohaKeyManager.providerMetadata()` to inspect the registered providers
 (name, hardware capability, attestation support) before deciding which
@@ -1565,8 +1585,9 @@ signing algorithm alongside `kdf_kind` and work factor; v4 uses Argon2id
 enforced for deterministic exports/imports. Salt/nonce reuse is rejected and
 decode guards fail fast on tampered lengths.
 The companion `importDeterministic(...)` helper restores the key pair while
-validating the export's public key and authentication tag, ensuring passphrase
-mismatches or tampering are rejected.
+validating the authentication tag. For Ed25519, both export and import derive
+the public key from the private seed and compare it with the canonical SPKI, so
+a substituted public key or an inconsistent input pair is rejected.
 
 `IrohaKeyManager.exportDeterministicKey(...)` / `importDeterministicKey(...)`
 surface the same functionality through the manager so applications do not need

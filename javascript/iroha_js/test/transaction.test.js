@@ -78,13 +78,11 @@ function pipelineTransactionStatus(hashBytes, kind, content = null) {
       ? { kind, block_height: 7 }
       : { kind };
   return {
-    kind: "Transaction",
     hash,
     status: {
       ...status,
       ...(content === null ? {} : { content }),
     },
-    summary: kind,
     scope: "global",
     resolved_from:
       kind === "Applied" || kind === "Rejected" || kind === "Expired"
@@ -224,10 +222,10 @@ test("hashInstructionBatch serializes instructions and delegates to native", () 
   ]);
 });
 
-test("submitSignedTransaction submits payload and polls status until terminal", async () => {
+test("submitSignedTransaction submits payload and polls until exact Applied finality", async () => {
   const txBytes = Buffer.from([0xaa]);
   const signedBytes = Buffer.from([0xbb]);
-  const hashBytes = Buffer.alloc(32, 0x10);
+  const hashBytes = Buffer.alloc(32, 0x11);
   const submissionResponse = createResponse({
     status: 202,
     jsonData: { status: "Accepted" },
@@ -235,7 +233,7 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
   });
   const statusQueue = [
     createResponse({
-      status: 202,
+      status: 200,
       jsonData: pipelineTransactionStatus(hashBytes, "Queued"),
       headers: { "content-type": "application/json" },
     }),
@@ -287,7 +285,9 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
   );
 
   assert.equal(result.hash, hashBytes.toString("hex"));
-  assert.equal(result.status.content.status.kind, "Applied");
+  assert.equal(result.status.status.kind, "Applied");
+  assert.equal(result.status.scope, "global");
+  assert.equal(result.status.resolved_from, "state");
   assert.equal(calls.length >= 3, true);
   const statusCalls = calls.filter((call) =>
     String(call.url).includes("/v1/pipeline/transactions/status"),
@@ -299,7 +299,7 @@ test("submitSignedTransaction submits payload and polls status until terminal", 
   );
 });
 
-test("submitSignedTransaction rejects removed scope before signing or submission", async () => {
+test("submitSignedTransaction rejects removed finality options before signing or submission", async () => {
   const txBytes = Buffer.from([0xcc]);
   let nativeCalls = 0;
   const binding = {
@@ -320,17 +320,28 @@ test("submitSignedTransaction rejects removed scope before signing or submission
     },
   });
 
-  await assert.rejects(
-    withNativeBinding(binding, () =>
-      submitSignedTransaction(client, txBytes, {
-        waitForCommit: true,
-        networkId: NETWORK_ID,
-        privateKey: Buffer.alloc(32, 0x01),
-        scope: "global",
-      }),
-    ),
-    /scope is unsupported; finality waits always use global scope/u,
-  );
+  for (const field of [
+    "allowShortHash",
+    "endpoints",
+    "failureStatuses",
+    "scope",
+    "statusEndpoints",
+    "successStatuses",
+    "terminalStatuses",
+    "transactionStatusScope",
+  ]) {
+    await assert.rejects(
+      withNativeBinding(binding, () =>
+        submitSignedTransaction(client, txBytes, {
+          waitForCommit: true,
+          networkId: NETWORK_ID,
+          privateKey: Buffer.alloc(32, 0x01),
+          [field]: null,
+        }),
+      ),
+      new RegExp(`${field} is unsupported`, "u"),
+    );
+  }
   assert.equal(nativeCalls, 0);
   assert.equal(fetchCalls, 0);
 });
@@ -356,10 +367,10 @@ test("submitSignedTransaction rejects even null removed scope", async () => {
   );
 });
 
-test("submitSignedTransaction times out when no terminal status", async () => {
+test("submitSignedTransaction times out without state-resolved Applied finality", async () => {
   const txBytes = Buffer.from([0x99]);
   const binding = {
-    hashSignedTransaction: () => Buffer.alloc(32, 0x42),
+    hashSignedTransaction: () => Buffer.alloc(32, 0x43),
     signTransaction: () => txBytes,
   };
   const fetchImpl = async (url) => {
@@ -378,8 +389,8 @@ test("submitSignedTransaction times out when no terminal status", async () => {
       });
     }
     return createResponse({
-      status: 202,
-      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x42), "Queued"),
+      status: 200,
+      jsonData: pipelineTransactionStatus(Buffer.alloc(32, 0x43), "Queued"),
       headers: { "content-type": "application/json" },
     });
   };
@@ -395,7 +406,7 @@ test("submitSignedTransaction times out when no terminal status", async () => {
           networkId: NETWORK_ID,
           privateKey: Buffer.alloc(32, 0x02),
         }),
-      /did not reach a terminal status within/i,
+      /did not reach state-resolved Applied finality within/i,
     );
   });
 });

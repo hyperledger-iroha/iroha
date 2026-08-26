@@ -55,8 +55,6 @@ fn account_id_raw_string_parses_as_account_id() {
     let gas_account_id = localnet_gas_account_id(&genesis_public_key)
         .expect("test localnet gas account derivation should succeed");
     let encoded = account_id_raw_string(&gas_account_id);
-    let parsed = AccountId::parse_encoded(&encoded)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("account id parse");
+    let parsed = AccountId::parse_encoded(&encoded).expect("account id parse");
     assert_eq!(parsed, gas_account_id);
 }

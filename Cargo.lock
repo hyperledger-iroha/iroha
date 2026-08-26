@@ -557,6 +557,9 @@ name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
+dependencies = [
+ "zeroize",
+]
 
 [[package]]
 name = "arrow-array"
@@ -1217,6 +1220,7 @@ dependencies = [
  "cfg-if",
  "constant_time_eq",
  "cpufeatures 0.3.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -5440,7 +5444,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",
- "tokio-tungstenite 0.28.0",
  "tracing",
 ]
 
@@ -5899,7 +5902,6 @@ dependencies = [
 name = "irohad"
 version = "2.0.0-rc.2.0"
 dependencies = [
- "aes-gcm",
  "assertables",
  "blake3",
  "build-support",
@@ -5908,7 +5910,6 @@ dependencies = [
  "eyre",
  "fastpq_prover",
  "hex",
- "hkdf",
  "iroha_config",
  "iroha_config_base",
  "iroha_core",
@@ -9937,6 +9938,7 @@ checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
 dependencies = [
  "digest 0.10.7",
  "keccak",
+ "zeroize",
 ]
 
 [[package]]
@@ -10526,6 +10528,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]
@@ -10556,6 +10559,7 @@ dependencies = [
  "tokio-tungstenite 0.28.0",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]

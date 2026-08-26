@@ -767,7 +767,6 @@ pub mod account_metadata_map {
             .into_iter()
             .map(|(key, value)| {
                 let account = AccountId::parse_encoded(&key)
-                    .map(crate::account::ParsedAccountId::into_account_id)
                     .map_err(|err| norito::json::Error::Message(err.to_string()))?;
                 let metadata: Metadata = json::from_value(value)?;
                 Ok((account, metadata))
@@ -846,7 +845,7 @@ pub mod sora_inrou_guest_images_map {
 mod tests {
     use super::*;
     use crate::soracloud::{
-        SoraArtifactDistributionPolicyV1, SoraInrouGuestImageV1, SoraInrouGuestIsaV1,
+        SoraInrouGuestImageV1, SoraInrouGuestIsaV1, SoraPublishedInrouGuestImageArtifactV1,
     };
     use norito::json;
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
@@ -1239,6 +1238,11 @@ mod tests {
     }
     #[test]
     fn sora_inrou_guest_images_map_roundtrip_serialization() {
+        let published_artifact =
+            |seed: u8, content_cid: &str| SoraPublishedInrouGuestImageArtifactV1 {
+                manifest_digest_hex: hex::encode([seed; 32]),
+                content_cid: content_cid.to_owned(),
+            };
         let wrapper = InrouGuestImagesWrapper {
             guest_images: BTreeMap::from([
                 (
@@ -1247,8 +1251,10 @@ mod tests {
                         kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
                         rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
                         initrd_image_path: None,
-                        distribution: SoraArtifactDistributionPolicyV1::default(),
-                        published_artifact: None,
+                        published_artifact: published_artifact(
+                            0x31,
+                            "bafyr6ibrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrgeytcmjrge",
+                        ),
                     },
                 ),
                 (
@@ -1257,8 +1263,10 @@ mod tests {
                         kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
                         rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
                         initrd_image_path: Some("/inrou/aarch64/initrd.img".to_owned()),
-                        distribution: SoraArtifactDistributionPolicyV1::default(),
-                        published_artifact: None,
+                        published_artifact: published_artifact(
+                            0x32,
+                            "bafyr6ibsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgizdemrsgi",
+                        ),
                     },
                 ),
             ]),

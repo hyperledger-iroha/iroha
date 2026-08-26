@@ -531,17 +531,29 @@ test("attempt read rejects forged certificate cross-bindings and lifecycle field
 
 test("attempt read rejects malformed hidden-ballot retry, corpus, tally, and outcome", () => {
   const mutations = [
-    (response) => { response.certificate.body_bindings[0].ballot.ballot_attempt_sequence = 17; },
-    (response) => { response.certificate.body_bindings[0].ballot.max_corpus_entries = 2; },
-    (response) => { response.certificate.body_bindings[0].ballot.tally.abstain = 1; },
-    (response) => { response.certificate.body_bindings[0].ballot.outcome = { outcome: "Rejected" }; },
+    [
+      (response) => { response.certificate.body_bindings[0].ballot.ballot_attempt_sequence = 17; },
+      /retri/u,
+    ],
+    [
+      (response) => { response.certificate.body_bindings[0].ballot.max_corpus_entries = 2; },
+      /frozen ballot lifecycle/u,
+    ],
+    [
+      (response) => { response.certificate.body_bindings[0].ballot.tally.abstain = 1; },
+      /tally/u,
+    ],
+    [
+      (response) => { response.certificate.body_bindings[0].ballot.outcome = { outcome: "Rejected" }; },
+      /approving aggregate outcome/u,
+    ],
   ];
-  for (const mutate of mutations) {
+  for (const [mutate, expected] of mutations) {
     const forged = hiddenBallotReadResponse(10);
     mutate(forged);
     assert.throws(
       () => normalizeParliamentAttemptReadResponseV1(forged, ATTEMPT_ID),
-      /retri|tally|approving aggregate outcome/u,
+      expected,
     );
   }
 });

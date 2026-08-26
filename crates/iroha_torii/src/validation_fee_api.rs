@@ -15,7 +15,7 @@ use iroha_data_model::{
         ProposalContentId, ProposalKind,
     },
     isi::{
-        InstructionBox, frame_instruction_payload,
+        InstructionBox,
         governance::{ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy},
     },
     validation_fee::{ValidationFeePolicyRegistryV1, ValidationFeePolicySnapshotCommitmentV1},
@@ -464,15 +464,10 @@ fn canonical_draft_instruction(
 fn framed_instruction_draft(
     instruction: &InstructionBox,
 ) -> Result<ValidationFeeProposalInstructionDraftV1, Error> {
-    let wire_id = iroha_data_model::isi::Instruction::id(&**instruction).to_string();
-    let payload = iroha_data_model::isi::Instruction::dyn_encode(&**instruction);
-    let framed = frame_instruction_payload(&wire_id, &payload).map_err(|error| {
-        inconsistent(format!(
-            "failed to frame native validation-fee instruction: {error}"
-        ))
-    })?;
+    let (wire_id, framed) = iroha_data_model::isi::framed_instruction_payload(instruction)
+        .ok_or_else(|| inconsistent("native validation-fee instruction has no V1 wire ID"))?;
     Ok(ValidationFeeProposalInstructionDraftV1 {
-        wire_id,
+        wire_id: wire_id.to_owned(),
         payload_hex: hex::encode(framed),
     })
 }

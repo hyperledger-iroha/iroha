@@ -2578,6 +2578,7 @@ fn equivocation_flood_is_bounded_and_cannot_starve_commit_qc() {
     assert!(adapter.deferred_inputs.is_empty());
 }
 #[test]
+#[allow(clippy::too_many_lines)]
 fn unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics() {
     let directory = TempDir::new().expect("temporary directory");
     let (mut adapter, startup) = open_test(&directory).expect("open adapter");
@@ -2648,6 +2649,56 @@ fn unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics() {
     let proposer = adapter.wire_context.leader(wire_round.view);
     let unsafe_proposal = proposal(&adapter.wire_context, proposer, subject(0xC5));
     let conflicting_proposal = proposal(&adapter.wire_context, proposer, subject(0xC6));
+    let safe_subject = adapter
+        .registry
+        .register_subject(subject(0xC5))
+        .expect("register the proposal subject for the upgraded lock");
+    adapter
+        .registry
+        .register_execution_commitment(core_round, safe_subject, execution_commitment(0xC5))
+        .expect("register the upgraded lock execution commitment");
+    let safe_shares = (0_u32..3)
+        .map(|index| {
+            reducer::SignatureShare::new(
+                adapter
+                    .registry
+                    .validator_id(index)
+                    .expect("fixture validator"),
+                reducer::OpaqueSignature::new(vec![
+                    0xC5,
+                    u8::try_from(index).expect("small validator index"),
+                ]),
+            )
+        })
+        .collect::<Vec<_>>();
+    let safe_prepare = reducer::QuorumCertificate::new(
+        reducer::CertificateRef::new(
+            core_context.id(),
+            core_round,
+            reducer::Phase::Prepare,
+            safe_subject,
+        ),
+        safe_shares,
+    );
+    let upgraded_reducer = reducer::Reducer::recover(
+        core_context.clone(),
+        Some(local_validator),
+        reducer::Generation::new(3),
+        [reducer::WalEntry::new(
+            reducer::PersistenceId::new(1),
+            reducer::WalRecord::LockAndCommit {
+                prepare: safe_prepare,
+                vote: reducer::Vote::new(
+                    core_context.id(),
+                    core_round,
+                    reducer::Phase::Commit,
+                    safe_subject,
+                    local_validator,
+                ),
+            },
+        )],
+    )
+    .expect("recover the same-view upgraded lock");
     let reducer_before = adapter.reducer.clone();
     let registry_before = (
         adapter.registry.subjects.len(),
@@ -2672,6 +2723,21 @@ fn unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics() {
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
     );
     assert!(retransmit.effects().is_empty());
+    adapter.reducer = upgraded_reducer;
+    let (retry_outcome, retry_admission) = adapter
+        .admit_authenticated_payload(&unsafe_proposal.payload)
+        .expect("re-evaluate the exact proposal after the lock generation changes");
+    assert!(
+        retry_outcome.is_none(),
+        "a proposal made safe by the upgraded lock must not remain tombstoned"
+    );
+    assert_eq!(
+        retry_admission
+            .expect("the proposal owns the upgraded consumer epoch")
+            .generation,
+        reducer::Generation::new(3)
+    );
+    adapter.reducer = reducer_before.clone();
     let conflict = adapter
         .receive_verified(conflicting_proposal.clone())
         .expect("report the conflicting proposal fingerprint");

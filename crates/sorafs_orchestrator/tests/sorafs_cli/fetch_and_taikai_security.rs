@@ -463,9 +463,30 @@ fn fetch_command_proxy_does_not_bypass_gateway_url_security() {
     let manifest_bytes = fs::read(&manifest_out_path).expect("read manifest json");
     let manifest_value: Value =
         from_slice(&manifest_bytes).expect("manifest json should parse into Value");
+    assert!(
+        manifest_from_summary.get("client_capability_hex").is_none(),
+        "ordinary summaries must not disclose proxy bootstrap credentials"
+    );
+    let capability_hex = manifest_value
+        .get("client_capability_hex")
+        .and_then(Value::as_str)
+        .expect("explicit bootstrap manifest must include the client capability");
+    assert_eq!(capability_hex.len(), 64);
+    assert!(
+        capability_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "proxy capability must use canonical lowercase hex"
+    );
+    #[cfg(unix)]
     assert_eq!(
-        manifest_value, manifest_from_summary,
-        "manifest exported to disk should match summary"
+        fs::metadata(&manifest_out_path)
+            .expect("bootstrap manifest metadata")
+            .permissions()
+            .mode()
+            & 0o077,
+        0,
+        "bootstrap manifest must not grant group or world access"
     );
     let authority = manifest_value
         .get("authority")

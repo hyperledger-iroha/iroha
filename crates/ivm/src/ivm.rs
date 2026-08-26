@@ -1825,7 +1825,7 @@ impl IVM {
             use_metal: false,
             use_cuda: false,
             zk_mode: false,
-            zk_trace_enabled: true,
+            zk_trace_enabled: false,
             entrypoint_pc: None,
             program_prefix_len: 0,
             last_diagnostic: None,
@@ -2923,6 +2923,18 @@ impl IVM {
     #[inline]
     pub fn zk_mode_enabled(&self) -> bool {
         self.zk_mode
+    }
+    /// Return whether this VM carries state that must not cross a public-only
+    /// execution boundary.
+    ///
+    /// This deliberately checks the mode, register tags, and tracked private
+    /// memory independently so a stale or externally assembled VM fails
+    /// closed even when those fields are inconsistent.
+    #[must_use]
+    pub(crate) fn carries_private_execution_state(&self) -> bool {
+        self.zk_mode
+            || !self.private_memory_bytes.is_empty()
+            || self.registers.snapshot_tags().contains(&true)
     }
     #[inline]
     fn zk_trace_collection_enabled(&self) -> bool {
@@ -8279,10 +8291,16 @@ mod tests {
         assert_ne!(proof.final_memory_root, *before.as_ref());
     }
     #[test]
-    fn zk_trace_collection_still_commits_memory_merkle_root_before_returning() {
+    fn zk_trace_collection_is_disabled_by_default() {
+        let vm = quiet_vm(u64::MAX);
+        assert!(!vm.zk_trace_enabled());
+    }
+    #[test]
+    fn explicitly_enabled_zk_trace_collection_commits_memory_merkle_root_before_returning() {
         let mut vm = quiet_vm(u64::MAX);
         vm.load_program(&store_program_with_mode(crate::ivm_mode::ZK, 4))
             .expect("program loads");
+        vm.set_zk_trace_enabled(true);
         let before = vm.memory.current_root();
         assert!(!vm.memory.dirty_for_testing());
         vm.set_register(1, Memory::HEAP_START);

@@ -9,7 +9,7 @@ Related roadmap item: NRPC-4 — Cross-SDK adoption schedule
 
 ### 1. Objectives
 - Align Rust/CLI, Python, JavaScript, Android, and Swift transports on the binary Norito-RPC interface ahead of the AND4 production toggle.
-- Ship a predictable phase plan so every SDK, CI lane, and observability surface is ready before JSON is demoted to fallback status.
+- Ship one explicit V1 transport contract per call. Binary and JSON ingress may both be current surfaces, but clients never switch representation after dispatch or failure.
 - Keep fixtures, telemetry, and operator evidence consistent with the NRPC-2 rollout guardrails and the Android AND4 networking milestones.
 
 ### 2. Phased Timeline
@@ -18,7 +18,7 @@ Related roadmap item: NRPC-4 — Cross-SDK adoption schedule
 | **P0 – Lab Parity** | Q2 2025 | Rust CLI + Python smoke suites exercise `/v1/pipeline` and `/v1/norito-rpc` in CI; JS helper passes unit tests; Android mock harness issues dual transport calls. | `python/iroha_python/scripts/run_norito_rpc_smoke.sh` wired into CI; `javascript/iroha_js/test/noritoRpcClient.test.js` green with `npm test`; Android mock harness (`java/iroha_android/src/test/java/.../NoritoRpcClientTests.java`) runs as part of `./gradlew test`. | CI logs + `status.md` entries; tracker rows NRPC-3A/NRPC-3 recorded as completed. |
 | **P1 – SDK Preview** | Q3 2025 | Publish the shared flat V1 fixture bundle under `fixtures/norito_rpc/`, record canonical verification reports under `artifacts/norito_rpc/`, and enable optional Norito transport flags in JS/Python/Swift samples. | Two independent create-only owner roots have identical exact path sets, entry types, modes, completion manifests, and every file byte before the reviewed identity-relative tracked update; `norito-rpc-verify` passes; SDK preview APIs consume the tracked mirrors. | Owner comparison + verification report recorded in `specs/torii/norito_rpc_tracker.md`; CI artifact links attached to `status.md`. |
 | **P2 – Staging / AND4 Preview** | Q1 2026 | Staging Torii pools enable Norito by default; Android AND4 preview clients and Swift IOS2 parity suites hit the binary transport; telemetry dashboard `dashboards/grafana/torii_norito_rpc_observability.json` populated. | `specs/torii/norito_rpc_stage_reports.md` contains staging canary report; `scripts/telemetry/test_torii_norito_rpc_alerts.sh` green in CI; Android AND4 mock harness replay covers success/error paths; Swift `/v1/pipeline` adopters pass nightly parity run. | Stage report + Alertmanager test output attached to tracker entry NRPC-2R; AND4 readiness row in `roadmap.md` notes Norito coverage. |
-| **P3 – Production GA** | Q4 2026 (aligned with AND4 production) | Norito transport becomes default for SDKs; JSON remains as brownout fallback; release pipeline archives Norito parity artefacts with every tag. | Release checklist contains Norito smoke output for Rust/JS/Python/Swift/Android; Alert thresholds for Norito vs JSON error rate SLOs enforced; `status.md` and release notes cite GA evidence. | `specs/runbooks/torii_norito_rpc_canary.md` updated with production execution; Alert exports + fixture checksums stored alongside signed manifests. |
+| **P3 – Production GA** | Q4 2026 (aligned with AND4 production) | Norito transport is the explicit default for SDK calls that select it; no failed call downgrades to JSON or replays signed bytes. The release pipeline archives Norito parity artefacts with every tag. | Release checklist contains Norito smoke output for Rust/JS/Python/Swift/Android; transport-specific alert thresholds are enforced; `status.md` and release notes cite GA evidence. | `specs/runbooks/torii_norito_rpc_canary.md` updated with production execution; Alert exports + fixture checksums stored alongside signed manifests. |
 
 ### 3. SDK Deliverables & CI Coverage
 | SDK / Surface | Key Actions | CI / Tests | Dependencies |
@@ -57,7 +57,7 @@ Related roadmap item: NRPC-4 — Cross-SDK adoption schedule
 | Risk | Impact | Mitigation / Owner |
 |------|--------|--------------------|
 | Android AND4 preview slips | Blocks production Norito timeline | Track in AND4 roadmap; SDK Program Lead ensures AND4 mock harness outputs feed this schedule before P2. |
-| Swift NoritoBridge work under-resourced | iOS clients lag behind others | Swift lead pairs with Android/Python maintainers on fixture cadence; fallback plan keeps CLI/JS/Python as mandatory gate until IOS2 parity lands. |
+| Swift NoritoBridge work under-resourced | iOS clients lag behind others | Swift lead pairs with Android/Python maintainers on fixture cadence; CLI/JS/Python remain mandatory independent gates until IOS2 parity lands. |
 | Fixture drift across SDKs | False negatives in CI, inconsistent telemetry | Canonical two-root create-only owner comparison, reviewed identity-relative tracked patch, and `norito-rpc-verify`. |
 | Telemetry gaps (NRPC-2B) | Cannot prove SLOs during rollout | Observability liaison owns dashboard + alert validation before P2 exit; chaos script `scripts/telemetry/test_torii_norito_rpc_alerts.sh` must be green prior to stage promotion. |
 

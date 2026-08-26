@@ -154,9 +154,8 @@ fn parse_asset_definition_argument(raw: &str) -> Result<AssetDefinitionId, Strin
     Ok(parsed)
 }
 fn parse_canonical_account(raw: &str, label: &str) -> Result<AccountId, String> {
-    let account = AccountId::parse_encoded(raw)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| format!("invalid {label} account '{raw}'"))?;
+    let account =
+        AccountId::parse_encoded(raw).map_err(|_| format!("invalid {label} account '{raw}'"))?;
     if account.to_string() != raw {
         return Err(format!("noncanonical {label} account '{raw}'"));
     }

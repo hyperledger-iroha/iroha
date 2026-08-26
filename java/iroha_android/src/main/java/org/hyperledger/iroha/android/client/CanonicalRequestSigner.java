@@ -310,7 +310,6 @@ public final class CanonicalRequestSigner {
   private static String canonicalAccountHeaderValue(final String accountId) {
     try {
       return AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null)
-          .address
           .canonicalHex();
     } catch (AccountAddress.AccountAddressException ignored) {
       return accountId;

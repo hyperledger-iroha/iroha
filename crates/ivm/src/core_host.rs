@@ -2200,9 +2200,8 @@ impl IVMHost for CoreHost {
                 // Return the domainless account subject so contracts can compare
                 // authority() against AccountId literals and stored AccountId state.
                 const ACCOUNT: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
-                let authority = AccountId::parse_encoded(ACCOUNT)
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                    .map_err(|_| VMError::NoritoInvalid)?;
+                let authority =
+                    AccountId::parse_encoded(ACCOUNT).map_err(|_| VMError::NoritoInvalid)?;
                 let payload = encode_canonical_norito(&authority)?;
                 let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
                 tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());

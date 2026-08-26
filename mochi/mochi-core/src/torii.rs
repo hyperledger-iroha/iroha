@@ -847,6 +847,15 @@ const SMOKE_EXACT_RESUBMIT_DELAY: Duration = Duration::from_millis(250);
 const SMOKE_EXACT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(1);
 const QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN_REJECT_CODE: &str =
     "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN";
+fn encode_lower_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(DIGITS[usize::from(*byte >> 4)] as char);
+        encoded.push(DIGITS[usize::from(*byte & 0x0f)] as char);
+    }
+    encoded
+}
 fn unix_time_now() -> Duration {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -874,7 +883,7 @@ fn smoke_transaction_result_in_block(
             is_match.then(|| match result.as_ref() {
                 Ok(_) => Ok(block.header().height().get()),
                 Err(reason) => Err(ToriiError::SmokeRejected {
-                    hash: tx_hash.to_string(),
+                    hash: encode_lower_hex(tx_hash.as_ref()),
                     reason: format!("{reason:?}"),
                 }),
             })
@@ -2425,10 +2434,85 @@ fn parse_optional_u64_field(
         .map(|value| parse_u64_value(value, true, context))
         .transpose()
 }
-fn parse_pipeline_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeTransactionStatus>> {
+fn require_exact_smoke_status_fields(
+    record: &json::Map,
+    expected: &[&str],
+    context: &str,
+) -> ToriiResult<()> {
+    if record.len() != expected.len() || expected.iter().any(|field| !record.contains_key(*field)) {
+        return Err(decode_error(
+            context,
+            format!("must contain exactly these fields: {}", expected.join(", ")),
+        ));
+    }
+    Ok(())
+}
+fn require_exact_pipeline_transaction_hash<'a>(
+    value: &'a str,
+    context: &str,
+) -> ToriiResult<&'a str> {
+    if value.len() != 64
+        || !value
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(*byte, b'a'..=b'f'))
+        || !matches!(
+            value.as_bytes()[63],
+            b'1' | b'3' | b'5' | b'7' | b'9' | b'b' | b'd' | b'f'
+        )
+    {
+        return Err(decode_error(
+            context,
+            "must be exactly 64 lowercase hexadecimal characters with the canonical Iroha hash marker",
+        ));
+    }
+    Ok(value)
+}
+fn parse_pipeline_smoke_status(
+    value: &json::Value,
+    expected_hash: &str,
+) -> ToriiResult<SmokeTransactionStatus> {
+    require_exact_pipeline_transaction_hash(expected_hash, "pipeline transaction request hash")?;
     let record = value
         .as_object()
         .ok_or_else(|| decode_error("pipeline transaction status", "must be a JSON object"))?;
+    require_exact_smoke_status_fields(
+        record,
+        &["hash", "status", "scope", "resolved_from"],
+        "pipeline transaction status",
+    )?;
+    let response_hash = record
+        .get("hash")
+        .and_then(json::Value::as_str)
+        .ok_or_else(|| decode_error("pipeline transaction status.hash", "must be a string"))?;
+    require_exact_pipeline_transaction_hash(response_hash, "pipeline transaction status.hash")?;
+    if response_hash != expected_hash {
+        return Err(decode_error(
+            "pipeline transaction status.hash",
+            "does not match the requested transaction hash",
+        ));
+    }
+    if record.get("scope").and_then(json::Value::as_str) != Some("global") {
+        return Err(decode_error(
+            "pipeline transaction status.scope",
+            "must be exactly `global`",
+        ));
+    }
+    let resolved_from = record
+        .get("resolved_from")
+        .and_then(json::Value::as_str)
+        .ok_or_else(|| {
+            decode_error(
+                "pipeline transaction status.resolved_from",
+                "must be a string",
+            )
+        })?;
+    if !matches!(resolved_from, "queue" | "cache" | "state") {
+        return Err(decode_error(
+            "pipeline transaction status.resolved_from",
+            "must be exactly `queue`, `cache`, or `state`",
+        ));
+    }
     let status = record
         .get("status")
         .and_then(json::Value::as_object)
@@ -2438,58 +2522,58 @@ fn parse_pipeline_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeT
                 "must be a JSON object",
             )
         })?;
-    let kind = parse_required_string(status, &["kind"], "pipeline transaction status.kind")?;
-    let height = parse_optional_u64_field(
-        status,
-        &["block_height", "blockHeight"],
-        "pipeline transaction status.block_height",
-    )?;
-    match kind.as_str() {
-        "Committed" | "Applied" => Ok(Some(SmokeTransactionStatus::Committed(
-            height.unwrap_or_default(),
-        ))),
-        "Approved" => Ok(height.map(SmokeTransactionStatus::Committed)),
-        "Rejected" => Ok(Some(SmokeTransactionStatus::Rejected(
-            smoke_rejection_reason(status),
-        ))),
-        "Expired" => Ok(Some(SmokeTransactionStatus::Expired)),
-        "Queued" => Ok(Some(SmokeTransactionStatus::Queued)),
-        _ => Ok(None),
+    if !status.contains_key("kind")
+        || status.len() > 2
+        || status
+            .keys()
+            .any(|field| !matches!(field.as_str(), "kind" | "block_height"))
+    {
+        return Err(decode_error(
+            "pipeline transaction status.status",
+            "must contain `kind` and only the optional `block_height` field",
+        ));
     }
-}
-fn parse_explorer_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeTransactionStatus>> {
-    let record = value
-        .as_object()
-        .ok_or_else(|| decode_error("explorer transaction record", "must be a JSON object"))?;
-    let status = parse_required_string(record, &["status"], "explorer transaction record.status")?;
-    match status.as_str() {
-        "Committed" | "Applied" | "Approved" => {
-            let height = parse_optional_u64_field(
-                record,
-                &["block", "block_height", "blockHeight"],
-                "explorer transaction record.block",
-            )?
-            .unwrap_or_default();
-            Ok(Some(SmokeTransactionStatus::Committed(height)))
-        }
-        "Rejected" => Ok(Some(SmokeTransactionStatus::Rejected(
-            smoke_rejection_reason(record),
-        ))),
-        "Expired" => Ok(Some(SmokeTransactionStatus::Expired)),
-        "Queued" | "Pending" => Ok(Some(SmokeTransactionStatus::Queued)),
-        _ => Ok(None),
+    let kind = status
+        .get("kind")
+        .and_then(json::Value::as_str)
+        .ok_or_else(|| decode_error("pipeline transaction status.kind", "must be a string"))?;
+    if !matches!(
+        kind,
+        "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired"
+    ) {
+        return Err(decode_error(
+            "pipeline transaction status.kind",
+            "is not a first-release pipeline status kind",
+        ));
     }
-}
-fn smoke_rejection_reason(record: &json::Map) -> String {
-    pick_value(record, &["rejection_reason", "rejectionReason", "reason"])
+    let height = status
+        .get("block_height")
         .map(|value| {
-            value
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| json::to_string(value).unwrap_or_else(|_| format!("{value:?}")))
+            value.as_u64().filter(|height| *height > 0).ok_or_else(|| {
+                decode_error(
+                    "pipeline transaction status.block_height",
+                    "must be a positive integer",
+                )
+            })
         })
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "rejected".to_owned())
+        .transpose()?;
+    if resolved_from != "state" {
+        return Ok(SmokeTransactionStatus::Queued);
+    }
+    match kind {
+        "Applied" => height
+            .map(SmokeTransactionStatus::Committed)
+            .ok_or_else(|| {
+                decode_error(
+                    "pipeline transaction status.block_height",
+                    "is required for state-resolved Applied status",
+                )
+            }),
+        "Rejected" => Ok(SmokeTransactionStatus::Rejected("rejected".to_owned())),
+        "Expired" => Ok(SmokeTransactionStatus::Expired),
+        "Queued" | "Approved" | "Committed" => Ok(SmokeTransactionStatus::Queued),
+        _ => unreachable!("pipeline status kind was validated above"),
+    }
 }
 fn pick_value<'a>(record: &'a json::Map, keys: &[&str]) -> Option<&'a json::Value> {
     keys.iter().find_map(|key| record.get(*key))
@@ -3003,10 +3087,6 @@ impl ToriiClient {
     pub fn explorer_rwas_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/explorer/rwas")
     }
-    /// URL of the `/v1/explorer/transactions/{hash}` endpoint.
-    pub fn explorer_transaction_endpoint(&self, hash: &str) -> ToriiResult<Url> {
-        self.http_endpoint(&format!("v1/explorer/transactions/{hash}"))
-    }
     /// URL of the `/v1/pipeline/transactions/status` endpoint.
     pub fn pipeline_transaction_status_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint(torii_routes::pipeline::TRANSACTION_STATUS.path())
@@ -3227,7 +3307,7 @@ impl ToriiClient {
         options: SmokeCommitOptions,
     ) -> ToriiResult<SmokeCommitSnapshot> {
         let tx_hash = transaction.hash();
-        let tx_hash_str = tx_hash.to_string();
+        let tx_hash_str = encode_lower_hex(tx_hash.as_ref());
         let started = Instant::now();
         // Stream notifications are latency optimizations for this exact-hash
         // readiness check. Torii may temporarily throttle WebSocket handshakes
@@ -3400,27 +3480,25 @@ impl ToriiClient {
         &self,
         tx_hash: &str,
     ) -> ToriiResult<Option<SmokeTransactionStatus>> {
-        if let Some(status) = self.fetch_pipeline_transaction_status(tx_hash).await? {
-            return Ok(Some(status));
-        }
-        self.fetch_explorer_transaction_status(tx_hash).await
+        self.fetch_pipeline_transaction_status(tx_hash).await
     }
     async fn fetch_pipeline_transaction_status(
         &self,
         tx_hash: &str,
     ) -> ToriiResult<Option<SmokeTransactionStatus>> {
+        require_exact_pipeline_transaction_hash(tx_hash, "pipeline transaction request hash")?;
         let url = self.pipeline_transaction_status_endpoint()?;
         let response = self
             .http
             .get(url)
-            .query(&[("hash", tx_hash)])
+            .query(&[("hash", tx_hash), ("scope", "global")])
             .header(reqwest::header::ACCEPT, "application/json")
             .send()
             .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
-        if !response.status().is_success() {
+        if response.status() != StatusCode::OK {
             return Err(ToriiError::UnexpectedStatus {
                 status: response.status(),
                 reject_code: None,
@@ -3430,33 +3508,7 @@ impl ToriiClient {
         let bytes =
             read_bounded_response(response, MAX_JSON_RESPONSE_BYTES, "pipeline status").await?;
         let value = decode_bounded_json_response(&bytes, "pipeline status")?;
-        parse_pipeline_smoke_status(&value)
-    }
-    async fn fetch_explorer_transaction_status(
-        &self,
-        tx_hash: &str,
-    ) -> ToriiResult<Option<SmokeTransactionStatus>> {
-        let url = self.explorer_transaction_endpoint(tx_hash)?;
-        let response = self
-            .http
-            .get(url)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .send()
-            .await?;
-        if response.status() == StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        if !response.status().is_success() {
-            return Err(ToriiError::UnexpectedStatus {
-                status: response.status(),
-                reject_code: None,
-                message: None,
-            });
-        }
-        let bytes =
-            read_bounded_response(response, MAX_JSON_RESPONSE_BYTES, "Explorer status").await?;
-        let value = decode_bounded_json_response(&bytes, "Explorer status")?;
-        parse_explorer_smoke_status(&value)
+        parse_pipeline_smoke_status(&value, tx_hash).map(Some)
     }
     /// Submit a signed query and decode the response into a typed [`QueryOutput`].
     pub async fn execute_query(&self, query: &SignedQuery) -> ToriiResult<QueryOutput> {

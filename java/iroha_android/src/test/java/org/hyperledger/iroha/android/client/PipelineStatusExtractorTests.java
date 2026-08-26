@@ -21,6 +21,9 @@ public final class PipelineStatusExtractorTests {
     rejectNonCanonicalStatusKinds();
     extractStatusKindMissingStatus();
     normalizeMetadataOnlyStatus();
+    keepNonStateTerminalHintsNonFinal();
+    acceptOnlyExactLocalOrGlobalScopes();
+    rejectNonCanonicalHashRepresentations();
     rejectRetiredStatusDetails();
     extractRejectCodeFromErrorEnvelopeBody();
     extractRejectCodeFromNoritoErrorEnvelopeBody();
@@ -92,6 +95,102 @@ public final class PipelineStatusExtractorTests {
         : "Public status must expose only metadata";
     assert PipelineStatusExtractor.requireAuthoritativeStatus(normalized, hash)
         .equals("Applied") : "Expected canonical Applied status";
+  }
+
+  private static void keepNonStateTerminalHintsNonFinal() {
+    final String hash = String.join("", Collections.nCopies(32, "ab"));
+    for (final String kind : Arrays.asList("Applied", "Rejected", "Expired")) {
+      for (final String source : Arrays.asList("cache", "queue")) {
+        final Map<String, Object> status = new LinkedHashMap<>();
+        status.put("kind", kind);
+        if ("Applied".equals(kind)) {
+          status.put("block_height", 7L);
+        }
+        final Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("hash", hash);
+        payload.put("status", status);
+        payload.put("scope", "global");
+        payload.put("resolved_from", source);
+        assert kind.equals(PipelineStatusExtractor.requireAuthoritativeStatus(payload, hash))
+            : "Structurally valid non-state status must remain observable";
+        if ("Applied".equals(kind)) {
+          try {
+            TransactionFinality.requireApplied(payload, hash);
+            throw new AssertionError("Cached or queued Applied must not prove finality");
+          } catch (final IllegalStateException expected) {
+            assert expected.getMessage().contains("exact Applied")
+                : "Expected exact finality rejection";
+          }
+        }
+      }
+    }
+  }
+
+  private static void acceptOnlyExactLocalOrGlobalScopes() {
+    final String hash = String.join("", Collections.nCopies(32, "ab"));
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("hash", hash);
+    payload.put("status", Collections.singletonMap("kind", "Queued"));
+    payload.put("scope", "local");
+    payload.put("resolved_from", "queue");
+    assert "local".equals(PipelineStatusExtractor.normalizePublicStatus(payload).get("scope"))
+        : "Exact local status scope must remain valid";
+
+    payload.put("scope", "auto");
+    try {
+      PipelineStatusExtractor.normalizePublicStatus(payload);
+      throw new AssertionError("Retired auto scope must be rejected");
+    } catch (final IllegalStateException expected) {
+      assert expected.getMessage().contains("unsupported scope")
+          : "Expected exact status-scope rejection";
+    }
+  }
+
+  private static void rejectNonCanonicalHashRepresentations() {
+    final String hash = String.join("", Collections.nCopies(32, "ab"));
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("hash", hash);
+    payload.put("status", Map.of("kind", "Applied", "block_height", 7L));
+    payload.put("scope", "global");
+    payload.put("resolved_from", "state");
+    final Object[] invalidHashes = {
+      hash.toUpperCase(java.util.Locale.ROOT),
+      " " + hash,
+      hash + " ",
+      "0x" + hash,
+      hash.substring(0, hash.length() - 2),
+      String.join("", Collections.nCopies(32, "aa")),
+      new byte[32],
+      Collections.nCopies(32, Integer.valueOf(0xab))
+    };
+    for (final Object invalid : invalidHashes) {
+      payload.put("hash", invalid);
+      try {
+        PipelineStatusExtractor.normalizePublicStatus(payload);
+        throw new AssertionError("Expected non-canonical response hash rejection: " + invalid);
+      } catch (final IllegalStateException expected) {
+        assert expected.getMessage().contains("exact lowercase")
+            : "Expected exact response hash failure";
+      }
+    }
+
+    payload.put("hash", hash);
+    for (final String invalid :
+        Arrays.asList(
+            hash.toUpperCase(java.util.Locale.ROOT),
+            " " + hash,
+            hash + " ",
+            "0x" + hash,
+            hash.substring(0, hash.length() - 2),
+            String.join("", Collections.nCopies(32, "aa")))) {
+      try {
+        PipelineStatusExtractor.requireAuthoritativeStatus(payload, invalid);
+        throw new AssertionError("Expected non-canonical requested hash rejection: " + invalid);
+      } catch (final IllegalStateException expected) {
+        assert expected.getMessage().contains("exact lowercase")
+            : "Expected exact requested hash failure";
+      }
+    }
   }
 
   private static void rejectRetiredStatusDetails() {

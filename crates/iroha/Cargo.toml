@@ -110,9 +110,5 @@ name = "musubi_archive_fetch_memory"
 path = "tests/musubi_archive_fetch_memory.rs"
 
 [[test]]
-name = "tx_confirmation"
-path = "tests/tx_confirmation.rs"
-
-[[test]]
 name = "tx_ttl"
 path = "tests/tx_ttl.rs"

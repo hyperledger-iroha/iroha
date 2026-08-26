@@ -4,8 +4,9 @@
 //! binds to a specific relay identity and handshake transcript hash and is signed with an ML-DSA
 //! key managed by the relay or a delegated issuer.
 //!
-//! Persistent token-consumption snapshots are hard-bounded, decoded under
-//! explicit Norito limits, and loaded only from stable direct regular files.
+//! Persistent token-consumption snapshots use headered byte-canonical Norito
+//! frames, are decoded under explicit limits, and are loaded only from stable
+//! direct regular files.
 use super::{
     replay_lock::ExclusiveLedgerLock,
     snapshot_file::{
@@ -15,23 +16,22 @@ use super::{
 };
 use blake3::Hasher;
 #[cfg(test)]
-use norito::codec::encode_adaptive;
+use norito::encode_canonical;
 use norito::{
-    DecodeLimits,
-    codec::{decode_exact_from_slice_with_limits, encode_adaptive_into},
+    DecodeLimits, decode_canonical_with_limits,
     derive::{NoritoDeserialize, NoritoSerialize},
 };
 use rand_core::TryCryptoRng;
 use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
-use zeroize::Zeroize as _;
+use zeroize::{Zeroize as _, Zeroizing};
 const TOKEN_MAGIC: &[u8; 4] = b"SNTK";
 const BODY_DOMAIN: &[u8; 21] = b"soranet.token.body.v1";
 const ID_DOMAIN: &[u8] = b"soranet.token.id.v1";
@@ -40,8 +40,8 @@ const ISSUER_DOMAIN: &[u8] = b"soranet.token.issuer.v1";
 const BODY_LEN: usize = 1 + 1 + 8 + 8 + 32 + 32 + 16 + 32;
 /// Length of the domain-separated body signed by the issuer.
 const SIGNING_BODY_LEN: usize = BODY_DOMAIN.len() + BODY_LEN - 1;
-/// Minimum envelope length (magic + version + body + signature length prefix).
-const MIN_FRAME_LEN: usize = TOKEN_MAGIC.len() + 1 + BODY_LEN + 2;
+/// Minimum envelope length (magic + version-prefixed body + signature length prefix).
+const MIN_FRAME_LEN: usize = TOKEN_MAGIC.len() + BODY_LEN + 2;
 /// Flags defined for v1 tokens (all bits reserved).
 const TOKEN_FLAG_MASK: u8 = 0;
 const TOKEN_STORE_SNAPSHOT_BASE_LIMIT_BYTES: usize = 4 * 1024;
@@ -50,6 +50,39 @@ const TOKEN_STORE_SNAPSHOT_DECODE_MAX_NESTING_DEPTH_V1: usize = 8;
 const TOKEN_STORE_SNAPSHOT_VERSION_V1: u8 = 1;
 /// First-release hard ceiling for persistent admission-token replay entries.
 pub const TOKEN_STORE_MAX_ENTRIES_V1: usize = 65_536;
+fn clear_sensitive_vec(value: &mut Vec<u8>) {
+    value.resize(value.capacity(), 0);
+    value.zeroize();
+}
+
+struct TokenSigningBody([u8; SIGNING_BODY_LEN]);
+impl TokenSigningBody {
+    #[cfg(test)]
+    fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn clear(&mut self) {
+        self.0.zeroize();
+    }
+}
+impl std::ops::Deref for TokenSigningBody {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl fmt::Debug for TokenSigningBody {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TokenSigningBody([REDACTED])")
+    }
+}
+impl Drop for TokenSigningBody {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
 /// Admission token issued by a relay operator or delegated gateway.
 #[derive(PartialEq, Eq)]
 pub struct AdmissionToken {
@@ -87,7 +120,7 @@ impl AdmissionToken {
         self.transcript_hash.zeroize();
         self.nonce.zeroize();
         self.issuer_fingerprint.zeroize();
-        self.signature.zeroize();
+        clear_sensitive_vec(&mut self.signature);
     }
 }
 impl Drop for AdmissionToken {
@@ -123,13 +156,15 @@ impl AdmissionToken {
         }
         let issued_at = u64::from_be_bytes(read_token_field::<8>(bytes, &mut cursor)?);
         let expires_at = u64::from_be_bytes(read_token_field::<8>(bytes, &mut cursor)?);
-        let relay_id = read_token_field::<32>(bytes, &mut cursor)?;
-        let transcript_hash = read_token_field::<32>(bytes, &mut cursor)?;
-        let nonce = read_token_field::<16>(bytes, &mut cursor)?;
-        let issuer_fingerprint = read_token_field::<32>(bytes, &mut cursor)?;
+        let relay_id = Zeroizing::new(read_token_field::<32>(bytes, &mut cursor)?);
+        let transcript_hash = Zeroizing::new(read_token_field::<32>(bytes, &mut cursor)?);
+        let nonce = Zeroizing::new(read_token_field::<16>(bytes, &mut cursor)?);
+        let issuer_fingerprint = Zeroizing::new(read_token_field::<32>(bytes, &mut cursor)?);
         let sig_len = u16::from_be_bytes(read_token_field::<2>(bytes, &mut cursor)?) as usize;
-        let signature = read_token_signature(bytes, &mut cursor, sig_len)?;
-        if !signature.is_empty() && signature.iter().all(|&byte| byte == 0) {
+        // Later field validation can still reject the frame. Keep the copied
+        // bearer signature in a zeroizing owner until every check succeeds.
+        let mut signature = Zeroizing::new(read_token_signature(bytes, &mut cursor, sig_len)?);
+        if signature.is_empty() || signature.iter().all(|&byte| byte == 0) {
             return Err(DecodeError::InertSignature);
         }
         if issued_at >= expires_at {
@@ -151,11 +186,11 @@ impl AdmissionToken {
             flags,
             issued_at,
             expires_at,
-            relay_id,
-            transcript_hash,
-            nonce,
-            issuer_fingerprint,
-            signature,
+            relay_id: *relay_id,
+            transcript_hash: *transcript_hash,
+            nonce: *nonce,
+            issuer_fingerprint: *issuer_fingerprint,
+            signature: std::mem::take(&mut *signature),
         })
     }
     /// Try to serialize the token frame.
@@ -164,7 +199,9 @@ impl AdmissionToken {
     /// Returns [`EncodeError`] when directly constructed token state cannot fit
     /// the v1 fixed-width frame.
     pub fn try_encode(&self) -> Result<Vec<u8>, EncodeError> {
-        let mut out = Vec::with_capacity(MIN_FRAME_LEN + self.signature.len());
+        // A directly constructed oversized signature can make encoding fail
+        // after the bearer body has already been staged.
+        let mut out = Zeroizing::new(Vec::with_capacity(MIN_FRAME_LEN + self.signature.len()));
         out.extend_from_slice(TOKEN_MAGIC);
         out.push(Self::VERSION);
         out.push(self.flags);
@@ -181,7 +218,7 @@ impl AdmissionToken {
             })?;
         out.extend_from_slice(&sig_len.to_be_bytes());
         out.extend_from_slice(&self.signature);
-        Ok(out)
+        Ok(std::mem::take(&mut *out))
     }
     /// Serialize the token frame.
     #[must_use]
@@ -239,7 +276,7 @@ impl AdmissionToken {
         let mut hasher = Hasher::new();
         let body = self.body_bytes();
         hasher.update(ID_DOMAIN);
-        hasher.update(&body);
+        hasher.update(&body[..]);
         hasher.update(self.signature());
         hasher.finalize().into()
     }
@@ -294,8 +331,8 @@ impl AdmissionToken {
                 actual: issuer_fingerprint,
             });
         }
-        let mut nonce = [0u8; 16];
-        fill_random(rng, "minting admission token nonce", &mut nonce)?;
+        let mut nonce = Zeroizing::new([0u8; 16]);
+        fill_random(rng, "minting admission token nonce", &mut nonce[..])?;
         let body = encode_body(
             flags,
             issued_secs,
@@ -305,22 +342,21 @@ impl AdmissionToken {
             &nonce,
             &issuer_fingerprint,
         );
-        let signature = sign_mldsa_from_os(suite, issuer_secret_key, &[], &body)
+        let signature = sign_mldsa_from_os(suite, issuer_secret_key, &[], &body[..])
             .map_err(MintError::Signature)?
-            .as_bytes()
-            .to_vec();
+            .into_bytes();
         Ok(Self {
             flags,
             issued_at: issued_secs,
             expires_at: expires_secs,
             relay_id,
             transcript_hash,
-            nonce,
+            nonce: *nonce,
             issuer_fingerprint,
             signature,
         })
     }
-    fn body_bytes(&self) -> [u8; SIGNING_BODY_LEN] {
+    fn body_bytes(&self) -> TokenSigningBody {
         encode_body(
             self.flags,
             self.issued_at,
@@ -375,7 +411,7 @@ fn read_token_signature(
     *cursor = end;
     Ok(signature.to_vec())
 }
-/// Admission token verifier configured with an issuer key.
+/// Admission token verifier configured with an issuer key and replay store.
 #[derive(Clone, Debug)]
 pub struct AdmissionTokenVerifier {
     suite: MlDsaSuite,
@@ -383,10 +419,11 @@ pub struct AdmissionTokenVerifier {
     issuer_fingerprint: [u8; 32],
     max_ttl: Duration,
     clock_skew: Duration,
-    replay_store: Option<Arc<Mutex<dyn TokenStore + Send>>>,
+    replay_store: Arc<Mutex<dyn TokenStore + Send>>,
+    pending_replays: Arc<Mutex<HashSet<[u8; 32]>>>,
 }
 impl AdmissionTokenVerifier {
-    /// Construct a new verifier.
+    /// Construct a new verifier with mandatory single-use replay protection.
     ///
     /// # Errors
     /// Returns [`VerifierConfigError`] if the configured issuer public key does
@@ -396,6 +433,7 @@ impl AdmissionTokenVerifier {
         public_key: Vec<u8>,
         max_ttl: Duration,
         clock_skew: Duration,
+        replay_store: Arc<Mutex<dyn TokenStore + Send>>,
     ) -> Result<Self, VerifierConfigError> {
         suite
             .validate_public_key(&public_key)
@@ -407,25 +445,19 @@ impl AdmissionTokenVerifier {
             issuer_fingerprint,
             max_ttl,
             clock_skew,
-            replay_store: None,
+            replay_store,
+            pending_replays: Arc::new(Mutex::new(HashSet::new())),
         })
-    }
-    /// Attach a replay store used to enforce single-use semantics.
-    #[must_use]
-    pub fn with_replay_store(mut self, store: Arc<Mutex<dyn TokenStore + Send>>) -> Self {
-        self.replay_store = Some(store);
-        self
-    }
-    /// Set or replace the replay store in place.
-    pub fn set_replay_store(&mut self, store: Arc<Mutex<dyn TokenStore + Send>>) {
-        self.replay_store = Some(store);
     }
     /// Fingerprint associated with the issuer public key.
     #[must_use]
     pub fn issuer_fingerprint(&self) -> &[u8; 32] {
         &self.issuer_fingerprint
     }
-    /// Verify a token against the provided relay identifier and transcript hash.
+    /// Verify and consume a token against the relay identifier and transcript hash.
+    ///
+    /// Successful verification records the token in the required replay store,
+    /// so every later presentation is rejected as [`VerifyError::Replay`].
     ///
     /// # Errors
     /// Returns [`VerifyError`] if the token fails any validation step.
@@ -471,53 +503,120 @@ impl AdmissionTokenVerifier {
                 max: self.max_ttl,
             });
         }
-        self.preflight_crypto_material(token)?;
+        let replay_id = self.reserve_replay(token, now)?;
+        if let Err(error) = self.preflight_crypto_material(token) {
+            self.release_replay(replay_id);
+            return Err(error);
+        }
         let body = token.body_bytes();
-        verify_mldsa(self.suite, &self.public_key, &[], &body, token.signature())
-            .map_err(VerifyError::Signature)?;
-        if let Some(store) = &self.replay_store {
-            let token_id = token.token_id();
-            let token_expires_at = UNIX_EPOCH
-                .checked_add(Duration::from_secs(token.expires_at()))
-                .ok_or_else(|| {
-                    VerifyError::Store(TokenStoreError::Parse(format!(
-                        "token expiry timestamp {} overflows system time",
-                        token.expires_at()
-                    )))
-                })?;
-            // Verification accepts a token until `expires_at + clock_skew`.
-            // Keep its single-use marker for that entire acceptance window;
-            // pruning it at the nominal expiry would permit a replay during
-            // the configured skew allowance.
-            let replay_expires_at =
-                token_expires_at
-                    .checked_add(self.clock_skew)
-                    .ok_or_else(|| {
-                        VerifyError::Store(TokenStoreError::Parse(format!(
-                            "token replay expiry {} + clock skew {:?} overflows system time",
-                            token.expires_at(),
-                            self.clock_skew
-                        )))
-                    })?;
-            let mut guard = store
-                .lock()
-                .map_err(|_| VerifyError::Store(TokenStoreError::Poisoned))?;
-            let outcome = guard
-                .insert(token_id, replay_expires_at, now)
-                .map_err(VerifyError::Store)?;
-            match outcome.status {
-                TokenInsertStatus::Accepted => {}
-                TokenInsertStatus::Duplicate => return Err(VerifyError::Replay(token_id)),
-                TokenInsertStatus::Expired
-                | TokenInsertStatus::TtlExceeded
-                | TokenInsertStatus::Capacity => {
-                    return Err(VerifyError::Store(TokenStoreError::InsertFailed {
-                        status: outcome.status,
-                    }));
-                }
+        let signature_result = verify_mldsa(
+            self.suite,
+            &self.public_key,
+            &[],
+            &body[..],
+            token.signature(),
+        )
+        .map_err(VerifyError::Signature);
+        if let Err(error) = signature_result {
+            self.release_replay(replay_id);
+            return Err(error);
+        }
+        let consumed = self.consume_replay(token, replay_id, now);
+        if consumed.is_err() {
+            self.release_replay(replay_id);
+        }
+        consumed
+    }
+
+    fn reserve_replay(
+        &self,
+        token: &AdmissionToken,
+        now: SystemTime,
+    ) -> Result<[u8; 32], VerifyError> {
+        let token_id = token.token_id();
+        // Check durable state and install the in-process reservation while the
+        // store lock is held. This makes concurrent copies share one cheap
+        // decision before any ML-DSA work starts.
+        let mut store = self
+            .replay_store
+            .lock()
+            .map_err(|_| VerifyError::Store(TokenStoreError::Poisoned))?;
+        if store.contains(&token_id, now).map_err(VerifyError::Store)? {
+            return Err(VerifyError::Replay(token_id));
+        }
+        let mut pending = self
+            .pending_replays
+            .lock()
+            .map_err(|_| VerifyError::Store(TokenStoreError::Poisoned))?;
+        if pending.contains(&token_id) {
+            return Err(VerifyError::Replay(token_id));
+        }
+        if pending.len() >= TOKEN_STORE_MAX_ENTRIES_V1 {
+            return Err(VerifyError::Store(TokenStoreError::InsertFailed {
+                status: TokenInsertStatus::Capacity,
+            }));
+        }
+        pending
+            .try_reserve(1)
+            .map_err(|_| VerifyError::Store(TokenStoreError::Allocation { entries: 1 }))?;
+        pending.insert(token_id);
+        Ok(token_id)
+    }
+
+    fn consume_replay(
+        &self,
+        token: &AdmissionToken,
+        token_id: [u8; 32],
+        now: SystemTime,
+    ) -> Result<(), VerifyError> {
+        let token_expires_at = UNIX_EPOCH
+            .checked_add(Duration::from_secs(token.expires_at()))
+            .ok_or_else(|| {
+                VerifyError::Store(TokenStoreError::Parse(format!(
+                    "token expiry timestamp {} overflows system time",
+                    token.expires_at()
+                )))
+            })?;
+        // Verification accepts a token until `expires_at + clock_skew`.
+        // Keep its single-use marker for that entire acceptance window;
+        // pruning it at the nominal expiry would permit a replay during the
+        // configured skew allowance.
+        let replay_expires_at = token_expires_at
+            .checked_add(self.clock_skew)
+            .ok_or_else(|| {
+                VerifyError::Store(TokenStoreError::Parse(format!(
+                    "token replay expiry {} + clock skew {:?} overflows system time",
+                    token.expires_at(),
+                    self.clock_skew
+                )))
+            })?;
+        let mut store = self
+            .replay_store
+            .lock()
+            .map_err(|_| VerifyError::Store(TokenStoreError::Poisoned))?;
+        let outcome = store
+            .insert(token_id, replay_expires_at, now)
+            .map_err(VerifyError::Store)?;
+        match outcome.status {
+            TokenInsertStatus::Accepted => {
+                self.release_replay(token_id);
+                Ok(())
+            }
+            TokenInsertStatus::Duplicate => Err(VerifyError::Replay(token_id)),
+            TokenInsertStatus::Expired
+            | TokenInsertStatus::TtlExceeded
+            | TokenInsertStatus::Capacity => {
+                Err(VerifyError::Store(TokenStoreError::InsertFailed {
+                    status: outcome.status,
+                }))
             }
         }
-        Ok(())
+    }
+
+    fn release_replay(&self, token_id: [u8; 32]) {
+        if let Ok(mut pending) = self.pending_replays.lock() {
+            pending.remove(&token_id);
+        }
     }
     fn preflight_crypto_material(&self, token: &AdmissionToken) -> Result<(), VerifyError> {
         self.suite
@@ -864,13 +963,10 @@ impl PersistentTokenStore {
                 "token replay snapshot is empty".to_string(),
             ));
         }
-        let snapshot = decode_exact_from_slice_with_limits::<TokenStoreSnapshot>(
-            &bytes,
-            self.limits.decode_limits(),
-        )
-        .map_err(|decode_err| {
-            TokenStoreError::Parse(format!("norito decode failed: {decode_err}"))
-        })?;
+        let snapshot: TokenStoreSnapshot =
+            decode_canonical_with_limits(&bytes, self.limits.decode_limits()).map_err(
+                |decode_err| TokenStoreError::Parse(format!("norito decode failed: {decode_err}")),
+            )?;
         drop(bytes);
         if snapshot.version != TOKEN_STORE_SNAPSHOT_VERSION_V1 {
             return Err(TokenStoreError::Parse(format!(
@@ -1002,7 +1098,7 @@ impl PersistentTokenStore {
             self.limits.max_snapshot_bytes(),
             "token replay snapshot",
         );
-        encode_adaptive_into(&snapshot, &mut bounded)
+        norito::core::write_canonical_to_writer(&snapshot, &mut bounded)
             .map_err(|err| TokenStoreError::Io(err.to_string()))?;
         let tmp = bounded.into_inner();
         tmp.as_file()
@@ -1134,24 +1230,24 @@ fn encode_body(
     transcript_hash: &[u8; 32],
     nonce: &[u8; 16],
     issuer_fingerprint: &[u8; 32],
-) -> [u8; SIGNING_BODY_LEN] {
-    let mut body = [0u8; SIGNING_BODY_LEN];
+) -> TokenSigningBody {
+    let mut body = TokenSigningBody([0u8; SIGNING_BODY_LEN]);
     let mut cursor = 0;
-    body[cursor..cursor + BODY_DOMAIN.len()].copy_from_slice(BODY_DOMAIN);
+    body.0[cursor..cursor + BODY_DOMAIN.len()].copy_from_slice(BODY_DOMAIN);
     cursor += BODY_DOMAIN.len();
-    body[cursor] = flags;
+    body.0[cursor] = flags;
     cursor += 1;
-    body[cursor..cursor + 8].copy_from_slice(&issued_at.to_be_bytes());
+    body.0[cursor..cursor + 8].copy_from_slice(&issued_at.to_be_bytes());
     cursor += 8;
-    body[cursor..cursor + 8].copy_from_slice(&expires_at.to_be_bytes());
+    body.0[cursor..cursor + 8].copy_from_slice(&expires_at.to_be_bytes());
     cursor += 8;
-    body[cursor..cursor + relay_id.len()].copy_from_slice(relay_id);
+    body.0[cursor..cursor + relay_id.len()].copy_from_slice(relay_id);
     cursor += relay_id.len();
-    body[cursor..cursor + transcript_hash.len()].copy_from_slice(transcript_hash);
+    body.0[cursor..cursor + transcript_hash.len()].copy_from_slice(transcript_hash);
     cursor += transcript_hash.len();
-    body[cursor..cursor + nonce.len()].copy_from_slice(nonce);
+    body.0[cursor..cursor + nonce.len()].copy_from_slice(nonce);
     cursor += nonce.len();
-    body[cursor..cursor + issuer_fingerprint.len()].copy_from_slice(issuer_fingerprint);
+    body.0[cursor..cursor + issuer_fingerprint.len()].copy_from_slice(issuer_fingerprint);
     cursor += issuer_fingerprint.len();
     debug_assert_eq!(cursor, SIGNING_BODY_LEN);
     body
@@ -1235,8 +1331,8 @@ pub enum DecodeError {
         /// UNIX-second timestamp carried by the frame.
         value: u64,
     },
-    /// Signature bytes were an inert all-zero placeholder.
-    #[error("admission token signature material must not be all zero")]
+    /// Signature bytes were empty or an inert all-zero placeholder.
+    #[error("admission token signature material must not be empty or all zero")]
     InertSignature,
 }
 /// Errors surfaced while serializing token frames.
@@ -1365,15 +1461,6 @@ mod tests {
         token: AdmissionToken,
     }
     impl MintedTokenFixture {
-        fn verifier(&self, max_ttl_secs: u64, clock_skew_secs: u64) -> AdmissionTokenVerifier {
-            AdmissionTokenVerifier::try_new(
-                self.suite,
-                self.keypair.public_key().to_vec(),
-                Duration::from_secs(max_ttl_secs),
-                Duration::from_secs(clock_skew_secs),
-            )
-            .expect("fixture verifier key must match its ML-DSA suite")
-        }
         fn verifier_with_store(
             &self,
             store_ttl_secs: u64,
@@ -1382,8 +1469,14 @@ mod tests {
         ) -> (AdmissionTokenVerifier, SharedTokenStore) {
             let store = replay_store(store_ttl_secs);
             (
-                self.verifier(max_ttl_secs, clock_skew_secs)
-                    .with_replay_store(store.clone()),
+                AdmissionTokenVerifier::try_new(
+                    self.suite,
+                    self.keypair.public_key().to_vec(),
+                    Duration::from_secs(max_ttl_secs),
+                    Duration::from_secs(clock_skew_secs),
+                    store.clone(),
+                )
+                .expect("fixture verifier key must match its ML-DSA suite"),
                 store,
             )
         }
@@ -1458,7 +1551,7 @@ mod tests {
             high_watermark_nanos: 0,
             entries,
         };
-        let content = encode_adaptive(&snapshot);
+        let content = encode_canonical(&snapshot).expect("encode canonical token-store snapshot");
         write_private_test_file(path, &content);
     }
     fn write_private_test_file(path: &std::path::Path, bytes: &[u8]) {
@@ -1589,13 +1682,39 @@ mod tests {
         legacy.extend_from_slice(&token.nonce);
         legacy.extend_from_slice(&token.issuer_fingerprint);
         assert_eq!(legacy.len(), SIGNING_BODY_LEN);
-        assert_eq!(token.body_bytes().as_slice(), legacy.as_slice());
+        let mut body = token.body_bytes();
+        assert_eq!(body.as_slice(), legacy.as_slice());
+        assert!(std::mem::needs_drop::<TokenSigningBody>());
+        assert_eq!(format!("{body:?}"), "TokenSigningBody([REDACTED])");
         let mut legacy_id = Hasher::new();
         legacy_id.update(ID_DOMAIN);
         legacy_id.update(&legacy);
         legacy_id.update(token.signature());
         let expected_id: [u8; 32] = legacy_id.finalize().into();
         assert_eq!(token.token_id(), expected_id);
+        body.clear();
+        assert!(body.iter().all(|byte| *byte == 0));
+    }
+    #[test]
+    fn minimum_frame_length_counts_the_version_once() {
+        assert_eq!(MIN_FRAME_LEN, TOKEN_MAGIC.len() + BODY_LEN + 2);
+        let token = AdmissionToken {
+            flags: 0,
+            issued_at: 1,
+            expires_at: 2,
+            relay_id: RELAY_ID,
+            transcript_hash: TRANSCRIPT,
+            nonce: [0xAB; 16],
+            issuer_fingerprint: [0xEF; 32],
+            signature: Vec::new(),
+        };
+        let encoded = token.try_encode().expect("encode fixed envelope");
+        assert_eq!(encoded.len(), MIN_FRAME_LEN);
+        assert_eq!(
+            AdmissionToken::decode(&encoded),
+            Err(DecodeError::InertSignature),
+            "an exact fixed envelope must reach signature validation, not truncate admission"
+        );
     }
     #[test]
     fn encode_decode_round_trip() {
@@ -1641,7 +1760,13 @@ mod tests {
         );
     }
     #[test]
+    #[allow(unsafe_code)]
     fn admission_token_zeroize_clears_all_bearer_fields() {
+        assert!(std::mem::needs_drop::<AdmissionToken>());
+        let mut signature = Vec::with_capacity(64);
+        signature.resize(signature.capacity(), 0x55);
+        signature.truncate(4);
+        let signature_capacity = signature.capacity();
         let mut token = AdmissionToken {
             flags: u8::MAX,
             issued_at: u64::MAX,
@@ -1650,7 +1775,7 @@ mod tests {
             transcript_hash: [0x22; 32],
             nonce: [0x33; 16],
             issuer_fingerprint: [0x44; 32],
-            signature: vec![0x55; 4],
+            signature,
         };
         token.zeroize_sensitive_fields();
         assert_eq!(token.flags, 0);
@@ -1660,7 +1785,14 @@ mod tests {
         assert_eq!(token.transcript_hash, [0; 32]);
         assert_eq!(token.nonce, [0; 16]);
         assert_eq!(token.issuer_fingerprint, [0; 32]);
+        assert!(token.signature.is_empty());
+        assert_eq!(token.signature.capacity(), signature_capacity);
+        // SAFETY: `zeroize_sensitive_fields` initializes and wipes every byte
+        // through the signature allocation's capacity immediately before
+        // clearing its logical length.
+        unsafe { token.signature.set_len(signature_capacity) };
         assert!(token.signature.iter().all(|byte| *byte == 0));
+        token.signature.clear();
     }
     // typed-matrix-residual:start token-runners
     #[test]
@@ -1862,6 +1994,7 @@ mod tests {
             keypair.public_key().to_vec(),
             Duration::from_secs(900),
             Duration::from_secs(5),
+            replay_store(900),
         )
         .expect("generated verifier key must match ML-DSA-44");
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_100);
@@ -1877,6 +2010,7 @@ mod tests {
             Vec::new(),
             Duration::from_secs(900),
             Duration::from_secs(5),
+            replay_store(900),
         )
         .expect_err("invalid issuer public key must fail at verifier construction");
         match err {
@@ -1895,6 +2029,7 @@ mod tests {
             bad_public_key,
             Duration::from_secs(900),
             Duration::from_secs(5),
+            replay_store(900),
         )
         .expect_err("bad verifier public key length must fail during construction");
         match err {
@@ -1962,8 +2097,7 @@ mod tests {
         );
     }
     #[test]
-    fn admission_token_reuse_is_currently_allowed() {
-        // Without a replay store attached, tokens remain reusable.
+    fn required_replay_store_makes_admission_tokens_single_use() {
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
             .expect("ML-DSA keypair generation should succeed");
         let fingerprint = compute_issuer_fingerprint(keypair.public_key());
@@ -1987,6 +2121,7 @@ mod tests {
             keypair.public_key().to_vec(),
             Duration::from_secs(900),
             Duration::from_secs(1),
+            replay_store(900),
         )
         .expect("generated verifier key must match ML-DSA-44");
         verifier
@@ -1997,14 +2132,15 @@ mod tests {
                 issued + Duration::from_secs(1),
             )
             .expect("first use");
-        verifier
+        let replay = verifier
             .verify(
                 &token,
                 &RELAY_ID,
                 &TRANSCRIPT,
                 issued + Duration::from_secs(2),
             )
-            .expect("replay use");
+            .expect_err("second use must be rejected");
+        assert!(matches!(replay, VerifyError::Replay(_)));
     }
     #[test]
     fn verify_rejects_relay_mismatch() {
@@ -2031,6 +2167,7 @@ mod tests {
             keypair.public_key().to_vec(),
             Duration::from_secs(900),
             Duration::from_secs(5),
+            replay_store(900),
         )
         .expect("generated verifier key must match ML-DSA-44");
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_100);
@@ -2064,6 +2201,7 @@ mod tests {
             keypair.public_key().to_vec(),
             Duration::from_secs(900),
             Duration::from_secs(5),
+            replay_store(900),
         )
         .expect("generated verifier key must match ML-DSA-44");
         let err = verifier
@@ -2395,6 +2533,44 @@ mod tests {
         assert!(matches!(err, VerifyError::Replay(_)), "{id}");
     }
     #[test]
+    fn known_replay_is_rejected_before_signature_verification() {
+        let fixture =
+            minted_token_with_expectation(0xA11CE, 300, "ML-DSA keypair generation should succeed");
+        let (mut verifier, _store) = fixture.verifier_with_store(900, 900, 5);
+        let now = fixture.issued + Duration::from_secs(5);
+        verifier
+            .verify(&fixture.token, &RELAY_ID, &TRANSCRIPT, now)
+            .expect("first use");
+        // Make crypto preflight impossible. The exact replay must still be
+        // rejected from durable state before the verifier inspects the key.
+        verifier.public_key.clear();
+        let err = verifier
+            .verify(&fixture.token, &RELAY_ID, &TRANSCRIPT, now)
+            .expect_err("persisted replay must short-circuit ML-DSA preflight");
+        assert!(matches!(err, VerifyError::Replay(_)));
+    }
+    #[test]
+    fn pending_replay_reservation_rejects_concurrent_duplicate() {
+        let fixture = minted_token_with_expectation(
+            0xC0FFEE,
+            300,
+            "ML-DSA keypair generation should succeed",
+        );
+        let (verifier, _store) = fixture.verifier_with_store(900, 900, 5);
+        let now = fixture.issued + Duration::from_secs(5);
+        let reservation = verifier
+            .reserve_replay(&fixture.token, now)
+            .expect("first in-process reservation");
+        let err = verifier
+            .reserve_replay(&fixture.token, now)
+            .expect_err("concurrent copy must be rejected before ML-DSA verification");
+        assert!(matches!(err, VerifyError::Replay(_)));
+        verifier.release_replay(reservation);
+        verifier
+            .reserve_replay(&fixture.token, now)
+            .expect("failed verification releases the reservation");
+    }
+    #[test]
     fn verifier_retains_replay_marker_through_clock_skew_window() {
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
             .expect("ML-DSA keypair generation should succeed");
@@ -2423,9 +2599,9 @@ mod tests {
             keypair.public_key().to_vec(),
             Duration::from_secs(60),
             clock_skew,
+            store,
         )
-        .expect("generated verifier key must match ML-DSA-44")
-        .with_replay_store(store);
+        .expect("generated verifier key must match ML-DSA-44");
         verifier
             .verify(
                 &token,
@@ -2473,9 +2649,9 @@ mod tests {
             keypair.public_key().to_vec(),
             Duration::from_secs(900),
             Duration::from_secs(5),
+            store.clone(),
         )
-        .expect("generated verifier key must match ML-DSA-44")
-        .with_replay_store(store.clone());
+        .expect("generated verifier key must match ML-DSA-44");
         let now = issued + Duration::from_secs(5);
         let err = verifier
             .verify(&token, &RELAY_ID, &TRANSCRIPT, now)
@@ -2495,9 +2671,33 @@ mod tests {
             std::fs::metadata(&path).expect("ledger metadata").len() > 0,
             "startup must materialize a parseable durable snapshot"
         );
+        let bytes = std::fs::read(&path).expect("read canonical snapshot");
+        let snapshot: TokenStoreSnapshot =
+            decode_canonical_with_limits(&bytes, limits.decode_limits())
+                .expect("materialized snapshot must be canonical");
+        assert_eq!(snapshot.version, TOKEN_STORE_SNAPSHOT_VERSION_V1);
+        assert!(snapshot.entries.is_empty());
         drop(store);
         let mut reloaded = PersistentTokenStore::load(&path, limits, now).expect("reload ledger");
         assert_eq!(reloaded.len(now).expect("len"), 0);
+    }
+    #[test]
+    fn persistent_store_rejects_bare_legacy_snapshot() {
+        let limits = TokenStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
+        let now = UNIX_EPOCH + Duration::from_secs(10_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("bare-replay-store.norito");
+        let snapshot = TokenStoreSnapshot {
+            version: TOKEN_STORE_SNAPSHOT_VERSION_V1,
+            high_watermark_secs: 10_000,
+            high_watermark_nanos: 0,
+            entries: Vec::new(),
+        };
+        let bare = norito::codec::encode_adaptive(&snapshot);
+        write_private_test_file(&path, &bare);
+        let error = PersistentTokenStore::load(&path, limits, now)
+            .expect_err("a snapshot without a canonical Norito header must fail closed");
+        assert!(matches!(error, TokenStoreError::Parse(_)));
     }
     #[test]
     fn persistent_store_blocks_replay_after_restart() {
@@ -2745,7 +2945,10 @@ mod tests {
             high_watermark_nanos: 1_000_000_000,
             entries: Vec::new(),
         };
-        write_private_test_file(&path, &encode_adaptive(&snapshot));
+        write_private_test_file(
+            &path,
+            &encode_canonical(&snapshot).expect("encode canonical timestamp fixture"),
+        );
         let error = PersistentTokenStore::load(&path, limits, now)
             .expect_err("noncanonical nanoseconds must fail closed");
         assert!(

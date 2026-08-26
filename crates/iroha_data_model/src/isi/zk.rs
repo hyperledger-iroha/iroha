@@ -493,22 +493,22 @@ mod tests {
         });
     }
     #[test]
-    fn zk_default_registry_decodes_type_names_and_stable_ids() {
+    fn zk_default_registry_decodes_only_stable_ids() {
         let registry = crate::isi::registry::default();
         let asset = asset_definition_id();
         assert_registry_decodes(
             &registry,
-            std::any::type_name::<VerifyProof>(),
+            "iroha.instruction.v1::zk::VerifyProof",
             VerifyProof::new(proof_attachment()),
         );
         assert_registry_decodes(
             &registry,
-            std::any::type_name::<PruneProofs>(),
+            "iroha.instruction.v1::zk::PruneProofs",
             PruneProofs::new(None),
         );
         assert_registry_decodes(
             &registry,
-            std::any::type_name::<RegisterZkAsset>(),
+            "iroha.instruction.v1::zk::RegisterZkAsset",
             RegisterZkAsset::new(asset.clone(), None, None),
         );
         assert_registry_decodes(

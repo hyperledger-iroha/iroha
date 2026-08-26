@@ -59,6 +59,7 @@ internal static class ToriiVpnJson
         RequireUInt64Range(response.PaddingBudgetMilliseconds, 1, ushort.MaxValue, $"{context}.padding_budget_ms");
         ValidateVpnTrust(
             response.RelayIdHex,
+            response.RelayMldsa65PublicKeyHex,
             response.DescriptorCommitHex,
             response.TlsServerName,
             response.RelayTlsSpkiSha256Hex,
@@ -94,6 +95,7 @@ internal static class ToriiVpnJson
         RequireUInt64Range(response.PaddingBudgetMilliseconds, 1, ushort.MaxValue, $"{context}.padding_budget_ms");
         ValidateVpnTrust(
             response.RelayIdHex,
+            response.RelayMldsa65PublicKeyHex,
             response.DescriptorCommitHex,
             response.TlsServerName,
             response.RelayTlsSpkiSha256Hex,
@@ -130,6 +132,7 @@ internal static class ToriiVpnJson
         RequireUInt64Range(response.PaddingBudgetMilliseconds, 1, ushort.MaxValue, $"{context}.padding_budget_ms");
         ValidateVpnTrust(
             response.RelayIdHex,
+            response.RelayMldsa65PublicKeyHex,
             response.DescriptorCommitHex,
             response.TlsServerName,
             response.RelayTlsSpkiSha256Hex,
@@ -466,6 +469,7 @@ internal static class ToriiVpnJson
 
     private static void ValidateVpnTrust(
         string relayIdHex,
+        string relayMldsa65PublicKeyHex,
         string descriptorCommitHex,
         string tlsServerName,
         string relayTlsSpkiSha256Hex,
@@ -475,6 +479,10 @@ internal static class ToriiVpnJson
         bool allowEmpty = false)
     {
         RequireVpnRelayId(relayIdHex, $"{context}.relay_id_hex", allowEmpty);
+        RequireVpnMldsa65PublicKey(
+            relayMldsa65PublicKeyHex,
+            $"{context}.relay_mldsa65_public_key_hex",
+            allowEmpty);
         RequireVpnTrustDigest(
             descriptorCommitHex,
             $"{context}.descriptor_commit_hex",
@@ -520,6 +528,26 @@ internal static class ToriiVpnJson
         if (value.AsSpan().IndexOfAnyExcept('0') < 0)
         {
             throw new JsonException($"{field} must not be the all-zero digest.");
+        }
+    }
+
+    private static void RequireVpnMldsa65PublicKey(
+        string value,
+        string field,
+        bool allowEmpty)
+    {
+        if (allowEmpty && value.Length == 0)
+        {
+            return;
+        }
+
+        ToriiSseEventJson.RequireExactSizedHex(
+            value,
+            field,
+            ToriiVpnDirectMetadata.RelayMldsa65PublicKeyByteLength);
+        if (value.AsSpan().IndexOfAnyExcept('0') < 0)
+        {
+            throw new JsonException($"{field} must not be the all-zero ML-DSA-65 public key.");
         }
     }
 
@@ -874,6 +902,7 @@ internal static class ToriiVpnJson
             nameof(ToriiVpnProfile.DisplayBillingLabel) => "display_billing_label",
             nameof(ToriiVpnProfile.OperatorAccountId) => "operator_account_id",
             nameof(ToriiVpnProfile.RelayIdHex) => "relay_id_hex",
+            nameof(ToriiVpnProfile.RelayMldsa65PublicKeyHex) => "relay_mldsa65_public_key_hex",
             nameof(ToriiVpnProfile.DescriptorCommitHex) => "descriptor_commit_hex",
             nameof(ToriiVpnProfile.TlsServerName) => "tls_server_name",
             nameof(ToriiVpnProfile.RelayTlsSpkiSha256Hex) => "relay_tls_spki_sha256_hex",
@@ -1086,6 +1115,7 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
         "flow_label_bits",
         "padding_budget_ms",
         "relay_id_hex",
+        "relay_mldsa65_public_key_hex",
         "descriptor_commit_hex",
         "tls_server_name",
         "relay_tls_spki_sha256_hex",
@@ -1131,6 +1161,7 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
         byte? flowLabelBits = null;
         ushort? paddingBudgetMilliseconds = null;
         string? relayIdHex = null;
+        string? relayMldsa65PublicKeyHex = null;
         string? descriptorCommitHex = null;
         string? tlsServerName = null;
         string? relayTlsSpkiSha256Hex = null;
@@ -1177,6 +1208,9 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
                         context,
                         "padding_budget_ms"),
                     RelayIdHex = ToriiVpnJson.RequireString(relayIdHex, $"{context}.relay_id_hex"),
+                    RelayMldsa65PublicKeyHex = ToriiVpnJson.RequireString(
+                        relayMldsa65PublicKeyHex,
+                        $"{context}.relay_mldsa65_public_key_hex"),
                     DescriptorCommitHex = ToriiVpnJson.RequireString(
                         descriptorCommitHex,
                         $"{context}.descriptor_commit_hex"),
@@ -1267,6 +1301,11 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
                 case "relay_id_hex":
                     relayIdHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.relay_id_hex");
                     break;
+                case "relay_mldsa65_public_key_hex":
+                    relayMldsa65PublicKeyHex = ToriiAccountFaucetJson.ReadOptionalString(
+                        ref reader,
+                        $"{context}.relay_mldsa65_public_key_hex");
+                    break;
                 case "descriptor_commit_hex":
                     descriptorCommitHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.descriptor_commit_hex");
                     break;
@@ -1317,6 +1356,7 @@ internal sealed class ToriiVpnProfileJsonConverter : JsonConverter<ToriiVpnProfi
         writer.WriteNumber("flow_label_bits", value.FlowLabelBits);
         writer.WriteNumber("padding_budget_ms", value.PaddingBudgetMilliseconds);
         writer.WriteString("relay_id_hex", value.RelayIdHex);
+        writer.WriteString("relay_mldsa65_public_key_hex", value.RelayMldsa65PublicKeyHex);
         writer.WriteString("descriptor_commit_hex", value.DescriptorCommitHex);
         writer.WriteString("tls_server_name", value.TlsServerName);
         writer.WriteString("relay_tls_spki_sha256_hex", value.RelayTlsSpkiSha256Hex);
@@ -1352,6 +1392,7 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
         "flow_label_bits",
         "padding_budget_ms",
         "relay_id_hex",
+        "relay_mldsa65_public_key_hex",
         "descriptor_commit_hex",
         "tls_server_name",
         "relay_tls_spki_sha256_hex",
@@ -1402,6 +1443,7 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
         byte? flowLabelBits = null;
         ushort? paddingBudgetMilliseconds = null;
         string? relayIdHex = null;
+        string? relayMldsa65PublicKeyHex = null;
         string? descriptorCommitHex = null;
         string? tlsServerName = null;
         string? relayTlsSpkiSha256Hex = null;
@@ -1450,6 +1492,9 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
                         context,
                         "padding_budget_ms"),
                     RelayIdHex = ToriiVpnJson.RequireString(relayIdHex, $"{context}.relay_id_hex"),
+                    RelayMldsa65PublicKeyHex = ToriiVpnJson.RequireString(
+                        relayMldsa65PublicKeyHex,
+                        $"{context}.relay_mldsa65_public_key_hex"),
                     DescriptorCommitHex = ToriiVpnJson.RequireString(
                         descriptorCommitHex,
                         $"{context}.descriptor_commit_hex"),
@@ -1554,6 +1599,11 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
                 case "relay_id_hex":
                     relayIdHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.relay_id_hex");
                     break;
+                case "relay_mldsa65_public_key_hex":
+                    relayMldsa65PublicKeyHex = ToriiAccountFaucetJson.ReadOptionalString(
+                        ref reader,
+                        $"{context}.relay_mldsa65_public_key_hex");
+                    break;
                 case "descriptor_commit_hex":
                     descriptorCommitHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.descriptor_commit_hex");
                     break;
@@ -1616,6 +1666,7 @@ internal sealed class ToriiVpnQuoteJsonConverter : JsonConverter<ToriiVpnQuote>
         writer.WriteNumber("flow_label_bits", value.FlowLabelBits);
         writer.WriteNumber("padding_budget_ms", value.PaddingBudgetMilliseconds);
         writer.WriteString("relay_id_hex", value.RelayIdHex);
+        writer.WriteString("relay_mldsa65_public_key_hex", value.RelayMldsa65PublicKeyHex);
         writer.WriteString("descriptor_commit_hex", value.DescriptorCommitHex);
         writer.WriteString("tls_server_name", value.TlsServerName);
         writer.WriteString("relay_tls_spki_sha256_hex", value.RelayTlsSpkiSha256Hex);
@@ -1653,6 +1704,7 @@ internal sealed class ToriiVpnSessionJsonConverter : JsonConverter<ToriiVpnSessi
         "flow_label_bits",
         "padding_budget_ms",
         "relay_id_hex",
+        "relay_mldsa65_public_key_hex",
         "descriptor_commit_hex",
         "tls_server_name",
         "relay_tls_spki_sha256_hex",
@@ -1706,6 +1758,7 @@ internal sealed class ToriiVpnSessionJsonConverter : JsonConverter<ToriiVpnSessi
         byte? flowLabelBits = null;
         ushort? paddingBudgetMilliseconds = null;
         string? relayIdHex = null;
+        string? relayMldsa65PublicKeyHex = null;
         string? descriptorCommitHex = null;
         string? tlsServerName = null;
         string? relayTlsSpkiSha256Hex = null;
@@ -1762,6 +1815,9 @@ internal sealed class ToriiVpnSessionJsonConverter : JsonConverter<ToriiVpnSessi
                         context,
                         "padding_budget_ms"),
                     RelayIdHex = ToriiVpnJson.RequireString(relayIdHex, $"{context}.relay_id_hex"),
+                    RelayMldsa65PublicKeyHex = ToriiVpnJson.RequireString(
+                        relayMldsa65PublicKeyHex,
+                        $"{context}.relay_mldsa65_public_key_hex"),
                     DescriptorCommitHex = ToriiVpnJson.RequireString(
                         descriptorCommitHex,
                         $"{context}.descriptor_commit_hex"),
@@ -1858,6 +1914,11 @@ internal sealed class ToriiVpnSessionJsonConverter : JsonConverter<ToriiVpnSessi
                 case "relay_id_hex":
                     relayIdHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.relay_id_hex");
                     break;
+                case "relay_mldsa65_public_key_hex":
+                    relayMldsa65PublicKeyHex = ToriiAccountFaucetJson.ReadOptionalString(
+                        ref reader,
+                        $"{context}.relay_mldsa65_public_key_hex");
+                    break;
                 case "descriptor_commit_hex":
                     descriptorCommitHex = ToriiAccountFaucetJson.ReadOptionalString(ref reader, $"{context}.descriptor_commit_hex");
                     break;
@@ -1934,6 +1995,7 @@ internal sealed class ToriiVpnSessionJsonConverter : JsonConverter<ToriiVpnSessi
         writer.WriteNumber("flow_label_bits", value.FlowLabelBits);
         writer.WriteNumber("padding_budget_ms", value.PaddingBudgetMilliseconds);
         writer.WriteString("relay_id_hex", value.RelayIdHex);
+        writer.WriteString("relay_mldsa65_public_key_hex", value.RelayMldsa65PublicKeyHex);
         writer.WriteString("descriptor_commit_hex", value.DescriptorCommitHex);
         writer.WriteString("tls_server_name", value.TlsServerName);
         writer.WriteString("relay_tls_spki_sha256_hex", value.RelayTlsSpkiSha256Hex);

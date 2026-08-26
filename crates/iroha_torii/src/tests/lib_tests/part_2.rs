@@ -1533,8 +1533,7 @@ async fn retail_recipient_lookup_preserves_requested_account_literal_for_bank_lo
         "sorauﾛ1Nﾅ9XﾂﾜｶPTCﾈﾜ1ﾌｲ3wF4ZxnjAeEﾆｷgYN1ｶﾕｷkAﾔﾋUWP59S";
     const PK2_RECIPIENT_LOOKUP_ALIAS: &str = "bright-brook-5859@ubl.sbp";
     let target = AccountId::parse_encoded(PK2_RECIPIENT_LOOKUP_ACCOUNT)
-        .expect("pk2 recipient account fixture must parse")
-        .into_account_id();
+        .expect("pk2 recipient account fixture must parse");
     let caller_keypair = checked_torii_test_ed25519_keypair(
         0x96,
         "derive recipient lookup funded caller fixture key",

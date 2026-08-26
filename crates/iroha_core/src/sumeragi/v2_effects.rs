@@ -88,7 +88,7 @@ use super::v2_runtime::{RuntimeSelectedOwnerKind, bind_adapter_effect_batch_owne
 #[cfg(test)]
 use super::v2_transport::authenticate_certified_body_request;
 use super::{
-    FairV2IngressOwnershipEvidence,
+    FairV2IngressLeaderWireToken, FairV2IngressOwnershipEvidence,
     message::BlockMessage,
     output_guard::ConsensusOutputGuard,
     v2::{
@@ -197,6 +197,16 @@ pub(crate) fn v2_ingress_head_can_drain<R: EffectRuntime>(
     let Some(ingress_ownership) = inbound.ingress_ownership() else {
         return true;
     };
+    if let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &message.payload {
+        if terminal_subject.is_some() {
+            // The post-Decision consumer terminalizes unmatched chunks
+            // without opening a new body owner.
+            return true;
+        }
+        if !executor.payload_chunk_ingress_can_drain(chunk.manifest_hash, ingress_ownership) {
+            return false;
+        }
+    }
     executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership)
 }
 
@@ -9091,6 +9101,54 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ) -> EffectExecutorError {
         self.close(EffectExecutorError::Service(reason.to_string()), services)
     }
+    fn has_exact_manifest_chunk_fetch(
+        &self,
+        manifest_hash: HashOf<wire::PayloadManifest>,
+        token: &FairV2IngressLeaderWireToken,
+    ) -> bool {
+        self.pending_fetches.values().any(|pending| {
+            pending.task.manifest.as_ref().is_some_and(|manifest| {
+                HashOf::new(manifest) == manifest_hash
+                    && token.matches_exact_body(manifest.round, manifest.subject, manifest_hash)
+            })
+        })
+    }
+    /// Keep a productive chunk in durable fair ingress until an exact
+    /// manifest-bearing fetch can authenticate it or retained body state can
+    /// terminalize it without orphan storage.
+    fn payload_chunk_ingress_can_drain(
+        &self,
+        manifest_hash: HashOf<wire::PayloadManifest>,
+        ingress_ownership: &FairV2IngressOwnershipEvidence,
+    ) -> bool {
+        if !ingress_ownership.validate_exact()
+            || ingress_ownership.leader_wire_runtime_receipt().is_some()
+        {
+            // Corrupt ownership must reach the existing mutating fail-closed
+            // seam instead of becoming an immortal queue head.
+            return true;
+        }
+        let Some(token) = ingress_ownership.leader_wire_token() else {
+            // Proofless reordering remains bounded by the ejectable orphan
+            // partition; it carries no protected runtime lifecycle.
+            return true;
+        };
+        if !token.matches_chunk_manifest(manifest_hash) {
+            return true;
+        }
+        match self.classify_payload_chunk_lifecycle_for_token(manifest_hash, token) {
+            Ok(
+                PayloadChunkLifecycleDisposition::Durable(_)
+                | PayloadChunkLifecycleDisposition::Volatile,
+            ) => true,
+            Ok(PayloadChunkLifecycleDisposition::Retain) => {
+                self.has_exact_manifest_chunk_fetch(manifest_hash, token)
+            }
+            // Internal disagreement must reach the existing fail-closed
+            // classifier rather than permanently pinning ingress.
+            Err(_) => true,
+        }
+    }
     /// Classify one exact productive chunk after the service has established
     /// that no active manifest fetch can consume it immediately.
     ///
@@ -9124,6 +9182,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "payload chunk lifecycle classification changed its exact manifest".to_owned(),
             ));
         }
+        self.classify_payload_chunk_lifecycle_for_token(manifest_hash, token)
+    }
+    fn classify_payload_chunk_lifecycle_for_token(
+        &self,
+        manifest_hash: HashOf<wire::PayloadManifest>,
+        token: &FairV2IngressLeaderWireToken,
+    ) -> Result<PayloadChunkLifecycleDisposition, EffectExecutorError> {
         let mut durable = None::<DurableBodyReceipt>;
         let mut observe_durable =
             |candidate: &DurableBodyReceipt| -> Result<(), EffectExecutorError> {

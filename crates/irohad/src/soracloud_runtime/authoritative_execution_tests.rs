@@ -1,7 +1,33 @@
 // Authoritative SoraCloud execution-result regression.
+use iroha_data_model::soracloud::SoraAgentRuntimeStatusV1;
+
+fn push_committed_test_block_hash(state: &mut Arc<State>, height: u64) -> Result<()> {
+    let view = state.view();
+    let next_height = committed_height(&view)
+        .checked_add(1)
+        .ok_or_else(|| eyre::eyre!("test consensus height overflow"))?;
+    eyre::ensure!(
+        height == next_height,
+        "test block height must advance consecutively: expected {next_height}, got {height}"
+    );
+    let header = BlockHeader::new(
+        NonZeroU64::new(height).ok_or_else(|| eyre::eyre!("block height must be non-zero"))?,
+        view.latest_block_hash(),
+        None,
+        None,
+        0,
+        0,
+    );
+    drop(view);
+    Arc::get_mut(state)
+        .ok_or_else(|| eyre::eyre!("test state must be uniquely owned while advancing height"))?
+        .push_block_hash_for_testing(header.hash());
+    Ok(())
+}
+
 #[test]
 fn execute_apartment_returns_authoritative_status_and_commitment() -> Result<()> {
-    let mut state = test_state_at_height_one()?;
+    let mut state = test_state()?;
     let apartment = sample_agent_record()?;
     {
         let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
@@ -10,9 +36,10 @@ fn execute_apartment_returns_authoritative_status_and_commitment() -> Result<()>
             apartment.clone(),
         );
     }
+    push_committed_test_block_hash(&mut state, 1)?;
     let temp_dir = tempfile::tempdir()?;
     let manager = SoracloudRuntimeManager::new(
-        test_runtime_manager_config(temp_dir.path().to_path_buf()),
+        test_runtime_manager_config(canonical_test_runtime_state_dir(&temp_dir)?),
         Arc::clone(&state),
     );
     manager.reconcile_once()?;
@@ -36,13 +63,7 @@ fn execute_apartment_returns_authoritative_status_and_commitment() -> Result<()>
 
 #[test]
 fn apartment_execution_fails_closed_at_committed_lease_expiry_height() -> Result<()> {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let mut state = Arc::new(State::new_for_testing(
-        World::new(),
-        Arc::clone(&kura),
-        query,
-    ));
+    let mut state = test_state()?;
     let mut apartment = sample_agent_record()?;
     apartment.lease_expires_height = 2;
     let apartment_name = apartment.manifest.apartment_name.to_string();
@@ -53,10 +74,10 @@ fn apartment_execution_fails_closed_at_committed_lease_expiry_height() -> Result
             .insert(apartment_name.clone(), apartment.clone());
     }
 
-    commit_empty_test_block(&state, &kura, 1)?;
+    push_committed_test_block_hash(&mut state, 1)?;
     let temp_dir = tempfile::tempdir()?;
     let manager = SoracloudRuntimeManager::new(
-        test_runtime_manager_config(temp_dir.path().to_path_buf()),
+        test_runtime_manager_config(canonical_test_runtime_state_dir(&temp_dir)?),
         Arc::clone(&state),
     );
     manager.reconcile_once()?;
@@ -74,7 +95,9 @@ fn apartment_execution_fails_closed_at_committed_lease_expiry_height() -> Result
         .map_err(|error| eyre::eyre!(error))?;
     assert_eq!(active.status, SoraAgentRuntimeStatusV1::Running);
 
-    commit_empty_test_block(&state, &kura, 2)?;
+    drop(handle);
+    drop(manager);
+    push_committed_test_block_hash(&mut state, 2)?;
     assert_eq!(
         committed_height(&state.view()),
         apartment.lease_expires_height
@@ -90,7 +113,12 @@ fn apartment_execution_fails_closed_at_committed_lease_expiry_height() -> Result
         SoraAgentRuntimeStatusV1::LeaseExpired,
         "authoritative row status must be derived at the committed height boundary"
     );
+    let manager = SoracloudRuntimeManager::new(
+        test_runtime_manager_config(canonical_test_runtime_state_dir(&temp_dir)?),
+        Arc::clone(&state),
+    );
     manager.reconcile_once()?;
+    let handle = test_runtime_handle(&manager, Arc::clone(&state));
     let snapshot = handle.snapshot();
     assert_eq!(
         snapshot

@@ -19,119 +19,6 @@ pub(crate) const PASTA_IPA_POSEIDON_PARTIAL_ROUNDS_V1: usize = 57;
 /// `secure_mds` selector in the reviewed Pasta IPA Poseidon transcript.
 pub(crate) const PASTA_IPA_POSEIDON_SECURE_MDS_V1: usize = 0;
 
-/// Public-instance opening policy used by an Axiom IPA transcript.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PastaIpaInstanceQueryV1 {
-    /// Evaluate public instances directly and omit committed instance openings.
-    Direct,
-    /// Commit to and open every configured instance query.
-    Queried,
-}
-
-/// Exact configured proof shape before any key generation or proving work.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PastaIpaProofShapeV1 {
-    degree: usize,
-    advice_columns: usize,
-    advice_queries: usize,
-    instance_queries: usize,
-    fixed_queries: usize,
-    selectors: usize,
-    lookups: usize,
-    permutation_columns: usize,
-    permutation_chunks: usize,
-    point_sets: usize,
-    commitments: usize,
-    evaluations: usize,
-    transcript_elements: usize,
-    augmented_proof_bytes: u32,
-}
-
-impl PastaIpaProofShapeV1 {
-    /// Maximum constraint degree.
-    #[cfg(test)]
-    pub(crate) const fn degree(&self) -> usize {
-        self.degree
-    }
-
-    /// Number of advice columns committed by the prover.
-    #[cfg(test)]
-    pub(crate) const fn advice_columns(&self) -> usize {
-        self.advice_columns
-    }
-
-    /// Number of distinct advice query pairs.
-    #[cfg(test)]
-    pub(crate) const fn advice_queries(&self) -> usize {
-        self.advice_queries
-    }
-
-    /// Number of configured instance query pairs.
-    #[cfg(test)]
-    pub(crate) const fn instance_queries(&self) -> usize {
-        self.instance_queries
-    }
-
-    /// Number of fixed-column query pairs before selector materialization.
-    #[cfg(test)]
-    pub(crate) const fn fixed_queries(&self) -> usize {
-        self.fixed_queries
-    }
-
-    /// Number of selectors materialized as current-row fixed queries.
-    #[cfg(test)]
-    pub(crate) const fn selectors(&self) -> usize {
-        self.selectors
-    }
-
-    /// Number of lookup arguments.
-    #[cfg(test)]
-    pub(crate) const fn lookups(&self) -> usize {
-        self.lookups
-    }
-
-    /// Number of equality-enabled permutation columns.
-    #[cfg(test)]
-    pub(crate) const fn permutation_columns(&self) -> usize {
-        self.permutation_columns
-    }
-
-    /// Number of permutation product-polynomial chunks.
-    #[cfg(test)]
-    pub(crate) const fn permutation_chunks(&self) -> usize {
-        self.permutation_chunks
-    }
-
-    /// Number of unique multi-opening rotation sets.
-    #[cfg(test)]
-    pub(crate) const fn point_sets(&self) -> usize {
-        self.point_sets
-    }
-
-    /// Number of curve commitments in the augmented transcript.
-    #[cfg(test)]
-    pub(crate) const fn commitments(&self) -> usize {
-        self.commitments
-    }
-
-    /// Number of scalar evaluations in the augmented transcript.
-    #[cfg(test)]
-    pub(crate) const fn evaluations(&self) -> usize {
-        self.evaluations
-    }
-
-    /// Total 32-byte transcript elements, including the folded-generator suffix.
-    #[cfg(test)]
-    pub(crate) const fn transcript_elements(&self) -> usize {
-        self.transcript_elements
-    }
-
-    /// Exact augmented proof length in bytes.
-    pub(crate) const fn augmented_proof_bytes(&self) -> u32 {
-        self.augmented_proof_bytes
-    }
-}
-
 /// Build the reviewed one-column, direct-instance IPA compilation profile.
 ///
 /// Public instances are evaluated directly from the supplied field elements;
@@ -145,7 +32,7 @@ pub(crate) fn pasta_ipa_direct_instance_compile_config_v1(
         .with_num_instance(vec![public_len])
 }
 
-/// Compute the exact Axiom IPA augmented-proof transcript shape.
+/// Compute the exact Axiom IPA augmented-proof length for the direct-instance profile.
 ///
 /// The accounting mirrors Halo2 Axiom and `snark-verifier`: selector
 /// polynomials are current-row fixed queries, permutation products are chunked
@@ -156,11 +43,10 @@ pub(crate) fn pasta_ipa_direct_instance_compile_config_v1(
 ///
 /// Returns an error for an invalid degree or any arithmetic/representation
 /// overflow while deriving the transcript shape.
-pub(crate) fn pasta_ipa_augmented_proof_shape_v1<F>(
+pub(crate) fn pasta_ipa_augmented_proof_bytes_v1<F>(
     cs: &ConstraintSystem<F>,
     k: u32,
-    instance_query: PastaIpaInstanceQueryV1,
-) -> Result<PastaIpaProofShapeV1, String>
+) -> Result<u32, String>
 where
     F: Field,
 {
@@ -190,14 +76,6 @@ where
             .entry((*column).into())
             .or_default()
             .insert(rotation.0);
-    }
-    if instance_query == PastaIpaInstanceQueryV1::Queried {
-        for (column, rotation) in cs.instance_queries() {
-            column_queries
-                .entry((*column).into())
-                .or_default()
-                .insert(rotation.0);
-        }
     }
     for column in cs.permutation().get_columns() {
         column_queries.entry(column).or_default().insert(0);
@@ -253,15 +131,10 @@ where
             .and_then(|count| count.checked_sub(1))
             .ok_or_else(|| "permutation evaluation count overflow".to_owned())?
     };
-    let proof_instance_evaluations = match instance_query {
-        PastaIpaInstanceQueryV1::Direct => 0,
-        PastaIpaInstanceQueryV1::Queried => cs.instance_queries().len(),
-    };
     let evaluations = cs
         .advice_queries()
         .len()
-        .checked_add(proof_instance_evaluations)
-        .and_then(|count| count.checked_add(fixed_query_evaluations))
+        .checked_add(fixed_query_evaluations)
         .and_then(|count| count.checked_add(lookups.checked_mul(5)?))
         .and_then(|count| count.checked_add(permutation_evaluations))
         .and_then(|count| count.checked_add(permutation_columns))
@@ -279,20 +152,38 @@ where
     let augmented_proof_bytes = u32::try_from(transcript_bytes)
         .map_err(|_| "augmented proof byte length does not fit u32".to_owned())?;
 
-    Ok(PastaIpaProofShapeV1 {
-        degree,
-        advice_columns: cs.num_advice_columns(),
-        advice_queries: cs.advice_queries().len(),
-        instance_queries: cs.instance_queries().len(),
-        fixed_queries,
-        selectors,
-        lookups,
-        permutation_columns,
-        permutation_chunks,
-        point_sets: point_sets.len(),
-        commitments,
-        evaluations,
-        transcript_elements,
-        augmented_proof_bytes,
-    })
+    Ok(augmented_proof_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use halo2_proofs::{halo2curves::pasta::Fp, poly::Rotation};
+
+    use super::*;
+
+    #[test]
+    fn direct_instance_queries_do_not_add_committed_openings() {
+        let mut baseline = ConstraintSystem::<Fp>::default();
+        let baseline_advice = baseline.advice_column();
+        baseline.create_gate("query advice", |meta| {
+            vec![meta.query_advice(baseline_advice, Rotation::cur())]
+        });
+
+        let mut with_instance = ConstraintSystem::<Fp>::default();
+        let advice = with_instance.advice_column();
+        let instance = with_instance.instance_column();
+        with_instance.create_gate("bind advice to public instance", |meta| {
+            let advice = meta.query_advice(advice, Rotation::cur());
+            let instance = meta.query_instance(instance, Rotation::cur());
+            vec![advice - instance]
+        });
+
+        let baseline_bytes =
+            pasta_ipa_augmented_proof_bytes_v1(&baseline, 4).expect("baseline proof size");
+        let direct_instance_bytes = pasta_ipa_augmented_proof_bytes_v1(&with_instance, 4)
+            .expect("direct-instance proof size");
+
+        assert_eq!(baseline_bytes, 640);
+        assert_eq!(direct_instance_bytes, baseline_bytes);
+    }
 }

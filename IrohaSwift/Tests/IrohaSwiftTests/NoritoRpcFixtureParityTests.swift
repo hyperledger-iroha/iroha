@@ -21,8 +21,8 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         )
         XCTAssertEqual(
             nativeBridgeABIVersion(),
-            21,
-            "required transaction fixture decode must execute through ABI-21"
+            23,
+            "required transaction fixture decode must execute through ABI-23"
         )
         for name in loader.names {
             try assertFixtureNativeRoundTrip(loader: loader, name: name)
@@ -595,7 +595,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         XCTAssertEqual(
             nativeSignedTransactionDecodeStatus(signedBytes),
             -2,
-            "ABI-21 must reject the unversioned bare signed transaction fixture: \(name)"
+            "ABI-23 must reject the unversioned bare signed transaction fixture: \(name)"
         )
         let versionedSignedBytes = versionedSignedTransaction(signedBytes)
         XCTAssertEqual(versionedSignedBytes.first, FixtureConstants.signedTransactionVersion)

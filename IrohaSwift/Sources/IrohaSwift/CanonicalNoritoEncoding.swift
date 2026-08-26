@@ -1066,11 +1066,10 @@ public enum CanonicalNorito {
     }
 
     private static func canonicalizeAssetDomain(_ value: String) throws -> String {
-        do {
-            return try AccountAddress.canonicalizeDomainLabel(value)
-        } catch {
+        guard let canonical = canonicalizeDomainIdLabel(value) else {
             throw CanonicalNoritoError.invalidAssetId(value)
         }
+        return canonical
     }
 
     static func encodePoseidonDigest(_ bytes: Data) throws -> Data {

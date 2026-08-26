@@ -290,27 +290,22 @@ fn parse_auth_mode(raw: Option<&str>) -> Result<ContentAuthMode> {
     let Some(raw) = raw else {
         return Ok(ContentAuthMode::Public);
     };
-    let trimmed = raw.trim();
-    if trimmed.eq_ignore_ascii_case("public") {
+    if raw == "public" {
         return Ok(ContentAuthMode::Public);
     }
-    if let Some(role_str) = trimmed.strip_prefix("role:") {
+    if let Some(role_str) = raw.strip_prefix("role:") {
         let role = role_str
             .parse::<RoleId>()
             .wrap_err("invalid role id in auth mode")?;
         return Ok(ContentAuthMode::RoleGate(role));
     }
-    if let Some(uaid_raw) = trimmed.strip_prefix("sponsor:") {
-        let cleaned = uaid_raw
-            .trim()
-            .strip_prefix("uaid:")
-            .unwrap_or_else(|| uaid_raw.trim());
-        let uaid = cleaned
+    if let Some(uaid_raw) = raw.strip_prefix("sponsor:") {
+        let uaid = uaid_raw
             .parse::<UniversalAccountId>()
             .wrap_err("invalid UAID in auth mode")?;
         return Ok(ContentAuthMode::Sponsor(uaid));
     }
-    eyre::bail!("unsupported auth mode `{trimmed}`")
+    eyre::bail!("unsupported noncanonical auth mode `{raw}`")
 }
 fn read_content_file_bounded(path: &Path, max_bytes: u64, label: &str) -> Result<Vec<u8>> {
     let (file, expected_bytes) = open_content_file_bounded(path, max_bytes, label)?;
@@ -569,6 +564,27 @@ fn guess_mime(path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn auth_mode_accepts_only_exact_sponsor_uaid() {
+        let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"content-sponsor"));
+        let canonical = format!("sponsor:{uaid}");
+        assert!(matches!(
+            parse_auth_mode(Some(&canonical)).expect("canonical sponsor mode"),
+            ContentAuthMode::Sponsor(parsed) if parsed == uaid
+        ));
+        let hex = uaid.as_hash().to_string();
+        for noncanonical in [
+            format!("sponsor:{hex}"),
+            format!("sponsor:UAID:{hex}"),
+            format!(" sponsor:{uaid}"),
+            format!("sponsor:{uaid} "),
+        ] {
+            assert!(
+                parse_auth_mode(Some(&noncanonical)).is_err(),
+                "noncanonical sponsor mode must reject: {noncanonical:?}"
+            );
+        }
+    }
     #[test]
     fn tar_builder_accepts_exact_bundle_limit_and_rejects_next_block() {
         let max_bundle_bytes = defaults::content::MAX_BUNDLE_BYTES;

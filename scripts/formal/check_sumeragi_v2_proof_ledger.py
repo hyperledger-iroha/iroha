@@ -40,7 +40,7 @@ PRODUCTION_TRACE_EXTRACTION_CANONICAL_ENCODING = "utf8-json-sort-keys-compact-lf
 # action without a source binding must fail the exact partition check below.
 PRODUCTION_TRACE_EXTRACTION_OPEN_MODEL_ACTIONS = ()
 PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS = (
-    "SelectQueuePlanV4Conjunction", "FsyncReservationV5",
+    "SelectQueuePlanV1Conjunction", "FsyncReservationV1",
     "ActivateKura", "FanoutFromProducer",
     "ServeLateBody", "PersistExecutionInput",
     "AuthorizeReady", "SignReady",
@@ -57506,7 +57506,7 @@ pub fn queue_plan_synced_request_id_from_network_digest(
 ) -> Hash {
     Hash::new(
         norito::encode_canonical(&(
-            QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V5,
+            QUEUE_PLAN_SYNCED_REQUEST_DOMAIN_V1,
             network_id_digest,
             entrypoint_hash,
         ))
@@ -57560,10 +57560,10 @@ pub fn queue_plan_synced_request_id(
         binding_items[item_name] = _require_qualified_rust_item(
             binding_path,
             binding_source,
-            "QueuePlanAdmissionBindingV2",
+            "QueuePlanAdmissionBindingV1",
             item_name,
             errors,
-            f"QueuePlanAdmissionBindingV2::{item_name}",
+            f"QueuePlanAdmissionBindingV1::{item_name}",
         )
     _require_rust_token_sequence(
         binding_path,
@@ -57573,7 +57573,7 @@ pub fn new(
     network_id: &NetworkId,
     transaction: &TransactionEntrypoint,
     routing_plan: &crate::queue::RoutingPlan,
-    admission_context: crate::queue::QueuePlanAdmissionContextV2,
+    admission_context: crate::queue::QueuePlanAdmissionContextV1,
     enqueue_timestamp_ms: u64,
 ) -> Result<Self, String>
 """,
@@ -57585,8 +57585,8 @@ pub fn new(
         binding_items["new"],
         """
 let network_id_digest = queue_plan_admission_network_id_digest(network_id);
-let global_admission_identity = crate::queue::QueuePlanGlobalAdmissionIdentityV2 {
-    version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2,
+let global_admission_identity = crate::queue::QueuePlanGlobalAdmissionIdentityV1 {
+    version: crate::queue::QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1,
     network_id_digest,
     request_id: queue_plan_synced_request_id_from_network_digest(
         network_id_digest,
@@ -57646,7 +57646,7 @@ self.validate_for_transaction_and_plan(transaction, routing_plan)
     certificate_validator = _require_rust_item(
         binding_path,
         binding_source,
-        "validate_queue_plan_admission_certificate_for_network_digest_v2",
+        "validate_queue_plan_admission_certificate_for_network_digest_v1",
         errors,
     )
     _require_rust_token_sequence(
@@ -57695,7 +57695,7 @@ if let Some(binding) = expected_admission_binding
         journal_path,
         journal_reconstruction,
         """
-let binding = QueuePlanAdmissionBindingV2::try_from_durable_admission(&durable_admission)
+let binding = QueuePlanAdmissionBindingV1::try_from_durable_admission(&durable_admission)
     .map_err(invalid_data)?;
 binding
     .validate_for_transaction_and_plan(&self.record.entrypoint, &self.record.routing_plan)
@@ -57728,7 +57728,7 @@ fn queue_plan_synced_proxy_request_id_for_entrypoint(
         "Torii must delegate QueuePlan semantic identity to the shared core kernel without a local projection",
         errors,
     )
-    if "torii:proxy:queue-plan-synced:v5" in torii_source:
+    if "torii:proxy:queue-plan-synced:v1" in torii_source:
         errors.append(
             f"{torii_path}: Torii must not duplicate the QueuePlan semantic-request projection domain"
         )
@@ -57753,7 +57753,7 @@ let request_id =
         torii_path,
         torii_execute,
         """
-match QueuePlanAdmissionBindingV2::new(
+match QueuePlanAdmissionBindingV1::new(
     app.state.network_id_ref(),
     &transaction,
     &routing_plan,
@@ -64413,7 +64413,7 @@ fanout.rollover_claim = rollover_claim;
     for item, expected, description in (
         (worker_ack_items.get("QueuePlanBatchSources::resolve"), """if !self.inventory.contains(&hash) { return Ok(None); } if !self.bodies.contains_key(&hash) { let Some(bytes) = kura.pending_queue_plan_admission_certificate(hash).map_err(|error| error.to_string())? else { return Ok(None); }; self.bodies.insert(hash, bytes); } Ok(self.bodies.get(&hash).map(Vec::as_slice))""", "QueuePlan source resolution must reject inventory misses and cache only exact Kura reads"),
         (worker_ack_items.get("QueuePlanBatchSources::contains_exact"), "self.resolve(kura, Hash::new(bytes)).map(|source| source == Some(bytes))", "QueuePlan source authentication must compare exact bytes returned through the frozen inventory"),
-        (worker_ack_items.get("QueuePlanBatchSources::validate"), """let hash = Hash :: new ( bytes ) ; if ! self . validated . contains ( & hash ) { crate :: torii_proxy :: decode_and_validate_queue_plan_admission_certificate_v2 ( network_id , bytes , ) . map_err ( | error | format ! ( ) ) ? ; # [ cfg ( test ) ] _kura . pending_queue_plan_admission_batch_validations . fetch_add ( 1 , AtomicOrdering :: Relaxed ) ; self . validated . insert ( hash ) ; } Ok ( hash )""", "QueuePlan source validation must decode exact bytes before caching their hash"),
+        (worker_ack_items.get("QueuePlanBatchSources::validate"), """let hash = Hash :: new ( bytes ) ; if ! self . validated . contains ( & hash ) { crate :: torii_proxy :: decode_and_validate_queue_plan_admission_certificate_v1 ( network_id , bytes , ) . map_err ( | error | format ! ( ) ) ? ; # [ cfg ( test ) ] _kura . pending_queue_plan_admission_batch_validations . fetch_add ( 1 , AtomicOrdering :: Relaxed ) ; self . validated . insert ( hash ) ; } Ok ( hash )""", "QueuePlan source validation must decode exact bytes before caching their hash"),
         (worker_ack_items.get("ProductionV2Services::queue_plan_admission_batch_sources"), """self.kura.pending_queue_plan_admission_hash_inventory().map(|inventory| QueuePlanBatchSources { inventory, bodies: HashMap::new(), validated: HashSet::new(), }).map_err(|error| error.to_string())""", "QueuePlan batching must freeze one exact Kura hash inventory with empty read and validation caches"),
         (worker_ack_items.get("ProductionV2Services::queue_plan_effect_parts"), """let expected_leader = self . context . roster . get ( usize :: try_from ( self . context . leader ( view ) ) . unwrap_or ( usize :: MAX ) ) . map ( | entry | & entry . validator ) . ok_or_else ( || . to_owned ( ) ) ? ; if peer != expected_leader { return Err ( . to_owned ( ) , ) ; } let certificate_hash = kura_sources . validate ( & self . kura , & self . context . network_id , certificate ) ? ; if ! kura_sources . contains_exact ( & self . kura , certificate ) ? { return Err ( . to_owned ( ) ) ; } Ok ( ( vec ! [ NetworkMessage :: QueuePlanAdmissionCertificate ( Arc :: clone ( certificate , ) ) ] , vec ! [ peer . clone ( ) ] , vec ! [ ExactTargetRoute :: Topology ] , None , None , ExactOutputRolloverClaim :: QueuePlanAdmission { scope : self . exact_output_scope ( ) , target : peer . clone ( ) , view , certificate_hash , } , ) )""", "QueuePlan dispatch must bind the frozen leader, validated exact Kura bytes, topology route, and typed rollover claim"),
         (worker_ack_items.get("ProductionV2Services::post_queue_plan_admission_certificate"), """let output_guard = Arc :: clone ( & self . output_guard ) ; let Some ( operation ) = output_guard . begin_fail_stop_operation ( ) else { return ; } ; let Ok ( ( messages , peers , _ , _ , _ , rollover_claim ) ) = self . queue_plan_effect_parts ( & peer , view , & certificate , kura_sources ) else { iroha_logger :: error ! ( % peer , view , ) ; return ; } ; match self . enqueue_exact_fanout_while_guarded ( messages , peers , rollover_claim , operation . permit ( ) , ) { Ok ( ExactFanoutOwnership :: Owned ) => operation . complete ( ) , Ok ( ExactFanoutOwnership :: SourceRetained ) => iroha_logger :: error ! ( ) , Err ( error ) => iroha_logger :: error ! ( % error , ) , }""", "QueuePlan publication must complete its fail-stop owner only after exact-fanout ownership transfers"),

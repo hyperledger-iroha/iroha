@@ -433,7 +433,6 @@ mod tests {
             diagnostic::PROFILE,
             diagnostic::OPENAPI_JSON,
             diagnostic::OPENAPI,
-            streaming::P2P,
             application_api::EXPLORER_METRICS_GET,
             application_api::TELEMETRY_PEERS_INFO_GET,
             application_api::TELEMETRY_LIVE_GET,
@@ -527,6 +526,7 @@ mod tests {
     fn dedicated_onboarding_authentication_is_exactly_scoped() {
         for route in [
             application_api::ACCOUNTS_ONBOARD_PLAN_POST,
+            application_api::ACCOUNTS_ONBOARD_PREPARE_POST,
             application_api::ACCOUNTS_ONBOARD_POST,
             application_api::ACCOUNTS_ONBOARDING_READINESS_GET,
         ] {
@@ -542,8 +542,20 @@ mod tests {
                 .iter()
                 .filter(|route| { route.authentication() == AuthenticationPolicy::OnboardingToken })
                 .count(),
-            3,
+            4,
             "no unrelated route may inherit the onboarding credential policy"
+        );
+        let current_state = application_api::ACCOUNTS_ONBOARDING_CURRENT_STATE_POST;
+        assert_eq!(current_state.method(), HttpMethod::Post);
+        assert_eq!(
+            current_state.path(),
+            "/v1/accounts/onboarding/current-state"
+        );
+        assert_eq!(current_state.effect(), RouteEffect::ReadOnly);
+        assert_eq!(current_state.admission(), AdmissionPolicy::Public);
+        assert_eq!(
+            current_state.authentication(),
+            AuthenticationPolicy::ToriiDefault
         );
     }
     #[test]
@@ -839,6 +851,16 @@ mod tests {
             route.authentication(),
             AuthenticationPolicy::ProtocolHandshake
         );
+        let prepare = application_api::ACCOUNTS_FAUCET_PREPARE_POST;
+        assert_eq!(prepare.effect(), RouteEffect::ExpensiveCompute);
+        assert_eq!(
+            prepare.admission(),
+            AdmissionPolicy::AuthenticatedProtocolPrincipal
+        );
+        assert_eq!(
+            prepare.authentication(),
+            AuthenticationPolicy::ProtocolHandshake
+        );
     }
     #[test]
     fn converted_route_families_are_valid_and_exclude_retired_spellings() {
@@ -892,6 +914,19 @@ mod tests {
             );
             assert_eq!(expected.path_normalization(), PathNormalization::Strict);
         }
+    }
+    #[test]
+    fn kaigi_signal_history_is_account_gated_expensive_compute() {
+        let route = application_api::KAIGI_CALLS_BY_CALL_ID_SIGNALS_GET;
+        assert_eq!(route.effect(), RouteEffect::ExpensiveCompute);
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert!(route.projections().sdk());
+        assert!(!route.projections().openapi());
+        assert_eq!(validate_catalog(&[route]), Ok(()));
     }
     #[test]
     fn contract_and_application_routes_exclude_retired_spellings() {
@@ -1142,12 +1177,30 @@ mod tests {
         );
     }
     #[test]
-    fn soracloud_release_surface_is_exactly_sixty_openapi_and_sdk_routes() {
+    fn soracloud_release_surface_is_exactly_fifty_one_openapi_and_sdk_routes() {
         let soracloud_routes = application_api::ROUTES
             .iter()
             .filter(|route| route.path().starts_with("/v1/soracloud/"))
             .collect::<Vec<_>>();
-        assert_eq!(soracloud_routes.len(), 60);
+        assert_eq!(soracloud_routes.len(), 51);
+        for retired_path in [
+            "/v1/soracloud/agent/autonomy/run",
+            "/v1/soracloud/agent/autonomy/run/finalize",
+            "/v1/soracloud/model/upload/encryption-recipient",
+            "/v1/soracloud/model/upload/private/execute",
+            "/v1/soracloud/model/upload/private/receipts",
+            "/v1/soracloud/model-host/advertise",
+            "/v1/soracloud/model-host/heartbeat",
+            "/v1/soracloud/model-host/withdraw",
+            "/v1/soracloud/model-host/status",
+        ] {
+            assert!(
+                soracloud_routes
+                    .iter()
+                    .all(|route| route.path() != retired_path),
+                "retired generated-HF inference ingress `{retired_path}` must not be cataloged"
+            );
+        }
 
         let catalog_routes = CATALOGED_ROUTES
             .iter()
@@ -1166,7 +1219,6 @@ mod tests {
         );
 
         let public_reads = BTreeSet::from([
-            "/v1/soracloud/model/upload/encryption-recipient",
             "/v1/soracloud/services/{service_name}/public-discovery",
             "/v1/soracloud/services/{service_name}/revisions/{service_version}/public-discovery",
         ]);
@@ -1230,9 +1282,6 @@ mod tests {
             let expected_effect = match (route.method(), route.path()) {
                 (HttpMethod::Get, _) | (HttpMethod::Post, "/v1/soracloud/ciphertext/query") => {
                     RouteEffect::ReadOnly
-                }
-                (HttpMethod::Post, "/v1/soracloud/model/upload/private/execute") => {
-                    RouteEffect::ExpensiveCompute
                 }
                 (HttpMethod::Post, _) => RouteEffect::Mutation,
                 (method, path) => panic!("unsupported Soracloud release route {method:?} {path}"),
@@ -1896,9 +1945,11 @@ mod tests {
             streaming::SUBSCRIPTION_WS.effect(),
             RouteEffect::LongLivedStream
         );
-        assert_eq!(
-            streaming::P2P.admission(),
-            AdmissionPolicy::ValidatorRosterMember
+        assert!(
+            CATALOGED_ROUTES
+                .iter()
+                .all(|route| route.path() != concat!("/", "p2p")),
+            "the plaintext P2P WebSocket route must not re-enter the first-release catalog"
         );
     }
     #[test]

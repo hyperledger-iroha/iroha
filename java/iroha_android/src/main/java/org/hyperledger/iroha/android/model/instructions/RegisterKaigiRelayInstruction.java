@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -22,7 +23,7 @@ public final class RegisterKaigiRelayInstruction implements InstructionTemplate 
     this.relayId = builder.relayId;
     this.hpkePublicKeyBase64 = builder.hpkePublicKeyBase64;
     this.bandwidthClass = builder.bandwidthClass;
-    this.arguments = Map.copyOf(argumentOrder);
+    this.arguments = Collections.unmodifiableMap(new LinkedHashMap<>(argumentOrder));
   }
 
   public String relayId() {
@@ -48,6 +49,7 @@ public final class RegisterKaigiRelayInstruction implements InstructionTemplate 
   }
 
   public static RegisterKaigiRelayInstruction fromArguments(final Map<String, String> arguments) {
+    KaigiInstructionUtils.requireAction(arguments, ACTION);
     final Builder builder = builder();
     builder.setRelayId(KaigiInstructionUtils.require(arguments, "relay.relay_id"));
     builder.setHpkePublicKeyBase64(KaigiInstructionUtils.require(arguments, "relay.hpke_public_key"));
@@ -83,7 +85,7 @@ public final class RegisterKaigiRelayInstruction implements InstructionTemplate 
   public static final class Builder {
     private String relayId;
     private String hpkePublicKeyBase64;
-    private int bandwidthClass;
+    private Integer bandwidthClass;
 
     private Builder() {}
 
@@ -107,8 +109,8 @@ public final class RegisterKaigiRelayInstruction implements InstructionTemplate 
     }
 
     public Builder setBandwidthClass(final int bandwidthClass) {
-      if (bandwidthClass < 0 || bandwidthClass > 0xFF) {
-        throw new IllegalArgumentException("bandwidthClass must be between 0 and 255");
+      if (bandwidthClass < 1 || bandwidthClass > 0xFF) {
+        throw new IllegalArgumentException("bandwidthClass must be between 1 and 255");
       }
       this.bandwidthClass = bandwidthClass;
       return this;
@@ -120,6 +122,9 @@ public final class RegisterKaigiRelayInstruction implements InstructionTemplate 
       }
       if (hpkePublicKeyBase64 == null) {
         throw new IllegalStateException("hpkePublicKey must be provided");
+      }
+      if (bandwidthClass == null) {
+        throw new IllegalStateException("bandwidthClass must be provided");
       }
       return new RegisterKaigiRelayInstruction(this);
     }

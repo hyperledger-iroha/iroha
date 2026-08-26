@@ -1371,13 +1371,8 @@ mod tests {
         );
     }
     #[test]
-    fn settlement_registry_decodes_type_names_and_stable_ids() {
+    fn settlement_registry_decodes_only_the_stable_box_id() {
         let registry = crate::isi::registry::default();
-        assert_registry_decodes(
-            &registry,
-            std::any::type_name::<SettlementInstructionBox>(),
-            SettlementInstructionBox::Dvp(dvp_instruction()),
-        );
         for value in [
             SettlementInstructionBox::Dvp(dvp_instruction()),
             SettlementInstructionBox::Pvp(pvp_instruction()),
@@ -1406,5 +1401,6 @@ mod tests {
         ] {
             assert!(!registry.contains(name), "{name} must remain boxed-only");
         }
+        assert!(!registry.contains(std::any::type_name::<SettlementInstructionBox>()));
     }
 }

@@ -272,15 +272,17 @@ pub fn validate_alias_quote_guard(
             ),
         ));
     }
-    let policy = crate::sns::policy_by_id(world, quote.selector.suffix_id).ok_or_else(|| {
-        AliasSetupError::new(
-            "alias.quote.policy_missing",
-            format!(
-                "SNS policy {} disappeared while validating the quote",
-                quote.selector.suffix_id
-            ),
-        )
-    })?;
+    let policy = crate::sns::policy_by_id(world, quote.selector.suffix_id)
+        .map_err(|error| AliasSetupError::new("alias.quote.policy_invalid", error.to_string()))?
+        .ok_or_else(|| {
+            AliasSetupError::new(
+                "alias.quote.policy_missing",
+                format!(
+                    "SNS policy {} disappeared while validating the quote",
+                    quote.selector.suffix_id
+                ),
+            )
+        })?;
     if policy.policy_version != guard.expected_policy_version {
         return Err(AliasSetupError::new(
             "alias.quote.policy_version_mismatch",
@@ -463,12 +465,16 @@ fn validate_alias_auto_renew_config(
 ) -> Result<(), AliasSetupError> {
     validate_alias_auto_renew_ranges(config)?;
     let suffix_id = target_suffix_id(target);
-    let policy = crate::sns::policy_by_id(world, suffix_id).ok_or_else(|| {
-        AliasSetupError::new(
-            "alias.auto_renew.policy_missing",
-            format!("SNS policy {suffix_id} is missing for the auto-renew target"),
-        )
-    })?;
+    let policy = crate::sns::policy_by_id(world, suffix_id)
+        .map_err(|error| {
+            AliasSetupError::new("alias.auto_renew.policy_invalid", error.to_string())
+        })?
+        .ok_or_else(|| {
+            AliasSetupError::new(
+                "alias.auto_renew.policy_missing",
+                format!("SNS policy {suffix_id} is missing for the auto-renew target"),
+            )
+        })?;
     if config.term_years < policy.min_term_years || config.term_years > policy.max_term_years {
         return Err(AliasSetupError::new(
             "alias.auto_renew.term_out_of_range",
@@ -1379,7 +1385,9 @@ mod tests {
             "read-only planning must not create the blocked domain"
         );
         assert!(
-            crate::sns::record_by_selector(&view, &selector).is_none(),
+            crate::sns::record_by_selector(&view, &selector)
+                .expect("valid SNS record state")
+                .is_none(),
             "read-only planning must not acquire the blocked lease"
         );
     }

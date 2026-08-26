@@ -82,7 +82,7 @@ public sealed class ToriiOneShotTransportTests
 
         Assert.Equal(redirectStatus, error.StatusCode);
         Assert.Equal(1, handler.CountFor("/v1/node/capabilities"));
-        Assert.Equal(1, handler.CountFor("/transaction"));
+        Assert.Equal(1, handler.CountFor("/v1/pipeline/transactions"));
         Assert.Equal(0, handler.CountFor("/replayed"));
     }
 
@@ -116,7 +116,7 @@ public sealed class ToriiOneShotTransportTests
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(1, handler.CountFor("/v1/node/capabilities"));
-        Assert.Equal(1, handler.CountFor("/transaction"));
+        Assert.Equal(1, handler.CountFor("/v1/pipeline/transactions"));
     }
 
     [Fact]
@@ -149,7 +149,7 @@ public sealed class ToriiOneShotTransportTests
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, error.StatusCode);
         Assert.Equal(1, handler.CountFor("/v1/node/capabilities"));
-        Assert.Equal(1, handler.CountFor("/transaction"));
+        Assert.Equal(1, handler.CountFor("/v1/pipeline/transactions"));
     }
 
     private static ToriiClient CreateClient(HttpMessageHandler handler)
@@ -164,7 +164,8 @@ public sealed class ToriiOneShotTransportTests
                 CanonicalRequestCredentials = new CanonicalRequestCredentials(
                     CanonicalAccountId,
                     CanonicalPrivateKeySeed),
-            });
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
     }
 
     private static CountingHandler TransactionHandler(
@@ -185,7 +186,7 @@ public sealed class ToriiOneShotTransportTests
                 });
             }
 
-            Assert.Equal("/transaction", request.RequestUri.AbsolutePath);
+            Assert.Equal("/v1/pipeline/transactions", request.RequestUri.AbsolutePath);
             return transactionResponse(request, cancellationToken);
         });
     }

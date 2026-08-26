@@ -58,7 +58,8 @@ Current checks cover:
 - Presence of an `edge-gateway` service with a non-empty image reference.
 - At least one anycast prefix (IPv4 or IPv6).
 - Non-empty secret rotation intervals.
-- Health checks with explicit expected status labels.
+- Health checks with explicit expected status labels and declared service targets.
+- Promotion gates that target declared services.
 - Sigstore endpoints (`fulcio_url`, `rekor_url`).
 
 The validation helper is CI-friendly and intended to gate configuration reviews.

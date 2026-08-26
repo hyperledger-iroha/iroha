@@ -382,6 +382,17 @@ public struct ToriiParliamentPublicFindingCertificateBindingV1: Sendable, Equata
     public let quorum: UInt32
 }
 
+/// Aggregate-only progress for one private timed-OVN ballot attempt.
+///
+/// The projection intentionally carries no participant identifiers, ballot
+/// records, roots, release shares, individual openings, or wallet secrets.
+public struct ToriiParliamentTimedOvnProgressProjectionV1: Sendable, Equatable {
+    public let ballotAttemptId: String
+    public let status: String
+    public let frozenSurvivorCount: UInt32?
+    public let acceptedBallotPrefixCount: UInt32?
+}
+
 /// Bounded public lifecycle/deadline projection for one required Parliament body.
 ///
 /// Private-ballot registrations, records, roots, shares, and openings are never
@@ -396,6 +407,7 @@ public struct ToriiParliamentBodyStateProjectionV1: Sendable, Equatable {
     public let publicFindingDeadlineHeight: UInt64?
     public let noResultKind: String?
     public let noResultHeight: UInt64?
+    public let timedOvnProgress: ToriiParliamentTimedOvnProgressProjectionV1?
 }
 
 /// Strict outer projection from the authenticated attempt-read route.
@@ -635,6 +647,7 @@ public enum ToriiParliamentAPIV1 {
         "public_finding_deadline_height",
         "no_result_kind",
         "no_result_height",
+        "timed_ovn_progress",
     ]
 
     public static let certificateBodyBindingNoritoFields = [
@@ -965,7 +978,8 @@ public enum ToriiParliamentAPIV1 {
             expectedAttemptSequence: attemptSequence,
             expectedRiskTier: riskTier,
             expectedPolicyVersion: policyVersion,
-            requiredBodies: requiredBodies
+            requiredBodies: requiredBodies,
+            bodyStates: bodyStates
         )
         if !(root["superseding_head"] is NSNull) {
             try validateExpectedHead(root["superseding_head"], context: "superseding_head")
@@ -1899,7 +1913,9 @@ fileprivate extension ToriiParliamentAPIV1 {
     }
 
     static func unsigned(_ value: Any?, field: String) throws -> UInt64 {
-        guard let value, !(value is Bool), let number = value as? NSNumber else {
+        guard let value,
+              let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID() else {
             throw ToriiClientError.invalidPayload("\(field) must be an unsigned integer.")
         }
         let decimal = number.stringValue
@@ -2225,6 +2241,86 @@ fileprivate extension ToriiParliamentAPIV1 {
                     )
                 }
             }
+            let timedOvnProgress: ToriiParliamentTimedOvnProgressProjectionV1?
+            if entry["timed_ovn_progress"] is NSNull {
+                timedOvnProgress = nil
+            } else {
+                guard privateBodies.contains(body), bodyInstanceId != nil else {
+                    throw ToriiClientError.invalidPayload(
+                        "\(context).timed_ovn_progress requires a selected private body."
+                    )
+                }
+                let progressContext = "\(context).timed_ovn_progress"
+                let progress = try exactObject(
+                    entry["timed_ovn_progress"],
+                    fields: [
+                        "ballot_attempt_id", "status", "frozen_survivor_count",
+                        "accepted_ballot_prefix_count",
+                    ],
+                    context: progressContext
+                )
+                let ballotAttemptId = try requireIdentifier(
+                    progress["ballot_attempt_id"],
+                    field: "\(progressContext).ballot_attempt_id"
+                )
+                let ballotStatus = try taggedUnit(
+                    progress["status"],
+                    tag: "status",
+                    admitted: [
+                        "Registration", "SurvivorFreeze", "TimedCommitment",
+                        "AwaitingRelease", "Opening", "Finalized", "NoResult", "Superseded",
+                    ],
+                    context: "\(progressContext).status"
+                )
+                let survivorsAreNull = progress["frozen_survivor_count"] is NSNull
+                let prefixIsNull = progress["accepted_ballot_prefix_count"] is NSNull
+                guard survivorsAreNull == prefixIsNull else {
+                    throw ToriiClientError.invalidPayload(
+                        "\(progressContext) must expose survivor and prefix counts together."
+                    )
+                }
+                let frozenSurvivorCount: UInt32?
+                let acceptedBallotPrefixCount: UInt32?
+                if survivorsAreNull {
+                    guard ["Registration", "SurvivorFreeze", "NoResult", "Superseded"]
+                        .contains(ballotStatus) else {
+                        throw ToriiClientError.invalidPayload(
+                            "\(progressContext) must expose counts after survivor freeze."
+                        )
+                    }
+                    frozenSurvivorCount = nil
+                    acceptedBallotPrefixCount = nil
+                } else {
+                    let survivors = try boundedUInt32(
+                        progress["frozen_survivor_count"],
+                        minimum: 1,
+                        maximum: UInt32(maximumCorpusEntries),
+                        field: "\(progressContext).frozen_survivor_count"
+                    )
+                    let prefix = try boundedUInt32(
+                        progress["accepted_ballot_prefix_count"],
+                        minimum: 0,
+                        maximum: survivors,
+                        field: "\(progressContext).accepted_ballot_prefix_count"
+                    )
+                    guard !["Registration", "SurvivorFreeze"].contains(ballotStatus),
+                          ballotStatus != "TimedCommitment" || prefix < survivors,
+                          !["AwaitingRelease", "Opening", "Finalized"].contains(ballotStatus)
+                            || prefix == survivors else {
+                        throw ToriiClientError.invalidPayload(
+                            "\(progressContext) counts disagree with its ballot phase."
+                        )
+                    }
+                    frozenSurvivorCount = survivors
+                    acceptedBallotPrefixCount = prefix
+                }
+                timedOvnProgress = .init(
+                    ballotAttemptId: ballotAttemptId,
+                    status: ballotStatus,
+                    frozenSurvivorCount: frozenSurvivorCount,
+                    acceptedBallotPrefixCount: acceptedBallotPrefixCount
+                )
+            }
             result.append(.init(
                 body: body,
                 bodyInstanceId: bodyInstanceId,
@@ -2234,7 +2330,8 @@ fileprivate extension ToriiParliamentAPIV1 {
                 publicFindingPhaseBlocks: phaseBlocks,
                 publicFindingDeadlineHeight: deadline,
                 noResultKind: noResultKind,
-                noResultHeight: noResultHeight
+                noResultHeight: noResultHeight,
+                timedOvnProgress: timedOvnProgress
             ))
         }
         return result
@@ -2247,7 +2344,8 @@ fileprivate extension ToriiParliamentAPIV1 {
         expectedAttemptSequence: UInt32,
         expectedRiskTier: String,
         expectedPolicyVersion: UInt64,
-        requiredBodies: [String]
+        requiredBodies: [String],
+        bodyStates: [ToriiParliamentBodyStateProjectionV1]
     ) throws -> [ToriiParliamentPublicFindingCertificateBindingV1] {
         guard let value else {
             throw ToriiClientError.invalidPayload("certificate is missing.")
@@ -2357,6 +2455,15 @@ fileprivate extension ToriiParliamentAPIV1 {
             }
             sortitionPulseIds.insert(facts.sortitionPulseId)
             if let ballot = facts.ballot {
+                let progress = bodyStates[index].timedOvnProgress
+                guard progress?.status == "Finalized",
+                      progress?.ballotAttemptId == ballot.ballotAttemptId,
+                      progress?.frozenSurvivorCount == ballot.acceptedBallots,
+                      progress?.acceptedBallotPrefixCount == ballot.acceptedBallots else {
+                    throw ToriiClientError.invalidPayload(
+                        "certificate.body_bindings[\(index)].ballot differs from timed_ovn_progress."
+                    )
+                }
                 guard seenBallotAttemptIds.insert(ballot.ballotAttemptId).inserted,
                       seenTleSessionIds.insert(ballot.tleSessionId).inserted,
                       seenReleasePulseIds.insert(ballot.releasePulseId).inserted,
@@ -2367,6 +2474,11 @@ fileprivate extension ToriiParliamentAPIV1 {
                 }
             }
             if let finding = facts.publicFinding {
+                guard bodyStates[index].timedOvnProgress == nil else {
+                    throw ToriiClientError.invalidPayload(
+                        "certificate.body_bindings[\(index)] public body exposes timed_ovn_progress."
+                    )
+                }
                 findings.append(finding)
             }
         }
@@ -2380,6 +2492,7 @@ fileprivate extension ToriiParliamentAPIV1 {
 
     struct CertificateBallotFacts {
         let ballotAttemptId: String
+        let acceptedBallots: UInt32
         let tleSessionId: String
         let releasePulseId: String
         let releaseSlot: String
@@ -2804,6 +2917,7 @@ fileprivate extension ToriiParliamentAPIV1 {
         }
         return .init(
             ballotAttemptId: ballotAttemptId,
+            acceptedBallots: accepted,
             tleSessionId: tleSessionId,
             releasePulseId: releasePulseId,
             releaseSlot: "\(releaseBeaconSessionId):\(releaseHeight)"

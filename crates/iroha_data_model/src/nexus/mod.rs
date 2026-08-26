@@ -2883,14 +2883,15 @@ mod tests {
         assert!(err.to_string().contains("unsupported"));
         let valid = LaneLifecycleParameterV1::new(&catalog, &entries, LaneLifecyclePlan::default())
             .expect("valid lifecycle parameter");
-        let mut encoded = norito::json::to_string(&valid).expect("serialize lifecycle payload");
-        assert_eq!(encoded.pop(), Some('}'));
-        encoded.push_str(",\"unexpected\":true}");
+        let mut encoded = norito::json::to_value(&valid).expect("serialize lifecycle payload");
+        encoded
+            .as_object_mut()
+            .expect("lifecycle payload object")
+            .insert("unexpected".to_owned(), norito::json::Value::Bool(true));
         let custom = CustomParameter::new(
             LaneLifecycleParameterV1::parameter_id(),
-            encoded
-                .parse::<iroha_primitives::json::Json>()
-                .expect("adversarial payload is syntactically valid JSON"),
+            iroha_primitives::json::Json::from_norito_value_ref(&encoded)
+                .expect("serialize canonical adversarial payload"),
         );
         let err = LaneLifecycleParameterV1::from_custom_parameter(&custom)
             .expect_err("unknown lifecycle payload field must fail closed");

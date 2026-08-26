@@ -49,6 +49,39 @@ fn nexus_fees_parse_accepts_xor_alias_selector() {
     assert!(emitter.into_result().is_ok());
 }
 #[test]
+fn nexus_fees_parse_accepts_canonical_xor_asset_definition_id() {
+    let canonical_xor = defaults::nexus::fees::fee_asset_id();
+    let cfg = NexusFees {
+        fee_asset_id: canonical_xor.clone(),
+        ..NexusFees::default()
+    };
+    let mut emitter = Emitter::new();
+    let parsed = cfg.parse(&mut emitter).expect("fees config should parse");
+    assert_eq!(parsed.fee_asset_id, canonical_xor);
+    assert!(emitter.into_result().is_ok());
+}
+#[test]
+fn nexus_fees_parse_rejects_noncanonical_xor_selectors() {
+    for selector in [
+        " xor#universal",
+        "xor#universal ",
+        "XOR#universal",
+        "xor#Universal",
+        "xor#universal.universal",
+    ] {
+        let cfg = NexusFees {
+            fee_asset_id: selector.to_owned(),
+            ..NexusFees::default()
+        };
+        let mut emitter = Emitter::new();
+        assert!(
+            cfg.parse(&mut emitter).is_none(),
+            "noncanonical selector `{selector}` must be rejected"
+        );
+        assert!(emitter.into_result().is_err());
+    }
+}
+#[test]
 fn nexus_fees_parse_uses_typed_sponsor_vault_custody_account() {
     let cfg = NexusFees::default();
     let mut emitter = Emitter::new();

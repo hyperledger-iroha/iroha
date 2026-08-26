@@ -94,7 +94,7 @@ fn unbounded_iterable_fanout_is_rejected_by_explicit_capability_map() {
     );
 }
 #[test]
-fn fast_dsl_identity_query_fails_before_nested_component_decode() {
+fn opaque_fast_dsl_identity_query_fails_closed() {
     let request = authorize_query_for_test(
         iroha_data_model::query::json::IterableQueryJson {
             kind: iroha_data_model::query::json::IterableQueryKind::FindRoleIds,
@@ -108,15 +108,8 @@ fn fast_dsl_identity_query_fails_before_nested_component_decode() {
         .expect("role-id request should build"),
         iroha_test_samples::ALICE_ID.clone(),
     );
-    let iroha_data_model::query::QueryRequest::Start(query) = &request.request else {
-        panic!("expected iterable role-id request")
-    };
-    assert!(
-        legacy_iterable_query_box(query).is_none(),
-        "the shipping runtime uses opaque fast-DSL components"
-    );
     let response = ensure_bounded_fanout_query(&request)
-        .expect_err("fast-DSL components must fail before nested decode");
+        .expect_err("opaque fast-DSL components must fail closed");
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 #[test]
@@ -500,7 +493,7 @@ fn fanout_fixed_overhead_covers_the_protocol_route_catalogue() {
     .expect("complete test accounting fits usize");
     assert!(accounted_peak <= envelope.working_set_bytes);
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[test]
 fn huge_online_population_does_not_expand_authoritative_candidate_partition() {
     const ONLINE_PEERS: u32 = 4_096;
@@ -1195,7 +1188,7 @@ fn fanout_decode_limits_reject_element_count_overflow() {
         "decoder element-limit arithmetic must fail closed instead of saturating"
     );
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn stalled_admitted_body_cannot_start_a_second_body_decode() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1232,7 +1225,7 @@ async fn stalled_admitted_body_cannot_start_a_second_body_decode() {
         .expect("the released byte-envelope slot becomes available");
     assert_eq!(semaphore.available_permits(), 0);
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn query_fanout_memory_permit_lives_until_response_body_is_dropped() {
     let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
@@ -1249,7 +1242,7 @@ async fn query_fanout_memory_permit_lives_until_response_body_is_dropped() {
     drop(response);
     assert_eq!(semaphore.available_permits(), 1);
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn torii_proxy_memory_permit_lives_until_response_body_is_dropped() {
     let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
@@ -1270,7 +1263,7 @@ async fn torii_proxy_memory_permit_lives_until_response_body_is_dropped() {
     drop(response);
     assert_eq!(semaphore.available_permits(), 1);
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn query_fanout_memory_permit_transfers_through_proxy_snapshot_and_slow_body() {
     let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
@@ -1303,7 +1296,7 @@ async fn query_fanout_memory_permit_transfers_through_proxy_snapshot_and_slow_bo
     assert_eq!(body.to_bytes(), Bytes::from_static(b"bounded"));
     assert_eq!(semaphore.available_permits(), 1);
 }
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn query_fanout_worker_clone_survives_cancelled_response() {
     let semaphore = Arc::new(tokio::sync::Semaphore::new(1));

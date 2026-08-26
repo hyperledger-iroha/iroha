@@ -18,7 +18,7 @@ final class NetworkIdTests: XCTestCase {
             "00000042",
             String(literal.dropFirst(5).prefix(64)),
             literal.lowercased(),
-            String(literal.dropLast()) + "0",
+            String(literal.dropLast()) + "1",
         ] {
             XCTAssertThrowsError(try NetworkId(literal: invalid))
         }

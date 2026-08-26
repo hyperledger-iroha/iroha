@@ -272,8 +272,6 @@ p2p_trust_score	p2p_trust_score	Per-peer trust score maintained by the gossip la
 p2p_trust_penalties_total	p2p_trust_penalties_total	Applied trust penalties labeled by reason	registered
 p2p_trust_decay_ticks_total	p2p_trust_decay_ticks_total	Half-life decay ticks applied to peer trust scores (label `peer_id`)	registered
 p2p_trust_gossip_skipped_total	p2p_trust_gossip_skipped_total	Trust gossip frames skipped grouped by direction and reason	registered
-p2p_ws_inbound_total	p2p_ws_inbound_total	Accepted inbound WebSocket P2P connections	registered
-p2p_ws_outbound_total	p2p_ws_outbound_total	Successful outbound WebSocket P2P connections	registered
 p2p_scion_inbound_total	p2p_scion_inbound_total	Accepted inbound SCION P2P connections	registered
 p2p_scion_outbound_total	p2p_scion_outbound_total	Successful outbound SCION P2P connections	registered
 tx_gossip_sent_total	tx_gossip_sent_total	Transaction gossip batches sent grouped by plane and dataspace	registered
@@ -785,9 +783,6 @@ torii_explorer_requests_total	torii_explorer_requests_total	Explorer endpoint re
 torii_explorer_request_duration_seconds	torii_explorer_request_duration_seconds	Explorer endpoint latency (seconds) grouped by endpoint and outcome	registered
 torii_norito_rpc_gate_total	torii_norito_rpc_gate_total	Torii Norito-RPC gate decisions grouped by rollout stage and outcome	registered
 torii_address_invalid_total	torii_address_invalid_total	Torii account identifier rejects grouped by endpoint and reason	registered
-torii_address_domain_total	torii_address_domain_total	Torii account domain kinds grouped by endpoint and selector type	registered
-torii_address_collision_total	torii_address_collision_total	Torii Local-12 selector collisions grouped by endpoint and kind	registered
-torii_address_collision_domain_total	torii_address_collision_domain_total	Torii Local-12 selector collisions grouped by endpoint and domain label	registered
 torii_account_literal_total	torii_account_literal_total	Torii account literal selections grouped by endpoint and format	registered
 torii_norito_decode_failures_total	torii_norito_decode_failures_total	Torii Norito RPC decode failures grouped by payload kind and reason	registered
 torii_proof_throttled_total	torii_proof_throttled_total	Torii proof endpoints throttled by rate limiter	registered

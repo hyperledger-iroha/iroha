@@ -1,8 +1,10 @@
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[cfg(feature = "connect")]
 #[tokio::test]
 async fn signed_query_proxy_tries_next_candidate_only_before_dispatch() {
-    let first_peer_id = checked_torii_test_peer_id(0x93, "derive hedged first proxy peer fixture key");
-    let second_peer_id = checked_torii_test_peer_id(0x94, "derive hedged second proxy peer fixture key");
+    let first_peer_id =
+        checked_torii_test_peer_id(0x93, "derive hedged first proxy peer fixture key");
+    let second_peer_id =
+        checked_torii_test_peer_id(0x94, "derive hedged second proxy peer fixture key");
     let route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2));
     let request = signed_query_proxy_request_for_test(
         Hash::new(b"signed-query-pre-dispatch-fallback"),

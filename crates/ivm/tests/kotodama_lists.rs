@@ -133,7 +133,7 @@ fn run_multiword_mutation_failure_case(
     let entrypoint_pc =
         u64::try_from(metadata.prefix_len()).expect("prefix fits u64") + entrypoint.entry_pc;
     let payload = Json::from_str_norito(&format!(
-        r#"{{"operation":"{operation}","index":"{index}"}}"#
+        r#"{{"index":"{index}","operation":"{operation}"}}"#
     ))
     .expect("valid multiword List arguments");
     let record =

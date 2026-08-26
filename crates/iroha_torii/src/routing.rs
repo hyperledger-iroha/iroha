@@ -59,7 +59,7 @@ use iroha_config::{
     },
 };
 #[cfg(feature = "app_api")]
-use iroha_version::codec::EncodeVersioned as _;
+use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
 use std::{
     sync::{Arc, LazyLock, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -101,7 +101,7 @@ use iroha_core::{
         ContractAliasBindingRecord, ContractAliasLeaseStatus, State as CoreState, StateReadOnly,
         WorldReadOnly,
     },
-    sumeragi::{self, status},
+    sumeragi,
     telemetry::{Telemetry, capability::TelemetryGate},
     time,
     torii::zk::proofs::{
@@ -1478,9 +1478,9 @@ pub struct KaigiRelaySummaryDto {
     pub bandwidth_class: u8,
     /// Hex-encoded fingerprint of the HPKE public key.
     pub hpke_fingerprint_hex: String,
-    /// Latest health status, if reported.
+    /// Latest lowercase health-status label, if reported.
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub status: Option<KaigiRelayHealthStatus>,
+    pub status: Option<String>,
     /// Timestamp (ms since epoch) of the latest health report, when available.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub reported_at_ms: Option<u64>,
@@ -1534,6 +1534,7 @@ pub const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS: usize =
     defaults::torii::APP_API_MAX_LIST_LIMIT as usize;
 /// Maximum retained JSON bytes for one Kaigi call-signal result page.
 pub const KAIGI_CALL_SIGNALS_MAX_RETAINED_BYTES: u64 = 4 * 1024 * 1024;
+const KAIGI_SIGNAL_SCHEMA_V1: &str = "iroha-demo-kaigi-chain-signal/v1";
 derived_items! {
 ( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// List response for Kaigi relay summaries.
@@ -1632,7 +1633,7 @@ pub struct KaigiCallSignalDto {
     /// Authority that submitted the signal transaction (transparent mode only).
     #[norito(skip_serializing_if = "Option::is_none")]
     pub authority: Option<String>,
-    /// Optional transaction creation timestamp.
+    /// Canonical carrier-block creation timestamp.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub timestamp_ms: Option<u64>,
     /// Full Kaigi call identifier.
@@ -1671,7 +1672,7 @@ pub struct KaigiCallEventCallRefDto {
 ( Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 /// Optional query parameters for Kaigi call-signal listing.
 pub struct KaigiCallSignalsParams {
-    /// Only include signals whose metadata timestamp is at or after this value.
+    /// Only include signals whose carrier-block timestamp is at or after this value.
     #[norito(default)]
     pub after_timestamp_ms: Option<u64>,
     /// Maximum number of signals to return.
@@ -1735,6 +1736,76 @@ fn increment_kaigi_relay_diagnostic_count(count: &mut usize) -> Result<(), Error
     *count += 1;
     Ok(())
 }
+fn kaigi_relay_metadata_error(message: impl Into<String>) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::InternalError(
+        message.into(),
+    ))
+}
+fn decode_kaigi_relay_registration(
+    metadata_key: &Name,
+    value: &IrohaJson,
+) -> Result<KaigiRelayRegistration, Error> {
+    let registration = value
+        .try_into_any_norito::<KaigiRelayRegistration>()
+        .map_err(|err| {
+            kaigi_relay_metadata_error(format!(
+                "failed to decode Kaigi relay registration metadata: {err}"
+            ))
+        })?;
+    let expected_key =
+        iroha_data_model::kaigi::kaigi_relay_metadata_key(&registration.relay_id).map_err(
+            |err| {
+                kaigi_relay_metadata_error(format!(
+                    "failed to derive Kaigi relay registration metadata key: {err}"
+                ))
+            },
+        )?;
+    if metadata_key != &expected_key {
+        return Err(kaigi_relay_metadata_error(
+            "Kaigi relay registration metadata key does not match its embedded relay identifier",
+        ));
+    }
+    if registration.hpke_public_key.is_empty() {
+        return Err(kaigi_relay_metadata_error(
+            "Kaigi relay registration requires an HPKE public key",
+        ));
+    }
+    if registration.bandwidth_class == 0 {
+        return Err(kaigi_relay_metadata_error(
+            "Kaigi relay registration requires a non-zero bandwidth class",
+        ));
+    }
+    Ok(registration)
+}
+fn ensure_unique_kaigi_relay_registration(
+    seen: &mut BTreeSet<AccountId>,
+    relay_id: &AccountId,
+) -> Result<(), Error> {
+    if !seen.insert(relay_id.clone()) {
+        return Err(kaigi_relay_metadata_error(
+            "duplicate Kaigi relay registration found across domains",
+        ));
+    }
+    Ok(())
+}
+fn decode_kaigi_relay_feedback(
+    expected_relay_id: &AccountId,
+    value: &IrohaJson,
+) -> Result<KaigiRelayFeedback, Error> {
+    let feedback = value
+        .try_into_any_norito::<KaigiRelayFeedback>()
+        .map_err(|err| {
+            kaigi_relay_metadata_error(format!(
+                "failed to decode Kaigi relay feedback metadata: {err}"
+            ))
+        })?;
+    if feedback.relay_id != *expected_relay_id {
+        return Err(kaigi_relay_metadata_error(
+            "Kaigi relay feedback metadata does not match its registration relay identifier",
+        ));
+    }
+    Ok(feedback)
+}
 fn find_kaigi_relay(
     state: &CoreState,
     relay_id: &AccountId,
@@ -1744,36 +1815,31 @@ fn find_kaigi_relay(
     let feedback_key = iroha_data_model::kaigi::kaigi_relay_feedback_key(relay_id)
         .map_err(|err| conversion_error(format!("invalid Kaigi relay identifier: {err}")))?;
     let world = state.world_view();
+    let mut seen = BTreeSet::new();
+    let mut found = None;
     for domain in world.domains_iter() {
         let Some(value) = domain.metadata().get(&registration_key) else {
             continue;
         };
-        let registration = value
-            .try_into_any_norito::<KaigiRelayRegistration>()
-            .map_err(|err| {
-                Error::Query(iroha_data_model::ValidationFail::InternalError(
-                    err.to_string(),
-                ))
-            })?;
+        let registration = decode_kaigi_relay_registration(&registration_key, value)?;
         if registration.relay_id != *relay_id {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::InternalError(
-                    "Kaigi relay metadata key does not match its embedded relay identifier"
-                        .to_owned(),
-                ),
+            return Err(kaigi_relay_metadata_error(
+                "Kaigi relay metadata key does not match its embedded relay identifier",
             ));
         }
+        ensure_unique_kaigi_relay_registration(&mut seen, &registration.relay_id)?;
         let feedback = domain
             .metadata()
             .get(&feedback_key)
-            .and_then(|json| json.try_into_any_norito::<KaigiRelayFeedback>().ok());
-        return Ok(Some(KaigiRelaySnapshot {
+            .map(|json| decode_kaigi_relay_feedback(relay_id, json))
+            .transpose()?;
+        found = Some(KaigiRelaySnapshot {
             domain: domain.id().clone(),
             registration,
             feedback,
-        }));
+        });
     }
-    Ok(None)
+    Ok(found)
 }
 fn visit_kaigi_relays_bounded(
     state: &CoreState,
@@ -1781,6 +1847,7 @@ fn visit_kaigi_relays_bounded(
 ) -> Result<usize, Error> {
     let world = state.world_view();
     let mut count = 0usize;
+    let mut seen = BTreeSet::new();
     for domain in world.domains_iter() {
         let domain_id = domain.id().clone();
         for (key, value) in domain.metadata().iter() {
@@ -1789,22 +1856,19 @@ fn visit_kaigi_relays_bounded(
                 continue;
             }
             increment_kaigi_relay_diagnostic_count(&mut count)?;
-            let registration: KaigiRelayRegistration =
-                value.try_into_any_norito().map_err(|err| {
-                    Error::Query(iroha_data_model::ValidationFail::InternalError(
-                        err.to_string(),
-                    ))
-                })?;
+            let registration = decode_kaigi_relay_registration(key, value)?;
+            ensure_unique_kaigi_relay_registration(&mut seen, &registration.relay_id)?;
             let feedback =
                 match iroha_data_model::kaigi::kaigi_relay_feedback_key(&registration.relay_id) {
                     Ok(feedback_key) => domain
                         .metadata()
                         .get(&feedback_key)
-                        .and_then(|json| json.try_into_any_norito::<KaigiRelayFeedback>().ok()),
+                        .map(|json| {
+                            decode_kaigi_relay_feedback(&registration.relay_id, json)
+                        })
+                        .transpose()?,
                     Err(err) => {
-                        return Err(Error::Query(
-                            iroha_data_model::ValidationFail::InternalError(err.to_string()),
-                        ));
+                        return Err(kaigi_relay_metadata_error(err.to_string()));
                     }
                 };
             if visit(KaigiRelaySnapshot {
@@ -1850,6 +1914,12 @@ fn load_kaigi_record(
     call_id: &KaigiId,
 ) -> Result<iroha_data_model::kaigi::KaigiRecord, Error> {
     let world = state.world_view();
+    load_kaigi_record_from_world(&world, call_id)
+}
+fn load_kaigi_record_from_world(
+    world: &impl WorldReadOnly,
+    call_id: &KaigiId,
+) -> Result<iroha_data_model::kaigi::KaigiRecord, Error> {
     let domain = world
         .domain(&call_id.domain_id)
         .map_err(|_| explorer_not_found())?;
@@ -1858,13 +1928,28 @@ fn load_kaigi_record(
     let Some(raw) = domain.metadata().get(&key) else {
         return Err(explorer_not_found());
     };
-    raw.clone()
+    let record = raw
+        .clone()
         .try_into_any_norito::<iroha_data_model::kaigi::KaigiRecord>()
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::InternalError(
                 err.to_string(),
             ))
-        })
+        })?;
+    validate_kaigi_record_id(record, call_id)
+}
+fn validate_kaigi_record_id(
+    record: iroha_data_model::kaigi::KaigiRecord,
+    requested: &KaigiId,
+) -> Result<iroha_data_model::kaigi::KaigiRecord, Error> {
+    if record.id != *requested {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::InternalError(
+                "Kaigi record identifier does not match its metadata key".to_owned(),
+            ),
+        ));
+    }
+    Ok(record)
 }
 fn kaigi_call_view_from_record(record: &iroha_data_model::kaigi::KaigiRecord) -> KaigiCallViewDto {
     let reveal_authorities =
@@ -1926,53 +2011,243 @@ fn kaigi_metadata_u64(value: &Value, keys: &[&str]) -> Option<u64> {
     keys.iter()
         .find_map(|key| kaigi_metadata_value(value, key)?.as_u64())
 }
-fn kaigi_signal_from_transaction(
+fn kaigi_signal_authority(
     tx: &iroha_data_model::query::CommittedTransaction,
-    reveal_authorities: bool,
-) -> Option<KaigiCallSignalDto> {
-    let (metadata, authority, timestamp_ms) = match tx.entrypoint() {
-        TransactionEntrypoint::External(signed) => (
-            signed.metadata(),
-            reveal_authorities.then(|| crate::account_literal::display_literal(signed.authority())),
-            u64::try_from(signed.creation_time().as_millis()).ok(),
-        ),
+) -> Option<&AccountId> {
+    match tx.entrypoint() {
+        TransactionEntrypoint::External(signed) => Some(signed.authority()),
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            Some(reveal.signed_transaction().authority())
+        }
+        TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+    }
+}
+fn kaigi_signal_authority_is_allowed(
+    tx: &iroha_data_model::query::CommittedTransaction,
+    record: &iroha_data_model::kaigi::KaigiRecord,
+    world: &impl WorldReadOnly,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    observation_time_ms: u64,
+    allowed_active_lineages: &BTreeSet<AccountId>,
+    lineage_cache: &mut BTreeMap<AccountId, Option<AccountId>>,
+    lineage_cache_limit: u64,
+) -> Result<bool, iroha_data_model::query::error::QueryExecutionFail> {
+    let Some(authority) = kaigi_signal_authority(tx) else {
+        return Ok(false);
+    };
+    if authority == &record.host {
+        return Ok(true);
+    }
+    if record.privacy_mode == iroha_data_model::kaigi::KaigiPrivacyMode::Transparent
+        && record.has_participant(authority)
+    {
+        return Ok(true);
+    }
+    let active_authority = if let Some(cached) = lineage_cache.get(authority) {
+        cached.clone()
+    } else {
+        if u64::try_from(lineage_cache.len()).unwrap_or(u64::MAX) >= lineage_cache_limit {
+            return Err(
+                iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded,
+            );
+        }
+        let resolved = resolve_kaigi_signal_active_lineage(
+            world,
+            catalog,
+            authority,
+            observation_time_ms,
+        )?;
+        lineage_cache.insert(authority.clone(), resolved.clone());
+        resolved
+    };
+    Ok(active_authority.is_some_and(|active| allowed_active_lineages.contains(&active)))
+}
+fn resolve_kaigi_signal_active_lineage(
+    world: &impl WorldReadOnly,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    account: &AccountId,
+    observation_time_ms: u64,
+) -> Result<Option<AccountId>, iroha_data_model::query::error::QueryExecutionFail> {
+    iroha_core::sns::resolve_active_account_id_rekey_lineage(
+        world,
+        catalog,
+        account,
+        observation_time_ms,
+    )
+    .map_err(|error| {
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+            "failed to resolve Kaigi signal account-id rekey lineage: {error}"
+        ))
+    })
+}
+fn kaigi_signal_allowed_active_lineages(
+    world: &impl WorldReadOnly,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    record: &iroha_data_model::kaigi::KaigiRecord,
+    observation_time_ms: u64,
+) -> Result<BTreeSet<AccountId>, iroha_data_model::query::error::QueryExecutionFail> {
+    let include_participants =
+        record.privacy_mode == iroha_data_model::kaigi::KaigiPrivacyMode::Transparent;
+    let mut lineages = BTreeSet::new();
+    for account in core::iter::once(&record.host).chain(
+        record
+            .participants
+            .iter()
+            .filter(|_| include_participants),
+    ) {
+        if let Some(active) =
+            resolve_kaigi_signal_active_lineage(world, catalog, account, observation_time_ms)?
+        {
+            lineages.insert(active);
+        }
+    }
+    Ok(lineages)
+}
+fn kaigi_signal_carrier_timestamp_ms(
+    state: &CoreState,
+    block_hash: &HashOf<BlockHeader>,
+    cache: &mut Option<(HashOf<BlockHeader>, u64)>,
+) -> Result<u64, iroha_data_model::query::error::QueryExecutionFail> {
+    if let Some((cached_hash, cached_timestamp_ms)) = cache.as_ref()
+        && cached_hash == block_hash
+    {
+        return Ok(*cached_timestamp_ms);
+    }
+    let block = state.block_by_hash(*block_hash).ok_or_else(|| {
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+            "Kaigi signal carrier block `{block_hash}` is unavailable"
+        ))
+    })?;
+    let timestamp_ms = u64::try_from(block.header().creation_time().as_millis()).map_err(|_| {
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(
+            "Kaigi signal carrier block timestamp exceeds u64 milliseconds".to_owned(),
+        )
+    })?;
+    *cache = Some((*block_hash, timestamp_ms));
+    Ok(timestamp_ms)
+}
+fn kaigi_signal_carrier_is_within_call_lifecycle(
+    record: &iroha_data_model::kaigi::KaigiRecord,
+    carrier_timestamp_ms: u64,
+) -> bool {
+    carrier_timestamp_ms >= record.created_at_ms
+        && record
+            .ended_at_ms
+            .is_none_or(|ended_at_ms| carrier_timestamp_ms <= ended_at_ms)
+}
+fn kaigi_signal_metadata_from_transaction(
+    tx: &iroha_data_model::query::CommittedTransaction,
+) -> Option<Value> {
+    if tx.result().as_ref().is_err() {
+        return None;
+    }
+    let metadata = match tx.entrypoint() {
+        TransactionEntrypoint::External(signed) => signed.metadata(),
         TransactionEntrypoint::SealedCommitment(_) => return None,
-        TransactionEntrypoint::SealedReveal(reveal) => (
-            reveal.signed_transaction().metadata(),
-            reveal_authorities.then(|| {
-                crate::account_literal::display_literal(reveal.signed_transaction().authority())
-            }),
-            u64::try_from(reveal.signed_transaction().creation_time().as_millis()).ok(),
-        ),
+        TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().metadata(),
         TransactionEntrypoint::Time(_) => return None,
     };
     let key: Name = "kaigi_signal".parse().ok()?;
     let signal_json = metadata.get(&key)?.try_into_any_norito::<Value>().ok()?;
+    if kaigi_metadata_string(&signal_json, &["schema"]).as_deref()
+        != Some(KAIGI_SIGNAL_SCHEMA_V1)
+    {
+        return None;
+    }
+    Some(signal_json)
+}
+fn kaigi_signal_metadata_for_call(
+    tx: &iroha_data_model::query::CommittedTransaction,
+    call_literal: &str,
+) -> Option<Value> {
+    let signal_json = kaigi_signal_metadata_from_transaction(tx)?;
+    (kaigi_metadata_string(&signal_json, &["callId", "call_id"]).as_deref()
+        == Some(call_literal))
+    .then_some(signal_json)
+}
+fn kaigi_signal_from_metadata(
+    tx: &iroha_data_model::query::CommittedTransaction,
+    mut signal_json: Value,
+    reveal_authorities: bool,
+    carrier_timestamp_ms: u64,
+) -> Option<KaigiCallSignalDto> {
+    let authority = match tx.entrypoint() {
+        TransactionEntrypoint::External(signed) => {
+            reveal_authorities.then(|| crate::account_literal::display_literal(signed.authority()))
+        }
+        TransactionEntrypoint::SealedCommitment(_) => return None,
+        TransactionEntrypoint::SealedReveal(reveal) => reveal_authorities.then(|| {
+            crate::account_literal::display_literal(reveal.signed_transaction().authority())
+        }),
+        TransactionEntrypoint::Time(_) => return None,
+    };
     let call_id = kaigi_metadata_string(&signal_json, &["callId", "call_id"])?;
     let signal_kind = kaigi_metadata_string(&signal_json, &["signalKind", "signal_kind"])
         .unwrap_or_else(|| "signal".to_owned())
         .to_ascii_lowercase();
     let created_at_ms = kaigi_metadata_u64(&signal_json, &["createdAtMs", "created_at_ms"])?;
+    if created_at_ms > carrier_timestamp_ms {
+        return None;
+    }
+    let host_account_id = reveal_authorities
+        .then(|| kaigi_metadata_string(&signal_json, &["hostAccountId", "host_account_id"]))
+        .flatten();
+    let participant_account_id = reveal_authorities
+        .then(|| {
+            kaigi_metadata_string(
+                &signal_json,
+                &["participantAccountId", "participant_account_id"],
+            )
+        })
+        .flatten();
+    if !reveal_authorities
+        && let Some(metadata) = signal_json.as_object_mut()
+    {
+        for key in [
+            "hostAccountId",
+            "host_account_id",
+            "participantAccountId",
+            "participant_account_id",
+        ] {
+            metadata.remove(key);
+        }
+    }
     Some(KaigiCallSignalDto {
         entrypoint_hash: tx.entrypoint_hash().to_string(),
         authority,
-        timestamp_ms,
+        timestamp_ms: Some(carrier_timestamp_ms),
         call_id,
         signal_kind,
-        host_account_id: reveal_authorities
-            .then(|| kaigi_metadata_string(&signal_json, &["hostAccountId", "host_account_id"]))
-            .flatten(),
-        participant_account_id: reveal_authorities
-            .then(|| {
-                kaigi_metadata_string(
-                    &signal_json,
-                    &["participantAccountId", "participant_account_id"],
-                )
-            })
-            .flatten(),
+        host_account_id,
+        participant_account_id,
         created_at_ms,
         metadata: IrohaJson::from(signal_json),
     })
+}
+fn kaigi_signal_from_transaction(
+    tx: &iroha_data_model::query::CommittedTransaction,
+    reveal_authorities: bool,
+    carrier_timestamp_ms: u64,
+) -> Option<KaigiCallSignalDto> {
+    let signal_json = kaigi_signal_metadata_from_transaction(tx)?;
+    kaigi_signal_from_metadata(
+        tx,
+        signal_json,
+        reveal_authorities,
+        carrier_timestamp_ms,
+    )
+}
+fn kaigi_signal_matches_call_query(
+    signal: &KaigiCallSignalDto,
+    call_literal: &str,
+    after_timestamp_ms: Option<u64>,
+) -> bool {
+    signal.call_id == call_literal
+        && signal
+            .timestamp_ms
+            .is_some_and(|carrier_timestamp_ms| {
+                after_timestamp_ms.is_none_or(|minimum| carrier_timestamp_ms >= minimum)
+            })
 }
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 fn kaigi_domain_counters(
@@ -9471,12 +9746,14 @@ fn bind_account_alias_for_test(
     let state_view = state.view();
     assert_eq!(
         iroha_core::sns::active_account_alias_owner(state_view.world(), &catalog, &label, 0,)
+            .expect("valid active account-alias owner state")
             .as_ref(),
         Some(account_id),
         "active SNS account-alias lease must resolve to the fixture account",
     );
     assert_eq!(
         iroha_core::sns::resolve_active_account_alias(state_view.world(), &catalog, &label, 0,)
+            .expect("valid account-alias resolution state")
             .as_ref(),
         Some(account_id),
         "authoritative account-alias lease and binding indexes must agree",
@@ -9502,7 +9779,9 @@ fn bind_universal_account_alias_on_world_for_test(
     block.commit();
     let world_view = world.view();
     assert_eq!(
-        iroha_core::sns::active_owner_by_selector(&world_view, &selector, 0).as_ref(),
+        iroha_core::sns::active_owner_by_selector(&world_view, &selector, 0)
+            .expect("valid active owner state")
+            .as_ref(),
         Some(account_id),
         "active SNS account-alias record must be committed to fixture state",
     );
@@ -9513,12 +9792,16 @@ fn bind_universal_account_alias_on_world_for_test(
         "active and statically rendered account-alias selectors must agree",
     );
     assert_eq!(
-        iroha_core::sns::active_account_alias_owner(&world_view, &catalog, &label, 0).as_ref(),
+        iroha_core::sns::active_account_alias_owner(&world_view, &catalog, &label, 0)
+            .expect("valid active account-alias owner state")
+            .as_ref(),
         Some(account_id),
         "active SNS account-alias lease must resolve to the fixture account",
     );
     assert_eq!(
-        iroha_core::sns::resolve_active_account_alias(&world_view, &catalog, &label, 0).as_ref(),
+        iroha_core::sns::resolve_active_account_alias(&world_view, &catalog, &label, 0)
+            .expect("valid account-alias resolution state")
+            .as_ref(),
         Some(account_id),
         "authoritative account-alias lease and binding indexes must agree",
     );
@@ -11090,8 +11373,8 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan_strict_dur
     state: Arc<CoreState>,
     accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
     routing_plan: RoutingPlan,
-    expected_admission_binding: &iroha_core::torii_proxy::QueuePlanAdmissionBindingV2,
-) -> Result<queue::QueuePlanDurableAdmissionV2> {
+    expected_admission_binding: &iroha_core::torii_proxy::QueuePlanAdmissionBindingV1,
+) -> Result<queue::QueuePlanDurableAdmissionV1> {
     let pressure = {
         let block_time = state.sumeragi_block_cadence();
         queue.refresh_pressure_budget_from_block_time(block_time)
@@ -11150,7 +11433,7 @@ pub(crate) fn push_accepted_ordinary_kagemusha_lifecycle_for_ingress_strict_dura
     accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
     routing_plan: RoutingPlan,
     expected_binding: &iroha_core::torii_proxy::OrdinaryKagemushaLifecycleAdmissionBindingV1,
-) -> Result<iroha_core::queue::QueuePlanDurableAdmissionV2> {
+) -> Result<iroha_core::queue::QueuePlanDurableAdmissionV1> {
     let pressure = {
         let block_time = state.sumeragi_block_cadence();
         queue.refresh_pressure_budget_from_block_time(block_time)
@@ -12347,8 +12630,7 @@ fn encode_contract_state_pointer_tlv_bytes(
         }
         ivm::EmbeddedStateType::AccountId => {
             let value = iroha_data_model::account::AccountId::parse_encoded(raw)
-                .ok()?
-                .into_account_id();
+                .ok()?;
             (PointerType::AccountId, to_bytes(&value).ok()?)
         }
         ivm::EmbeddedStateType::AssetDefinitionId => {
@@ -14709,7 +14991,7 @@ mod contract_state_tests {
     }
     routing_test! { sync decode_contract_state_scalar_json_rejects_unbound_legacy_json_payloads
         let json_value = iroha_primitives::json::Json::from_str_norito(
-            "{\"tranche_id\":\"benefit-1\",\"beneficiary_account_id\":\"i105-user\"}",
+            "{\"beneficiary_account_id\":\"i105-user\",\"tranche_id\":\"benefit-1\"}",
         )
         .expect("valid json payload");
         let json_payload = norito::to_bytes(&json_value).expect("encode json payload");
@@ -14719,7 +15001,7 @@ mod contract_state_tests {
     }
     routing_test! { sync decode_contract_state_scalar_json_rejects_policyless_norito_json_wrapper
         let json_value = iroha_primitives::json::Json::from_str_norito(
-            "{\"tranche_id\":\"benefit-1\",\"beneficiary_account_id\":\"i105-user\"}",
+            "{\"beneficiary_account_id\":\"i105-user\",\"tranche_id\":\"benefit-1\"}",
         )
         .expect("valid json payload");
         let json_payload = norito::to_bytes(&json_value).expect("encode json payload");
@@ -15067,12 +15349,12 @@ fn exact_asset_transfer_account(raw: &str, field: &str) -> Result<AccountId> {
     }
     let parsed = AccountId::parse_encoded(raw)
         .map_err(|error| conversion_error(format!("invalid {field}: {error}")))?;
-    if parsed.canonical() != raw {
+    if parsed.to_string() != raw {
         return Err(conversion_error(format!(
             "{field} must be an exact canonical I105 account id"
         )));
     }
-    Ok(parsed.into_account_id())
+    Ok(parsed)
 }
 fn exact_asset_transfer_definition(raw: &str) -> Result<AssetDefinitionId> {
     if raw.is_empty() || raw.len() > ASSET_TRANSFER_MAX_DEFINITION_LITERAL_BYTES {
@@ -19761,6 +20043,11 @@ fn resolve_multisig_account_selector(
                 &label,
                 now_ms,
             )
+            .map_err(|error| {
+                Error::Query(iroha_data_model::ValidationFail::InternalError(
+                    error.to_string(),
+                ))
+            })?
             .ok_or_else(|| {
                 let alias_literal = label
                     .to_literal(&nexus.dataspace_catalog)
@@ -20452,8 +20739,7 @@ fn required_nonempty_json_string(object: &Map, key: &str) -> Option<String> {
 fn required_canonical_account_id_string(object: &Map, key: &str) -> Option<String> {
     let literal = required_nonempty_json_string(object, key)?;
     let account = iroha_data_model::account::AccountId::parse_encoded(&literal)
-        .ok()?
-        .into_account_id();
+        .ok()?;
     (account.to_string() == literal).then_some(literal)
 }
 fn required_canonical_asset_definition_id_string(object: &Map, key: &str) -> Option<String> {
@@ -22118,36 +22404,35 @@ mod contract_payload_normalization_tests {
         assert!(!normalization_attempted.get());
         assert_eq!(ivm::argument_record_decode_count(), 0);
     }
-    routing_test! { sync normalize_contract_payload_is_permutation_invariant_and_compact
+    routing_test! { sync normalize_contract_payload_requires_canonical_json_and_is_idempotent
         let descriptor = json_descriptor();
-        let first = IrohaJson::from_raw_json(
-            r#" { "ev" : { "z" : "last", "a" : 1, "b" : [true, false] } } "#.to_owned(),
-        )
-        .expect("valid permuted JSON fixture");
-        let permuted =
-            IrohaJson::from_raw_json(r#"{"ev":{"b":[true,false],"a":1,"z":"last"}}"#.to_owned())
-                .expect("valid compact JSON fixture");
-        let first = normalize_contract_payload(&descriptor, Some(&first))
-            .expect("first payload must normalize")
+        for alternate in [
+            r#" { "ev" : { "z" : "last", "a" : 1, "b" : [true, false] } } "#,
+            r#"{"ev":{"b":[true,false],"a":1,"z":"last"}}"#,
+        ] {
+            IrohaJson::from_raw_json(alternate.to_owned())
+                .expect_err("alternate JSON spelling must fail at the V1 boundary");
+        }
+        let canonical =
+            IrohaJson::from_raw_json(r#"{"ev":{"a":1,"b":[true,false],"z":"last"}}"#.to_owned())
+                .expect("canonical compact JSON fixture");
+        let normalized = normalize_contract_payload(&descriptor, Some(&canonical))
+            .expect("canonical payload must validate")
             .expect("payload");
-        let permuted = normalize_contract_payload(&descriptor, Some(&permuted))
-            .expect("permuted payload must normalize")
-            .expect("payload");
-        assert_eq!(first, permuted);
-        assert_eq!(first.get(), r#"{"ev":{"a":1,"b":[true,false],"z":"last"}}"#);
+        assert_eq!(normalized, canonical);
         assert_eq!(
-            contract_payload_digest_hex(Some(&first)),
-            contract_payload_digest_hex(Some(&permuted)),
+            contract_payload_digest_hex(Some(&normalized)),
+            contract_payload_digest_hex(Some(&canonical)),
         );
         let schema = descriptor
             .argument_schema
             .as_ref()
             .expect("argument schema");
         assert_eq!(
-            ivm::encode_argument_record_from_json(schema, &first)
-                .expect("first canonical argument record"),
-            ivm::encode_argument_record_from_json(schema, &permuted)
-                .expect("permuted canonical argument record"),
+            ivm::encode_argument_record_from_json(schema, &normalized)
+                .expect("validated canonical argument record"),
+            ivm::encode_argument_record_from_json(schema, &canonical)
+                .expect("input canonical argument record"),
         );
     }
     routing_test! { sync json_payload_constructor_rejects_duplicate_keys_and_trailing_tokens
@@ -22164,22 +22449,21 @@ mod contract_payload_normalization_tests {
         }
     }
     #[test]
-    fn normalize_contract_payload_canonicalizes_exact_numeric_endpoints_and_rejects_malformed_numbers()
+    fn normalize_contract_payload_preserves_canonical_numeric_endpoints_and_rejects_aliases()
      {
         let descriptor = json_descriptor();
         let payload = IrohaJson::from_raw_json(
-            r#"{"ev":{"negative_zero":-0,"max_u64":18446744073709551615,"min_i64":-9223372036854775808,"one_exp":1e0}}"#
+            r#"{"ev":{"max_u64":18446744073709551615,"min_i64":-9223372036854775808,"negative_zero":-0.0,"one_exp":1.0}}"#
                 .to_owned(),
         )
-        .expect("valid numeric endpoint JSON fixture");
+        .expect("canonical numeric endpoint JSON fixture");
         let normalized = normalize_contract_payload(&descriptor, Some(&payload))
-            .expect("finite endpoint numbers must normalize")
+            .expect("canonical finite endpoint numbers must validate")
             .expect("payload");
-        assert_eq!(
-            normalized.get(),
-            r#"{"ev":{"max_u64":18446744073709551615,"min_i64":-9223372036854775808,"negative_zero":-0.0,"one_exp":1.0}}"#
-        );
+        assert_eq!(normalized, payload);
         for raw in [
+            r#"{"ev":{"negative_zero":-0}}"#,
+            r#"{"ev":{"one_exp":1e0}}"#,
             r#"{"ev":{"n":01}}"#,
             r#"{"ev":{"n":+1}}"#,
             r#"{"ev":{"n":1.}}"#,
@@ -26542,6 +26826,11 @@ fn resolve_account_recovery_alias(
     }
     let world = state.world_view();
     let active = resolve_active_account_alias(&world, &nexus.dataspace_catalog, &alias, now_ms)
+        .map_err(|error| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                error.to_string(),
+            ))
+        })?
         .ok_or_else(|| {
             conversion_error(format!(
                 "account recovery alias `{alias_literal}` does not resolve to a strictly active account"
@@ -27014,7 +27303,12 @@ pub async fn handle_post_account_recovery_status(
             &account_alias,
             &recovery_request.active_account_id_at_proposal,
             now_ms,
-        );
+        )
+        .map_err(|error| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                error.to_string(),
+            ))
+        })?;
         if lineage.as_ref() != Some(&active_account) {
             return Err(conversion_error(
                 "account recovery request is not bound to the active alias controller lineage"
@@ -32897,40 +33191,6 @@ mod base64_bytes {
             .map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
-/// Handle WebSocket P2P fallback upgrade (feature-gated).
-///
-/// Upgrades the connection, adapts it to an AsyncRead/AsyncWrite pair, and forwards
-/// it to the P2P network handle via `accept_stream`. When the network rejects the
-/// connection due to caps/throttle/ACLs, the WebSocket is closed immediately.
-#[cfg(feature = "p2p_ws")]
-pub async fn handle_p2p_ws(
-    ws: WebSocket,
-    p2p: Option<iroha_core::IrohaNetwork>,
-    remote_addr: std::net::SocketAddr,
-) {
-    use crate::stream::ws_split;
-    if let Some(p2p) = p2p {
-        let (read, write) = ws_split(ws);
-        match p2p.accept_stream(read, write, remote_addr).await {
-            Ok(true) => {
-                // Accepted: peer task owns the stream. Nothing to do here.
-                iroha_p2p::network::inc_ws_inbound();
-            }
-            Ok(false) => {
-                // Rejected: close.
-                // We can't close cleanly since halves were already created; nothing else to do.
-            }
-            Err(e) => {
-                iroha_logger::warn!(%e, "accept_stream failed; closing WS");
-            }
-        }
-    } else {
-        // P2P handle not wired; close.
-        use futures::SinkExt;
-        let mut ws = ws;
-        let _ = ws.close().await;
-    }
-}
 app_api_items! {
 // ---------------------- v1 App-Facing Endpoints ----------------------
 #[derive(Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Default)]
@@ -35931,7 +36191,6 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                     }
                     if let (Some(acc), Some(s)) = (authority_typed.as_ref(), v.as_str()) {
                         let matched = iroha_data_model::account::AccountId::parse_encoded(s)
-                            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                             .map_or(false, |parsed| parsed.controller() == acc.controller());
                         if torii_debug_match_enabled() {
                             eprintln!(
@@ -35991,7 +36250,6 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 "authority" => {
                     if let (Some(acc), Some(s)) = (authority_typed.as_ref(), v.as_str()) {
                         iroha_data_model::account::AccountId::parse_encoded(s)
-                            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                             .map_or(true, |id| id.controller() != acc.controller())
                     } else {
                         true
@@ -36077,11 +36335,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                         list.iter()
                             .filter_map(|v| v.as_str())
                             .filter_map(|s| {
-                                iroha_data_model::account::AccountId::parse_encoded(s)
-                                    .map(
-                                        iroha_data_model::account::ParsedAccountId::into_account_id,
-                                    )
-                                    .ok()
+                                iroha_data_model::account::AccountId::parse_encoded(s).ok()
                             })
                             .any(|id| id.controller() == acc.controller())
                     } else {
@@ -36137,11 +36391,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                         list.iter()
                             .filter_map(|v| v.as_str())
                             .filter_map(|s| {
-                                iroha_data_model::account::AccountId::parse_encoded(s)
-                                    .map(
-                                        iroha_data_model::account::ParsedAccountId::into_account_id,
-                                    )
-                                    .ok()
+                                iroha_data_model::account::AccountId::parse_encoded(s).ok()
                             })
                             .all(|id| id.controller() != acc.controller())
                     } else {
@@ -36459,8 +36709,12 @@ const ENDPOINT_ACCOUNTS_LIST: &str = "/v1/accounts";
 const ENDPOINT_ACCOUNTS_QUERY: &str = "/v1/accounts/query";
 pub const ENDPOINT_ACCOUNTS_GET: &str = "/v1/accounts/{account_id}";
 pub const ENDPOINT_ACCOUNTS_ONBOARD_PLAN: &str = "/v1/accounts/onboard/plan";
+pub const ENDPOINT_ACCOUNTS_ONBOARD_PREPARE: &str = "/v1/accounts/onboard/prepare";
 pub const ENDPOINT_ACCOUNTS_ONBOARD: &str = "/v1/accounts/onboard";
+pub const ENDPOINT_ACCOUNTS_ONBOARDING_CURRENT_STATE: &str =
+    "/v1/accounts/onboarding/current-state";
 pub const ENDPOINT_ACCOUNTS_FAUCET: &str = "/v1/accounts/faucet";
+pub const ENDPOINT_ACCOUNTS_FAUCET_PREPARE: &str = "/v1/accounts/faucet/prepare";
 pub const ENDPOINT_ACCOUNTS_FAUCET_PUZZLE: &str = "/v1/accounts/faucet/puzzle";
 pub const ENDPOINT_ACCOUNT_ALIASES: &str = "/v1/accounts/{account_id}/aliases";
 const APP_API_TRANSACTION_TTL_SECS: u64 = 300;
@@ -36585,8 +36839,8 @@ pub fn parse_account_path_segment(
 ) -> Result<(iroha_data_model::account::AccountId, String), Error> {
     use iroha_data_model::query::error::QueryExecutionFail;
     parse_account_literal(literal, telemetry, endpoint)
-        .map(|parsed| {
-            let (account_id, canonical, _) = parsed.into_parts();
+        .map(|account_id| {
+            let canonical = account_id.to_string();
             (account_id, canonical)
         })
         .map_err(|err| {
@@ -36606,16 +36860,15 @@ pub(crate) fn parse_account_literal_with_state(
     context: &'static str,
 ) -> Result<(iroha_data_model::account::AccountId, String), iroha_data_model::error::ParseError> {
     match AccountId::parse_encoded(literal) {
-        Ok(parsed) => {
-            let (account_id, canonical, _) = parsed.into_parts();
+        Ok(account_id) => {
+            let canonical = account_id.to_string();
             if literal != canonical {
                 let err = iroha_data_model::error::ParseError::new(
                     "account id must use its exact canonical I105 literal",
                 );
-                record_account_literal_reject(telemetry, context, literal, err.reason());
+                record_account_literal_reject(telemetry, context, err.reason());
                 return Err(err);
             }
-            record_account_literal_accept(telemetry, context, &account_id);
             Ok((account_id, canonical))
         }
         Err(base_err) => {
@@ -36623,7 +36876,7 @@ pub(crate) fn parse_account_literal_with_state(
             // permissioned operation and must use a caller-aware path that verifies the exact
             // applicable domain or dataspace `CanResolveAccountAlias` grant before consulting
             // active SNS state.
-            record_account_literal_reject(telemetry, context, literal, base_err.reason());
+            record_account_literal_reject(telemetry, context, base_err.reason());
             Err(base_err)
         }
     }
@@ -36670,12 +36923,8 @@ fn canonicalize_account_literal_value(
                     context,
                 )
                 .map(|(_, canonical)| canonical),
-                None => parse_account_literal(current_literal.as_str(), telemetry, context).map(
-                    |parsed| {
-                        let (_, canonical, _) = parsed.into_parts();
-                        canonical
-                    },
-                ),
+                None => parse_account_literal(current_literal.as_str(), telemetry, context)
+                    .map(|account_id| account_id.to_string()),
             };
             match parsed {
                 Ok(parsed) => {
@@ -36785,10 +37034,8 @@ fn canonicalize_query_account_literal(
             let canonical = match state {
                 Some(state) => parse_account_literal_with_state(state, raw, telemetry, context)
                     .map(|(_, canonical)| canonical),
-                None => parse_account_literal(raw, telemetry, context).map(|parsed| {
-                    let (_, canonical, _) = parsed.into_parts();
-                    canonical
-                }),
+                None => parse_account_literal(raw, telemetry, context)
+                    .map(|account_id| account_id.to_string()),
             };
             canonical.map_err(|err| {
                 Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
@@ -36803,60 +37050,23 @@ pub fn parse_account_literal(
     literal: &str,
     telemetry: &MaybeTelemetry,
     context: &'static str,
-) -> Result<iroha_data_model::account::ParsedAccountId, iroha_data_model::error::ParseError> {
+) -> Result<AccountId, iroha_data_model::error::ParseError> {
     match AccountId::parse_encoded(literal) {
-        Ok(parsed) => {
-            record_account_literal_accept(telemetry, context, parsed.account_id());
-            Ok(parsed)
-        }
+        Ok(parsed) => Ok(parsed),
         Err(err) => {
-            record_account_literal_reject(telemetry, context, literal, err.reason());
+            record_account_literal_reject(telemetry, context, err.reason());
             Err(err)
         }
     }
 }
-fn record_account_literal_accept(
-    telemetry: &MaybeTelemetry,
-    context: &'static str,
-    _account_id: &AccountId,
-) {
-    telemetry.with_metrics(|metrics| {
-        metrics.inc_torii_address_domain(context, "default");
-    });
-}
 fn record_account_literal_reject(
     telemetry: &MaybeTelemetry,
     context: &'static str,
-    literal: &str,
     reason: &'static str,
 ) {
     telemetry.with_metrics(|metrics| {
-        if literal_is_local8(literal) {
-            metrics.inc_torii_address_domain(context, "local8");
-            if let Some(domain_label) = local8_domain_label(literal) {
-                metrics.inc_torii_address_domain(context, &domain_label);
-            }
-        }
         metrics.inc_torii_address_invalid(context, reason);
     });
-}
-fn local8_domain_label(literal: &str) -> Option<String> {
-    use iroha_data_model::domain::DomainId;
-    let trimmed = literal.trim();
-    let (_, domain_part) = trimmed.rsplit_once('@')?;
-    let parsed = DomainId::parse_fully_qualified(domain_part).ok()?;
-    Some(parsed.to_string())
-}
-fn literal_is_local8(literal: &str) -> bool {
-    let trimmed = literal.trim_start();
-    let address_part = trimmed
-        .split_once('@')
-        .map(|(address, _)| address)
-        .unwrap_or(trimmed);
-    address_part
-        .to_ascii_lowercase()
-        .trim_start_matches("0x")
-        .starts_with("sn1")
 }
 #[cfg(feature = "app_api")]
 fn explorer_qr_error(err: iroha_torii_shared::qr::QrError) -> Error {
@@ -36869,45 +37079,30 @@ fn explorer_qr_error(err: iroha_torii_shared::qr::QrError) -> Error {
 mod address_metrics_tests {
     use super::*;
     use crate::filter::{FieldPath, FilterExpr};
-    use iroha_data_model::account::{AccountAddress, AccountId, address::AddressDomainKind};
+    use iroha_data_model::account::AccountId;
     use norito::json::Value;
     const TEST_CONTEXT: &str = "/tests/account-metrics";
     const KAIGI_SSE_CONTEXT: &str = "/v1/kaigi/relays/events?relay";
-    const LOCAL8_LITERAL: &str = "sn12zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz@kaigi.sora";
-    routing_test! { current_thread parse_account_literal_counts_local8_attempts
+    const NONCANONICAL_LITERAL: &str =
+        "sn12zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz@kaigi.sora";
+    routing_test! { current_thread parse_account_literal_records_invalid_attempts
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
-        let reason = iroha_data_model::account::AccountId::parse_encoded(LOCAL8_LITERAL)
-            .expect_err("local8 literal should fail")
+        let reason = iroha_data_model::account::AccountId::parse_encoded(NONCANONICAL_LITERAL)
+            .expect_err("domain-suffixed literal should fail")
             .reason();
         let invalid_counter = metrics
             .torii_address_invalid_total
             .with_label_values(&[TEST_CONTEXT, reason]);
         let before_invalid = invalid_counter.get();
-        assert!(parse_account_literal(LOCAL8_LITERAL, &telemetry, TEST_CONTEXT).is_err());
+        assert!(parse_account_literal(NONCANONICAL_LITERAL, &telemetry, TEST_CONTEXT).is_err());
         assert_eq!(invalid_counter.get(), before_invalid + 1);
-    }
-    routing_test! { current_thread parse_account_literal_records_local8_domain_labels
-        let telemetry = MaybeTelemetry::for_tests();
-        let metrics = telemetry.metrics().await;
-        let domain_label = local8_domain_label(LOCAL8_LITERAL).expect("domain parses");
-        let local8_counter = metrics
-            .torii_address_domain_total
-            .with_label_values(&[TEST_CONTEXT, "local8"]);
-        let domain_counter = metrics
-            .torii_address_domain_total
-            .with_label_values(&[TEST_CONTEXT, domain_label.as_str()]);
-        let before_local8 = local8_counter.get();
-        let before_domain = domain_counter.get();
-        assert!(parse_account_literal(LOCAL8_LITERAL, &telemetry, TEST_CONTEXT).is_err());
-        assert_eq!(local8_counter.get(), before_local8 + 1);
-        assert_eq!(domain_counter.get(), before_domain + 1);
     }
     routing_test! { current_thread filter_validation_records_address_metrics
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
-        let reason = iroha_data_model::account::AccountId::parse_encoded(LOCAL8_LITERAL)
-            .expect_err("local8 literal should fail")
+        let reason = iroha_data_model::account::AccountId::parse_encoded(NONCANONICAL_LITERAL)
+            .expect_err("domain-suffixed literal should fail")
             .reason();
         let invalid_counter = metrics
             .torii_address_invalid_total
@@ -36915,7 +37110,7 @@ mod address_metrics_tests {
         let before_invalid = invalid_counter.get();
         let expr = FilterExpr::Eq(
             FieldPath("authority".to_string()),
-            Value::String(LOCAL8_LITERAL.into()),
+            Value::String(NONCANONICAL_LITERAL.into()),
         );
         assert!(validate_tx_filter_adapter(&expr, &telemetry).is_err());
         assert_eq!(invalid_counter.get(), before_invalid + 1);
@@ -36971,42 +37166,12 @@ mod address_metrics_tests {
             .get();
         assert_eq!(after, before + 1);
     }
-    fn i105_literal() -> String {
-        let kp = checked_routing_fixture_keypair(
-            0x97,
-            iroha_crypto::Algorithm::Ed25519,
-            "derive account literal metric fixture key",
-        );
-        AccountId::new(kp.public_key().clone()).to_string()
-    }
-    routing_test! { current_thread parse_account_literal_records_default_domain_metrics
-        let telemetry = MaybeTelemetry::for_tests();
-        let endpoint = TEST_CONTEXT;
-        let literal = i105_literal();
-        let label = AddressDomainKind::Default.as_str();
-        let before = {
-            let metrics = telemetry.metrics().await;
-            metrics
-                .torii_address_domain_total
-                .with_label_values(&[endpoint, label])
-                .get()
-        };
-        parse_account_literal(&literal, &telemetry, endpoint).expect("literal should parse");
-        let after = {
-            let metrics = telemetry.metrics().await;
-            metrics
-                .torii_address_domain_total
-                .with_label_values(&[endpoint, label])
-                .get()
-        };
-        assert_eq!(after, before + 1);
-    }
     routing_test! { current_thread kaigi_sse_accepts_i105_literal
         let telemetry = MaybeTelemetry::for_tests();
         let literal = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
         let parsed = parse_account_literal(&literal, &telemetry, KAIGI_SSE_CONTEXT)
             .expect("i105 literal should parse");
-        assert_eq!(parsed.canonical(), parsed.account_id().to_string());
+        assert_eq!(parsed.to_string(), literal);
     }
 }
 #[cfg(all(test, feature = "app_api", feature = "telemetry"))]
@@ -39641,10 +39806,12 @@ mod tx_query_filter_tests {
             "kaigi_signal".parse().expect("metadata key"),
             Json::new(crate::json_object(vec![
                 crate::json_entry("schema", "iroha-demo-kaigi-chain-signal/v1"),
-                crate::json_entry("callId", "kaigi:weekly-sync"),
+                crate::json_entry("callId", "kaigi.universal:weekly-sync"),
                 crate::json_entry("signalKind", "answer"),
                 crate::json_entry("hostAccountId", authority.to_string()),
+                crate::json_entry("host_account_id", authority.to_string()),
                 crate::json_entry("participantAccountId", authority.to_string()),
+                crate::json_entry("participant_account_id", authority.to_string()),
                 crate::json_entry("createdAtMs", 1_700_000_000_000_u64),
                 crate::json_entry(
                     "encryptedSignal",
@@ -39663,9 +39830,10 @@ mod tx_query_filter_tests {
             true,
             metadata,
         );
-        let signal = kaigi_signal_from_transaction(&tx, true).expect("signal should parse");
+        let signal = kaigi_signal_from_transaction(&tx, true, 1_700_000_000_100)
+            .expect("signal should parse");
         let authority_literal = authority.to_string();
-        assert_eq!(signal.call_id, "kaigi:weekly-sync");
+        assert_eq!(signal.call_id, "kaigi.universal:weekly-sync");
         assert_eq!(signal.signal_kind, "answer");
         assert_eq!(signal.created_at_ms, 1_700_000_000_000);
         assert_eq!(signal.timestamp_ms, Some(1_700_000_000_100));
@@ -39677,6 +39845,22 @@ mod tx_query_filter_tests {
             signal.participant_account_id.as_deref(),
             Some(authority_literal.as_str())
         );
+        let response_metadata: Value = signal
+            .metadata
+            .try_into_any_norito()
+            .expect("signal response metadata");
+        for key in [
+            "hostAccountId",
+            "host_account_id",
+            "participantAccountId",
+            "participant_account_id",
+        ] {
+            assert_eq!(
+                response_metadata.get(key).and_then(Value::as_str),
+                Some(authority_literal.as_str()),
+                "transparent signal metadata must preserve {key}",
+            );
+        }
     }
     routing_test! { sync kaigi_signal_from_transaction_hides_identities_for_private_calls
         let (authority, keypair) = account_with_key();
@@ -39685,10 +39869,12 @@ mod tx_query_filter_tests {
             "kaigi_signal".parse().expect("metadata key"),
             Json::new(crate::json_object(vec![
                 crate::json_entry("schema", "iroha-demo-kaigi-chain-signal/v1"),
-                crate::json_entry("callId", "kaigi:weekly-sync"),
+                crate::json_entry("callId", "kaigi.universal:weekly-sync"),
                 crate::json_entry("signalKind", "answer"),
                 crate::json_entry("hostAccountId", authority.to_string()),
+                crate::json_entry("host_account_id", authority.to_string()),
                 crate::json_entry("participantAccountId", authority.to_string()),
+                crate::json_entry("participant_account_id", authority.to_string()),
                 crate::json_entry("createdAtMs", 1_700_000_000_000_u64),
             ])),
         );
@@ -39700,11 +39886,525 @@ mod tx_query_filter_tests {
             true,
             metadata,
         );
-        let signal = kaigi_signal_from_transaction(&tx, false).expect("signal should parse");
-        assert_eq!(signal.call_id, "kaigi:weekly-sync");
+        let signal = kaigi_signal_from_transaction(&tx, false, 1_700_000_000_100)
+            .expect("signal should parse");
+        assert_eq!(signal.call_id, "kaigi.universal:weekly-sync");
         assert!(signal.authority.is_none());
         assert!(signal.host_account_id.is_none());
         assert!(signal.participant_account_id.is_none());
+        let response_metadata: Value = signal
+            .metadata
+            .try_into_any_norito()
+            .expect("signal response metadata");
+        for key in [
+            "hostAccountId",
+            "host_account_id",
+            "participantAccountId",
+            "participant_account_id",
+        ] {
+            assert!(
+                response_metadata.get(key).is_none(),
+                "private signal metadata must redact {key}",
+            );
+        }
+    }
+    routing_test! { sync kaigi_signal_from_transaction_requires_canonical_schema
+        let (authority, keypair) = account_with_key();
+        let signal_metadata = |schema: Option<&str>| {
+            let mut fields = vec![
+                crate::json_entry("callId", "kaigi.universal:weekly-sync"),
+                crate::json_entry("createdAtMs", 1_700_000_000_000_u64),
+            ];
+            if let Some(schema) = schema {
+                fields.push(crate::json_entry("schema", schema));
+            }
+            let mut metadata = dm::Metadata::default();
+            metadata.insert(
+                "kaigi_signal".parse().expect("metadata key"),
+                Json::new(crate::json_object(fields)),
+            );
+            metadata
+        };
+        for schema in [None, Some("iroha-demo-kaigi-chain-signal/v2")] {
+            let tx = make_external_tx_with_metadata(
+                &authority,
+                &keypair,
+                1_700_000_000_100,
+                None,
+                true,
+                signal_metadata(schema),
+            );
+            assert!(
+                kaigi_signal_from_transaction(&tx, true, 1_700_000_000_100).is_none(),
+                "unversioned or non-V1 signal metadata must fail closed",
+            );
+        }
+    }
+    routing_test! { sync kaigi_signal_from_transaction_rejects_failed_transactions
+        let (authority, keypair) = account_with_key();
+        let mut metadata = dm::Metadata::default();
+        metadata.insert(
+            "kaigi_signal".parse().expect("metadata key"),
+            Json::new(crate::json_object(vec![
+                crate::json_entry("schema", KAIGI_SIGNAL_SCHEMA_V1),
+                crate::json_entry("callId", "kaigi.universal:weekly-sync"),
+                crate::json_entry("createdAtMs", 1_700_000_000_000_u64),
+            ])),
+        );
+        let tx = make_external_tx_with_metadata(
+            &authority,
+            &keypair,
+            1_700_000_000_100,
+            None,
+            false,
+            metadata,
+        );
+        assert!(
+            kaigi_signal_from_transaction(&tx, true, 1_700_000_000_100).is_none(),
+            "failed committed transactions must not surface as accepted Kaigi signals",
+        );
+    }
+    routing_test! { sync kaigi_signal_from_transaction_rejects_future_metadata_timestamp
+        let (authority, keypair) = account_with_key();
+        let carrier_at_ms = 1_700_000_000_100_u64;
+        let mut metadata = dm::Metadata::default();
+        metadata.insert(
+            "kaigi_signal".parse().expect("metadata key"),
+            Json::new(crate::json_object(vec![
+                crate::json_entry("schema", KAIGI_SIGNAL_SCHEMA_V1),
+                crate::json_entry("callId", "kaigi.universal:weekly-sync"),
+                crate::json_entry("createdAtMs", carrier_at_ms + 1),
+            ])),
+        );
+        let tx = make_external_tx_with_metadata(
+            &authority,
+            &keypair,
+            carrier_at_ms,
+            None,
+            true,
+            metadata,
+        );
+        assert!(
+            kaigi_signal_from_transaction(&tx, true, carrier_at_ms).is_none(),
+            "signer-controlled metadata must not move the signal cursor beyond carrier-block time",
+        );
+    }
+    routing_test! { sync kaigi_signal_call_query_uses_canonical_id_and_carrier_timestamp_floor
+        let (authority, keypair) = account_with_key();
+        let call_id = iroha_data_model::kaigi::KaigiId::new(
+            DomainId::try_new("kaigi", "universal").expect("domain"),
+            "weekly-sync".parse().expect("call name"),
+        );
+        let call_literal = call_id.to_string();
+        let created_at_ms = 1_700_000_000_000_u64;
+        let transaction_at_ms = created_at_ms + 100;
+        let carrier_at_ms = created_at_ms + 200;
+        let mut metadata = dm::Metadata::default();
+        metadata.insert(
+            "kaigi_signal".parse().expect("metadata key"),
+            Json::new(crate::json_object(vec![
+                crate::json_entry("schema", KAIGI_SIGNAL_SCHEMA_V1),
+                crate::json_entry("callId", call_literal.clone()),
+                crate::json_entry("createdAtMs", created_at_ms),
+            ])),
+        );
+        let tx = make_external_tx_with_metadata(
+            &authority,
+            &keypair,
+            transaction_at_ms,
+            None,
+            true,
+            metadata,
+        );
+        let signal = kaigi_signal_from_transaction(&tx, true, carrier_at_ms)
+            .expect("canonical signal");
+        assert_eq!(signal.call_id, call_literal);
+        assert_eq!(signal.timestamp_ms, Some(carrier_at_ms));
+        assert!(kaigi_signal_matches_call_query(
+            &signal,
+            call_literal.as_str(),
+            None,
+        ));
+        assert!(kaigi_signal_matches_call_query(
+            &signal,
+            call_literal.as_str(),
+            Some(created_at_ms + 150),
+        ));
+        assert!(!kaigi_signal_matches_call_query(
+            &signal,
+            call_literal.as_str(),
+            Some(carrier_at_ms + 1),
+        ));
+        assert!(!kaigi_signal_matches_call_query(
+            &signal,
+            "kaigi:weekly-sync",
+            None,
+        ));
+    }
+    routing_test! { sync kaigi_signal_carrier_must_be_within_call_lifecycle
+        let (host, _) = account_with_key();
+        let call_id = iroha_data_model::kaigi::KaigiId::new(
+            DomainId::try_new("kaigi", "universal").expect("domain"),
+            "weekly-sync".parse().expect("call name"),
+        );
+        let template = iroha_data_model::kaigi::NewKaigi::with_defaults(call_id, host);
+        let mut record = iroha_data_model::kaigi::KaigiRecord::from_new(&template, 100);
+        record.status = iroha_data_model::kaigi::KaigiStatus::Ended;
+        record.ended_at_ms = Some(200);
+        assert!(!kaigi_signal_carrier_is_within_call_lifecycle(&record, 99));
+        assert!(kaigi_signal_carrier_is_within_call_lifecycle(&record, 100));
+        assert!(kaigi_signal_carrier_is_within_call_lifecycle(&record, 200));
+        assert!(!kaigi_signal_carrier_is_within_call_lifecycle(&record, 201));
+    }
+    routing_test! { sync kaigi_signal_prefilter_skips_many_unrelated_history_authorities
+        let (host, _) = account_with_key();
+        let call_id = iroha_data_model::kaigi::KaigiId::new(
+            DomainId::try_new("kaigi", "universal").expect("domain"),
+            "weekly-sync".parse().expect("call name"),
+        );
+        let call_literal = call_id.to_string();
+        let template = iroha_data_model::kaigi::NewKaigi::with_defaults(call_id, host);
+        let record = iroha_data_model::kaigi::KaigiRecord::from_new(&template, 1);
+        let world = iroha_core::state::World::default();
+        let world = world.view();
+        let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
+        let allowed_lineages = BTreeSet::new();
+        let mut lineage_cache = BTreeMap::new();
+        let mut admitted = 0_u64;
+
+        for index in 0..256_u64 {
+            let mut seed = [0x6d; 32];
+            seed[..8].copy_from_slice(&index.to_le_bytes());
+            let keypair = KeyPair::try_from_seed(
+                seed.to_vec(),
+                iroha_crypto::Algorithm::Ed25519,
+            )
+            .expect("derive unique non-signal history authority");
+            let outsider = dm::AccountId::new(keypair.public_key().clone());
+            let transaction = make_external_tx(&outsider, &keypair, index + 2, None, true);
+            let Some(_signal_json) =
+                kaigi_signal_metadata_for_call(&transaction, &call_literal)
+            else {
+                continue;
+            };
+            if kaigi_signal_authority_is_allowed(
+                &transaction,
+                &record,
+                &world,
+                &catalog,
+                0,
+                &allowed_lineages,
+                &mut lineage_cache,
+                8,
+            )
+            .expect("non-signal history prefilter")
+            {
+                admitted = admitted.saturating_add(1);
+            }
+        }
+
+        assert_eq!(admitted, 0);
+        assert!(
+            lineage_cache.is_empty(),
+            "transactions without canonical Kaigi signal metadata must not consume lineage cache"
+        );
+    }
+    routing_test! { sync kaigi_signal_authority_cache_fails_closed_at_budget
+        let (host, _) = account_with_key();
+        let (first_outsider, first_keypair) = account_with_key();
+        let (second_outsider, second_keypair) = account_with_key();
+        let call_id = iroha_data_model::kaigi::KaigiId::new(
+            DomainId::try_new("kaigi", "universal").expect("domain"),
+            "weekly-sync".parse().expect("call name"),
+        );
+        let template = iroha_data_model::kaigi::NewKaigi::with_defaults(call_id, host);
+        let record = iroha_data_model::kaigi::KaigiRecord::from_new(&template, 1);
+        let first_tx = make_external_tx(&first_outsider, &first_keypair, 2, None, true);
+        let second_tx = make_external_tx(&second_outsider, &second_keypair, 3, None, true);
+        let world = iroha_core::state::World::default();
+        let world = world.view();
+        let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
+        let allowed_lineages = BTreeSet::new();
+        let mut lineage_cache = BTreeMap::new();
+
+        assert!(!kaigi_signal_authority_is_allowed(
+            &first_tx,
+            &record,
+            &world,
+            &catalog,
+            0,
+            &allowed_lineages,
+            &mut lineage_cache,
+            1,
+        )
+        .expect("first outsider consumes the bounded cache entry"));
+        assert_eq!(lineage_cache.len(), 1);
+        assert!(matches!(
+            kaigi_signal_authority_is_allowed(
+                &second_tx,
+                &record,
+                &world,
+                &catalog,
+                0,
+                &allowed_lineages,
+                &mut lineage_cache,
+                1,
+            ),
+            Err(iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded)
+        ));
+        assert_eq!(lineage_cache.len(), 1);
+    }
+    routing_test! { sync kaigi_signal_authority_is_bound_to_current_call_roster
+        let (host, host_keypair) = account_with_key();
+        let (participant, participant_keypair) = account_with_key();
+        let (outsider, outsider_keypair) = account_with_key();
+        let call_id = iroha_data_model::kaigi::KaigiId::new(
+            DomainId::try_new("kaigi", "universal").expect("domain"),
+            "weekly-sync".parse().expect("call name"),
+        );
+        let template = iroha_data_model::kaigi::NewKaigi::with_defaults(call_id, host.clone());
+        let mut record = iroha_data_model::kaigi::KaigiRecord::from_new(&template, 1);
+        record.push_participant(participant.clone());
+        let host_tx = make_external_tx(&host, &host_keypair, 10, None, true);
+        let participant_tx =
+            make_external_tx(&participant, &participant_keypair, 11, None, true);
+        let outsider_tx = make_external_tx(&outsider, &outsider_keypair, 12, None, true);
+        let world = iroha_core::state::World::default();
+        let world = world.view();
+        let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
+        let mut lineage_cache = BTreeMap::new();
+        let allowed_lineages = BTreeSet::new();
+        assert!(kaigi_signal_authority_is_allowed(
+            &host_tx,
+            &record,
+            &world,
+            &catalog,
+            0,
+            &allowed_lineages,
+            &mut lineage_cache,
+            u64::MAX,
+        ).expect("host authorization"));
+        assert!(kaigi_signal_authority_is_allowed(
+            &participant_tx,
+            &record,
+            &world,
+            &catalog,
+            0,
+            &allowed_lineages,
+            &mut lineage_cache,
+            u64::MAX,
+        ).expect("participant authorization"));
+        assert!(!kaigi_signal_authority_is_allowed(
+            &outsider_tx,
+            &record,
+            &world,
+            &catalog,
+            0,
+            &allowed_lineages,
+            &mut lineage_cache,
+            u64::MAX,
+        ).expect("outsider authorization"));
+        record.privacy_mode = iroha_data_model::kaigi::KaigiPrivacyMode::ZkRosterV1;
+        assert!(kaigi_signal_authority_is_allowed(
+            &host_tx,
+            &record,
+            &world,
+            &catalog,
+            0,
+            &allowed_lineages,
+            &mut lineage_cache,
+            u64::MAX,
+        ).expect("private host authorization"));
+        assert!(
+            !kaigi_signal_authority_is_allowed(
+                &participant_tx,
+                &record,
+                &world,
+                &catalog,
+                0,
+                &allowed_lineages,
+                &mut lineage_cache,
+                u64::MAX,
+            ).expect("private participant authorization"),
+            "private signal admission remains host-only while private joins are disabled",
+        );
+    }
+    routing_test! { sync kaigi_signal_authority_accepts_active_rekey_successors
+        fn insert_active_rekey_lineage(
+            world: &mut iroha_core::state::World,
+            catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+            label: &str,
+            retired: &dm::AccountId,
+            active: &dm::AccountId,
+        ) {
+            let alias = iroha_data_model::account::rekey::AccountAlias::domainless(
+                label.parse().expect("account alias label"),
+                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            );
+            let selector = iroha_core::sns::selector_for_account_alias(&alias, catalog)
+                .expect("account alias selector");
+            let active_address = iroha_data_model::account::AccountAddress::from_account_id(active)
+                .expect("active account address");
+            let lease = iroha_data_model::sns::NameRecordV1::new(
+                selector.clone(),
+                active.clone(),
+                vec![iroha_data_model::sns::NameControllerV1::account(&active_address)],
+                0,
+                0,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                dm::Metadata::default(),
+            );
+            world
+                .smart_contract_state_mut_for_testing()
+                .insert(
+                    iroha_core::sns::record_storage_key(&selector),
+                    norito::codec::Encode::encode(&lease),
+                );
+            world
+                .account_aliases_mut_for_testing()
+                .insert(alias.clone(), active.clone());
+            world.account_rekey_records_mut_for_testing().insert(
+                alias.clone(),
+                iroha_data_model::account::rekey::AccountRekeyRecord::new(
+                    alias,
+                    retired.clone(),
+                )
+                .repoint_for_account_id_rekey(active.clone())
+                .expect("active account-id rekey lineage"),
+            );
+        }
+
+        let (retired_host, _) = account_with_key();
+        let (active_host, active_host_keypair) = account_with_key();
+        let (retired_participant, _) = account_with_key();
+        let (active_participant, active_participant_keypair) = account_with_key();
+        let (outsider, outsider_keypair) = account_with_key();
+        let active_host_account = dm::Account::new(active_host.clone()).build(&active_host);
+        let active_participant_account =
+            dm::Account::new(active_participant.clone()).build(&active_host);
+        let outsider_account = dm::Account::new(outsider.clone()).build(&active_host);
+        let mut world = iroha_core::state::World::with(
+            [],
+            [active_host_account, active_participant_account, outsider_account],
+            [],
+        );
+        let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+        ])
+        .expect("dataspace catalog");
+        insert_active_rekey_lineage(
+            &mut world,
+            &catalog,
+            "kaigihost",
+            &retired_host,
+            &active_host,
+        );
+        insert_active_rekey_lineage(
+            &mut world,
+            &catalog,
+            "kaigiparticipant",
+            &retired_participant,
+            &active_participant,
+        );
+        let call_id = iroha_data_model::kaigi::KaigiId::new(
+            DomainId::try_new("kaigi", "universal").expect("domain"),
+            "weekly-sync".parse().expect("call name"),
+        );
+        let template =
+            iroha_data_model::kaigi::NewKaigi::with_defaults(call_id, retired_host.clone());
+        let mut record = iroha_data_model::kaigi::KaigiRecord::from_new(&template, 1);
+        record.push_participant(retired_participant);
+        let host_tx = make_external_tx(&active_host, &active_host_keypair, 10, None, true);
+        let participant_tx = make_external_tx(
+            &active_participant,
+            &active_participant_keypair,
+            11,
+            None,
+            true,
+        );
+        let outsider_tx = make_external_tx(&outsider, &outsider_keypair, 12, None, true);
+        let world = world.view();
+        let allowed_lineages =
+            kaigi_signal_allowed_active_lineages(&world, &catalog, &record, 50)
+                .expect("transparent signal authority scope");
+        let mut lineage_cache = BTreeMap::new();
+        assert!(kaigi_signal_authority_is_allowed(
+            &host_tx,
+            &record,
+            &world,
+            &catalog,
+            50,
+            &allowed_lineages,
+            &mut lineage_cache,
+            u64::MAX,
+        ).expect("active host successor authorization"));
+        assert!(kaigi_signal_authority_is_allowed(
+            &participant_tx,
+            &record,
+            &world,
+            &catalog,
+            50,
+            &allowed_lineages,
+            &mut lineage_cache,
+            u64::MAX,
+        ).expect("active participant successor authorization"));
+        assert!(!kaigi_signal_authority_is_allowed(
+            &outsider_tx,
+            &record,
+            &world,
+            &catalog,
+            50,
+            &allowed_lineages,
+            &mut lineage_cache,
+            u64::MAX,
+        ).expect("unrelated authority authorization"));
+
+        record.privacy_mode = iroha_data_model::kaigi::KaigiPrivacyMode::ZkRosterV1;
+        let allowed_lineages =
+            kaigi_signal_allowed_active_lineages(&world, &catalog, &record, 50)
+                .expect("private signal authority scope");
+        assert!(kaigi_signal_authority_is_allowed(
+            &host_tx,
+            &record,
+            &world,
+            &catalog,
+            50,
+            &allowed_lineages,
+            &mut lineage_cache,
+            u64::MAX,
+        ).expect("private active host successor authorization"));
+        assert!(!kaigi_signal_authority_is_allowed(
+            &participant_tx,
+            &record,
+            &world,
+            &catalog,
+            50,
+            &allowed_lineages,
+            &mut lineage_cache,
+            u64::MAX,
+        ).expect("private participant successor authorization"));
+    }
+    routing_test! { sync kaigi_record_validation_rejects_embedded_identifier_mismatch
+        let domain = DomainId::try_new("kaigi", "universal").expect("domain");
+        let requested = iroha_data_model::kaigi::KaigiId::new(
+            domain.clone(),
+            "weekly-sync".parse().expect("requested call name"),
+        );
+        let embedded = iroha_data_model::kaigi::KaigiId::new(
+            domain,
+            "different-call".parse().expect("embedded call name"),
+        );
+        let (host, _) = account_with_key();
+        let template = iroha_data_model::kaigi::NewKaigi::with_defaults(embedded, host);
+        let record = iroha_data_model::kaigi::KaigiRecord::from_new(&template, 1);
+        let error = validate_kaigi_record_id(record, &requested)
+            .expect_err("mismatched embedded Kaigi identifier must fail closed");
+        let Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = error else {
+            panic!("unexpected Kaigi record mismatch error: {error:?}");
+        };
+        assert!(message.contains("metadata key"));
     }
     routing_test! { sync kaigi_call_view_hides_host_identity_for_private_calls
         let (host, _) = account_with_key();
@@ -39742,6 +40442,26 @@ mod tx_query_filter_tests {
         let view = kaigi_call_view_from_record(&record);
         assert!(view.host_account_id.is_none());
         assert!(view.billing_account_id.is_none());
+    }
+    routing_test! { sync kaigi_event_kind_filters_fail_closed_for_nonempty_invalid_input
+        assert!(parse_kaigi_kind_filter(None).is_none());
+        assert!(parse_kaigi_call_kind_filter(Some("   ")).is_none());
+
+        let relay_filter = parse_kaigi_kind_filter(Some(", ,"))
+            .expect("a nonempty malformed relay filter must remain active");
+        assert!(relay_filter.is_empty());
+
+        let call_filter = parse_kaigi_call_kind_filter(Some("unknown"))
+            .expect("an unknown call-event filter must remain active");
+        assert!(call_filter.is_empty());
+        assert!(!call_filter.contains("roster_updated"));
+
+        let mixed_filter = parse_kaigi_call_kind_filter(Some("unknown, ENDED"))
+            .expect("a mixed call-event filter");
+        assert_eq!(
+            mixed_filter.into_iter().collect::<Vec<_>>(),
+            vec!["ended".to_owned()],
+        );
     }
     routing_test! { sync convert_kaigi_call_event_maps_roster_and_end_updates
         use iroha_data_model::events::data::prelude::{DomainEvent, KaigiRosterSummary};
@@ -40260,7 +40980,6 @@ mod explorer_lookup_tests {
                         let account = query.account.map(|raw| {
                             dm::AccountId::parse_encoded(&raw)
                                 .expect("test query account should parse")
-                                .into_account_id()
                         });
                         let pagination = crate::explorer::ExplorerPaginationQuery {
                             page: query.page.unwrap_or(0),
@@ -40343,7 +41062,6 @@ mod explorer_lookup_tests {
                         let account = query.account.map(|raw| {
                             dm::AccountId::parse_encoded(&raw)
                                 .expect("test query account should parse")
-                                .into_account_id()
                         });
                         let pagination = crate::explorer::ExplorerPaginationQuery {
                             page: query.page.unwrap_or(0),
@@ -40807,7 +41525,6 @@ mod query_endpoint_tests {
         let isi: dm::InstructionBox = isi::zk::VerifyProof::new(attachment).into();
         let authority: dm::AccountId =
             dm::AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .expect("valid account id");
         isi.execute(&authority, &mut stx)
             .expect("execute verify-proof");
@@ -42052,7 +42769,10 @@ pub async fn handle_v1_kaigi_relays(
     let mut items = Vec::with_capacity(KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS);
     let total = visit_kaigi_relays_bounded(&state, |snapshot| {
         let domain_label = snapshot.domain.to_string();
-        let status = snapshot.feedback.as_ref().map(|fb| fb.status);
+        let status = snapshot
+            .feedback
+            .as_ref()
+            .map(|feedback| feedback.status.label().to_owned());
         let reported_at_ms = snapshot.feedback.as_ref().map(|fb| fb.reported_at_ms);
         let fingerprint = Hash::new(&snapshot.registration.hpke_public_key);
         items.push(KaigiRelaySummaryDto {
@@ -42119,7 +42839,10 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
     };
     let metrics = telemetry.metrics().await;
     let domain_label = snapshot.domain.to_string();
-    let status = snapshot.feedback.as_ref().map(|fb| fb.status);
+    let status = snapshot
+        .feedback
+        .as_ref()
+        .map(|feedback| feedback.status.label().to_owned());
     let reported_at_ms = snapshot.feedback.as_ref().map(|fb| fb.reported_at_ms);
     let fingerprint = Hash::new(&snapshot.registration.hpke_public_key);
     let relay_summary = KaigiRelaySummaryDto {
@@ -42241,9 +42964,23 @@ pub async fn handle_v1_kaigi_call_signals(
     call_id: KaigiId,
     crate::NoritoQuery(params): crate::NoritoQuery<KaigiCallSignalsParams>,
 ) -> Result<AxResponse, Error> {
-    let record = load_kaigi_record(state.as_ref(), &call_id)?;
+    let view = state.view();
+    let record = load_kaigi_record_from_world(view.world(), &call_id)?;
+    let observation_time_ms = view.authenticated_query_ledger_time_ms().ok_or_else(|| {
+        conversion_error(
+            "no authenticated committed ledger time anchors Kaigi signal authorization"
+                .to_owned(),
+        )
+    })?;
     let reveal_authorities =
         record.privacy_mode == iroha_data_model::kaigi::KaigiPrivacyMode::Transparent;
+    let allowed_active_lineages = kaigi_signal_allowed_active_lineages(
+        view.world(),
+        &view.nexus().dataspace_catalog,
+        &record,
+        observation_time_ms,
+    )
+    .map_err(|error| Error::Query(iroha_data_model::ValidationFail::QueryFailed(error)))?;
     let after_timestamp_ms = params.after_timestamp_ms;
     let pagination = enforce_app_pagination(
         params.limit.or(Some(50)),
@@ -42275,30 +43012,53 @@ pub async fn handle_v1_kaigi_call_signals(
     let mut retained_bytes = 0u64;
     let mut total = 0u64;
     let mut sequence = 0usize;
-    let view = state.view();
+    let mut carrier_timestamp_cache = None;
+    let mut authority_lineage_cache = BTreeMap::new();
     let max_carrier_work = app_query_limits().max_fetch_size.min(canonical_max_fetch);
     iroha_core::smartcontracts::isi::tx::visit_committed_transactions_bounded(
         &view,
         iroha_data_model::query::dsl::CompoundPredicate::PASS,
         max_carrier_work,
         |transaction, _matches| {
-            let Some(signal) = kaigi_signal_from_transaction(&transaction, reveal_authorities)
+            let Some(signal_json) =
+                kaigi_signal_metadata_for_call(&transaction, &call_literal)
             else {
                 return Ok(ControlFlow::Continue(()));
             };
-            if signal.call_id != call_literal
-                || !after_timestamp_ms.is_none_or(|minimum| {
-                    signal.created_at_ms >= minimum
-                        || signal
-                            .timestamp_ms
-                            .is_some_and(|timestamp| timestamp >= minimum)
-                })
-            {
+            let carrier_timestamp_ms = kaigi_signal_carrier_timestamp_ms(
+                state.as_ref(),
+                transaction.block_hash(),
+                &mut carrier_timestamp_cache,
+            )?;
+            if !kaigi_signal_carrier_is_within_call_lifecycle(&record, carrier_timestamp_ms) {
+                return Ok(ControlFlow::Continue(()));
+            }
+            let Some(signal) = kaigi_signal_from_metadata(
+                &transaction,
+                signal_json,
+                reveal_authorities,
+                carrier_timestamp_ms,
+            ) else {
+                return Ok(ControlFlow::Continue(()));
+            };
+            if !kaigi_signal_matches_call_query(&signal, &call_literal, after_timestamp_ms) {
+                return Ok(ControlFlow::Continue(()));
+            }
+            if !kaigi_signal_authority_is_allowed(
+                &transaction,
+                &record,
+                view.world(),
+                &view.nexus().dataspace_catalog,
+                observation_time_ms,
+                &allowed_active_lineages,
+                &mut authority_lineage_cache,
+                max_carrier_work,
+            )? {
                 return Ok(ControlFlow::Continue(()));
             }
             total = total.saturating_add(1);
             let entry = PageEntry {
-                key: signal.created_at_ms,
+                key: carrier_timestamp_ms,
                 seq: sequence,
                 item: (signal, 0),
             };
@@ -42365,7 +43125,7 @@ fn parse_kaigi_kind_filter(kind: Option<&str>) -> Option<BTreeSet<String>> {
         .map(|entry| entry.trim().to_ascii_lowercase())
         .filter(|entry| !entry.is_empty())
         .collect();
-    if set.is_empty() { None } else { Some(set) }
+    Some(set)
 }
 fn parse_kaigi_call_kind_filter(kind: Option<&str>) -> Option<BTreeSet<String>> {
     let raw = kind?.trim();
@@ -42377,7 +43137,7 @@ fn parse_kaigi_call_kind_filter(kind: Option<&str>) -> Option<BTreeSet<String>> 
         .map(|entry| entry.trim().to_ascii_lowercase())
         .filter(|entry| matches!(entry.as_str(), "roster_updated" | "ended"))
         .collect();
-    if set.is_empty() { None } else { Some(set) }
+    Some(set)
 }
 fn convert_kaigi_event(
     event_box: &EventBox,
@@ -43016,8 +43776,6 @@ fn sumeragi_npos_diagnostics(
                 "validated NPoS reveal deadline overflowed".to_owned(),
             ))
         })?;
-    let (vrf_penalty_epoch, committed_no_reveal, no_participation, late_reveals) =
-        sumeragi::status::vrf_penalty_snapshot();
     let diagnostics = SumeragiNposDiagnostics {
         epoch_length_blocks: params.epoch_length_blocks(),
         vrf_commit_deadline_offset: NonZeroU64::new(commit).ok_or_else(|| {
@@ -43029,10 +43787,6 @@ fn sumeragi_npos_diagnostics(
         epoch_seed: params.epoch_seed(),
         prf_height: reducer.height,
         prf_view: reducer.view,
-        vrf_penalty_epoch,
-        vrf_committed_no_reveal_total: committed_no_reveal,
-        vrf_no_participation_total: no_participation,
-        vrf_late_reveals_total: late_reveals,
     };
     diagnostics.validate().map_err(|reason| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -45597,9 +46351,9 @@ mod validation_fee_torii_ingress_tests {
             0,
             "stateless admission must not enqueue before authenticated durable QueuePlan admission"
         );
-        #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+        #[cfg(feature = "connect")]
         let expected_reject_code = "route_unavailable";
-        #[cfg(not(any(feature = "p2p_ws", feature = "connect")))]
+        #[cfg(not(feature = "connect"))]
         let expected_reject_code = "queue_plan_synced_transport_unavailable";
         assert_eq!(
             response
@@ -50376,8 +51130,10 @@ fn primary_alias_projection_for_account_id_in_world(
         let active_labels = labels
             .into_iter()
             .filter(|label| {
-                resolve_active_account_alias(world, catalog, label, now_ms).as_ref()
-                    == Some(account_id)
+                matches!(
+                    resolve_active_account_alias(world, catalog, label, now_ms),
+                    Ok(Some(ref resolved)) if resolved == account_id
+                )
             })
             .collect::<BTreeSet<_>>();
         if let Some(primary) = account
@@ -52520,29 +53276,10 @@ fn uaid_parse_error(reason: &'static str) -> Error {
         iroha_data_model::query::error::QueryExecutionFail::InvalidSingularParameters,
     ))
 }
-fn canonicalize_uaid_literal(raw: &str) -> Result<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(uaid_parse_error("empty_literal"));
-    }
-    let hex_portion = match trimmed.get(..5) {
-        Some(prefix) if prefix.eq_ignore_ascii_case("uaid:") => trimmed[5..].trim(),
-        _ => trimmed,
-    };
-    if hex_portion.len() != 64 {
-        return Err(uaid_parse_error("invalid_length"));
-    }
-    if !hex_portion.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(uaid_parse_error("non_hex_character"));
-    }
-    Ok(hex_portion.to_ascii_lowercase())
-}
 fn parse_uaid_literal(raw: &str) -> Result<UniversalAccountId> {
-    let canonical_hex = canonicalize_uaid_literal(raw)?;
-    let hash = Hash::from_str(&canonical_hex).map_err(|_| uaid_parse_error("hash_decode"))?;
-    Ok(UniversalAccountId::from_hash(hash))
+    UniversalAccountId::from_str(raw).map_err(|_| uaid_parse_error("noncanonical_literal"))
 }
-/// Normalize a UAID before routing an account or space-directory read to another Torii peer.
+/// Validate a canonical UAID before routing an account or space-directory read to another peer.
 #[cfg(feature = "app_api")]
 pub(crate) fn canonical_routed_uaid_literal(raw: &str) -> Result<String> {
     parse_uaid_literal(raw).map(|uaid| uaid.to_string())
@@ -52554,25 +53291,23 @@ mod uaid_parsing_tests {
     use iroha_crypto::Hash;
     const SAMPLE_UAID_HEX: &str =
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-    routing_test! { sync parses_trimmed_prefixed_literal
-        let literal = format!("  UAID:{}  ", SAMPLE_UAID_HEX.to_uppercase());
+    routing_test! { sync parses_canonical_prefixed_literal
+        let literal = format!("uaid:{SAMPLE_UAID_HEX}");
         let parsed = parse_uaid_literal(&literal).expect("parse UAID literal");
         let expected_hash = Hash::from_str(SAMPLE_UAID_HEX).expect("decode UAID hash");
         let expected = UniversalAccountId::from_hash(expected_hash);
         assert_eq!(parsed, expected);
     }
-    routing_test! { sync parses_mixed_case_prefix
-        let literal = format!("  UaId:  {}  ", SAMPLE_UAID_HEX.to_uppercase());
-        let parsed = parse_uaid_literal(&literal).expect("parse UAID literal");
-        let expected_hash = Hash::from_str(SAMPLE_UAID_HEX).expect("decode UAID hash");
-        let expected = UniversalAccountId::from_hash(expected_hash);
-        assert_eq!(parsed, expected);
-    }
-    routing_test! { sync parses_raw_hex_literal_without_prefix
-        let parsed = parse_uaid_literal(SAMPLE_UAID_HEX).expect("parse UAID literal");
-        let expected_hash = Hash::from_str(SAMPLE_UAID_HEX).expect("decode UAID hash");
-        let expected = UniversalAccountId::from_hash(expected_hash);
-        assert_eq!(parsed, expected);
+    routing_test! { sync rejects_noncanonical_spellings
+        for literal in [
+            SAMPLE_UAID_HEX.to_owned(),
+            format!("UAID:{SAMPLE_UAID_HEX}"),
+            format!("uaid:{}", SAMPLE_UAID_HEX.to_uppercase()),
+            format!(" uaid:{SAMPLE_UAID_HEX}"),
+            format!("uaid:{SAMPLE_UAID_HEX} "),
+        ] {
+            assert!(parse_uaid_literal(&literal).is_err(), "must reject {literal:?}");
+        }
     }
     routing_test! { sync rejects_invalid_inputs
         assert!(parse_uaid_literal("").is_err());
@@ -52595,8 +53330,10 @@ pub struct AccountOnboardingPlanRequestDto {
     pub alias: String,
     /// Canonical domainless account identifier to create or repair.
     pub account_id: String,
-    /// Optional permission names selected from the configured allowlist.
-    #[norito(default)]
+    /// Explicit permission names selected from the configured allowlist.
+    ///
+    /// The V1 field is mandatory; an empty array requests no additional
+    /// permissions.
     pub permissions: Vec<String>,
 }
 }
@@ -52628,7 +53365,10 @@ pub struct AccountOnboardingPlanBodyDto {
     /// Exact framed instructions planned for the server-signed transaction.
     pub instructions: Vec<iroha_data_model::alias_setup::AliasFramedInstructionV1>,
     /// Optional native auto-renew follow-up that the resource owner must sign.
-    #[norito(default)]
+    ///
+    /// The V1 slot is mandatory; `null` means that no owner follow-up is
+    /// required.
+    #[norito(required)]
     pub owner_auto_renew_instruction:
         Option<iroha_data_model::alias_setup::AliasFramedInstructionV1>,
     /// Last block timestamp at which this receipt may be applied.
@@ -52700,32 +53440,129 @@ fn account_onboarding_receipt_signature_is_valid(
         .try_signatory()
         .is_some_and(|signatory| signature.verify(signatory, plan_hash.as_ref()).is_ok())
 }
-/// Apply request containing only a previously issued stateless receipt.
+/// Public-reset mutation identity bound into every server-prepared transaction.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct TairaPublicResetMutationBindingV1 {
+    /// Exact binding schema identifier.
+    pub schema: String,
+    /// SHA-256 of the admitted reset authorization.
+    pub authorization_sha256: String,
+    /// Exact authorization nonce.
+    pub authorization_nonce: String,
+    /// Exact operation kind: `onboarding` or `faucet`.
+    pub kind: String,
+    /// Canonical reset phase label.
+    pub phase: String,
+    /// Exact mutation idempotency digest.
+    pub idempotency_key: String,
+    /// Absolute execution deadline from the admitted authorization.
+    pub execution_expires_at_unix_ms: u64,
+}
+impl TairaPublicResetMutationBindingV1 {
+    /// Current immutable binding schema.
+    pub const SCHEMA: &'static str = "iroha.taira.public-reset.mutation-binding.v1";
+}
+/// Prepare request consuming one already authenticated semantic onboarding receipt.
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-pub struct AccountOnboardingApplyRequestDto {
+pub struct AccountOnboardingPrepareRequestDto {
+    /// Exact prepare request schema.
+    pub schema: String,
+    /// Public-reset mutation identity.
+    pub binding: TairaPublicResetMutationBindingV1,
     /// Receipt returned by `POST /v1/accounts/onboard/plan`.
     pub receipt: AccountOnboardingPlanReceiptDto,
 }
-/// Sponsored onboarding apply result.
-#[derive(Debug, crate::json_macros::JsonSerialize)]
-pub struct AccountOnboardingResponseDto {
+impl AccountOnboardingPrepareRequestDto {
+    /// Current immutable prepare request schema.
+    pub const SCHEMA: &'static str = "iroha.accounts.onboard.prepare.v1";
+}
+/// Authenticated exact sponsored-onboarding transaction prepared by Torii.
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingPreparedTransactionDto {
+    /// Exact prepared-transaction schema.
+    pub schema: String,
+    /// Public-reset mutation identity committed by the transaction metadata.
+    pub binding: TairaPublicResetMutationBindingV1,
+    /// Exact operation label, always `onboarding`.
+    pub operation: String,
+    /// Complete signed semantic receipt consumed during prepare.
+    pub receipt: AccountOnboardingPlanReceiptDto,
+    /// Domain-separated receipt hash.
+    pub semantic_hash_hex: String,
     /// Canonical target account.
     pub account_id: String,
     /// Canonical resolved alias.
     pub alias: String,
-    /// Queued transaction hash, absent for an exact unchanged replay.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub tx_hash_hex: Option<String>,
-    /// `Queued`, `Repaired`, or `Unchanged`.
-    pub status: &'static str,
-    /// Live disposition observed immediately before apply.
+    /// Live disposition used to derive the exact instruction vector.
     pub disposition: iroha_data_model::alias_setup::AliasPlanDispositionV1,
+    /// Hash of the exact signed transaction.
+    pub transaction_hash_hex: String,
+    /// Canonical fixed-V1 `SignedTransaction` wire, lowercase hexadecimal.
+    pub signed_transaction_wire_hex: String,
+    /// SHA-256 of the exact canonical transaction wire.
+    pub signed_transaction_wire_sha256: String,
+    /// Exact signature-bound fee-payment intent.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+    /// Onboarding-authority signature authenticating every preceding field.
+    pub server_signature: Signature,
+}
+impl AccountOnboardingPreparedTransactionDto {
+    /// Current immutable prepared-transaction schema.
+    pub const SCHEMA: &'static str = "iroha.taira.prepared-transaction.v1";
+    /// Exact operation label.
+    pub const OPERATION: &'static str = "onboarding";
+}
+/// Authenticated nonterminal result requiring a fresh account-and-alias state proof.
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct AccountOnboardingProofRequiredPrepareResponseDto {
+    /// Exact proof-required result schema.
+    pub schema: String,
+    /// Public-reset mutation identity that was checked without being submitted.
+    pub binding: TairaPublicResetMutationBindingV1,
+    /// Exact operation label, always `onboarding`.
+    pub operation: String,
+    /// Exact nonterminal label, always `ProofRequired`.
+    pub outcome: String,
+    /// Exact live-state proof required before a coordinator may terminalize the result.
+    pub proof_kind: String,
+    /// Domain-separated semantic receipt hash.
+    pub semantic_hash_hex: String,
+    /// Canonical target account.
+    pub account_id: String,
+    /// Canonical resolved alias.
+    pub alias: String,
+    /// Exact observed no-op disposition; this is not itself a current-state proof.
+    pub disposition: iroha_data_model::alias_setup::AliasPlanDispositionV1,
+    /// Onboarding-authority signature authenticating the result.
+    pub server_signature: Signature,
+}
+impl AccountOnboardingProofRequiredPrepareResponseDto {
+    /// Current immutable proof-required result schema.
+    pub const SCHEMA: &'static str = "iroha.accounts.onboard.prepare-proof-required.v1";
+    /// Exact nonterminal result label.
+    pub const OUTCOME: &'static str = "ProofRequired";
+    /// Exact proof contract that a coordinator must satisfy with one fresh atomic observation.
+    pub const PROOF_KIND: &'static str = "account_alias_current_state";
 }
 #[cfg(all(test, feature = "app_api"))]
 mod sponsored_onboarding_dto_tests {
     use super::{
+        AccountFaucetRequestDto, AccountOnboardingPlanReceiptDto,
         AccountOnboardingPlanRequestDto, account_onboarding_receipt_signature_is_valid,
+        canonical_faucet_claim_account, canonical_onboarding_account_id,
         checked_routing_fixture_keypair, onboarding_disposition_transition_allowed,
         onboarding_frames_are_ordered_subset,
     };
@@ -52755,6 +53592,127 @@ mod sponsored_onboarding_dto_tests {
                 "legacy or secret-bearing field must be rejected: {forbidden}"
             );
         }
+    }
+    routing_test! { sync onboarding_and_faucet_v1_json_reject_omitted_fields
+        let request = AccountOnboardingPlanRequestDto {
+            version: AccountOnboardingPlanRequestDto::VERSION,
+            alias: "merchant@banka.paynet".to_owned(),
+            account_id: iroha_test_samples::ALICE_ID.to_string(),
+            permissions: Vec::new(),
+        };
+        let mut request_json =
+            norito::json::to_value(&request).expect("encode exact onboarding request");
+        assert_eq!(
+            norito::json::from_value::<AccountOnboardingPlanRequestDto>(request_json.clone())
+                .expect("round-trip exact onboarding request"),
+            request
+        );
+        assert!(
+            request_json
+                .as_object_mut()
+                .expect("onboarding request object")
+                .remove("permissions")
+                .is_some()
+        );
+        assert!(
+            norito::json::from_value::<AccountOnboardingPlanRequestDto>(request_json).is_err(),
+            "an omitted V1 permissions vector must not default to empty"
+        );
+
+        let claim = AccountFaucetRequestDto {
+            account_id: iroha_test_samples::ALICE_ID.to_string(),
+            pow_anchor_height: None,
+            pow_nonce_hex: None,
+        };
+        let claim_json = norito::json::to_value(&claim).expect("encode exact faucet claim");
+        assert_eq!(
+            norito::json::from_value::<AccountFaucetRequestDto>(claim_json.clone())
+                .expect("round-trip exact faucet claim"),
+            claim
+        );
+        for field in ["pow_anchor_height", "pow_nonce_hex"] {
+            let mut missing = claim_json.clone();
+            assert!(
+                missing
+                    .as_object_mut()
+                    .expect("faucet claim object")
+                    .remove(field)
+                    .is_some()
+            );
+            assert!(
+                norito::json::from_value::<AccountFaucetRequestDto>(missing).is_err(),
+                "an omitted V1 faucet field must fail: {field}"
+            );
+        }
+    }
+    routing_test! { sync onboarding_receipt_v1_json_rejects_omitted_slots
+        let fixture: norito::json::Value = norito::json::from_slice(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json"
+        )))
+        .expect("decode shared alias-setup fixture");
+        let receipt_json = fixture["account_onboarding_receipt_vector"]["receipt_json"].clone();
+        let receipt: AccountOnboardingPlanReceiptDto =
+            norito::json::from_value(receipt_json.clone()).expect("decode exact receipt fixture");
+        assert_eq!(
+            norito::json::to_value(&receipt).expect("re-encode exact receipt fixture"),
+            receipt_json
+        );
+        for path in [
+            &["body", "request", "permissions"][..],
+            &["body", "owner_auto_renew_instruction"][..],
+            &["body", "acquisition", "pricing_class_hint"][..],
+            &["body", "resource", "quote"][..],
+            &["body", "resource", "instruction_index"][..],
+        ] {
+            let mut missing = receipt_json.clone();
+            let mut object = missing.as_object_mut().expect("receipt object");
+            for segment in &path[..path.len() - 1] {
+                object = object
+                    .get_mut(*segment)
+                    .and_then(norito::json::Value::as_object_mut)
+                    .expect("nested receipt object");
+            }
+            let field = path[path.len() - 1];
+            assert!(object.remove(field).is_some(), "fixture contains {field}");
+            assert!(
+                norito::json::from_value::<AccountOnboardingPlanReceiptDto>(missing).is_err(),
+                "an omitted V1 receipt field must fail: {}",
+                path.join(".")
+            );
+        }
+    }
+    routing_test! { sync onboarding_and_faucet_reject_padded_account_ids
+        let canonical = iroha_test_samples::ALICE_ID.to_string();
+        for padded in [format!(" {canonical}"), format!("{canonical} ")] {
+            assert!(
+                canonical_onboarding_account_id(&padded).is_err(),
+                "onboarding accepted padded account_id {padded:?}"
+            );
+            let claim = AccountFaucetRequestDto {
+                account_id: padded.clone(),
+                pow_anchor_height: None,
+                pow_nonce_hex: None,
+            };
+            assert!(
+                canonical_faucet_claim_account(&claim).is_err(),
+                "faucet accepted padded account_id {padded:?}"
+            );
+        }
+        assert_eq!(
+            canonical_onboarding_account_id(&canonical)
+                .expect("canonical onboarding account literal"),
+            iroha_test_samples::ALICE_ID.clone()
+        );
+        assert_eq!(
+            canonical_faucet_claim_account(&AccountFaucetRequestDto {
+                account_id: canonical,
+                pow_anchor_height: None,
+                pow_nonce_hex: None,
+            })
+            .expect("canonical faucet account literal"),
+            iroha_test_samples::ALICE_ID.clone()
+        );
     }
     routing_test! { sync receipt_disposition_transitions_only_allow_idempotent_progress
         use AliasPlanDispositionV1::{Conflict, Create, NoOp, Repair};
@@ -52815,22 +53773,105 @@ mod sponsored_onboarding_dto_tests {
         ));
     }
 }
-#[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 pub struct AccountFaucetRequestDto {
+    /// Exact canonical domainless account identifier.
     pub account_id: String,
-    #[norito(default)]
+    /// Optional committed block height anchoring the proof of work.
+    ///
+    /// The V1 slot is mandatory; `null` is explicit when no solved proof is
+    /// supplied.
+    #[norito(required)]
     pub pow_anchor_height: Option<u64>,
-    #[norito(default)]
+    /// Optional canonical lowercase hexadecimal proof nonce.
+    ///
+    /// The V1 slot is mandatory; `null` is explicit when no solved proof is
+    /// supplied.
+    #[norito(required)]
     pub pow_nonce_hex: Option<String>,
 }
-#[derive(Debug, crate::json_macros::JsonSerialize)]
-pub struct AccountFaucetResponseDto {
+/// Prepare request consuming one solved faucet proof-of-work claim.
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct AccountFaucetPrepareRequestDto {
+    /// Exact prepare request schema.
+    pub schema: String,
+    /// Public-reset mutation identity.
+    pub binding: TairaPublicResetMutationBindingV1,
+    /// Solved faucet claim to validate without mutating ledger state.
+    pub claim: AccountFaucetRequestDto,
+}
+impl AccountFaucetPrepareRequestDto {
+    /// Current immutable prepare request schema.
+    pub const SCHEMA: &'static str = "iroha.accounts.faucet.prepare.v1";
+}
+/// Authenticated exact faucet transaction prepared by Torii.
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct AccountFaucetPreparedTransactionDto {
+    /// Exact prepared-transaction schema.
+    pub schema: String,
+    /// Public-reset mutation identity committed by the transaction metadata.
+    pub binding: TairaPublicResetMutationBindingV1,
+    /// Exact operation label, always `faucet`.
+    pub operation: String,
+    /// Complete solved semantic claim consumed during prepare.
+    pub claim: AccountFaucetRequestDto,
+    /// Domain-separated hash of the exact faucet claim.
+    pub semantic_hash_hex: String,
+    /// Canonical target account.
     pub account_id: String,
+    /// Canonical faucet asset definition.
     pub asset_definition_id: String,
+    /// Canonical destination asset.
     pub asset_id: String,
+    /// Exact transfer amount.
     pub amount: Quantity,
-    pub tx_hash_hex: String,
-    pub status: &'static str,
+    /// Hash of the exact signed transaction.
+    pub transaction_hash_hex: String,
+    /// Canonical fixed-V1 `SignedTransaction` wire, lowercase hexadecimal.
+    pub signed_transaction_wire_hex: String,
+    /// SHA-256 of the exact canonical transaction wire.
+    pub signed_transaction_wire_sha256: String,
+    /// Exact signature-bound fee-payment intent.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+    /// Faucet-authority signature authenticating every preceding field.
+    pub server_signature: Signature,
+}
+impl AccountFaucetPreparedTransactionDto {
+    /// Current immutable prepared-transaction schema.
+    pub const SCHEMA: &'static str = "iroha.taira.prepared-transaction.v1";
+    /// Exact operation label.
+    pub const OPERATION: &'static str = "faucet";
+}
+/// Exact-submit outcome for either prepared operation.
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct PreparedTransactionSubmitResponseDto {
+    /// Exact submit response schema.
+    pub schema: String,
+    /// Public-reset mutation identity from the accepted envelope.
+    pub binding: TairaPublicResetMutationBindingV1,
+    /// Exact operation label.
+    pub operation: String,
+    /// Hash of the only transaction considered by this request.
+    pub transaction_hash_hex: String,
+    /// `Applied`, `Pending`, or `Rejected`.
+    pub outcome: String,
+}
+impl PreparedTransactionSubmitResponseDto {
+    /// Current immutable submit response schema.
+    pub const SCHEMA: &'static str = "iroha.taira.prepared-transaction-submit.v1";
 }
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct AccountFaucetPuzzleDto {
@@ -52846,11 +53887,867 @@ pub struct AccountFaucetPuzzleDto {
     pub scrypt_p: u32,
     pub max_anchor_age_blocks: u64,
 }
-impl crate::utils::extractors::SupportsNoritoDecode for AccountFaucetRequestDto {
-    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
-        norito::json::from_slice::<Self>(bytes).map_err(|err| {
-            norito::Error::Message(format!("invalid AccountFaucetRequestDto: {err}"))
+const FAUCET_CLAIM_HASH_DOMAIN_V1: &[u8] = b"iroha:accounts:faucet:claim:v1\0";
+const PREPARED_BINDING_METADATA_KEY_V1: &str = "taira_public_reset_binding";
+const PREPARED_OPERATION_METADATA_KEY_V1: &str = "taira_prepared_operation";
+const PREPARED_SEMANTIC_HASH_METADATA_KEY_V1: &str = "taira_prepared_semantic_hash";
+
+#[derive(Clone)]
+struct AccountOnboardingPreparedSignaturePayloadV1 {
+    schema: String,
+    binding: TairaPublicResetMutationBindingV1,
+    operation: String,
+    receipt: AccountOnboardingPlanReceiptDto,
+    semantic_hash_hex: String,
+    account_id: String,
+    alias: String,
+    disposition: iroha_data_model::alias_setup::AliasPlanDispositionV1,
+    transaction_hash_hex: String,
+    signed_transaction_wire_hex: String,
+    signed_transaction_wire_sha256: String,
+    fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+}
+impl From<&AccountOnboardingPreparedTransactionDto>
+    for AccountOnboardingPreparedSignaturePayloadV1
+{
+    fn from(value: &AccountOnboardingPreparedTransactionDto) -> Self {
+        Self {
+            schema: value.schema.clone(),
+            binding: value.binding.clone(),
+            operation: value.operation.clone(),
+            receipt: value.receipt.clone(),
+            semantic_hash_hex: value.semantic_hash_hex.clone(),
+            account_id: value.account_id.clone(),
+            alias: value.alias.clone(),
+            disposition: value.disposition,
+            transaction_hash_hex: value.transaction_hash_hex.clone(),
+            signed_transaction_wire_hex: value.signed_transaction_wire_hex.clone(),
+            signed_transaction_wire_sha256: value.signed_transaction_wire_sha256.clone(),
+            fee_payment: value.fee_payment.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct AccountOnboardingProofRequiredSignaturePayloadV1 {
+    schema: String,
+    binding: TairaPublicResetMutationBindingV1,
+    operation: String,
+    outcome: String,
+    proof_kind: String,
+    semantic_hash_hex: String,
+    account_id: String,
+    alias: String,
+    disposition: iroha_data_model::alias_setup::AliasPlanDispositionV1,
+}
+
+#[derive(Clone)]
+struct AccountFaucetPreparedSignaturePayloadV1 {
+    schema: String,
+    binding: TairaPublicResetMutationBindingV1,
+    operation: String,
+    claim: AccountFaucetRequestDto,
+    semantic_hash_hex: String,
+    account_id: String,
+    asset_definition_id: String,
+    asset_id: String,
+    amount: Quantity,
+    transaction_hash_hex: String,
+    signed_transaction_wire_hex: String,
+    signed_transaction_wire_sha256: String,
+    fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+}
+impl From<&AccountFaucetPreparedTransactionDto> for AccountFaucetPreparedSignaturePayloadV1 {
+    fn from(value: &AccountFaucetPreparedTransactionDto) -> Self {
+        Self {
+            schema: value.schema.clone(),
+            binding: value.binding.clone(),
+            operation: value.operation.clone(),
+            claim: value.claim.clone(),
+            semantic_hash_hex: value.semantic_hash_hex.clone(),
+            account_id: value.account_id.clone(),
+            asset_definition_id: value.asset_definition_id.clone(),
+            asset_id: value.asset_id.clone(),
+            amount: value.amount.clone(),
+            transaction_hash_hex: value.transaction_hash_hex.clone(),
+            signed_transaction_wire_hex: value.signed_transaction_wire_hex.clone(),
+            signed_transaction_wire_sha256: value.signed_transaction_wire_sha256.clone(),
+            fee_payment: value.fee_payment.clone(),
+        }
+    }
+}
+
+trait PreparedSignatureTranscriptV1 {
+    fn signature_transcript(&self) -> Result<Vec<u8>>;
+}
+
+fn prepared_binding_ref(
+    binding: &TairaPublicResetMutationBindingV1,
+) -> iroha_torii_shared::prepared_transaction::PreparedMutationBindingRefV1<'_> {
+    iroha_torii_shared::prepared_transaction::PreparedMutationBindingRefV1 {
+        schema: &binding.schema,
+        authorization_sha256: &binding.authorization_sha256,
+        authorization_nonce: &binding.authorization_nonce,
+        kind: &binding.kind,
+        phase: &binding.phase,
+        idempotency_key: &binding.idempotency_key,
+        execution_expires_at_unix_ms: binding.execution_expires_at_unix_ms,
+    }
+}
+
+fn prepared_disposition_text(
+    disposition: iroha_data_model::alias_setup::AliasPlanDispositionV1,
+) -> &'static str {
+    use iroha_data_model::alias_setup::AliasPlanDispositionV1::{Conflict, Create, NoOp, Repair};
+    match disposition {
+        NoOp => "no_op",
+        Repair => "repair",
+        Create => "create",
+        Conflict => "conflict",
+    }
+}
+
+fn decode_prepared_transcript_wire(wire_hex: &str) -> Result<Vec<u8>> {
+    if wire_hex.is_empty()
+        || wire_hex.len() % 2 != 0
+        || wire_hex
+            .bytes()
+            .any(|byte| !(byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    {
+        return Err(prepared_transaction_invalid(
+            "prepared transaction transcript wire is not canonical lowercase hexadecimal",
+        ));
+    }
+    hex::decode(wire_hex).map_err(|_| {
+        prepared_transaction_invalid("prepared transaction transcript wire is invalid")
+    })
+}
+
+impl PreparedSignatureTranscriptV1 for AccountOnboardingPreparedSignaturePayloadV1 {
+    fn signature_transcript(&self) -> Result<Vec<u8>> {
+        if self.operation != AccountOnboardingPreparedTransactionDto::OPERATION
+            || self.semantic_hash_hex != hex::encode(self.receipt.plan_hash.as_ref())
+        {
+            return Err(prepared_transaction_invalid(
+                "prepared onboarding signature fields do not match the signed receipt",
+            ));
+        }
+        let wire = decode_prepared_transcript_wire(&self.signed_transaction_wire_hex)?;
+        Ok(iroha_torii_shared::prepared_transaction::onboarding_prepared_signature_transcript_v1(
+            iroha_torii_shared::prepared_transaction::OnboardingPreparedSignatureFieldsV1 {
+                envelope_schema: &self.schema,
+                binding: prepared_binding_ref(&self.binding),
+                semantic_hash_hex: &self.semantic_hash_hex,
+                account_id: &self.account_id,
+                alias: &self.alias,
+                disposition: prepared_disposition_text(self.disposition),
+                transaction_hash_hex: &self.transaction_hash_hex,
+                signed_transaction_wire_sha256: &self.signed_transaction_wire_sha256,
+                signed_transaction_wire: &wire,
+            },
+        ))
+    }
+}
+
+impl PreparedSignatureTranscriptV1 for AccountOnboardingProofRequiredSignaturePayloadV1 {
+    fn signature_transcript(&self) -> Result<Vec<u8>> {
+        if self.operation != AccountOnboardingPreparedTransactionDto::OPERATION {
+            return Err(prepared_transaction_invalid(
+                "prepared onboarding proof-required operation is invalid",
+            ));
+        }
+        Ok(iroha_torii_shared::prepared_transaction::onboarding_proof_required_signature_transcript_v1(
+            iroha_torii_shared::prepared_transaction::OnboardingProofRequiredSignatureFieldsV1 {
+                envelope_schema: &self.schema,
+                binding: prepared_binding_ref(&self.binding),
+                outcome: &self.outcome,
+                proof_kind: &self.proof_kind,
+                semantic_hash_hex: &self.semantic_hash_hex,
+                account_id: &self.account_id,
+                alias: &self.alias,
+                disposition: prepared_disposition_text(self.disposition),
+            },
+        ))
+    }
+}
+
+impl PreparedSignatureTranscriptV1 for AccountFaucetPreparedSignaturePayloadV1 {
+    fn signature_transcript(&self) -> Result<Vec<u8>> {
+        if self.operation != AccountFaucetPreparedTransactionDto::OPERATION {
+            return Err(prepared_transaction_invalid(
+                "prepared faucet operation is invalid",
+            ));
+        }
+        let wire = decode_prepared_transcript_wire(&self.signed_transaction_wire_hex)?;
+        let amount = self.amount.to_string();
+        Ok(iroha_torii_shared::prepared_transaction::faucet_prepared_signature_transcript_v1(
+            iroha_torii_shared::prepared_transaction::FaucetPreparedSignatureFieldsV1 {
+                envelope_schema: &self.schema,
+                binding: prepared_binding_ref(&self.binding),
+                claim_account_id: &self.claim.account_id,
+                claim_pow_anchor_height: self.claim.pow_anchor_height,
+                claim_pow_nonce_hex: self.claim.pow_nonce_hex.as_deref(),
+                semantic_hash_hex: &self.semantic_hash_hex,
+                account_id: &self.account_id,
+                asset_definition_id: &self.asset_definition_id,
+                asset_id: &self.asset_id,
+                amount: &amount,
+                transaction_hash_hex: &self.transaction_hash_hex,
+                signed_transaction_wire_sha256: &self.signed_transaction_wire_sha256,
+                signed_transaction_wire: &wire,
+            },
+        ))
+    }
+}
+
+fn prepared_transaction_payload_hash(
+    payload: &impl PreparedSignatureTranscriptV1,
+) -> Result<Hash> {
+    let transcript = payload.signature_transcript()?;
+    Ok(iroha_torii_shared::prepared_transaction::prepared_signature_digest_v1(
+        &transcript,
+    ))
+}
+
+fn sign_prepared_transaction_payload(
+    payload: &impl PreparedSignatureTranscriptV1,
+    private_key: &iroha_crypto::PrivateKey,
+) -> Result<Signature> {
+    let hash = prepared_transaction_payload_hash(payload)?;
+    Signature::try_new(private_key, hash.as_ref()).map_err(|error| {
+        Error::SerializationFailure {
+            context: "prepared transaction envelope signature",
+            source: Box::new(error),
+        }
+    })
+}
+
+fn prepared_transaction_payload_signature_is_valid(
+    payload: &impl PreparedSignatureTranscriptV1,
+    signature: &Signature,
+    authority: &AccountId,
+) -> bool {
+    let Ok(hash) = prepared_transaction_payload_hash(payload) else {
+        return false;
+    };
+    authority
+        .try_signatory()
+        .is_some_and(|key| signature.verify(key, hash.as_ref()).is_ok())
+}
+
+fn prepared_transaction_invalid(message: impl Into<String>) -> Error {
+    Error::AppQueryValidation {
+        code: "prepared_transaction_invalid",
+        message: message.into(),
+    }
+}
+
+fn is_lower_hex_with_len(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn validate_prepared_mutation_binding(
+    binding: &TairaPublicResetMutationBindingV1,
+    expected_kind: &str,
+    now_ms: u64,
+    require_active: bool,
+) -> Result<()> {
+    let valid_nonce = binding.authorization_nonce.len() == 32
+        && binding.authorization_nonce.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        });
+    let valid_phase = !binding.phase.is_empty()
+        && binding.phase.len() <= 128
+        && binding.phase.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        });
+    if binding.schema != TairaPublicResetMutationBindingV1::SCHEMA
+        || binding.kind != expected_kind
+        || !is_lower_hex_with_len(&binding.authorization_sha256, 64)
+        || !valid_nonce
+        || !valid_phase
+        || !is_lower_hex_with_len(&binding.idempotency_key, 64)
+        || (require_active && binding.execution_expires_at_unix_ms <= now_ms)
+    {
+        return Err(prepared_transaction_invalid(
+            "public-reset mutation binding is noncanonical, expired, or belongs to another operation",
+        ));
+    }
+    Ok(())
+}
+
+fn faucet_claim_hash(claim: &AccountFaucetRequestDto) -> Hash {
+    let encoded = claim.encode();
+    Hash::new_from_chunks(&[FAUCET_CLAIM_HASH_DOMAIN_V1, encoded.as_slice()])
+}
+
+fn prepared_transaction_metadata(
+    binding: &TairaPublicResetMutationBindingV1,
+    operation: &str,
+    semantic_hash_hex: &str,
+) -> Result<Metadata> {
+    let binding_value = norito::json::to_value(binding).map_err(|error| {
+        Error::SerializationFailure {
+            context: "prepared transaction mutation binding",
+            source: Box::new(error),
+        }
+    })?;
+    let binding_json = IrohaJson::from_norito_value_ref(&binding_value).map_err(|error| {
+        Error::SerializationFailure {
+            context: "prepared transaction mutation binding",
+            source: Box::new(error),
+        }
+    })?;
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        PREPARED_BINDING_METADATA_KEY_V1
+            .parse()
+            .expect("static prepared binding metadata key"),
+        binding_json,
+    );
+    metadata.insert(
+        PREPARED_OPERATION_METADATA_KEY_V1
+            .parse()
+            .expect("static prepared operation metadata key"),
+        IrohaJson::new(operation.to_owned()),
+    );
+    metadata.insert(
+        PREPARED_SEMANTIC_HASH_METADATA_KEY_V1
+            .parse()
+            .expect("static prepared semantic-hash metadata key"),
+        IrohaJson::new(semantic_hash_hex.to_owned()),
+    );
+    Ok(metadata)
+}
+
+fn canonical_prepared_transaction_wire(
+    transaction: &SignedTransaction,
+) -> Result<(String, String, String)> {
+    let wire = transaction.encode_wire_v1().map_err(|error| {
+        Error::SerializationFailure {
+            context: "prepared signed transaction wire",
+            source: Box::new(error),
+        }
+    })?;
+    let transaction_hash_hex = hex::encode(transaction.hash().as_ref());
+    let wire_sha256 = hex::encode(Sha256::digest(&wire));
+    Ok((transaction_hash_hex, hex::encode(wire), wire_sha256))
+}
+
+fn decode_canonical_prepared_transaction(
+    transaction_hash_hex: &str,
+    wire_hex: &str,
+    wire_sha256: &str,
+) -> Result<SignedTransaction> {
+    if !is_lower_hex_with_len(transaction_hash_hex, 64)
+        || !is_lower_hex_with_len(wire_sha256, 64)
+        || wire_hex.is_empty()
+        || wire_hex.len() % 2 != 0
+        || wire_hex.bytes().any(|byte| {
+            !(byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         })
+    {
+        return Err(prepared_transaction_invalid(
+            "prepared transaction hashes or wire hexadecimal are noncanonical",
+        ));
+    }
+    let wire = hex::decode(wire_hex).map_err(|_| {
+        prepared_transaction_invalid("prepared transaction wire is not valid lowercase hex")
+    })?;
+    if hex::encode(Sha256::digest(&wire)) != wire_sha256 {
+        return Err(prepared_transaction_invalid(
+            "prepared transaction wire SHA-256 does not match the envelope",
+        ));
+    }
+    let transaction = SignedTransaction::decode_all_versioned(&wire).map_err(|error| {
+        prepared_transaction_invalid(format!(
+            "prepared transaction wire is not a fixed-V1 SignedTransaction: {error}"
+        ))
+    })?;
+    let canonical = transaction.encode_wire_v1().map_err(|error| {
+        prepared_transaction_invalid(format!(
+            "prepared transaction could not be canonically re-encoded: {error}"
+        ))
+    })?;
+    if canonical != wire
+        || hex::encode(transaction.hash().as_ref()) != transaction_hash_hex
+        || hex::encode(Sha256::digest(&canonical)) != wire_sha256
+    {
+        return Err(prepared_transaction_invalid(
+            "prepared transaction wire, hash, or canonical re-encoding changed identity",
+        ));
+    }
+    transaction.verify_signature().map_err(|error| {
+        prepared_transaction_invalid(format!(
+            "prepared transaction signature is invalid: {error}"
+        ))
+    })?;
+    Ok(transaction)
+}
+
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { sync prepared_transaction_wire_validation_is_canonical_and_hash_bound
+    let signer = checked_routing_fixture_keypair(
+        0xb7,
+        Algorithm::Ed25519,
+        "derive prepared wire fixture signer",
+    );
+    let transaction = TransactionBuilder::new(
+        crate::test_utils::signed_query_network_id(),
+        AccountId::new(signer.public_key().clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "prepared wire fixture".to_owned())])
+    .sign(signer.private_key());
+    let (transaction_hash_hex, wire_hex, wire_sha256) =
+        canonical_prepared_transaction_wire(&transaction).expect("canonical prepared wire");
+    let decoded = decode_canonical_prepared_transaction(
+        &transaction_hash_hex,
+        &wire_hex,
+        &wire_sha256,
+    )
+    .expect("decode canonical prepared wire");
+    assert_eq!(decoded.hash(), transaction.hash());
+
+    let mut altered_wire = hex::decode(&wire_hex).expect("wire hex");
+    altered_wire.push(0);
+    let altered_wire_hex = hex::encode(&altered_wire);
+    let altered_wire_sha256 = hex::encode(Sha256::digest(&altered_wire));
+    assert!(decode_canonical_prepared_transaction(
+        &transaction_hash_hex,
+        &altered_wire_hex,
+        &altered_wire_sha256,
+    )
+    .is_err());
+    assert!(decode_canonical_prepared_transaction(
+        &transaction_hash_hex.to_ascii_uppercase(),
+        &wire_hex,
+        &wire_sha256,
+    )
+    .is_err());
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod prepared_transaction_signature_fixture_tests {
+    use std::{num::NonZeroU32, time::Duration};
+
+    use super::*;
+
+    const FIXTURE_SCHEMA: &str = "iroha.taira.prepared-transaction-signature-fixture.v1";
+
+    fn onboarding_receipt_fixture() -> AccountOnboardingPlanReceiptDto {
+        let fixture: norito::json::Value = norito::json::from_slice(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json"
+        )))
+        .expect("decode shared alias-setup fixture");
+        norito::json::from_value(
+            fixture["account_onboarding_receipt_vector"]["receipt_json"].clone(),
+        )
+        .expect("decode onboarding receipt vector")
+    }
+
+    fn fixture_binding(kind: &str, phase: &str, digest_byte: char) -> TairaPublicResetMutationBindingV1 {
+        let authorization_nonce = match kind {
+            "onboarding" => "onboarding-fixture-nonce-0000001",
+            "faucet" => "faucet-fixture-nonce-00000000001",
+            _ => panic!("unsupported fixture binding kind"),
+        };
+        assert_eq!(authorization_nonce.len(), 32);
+        TairaPublicResetMutationBindingV1 {
+            schema: TairaPublicResetMutationBindingV1::SCHEMA.to_owned(),
+            authorization_sha256: digest_byte.to_string().repeat(64),
+            authorization_nonce: authorization_nonce.to_owned(),
+            kind: kind.to_owned(),
+            phase: phase.to_owned(),
+            idempotency_key: digest_byte.to_ascii_uppercase().to_string().repeat(64).to_ascii_lowercase(),
+            execution_expires_at_unix_ms: 4_102_444_800_000,
+        }
+    }
+
+    fn deterministic_transaction(
+        network_id: NetworkId,
+        authority: AccountId,
+        signer: &iroha_crypto::PrivateKey,
+        binding: &TairaPublicResetMutationBindingV1,
+        operation: &str,
+        semantic_hash_hex: &str,
+        instructions: Vec<InstructionBox>,
+        nonce: u32,
+    ) -> SignedTransaction {
+        let metadata = prepared_transaction_metadata(binding, operation, semantic_hash_hex)
+            .expect("prepared fixture metadata");
+        let mut builder = TransactionBuilder::new(
+            network_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(metadata)
+        .with_instructions(instructions);
+        builder.set_creation_time(Duration::from_millis(4_000_000_000_000));
+        builder.set_ttl(Duration::from_secs(3_600));
+        builder.set_nonce(NonZeroU32::new(nonce).expect("non-zero fixture nonce"));
+        builder.sign(signer)
+    }
+
+    fn vector_value(
+        name: &str,
+        network_id: &NetworkId,
+        signer: &iroha_crypto::KeyPair,
+        response: norito::json::Value,
+        transcript: &[u8],
+        signature: &Signature,
+    ) -> norito::json::Value {
+        let digest = iroha_torii_shared::prepared_transaction::prepared_signature_digest_v1(
+            transcript,
+        );
+        let mut value = norito::json::Map::new();
+        value.insert("name".to_owned(), name.into());
+        value.insert(
+            "network_id".to_owned(),
+            norito::json::to_value(network_id).expect("serialize prepared fixture network identity"),
+        );
+        value.insert(
+            "signer_public_key".to_owned(),
+            signer.public_key().to_string().into(),
+        );
+        value.insert(
+            "signer_account_id".to_owned(),
+            AccountId::new(signer.public_key().clone()).to_string().into(),
+        );
+        value.insert("response".to_owned(), response);
+        value.insert("transcript_hex".to_owned(), hex::encode(transcript).into());
+        value.insert(
+            "digest_hex".to_owned(),
+            hex::encode(digest.as_ref()).into(),
+        );
+        value.insert(
+            "server_signature_hex".to_owned(),
+            hex::encode(signature.payload()).into(),
+        );
+        norito::json::Value::Object(value)
+    }
+
+    fn build_fixture() -> norito::json::Value {
+        let receipt = onboarding_receipt_fixture();
+        assert!(receipt.verify(), "shared onboarding receipt must verify");
+        let onboarding_signer = checked_routing_fixture_keypair(
+            0x51,
+            Algorithm::Ed25519,
+            "derive prepared onboarding fixture signer",
+        );
+        assert_eq!(
+            receipt.body.authority,
+            AccountId::new(onboarding_signer.public_key().clone())
+        );
+        let onboarding_binding = fixture_binding("onboarding", "onboarding", '1');
+        let onboarding_semantic_hash = hex::encode(receipt.plan_hash.as_ref());
+        let onboarding_transaction = deterministic_transaction(
+            receipt.body.network_id,
+            receipt.body.authority.clone(),
+            onboarding_signer.private_key(),
+            &onboarding_binding,
+            AccountOnboardingPreparedTransactionDto::OPERATION,
+            &onboarding_semantic_hash,
+            decode_canonical_onboarding_frames(&receipt.body.instructions)
+                .expect("decode onboarding fixture instructions"),
+            1,
+        );
+        let (onboarding_hash, onboarding_wire, onboarding_wire_sha256) =
+            canonical_prepared_transaction_wire(&onboarding_transaction)
+                .expect("canonical onboarding fixture wire");
+        let decoded_onboarding_transaction = decode_canonical_prepared_transaction(
+            &onboarding_hash,
+            &onboarding_wire,
+            &onboarding_wire_sha256,
+        )
+        .expect("decode canonical onboarding fixture wire");
+        assert_eq!(
+            decoded_onboarding_transaction.authority(),
+            onboarding_transaction.authority(),
+            "canonical decoding must preserve the universal onboarding authority identity",
+        );
+        assert_eq!(
+            decoded_onboarding_transaction.authority().to_string(),
+            AccountId::new(onboarding_signer.public_key().clone()).to_string(),
+            "Rust must render the decoded onboarding authority with the fixture's canonical account literal",
+        );
+        let onboarding_payload = AccountOnboardingPreparedSignaturePayloadV1 {
+            schema: AccountOnboardingPreparedTransactionDto::SCHEMA.to_owned(),
+            binding: onboarding_binding.clone(),
+            operation: AccountOnboardingPreparedTransactionDto::OPERATION.to_owned(),
+            receipt: receipt.clone(),
+            semantic_hash_hex: onboarding_semantic_hash.clone(),
+            account_id: receipt.body.request.account_id.clone(),
+            alias: receipt.body.request.alias.clone(),
+            disposition: iroha_data_model::alias_setup::AliasPlanDispositionV1::Create,
+            transaction_hash_hex: onboarding_hash.clone(),
+            signed_transaction_wire_hex: onboarding_wire.clone(),
+            signed_transaction_wire_sha256: onboarding_wire_sha256.clone(),
+            fee_payment: onboarding_transaction.payload().fee_payment.clone(),
+        };
+        let onboarding_signature = sign_prepared_transaction_payload(
+            &onboarding_payload,
+            onboarding_signer.private_key(),
+        )
+        .expect("sign onboarding fixture envelope");
+        let onboarding_response = AccountOnboardingPreparedTransactionDto {
+            schema: onboarding_payload.schema.clone(),
+            binding: onboarding_payload.binding.clone(),
+            operation: onboarding_payload.operation.clone(),
+            receipt: onboarding_payload.receipt.clone(),
+            semantic_hash_hex: onboarding_payload.semantic_hash_hex.clone(),
+            account_id: onboarding_payload.account_id.clone(),
+            alias: onboarding_payload.alias.clone(),
+            disposition: onboarding_payload.disposition,
+            transaction_hash_hex: onboarding_payload.transaction_hash_hex.clone(),
+            signed_transaction_wire_hex: onboarding_payload.signed_transaction_wire_hex.clone(),
+            signed_transaction_wire_sha256: onboarding_payload
+                .signed_transaction_wire_sha256
+                .clone(),
+            fee_payment: onboarding_payload.fee_payment.clone(),
+            server_signature: onboarding_signature.clone(),
+        };
+        let onboarding_transcript = onboarding_payload
+            .signature_transcript()
+            .expect("onboarding fixture transcript");
+
+        let proof_required_binding = fixture_binding("onboarding", "onboarding_proof_required", '2');
+        let proof_required_payload = AccountOnboardingProofRequiredSignaturePayloadV1 {
+            schema: AccountOnboardingProofRequiredPrepareResponseDto::SCHEMA.to_owned(),
+            binding: proof_required_binding.clone(),
+            operation: AccountOnboardingPreparedTransactionDto::OPERATION.to_owned(),
+            outcome: AccountOnboardingProofRequiredPrepareResponseDto::OUTCOME.to_owned(),
+            proof_kind: AccountOnboardingProofRequiredPrepareResponseDto::PROOF_KIND.to_owned(),
+            semantic_hash_hex: onboarding_semantic_hash,
+            account_id: receipt.body.request.account_id.clone(),
+            alias: receipt.body.request.alias.clone(),
+            disposition: iroha_data_model::alias_setup::AliasPlanDispositionV1::NoOp,
+        };
+        let proof_required_signature = sign_prepared_transaction_payload(
+            &proof_required_payload,
+            onboarding_signer.private_key(),
+        )
+        .expect("sign proof-required fixture result");
+        let proof_required_response = AccountOnboardingProofRequiredPrepareResponseDto {
+            schema: proof_required_payload.schema.clone(),
+            binding: proof_required_payload.binding.clone(),
+            operation: proof_required_payload.operation.clone(),
+            outcome: proof_required_payload.outcome.clone(),
+            proof_kind: proof_required_payload.proof_kind.clone(),
+            semantic_hash_hex: proof_required_payload.semantic_hash_hex.clone(),
+            account_id: proof_required_payload.account_id.clone(),
+            alias: proof_required_payload.alias.clone(),
+            disposition: proof_required_payload.disposition,
+            server_signature: proof_required_signature.clone(),
+        };
+        let proof_required_transcript = proof_required_payload
+            .signature_transcript()
+            .expect("proof-required fixture transcript");
+
+        let faucet_signer = checked_routing_fixture_keypair(
+            0x61,
+            Algorithm::Ed25519,
+            "derive prepared faucet fixture signer",
+        );
+        let faucet_authority = AccountId::new(faucet_signer.public_key().clone());
+        let faucet_account: AccountId = AccountId::parse_encoded(&receipt.body.request.account_id)
+            .expect("decode faucet fixture account");
+        let faucet_asset_definition: AssetDefinitionId = "4rPeAP6jAjiLVZThZYwwPRBuQagt"
+            .parse()
+            .expect("fixture asset definition");
+        let faucet_asset = AssetId::new(faucet_asset_definition.clone(), faucet_account.clone());
+        let faucet_source = AssetId::new(faucet_asset_definition.clone(), faucet_authority.clone());
+        let faucet_amount = Quantity::from(5_u32);
+        let faucet_claim = AccountFaucetRequestDto {
+            account_id: faucet_account.to_string(),
+            pow_anchor_height: Some(42),
+            pow_nonce_hex: Some("0001020304050607".to_owned()),
+        };
+        let faucet_binding = fixture_binding("faucet", "faucet", '3');
+        let faucet_semantic_hash = hex::encode(faucet_claim_hash(&faucet_claim).as_ref());
+        let faucet_transaction = deterministic_transaction(
+            receipt.body.network_id,
+            faucet_authority,
+            faucet_signer.private_key(),
+            &faucet_binding,
+            AccountFaucetPreparedTransactionDto::OPERATION,
+            &faucet_semantic_hash,
+            vec![
+                InstructionBox::from(iroha_data_model::isi::Register::account(
+                    iroha_data_model::account::Account::new(faucet_account.clone()),
+                )),
+                Transfer::asset_quantity(
+                    faucet_source,
+                    faucet_amount.clone(),
+                    faucet_account.clone(),
+                )
+                .into(),
+            ],
+            2,
+        );
+        let (faucet_hash, faucet_wire, faucet_wire_sha256) =
+            canonical_prepared_transaction_wire(&faucet_transaction)
+                .expect("canonical faucet fixture wire");
+        let decoded_faucet_transaction = decode_canonical_prepared_transaction(
+            &faucet_hash,
+            &faucet_wire,
+            &faucet_wire_sha256,
+        )
+        .expect("decode canonical faucet fixture wire");
+        assert_eq!(
+            decoded_faucet_transaction.authority(),
+            faucet_transaction.authority(),
+            "canonical decoding must preserve the universal faucet authority identity",
+        );
+        assert_eq!(
+            decoded_faucet_transaction.authority().to_string(),
+            AccountId::new(faucet_signer.public_key().clone()).to_string(),
+            "Rust must render the decoded faucet authority with the fixture's canonical account literal",
+        );
+        let faucet_payload = AccountFaucetPreparedSignaturePayloadV1 {
+            schema: AccountFaucetPreparedTransactionDto::SCHEMA.to_owned(),
+            binding: faucet_binding.clone(),
+            operation: AccountFaucetPreparedTransactionDto::OPERATION.to_owned(),
+            claim: faucet_claim.clone(),
+            semantic_hash_hex: faucet_semantic_hash,
+            account_id: faucet_account.to_string(),
+            asset_definition_id: faucet_asset_definition.to_string(),
+            asset_id: faucet_asset.to_string(),
+            amount: faucet_amount,
+            transaction_hash_hex: faucet_hash,
+            signed_transaction_wire_hex: faucet_wire,
+            signed_transaction_wire_sha256: faucet_wire_sha256,
+            fee_payment: faucet_transaction.payload().fee_payment.clone(),
+        };
+        let faucet_signature =
+            sign_prepared_transaction_payload(&faucet_payload, faucet_signer.private_key())
+                .expect("sign faucet fixture envelope");
+        let faucet_response = AccountFaucetPreparedTransactionDto {
+            schema: faucet_payload.schema.clone(),
+            binding: faucet_payload.binding.clone(),
+            operation: faucet_payload.operation.clone(),
+            claim: faucet_payload.claim.clone(),
+            semantic_hash_hex: faucet_payload.semantic_hash_hex.clone(),
+            account_id: faucet_payload.account_id.clone(),
+            asset_definition_id: faucet_payload.asset_definition_id.clone(),
+            asset_id: faucet_payload.asset_id.clone(),
+            amount: faucet_payload.amount.clone(),
+            transaction_hash_hex: faucet_payload.transaction_hash_hex.clone(),
+            signed_transaction_wire_hex: faucet_payload.signed_transaction_wire_hex.clone(),
+            signed_transaction_wire_sha256: faucet_payload
+                .signed_transaction_wire_sha256
+                .clone(),
+            fee_payment: faucet_payload.fee_payment.clone(),
+            server_signature: faucet_signature.clone(),
+        };
+        let faucet_transcript = faucet_payload
+            .signature_transcript()
+            .expect("faucet fixture transcript");
+
+        let network_id = norito::json::to_value(
+            onboarding_transaction
+                .payload()
+                .network_id()
+                .expect("onboarding fixture transaction must target a network"),
+        )
+        .expect("serialize onboarding fixture network identity");
+        assert_eq!(
+            network_id,
+            norito::json::to_value(&receipt.body.network_id)
+                .expect("serialize receipt fixture network identity"),
+        );
+        assert_eq!(
+            network_id,
+            norito::json::to_value(
+                faucet_transaction
+                    .payload()
+                    .network_id()
+                    .expect("faucet fixture transaction must target a network"),
+            )
+            .expect("serialize faucet fixture network identity"),
+            "all shared prepared-transaction vectors must use one trust-pinned network",
+        );
+
+        let mut root = norito::json::Map::new();
+        root.insert("schema".to_owned(), FIXTURE_SCHEMA.into());
+        root.insert(
+            "signature_domain_hex".to_owned(),
+            hex::encode(
+                iroha_torii_shared::prepared_transaction::PREPARED_TRANSACTION_SIGNATURE_DOMAIN_V1,
+            )
+            .into(),
+        );
+        root.insert(
+            "transcript_schema".to_owned(),
+            iroha_torii_shared::prepared_transaction::PREPARED_TRANSACTION_SIGNATURE_TRANSCRIPT_SCHEMA_V1
+                .into(),
+        );
+        root.insert("frame_length_encoding".to_owned(), "u64_be".into());
+        root.insert("digest_algorithm".to_owned(), "iroha_blake2b_256".into());
+        root.insert(
+            "vectors".to_owned(),
+            norito::json::Value::Array(vec![
+                vector_value(
+                    "onboarding_prepared",
+                    onboarding_transaction
+                        .payload()
+                        .network_id()
+                        .expect("onboarding fixture transaction must target a network"),
+                    &onboarding_signer,
+                    norito::json::to_value(&onboarding_response)
+                        .expect("serialize onboarding fixture response"),
+                    &onboarding_transcript,
+                    &onboarding_signature,
+                ),
+                vector_value(
+                    "onboarding_proof_required",
+                    &receipt.body.network_id,
+                    &onboarding_signer,
+                    norito::json::to_value(&proof_required_response)
+                        .expect("serialize proof-required fixture response"),
+                    &proof_required_transcript,
+                    &proof_required_signature,
+                ),
+                vector_value(
+                    "faucet_prepared",
+                    faucet_transaction
+                        .payload()
+                        .network_id()
+                        .expect("faucet fixture transaction must target a network"),
+                    &faucet_signer,
+                    norito::json::to_value(&faucet_response)
+                        .expect("serialize faucet fixture response"),
+                    &faucet_transcript,
+                    &faucet_signature,
+                ),
+            ]),
+        );
+        norito::json::Value::Object(root)
+    }
+
+    routing_test! { sync prepared_transaction_signature_fixture_is_current
+        let fixture = build_fixture();
+        let expected: norito::json::Value = norito::json::from_slice(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/prepared_transactions/prepared_transaction_signature_v1.json"
+        )))
+        .expect("decode prepared-transaction signature fixture");
+        assert_eq!(fixture, expected);
+    }
+
+    routing_test! { sync print_prepared_transaction_signature_fixture
+        if std::env::var_os("IROHA_PRINT_PREPARED_TRANSACTION_SIGNATURE_FIXTURE").is_none() {
+            return;
+        }
+        println!(
+            "{}",
+            norito::json::to_string_pretty(&build_fixture())
+                .expect("render prepared-transaction signature fixture")
+        );
     }
 }
 fn onboarding_invalid_request(reason: &str) -> Error {
@@ -52977,8 +54874,8 @@ fn faucet_invalid_request(reason: &str) -> Error {
         message: reason.to_owned(),
     }
 }
-const FAUCET_POW_ALGORITHM: &str = "scrypt-leading-zero-bits-v2";
-const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v3";
+const FAUCET_POW_ALGORITHM: &str = "scrypt-leading-zero-bits-v1";
+const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v1";
 fn leading_zero_bits(bytes: &[u8]) -> u32 {
     let mut total = 0u32;
     for byte in bytes {
@@ -53332,6 +55229,21 @@ fn ensure_authenticated_onboarding_name(
             .to_owned(),
     })
 }
+fn canonical_onboarding_account_id(account_literal: &str) -> Result<AccountId> {
+    if account_literal.is_empty() || account_literal.trim() != account_literal {
+        return Err(onboarding_invalid_request(
+            "account_id must be a nonempty canonical domainless representation",
+        ));
+    }
+    let account_id = AccountId::parse_encoded(account_literal)
+        .map_err(|_| onboarding_invalid_request("invalid canonical account_id"))?;
+    if account_id.to_string() != account_literal {
+        return Err(onboarding_invalid_request(
+            "account_id must use the canonical domainless representation",
+        ));
+    }
+    Ok(account_id)
+}
 fn normalize_account_onboarding_request(
     app: &crate::SharedAppState,
     authenticated_scope: &crate::AuthenticatedOnboardingScope,
@@ -53362,15 +55274,7 @@ fn normalize_account_onboarding_request(
     .map_err(|error| onboarding_invalid_request(&error.to_string()))?;
     let alias = ResolvedAccountAliasV1::new(alias_name, dataspace_id);
     ensure_authenticated_onboarding_name(&alias, authenticated_scope)?;
-    let account_literal = request.account_id.trim();
-    let account_id = AccountId::parse_encoded(account_literal)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| onboarding_invalid_request("invalid canonical account_id"))?;
-    if account_id.to_string() != account_literal {
-        return Err(onboarding_invalid_request(
-            "account_id must use the canonical domainless representation",
-        ));
-    }
+    let account_id = canonical_onboarding_account_id(&request.account_id)?;
     let Some(signer) = app.account_onboarding.as_ref() else {
         return Err(onboarding_invalid_request("account onboarding is disabled"));
     };
@@ -53679,6 +55583,10 @@ fn onboarding_owner_auto_renew_follow_up(
         )?;
     let policy =
         iroha_core::sns::policy_by_id(&world, iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID)
+            .map_err(|error| Error::AppConflict {
+                code: "alias.onboarding.policy_invalid",
+                message: error.to_string(),
+            })?
             .ok_or(Error::AppConflict {
                 code: "alias.onboarding.policy_missing",
                 message: "the account-alias SNS policy is missing".to_owned(),
@@ -53760,6 +55668,10 @@ fn build_account_onboarding_plan(
         })?;
         let policy =
             iroha_core::sns::policy_by_id(&world, iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID)
+                .map_err(|error| Error::AppConflict {
+                    code: "alias.onboarding.policy_invalid",
+                    message: error.to_string(),
+                })?
                 .ok_or(Error::AppConflict {
                 code: "alias.onboarding.policy_missing",
                 message: "the account-alias SNS policy is missing".to_owned(),
@@ -53855,16 +55767,18 @@ pub async fn handle_v1_accounts_onboard_plan(
         })?;
     Ok(application_json_response(body))
 }
-/// Revalidate and atomically submit a stateless sponsored onboarding receipt.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_accounts_onboard_apply(
-    app: crate::SharedAppState,
-    authenticated_scope: crate::AuthenticatedOnboardingScope,
-    crate::JsonOnly(request): crate::JsonOnly<AccountOnboardingApplyRequestDto>,
-    telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    use iroha_data_model::{alias_setup::AliasPlanDispositionV1, isi::alias_setup::EnsureAlias};
-    let receipt = request.receipt;
+struct RevalidatedOnboardingPreparedWorkV1 {
+    account_id: String,
+    alias: String,
+    disposition: iroha_data_model::alias_setup::AliasPlanDispositionV1,
+    instructions: Vec<InstructionBox>,
+}
+
+fn validate_onboarding_prepared_receipt_context(
+    app: &crate::SharedAppState,
+    authenticated_scope: &crate::AuthenticatedOnboardingScope,
+    receipt: &AccountOnboardingPlanReceiptDto,
+) -> Result<()> {
     if !receipt.verify() {
         return Err(Error::AppConflict {
             code: "alias.onboarding.receipt_invalid",
@@ -53885,6 +55799,26 @@ pub async fn handle_v1_accounts_onboard_apply(
                 .to_owned(),
         });
     }
+    let iroha_data_model::alias_setup::AliasIntentV1::AccountAlias(intent) =
+        &receipt.body.resource.intent
+    else {
+        return Err(onboarding_receipt_plan_mismatch(
+            "an onboarding receipt must contain an account-alias intent",
+        ));
+    };
+    ensure_authenticated_onboarding_name(&intent.alias, authenticated_scope)
+}
+
+fn revalidate_onboarding_prepared_work(
+    app: &crate::SharedAppState,
+    authenticated_scope: &crate::AuthenticatedOnboardingScope,
+    receipt: &AccountOnboardingPlanReceiptDto,
+) -> Result<RevalidatedOnboardingPreparedWorkV1> {
+    use iroha_data_model::{alias_setup::AliasPlanDispositionV1, isi::alias_setup::EnsureAlias};
+    validate_onboarding_prepared_receipt_context(app, authenticated_scope, receipt)?;
+    let Some(signer) = app.account_onboarding.as_ref() else {
+        return Err(onboarding_invalid_request("account onboarding is disabled"));
+    };
     let (_, now_ms) = onboarding_committed_anchor(app.state.as_ref())?;
     if now_ms > receipt.body.valid_until_ms {
         return Err(Error::AppConflict {
@@ -53913,7 +55847,7 @@ pub async fn handle_v1_accounts_onboard_apply(
         });
     }
     validate_onboarding_receipt_plan_shape(&receipt.body, &normalized, signer)?;
-    let (disposition, executable, instructions) = {
+    let (disposition, instructions) = {
         let world = app.state.world_view();
         let catalog = app.state.nexus_snapshot().dataspace_catalog;
         let disposition = iroha_core::alias_setup::classify_alias_intent(
@@ -54013,55 +55947,326 @@ pub async fn handle_v1_accounts_onboard_apply(
                 "live onboarding instructions introduce work not committed by the signed receipt",
             ));
         }
-        (disposition, executable, instructions)
+        (disposition, instructions)
     };
-    if !executable {
-        let payload = AccountOnboardingResponseDto {
-            account_id: normalized.account_id.to_string(),
-            alias: normalized.request.alias.clone(),
-            tx_hash_hex: None,
-            status: "Unchanged",
-            disposition,
-        };
-        let response = infallible_pretty_json_response(&payload, "{}");
-        return Ok((StatusCode::OK, response));
+    Ok(RevalidatedOnboardingPreparedWorkV1 {
+        account_id: normalized.account_id.to_string(),
+        alias: normalized.request.alias,
+        disposition,
+        instructions,
+    })
+}
+
+fn prepared_submit_outcome(
+    app: &crate::SharedAppState,
+    transaction_hash: &HashOf<SignedTransaction>,
+) -> Result<Option<&'static str>> {
+    let entrypoint_hash =
+        iroha_core::tx::external_entrypoint_hash_from_signed_hash(transaction_hash.clone());
+    if app.state.has_committed_entrypoint(entrypoint_hash) {
+        let status = crate::pipeline_status_from_state(app.as_ref(), transaction_hash)?
+            .ok_or(Error::AppServiceUnavailable {
+                code: "prepared_transaction_status_unavailable",
+                message: "the exact prepared transaction is committed but its canonical outcome is unavailable"
+                    .to_owned(),
+            })?;
+        return Ok(Some(prepared_outcome_from_pipeline_status(status.kind)));
     }
+    if let Some(status) = app.pipeline_status_cache.lookup(transaction_hash) {
+        return Ok(Some(prepared_outcome_from_pipeline_status(status.kind)));
+    }
+    if app
+        .queue
+        .contains_pending_hash(entrypoint_hash, app.state.as_ref())
+    {
+        return Ok(Some("Pending"));
+    }
+    Ok(None)
+}
+
+fn prepared_outcome_from_pipeline_status(kind: crate::PipelineStatusKind) -> &'static str {
+    match kind {
+        crate::PipelineStatusKind::Rejected | crate::PipelineStatusKind::Expired => "Rejected",
+        crate::PipelineStatusKind::Applied => "Applied",
+        crate::PipelineStatusKind::Queued
+        | crate::PipelineStatusKind::Approved
+        | crate::PipelineStatusKind::Committed => "Pending",
+    }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+routing_test! { sync prepared_outcome_requires_exact_applied_status
+    assert_eq!(
+        prepared_outcome_from_pipeline_status(crate::PipelineStatusKind::Approved),
+        "Pending"
+    );
+    assert_eq!(
+        prepared_outcome_from_pipeline_status(crate::PipelineStatusKind::Committed),
+        "Pending"
+    );
+    assert_eq!(
+        prepared_outcome_from_pipeline_status(crate::PipelineStatusKind::Applied),
+        "Applied"
+    );
+}
+
+fn prepared_submit_response(
+    binding: TairaPublicResetMutationBindingV1,
+    operation: &str,
+    transaction_hash_hex: String,
+    outcome: &str,
+) -> Response {
+    infallible_pretty_json_response(
+        &PreparedTransactionSubmitResponseDto {
+            schema: PreparedTransactionSubmitResponseDto::SCHEMA.to_owned(),
+            binding,
+            operation: operation.to_owned(),
+            transaction_hash_hex,
+            outcome: outcome.to_owned(),
+        },
+        "{}",
+    )
+}
+
+/// Revalidate a signed semantic receipt and prepare one exact transaction without submitting it.
+pub async fn handle_v1_accounts_onboard_prepare(
+    app: crate::SharedAppState,
+    authenticated_scope: crate::AuthenticatedOnboardingScope,
+    crate::JsonOnly(request): crate::JsonOnly<AccountOnboardingPrepareRequestDto>,
+) -> Result<impl IntoResponse> {
+    if request.schema != AccountOnboardingPrepareRequestDto::SCHEMA {
+        return Err(prepared_transaction_invalid(
+            "unsupported account onboarding prepare schema",
+        ));
+    }
+    validate_prepared_mutation_binding(
+        &request.binding,
+        AccountOnboardingPreparedTransactionDto::OPERATION,
+        current_time_millis(),
+        true,
+    )?;
+    let work =
+        revalidate_onboarding_prepared_work(&app, &authenticated_scope, &request.receipt)?;
+    let signer = app
+        .account_onboarding
+        .as_ref()
+        .ok_or_else(|| onboarding_invalid_request("account onboarding is disabled"))?;
+    let semantic_hash_hex = hex::encode(request.receipt.plan_hash.as_ref());
+    if work.instructions.is_empty() {
+        let signature_payload = AccountOnboardingProofRequiredSignaturePayloadV1 {
+            schema: AccountOnboardingProofRequiredPrepareResponseDto::SCHEMA.to_owned(),
+            binding: request.binding,
+            operation: AccountOnboardingPreparedTransactionDto::OPERATION.to_owned(),
+            outcome: AccountOnboardingProofRequiredPrepareResponseDto::OUTCOME.to_owned(),
+            proof_kind: AccountOnboardingProofRequiredPrepareResponseDto::PROOF_KIND.to_owned(),
+            semantic_hash_hex,
+            account_id: work.account_id,
+            alias: work.alias,
+            disposition: work.disposition,
+        };
+        let server_signature =
+            sign_prepared_transaction_payload(&signature_payload, &signer.private_key.0)?;
+        let response = AccountOnboardingProofRequiredPrepareResponseDto {
+            schema: signature_payload.schema,
+            binding: signature_payload.binding,
+            operation: signature_payload.operation,
+            outcome: signature_payload.outcome,
+            proof_kind: signature_payload.proof_kind,
+            semantic_hash_hex: signature_payload.semantic_hash_hex,
+            account_id: signature_payload.account_id,
+            alias: signature_payload.alias,
+            disposition: signature_payload.disposition,
+            server_signature,
+        };
+        return Ok((
+            StatusCode::OK,
+            infallible_pretty_json_response(&response, "{}"),
+        ));
+    }
+    let metadata = prepared_transaction_metadata(
+        &request.binding,
+        AccountOnboardingPreparedTransactionDto::OPERATION,
+        &semantic_hash_hex,
+    )?;
     let mut builder = TransactionBuilder::new(
         *app.state.network_id_ref(),
         signer.authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
-    .with_instructions(instructions);
+    .with_metadata(metadata)
+    .with_instructions(work.instructions);
     builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
-    let tx = quote_and_sign_app_api_transaction(
+    let transaction = quote_and_sign_app_api_transaction(
         builder,
         &signer.private_key.0,
         app.queue.as_ref(),
         app.state.as_ref(),
-        ENDPOINT_ACCOUNTS_ONBOARD,
+        ENDPOINT_ACCOUNTS_ONBOARD_PREPARE,
     )?;
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
-    handle_transaction_with_metrics(
+    let (transaction_hash_hex, signed_transaction_wire_hex, signed_transaction_wire_sha256) =
+        canonical_prepared_transaction_wire(&transaction)?;
+    let signature_payload = AccountOnboardingPreparedSignaturePayloadV1 {
+        schema: AccountOnboardingPreparedTransactionDto::SCHEMA.to_owned(),
+        binding: request.binding.clone(),
+        operation: AccountOnboardingPreparedTransactionDto::OPERATION.to_owned(),
+        receipt: request.receipt.clone(),
+        semantic_hash_hex: semantic_hash_hex.clone(),
+        account_id: work.account_id.clone(),
+        alias: work.alias.clone(),
+        disposition: work.disposition,
+        transaction_hash_hex: transaction_hash_hex.clone(),
+        signed_transaction_wire_hex: signed_transaction_wire_hex.clone(),
+        signed_transaction_wire_sha256: signed_transaction_wire_sha256.clone(),
+        fee_payment: transaction.payload().fee_payment.clone(),
+    };
+    let server_signature =
+        sign_prepared_transaction_payload(&signature_payload, &signer.private_key.0)?;
+    let response = AccountOnboardingPreparedTransactionDto {
+        schema: signature_payload.schema,
+        binding: signature_payload.binding,
+        operation: signature_payload.operation,
+        receipt: signature_payload.receipt,
+        semantic_hash_hex: signature_payload.semantic_hash_hex,
+        account_id: signature_payload.account_id,
+        alias: signature_payload.alias,
+        disposition: signature_payload.disposition,
+        transaction_hash_hex: signature_payload.transaction_hash_hex,
+        signed_transaction_wire_hex: signature_payload.signed_transaction_wire_hex,
+        signed_transaction_wire_sha256: signature_payload.signed_transaction_wire_sha256,
+        fee_payment: signature_payload.fee_payment,
+        server_signature,
+    };
+    Ok((
+        StatusCode::OK,
+        infallible_pretty_json_response(&response, "{}"),
+    ))
+}
+
+/// Verify and submit only the exact transaction authenticated by a prepared envelope.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_accounts_onboard_submit_prepared(
+    app: crate::SharedAppState,
+    authenticated_scope: crate::AuthenticatedOnboardingScope,
+    crate::JsonOnly(prepared): crate::JsonOnly<AccountOnboardingPreparedTransactionDto>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    let signer = app
+        .account_onboarding
+        .as_ref()
+        .ok_or_else(|| onboarding_invalid_request("account onboarding is disabled"))?;
+    validate_prepared_mutation_binding(
+        &prepared.binding,
+        AccountOnboardingPreparedTransactionDto::OPERATION,
+        current_time_millis(),
+        false,
+    )?;
+    if prepared.schema != AccountOnboardingPreparedTransactionDto::SCHEMA
+        || prepared.operation != AccountOnboardingPreparedTransactionDto::OPERATION
+        || !prepared_transaction_payload_signature_is_valid(
+            &AccountOnboardingPreparedSignaturePayloadV1::from(&prepared),
+            &prepared.server_signature,
+            &signer.authority,
+        )
+    {
+        return Err(prepared_transaction_invalid(
+            "prepared onboarding envelope schema, operation, or server signature is invalid",
+        ));
+    }
+    let transaction = decode_canonical_prepared_transaction(
+        &prepared.transaction_hash_hex,
+        &prepared.signed_transaction_wire_hex,
+        &prepared.signed_transaction_wire_sha256,
+    )?;
+    // A known hash is still scoped to the credential that prepared its signed receipt. Only the
+    // time-sensitive/live-state checks below are skipped while reconciling response-loss replay.
+    validate_onboarding_prepared_receipt_context(
+        &app,
+        &authenticated_scope,
+        &prepared.receipt,
+    )?;
+    if let Some(outcome) = prepared_submit_outcome(&app, &transaction.hash())? {
+        return Ok((
+            StatusCode::OK,
+            prepared_submit_response(
+                prepared.binding,
+                AccountOnboardingPreparedTransactionDto::OPERATION,
+                prepared.transaction_hash_hex,
+                outcome,
+            ),
+        ));
+    }
+    validate_prepared_mutation_binding(
+        &prepared.binding,
+        AccountOnboardingPreparedTransactionDto::OPERATION,
+        current_time_millis(),
+        true,
+    )?;
+    let work = revalidate_onboarding_prepared_work(
+        &app,
+        &authenticated_scope,
+        &prepared.receipt,
+    )?;
+    let expected_semantic_hash = hex::encode(prepared.receipt.plan_hash.as_ref());
+    let expected_metadata = prepared_transaction_metadata(
+        &prepared.binding,
+        AccountOnboardingPreparedTransactionDto::OPERATION,
+        &expected_semantic_hash,
+    )?;
+    if prepared.semantic_hash_hex != expected_semantic_hash
+        || prepared.account_id != work.account_id
+        || prepared.alias != work.alias
+        || prepared.disposition != work.disposition
+        || transaction.authority() != &signer.authority
+        || transaction.network_id() != Some(app.state.network_id_ref())
+        || transaction.metadata() != &expected_metadata
+        || transaction.payload().fee_payment != prepared.fee_payment
+        || !matches!(
+            transaction.instructions(),
+            Executable::Instructions(instructions) if instructions.as_ref() == work.instructions.as_slice()
+        )
+    {
+        return Err(prepared_transaction_invalid(
+            "prepared onboarding transaction no longer matches its receipt, binding, result identity, or exact fee intent",
+        ));
+    }
+    let transaction_hash = transaction.hash();
+    let submission = handle_transaction_with_metrics(
         app.queue.clone(),
         app.state.clone(),
-        tx,
+        transaction,
         telemetry,
         ENDPOINT_ACCOUNTS_ONBOARD,
     )
-    .await?;
-    let payload = AccountOnboardingResponseDto {
-        account_id: normalized.account_id.to_string(),
-        alias: normalized.request.alias,
-        tx_hash_hex: Some(tx_hash_hex),
-        status: if disposition == AliasPlanDispositionV1::Create {
-            "Queued"
-        } else {
-            "Repaired"
-        },
-        disposition,
+    .await;
+    let outcome = match submission {
+        Ok(_) => "Pending",
+        Err(Error::PushIntoQueue { source, .. })
+            if matches!(source.as_ref(), iroha_core::queue::Error::IsInQueue) =>
+        {
+            "Pending"
+        }
+        Err(Error::PushIntoQueue { source, .. })
+            if matches!(source.as_ref(), iroha_core::queue::Error::InBlockchain) =>
+        {
+            prepared_submit_outcome(&app, &transaction_hash)?.ok_or(
+                Error::AppServiceUnavailable {
+                    code: "prepared_transaction_status_unavailable",
+                    message: "the exact prepared onboarding transaction is committed but its outcome is unavailable"
+                        .to_owned(),
+                },
+            )?
+        }
+        Err(error) => return Err(error),
     };
-    let response = infallible_pretty_json_response(&payload, "{}");
-    Ok((StatusCode::ACCEPTED, response))
+    Ok((
+        StatusCode::ACCEPTED,
+        prepared_submit_response(
+            prepared.binding,
+            AccountOnboardingPreparedTransactionDto::OPERATION,
+            prepared.transaction_hash_hex,
+            outcome,
+        ),
+    ))
 }
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_accounts_faucet_puzzle(
@@ -54109,37 +56314,64 @@ pub async fn handle_v1_accounts_faucet_puzzle(
     );
     Ok((StatusCode::OK, resp))
 }
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_accounts_faucet(
-    app: crate::SharedAppState,
-    crate::NoritoJson(req): crate::NoritoJson<AccountFaucetRequestDto>,
-    telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
+struct RevalidatedFaucetPreparedWorkV1 {
+    account_id: String,
+    asset_definition_id: String,
+    asset_id: String,
+    amount: Quantity,
+    instructions: Vec<InstructionBox>,
+}
+
+fn canonical_faucet_claim_account(claim: &AccountFaucetRequestDto) -> Result<AccountId> {
+    let account_literal = claim.account_id.as_str();
+    if account_literal.is_empty() {
+        return Err(faucet_invalid_request("account_id must not be empty"));
+    }
+    if account_literal.trim() != account_literal {
+        return Err(faucet_invalid_request(
+            "account id literal must not contain leading or trailing whitespace",
+        ));
+    }
+    let account_id = AccountId::parse_encoded(account_literal)
+        .map_err(|_| faucet_invalid_request("invalid account id literal"))?;
+    if account_id.to_string() != account_literal {
+        return Err(faucet_invalid_request(
+            "account id literal must use its canonical domainless representation",
+        ));
+    }
+    if let Some(nonce) = claim.pow_nonce_hex.as_deref()
+        && (nonce != nonce.trim()
+            || nonce != nonce.to_ascii_lowercase()
+            || nonce.len() % 2 != 0
+            || nonce.bytes().any(|byte| {
+                !(byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            }))
+    {
+        return Err(faucet_invalid_request(
+            "faucet pow nonce must use canonical lowercase hexadecimal",
+        ));
+    }
+    Ok(account_id)
+}
+
+fn revalidate_faucet_prepared_work(
+    app: &crate::SharedAppState,
+    claim: &AccountFaucetRequestDto,
+) -> Result<RevalidatedFaucetPreparedWorkV1> {
     let Some(faucet) = app.account_faucet.as_ref() else {
         return Err(Error::Query(
             iroha_data_model::ValidationFail::NotPermitted("Account faucet disabled".into()),
         ));
     };
-    let AccountFaucetRequestDto {
-        account_id,
-        pow_anchor_height,
-        pow_nonce_hex,
-    } = req;
-    let account_literal = account_id.trim();
-    if account_literal.is_empty() {
-        return Err(faucet_invalid_request("account_id must not be empty"));
-    }
-    let account_id = AccountId::parse_encoded(account_literal)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| faucet_invalid_request("invalid account id literal"))?;
+    let account_id = canonical_faucet_claim_account(claim)?;
     verify_faucet_pow(
-        &app,
+        app,
         faucet,
         &account_id,
-        pow_anchor_height,
-        pow_nonce_hex.as_deref(),
+        claim.pow_anchor_height,
+        claim.pow_nonce_hex.as_deref(),
     )?;
-    let asset_definition_id = resolve_faucet_asset_definition_id(&app, faucet)?;
+    let asset_definition_id = resolve_faucet_asset_definition_id(app, faucet)?;
     let faucet_amount = configured_faucet_quantity(faucet)?;
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let source_asset_id = AssetId::new(asset_definition_id.clone(), faucet.authority.clone());
@@ -54168,45 +56400,270 @@ pub async fn handle_v1_accounts_faucet(
         faucet_amount.clone(),
         account_id.clone(),
     )));
+    Ok(RevalidatedFaucetPreparedWorkV1 {
+        account_id: account_id.to_string(),
+        asset_definition_id: asset_definition_id.to_string(),
+        asset_id: destination_asset_id.to_string(),
+        amount: faucet.amount.clone(),
+        instructions,
+    })
+}
+
+fn validate_faucet_prepared_work_without_reconsuming_pow(
+    app: &crate::SharedAppState,
+    claim: &AccountFaucetRequestDto,
+    transaction: &SignedTransaction,
+) -> Result<RevalidatedFaucetPreparedWorkV1> {
+    let faucet = app.account_faucet.as_ref().ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+            "Account faucet disabled".into(),
+        ))
+    })?;
+    let account_id = canonical_faucet_claim_account(claim)?;
+    let asset_definition_id = resolve_faucet_asset_definition_id(app, faucet)?;
+    let amount = configured_faucet_quantity(faucet)?;
+    let destination_asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
+    let source_asset_id = AssetId::new(asset_definition_id.clone(), faucet.authority.clone());
+    let transfer: InstructionBox = Transfer::asset_quantity(
+        source_asset_id,
+        amount.clone(),
+        account_id.clone(),
+    )
+    .into();
+    let without_registration = vec![transfer.clone()];
+    let with_registration = vec![
+        InstructionBox::from(iroha_data_model::isi::Register::account(
+            iroha_data_model::account::Account::new(account_id.clone()),
+        )),
+        transfer,
+    ];
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        return Err(prepared_transaction_invalid(
+            "prepared faucet transaction must contain a direct instruction sequence",
+        ));
+    };
+    if instructions.as_ref() != without_registration.as_slice()
+        && instructions.as_ref() != with_registration.as_slice()
+    {
+        return Err(prepared_transaction_invalid(
+            "prepared faucet transaction instructions do not encode its exact claim",
+        ));
+    }
+    Ok(RevalidatedFaucetPreparedWorkV1 {
+        account_id: account_id.to_string(),
+        asset_definition_id: asset_definition_id.to_string(),
+        asset_id: destination_asset_id.to_string(),
+        amount,
+        instructions: instructions.as_ref().to_vec(),
+    })
+}
+
+/// Validate one faucet proof-of-work claim and prepare an exact transaction without submitting it.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_accounts_faucet_prepare(
+    app: crate::SharedAppState,
+    crate::JsonOnly(request): crate::JsonOnly<AccountFaucetPrepareRequestDto>,
+) -> Result<impl IntoResponse> {
+    if request.schema != AccountFaucetPrepareRequestDto::SCHEMA {
+        return Err(prepared_transaction_invalid(
+            "unsupported account faucet prepare schema",
+        ));
+    }
+    validate_prepared_mutation_binding(
+        &request.binding,
+        AccountFaucetPreparedTransactionDto::OPERATION,
+        current_time_millis(),
+        true,
+    )?;
+    let work = revalidate_faucet_prepared_work(&app, &request.claim)?;
+    let faucet = app.account_faucet.as_ref().ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+            "Account faucet disabled".into(),
+        ))
+    })?;
+    let semantic_hash_hex = hex::encode(faucet_claim_hash(&request.claim).as_ref());
+    let metadata = prepared_transaction_metadata(
+        &request.binding,
+        AccountFaucetPreparedTransactionDto::OPERATION,
+        &semantic_hash_hex,
+    )?;
     let mut builder = TransactionBuilder::new(
         *app.state.network_id_ref(),
         faucet.authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
-    .with_instructions(instructions);
+    .with_metadata(metadata)
+    .with_instructions(work.instructions);
     builder.set_ttl(Duration::from_secs(APP_API_TRANSACTION_TTL_SECS));
-    let tx = quote_and_sign_app_api_transaction(
+    let transaction = quote_and_sign_app_api_transaction(
         builder,
         faucet.signer.private_key(),
         app.queue.as_ref(),
         app.state.as_ref(),
-        ENDPOINT_ACCOUNTS_FAUCET,
+        ENDPOINT_ACCOUNTS_FAUCET_PREPARE,
     )?;
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
-    handle_transaction_with_metrics(
+    let (transaction_hash_hex, signed_transaction_wire_hex, signed_transaction_wire_sha256) =
+        canonical_prepared_transaction_wire(&transaction)?;
+    let signature_payload = AccountFaucetPreparedSignaturePayloadV1 {
+        schema: AccountFaucetPreparedTransactionDto::SCHEMA.to_owned(),
+        binding: request.binding.clone(),
+        operation: AccountFaucetPreparedTransactionDto::OPERATION.to_owned(),
+        claim: request.claim.clone(),
+        semantic_hash_hex: semantic_hash_hex.clone(),
+        account_id: work.account_id.clone(),
+        asset_definition_id: work.asset_definition_id.clone(),
+        asset_id: work.asset_id.clone(),
+        amount: work.amount.clone(),
+        transaction_hash_hex: transaction_hash_hex.clone(),
+        signed_transaction_wire_hex: signed_transaction_wire_hex.clone(),
+        signed_transaction_wire_sha256: signed_transaction_wire_sha256.clone(),
+        fee_payment: transaction.payload().fee_payment.clone(),
+    };
+    let server_signature =
+        sign_prepared_transaction_payload(&signature_payload, faucet.signer.private_key())?;
+    let response = AccountFaucetPreparedTransactionDto {
+        schema: signature_payload.schema,
+        binding: signature_payload.binding,
+        operation: signature_payload.operation,
+        claim: signature_payload.claim,
+        semantic_hash_hex: signature_payload.semantic_hash_hex,
+        account_id: signature_payload.account_id,
+        asset_definition_id: signature_payload.asset_definition_id,
+        asset_id: signature_payload.asset_id,
+        amount: signature_payload.amount,
+        transaction_hash_hex: signature_payload.transaction_hash_hex,
+        signed_transaction_wire_hex: signature_payload.signed_transaction_wire_hex,
+        signed_transaction_wire_sha256: signature_payload.signed_transaction_wire_sha256,
+        fee_payment: signature_payload.fee_payment,
+        server_signature,
+    };
+    Ok((
+        StatusCode::OK,
+        infallible_pretty_json_response(&response, "{}"),
+    ))
+}
+
+/// Verify and submit only the exact transaction authenticated by a prepared faucet envelope.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_accounts_faucet_submit_prepared(
+    app: crate::SharedAppState,
+    crate::JsonOnly(prepared): crate::JsonOnly<AccountFaucetPreparedTransactionDto>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    let faucet = app.account_faucet.as_ref().ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+            "Account faucet disabled".into(),
+        ))
+    })?;
+    validate_prepared_mutation_binding(
+        &prepared.binding,
+        AccountFaucetPreparedTransactionDto::OPERATION,
+        current_time_millis(),
+        false,
+    )?;
+    if prepared.schema != AccountFaucetPreparedTransactionDto::SCHEMA
+        || prepared.operation != AccountFaucetPreparedTransactionDto::OPERATION
+        || !prepared_transaction_payload_signature_is_valid(
+            &AccountFaucetPreparedSignaturePayloadV1::from(&prepared),
+            &prepared.server_signature,
+            &faucet.authority,
+        )
+    {
+        return Err(prepared_transaction_invalid(
+            "prepared faucet envelope schema, operation, or server signature is invalid",
+        ));
+    }
+    let transaction = decode_canonical_prepared_transaction(
+        &prepared.transaction_hash_hex,
+        &prepared.signed_transaction_wire_hex,
+        &prepared.signed_transaction_wire_sha256,
+    )?;
+    if let Some(outcome) = prepared_submit_outcome(&app, &transaction.hash())? {
+        return Ok((
+            StatusCode::OK,
+            prepared_submit_response(
+                prepared.binding,
+                AccountFaucetPreparedTransactionDto::OPERATION,
+                prepared.transaction_hash_hex,
+                outcome,
+            ),
+        ));
+    }
+    validate_prepared_mutation_binding(
+        &prepared.binding,
+        AccountFaucetPreparedTransactionDto::OPERATION,
+        current_time_millis(),
+        true,
+    )?;
+    // The authenticated envelope attests that proof-of-work was valid at prepare time. Re-aging
+    // its anchor here would make a persisted exact transaction impossible to submit later.
+    let work = validate_faucet_prepared_work_without_reconsuming_pow(
+        &app,
+        &prepared.claim,
+        &transaction,
+    )?;
+    let expected_semantic_hash = hex::encode(faucet_claim_hash(&prepared.claim).as_ref());
+    let expected_metadata = prepared_transaction_metadata(
+        &prepared.binding,
+        AccountFaucetPreparedTransactionDto::OPERATION,
+        &expected_semantic_hash,
+    )?;
+    if prepared.semantic_hash_hex != expected_semantic_hash
+        || prepared.account_id != work.account_id
+        || prepared.asset_definition_id != work.asset_definition_id
+        || prepared.asset_id != work.asset_id
+        || prepared.amount != work.amount
+        || transaction.authority() != &faucet.authority
+        || transaction.network_id() != Some(app.state.network_id_ref())
+        || transaction.metadata() != &expected_metadata
+        || transaction.payload().fee_payment != prepared.fee_payment
+        || !matches!(
+            transaction.instructions(),
+            Executable::Instructions(instructions) if instructions.as_ref() == work.instructions.as_slice()
+        )
+    {
+        return Err(prepared_transaction_invalid(
+            "prepared faucet transaction no longer matches its claim, binding, result identity, or exact fee intent",
+        ));
+    }
+    let transaction_hash = transaction.hash();
+    let submission = handle_transaction_with_metrics(
         app.queue.clone(),
         app.state.clone(),
-        tx,
+        transaction,
         telemetry,
         ENDPOINT_ACCOUNTS_FAUCET,
     )
-    .await?;
-    let response = AccountFaucetResponseDto {
-        account_id: account_id.to_string(),
-        asset_definition_id: asset_definition_id.to_string(),
-        asset_id: destination_asset_id.to_string(),
-        amount: faucet.amount.clone(),
-        tx_hash_hex,
-        status: "QUEUED",
+    .await;
+    let outcome = match submission {
+        Ok(_) => "Pending",
+        Err(Error::PushIntoQueue { source, .. })
+            if matches!(source.as_ref(), iroha_core::queue::Error::IsInQueue) =>
+        {
+            "Pending"
+        }
+        Err(Error::PushIntoQueue { source, .. })
+            if matches!(source.as_ref(), iroha_core::queue::Error::InBlockchain) =>
+        {
+            prepared_submit_outcome(&app, &transaction_hash)?.ok_or(
+                Error::AppServiceUnavailable {
+                    code: "prepared_transaction_status_unavailable",
+                    message: "the exact prepared faucet transaction is committed but its outcome is unavailable"
+                        .to_owned(),
+                },
+            )?
+        }
+        Err(error) => return Err(error),
     };
-    let mut resp = Response::new(Body::from(
-        norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
-    ));
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/json"),
-    );
-    Ok((StatusCode::ACCEPTED, resp))
+    Ok((
+        StatusCode::ACCEPTED,
+        prepared_submit_response(
+            prepared.binding,
+            AccountFaucetPreparedTransactionDto::OPERATION,
+            prepared.transaction_hash_hex,
+            outcome,
+        ),
+    ))
 }
 pub async fn handle_v1_account_aliases(
     app: crate::SharedAppState,
@@ -54526,14 +56983,18 @@ pub async fn handle_v1_accounts_portfolio(
 pub(crate) fn parse_asset_balance_scope_literal(
     raw: &str,
 ) -> Result<iroha_data_model::asset::AssetBalanceScope> {
-    let trimmed = raw.trim();
-    if trimmed.eq_ignore_ascii_case("global") {
+    if raw == "global" {
         return Ok(iroha_data_model::asset::AssetBalanceScope::Global);
     }
-    if let Some(rest) = trimmed.strip_prefix("dataspace:") {
+    if let Some(rest) = raw.strip_prefix("dataspace:") {
         let dataspace = rest.parse::<u64>().map_err(|_| {
             conversion_error("scope must be `global` or `dataspace:<id>`".to_owned())
         })?;
+        if dataspace.to_string() != rest {
+            return Err(conversion_error(
+                "scope dataspace id must use canonical decimal text".to_owned(),
+            ));
+        }
         return Ok(iroha_data_model::asset::AssetBalanceScope::Dataspace(
             iroha_data_model::nexus::DataSpaceId::new(dataspace),
         ));
@@ -55042,7 +57503,7 @@ pub struct SpaceDirectoryManifestPublishDto {
 pub struct SpaceDirectoryManifestRevokeDto {
     /// Account that owns the dataspace and authorizes the revocation.
     pub authority: iroha_data_model::account::AccountId,
-    /// UAID literal (`uaid:<hex>` or raw 64-hex digest).
+    /// Exact canonical UAID literal (`uaid:<64-lowercase-hex>`).
     pub uaid: String,
     /// Dataspace identifier hosting the manifest.
     pub dataspace: u64,
@@ -55088,6 +57549,7 @@ mod app_api_inline_signing_boundary_tests {
 }
 derived_items! {
 ( Default, Debug, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize,)
+#[norito(deny_unknown_fields)]
 pub struct SpaceDirectoryManifestQuery {
     #[norito(default)]
     pub dataspace: Option<u64>,
@@ -55101,10 +57563,8 @@ pub struct SpaceDirectoryManifestQuery {
     pub count_mode: Option<String>,
 }
 ( Default, Debug, Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize,)
-pub struct SpaceDirectoryBindingsQuery {
-    #[norito(default)]
-    pub reserved: Option<String>,
-}
+#[norito(deny_unknown_fields)]
+pub struct SpaceDirectoryBindingsQuery {}
 }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -55117,7 +57577,7 @@ pub enum SpaceDirectoryManifestStatus {
 impl core::str::FromStr for SpaceDirectoryManifestStatus {
     type Err = &'static str;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_lowercase().as_str() {
+        match s {
             "active" => Ok(Self::Active),
             "inactive" => Ok(Self::Inactive),
             "all" => Ok(Self::All),
@@ -55499,9 +57959,9 @@ mod space_directory_manifest_helper_tests {
         )
     }
     #[test]
-    fn space_directory_manifest_status_parsing_is_case_insensitive_and_rejects_unknown_values() {
+    fn space_directory_manifest_status_parsing_requires_exact_lowercase_values() {
         assert_eq!(
-            "ACTIVE".parse::<SpaceDirectoryManifestStatus>(),
+            "active".parse::<SpaceDirectoryManifestStatus>(),
             Ok(SpaceDirectoryManifestStatus::Active)
         );
         assert_eq!(
@@ -55509,12 +57969,32 @@ mod space_directory_manifest_helper_tests {
             Ok(SpaceDirectoryManifestStatus::Inactive)
         );
         assert_eq!(
-            "AlL".parse::<SpaceDirectoryManifestStatus>(),
+            "all".parse::<SpaceDirectoryManifestStatus>(),
             Ok(SpaceDirectoryManifestStatus::All)
         );
-        assert_eq!(
-            "stale".parse::<SpaceDirectoryManifestStatus>(),
-            Err("status must be one of: active, inactive, all")
+        for rejected in ["ACTIVE", "Active", "AlL", " active", "active ", "stale"] {
+            assert_eq!(
+                rejected.parse::<SpaceDirectoryManifestStatus>(),
+                Err("status must be one of: active, inactive, all"),
+                "noncanonical status must be rejected: {rejected:?}",
+            );
+        }
+    }
+    #[test]
+    fn space_directory_query_dtos_reject_unknown_fields() {
+        assert!(
+            norito::json::from_str::<SpaceDirectoryBindingsQuery>(
+                r#"{"reserved":"retired"}"#,
+            )
+            .is_err(),
+            "bindings query must not accept retired placeholder parameters",
+        );
+        assert!(
+            norito::json::from_str::<SpaceDirectoryManifestQuery>(
+                r#"{"dataspace":7,"legacy_limit":1}"#,
+            )
+            .is_err(),
+            "manifest query must reject unknown parameters",
         );
     }
     routing_test! { sync manifest_status_and_matching_cover_pending_active_expired_and_revoked_rows
@@ -55674,29 +58154,22 @@ mod space_directory_manifest_helper_tests {
             0
         );
     }
-    routing_test! { async handle_v1_space_directory_bindings_accepts_raw_hex_uaid_literals
+    routing_test! { async handle_v1_space_directory_bindings_rejects_raw_hex_uaid_literals
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5C; Hash::LENGTH]));
         let raw_hex = uaid.to_string().trim_start_matches("uaid:").to_owned();
         let state = manifest_state(World::default(), None);
-        let response = handle_v1_space_directory_bindings(
+        let error = match handle_v1_space_directory_bindings(
             state,
             axum::extract::Path(raw_hex),
             crate::NoritoQuery(SpaceDirectoryBindingsQuery::default()),
             MaybeTelemetry::disabled(),
         )
         .await
-        .expect("raw-hex UAID literal should succeed")
-        .into_response();
-        assert_eq!(response.status(), StatusCode::OK);
-        let json = response_json(response).await;
-        assert_eq!(json["uaid"].as_str(), Some(uaid.to_string().as_str()));
-        assert_eq!(
-            json["dataspaces"]
-                .as_array()
-                .expect("dataspaces array")
-                .len(),
-            0
-        );
+        {
+            Ok(_) => panic!("raw-hex UAID literal must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
     }
     routing_test! { async handle_v1_space_directory_bindings_rejects_invalid_uaid_literals
         let state = manifest_state(World::default(), None);
@@ -55929,27 +58402,22 @@ mod space_directory_manifest_helper_tests {
         };
         assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
     }
-    routing_test! { async handle_v1_space_directory_manifests_accepts_raw_hex_uaid_literals
+    routing_test! { async handle_v1_space_directory_manifests_rejects_raw_hex_uaid_literals
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0x5D; Hash::LENGTH]));
         let raw_hex = uaid.to_string().trim_start_matches("uaid:").to_owned();
         let state = manifest_state(World::default(), None);
-        let response = handle_v1_space_directory_manifests(
+        let error = match handle_v1_space_directory_manifests(
             state,
             axum::extract::Path(raw_hex),
             crate::NoritoQuery(SpaceDirectoryManifestQuery::default()),
             MaybeTelemetry::disabled(),
         )
         .await
-        .expect("raw-hex UAID literal should succeed")
-        .into_response();
-        assert_eq!(response.status(), StatusCode::OK);
-        let json = response_json(response).await;
-        assert_eq!(json["uaid"].as_str(), Some(uaid.to_string().as_str()));
-        assert_eq!(json["total"].as_u64(), Some(0));
-        assert_eq!(
-            json["manifests"].as_array().expect("manifests array").len(),
-            0
-        );
+        {
+            Ok(_) => panic!("raw-hex UAID literal must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
     }
     routing_test! { async handle_v1_space_directory_manifests_rejects_invalid_uaid_literals
         let state = manifest_state(World::default(), None);
@@ -56026,7 +58494,7 @@ mod space_directory_manifest_helper_tests {
             state,
             axum::extract::Path(uaid.to_string()),
             crate::NoritoQuery(SpaceDirectoryManifestQuery {
-                status: Some("Inactive".to_owned()),
+                status: Some("inactive".to_owned()),
                 ..SpaceDirectoryManifestQuery::default()
             }),
             MaybeTelemetry::disabled(),
@@ -56174,7 +58642,7 @@ mod space_directory_manifest_helper_tests {
             state,
             axum::extract::Path(uaid.to_string()),
             crate::NoritoQuery(SpaceDirectoryManifestQuery {
-                status: Some("Active".to_owned()),
+                status: Some("active".to_owned()),
                 limit: Some(1),
                 offset: Some(1),
                 ..SpaceDirectoryManifestQuery::default()
@@ -56302,6 +58770,25 @@ mod asset_definitions_query_tests {
             .expect("collect body")
             .to_bytes();
         norito::json::from_slice(&body).expect("valid JSON")
+    }
+    #[test]
+    fn asset_balance_scope_requires_exact_first_release_literal() {
+        assert!(parse_asset_balance_scope_literal("global").is_ok());
+        assert!(parse_asset_balance_scope_literal("dataspace:7").is_ok());
+        for rejected in [
+            "Global",
+            "GLOBAL",
+            " global",
+            "global ",
+            "dataspace:07",
+            "dataspace:+7",
+            "dataspace: 7",
+        ] {
+            assert!(
+                parse_asset_balance_scope_literal(rejected).is_err(),
+                "noncanonical scope must be rejected: {rejected:?}",
+            );
+        }
     }
     routing_test! { async assets_definitions_list_exposes_name_and_nullable_alias
         let state = state_with_asset_definitions();
@@ -60341,7 +62828,6 @@ pub async fn handle_v1_nexus_public_lane_stake(
     let validator_filter = if let Some(canonical) = canonical_validator {
         Some(
             AccountId::parse_encoded(&canonical)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .map_err(|err| {
                     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                         iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
@@ -60403,7 +62889,6 @@ pub async fn handle_v1_nexus_public_lane_rewards(
         ))
     })?;
     let account_id: AccountId = AccountId::parse_encoded(&account_literal)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
@@ -63253,7 +65738,6 @@ fn filter_asset_holder_item(expr: &crate::filter::FilterExpr, item: &AssetHolder
 fn account_id_from_filter_value(value: &Value) -> Option<AccountId> {
     AccountId::parse_encoded(value.as_str()?)
         .ok()
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
 }
 fn intersect_account_candidates(
     selected: &mut Option<BTreeSet<AccountId>>,
@@ -63325,7 +65809,6 @@ pub async fn handle_v1_asset_holders(
     )?
     .map(|canonical| {
         AccountId::parse_encoded(&canonical)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .map_err(|err| conversion_error(format!("invalid account_id `{canonical}`: {err}")))
     })
     .transpose()?;
@@ -65398,7 +67881,7 @@ pub async fn handle_status(
     accept: Option<axum::http::HeaderValue>,
     tail: Option<&str>,
     nexus_routing_policy: ActualLaneRoutingPolicy,
-    authoritative_block_height: Option<u64>,
+    authoritative_block_height: u64,
     offline: Option<iroha_torii_shared::offline_api::OfflineStatus>,
 ) -> Result<Response> {
     iroha_logger::debug!(
@@ -65429,7 +67912,6 @@ pub async fn handle_status(
             })?;
     let mut status = Status::from(metrics);
     ensure_status_metrics_match_authoritative_height(&status, authoritative_block_height)?;
-    normalize_status_block_visibility(&mut status, authoritative_block_height);
     status.nexus = Some(iroha_telemetry::metrics::NexusStatus::from_routing_policy(
         &nexus_routing_policy,
     ));

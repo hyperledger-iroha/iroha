@@ -613,7 +613,6 @@ impl GovernanceRules {
                     return Err("validator entry cannot be blank".into());
                 }
                 let account = AccountId::parse_encoded(validator_trimmed)
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .map_err(|err| format!("invalid validator id `{validator_trimmed}`: {err}"))?;
                 if !seen_validators.insert(account.clone()) {
                     return Err(format!(

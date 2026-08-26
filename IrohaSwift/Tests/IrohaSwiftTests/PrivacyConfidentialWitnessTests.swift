@@ -57,6 +57,21 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
     }
 
     func testWitnessRejectsNonCanonicalNumbersAndWrongDigestLengths() {
+        XCTAssertEqual(
+            try PrivacyConfidentialWitnessCodecs.canonicalPublicAmount(
+                "0",
+                field: "publicAmount"
+            ),
+            "0"
+        )
+        for value in ["00", "01", "-1"] {
+            XCTAssertThrowsError(
+                try PrivacyConfidentialWitnessCodecs.canonicalPublicAmount(
+                    value,
+                    field: "publicAmount"
+                )
+            )
+        }
         XCTAssertThrowsError(
             try PrivacyConfidentialNoteWitnessV1(
                 amount: "01",

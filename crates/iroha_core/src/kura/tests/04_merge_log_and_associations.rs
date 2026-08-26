@@ -45,6 +45,70 @@ fn store_block_with_merge_entry_appends_log() {
     );
     assert_eq!(kura.merge_ledger_snapshot(), vec![expected]);
 }
+fn carrier_record_for_alignment_test(entry: &MergeLedgerEntry) -> MergeLedgerCarrierRecord {
+    MergeLedgerCarrierRecord {
+        version: 1,
+        entry_hash: entry.canonical_hash(),
+        epoch_id: entry.epoch_id,
+        block_height: entry.merge_qc.carrier_height,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(
+            entry.merge_qc.carrier_height.to_le_bytes(),
+        )),
+    }
+}
+#[test]
+fn merge_carrier_alignment_rejects_carrierless_log_prefix() {
+    let first = sample_merge_entry(1);
+    let second = sample_merge_entry(2);
+    let carriers = vec![carrier_record_for_alignment_test(&second)];
+    let error = Kura::validate_merge_carrier_alignment(&[first, second], &carriers)
+        .expect_err("a carrier-less committed prefix must fail closed");
+    assert!(matches!(
+        error,
+        Error::MergeCarrierConflict(message)
+            if message.contains("count mismatch") && message.contains("found 1 carriers")
+    ));
+}
+#[test]
+fn merge_carrier_alignment_rejects_excess_carrier_count() {
+    let first = sample_merge_entry(1);
+    let second = sample_merge_entry(2);
+    let carriers = vec![
+        carrier_record_for_alignment_test(&first),
+        carrier_record_for_alignment_test(&second),
+    ];
+    let error = Kura::validate_merge_carrier_alignment(&[first], &carriers)
+        .expect_err("an excess carrier record must fail closed");
+    assert!(matches!(
+        error,
+        Error::MergeCarrierConflict(message)
+            if message.contains("count mismatch") && message.contains("found 2 carriers")
+    ));
+}
+#[test]
+fn merge_carrier_alignment_accepts_exact_ordered_logs() {
+    let entries = vec![sample_merge_entry(1), sample_merge_entry(2)];
+    let carriers = entries
+        .iter()
+        .map(carrier_record_for_alignment_test)
+        .collect::<Vec<_>>();
+    Kura::validate_merge_carrier_alignment(&entries, &carriers)
+        .expect("exactly aligned merge and carrier logs must pass");
+}
+#[test]
+fn merge_carrier_alignment_rejects_equal_length_sequence_mismatch() {
+    let entries = vec![sample_merge_entry(1), sample_merge_entry(2)];
+    let carriers = vec![
+        carrier_record_for_alignment_test(&entries[1]),
+        carrier_record_for_alignment_test(&entries[0]),
+    ];
+    let error = Kura::validate_merge_carrier_alignment(&entries, &carriers)
+        .expect_err("equal counts with a different sequence must fail closed");
+    assert!(matches!(
+        error,
+        Error::MergeCarrierConflict(message) if message.contains("not exactly aligned")
+    ));
+}
 #[test]
 fn retained_merge_reference_survives_remote_only_body_eviction() {
     let kura = Kura::blank_kura_for_testing_with_blocks_in_memory(nonzero!(2_usize));

@@ -218,10 +218,12 @@ Environment variables are available for local development:
 
 The resolver also surfaces retry profiles that mirror the Torii roadmap:
 
-- `pipeline` — used for `/v1/pipeline/transactions` + `/v1/pipeline/transactions/status`. POST
-  submissions are safe to retry because the payload hash deduplicates requests, so the profile adds
-  `POST` to the allowed methods, lowers the initial backoff to 250 ms, and raises the attempt cap to 5.
-  A `404` from the status endpoint is treated as pending, so pollers keep waiting after Torii restarts.
+- `pipeline` — used for safe `/v1/pipeline/transactions/status` reads. The canonical transaction
+  POST is one-shot: the SDK validates exact V1 bytes, disables retries and redirects, and accepts
+  only HTTP `202`. Reconcile any ambiguous result by its transaction hash instead of redispatching
+  the signed bytes. For status reads, a `404` is pending so pollers keep waiting after Torii restarts;
+  otherwise the endpoint must return `200` with the exact closed status payload and a canonical
+  marked transaction hash. Empty `200`, `202`, `204`, and every other status fail closed.
 - `streaming` — used for SSE endpoints (`/v1/events/sse`, `/v1/sumeragi/status/sse`,
   `/v1/kaigi/relays/events`). It prefers longer retry windows so event feeds reconnect automatically.
 

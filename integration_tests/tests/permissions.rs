@@ -674,9 +674,7 @@ fn stored_vs_granted_permission_payload() {
     // The exact mint permission is rooted in the asset-definition authority, not in the
     // destination account that happens to hold the asset instance.
     let value_json = Json::from_raw_json(format!(
-        // NOTE: Permissions is created explicitly as a json string to introduce additional whitespace
-        // This way, if the executor compares permissions just as JSON strings, the test will fail
-        r#"{{ "asset_definition"   :   "{asset_definition_id}", "account" : "{mouse_id}" }}"#
+        r#"{{"account":"{mouse_id}","asset_definition":"{asset_definition_id}"}}"#
     ))
     .expect("valid permission JSON fixture");
     let allow_alice_to_mint_mouse_asset = Grant::account_permission(

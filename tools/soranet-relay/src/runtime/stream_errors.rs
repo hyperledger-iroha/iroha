@@ -6,51 +6,63 @@ enum ExitStreamError {
     Decode(#[from] RouteOpenFrameError),
     #[error("{stream} exit routing disabled in configuration")]
     StreamDisabled { stream: &'static str },
-    #[error("{stream} channel {channel} not provisioned")]
-    RouteNotProvisioned {
+    #[error(
+        "{stream} channel {channel} is unavailable because first-release filesystem route publication is disabled"
+    )]
+    FilesystemPublicationDisabled {
         stream: &'static str,
         channel: String,
     },
+    #[cfg(any())]
     #[error(transparent)]
     RouteLookup(#[from] RouteCatalogError),
+    #[cfg(any())]
     #[error("{stream} channel {channel} requires authenticated viewers")]
     RouteRequiresAuthentication {
         stream: &'static str,
         channel: String,
     },
+    #[cfg(any())]
     #[error("{stream} adapter connection timed out after {timeout:?}")]
     AdapterTimeout {
         stream: &'static str,
         timeout: Duration,
     },
+    #[cfg(any())]
     #[error("{stream} adapter connection failed: {error}")]
     AdapterConnect {
         stream: &'static str,
         #[source]
         error: tungstenite::Error,
     },
+    #[cfg(any())]
     #[error("failed to encode {stream} handshake: {error}")]
     HandshakeEncode {
         stream: &'static str,
         #[source]
         error: norito::Error,
     },
+    #[cfg(any())]
     #[error("failed to send data to {stream} adapter: {error}")]
     AdapterSend {
         stream: &'static str,
         #[source]
         error: tungstenite::Error,
     },
+    #[cfg(any())]
     #[error("failed to receive data from {stream} adapter: {error}")]
     AdapterReceive {
         stream: &'static str,
         #[source]
         error: tungstenite::Error,
     },
+    #[cfg(any())]
     #[error("exit stream read error: {0}")]
     RecvRead(io::Error),
+    #[cfg(any())]
     #[error("exit stream write error: {0}")]
     SendWrite(io::Error),
+    #[cfg(any())]
     #[error("failed to finish exit stream: {0}")]
     SendFinish(io::Error),
 }
@@ -58,24 +70,36 @@ impl ExitStreamError {
     fn compliance_context(&self) -> (Option<&'static str>, Option<&str>, &'static str) {
         match self {
             Self::StreamDisabled { stream } => (Some(*stream), None, "stream_disabled"),
-            Self::RouteNotProvisioned { stream, channel } => {
-                (Some(*stream), Some(channel), "route_not_provisioned")
-            }
+            Self::FilesystemPublicationDisabled { stream, channel } => (
+                Some(*stream),
+                Some(channel),
+                "filesystem_publication_disabled",
+            ),
+            #[cfg(any())]
             Self::RouteRequiresAuthentication { stream, channel } => (
                 Some(*stream),
                 Some(channel),
                 "route_requires_authentication",
             ),
+            #[cfg(any())]
             Self::AdapterTimeout { stream, .. } => (Some(*stream), None, "adapter_timeout"),
+            #[cfg(any())]
             Self::AdapterConnect { stream, .. } => (Some(*stream), None, "adapter_connect"),
+            #[cfg(any())]
             Self::HandshakeEncode { stream, .. } => (Some(*stream), None, "handshake_encode"),
+            #[cfg(any())]
             Self::AdapterSend { stream, .. } => (Some(*stream), None, "adapter_send"),
+            #[cfg(any())]
             Self::AdapterReceive { stream, .. } => (Some(*stream), None, "adapter_receive"),
+            #[cfg(any())]
             Self::RouteLookup(_) => (None, None, "route_lookup"),
             Self::Read(_) => (None, None, "route_frame_read"),
             Self::Decode(_) => (None, None, "route_frame_decode"),
+            #[cfg(any())]
             Self::RecvRead(_) => (None, None, "exit_stream_read"),
+            #[cfg(any())]
             Self::SendWrite(_) => (None, None, "exit_stream_write"),
+            #[cfg(any())]
             Self::SendFinish(_) => (None, None, "exit_stream_finish"),
         }
     }
@@ -130,6 +154,12 @@ enum HandshakeError {
     Puzzle(#[from] puzzle::Error),
     #[error("ticket replay store failed closed: {0}")]
     ReplayStore(String),
+    #[error("admission verifier capacity is busy")]
+    AdmissionWorkUnavailable,
+    #[error("admission verifier worker failed: {0}")]
+    AdmissionWorker(String),
+    #[error("authenticated relay transport trust has expired")]
+    TransportTrustExpired,
     #[error("missing admission challenge")]
     MissingChallenge,
     #[error("token decode failed: {0}")]

@@ -6846,7 +6846,7 @@ fn test_sumeragi_handle_with_source_geometry(
 include!("tests/queue_plan_admission_handoff.rs");
 /// Spawn configuration for the authoritative serialized Sumeragi v2 worker.
 pub struct SumeragiStartArgs {
-    /// Frozen-compatible v2 consensus configuration.
+    /// Canonical frozen Sumeragi-v2 consensus configuration.
     pub config: SumeragiConfig,
     /// Common configuration shared with other subsystems (keys, peers, chain id).
     pub common_config: CommonConfig,

@@ -140,8 +140,6 @@ private struct AccountAddressNegativeCase: Decodable {
                 return AccountAddressError.invalidI105Char("0").code
             case "UnexpectedNetworkPrefix":
                 return AccountAddressError.unexpectedNetworkPrefix(expected: expected ?? 0, found: found ?? 0).code
-            case "InvalidHexAddress":
-                return AccountAddressError.invalidHexAddress.code
             case "UnexpectedTrailingBytes":
                 return AccountAddressError.unexpectedTrailingBytes.code
             case "InvalidLength":

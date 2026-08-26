@@ -96,7 +96,7 @@ fn canonicalize_account_literal(value: &str, field: &str) -> Result<String> {
     }
     let parsed = AccountId::parse_encoded(owner)
         .map_err(|err| eyre!("{field} must be a canonical I105 account id: {err}"))?;
-    Ok(parsed.canonical().to_owned())
+    Ok(parsed.to_string())
 }
 fn normalize_public_input_owner(map: &mut json::Map) -> Result<()> {
     let Some(value) = map.get("owner") else {

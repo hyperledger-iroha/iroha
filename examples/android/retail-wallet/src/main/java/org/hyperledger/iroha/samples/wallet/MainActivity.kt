@@ -48,11 +48,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         viewModel.address.observe(this) { address ->
-            binding.addressDomainHint.text = if (address.implicitDefault) {
-                getString(R.string.wallet_address_default_note, address.defaultDomain)
-            } else {
-                getString(R.string.wallet_address_domain_note, address.defaultDomain)
-            }
+            binding.addressCanonicalHint.text = getString(R.string.wallet_address_canonical_note)
             binding.addressI105Label.text =
                 getString(R.string.wallet_address_i105_label, address.networkPrefix)
             binding.addressI105Value.text = address.i105

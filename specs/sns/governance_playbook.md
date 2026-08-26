@@ -143,14 +143,21 @@ Sponsored onboarding is the sole server-signing exception:
 1. Authenticate `POST /v1/accounts/onboard/plan` with a configured credential
    token supplied in a header from a protected token file.
 2. Review the stateless receipt and its allowed ancillary instructions.
-3. Submit that receipt to `POST /v1/accounts/onboard`.
-4. Torii revalidates it and uses the configured signer to submit one atomic
-   transaction containing `EnsureAlias::Account` and only the explicitly
-   allowed onboarding instructions.
+3. Send the exact receipt and immutable public-reset mutation binding to
+   `POST /v1/accounts/onboard/prepare`.
+4. Verify the configured authority and genesis-derived network trust pins, the
+   receipt/semantic hash, exact signed transaction wire, fee intent, metadata,
+   and outer server signature; durably retain the authenticated envelope.
+5. If prepare returned authenticated `ProofRequired`, never submit it. On every
+   prepare or reopen, send exactly one closed request to
+   `POST /v1/accounts/onboarding/current-state` and classify it as applied only
+   when the single anchored response proves the exact account exists and the
+   exact alias targets it; absent or conflicting observations remain
+   nonterminal. Otherwise submit only the retained transaction envelope bytes
+   to `POST /v1/accounts/onboard` and reconcile only that exact transaction hash.
 
-An exact repeat returns `Unchanged`; missing derived state may be repaired;
-drift returns 409. Raw tokens and private keys never cross HTTP bodies and must
-not be stored in plan/evidence files.
+Missing derived state may be repaired; drift returns 409. Raw tokens and private
+keys never cross HTTP bodies and must not be stored in plan/evidence files.
 
 ## 7. Disputes and emergency decisions
 

@@ -132,7 +132,6 @@ impl JsonKeyCodec for crate::account::AccountId {
     }
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         crate::account::AccountId::parse_encoded(encoded)
-            .map(crate::account::ParsedAccountId::into_account_id)
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }

@@ -7,8 +7,8 @@ also part of the pinned positive Apalache matrix.
 
 The production container remains `LaneExecutablePayloadV1`, whose sole
 accepted first-release schema is
-`LANE_EXECUTABLE_PAYLOAD_VERSION_V2`. The fixed model represents that schema
-as exact authenticated `QueuePlanAdmissionBindingV2` preimage custody by the
+`LANE_EXECUTABLE_PAYLOAD_VERSION_V1`. The fixed model represents that schema
+as exact authenticated `QueuePlanAdmissionBindingV1` preimage custody by the
 selected producer. Other committee members may have no established custody;
 the model and production projection do not infer all-validator knowledge. It
 checks:
@@ -16,7 +16,7 @@ checks:
 - exactly one `ProducerSelected` owner and two `ReplicatedCarrier` owners;
 - producer-inclusive, committee-bounded authenticated preimage custody;
 - one content-bound selected-batch conjunction over exact individual
-  QueuePlan journal V4 `Put` records before reservation journal V5 fsync;
+  QueuePlan journal V1 `Put` records before reservation journal V1 fsync;
 - Kura Active and execution-input durability before volatile READY
   authorization, local READY signature, and durable READY QC;
 - the canonical strict two-thirds count threshold (3-of-3 in this deliberately
@@ -38,7 +38,7 @@ checks:
 - the literal 4096 selected-entry ceiling.
 
 The twenty-two `_bug.cfg` controls are required to emit their named TLC invariant
-violation. They cover inverted selected-V4/V5 order, Kura-before-reservation,
+violation. They cover inverted QueuePlan-selection/reservation order, Kura-before-reservation,
 each READY ordering boundary, durable loss and improper volatile retention on
 crash, conflicting/ABA binding preimages, lane-commit and release scope drift,
 duplicate WSV application, each post-carrier cleanup boundary, each durable
@@ -75,31 +75,30 @@ reconstruction from the canonical journal on restart.
 The fixed-width composed state/action relation is now implemented in Rust and
 mirrored in Verus for canonical committees of 1 through 128 validators. The
 three-validator TLA+ state space embeds into that relation and remains bounded
-abstract evidence. The relation covers selected QueuePlan V4 conjunction,
-reservation V5, Kura Active, body fanout/late service, execution input, READY
+abstract evidence. The relation covers selected QueuePlan V1 conjunction,
+reservation V1, Kura Active, body fanout/late service, execution input, READY
 authorization/signature/QC, crash/recover, lane commit, atomic WSV application,
 post-carrier Commit/tombstone/ForgetCommit, and the four-stage release. The
 three post-carrier cleanup stages advance one canonical ordered key at a time,
 retain partial prefixes across crash/recovery, and expose Commit cleanup as
 terminal canonical-WSV ownership only after the full ForgetCommit prefix. The
 reverse terminal-owner projection classifies that completed cleanup as canonical-WSV
-ownership and ordered/direct release as ordinary-FIFO ownership. V5 snapshot
-reconstruction is an exact abstract stutter. The retired lane-wide removal
-operation is absent from the current V5 schema; the schema-bound bootstrap and
-operation decoder reject its old bytes without compatibility replay.
+ownership and ordered/direct release as ordinary-FIFO ownership. V1 snapshot
+reconstruction is an exact abstract stutter. The V1 operation inventory has no
+lane-wide removal action.
 
 Current production bindings cover several bounded slices. For selection, the
 canonical autonomous slot plan creates a move-only authorization containing
 the exact reservation scope, frozen height-context identity, committee width,
 and one-hot producer. After
-exact QueuePlan V4/global registry/FIFO selection, Queue derives the complete
-ordered reservation-group identity, checks `SelectQueuePlanV4Conjunction`, and
-carries the checked `FsyncReservationV5` projection directly to the exact
+exact QueuePlan V1/global registry/FIFO selection, Queue derives the complete
+ordered reservation-group identity, checks `SelectQueuePlanV1Conjunction`, and
+carries the checked `FsyncReservationV1` projection directly to the exact
 journal `put_batch` append. A 4,097-entry request fails before culling, FIFO
 mutation, or journal I/O.
 
 For the local producer's Kura boundary, Queue revalidates that complete group
-against the live V4 claims, V5 records, immutable FIFO ordinals, and exact
+against the live V1 claims, V1 records, immutable FIFO ordinals, and exact
 queued transactions. It returns a move-only authorization which retains the
 per-transaction Queue transition fence. Kura validates the signed executable
 payload, recomputes its canonical reservation-owner and proposal hashes from
@@ -198,7 +197,7 @@ takeover, Queue snapshot recovery, local Kura rehydration, drain-queue
 installation, and one-shot activation revalidation. The registered open-action
 tuple is empty.
 
-For `RecoverReservationSnapshot`, the source contract binds the primitive V5
+For `RecoverReservationSnapshot`, the source contract binds the primitive V1
 snapshot transition, exact owner/record/release normalization, ordered coverage
 root, post-open file-content revalidation, move-only Queue install and planning
 receipts, and the final publication gate. Its parametric Verus lemma proves

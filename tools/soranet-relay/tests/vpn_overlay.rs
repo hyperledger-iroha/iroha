@@ -7,7 +7,7 @@ use soranet_relay::{
     metrics::Metrics,
     vpn::{
         CoverFrameMeta, VpnFrameBuildError, VpnFrameIoError, VpnOverlay as RelayVpnOverlay,
-        read_frame, write_frame,
+        VpnSessionStateError, read_frame, write_frame,
     },
 };
 use std::sync::Arc;
@@ -52,7 +52,7 @@ fn overlay_parses_valid_frame() {
     let padded = VpnCellV1 { header, payload }
         .into_padded_frame()
         .expect("padded");
-    let parsed = overlay.parse_frame(&padded.bytes).expect("parsed");
+    let parsed = overlay.parse_frame(padded.as_ref()).expect("parsed");
     assert_eq!(VpnCellClassV1::Data, parsed.header.class);
     assert_eq!(0x10203, parsed.header.flow_label.to_u32());
     assert_eq!(4u16, parsed.header.payload_len);
@@ -106,11 +106,11 @@ fn session_records_frame_ingress_and_egress() {
         .into_padded_frame()
         .expect("frame");
     let parsed_in = session
-        .record_frame_ingress(&overlay, &frame.bytes)
+        .record_frame_ingress(&overlay, frame.as_ref())
         .expect("ingress parsed");
     assert_eq!(6, parsed_in.payload.len());
     let parsed_out = session
-        .record_frame_egress(&overlay, &frame.bytes)
+        .record_frame_egress(&overlay, frame.as_ref())
         .expect("egress parsed");
     assert_eq!(6, parsed_out.payload.len());
     let snapshot = metrics.snapshot();
@@ -150,17 +150,17 @@ fn session_rejects_replayed_ingress_sequence() {
     .into_padded_frame()
     .expect("frame");
     session
-        .record_frame_ingress(&overlay, &frame.bytes)
+        .record_frame_ingress(&overlay, frame.as_ref())
         .expect("first frame is accepted");
     let err = session
-        .record_frame_ingress(&overlay, &frame.bytes)
+        .record_frame_ingress(&overlay, frame.as_ref())
         .expect_err("duplicate sequence should be rejected");
     assert!(matches!(
         err,
-        VpnCellError::NonMonotonicSequence {
+        VpnSessionStateError::Cell(VpnCellError::NonMonotonicSequence {
             last: 10,
             actual: 10
-        }
+        })
     ));
 }
 
@@ -192,17 +192,17 @@ fn maximum_sequence_does_not_reset_replay_tracking() {
         .expect("frame")
     };
     session
-        .record_frame_ingress(&overlay, &frame(u64::MAX).bytes)
+        .record_frame_ingress(&overlay, frame(u64::MAX).as_ref())
         .expect("maximum sequence is accepted once");
     let error = session
-        .record_frame_ingress(&overlay, &frame(0).bytes)
+        .record_frame_ingress(&overlay, frame(0).as_ref())
         .expect_err("lower sequence must remain rejected");
     assert!(matches!(
         error,
-        VpnCellError::NonMonotonicSequence {
+        VpnSessionStateError::Cell(VpnCellError::NonMonotonicSequence {
             last: u64::MAX,
             actual: 0
-        }
+        })
     ));
 }
 
@@ -225,9 +225,10 @@ fn overlay_rejects_padding_budget_mismatch() {
     }
     .into_padded_frame()
     .expect("frame");
-    frame.bytes[frame.bytes.len() - 1] = 0;
+    let last = frame.as_ref().len() - 1;
+    frame.as_mut()[last] = 0;
     let err = overlay
-        .parse_frame(&frame.bytes)
+        .parse_frame(frame.as_ref())
         .expect_err("padding budget should be validated");
     assert!(matches!(err, VpnCellError::PaddingBudgetMismatch { .. }));
 }
@@ -251,7 +252,7 @@ fn overlay_rejects_cover_flag_mismatch() {
     .into_padded_frame()
     .expect("frame");
     let err = overlay
-        .parse_frame(&frame.bytes)
+        .parse_frame(frame.as_ref())
         .expect_err("flag mismatch");
     assert!(matches!(
         err,

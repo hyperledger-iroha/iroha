@@ -986,36 +986,38 @@
       "function": "iroha_contracts_call_and_wait_tool",
       "name": "iroha.contracts.call_and_wait",
       "effect": "write",
-      "description": "Call a deployed contract instance and poll pipeline status until a terminal state.",
+      "description": "Call a deployed contract instance and poll exact global pipeline status until state-resolved Applied; state-resolved Rejected and Expired fail. Status polling decodes only exact HTTP 200 payloads, treats only HTTP 404 as pending, and rejects every other HTTP status. The Applied result has exactly status, hash, terminal_kind, attempts, elapsed_ms, optional submit, and final.",
       "method": "POST",
       "path_template": "/v1/contracts/call",
       "input_schema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
+        "required": [
+          "body"
+        ],
         "properties": {
           "body": {
             "type": "object",
             "additionalProperties": true,
-            "description": "Raw request payload. If omitted, flat top-level fields are forwarded as the request body."
+            "description": "Exact contract-call request payload. Wait controls are never forwarded into this body."
           },
           "hash": {
             "type": "string",
-            "description": "Optional known transaction hash override."
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{63}[13579bdf]$",
+            "description": "Optional exact canonical Iroha transaction hash override."
           },
           "timeout_ms": {
             "type": "integer",
+            "minimum": 1,
+            "maximum": 600000,
             "description": "Polling timeout in milliseconds (default 30000, max 600000)."
           },
           "poll_interval_ms": {
             "type": "integer",
+            "minimum": 50,
             "description": "Polling interval in milliseconds (default 500, minimum 50)."
-          },
-          "terminal_statuses": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Optional terminal status override (default: Committed, Applied, Rejected, Expired)."
           },
           "status_accept": {
             "type": "string",
@@ -1257,37 +1259,10 @@
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
-        "oneOf": [
-          {
-            "required": [
-              "body"
-            ]
-          },
-          {
-            "required": [
-              "version",
-              "alias",
-              "account_id"
-            ]
-          }
+        "required": [
+          "body"
         ],
         "properties": {
-          "version": {
-            "type": "integer",
-            "const": 1
-          },
-          "alias": {
-            "type": "string"
-          },
-          "account_id": {
-            "type": "string"
-          },
-          "permissions": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
           "body": {
             "type": "object",
             "additionalProperties": false,
@@ -1329,87 +1304,139 @@
       }
     },
     {
-      "function": "iroha_accounts_onboard_tool",
-      "name": "iroha.accounts.onboard",
+      "function": "iroha_accounts_onboard_prepare_tool",
+      "name": "iroha.accounts.onboard.prepare",
+      "effect": "read",
+      "description": "Revalidate a signed onboarding receipt and return an authenticated exact transaction envelope without submitting it. The onboarding token is accepted only from the outer MCP request.",
+      "method": "POST",
+      "path_template": "/v1/accounts/onboard/prepare",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["body"],
+        "properties": {
+          "body": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["schema", "binding", "receipt"],
+            "properties": {
+              "schema": {"type": "string", "const": "iroha.accounts.onboard.prepare.v1"},
+              "binding": {"type": "object", "additionalProperties": true},
+              "receipt": {"type": "object", "additionalProperties": true}
+            }
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {"type": "string"},
+            "description": "Non-authentication headers only; the onboarding token must be sent on the outer MCP request."
+          },
+          "accept": {"type": "string"}
+        }
+      }
+    },
+    {
+      "function": "iroha_accounts_onboard_submit_tool",
+      "name": "iroha.accounts.onboard.submit",
       "effect": "write",
-      "description": "Apply a stateless receipt returned by iroha.accounts.onboard.plan. The dedicated onboarding token is accepted only from the outer MCP request.",
+      "description": "Submit only the exact authenticated transaction envelope returned by iroha.accounts.onboard.prepare. The onboarding token is accepted only from the outer MCP request.",
       "method": "POST",
       "path_template": "/v1/accounts/onboard",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
-        "oneOf": [
-          {
-            "required": [
-              "body"
-            ]
-          },
-          {
-            "required": [
-              "receipt"
-            ]
-          }
-        ],
+        "required": ["body"],
         "properties": {
-          "receipt": {
-            "type": "object",
-            "additionalProperties": true
-          },
           "body": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "receipt"
-            ],
+            "required": ["schema", "binding", "operation", "receipt", "semantic_hash_hex", "account_id", "alias", "disposition", "transaction_hash_hex", "signed_transaction_wire_hex", "signed_transaction_wire_sha256", "fee_payment", "server_signature"],
             "properties": {
-              "receipt": {
-                "type": "object",
-                "additionalProperties": true
-              }
+              "schema": {"type": "string", "const": "iroha.taira.prepared-transaction.v1"},
+              "binding": {"type": "object", "additionalProperties": true},
+              "operation": {"type": "string", "const": "onboarding"},
+              "receipt": {"type": "object", "additionalProperties": true},
+              "semantic_hash_hex": {"type": "string"},
+              "account_id": {"type": "string"},
+              "alias": {"type": "string"},
+              "disposition": {},
+              "transaction_hash_hex": {"type": "string"},
+              "signed_transaction_wire_hex": {"type": "string"},
+              "signed_transaction_wire_sha256": {"type": "string"},
+              "fee_payment": {},
+              "server_signature": {}
             }
           },
           "headers": {
             "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            },
+            "additionalProperties": {"type": "string"},
             "description": "Non-authentication headers only; the onboarding token must be sent on the outer MCP request."
           },
-          "accept": {
-            "type": "string"
-          }
+          "accept": {"type": "string"}
         }
       }
     },
     {
-      "function": "iroha_accounts_faucet_tool",
-      "name": "iroha.accounts.faucet",
+      "function": "iroha_accounts_faucet_prepare_tool",
+      "name": "iroha.accounts.faucet.prepare",
+      "effect": "read",
+      "description": "Validate one solved faucet claim and return an authenticated exact transaction envelope without submitting it.",
+      "method": "POST",
+      "path_template": "/v1/accounts/faucet/prepare",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["body"],
+        "properties": {
+          "body": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["schema", "binding", "claim"],
+            "properties": {
+              "schema": {"type": "string", "const": "iroha.accounts.faucet.prepare.v1"},
+              "binding": {"type": "object", "additionalProperties": true},
+              "claim": {"type": "object", "additionalProperties": false, "required": ["account_id"], "properties": {"account_id": {"type": "string"}, "pow_anchor_height": {"type": "integer"}, "pow_nonce_hex": {"type": "string"}}}
+            }
+          },
+          "headers": {"type": "object", "additionalProperties": {"type": "string"}},
+          "accept": {"type": "string"}
+        }
+      }
+    },
+    {
+      "function": "iroha_accounts_faucet_submit_tool",
+      "name": "iroha.accounts.faucet.submit",
       "effect": "write",
-      "description": "Request starter testnet funds for an existing account (`account_id` shortcut supported when `body` is omitted).",
+      "description": "Submit only the exact authenticated transaction envelope returned by iroha.accounts.faucet.prepare.",
       "method": "POST",
       "path_template": "/v1/accounts/faucet",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
+        "required": ["body"],
         "properties": {
-          "account_id": {
-            "type": "string",
-            "description": "Convenience shortcut for `body.account_id`."
-          },
           "body": {
             "type": "object",
-            "additionalProperties": true,
-            "description": "Raw faucet request body. If provided, it takes precedence over shortcuts."
-          },
-          "headers": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
+            "additionalProperties": false,
+            "required": ["schema", "binding", "operation", "claim", "semantic_hash_hex", "account_id", "asset_definition_id", "asset_id", "amount", "transaction_hash_hex", "signed_transaction_wire_hex", "signed_transaction_wire_sha256", "fee_payment", "server_signature"],
+            "properties": {
+              "schema": {"type": "string", "const": "iroha.taira.prepared-transaction.v1"},
+              "binding": {"type": "object", "additionalProperties": true},
+              "operation": {"type": "string", "const": "faucet"},
+              "claim": {"type": "object", "additionalProperties": true},
+              "semantic_hash_hex": {"type": "string"},
+              "account_id": {"type": "string"},
+              "asset_definition_id": {"type": "string"},
+              "asset_id": {"type": "string"},
+              "amount": {},
+              "transaction_hash_hex": {"type": "string"},
+              "signed_transaction_wire_hex": {"type": "string"},
+              "signed_transaction_wire_sha256": {"type": "string"},
+              "fee_payment": {},
+              "server_signature": {}
             }
           },
-          "accept": {
-            "type": "string"
-          }
+          "headers": {"type": "object", "additionalProperties": {"type": "string"}},
+          "accept": {"type": "string"}
         }
       }
     },
@@ -2994,7 +3021,7 @@
       "function": "iroha_transactions_wait_tool",
       "name": "iroha.transactions.wait",
       "effect": "read",
-      "description": "Poll typed pipeline status for an existing transaction hash until a terminal state. Defaults to JSON; set status_accept=application/x-norito for typed Norito.",
+      "description": "Poll exact global pipeline status for an existing transaction hash until state-resolved Applied; state-resolved Rejected and Expired fail. Status polling decodes only exact HTTP 200 payloads, treats only HTTP 404 as pending, and rejects every other HTTP status. The Applied result has exactly status, hash, terminal_kind, attempts, elapsed_ms, and final.",
       "method": "GET",
       "path_template": "/v1/pipeline/transactions/status",
       "input_schema": {
@@ -3012,24 +3039,23 @@
             ],
             "properties": {
               "hash": {
-                "type": "string"
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64,
+                "pattern": "^[0-9a-f]{63}[13579bdf]$"
               }
             }
           },
           "timeout_ms": {
             "type": "integer",
+            "minimum": 1,
+            "maximum": 600000,
             "description": "Polling timeout in milliseconds (default 30000, max 600000)."
           },
           "poll_interval_ms": {
             "type": "integer",
+            "minimum": 50,
             "description": "Polling interval in milliseconds (default 500, minimum 50)."
-          },
-          "terminal_statuses": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Optional terminal status override (default: Applied). Include Rejected or Expired to inspect those failure outcomes."
           },
           "status_accept": {
             "type": "string",
@@ -3056,7 +3082,7 @@
       "path_template": "/v1/pipeline/transactions/status",
       "input_schema": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "required": [
           "query"
         ],
@@ -3069,7 +3095,10 @@
             ],
             "properties": {
               "hash": {
-                "type": "string"
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64,
+                "pattern": "^[0-9a-f]{63}[13579bdf]$"
               }
             }
           },

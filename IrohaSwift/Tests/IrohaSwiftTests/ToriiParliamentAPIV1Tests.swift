@@ -344,6 +344,61 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         }
     }
 
+    func testTimedOvnProgressIsAggregateOnlyAndCertificateBound() throws {
+        let response = makeHiddenBallotReadResponse()
+        let parsed = try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+            jsonData(response),
+            expectedGovernanceAttemptId: attemptID
+        )
+        let progress = try XCTUnwrap(parsed.bodyStates[0].timedOvnProgress)
+        XCTAssertEqual(progress.ballotAttemptId, identifier(0x21))
+        XCTAssertEqual(progress.status, "Finalized")
+        XCTAssertEqual(progress.frozenSurvivorCount, 3)
+        XCTAssertEqual(progress.acceptedBallotPrefixCount, 3)
+
+        var mismatched = response
+        var states = try XCTUnwrap(mismatched["body_states"] as? [[String: Any]])
+        var progressObject = try XCTUnwrap(
+            states[0]["timed_ovn_progress"] as? [String: Any]
+        )
+        progressObject["accepted_ballot_prefix_count"] = 2
+        states[0]["timed_ovn_progress"] = progressObject
+        mismatched["body_states"] = states
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(mismatched),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+
+        var leaked = response
+        states = try XCTUnwrap(leaked["body_states"] as? [[String: Any]])
+        progressObject = try XCTUnwrap(states[0]["timed_ovn_progress"] as? [String: Any])
+        progressObject["ballot_records"] = []
+        states[0]["timed_ovn_progress"] = progressObject
+        leaked["body_states"] = states
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(leaked),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+
+        var premature = response
+        states = try XCTUnwrap(premature["body_states"] as? [[String: Any]])
+        progressObject = try XCTUnwrap(states[0]["timed_ovn_progress"] as? [String: Any])
+        progressObject["status"] = ["status": "TimedCommitment"]
+        progressObject["accepted_ballot_prefix_count"] = 3
+        states[0]["timed_ovn_progress"] = progressObject
+        premature["body_states"] = states
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.decodeAttemptReadResponse(
+                jsonData(premature),
+                expectedGovernanceAttemptId: attemptID
+            )
+        )
+    }
+
     func testReleaseContextRequiresCompleteTranscriptAndBindsEveryPartial() throws {
         let ballotID = identifier(0x33)
         let response = makeTleReleaseContextResponse()
@@ -522,6 +577,7 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
                 "public_finding_deadline_height": 8,
                 "no_result_kind": NSNull(),
                 "no_result_height": NSNull(),
+                "timed_ovn_progress": NSNull(),
             ]],
             "certificate": [
                 "proposal_content_id": proposalID,
@@ -624,6 +680,12 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         states[0]["public_finding_opened_at_height"] = NSNull()
         states[0]["public_finding_phase_blocks"] = NSNull()
         states[0]["public_finding_deadline_height"] = NSNull()
+        states[0]["timed_ovn_progress"] = [
+            "ballot_attempt_id": identifier(0x21),
+            "status": ["status": "Finalized"],
+            "frozen_survivor_count": 3,
+            "accepted_ballot_prefix_count": 3,
+        ]
         response["body_states"] = states
         return response
     }

@@ -3574,7 +3574,6 @@ pub mod isi {
                     .as_str()
                     .ok_or_else(|| "owner must be a canonical I105 account id".to_owned())?;
                 let owner = iroha_data_model::account::AccountId::parse_encoded(literal)
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .map_err(|_| "owner must be a canonical I105 account id".to_owned())?;
                 if owner.to_string() != literal {
                     return Err("owner must use canonical I105 account id form".to_owned());
@@ -15207,40 +15206,46 @@ pub mod isi {
             }
             let now_ms = state_transaction.block_unix_timestamp_ms();
             let bootstrap_domain_name_lease = state_transaction.block_hashes.is_empty();
-            let should_seed_domain_name_lease = match crate::sns::active_domain_owner(
-                state_transaction.world(),
-                &canonical_id,
-                now_ms,
-            ) {
+            let active_domain_owner =
+                crate::sns::active_domain_owner(state_transaction.world(), &canonical_id, now_ms)
+                    .map_err(|err| {
+                    InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "failed to resolve active SNS domain-name lease for `{canonical_id}`: {err}"
+                    )
+                    .into(),
+                )
+                })?;
+            let should_seed_domain_name_lease = match active_domain_owner {
                 Some(owner) if owner == *authority => false,
                 Some(owner) => {
-                    if state_transaction.replay_compatibility {
-                        false
-                    } else {
-                        return Err(InstructionExecutionError::InvariantViolation(
+                    return Err(InstructionExecutionError::InvariantViolation(
                         format!(
                             "active SNS domain-name lease for `{canonical_id}` is owned by `{owner}`, not `{authority}`"
                         )
                         .into(),
                     ));
-                    }
                 }
                 None if bootstrap_domain_name_lease => true,
                 None => {
-                    if state_transaction.replay_compatibility {
-                        false
-                    } else {
-                        return Err(InstructionExecutionError::InvariantViolation(
+                    return Err(InstructionExecutionError::InvariantViolation(
                         format!(
                             "active SNS domain-name lease is required before registering `{canonical_id}`"
                         )
                         .into(),
                     ));
-                    }
                 }
             };
             let mut domain = new_domain.build(authority);
             domain.id = canonical_id.clone();
+            if let Some((key, _)) = domain.metadata.iter().find(|(key, _)| {
+                crate::smartcontracts::isi::kaigi::is_reserved_kaigi_metadata_key(key)
+            }) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("domain metadata key `{key}` is reserved for native Kaigi state")
+                        .into(),
+                ));
+            }
             let requires_endorsement = state_transaction
                 .world
                 .domain_endorsement_policies
@@ -17721,6 +17726,10 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let domain_id = self.object().clone();
+            crate::smartcontracts::isi::kaigi::ensure_kaigi_domain_can_unregister(
+                state_transaction,
+                &domain_id,
+            )?;
             let relabeled_accounts: Vec<AccountId> = state_transaction
                 .world
                 .accounts_in_domain_iter(&domain_id)
@@ -23516,27 +23525,6 @@ pub mod isi {
                 "missing call_hash must reject before custody, payload, locator, index, terminal, and usage mutation"
             );
         });
-        world_test!(replay_sccp_message_skips_call_hash_and_transfer_transcript {
-            let state = blank_test_state();
-            let header = first_test_block_header_with_checked_height();
-            let mut block = state.block(header);
-            block.replay_compatibility = true;
-            let mut stx = block.transaction();
-            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
-            assert!(stx.tx_call_hash.is_none());
-            let payload = sora_outbound_sccp_payload(149);
-            let before = sccp_outbound_mutation_snapshot(&stx, &ALICE_ID);
-            crate::bridge::test_record_sccp_message(canonical_test_sccp_payload_bytes(&payload))
-                .expect_execute(&ALICE_ID, &mut stx, "committed-block replay intentionally skips transfer transcripts");
-            let after = sccp_outbound_mutation_snapshot(&stx, &ALICE_ID);
-            assert_eq!(after.pending.len(), before.pending.len() + 1);
-            assert_eq!(after.locators.len(), before.locators.len() + 1);
-            assert_eq!(after.ordered_index.len(), before.ordered_index.len() + 1);
-            assert_eq!(after.usage.message_count, before.usage.message_count + 1);
-            assert_ne!(after.sender_balance, before.sender_balance);
-            assert_ne!(after.custody_balance, before.custody_balance);
-            assert_eq!(stx.pending_transfer_transcript_count_for_testing(), 0);
-        });
         world_test!(record_sccp_message_rejects_corrupt_or_overflowing_usage_before_mutation {
             blank_test_state_transaction!(checked state, block, stx);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
@@ -25050,30 +25038,6 @@ seiyaku GovernanceLifecycle {
                 .expect_execute_err(&authority, &mut stx, "missing lease must fail");
             assert_contains!(err.to_string(), "active SNS domain-name lease", "unexpected error: {err}");
         });
-        world_test!(replay_allows_legacy_domain_registration_without_active_sns_lease {
-            let state = blank_state();
-            {
-                let mut block_hashes = state.block_hashes.block();
-                block_hashes.push_for_tests(
-                    iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-                        Hash::prehashed([0x51; Hash::LENGTH]),
-                    ),
-                );
-                block_hashes.commit_for_tests();
-            }
-            let block = new_dummy_block_non_genesis();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-            stx.replay_compatibility = true;
-            let (authority, _) = gen_account_in("tenants");
-            let domain_id: DomainId = DomainId::try_new("leased", "world").expect("domain");
-            Register::domain(Domain::new(domain_id.clone()))
-                .expect_execute(&authority, &mut stx, "replay must preserve legacy committed domain registration");
-            assert!(
-                stx.world.domains.get(&domain_id).is_some(),
-                "domain should be stored during replay"
-            );
-        });
         world_test!(register_domain_in_empty_state_does_not_require_sns_lease {
             let state = blank_state();
             let block = new_dummy_block_non_genesis();
@@ -25098,6 +25062,55 @@ seiyaku GovernanceLifecycle {
                 stx.world.domains.get(&domain_id).is_some(),
                 "genesis registration should materialize the domain"
             );
+        });
+        world_test!(register_domain_cannot_seed_native_kaigi_state {
+            use iroha_data_model::kaigi::{
+                KaigiRelayAllowlist, kaigi_metadata_key, kaigi_relay_allowlist_key,
+                kaigi_relay_feedback_key, kaigi_relay_metadata_key,
+            };
+
+            blank_state_transaction!(state, block, state_block, stx);
+            let domain_id: DomainId =
+                DomainId::try_new("kaigi-protected", "universal").expect("domain id");
+            let call_name: Name = "protected".parse().expect("call name");
+            for key in [
+                kaigi_metadata_key(&call_name).expect("call metadata key"),
+                kaigi_relay_metadata_key(&ALICE_ID).expect("relay metadata key"),
+                kaigi_relay_feedback_key(&ALICE_ID).expect("relay feedback key"),
+            ] {
+                let mut metadata = Metadata::default();
+                metadata.insert(key, Json::new("forged Kaigi state"));
+                let error = Register::domain(
+                    Domain::new(domain_id.clone()).with_metadata(metadata),
+                )
+                .expect_execute_err(
+                    &ALICE_ID,
+                    &mut stx,
+                    "domain registration must reject native Kaigi metadata",
+                );
+                assert_contains!(
+                    error.to_string(),
+                    "reserved for native Kaigi state",
+                    "unexpected error: {error}"
+                );
+                assert!(
+                    stx.world.domains.get(&domain_id).is_none(),
+                    "rejected registration must not materialize the domain"
+                );
+            }
+
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                kaigi_relay_allowlist_key().expect("relay allowlist key"),
+                Json::new(KaigiRelayAllowlist::default()),
+            );
+            Register::domain(Domain::new(domain_id.clone()).with_metadata(metadata))
+                .expect_execute(
+                    &ALICE_ID,
+                    &mut stx,
+                    "domain registration must retain the governance allowlist path",
+                );
+            assert!(stx.world.domains.get(&domain_id).is_some());
         });
         world_test!(register_domain_accepts_matching_active_sns_lease {
             let kura = Kura::blank_kura_for_testing();
@@ -26441,6 +26454,146 @@ seiyaku GovernanceLifecycle {
                 .expect("register multisig authority");
             multisig_id
         }
+        world_test!(unregister_domain_rejects_native_kaigi_state_atomically {
+            use iroha_data_model::kaigi::{
+                KaigiId, KaigiRecord, NewKaigi, kaigi_metadata_key,
+            };
+
+            blank_state_transaction!(state, block, state_block, stx);
+            let domain_id: DomainId =
+                DomainId::try_new("kaigi-retained", "universal").expect("domain id");
+            Register::domain(Domain::new(domain_id.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "register Kaigi domain");
+            let call_name: Name = "active-call".parse().expect("call name");
+            let call = KaigiId::new(domain_id.clone(), call_name.clone());
+            let record = KaigiRecord::from_new(
+                &NewKaigi::with_defaults(call, ALICE_ID.clone()),
+                1,
+            );
+            let key = kaigi_metadata_key(&call_name).expect("Kaigi metadata key");
+            let value = Json::try_new(record).expect("Kaigi record JSON");
+            stx.world
+                .domain_mut(&domain_id)
+                .expect("Kaigi domain")
+                .metadata_mut()
+                .insert(key.clone(), value.clone());
+            stx.world.take_external_events();
+
+            let error = Unregister::domain(domain_id.clone()).expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "a domain with native Kaigi state must remain registered",
+            );
+
+            assert_contains!(
+                error.to_string(),
+                "contains protected native Kaigi state",
+                "unexpected error: {error}"
+            );
+            assert_eq!(
+                stx.world
+                    .domain(&domain_id)
+                    .expect("rejected removal must preserve the domain")
+                    .metadata()
+                    .get(&key),
+                Some(&value),
+                "rejected domain removal must preserve the native Kaigi record"
+            );
+            assert!(
+                stx.world.take_external_events().is_empty(),
+                "rejected domain removal must not emit events"
+            );
+        });
+        world_test!(unregister_alias_domain_preserves_cross_domain_kaigi_rekey_history {
+            use iroha_data_model::{
+                account::rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
+                isi::kaigi::EndKaigi,
+                kaigi::{KaigiId, KaigiRecord, KaigiStatus, NewKaigi, kaigi_metadata_key},
+                nexus::DataSpaceId,
+            };
+
+            blank_state_transaction!(state, block, state_block, stx);
+            let alias_domain =
+                DomainId::try_new("identity", "universal").expect("alias domain");
+            let call_domain = DomainId::try_new("calls", "universal").expect("call domain");
+            for domain in [&alias_domain, &call_domain] {
+                Register::domain(Domain::new(domain.clone()))
+                    .expect_execute(&ALICE_ID, &mut stx, "register domain");
+            }
+            let predecessor = AccountId::new(checked_keypair().public_key().clone());
+            let terminal = AccountId::new(checked_keypair().public_key().clone());
+            let alias_owner = AccountId::new(checked_keypair().public_key().clone());
+            for account in [&terminal, &alias_owner] {
+                Register::account(Account::new(account.clone()))
+                    .expect_execute(&ALICE_ID, &mut stx, "register account");
+            }
+            let alias = AccountAlias::new(
+                "continuity".parse().expect("alias label"),
+                Some(AccountAliasDomain::new(alias_domain.name().clone())),
+                DataSpaceId::UNIVERSAL,
+            );
+            let history = AccountRekeyRecord::new(alias.clone(), predecessor.clone())
+                .repoint_for_account_id_rekey(terminal.clone())
+                .expect("canonical account-id rekey")
+                .reassign_alias_to_account(alias_owner.clone())
+                .expect("independent alias reassignment");
+            stx.world
+                .insert_account_alias_binding(alias.clone(), alias_owner.clone());
+            stx.world
+                .account_rekey_records
+                .insert(alias.clone(), history.clone());
+            let call_name: Name = "active-call".parse().expect("call name");
+            let call = KaigiId::new(call_domain.clone(), call_name.clone());
+            let record = KaigiRecord::from_new(
+                &NewKaigi::with_defaults(call.clone(), predecessor.clone()),
+                0,
+            );
+            let key = kaigi_metadata_key(&call_name).expect("Kaigi metadata key");
+            stx.world
+                .domain_mut(&call_domain)
+                .expect("call domain")
+                .metadata_mut()
+                .insert(
+                    key.clone(),
+                    Json::try_new(record).expect("Kaigi record JSON"),
+                );
+
+            let error = Unregister::domain(alias_domain.clone()).expect_execute_err(
+                &ALICE_ID,
+                &mut stx,
+                "alias-domain teardown must preserve cross-domain Kaigi continuity",
+            );
+            assert_contains!(
+                error.to_string(),
+                "history is required by native Kaigi state",
+                "unexpected error: {error}"
+            );
+            assert!(stx.world.domain(&alias_domain).is_ok());
+            assert_eq!(stx.world.account_aliases.get(&alias), Some(&alias_owner));
+            assert_eq!(stx.world.account_rekey_records.get(&alias), Some(&history));
+
+            EndKaigi {
+                call_id: call.clone(),
+                ended_at_ms: Some(0),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&terminal, &mut stx)
+            .expect("preserved successor continuity must remain usable");
+            let ended: KaigiRecord = stx
+                .world
+                .domain(&call_domain)
+                .expect("call domain")
+                .metadata()
+                .get(&key)
+                .expect("Kaigi record")
+                .clone()
+                .try_into_any_norito()
+                .expect("decode Kaigi record");
+            assert_eq!(ended.status, KaigiStatus::Ended);
+        });
         world_test!(unregister_domain_preserves_global_account_records_and_owned_foreign_nfts {
             let state = blank_state();
             let domain_id: DomainId =
@@ -28696,44 +28849,6 @@ seiyaku GovernanceLifecycle {
                 after.receipt_markers.len(),
                 retry_before.receipt_markers.len() + 1
             );
-        });
-        world_test!(replay_native_transfer_skips_call_hash_and_transfer_transcript {
-            let state = blank_state();
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            state_block.replay_compatibility = true;
-            let mut stx = state_block.transaction();
-            let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
-                sccp_native_inbound_transfer_payload_for_test(79, 7),
-            );
-            let (asset, custody) = configure_native_sccp_settlement_for_test(
-                &mut stx,
-                registry,
-                NumericSpec::default(),
-                Quantity::from(100_u64),
-            );
-            assert!(stx.tx_call_hash.is_none());
-            let before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
-            SubmitBridgeProof::new(proof)
-                .expect_execute(&ALICE_ID, &mut stx, "committed-block replay intentionally skips transfer transcripts");
-            let after = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
-            assert_eq!(after.transfer_transcripts, before.transfer_transcripts);
-            assert_eq!(
-                after.custody_balance,
-                before
-                    .custody_balance
-                    .checked_sub(&sccp_test_transfer_quantity())
-                    .expect("funded replay custody subtraction")
-            );
-            assert_eq!(
-                after.recipient_balance,
-                before
-                    .recipient_balance
-                    .checked_add(&sccp_test_transfer_quantity())
-                    .expect("replay recipient addition")
-            );
-            assert_eq!(after.proofs.len(), before.proofs.len() + 1);
-            assert_eq!(after.inbound.len(), before.inbound.len() + 1);
         });
         world_test!(submit_native_transfer_proof_releases_custody_atomically_and_only_once {
             blank_state_transaction!(state, block, state_block, stx);

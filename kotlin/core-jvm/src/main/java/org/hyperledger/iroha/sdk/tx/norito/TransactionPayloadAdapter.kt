@@ -696,7 +696,7 @@ internal class TransactionPayloadAdapter private constructor(
                 } catch (e: AccountAddressException) {
                     throw IllegalArgumentException("authority must use canonical I105 encoding", e)
                 }
-                return parseAddressToController(parsed.address)
+                return parseAddressToController(parsed)
             }
 
             private fun parseAddressToController(address: AccountAddress): ControllerPayload {

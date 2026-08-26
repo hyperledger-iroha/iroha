@@ -1,8 +1,7 @@
 // Strict activation-evidence readers kept out of the main client module's source budget.
 
 use crate::data_model::block::{
-    BlockHeader, decode_framed_signed_block,
-    proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
+    decode_framed_signed_block, proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
 };
 use iroha_data_model::{
     bridge::{

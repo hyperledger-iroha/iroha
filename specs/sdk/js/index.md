@@ -59,8 +59,9 @@ every time the built-in HTTP client schedules a retry. The hook receives the
 HTTP method, URL, attempt counters, retry cause, and the delay that will be
 applied before the next request. The payload also exposes the selected retry
 `profile` (`default`, `pipeline`, `streaming`, or any custom entry) so you can
-distinguish between idempotent transaction submissions and long-lived stream
-reconnections. This allows callers to feed retry events into
+distinguish between safe pipeline status reads and long-lived stream
+reconnections. Signed transaction submission is deliberately absent from this
+telemetry because it is dispatched exactly once. This allows callers to feed retry events into
 custom loggers or metrics pipelines without reimplementing the HTTP client:
 
 ```ts
@@ -76,13 +77,16 @@ const client = new ToriiClient(baseUrl, {
 The hook runs inside a try/catch block so exceptions never interfere with the
 retry loop.
 
-Pipeline submissions (`/v1/pipeline/transactions` + `/v1/pipeline/transactions/status`)
-automatically use the `pipeline` profile (POST retries enabled, 250 ms base backoff, 5 attempts),
-while SSE endpoints use the `streaming` profile (longer retry window, 6 attempts). Override the
-profiles via `resolveToriiClientConfig({ overrides: { retryProfiles: { … } } })` or by passing
-`retryProfiles` directly to the `ToriiClient` constructor when you need different budgets.
+Pipeline status reads use the `pipeline` profile (250 ms base backoff, 5 attempts), while SSE
+endpoints use the `streaming` profile (longer retry window, 6 attempts). The canonical
+`POST /v1/pipeline/transactions` path validates exact V1 bytes, dispatches once, follows no
+redirect, and accepts only HTTP `202`; retry-profile overrides cannot make that POST replayable.
+Override profiles only when safe reads need different budgets.
 If `/v1/pipeline/transactions/status` returns `404`, the JS client treats it as "pending" and
 returns `null` so polling can continue after Torii restarts or cache eviction.
+The only other valid response is `200` with the exact closed status payload and a canonical
+marked transaction hash (64 lowercase hexadecimal characters with an odd final nibble). Empty
+`200`, `202`, `204`, and every other HTTP status fail closed.
 `ToriiClient.submitTransaction` validates `data_model_version` from `/v1/node/capabilities` and
 throws `ToriiDataModelCompatibilityError` when it differs from the SDK's built-in value.
 See {doc}`torii_retry_policy` for the full table of defaults, override knobs,

@@ -26,6 +26,7 @@ public final class VpnProfile {
   private final int flowLabelBits;
   private final int paddingBudgetMs;
   private final String relayIdHex;
+  private final String relayMldsa65PublicKeyHex;
   private final String descriptorCommitHex;
   private final String tlsServerName;
   private final String relayTlsSpkiSha256Hex;
@@ -52,6 +53,7 @@ public final class VpnProfile {
       final int flowLabelBits,
       final int paddingBudgetMs,
       final String relayIdHex,
+      final String relayMldsa65PublicKeyHex,
       final String descriptorCommitHex,
       final String tlsServerName,
       final String relayTlsSpkiSha256Hex,
@@ -76,6 +78,8 @@ public final class VpnProfile {
     this.flowLabelBits = flowLabelBits;
     this.paddingBudgetMs = paddingBudgetMs;
     this.relayIdHex = Objects.requireNonNull(relayIdHex, "relayIdHex");
+    this.relayMldsa65PublicKeyHex =
+        Objects.requireNonNull(relayMldsa65PublicKeyHex, "relayMldsa65PublicKeyHex");
     this.descriptorCommitHex = Objects.requireNonNull(descriptorCommitHex, "descriptorCommitHex");
     this.tlsServerName = Objects.requireNonNull(tlsServerName, "tlsServerName");
     this.relayTlsSpkiSha256Hex =
@@ -105,6 +109,7 @@ public final class VpnProfile {
   public int flowLabelBits() { return flowLabelBits; }
   public int paddingBudgetMs() { return paddingBudgetMs; }
   public String relayIdHex() { return relayIdHex; }
+  public String relayMldsa65PublicKeyHex() { return relayMldsa65PublicKeyHex; }
   public String descriptorCommitHex() { return descriptorCommitHex; }
   public String tlsServerName() { return tlsServerName; }
   public String relayTlsSpkiSha256Hex() { return relayTlsSpkiSha256Hex; }

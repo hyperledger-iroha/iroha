@@ -106,7 +106,7 @@ fn transfer_transcripts_reject_missing_call_hash() {
     assert!(transcripts.is_empty());
 }
 #[test]
-fn transfer_transcript_identity_preflight_fails_closed_during_replay() {
+fn transfer_transcript_identity_preflight_always_fails_closed() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new(World::default(), Arc::clone(&kura), query);
@@ -127,29 +127,27 @@ fn transfer_transcript_identity_preflight_fails_closed_during_replay() {
             call_hash
         );
     }
-    block.replay_compatibility = true;
     let transaction = block.transaction();
     let error = transaction
-        .require_transfer_transcript_identity("test replay transfer")
-        .expect_err("replay transfer without call_hash must fail closed");
+        .require_transfer_transcript_identity("test transfer after prior transaction")
+        .expect_err("every transaction without call_hash must fail closed");
     assert!(error.to_string().contains("transaction call_hash"));
 }
 #[test]
-fn replay_transfer_transcripts_reject_missing_call_hash_without_fastpq_work() {
+fn transfer_transcripts_reject_missing_call_hash_without_fastpq_work() {
     let kura = Kura::blank_kura_for_testing();
     let query = crate::query::store::LiveQueryStore::start_test();
     let state = State::new(World::default(), Arc::clone(&kura), query);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
-    block.replay_compatibility = true;
     let _guard = crate::sumeragi::witness::exec_witness_guard();
     crate::sumeragi::witness::start_block();
     let mut tx = block.transaction();
     tx.record_transfer_transcript(&ALICE_ID, sample_delta(1))
-        .expect_err("replay mode must not bypass transcript identity");
+        .expect_err("missing transcript identity must fail closed");
     assert!(
         tx.pending_transfer_transcripts.is_empty(),
-        "rejected replay transfer must not stage FASTPQ transcripts"
+        "rejected transfer must not stage FASTPQ transcripts"
     );
     tx.apply();
     assert!(block.drain_transfer_transcripts().is_empty());

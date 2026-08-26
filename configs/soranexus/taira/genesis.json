@@ -40,7 +40,10 @@
               "id": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "metadata": {
                 "key": "value"
-              }
+              },
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -50,7 +53,10 @@
               "id": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
               "metadata": {
                 "purpose": "taira_fee_sponsor_program_owner"
-              }
+              },
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -60,7 +66,10 @@
               "id": "testuﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
               "metadata": {
                 "purpose": "fee_sponsor_vault_custody"
-              }
+              },
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -70,7 +79,10 @@
               "id": "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
               "metadata": {
                 "key": "value"
-              }
+              },
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -103,7 +115,10 @@
           "Register": {
             "Account": {
               "id": "testuﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
-              "metadata": {}
+              "metadata": {},
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -197,7 +212,10 @@
           "Register": {
             "Account": {
               "id": "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
-              "metadata": {}
+              "metadata": {},
+              "label": null,
+              "uaid": null,
+              "opaque_ids": []
             }
           }
         },
@@ -415,7 +433,7 @@
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest"
+"wire_id": "iroha.instruction.v1::space_directory::PublishSpaceDirectoryManifest"
                       }
                     },
                     {
@@ -427,25 +445,25 @@
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk"
+                        "wire_id": "iroha.instruction.v1::smart_contract_code::UploadSmartContractCodeChunk"
                       }
                     },
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload"
+                        "wire_id": "iroha.instruction.v1::smart_contract_code::FinalizeSmartContractCodeUpload"
                       }
                     },
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode"
+                        "wire_id": "iroha.instruction.v1::smart_contract_code::RegisterSmartContractCode"
                       }
                     },
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "iroha_data_model::isi::smart_contract_code::CommitContractDeployment"
+                        "wire_id": "iroha.instruction.v1::smart_contract_code::CommitContractDeployment"
                       }
                     },
                     {
@@ -457,19 +475,13 @@
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "iroha_data_model::isi::sorafs::RegisterCapacityDeclaration"
+                        "wire_id": "iroha.instruction.v1::sorafs::RegisterCapacityDeclaration"
                       }
                     },
                     {
                       "kind": "native_instruction",
                       "value": {
                         "wire_id": "iroha.set_key_value"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "soracloud::HeartbeatSoracloudModelHost"
                       }
                     },
                     {
@@ -482,18 +494,6 @@
                       "kind": "native_instruction",
                       "value": {
                         "wire_id": "soracloud::ReconcileSoracloudInrouPlacements"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha_data_model::isi::soracloud::ReconcileSoracloudModelHosts"
-                      }
-                    },
-                    {
-                      "kind": "native_instruction",
-                      "value": {
-                        "wire_id": "iroha_data_model::isi::soracloud::ReportSoracloudModelHostViolation"
                       }
                     },
                     {

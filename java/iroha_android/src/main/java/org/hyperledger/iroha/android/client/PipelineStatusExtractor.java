@@ -15,7 +15,7 @@ final class PipelineStatusExtractor {
   private static final Set<String> ROOT_FIELDS =
       immutableSet("hash", "status", "scope", "resolved_from");
   private static final Set<String> STATUS_FIELDS = immutableSet("kind", "block_height");
-  private static final Set<String> SCOPES = immutableSet("local", "auto", "global");
+  private static final Set<String> SCOPES = immutableSet("local", "global");
   private static final Set<String> SOURCES = immutableSet("queue", "cache", "state");
 
   private PipelineStatusExtractor() {}
@@ -52,9 +52,10 @@ final class PipelineStatusExtractor {
       throw new IllegalStateException("Pipeline status is missing required fields: " + missing);
     }
     final Object hashValue = payload.get("hash");
-    if (!(hashValue instanceof String) || !((String) hashValue).matches("[0-9a-f]{64}")) {
+    if (!(hashValue instanceof String)
+        || !((String) hashValue).matches("[0-9a-f]{63}[13579bdf]")) {
       throw new IllegalStateException(
-          "Pipeline status hash must be exact lowercase 32-byte hex");
+          "Pipeline status hash must be an exact lowercase marked 32-byte hash");
     }
     final Object rawStatusValue = payload.get("status");
     if (!(rawStatusValue instanceof Map)) {
@@ -94,9 +95,13 @@ final class PipelineStatusExtractor {
     return Collections.unmodifiableMap(normalized);
   }
 
-  /** Require exact global, state-backed terminal semantics for polling. */
+  /** Validate one exact global status observation and return its canonical kind. */
   static String requireAuthoritativeStatus(
       final Map<String, Object> payload, final String expectedHash) {
+    if (expectedHash == null || !expectedHash.matches("[0-9a-f]{63}[13579bdf]")) {
+      throw new IllegalStateException(
+          "Requested transaction hash must be an exact lowercase marked 32-byte hash");
+    }
     final Map<String, Object> normalized = normalizePublicStatus(payload);
     if (!expectedHash.equals(normalized.get("hash"))) {
       throw new IllegalStateException(
@@ -107,15 +112,10 @@ final class PipelineStatusExtractor {
     }
     final Map<?, ?> status = (Map<?, ?>) normalized.get("status");
     final String kind = (String) status.get("kind");
-    final String resolvedFrom = (String) normalized.get("resolved_from");
     if ("Applied".equals(kind)) {
-      if (!"state".equals(resolvedFrom) || !hasPositiveBlockHeight(status.get("block_height"))) {
+      if (!hasPositiveBlockHeight(status.get("block_height"))) {
         throw new IllegalStateException(
-            "Applied pipeline status must be state-resolved with a positive block height");
-      }
-    } else if ("Rejected".equals(kind) || "Expired".equals(kind)) {
-      if (!"state".equals(resolvedFrom)) {
-        throw new IllegalStateException("Terminal pipeline failure must be resolved from state");
+            "Applied pipeline status must have a positive block height");
       }
     }
     return kind;

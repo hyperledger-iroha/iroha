@@ -6,16 +6,11 @@ public enum AccountAddressError: Error, Equatable {
     case invalidHeaderVersion(UInt8)
     case invalidNormVersion(UInt8)
     case invalidI105Prefix(UInt16)
-    case hashFailure
     case invalidI105Encoding
     case invalidLength
     case checksumMismatch
-    case invalidHexAddress
-    case domainMismatch
-    case invalidDomainLabel(String)
     case unexpectedNetworkPrefix(expected: UInt16, found: UInt16)
     case unknownAddressClass(UInt8)
-    case unknownDomainTag(UInt8)
     case unexpectedExtensionFlag
     case unknownControllerTag(UInt8)
     case invalidPublicKey
@@ -44,26 +39,16 @@ public enum AccountAddressError: Error, Equatable {
             return "ERR_INVALID_NORM_VERSION"
         case .invalidI105Prefix:
             return "ERR_INVALID_I105_PREFIX"
-        case .hashFailure:
-            return "ERR_CANONICAL_HASH_FAILURE"
         case .invalidI105Encoding:
             return "ERR_INVALID_I105_ENCODING"
         case .invalidLength:
             return "ERR_INVALID_LENGTH"
         case .checksumMismatch:
             return "ERR_CHECKSUM_MISMATCH"
-        case .invalidHexAddress:
-            return "ERR_INVALID_HEX_ADDRESS"
-        case .domainMismatch:
-            return "ERR_DOMAIN_MISMATCH"
-        case .invalidDomainLabel:
-            return "ERR_INVALID_DOMAIN_LABEL"
         case .unexpectedNetworkPrefix:
             return "ERR_UNEXPECTED_NETWORK_PREFIX"
         case .unknownAddressClass:
             return "ERR_UNKNOWN_ADDRESS_CLASS"
-        case .unknownDomainTag:
-            return "ERR_UNKNOWN_DOMAIN_TAG"
         case .unexpectedExtensionFlag:
             return "ERR_UNEXPECTED_EXTENSION_FLAG"
         case .unknownControllerTag:
@@ -111,7 +96,6 @@ public struct AccountAddressNetworkPrefix: Equatable {
 
 public struct AccountAddress {
     private let header: AddressHeader
-    private let domain: DomainSelector
     private let controller: ControllerPayload
     private let rawCanonicalBytes: Data?
 
@@ -140,7 +124,6 @@ public struct AccountAddress {
         let controller = try ControllerPayload.singleKey(publicKey: publicKey, algorithm: algorithm, distid: distid)
         return AccountAddress(
             header: header,
-            domain: .default,
             controller: controller,
             rawCanonicalBytes: nil
         )
@@ -167,7 +150,6 @@ public struct AccountAddress {
         }
         return AccountAddress(
             header: header,
-            domain: .default,
             controller: controller,
             rawCanonicalBytes: bytes
         )
@@ -215,24 +197,6 @@ public struct AccountAddress {
             throw AccountAddressError.unsupportedAddressFormat
         } catch {
             throw error
-        }
-    }
-
-    static func canonicalizeDomainLabel(_ raw: String) throws -> String {
-        try DomainSelector.canonicalizeLabel(raw)
-    }
-
-    func matchesDomainLabel(_ raw: String) -> Bool {
-        guard let canonical = try? DomainSelector.canonicalizeLabel(raw) else {
-            return false
-        }
-        switch domain {
-        case .default:
-            return !canonical.isEmpty
-        case .local12(let digest):
-            return computeLocalDigest(label: canonical) == digest
-        case .global:
-            return true
         }
     }
 
@@ -429,80 +393,6 @@ private extension CurveId {
 private enum AddressClass: UInt8 {
     case singleKey = 0
     case multiSig = 1
-}
-
-private enum DomainSelector {
-    case `default`
-    case local12(Data)
-    case global(UInt32)
-
-    fileprivate static func canonicalizeLabel(_ raw: String) throws -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw AccountAddressError.invalidDomainLabel(raw)
-        }
-        if trimmed != raw || trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-            throw AccountAddressError.invalidDomainLabel(raw)
-        }
-        if trimmed.contains("@") || trimmed.contains("#") || trimmed.contains("$") {
-            throw AccountAddressError.invalidDomainLabel(raw)
-        }
-        let lowered = trimmed.lowercased()
-        for scalar in lowered.unicodeScalars {
-            guard scalar.isASCII else {
-                throw AccountAddressError.invalidDomainLabel(raw)
-            }
-            let value = scalar.value
-            let isAlphaNum = (value >= 48 && value <= 57) || (value >= 97 && value <= 122)
-            if !isAlphaNum && value != 45 && value != 95 && value != 46 {
-                throw AccountAddressError.invalidDomainLabel(raw)
-            }
-        }
-        return lowered
-    }
-
-    static func from(domain: String) throws -> DomainSelector {
-        _ = try canonicalizeLabel(domain)
-        // Canonical payloads are globally scoped and no longer encode domain selectors.
-        return .default
-    }
-
-    func encode(into buffer: inout Data) {
-        switch self {
-        case .default:
-            buffer.append(0x00)
-        case .local12(let digest):
-            buffer.append(0x01)
-            buffer.append(digest)
-        case .global(let id):
-            buffer.append(0x02)
-            var be = id.bigEndian
-            withUnsafeBytes(of: &be) { buffer.append(contentsOf: $0) }
-        }
-    }
-
-    static func decode(bytes: Data, cursor: Int) throws -> (DomainSelector, Int) {
-        guard cursor < bytes.count else { throw AccountAddressError.invalidLength }
-        let tag = bytes[cursor]
-        let cursor = cursor + 1
-        switch tag {
-        case 0x00:
-            return (.default, cursor)
-        case 0x01:
-            let end = cursor + 12
-            guard end <= bytes.count else { throw AccountAddressError.invalidLength }
-            let digest = bytes[cursor..<end]
-            return (.local12(Data(digest)), end)
-        case 0x02:
-            let end = cursor + 4
-            guard end <= bytes.count else { throw AccountAddressError.invalidLength }
-            let raw = bytes[cursor..<end]
-            let value = raw.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
-            return (.global(value), end)
-        default:
-            throw AccountAddressError.unknownDomainTag(tag)
-        }
-    }
 }
 
 private enum ControllerPayload {
@@ -975,7 +865,6 @@ private let irohaPoemKanaHalfwidth: [String] = [
     "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
     "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
 ]
-private let localDomainKey = Data("SORA-LOCAL-K:v1".utf8)
 private let multisigMemberMax = 0xFF
 private let blake2bBlockLength = 128
 private let compressedAlphabet: [String] = base58Alphabet + irohaPoemKanaHalfwidth
@@ -1199,11 +1088,6 @@ private func asciiDigit(from character: Character) -> Character? {
     }
 }
 
-private func computeLocalDigest(label: String) -> Data {
-    let digest = Blake2s.hash(data: Data(label.utf8), key: localDomainKey, outputLength: 32)
-    return Data(digest.prefix(12))
-}
-
 private func convertToBase32(data: Data) -> [Int] {
     var acc = 0
     var bits = 0
@@ -1308,22 +1192,12 @@ extension AccountAddressError {
             if let prefix = uInt16Field("prefix", fields: fields) {
                 return AccountAddressError.invalidI105Prefix(prefix)
             }
-        case "ERR_CANONICAL_HASH_FAILURE":
-            return AccountAddressError.hashFailure
         case "ERR_INVALID_I105_ENCODING":
             return AccountAddressError.invalidI105Encoding
         case "ERR_INVALID_LENGTH":
             return AccountAddressError.invalidLength
         case "ERR_CHECKSUM_MISMATCH":
             return AccountAddressError.checksumMismatch
-        case "ERR_INVALID_HEX_ADDRESS":
-            return AccountAddressError.invalidHexAddress
-        case "ERR_DOMAIN_MISMATCH":
-            return AccountAddressError.domainMismatch
-        case "ERR_INVALID_DOMAIN_LABEL":
-            if let label = fields["label"] as? String {
-                return AccountAddressError.invalidDomainLabel(label)
-            }
         case "ERR_UNEXPECTED_NETWORK_PREFIX":
             if let expected = uInt16Field("expected", fields: fields),
                let found = uInt16Field("found", fields: fields) {
@@ -1332,10 +1206,6 @@ extension AccountAddressError {
         case "ERR_UNKNOWN_ADDRESS_CLASS":
             if let value = uInt8Field("value", fields: fields) {
                 return AccountAddressError.unknownAddressClass(value)
-            }
-        case "ERR_UNKNOWN_DOMAIN_TAG":
-            if let value = uInt8Field("value", fields: fields) {
-                return AccountAddressError.unknownDomainTag(value)
             }
         case "ERR_UNEXPECTED_EXTENSION_FLAG":
             return AccountAddressError.unexpectedExtensionFlag
@@ -1369,8 +1239,6 @@ extension AccountAddressError {
             if let value = fields["char"] as? String, let character = value.first {
                 return AccountAddressError.invalidI105Char(character)
             }
-        case "ERR_LOCAL8_DEPRECATED":
-            return AccountAddressError.unsupportedAddressFormat
         case "ERR_UNSUPPORTED_ADDRESS_FORMAT":
             return AccountAddressError.unsupportedAddressFormat
         case "ERR_MULTISIG_MEMBER_OVERFLOW":
@@ -1460,7 +1328,6 @@ extension AccountAddress {
                     classId: addressClass,
                     normVersion: 1
                 ),
-                domain: .default,
                 controller: controller,
                 rawCanonicalBytes: nil
             )

@@ -293,6 +293,8 @@ fn ensure_canonical_quote_policy(
 ) -> Result<(), String> {
     let policy = &body.policy;
     ensure_non_zero_32("vpn relay id", &policy.relay_id)?;
+    iroha_crypto::PublicKey::from_bytes(Algorithm::MlDsa, &policy.relay_mldsa65_public_key)
+        .map_err(|error| format!("vpn relay ML-DSA-65 identity is invalid: {error}"))?;
     ensure_non_zero_policy_commitment(
         "vpn relay descriptor commitment",
         &policy.descriptor_commit,
@@ -1018,6 +1020,8 @@ mod tests {
             exit_class: iroha_data_model::soranet::vpn::VpnExitClassV1::Standard,
             relay_endpoint: "/dns/relay.example/udp/9443/quic".to_owned(),
             relay_id: voucher.body.relay_id,
+            relay_mldsa65_public_key: [0x12;
+                iroha_data_model::soranet::vpn::VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1],
             descriptor_commit: [0x22; 32],
             tls_server_name: "relay.example".to_owned(),
             relay_tls_spki_sha256: [0xAB; 32],
@@ -1337,6 +1341,15 @@ mod tests {
         let mut missing_trust = record.signed_quote.body.clone();
         missing_trust.policy.directory_snapshot_digest = [0_u8; 32];
         assert!(ensure_canonical_quote_policy(&missing_trust, &record.custody_account_id).is_err());
+        let mut invalid_mldsa_identity = record.signed_quote.body.clone();
+        invalid_mldsa_identity
+            .policy
+            .relay_mldsa65_public_key
+            .fill(0);
+        assert!(
+            ensure_canonical_quote_policy(&invalid_mldsa_identity, &record.custody_account_id)
+                .is_err()
+        );
         let mut oversized_endpoint = record.signed_quote.body.clone();
         oversized_endpoint.policy.relay_endpoint = "x".repeat(VPN_MAX_RELAY_ENDPOINT_BYTES_V1 + 1);
         assert!(

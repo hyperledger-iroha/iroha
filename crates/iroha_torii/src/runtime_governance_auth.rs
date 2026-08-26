@@ -25,21 +25,21 @@ fn require_runtime_governance_canonical_account_literal(
             "{context} authority must use canonical I105 account id form"
         ))
     })?;
-    if parsed.canonical() != requested {
+    if parsed.to_string() != requested {
         return Err(crate::routing::conversion_error(format!(
             "{context} authority must use canonical I105 account id form"
         )));
     }
-    require_runtime_governance_account(parsed.account_id(), authenticated, context)
+    require_runtime_governance_account(&parsed, authenticated, context)
 }
 #[cfg(all(test, feature = "app_api"))]
 mod runtime_governance_auth_tests {
-    use iroha_data_model::ValidationFail;
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
     use super::{
         Error, require_runtime_governance_account,
         require_runtime_governance_canonical_account_literal,
     };
+    use iroha_data_model::ValidationFail;
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
     #[test]
     fn exact_runtime_governance_authority_is_required() {
         require_runtime_governance_account(&ALICE_ID, &ALICE_ID, "citizen draft")

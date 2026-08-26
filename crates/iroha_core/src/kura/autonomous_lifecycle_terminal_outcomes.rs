@@ -52,7 +52,7 @@ impl AutonomousLifecycleBootstrapCompletion {
     }
     /// Borrow the exact Live cursor durably read after bootstrap deletion.
     #[must_use]
-    pub(crate) fn cursor(&self) -> &AutonomousLifecycleCursorV2 {
+    pub(crate) fn cursor(&self) -> &AutonomousLifecycleCursorV1 {
         self.cursor_read
             .cursor()
             .expect("completed bootstrap always returns its exact Live cursor")
@@ -207,7 +207,7 @@ impl Kura {
         let mut related_bytes = 0_u64;
         let mut attempts = BTreeMap::<(u64, u64), LaneExecutablePayloadV1>::new();
         let mut attempts_per_height = BTreeMap::<u64, usize>::new();
-        let mut cursors = BTreeMap::<(u64, u64), AutonomousLifecycleCursorV2>::new();
+        let mut cursors = BTreeMap::<(u64, u64), AutonomousLifecycleCursorV1>::new();
         let mut terminal_outcomes =
             BTreeMap::<(u64, u64), (PathBuf, AutonomousLifecycleTerminalOutcomeV1)>::new();
         let mut bootstrap_stages =
@@ -503,7 +503,7 @@ impl Kura {
         }
         if cursors.iter().any(|(identity, cursor)| {
             cursor.sequence() == 1
-                && cursor.phase_kind() == AutonomousLifecycleCursorPhaseKindV2::Prepared
+                && cursor.phase_kind() == AutonomousLifecycleCursorPhaseKindV1::Prepared
                 && !bootstrap_stages.contains_key(identity)
         }) {
             return Err(Self::invalid_lane_artifact_error(
@@ -536,7 +536,7 @@ impl Kura {
                 outcome
                     .validate_for_payload(&executable_payload)
                     .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
-                if cursor.as_ref().map(AutonomousLifecycleCursorV2::binding)
+                if cursor.as_ref().map(AutonomousLifecycleCursorV1::binding)
                     != Some(outcome.binding())
                 {
                     return Err(Self::invalid_lane_artifact_error(
@@ -1033,7 +1033,7 @@ impl Kura {
         &self,
         entry: &LaneConfigEntry,
         payload: &LaneExecutablePayloadV1,
-    ) -> Result<AutonomousLifecycleCursorV2> {
+    ) -> Result<AutonomousLifecycleCursorV1> {
         let descriptor = &payload.origin_proposal.descriptor;
         let path = Self::autonomous_lifecycle_cursor_path_for_entry(
             entry,
@@ -2577,7 +2577,7 @@ impl Kura {
                 AutonomousLaneBlockDurableRecord,
             )>,
         >,
-        cursors: &BTreeMap<(u64, u64), AutonomousLifecycleCursorV2>,
+        cursors: &BTreeMap<(u64, u64), AutonomousLifecycleCursorV1>,
         outcomes: &BTreeMap<(u64, u64), (PathBuf, AutonomousLifecycleTerminalOutcomeV1)>,
     ) -> Result<()> {
         for (identity, (path, outcome)) in outcomes {
@@ -2598,7 +2598,7 @@ impl Kura {
                 .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
             if cursors
                 .get(identity)
-                .map(AutonomousLifecycleCursorV2::binding)
+                .map(AutonomousLifecycleCursorV1::binding)
                 != Some(outcome.binding())
             {
                 return Err(Self::invalid_lane_artifact_error(

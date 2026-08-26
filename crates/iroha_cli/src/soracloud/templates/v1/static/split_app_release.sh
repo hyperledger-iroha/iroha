@@ -6,13 +6,10 @@ SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 
 : "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
 
-"$SCRIPT_DIR/doctor.sh"
-
 args=(
   soracloud app release
   --manifest "$SCRIPT_DIR/app_manifest.json"
   --torii-url "$TORII_URL"
-  --skip-build
 )
 
 if [[ -n "${API_TOKEN:-}" ]]; then

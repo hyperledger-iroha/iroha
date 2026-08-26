@@ -61,19 +61,6 @@ fn recovery_control_files_reject_cap_plus_one_before_decode() {
     }
     let kura = super::Kura::blank_kura_for_testing();
     let blocks_root = kura.active_blocks_dir.lock().clone();
-    let rollback_path = super::Kura::rollback_intent_path(&blocks_root);
-    let rollback_temp_path = rollback_path.with_extension("norito.tmp");
-    for path in [&rollback_path, &rollback_temp_path] {
-        create_sparse(
-            path,
-            u64::try_from(super::MAX_ROLLBACK_INTENT_V2_BYTES).expect("rollback cap fits u64") + 1,
-        );
-        assert!(
-            super::Kura::load_rollback_intent(&blocks_root).is_err(),
-            "main and temporary rollback intents must reject cap-plus-one metadata before reading"
-        );
-        std::fs::remove_file(path).expect("remove oversized rollback intent");
-    }
     let association_path = kura.canonical_association_stage_path();
     create_sparse(
         &association_path,

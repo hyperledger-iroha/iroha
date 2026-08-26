@@ -31,7 +31,6 @@ std::thread_local! {
     static FAIL_NEXT_NATIVE_AMX_LATEST_INDEX_RECOVERY_TEMP_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_BOUND_PROGRESS_INTENT_DIRECTORY_SYNC: std::cell::Cell<Option<ProgressIntentDirectorySyncFault>> = const { std::cell::Cell::new(None) };
     static FAIL_PROGRESS_SIDECAR_ANCESTOR_SYNC_AT: std::cell::Cell<Option<ProgressAncestorSyncFault>> = const { std::cell::Cell::new(None) };
-    static FAIL_ROLLBACK_AT: std::cell::Cell<Option<RollbackFaultPoint>> = const { std::cell::Cell::new(None) };
     static FAIL_NEXT_CERTIFIED_LANE_BLOCK_ARTIFACT_VALIDATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_AFTER_NEXT_CERTIFIED_FRONTIER_BUILD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_AFTER_NEXT_AUTONOMOUS_CERTIFIED_FRONTIER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };

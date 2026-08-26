@@ -14,17 +14,15 @@ use crate::{
         },
         soracloud::{
             AcknowledgeSoracloudAgentMessage, AdvanceSoracloudRollout, AdvertiseSoracloudInrouHost,
-            AdvertiseSoracloudModelHost, AllowSoracloudAgentAutonomyArtifact,
-            ApplySoracloudOrderedMailboxResult, ApproveSoracloudAgentWalletSpend,
-            CheckpointSoracloudTrainingJob, ClearSoracloudInrouReplicaRuntimeState,
-            DeleteSoracloudServiceConfig, DeleteSoracloudServiceSecret,
-            DeploySoracloudAgentApartment, DeploySoracloudService, EnqueueSoracloudAgentMessage,
-            FinalizeSoracloudUploadedModelBundle, HeartbeatSoracloudModelHost,
+            AllowSoracloudAgentAutonomyArtifact, ApplySoracloudOrderedMailboxResult,
+            ApproveSoracloudAgentWalletSpend, CheckpointSoracloudTrainingJob,
+            ClearSoracloudInrouReplicaRuntimeState, DeleteSoracloudServiceConfig,
+            DeleteSoracloudServiceSecret, DeploySoracloudAgentApartment, DeploySoracloudService,
+            EnqueueSoracloudAgentMessage, FinalizeSoracloudUploadedModelBundle,
             JoinSoracloudHfSharedLease, LeaveSoracloudHfSharedLease, MutateSoracloudState,
-            PrepareSoracloudPrivateUploadedModelExecution, PromoteSoracloudModelWeight,
-            ReconcileSoracloudInrouPlacements, RecordSoracloudAgentAutonomyExecution,
-            RecordSoracloudDecryptionRequest, RecordSoracloudMailboxMessage,
-            RecordSoracloudPrivateUploadedModelExecutionReceipt, RecordSoracloudRuntimeReceipt,
+            PromoteSoracloudModelWeight, ReconcileSoracloudInrouPlacements,
+            RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
+            RecordSoracloudMailboxMessage, RecordSoracloudRuntimeReceipt,
             RegisterSoracloudFhePolicy, RegisterSoracloudModelArtifact,
             RegisterSoracloudModelWeight, RegisterSoracloudUploadedModelBundle,
             RenewSoracloudAgentLease, RenewSoracloudHfSharedLease,
@@ -34,7 +32,7 @@ use crate::{
             RotateSoracloudFhePolicy, RunSoracloudAgentAutonomy, RunSoracloudFheJob,
             SetSoracloudInrouReplicaRuntimeState, SetSoracloudRuntimeState,
             SetSoracloudServiceConfig, SetSoracloudServiceSecret, StartSoracloudTrainingJob,
-            UpgradeSoracloudService, WithdrawSoracloudInrouHost, WithdrawSoracloudModelHost,
+            UpgradeSoracloudService, WithdrawSoracloudInrouHost,
         },
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RebindPublicLaneValidatorPeer,
@@ -429,12 +427,6 @@ fn visit_soracloud_service_instruction<V: Visit + ?Sized>(
         visitor.visit_leave_soracloud_hf_shared_lease(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RenewSoracloudHfSharedLease>() {
         visitor.visit_renew_soracloud_hf_shared_lease(v);
-    } else if let Some(v) = isi.as_any().downcast_ref::<AdvertiseSoracloudModelHost>() {
-        visitor.visit_advertise_soracloud_model_host(v);
-    } else if let Some(v) = isi.as_any().downcast_ref::<HeartbeatSoracloudModelHost>() {
-        visitor.visit_heartbeat_soracloud_model_host(v);
-    } else if let Some(v) = isi.as_any().downcast_ref::<WithdrawSoracloudModelHost>() {
-        visitor.visit_withdraw_soracloud_model_host(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<AdvertiseSoracloudInrouHost>() {
         visitor.visit_advertise_soracloud_inrou_host(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<WithdrawSoracloudInrouHost>() {
@@ -560,16 +552,6 @@ fn visit_soracloud_training_instruction<V: Visit + ?Sized>(
         .downcast_ref::<ApplySoracloudOrderedMailboxResult>()
     {
         visitor.visit_apply_soracloud_ordered_mailbox_result(v);
-    } else if let Some(v) = isi
-        .as_any()
-        .downcast_ref::<PrepareSoracloudPrivateUploadedModelExecution>()
-    {
-        visitor.visit_prepare_soracloud_private_uploaded_model_execution(v);
-    } else if let Some(v) = isi
-        .as_any()
-        .downcast_ref::<RecordSoracloudPrivateUploadedModelExecutionReceipt>()
-    {
-        visitor.visit_record_soracloud_private_uploaded_model_execution_receipt(v);
     } else {
         return false;
     }
@@ -849,9 +831,6 @@ macro_rules! instruction_visitors {
             visit_join_soracloud_hf_shared_lease(&JoinSoracloudHfSharedLease),
             visit_leave_soracloud_hf_shared_lease(&LeaveSoracloudHfSharedLease),
             visit_renew_soracloud_hf_shared_lease(&RenewSoracloudHfSharedLease),
-            visit_advertise_soracloud_model_host(&AdvertiseSoracloudModelHost),
-            visit_heartbeat_soracloud_model_host(&HeartbeatSoracloudModelHost),
-            visit_withdraw_soracloud_model_host(&WithdrawSoracloudModelHost),
             visit_advertise_soracloud_inrou_host(&AdvertiseSoracloudInrouHost),
             visit_withdraw_soracloud_inrou_host(&WithdrawSoracloudInrouHost),
             visit_reconcile_soracloud_inrou_placements(&ReconcileSoracloudInrouPlacements),
@@ -883,12 +862,6 @@ macro_rules! instruction_visitors {
             visit_record_soracloud_mailbox_message(&RecordSoracloudMailboxMessage),
             visit_record_soracloud_runtime_receipt(&RecordSoracloudRuntimeReceipt),
             visit_apply_soracloud_ordered_mailbox_result(&ApplySoracloudOrderedMailboxResult),
-            visit_prepare_soracloud_private_uploaded_model_execution(
-                &PrepareSoracloudPrivateUploadedModelExecution
-            ),
-            visit_record_soracloud_private_uploaded_model_execution_receipt(
-                &RecordSoracloudPrivateUploadedModelExecutionReceipt
-            ),
         }
     };
 }

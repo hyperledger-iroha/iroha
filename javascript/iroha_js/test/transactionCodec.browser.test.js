@@ -1253,11 +1253,20 @@ test("browser finalizer fails closed on contradictory signer and payload state",
   expectCodecError(
     () =>
       finalizeBrowserSignedTransaction(
-        { ...signable, payloadHashHex: "00".repeat(32) },
+        { ...signable, payloadHashHex: "b".repeat(64) },
         signature,
         PUBLIC_KEY,
       ),
     "payload_hash_mismatch",
+  );
+  expectCodecError(
+    () =>
+      finalizeBrowserSignedTransaction(
+        { ...signable, payloadHashHex: "a".repeat(64) },
+        signature,
+        PUBLIC_KEY,
+      ),
+    "invalid_hash",
   );
   expectCodecError(
     () =>

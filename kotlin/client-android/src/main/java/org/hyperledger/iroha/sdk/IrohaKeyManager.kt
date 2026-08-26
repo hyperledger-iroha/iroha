@@ -71,6 +71,8 @@ class IrohaKeyManager private constructor(
             val existing = provider.load(alias)
             if (existing != null) {
                 ensureExpectedKeyPair(alias, preference, existing, provider.metadata(), "load")
+                val outcome = outcomeFor(provider, alias, existing)
+                enforcePreference(preference, provider.metadata(), outcome)
                 return existing
             }
         }
@@ -410,13 +412,6 @@ class IrohaKeyManager private constructor(
             return IrohaKeyManager(providers, telemetry, signingAlgorithm)
         }
 
-        private fun routeFromMetadata(metadata: KeyProviderMetadata?): KeyGenerationOutcome.Route {
-            if (metadata == null) return KeyGenerationOutcome.Route.SOFTWARE
-            if (metadata.strongBoxBacked) return KeyGenerationOutcome.Route.STRONGBOX
-            if (metadata.hardwareBacked) return KeyGenerationOutcome.Route.HARDWARE
-            return KeyGenerationOutcome.Route.SOFTWARE
-        }
-
         private fun generateWithOutcome(
             provider: KeyProvider,
             alias: String,
@@ -425,7 +420,16 @@ class IrohaKeyManager private constructor(
             if (provider is KeystoreKeyProvider) {
                 return provider.generateWithOutcome(alias, preference)
             }
-            return KeyGenerationOutcome(provider.generate(alias), routeFromMetadata(provider.metadata()))
+            val keyPair = provider.generate(alias)
+            return provider.outcomeFor(alias, keyPair)
+        }
+
+        private fun outcomeFor(
+            provider: KeyProvider,
+            alias: String,
+            keyPair: KeyPair,
+        ): KeyGenerationOutcome {
+            return provider.outcomeFor(alias, keyPair)
         }
 
         private fun validateKeyPair(

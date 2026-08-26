@@ -36,7 +36,7 @@ test("normalizeAccountId rejects '@domain' literals (no UTS-46 canonicalization 
   );
 });
 
-test("normalizeAccountId accepts default-domain literal without suffix", () => {
+test("normalizeAccountId accepts a canonical domainless literal", () => {
   const address = AccountAddress.fromAccount({
     publicKey: SAMPLE_KEY,
   });
@@ -70,7 +70,7 @@ test("normalizeAccountId rejects canonical hex account literals", () => {
   );
 });
 
-test("normalizeAccountId accepts i105 default-domain literal without suffix", () => {
+test("normalizeAccountId accepts a canonical I105 literal", () => {
   const address = AccountAddress.fromAccount({
     publicKey: SAMPLE_KEY,
   });
@@ -107,7 +107,7 @@ test("normalizeAccountId preserves canonical i105 literals", () => {
   assert.equal(normalized, literalWithoutDomain);
 });
 
-test("normalizeAccountId preserves non-default i105 discriminants", () => {
+test("normalizeAccountId preserves explicit I105 chain discriminants", () => {
   const address = AccountAddress.fromAccount({
     publicKey: SAMPLE_KEY,
   });
@@ -116,7 +116,7 @@ test("normalizeAccountId preserves non-default i105 discriminants", () => {
   assert.equal(normalized, literalWithoutDomain);
 });
 
-test("normalizeAccountId rejects invalid domain labels", () => {
+test("normalizeAccountId rejects alias-shaped literals", () => {
   assert.throws(
     () => normalizeAccountId("alice@bad domain", "accountId"),
     (error) =>

@@ -140,7 +140,7 @@ public final class SumeragiDiagnosticsModels {
     public BigInteger quarantineExecutedTotal() { return quarantineExecutedTotal; }
   }
 
-  /** Permissionless-election diagnostics present only while NPoS mode is active. */
+  /** Current permissionless-election schedule and PRF context while NPoS mode is active. */
   public static final class NposDiagnostics {
     private final BigInteger epochLengthBlocks;
     private final BigInteger vrfCommitDeadlineOffset;
@@ -148,10 +148,6 @@ public final class SumeragiDiagnosticsModels {
     private final List<Integer> epochSeed;
     private final BigInteger prfHeight;
     private final BigInteger prfView;
-    private final BigInteger vrfPenaltyEpoch;
-    private final BigInteger vrfCommittedNoRevealTotal;
-    private final BigInteger vrfNoParticipationTotal;
-    private final BigInteger vrfLateRevealsTotal;
 
     public NposDiagnostics(
         final BigInteger epochLengthBlocks,
@@ -159,11 +155,7 @@ public final class SumeragiDiagnosticsModels {
         final BigInteger vrfRevealDeadlineOffset,
         final List<Integer> epochSeed,
         final BigInteger prfHeight,
-        final BigInteger prfView,
-        final BigInteger vrfPenaltyEpoch,
-        final BigInteger vrfCommittedNoRevealTotal,
-        final BigInteger vrfNoParticipationTotal,
-        final BigInteger vrfLateRevealsTotal) {
+        final BigInteger prfView) {
       requireUnsigned64(epochLengthBlocks, "epochLengthBlocks");
       requireUnsigned64(vrfCommitDeadlineOffset, "vrfCommitDeadlineOffset");
       requireUnsigned64(vrfRevealDeadlineOffset, "vrfRevealDeadlineOffset");
@@ -181,16 +173,8 @@ public final class SumeragiDiagnosticsModels {
         seedNonzero |= item != 0;
       }
       require(seedNonzero, "epochSeed must not be all zero");
-      for (final BigInteger counter :
-          new BigInteger[] {
-            prfHeight,
-            prfView,
-            vrfPenaltyEpoch,
-            vrfCommittedNoRevealTotal,
-            vrfNoParticipationTotal,
-            vrfLateRevealsTotal
-          }) {
-        requireUnsigned64(counter, "NPoS diagnostics counter");
+      for (final BigInteger value : new BigInteger[] {prfHeight, prfView}) {
+        requireUnsigned64(value, "NPoS diagnostics PRF context");
       }
       this.epochLengthBlocks = epochLengthBlocks;
       this.vrfCommitDeadlineOffset = vrfCommitDeadlineOffset;
@@ -198,10 +182,6 @@ public final class SumeragiDiagnosticsModels {
       this.epochSeed = Collections.unmodifiableList(new ArrayList<>(epochSeed));
       this.prfHeight = prfHeight;
       this.prfView = prfView;
-      this.vrfPenaltyEpoch = vrfPenaltyEpoch;
-      this.vrfCommittedNoRevealTotal = vrfCommittedNoRevealTotal;
-      this.vrfNoParticipationTotal = vrfNoParticipationTotal;
-      this.vrfLateRevealsTotal = vrfLateRevealsTotal;
     }
 
     public BigInteger epochLengthBlocks() { return epochLengthBlocks; }
@@ -210,10 +190,6 @@ public final class SumeragiDiagnosticsModels {
     public List<Integer> epochSeed() { return epochSeed; }
     public BigInteger prfHeight() { return prfHeight; }
     public BigInteger prfView() { return prfView; }
-    public BigInteger vrfPenaltyEpoch() { return vrfPenaltyEpoch; }
-    public BigInteger vrfCommittedNoRevealTotal() { return vrfCommittedNoRevealTotal; }
-    public BigInteger vrfNoParticipationTotal() { return vrfNoParticipationTotal; }
-    public BigInteger vrfLateRevealsTotal() { return vrfLateRevealsTotal; }
   }
 
   /** Evidence-derived Native AMX participant application state. */
@@ -951,11 +927,7 @@ public final class SumeragiDiagnosticsModels {
                 "vrf_reveal_deadline_offset",
                 "epoch_seed",
                 "prf_height",
-                "prf_view",
-                "vrf_penalty_epoch",
-                "vrf_committed_no_reveal_total",
-                "vrf_no_participation_total",
-                "vrf_late_reveals_total"),
+                "prf_view"),
             context);
     final List<?> rawSeed = SumeragiJsonSupport.array(record.get("epoch_seed"), context + ".epoch_seed", 32);
     require(rawSeed.size() == 32, context + ".epoch_seed must contain exactly 32 bytes");
@@ -973,11 +945,7 @@ public final class SumeragiDiagnosticsModels {
         diagnosticU64(record, "vrf_reveal_deadline_offset", context),
         seed,
         diagnosticU64(record, "prf_height", context),
-        diagnosticU64(record, "prf_view", context),
-        diagnosticU64(record, "vrf_penalty_epoch", context),
-        diagnosticU64(record, "vrf_committed_no_reveal_total", context),
-        diagnosticU64(record, "vrf_no_participation_total", context),
-        diagnosticU64(record, "vrf_late_reveals_total", context));
+        diagnosticU64(record, "prf_view", context));
   }
 
   private static List<?> opaqueRows(final Object value, final String context) {

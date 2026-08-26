@@ -1,5 +1,6 @@
 //! WSV host account administration syscall tests.
 use iroha_crypto::{Hash, PublicKey};
+use iroha_primitives::json::Json;
 use ivm::{
     IVM, Memory, PointerType,
     mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
@@ -158,12 +159,11 @@ fn set_account_detail_with_permissions() {
         host.wsv
             .grant_permission(&alice, PermissionToken::SetAccountDetail(bob.clone()));
     }
-    // Set account detail with JSON value (whitespace should be stripped)
+    // Alternate lexical spellings fail before a Json pointer can enter the ABI.
+    assert!(Json::from_str_norito(r#"{ "msg" : "hello" }"#).is_err());
+    // Set account detail with the exact canonical JSON spelling.
     let key = make_tlv(PointerType::Name, b"greeting");
-    let detail = make_tlv(
-        PointerType::Json,
-        br#"{ "msg" : "hello" }"#, // intentionally non-minified
-    );
+    let detail = make_tlv(PointerType::Json, br#"{"msg":"hello"}"#);
     let acct = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acct).expect("preload input");
     vm.memory

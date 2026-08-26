@@ -80,15 +80,15 @@ final class ParliamentTimedOvnKeychainSeedTests: XCTestCase {
         }
         wait(for: [entered], timeout: 1)
 
-        let deleteDone = expectation(description: "delete finished after borrow")
+        let deleteDone = DispatchSemaphore(value: 0)
         DispatchQueue.global().async {
-            defer { deleteDone.fulfill() }
+            defer { deleteDone.signal() }
             try? store.delete(handle)
         }
-        let earlyDelete = XCTWaiter.wait(for: [deleteDone], timeout: 0.05)
-        XCTAssertEqual(earlyDelete, .timedOut)
+        XCTAssertEqual(deleteDone.wait(timeout: .now() + 0.05), .timedOut)
         release.signal()
-        wait(for: [operationDone, deleteDone], timeout: 1)
+        XCTAssertEqual(deleteDone.wait(timeout: .now() + 1), .success)
+        wait(for: [operationDone], timeout: 1)
         XCTAssertThrowsError(try handle.withUnsafeSeedBytes { Data($0) }) { error in
             XCTAssertEqual(error as? ParliamentTimedOvnKeychainSeedError, .staleHandle)
         }

@@ -4,6 +4,7 @@ import { createValidationError, ValidationErrorCode } from "./validationError.js
 
 const VPN_HELPER_TICKET_BYTES = 788;
 const VPN_HELPER_TICKET_HEX_LENGTH = VPN_HELPER_TICKET_BYTES * 2;
+const VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX_LENGTH = 1_952 * 2;
 const VPN_EXIT_CLASSES = new Set(["standard", "low-latency", "high-security"]);
 const VPN_SESSION_STATUSES = new Set(["active"]);
 const VPN_RECEIPT_STATUSES = new Set([
@@ -60,6 +61,7 @@ const VPN_PROFILE_RESPONSE_FIELDS = new Set([
   "flow_label_bits",
   "padding_budget_ms",
   "relay_id_hex",
+  "relay_mldsa65_public_key_hex",
   "descriptor_commit_hex",
   "tls_server_name",
   "relay_tls_spki_sha256_hex",
@@ -89,6 +91,7 @@ const VPN_QUOTE_RESPONSE_FIELDS = new Set([
   "flow_label_bits",
   "padding_budget_ms",
   "relay_id_hex",
+  "relay_mldsa65_public_key_hex",
   "descriptor_commit_hex",
   "tls_server_name",
   "relay_tls_spki_sha256_hex",
@@ -116,6 +119,7 @@ const VPN_SESSION_RESPONSE_FIELDS = new Set([
   "flow_label_bits",
   "padding_budget_ms",
   "relay_id_hex",
+  "relay_mldsa65_public_key_hex",
   "descriptor_commit_hex",
   "tls_server_name",
   "relay_tls_spki_sha256_hex",
@@ -166,6 +170,11 @@ export function createVpnSchema({
       relayIdHex: requireVpnRelayId(record.relay_id_hex, `${context}.relay_id_hex`, {
         allowEmpty,
       }),
+      relayMldsa65PublicKeyHex: requireVpnMldsa65PublicKey(
+        record.relay_mldsa65_public_key_hex,
+        `${context}.relay_mldsa65_public_key_hex`,
+        { allowEmpty },
+      ),
       descriptorCommitHex: requireVpnTrustDigest(
         record.descriptor_commit_hex,
         `${context}.descriptor_commit_hex`,
@@ -208,6 +217,29 @@ export function createVpnSchema({
       );
     }
     return literal;
+  }
+
+  function requireVpnMldsa65PublicKey(value, context, { allowEmpty = false } = {}) {
+    if (allowEmpty && value === "") return "";
+    if (
+      typeof value !== "string" ||
+      value.length !== VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX_LENGTH ||
+      /[^0-9a-f]/u.test(value)
+    ) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_HEX,
+        `${context} must be exactly ${VPN_RELAY_MLDSA65_PUBLIC_KEY_HEX_LENGTH} lowercase hexadecimal characters`,
+        context,
+      );
+    }
+    if (/^0+$/u.test(value)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_HEX,
+        `${context} must not be the all-zero ML-DSA-65 key`,
+        context,
+      );
+    }
+    return value;
   }
 
   function requireVpnTrustDigest(value, context, { allowEmpty = false } = {}) {

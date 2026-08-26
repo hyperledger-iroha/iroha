@@ -171,7 +171,10 @@
         "height",
         "epoch",
         "epoch_end_height",
+        "next_epoch_snapshot",
         "mode",
+        "parent_commit_qc",
+        "snapshot_bootstrap",
         "roster",
         "quorum",
         "nexus_amx_context_hash",
@@ -181,7 +184,7 @@
       ]
     },
     {
-      "id": "height.context.optional",
+      "id": "height.context.nullable",
       "values": ["next_epoch_snapshot", "parent_commit_qc", "snapshot_bootstrap"]
     },
     {
@@ -194,10 +197,10 @@
     },
     {
       "id": "block.subject.required",
-      "values": ["block_hash", "payload_hash"]
+      "values": ["parent_block_hash", "block_hash", "payload_hash"]
     },
     {
-      "id": "block.subject.optional",
+      "id": "block.subject.nullable",
       "values": ["parent_block_hash"]
     },
     {
@@ -210,18 +213,20 @@
         "parent_state_root",
         "post_state_root",
         "ordinary_writes_root",
+        "topup_anchor_root",
         "topup_anchor_count",
         "native_amx_application_manifest_version",
         "native_amx_application_manifest_root",
         "native_amx_application_manifest_count",
+        "lane_finality_manifest",
         "merge_carrier",
         "executed_block_wire_len",
         "executed_block_wire_hash"
       ]
     },
     {
-      "id": "execution.optional",
-      "values": ["topup_anchor_root"]
+      "id": "execution.nullable",
+      "values": ["topup_anchor_root", "lane_finality_manifest", "merge_carrier"]
     },
     {
       "id": "qc.required",
@@ -274,15 +279,28 @@
         "da_proof_policies_hash",
         "da_commitments_hash",
         "da_pin_intents_hash",
+        "npos_effects_hash",
         "sccp_commitment_root",
         "creation_time_ms",
         "view_change_index",
-        "confidential_features"
+        "confidential_features",
+        "execution_context_hash"
       ]
     },
     {
-      "id": "block.header.optional",
-      "values": ["npos_effects_hash", "execution_context_hash"]
+      "id": "block.header.nullable",
+      "values": [
+        "prev_block_hash",
+        "merkle_root",
+        "result_merkle_root",
+        "da_proof_policies_hash",
+        "da_commitments_hash",
+        "da_pin_intents_hash",
+        "npos_effects_hash",
+        "sccp_commitment_root",
+        "confidential_features",
+        "execution_context_hash"
+      ]
     },
     {
       "id": "ledger.state_finality.required",
@@ -332,6 +350,7 @@
         "SumeragiV2ValidatorPower",
         "SumeragiV2DualQuorum",
         "SumeragiV2BlockSubject",
+        "SumeragiV2LaneFinalityManifestCommitment",
         "SumeragiV2MergeCarrierCommitment",
         "SumeragiV2ExecutionCommitment",
         "SumeragiV2QuorumCertificate",
@@ -369,10 +388,12 @@
         "da_proof_policies_hash",
         "da_commitments_hash",
         "da_pin_intents_hash",
+        "npos_effects_hash",
         "sccp_commitment_root",
         "creation_time_ms",
         "view_change_index",
-        "confidential_features"
+        "confidential_features",
+        "execution_context_hash"
       ]
     },
     {
@@ -396,10 +417,12 @@
         "native_amx_application_manifest_count",
         "native_amx_application_manifest_root",
         "native_amx_application_manifest_version",
+        "lane_finality_manifest",
         "merge_carrier",
         "ordinary_writes_root",
         "parent_state_root",
         "post_state_root",
+        "topup_anchor_root",
         "topup_anchor_count"
       ]
     },
@@ -522,17 +545,6 @@
         "X-Iroha-Timestamp-Ms",
         "X-Iroha-Nonce",
         "X-Iroha-Witness"
-      ]
-    },
-    {
-      "id": "private.receipt.metadata",
-      "values": [
-        "total",
-        "returned_items",
-        "remaining_items",
-        "has_more",
-        "count_mode",
-        "continue_cursor"
       ]
     },
     {

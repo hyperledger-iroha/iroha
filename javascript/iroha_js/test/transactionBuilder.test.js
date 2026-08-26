@@ -34,6 +34,7 @@ import {
   buildCreateKaigiTransaction,
   buildJoinKaigiTransaction,
   buildRegisterKaigiRelayTransaction,
+  buildReportKaigiRelayHealthTransaction,
   buildRegisterSmartContractCodeTransaction,
   buildRegisterSmartContractBytesTransaction,
   buildRemoveSmartContractBytesTransaction,
@@ -110,6 +111,9 @@ const RELAY_PUBLIC_KEY_HEX =
 const RELAY_ACCOUNT_ID = i105FromEd25519PublicKeyHex(RELAY_PUBLIC_KEY_HEX);
 const RELAY_ACCOUNT_ID_INPUT =
   i105FromEd25519PublicKeyHex(RELAY_PUBLIC_KEY_HEX);
+const THIRD_RELAY_ACCOUNT_ID_INPUT = i105FromEd25519PublicKeyHex(
+  "D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737",
+);
 const ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const LILY_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 const CANONICAL_ASSET_ID_INPUT = `${ASSET_DEFINITION_ID}#${AUTHORITY_ID}`;
@@ -1382,10 +1386,19 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
       [{ waitForCommit: "true" }, /waitForCommit must be a boolean/],
       [{ transactionIntervalMs: -1 }, /intervalMs.*non-negative/i],
       [{ transactionTimeoutMs: -1 }, /timeoutMs.*non-negative/i],
-      [
-        { transactionStatusScope: "global" },
-        /transactionStatusScope is unsupported/u,
-      ],
+      ...[
+        "allowShortHash",
+        "endpoints",
+        "failureStatuses",
+        "scope",
+        "statusEndpoints",
+        "successStatuses",
+        "terminalStatuses",
+        "transactionStatusScope",
+      ].map((field) => [
+        { [field]: null },
+        new RegExp(`${field} is unsupported`, "u"),
+      ]),
     ]) {
       const calls = await rejectsBeforeSigning({ options, expected });
       assert.equal(calls.simulate, 0);
@@ -2802,6 +2815,16 @@ test("buildCreateKaigiTransaction composes Kaigi create instruction", () => {
                 hpkePublicKey: Buffer.alloc(32, 0x01),
                 weight: 2,
               },
+              {
+                relayId: AUTHORITY_ID_INPUT,
+                hpkePublicKey: Buffer.alloc(32, 0x02),
+                weight: 3,
+              },
+              {
+                relayId: THIRD_RELAY_ACCOUNT_ID_INPUT,
+                hpkePublicKey: Buffer.alloc(32, 0x03),
+                weight: 4,
+              },
             ],
           },
         },
@@ -2817,6 +2840,7 @@ test("buildCreateKaigiTransaction composes Kaigi create instruction", () => {
     call_name: "weekly-sync",
   });
   assert.equal(created.Kaigi.CreateKaigi.call.gas_rate_per_minute, 120);
+  assert.equal(created.Kaigi.CreateKaigi.call.relay_manifest.hops.length, 3);
   assert.deepEqual(created.Kaigi.CreateKaigi.call.relay_manifest.hops[0], {
     relay_id: RELAY_ACCOUNT_ID,
     hpke_public_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
@@ -2852,8 +2876,8 @@ test("buildCreateKaigiTransaction preserves privacy artifacts", () => {
           id: "wonderland.sora:private-room",
           host: AUTHORITY_ID_INPUT,
           privacyMode: "ZkRosterV1",
-          commitment: { commitment, aliasTag: "host" },
-          nullifier: { digest: nullifier, issuedAtMs: 12 },
+          commitment: { commitment },
+          nullifier: { digest: nullifier, issuedAtMs: 0 },
           proof,
         },
         privateKey: PRIVATE_KEY,
@@ -2893,8 +2917,8 @@ test("buildJoinKaigiTransaction normalizes binary fields", () => {
         join: {
           callId: "wonderland.sora:weekly-sync",
           participant: AUTHORITY_ID_INPUT,
-          commitment: { commitment, aliasTag: "alice" },
-          nullifier: { digest: nullifier, issuedAtMs: 42 },
+          commitment: { commitment },
+          nullifier: { digest: nullifier, issuedAtMs: 0 },
           proof,
         },
         privateKey: PRIVATE_KEY,
@@ -2909,7 +2933,7 @@ test("buildJoinKaigiTransaction normalizes binary fields", () => {
     normalizedHashHex(commitment),
   );
   assert.equal(joinInstruction.nullifier.digest, normalizedHashHex(nullifier));
-  assert.equal(joinInstruction.nullifier.issued_at_ms, 42);
+  assert.equal(joinInstruction.nullifier.issued_at_ms, 0);
   assert.equal(joinInstruction.proof, proof.toString("base64"));
 });
 
@@ -2953,6 +2977,51 @@ test("buildRegisterKaigiRelayTransaction encodes hpke key", () => {
     "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo=",
   );
   assert.equal(relayInstruction.relay.bandwidth_class, 6);
+});
+
+test("buildReportKaigiRelayHealthTransaction composes relay feedback", () => {
+  const captures = [];
+  const fakeResult = {
+    signed_transaction: Buffer.from([0x42]),
+    hash: Buffer.alloc(32, 0x77),
+  };
+  withNativeBinding(
+    {
+      buildTransaction: (_chain, authority, instructions) => {
+        captures.push({
+          authority,
+          instructions: instructions.map((payload) => JSON.parse(payload)),
+        });
+        return fakeResult;
+      },
+    },
+    () =>
+      buildReportKaigiRelayHealthTransaction({
+        networkId: NETWORK_ID,
+        authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        report: {
+          callId: "wonderland.sora:weekly-sync",
+          relayId: RELAY_ACCOUNT_ID_INPUT,
+          status: "Unavailable",
+          reportedAtMs: 1701123456789,
+          notes: "relay timeout",
+        },
+        privateKey: PRIVATE_KEY,
+      }),
+  );
+  assert.equal(captures.length, 1);
+  const report = captures[0].instructions[0].Kaigi.ReportKaigiRelayHealth;
+  assert.deepEqual(report, {
+    call_id: {
+      domain_id: "wonderland.sora",
+      call_name: "weekly-sync",
+    },
+    relay_id: RELAY_ACCOUNT_ID,
+    status: { status: "Unavailable", state: null },
+    reported_at_ms: 1701123456789,
+    notes: "relay timeout",
+  });
 });
 
 baseTest("buildProposeDeployContractTransaction wraps proposal", () => {

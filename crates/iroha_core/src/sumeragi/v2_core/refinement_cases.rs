@@ -406,9 +406,9 @@ fn in_flight_first_release_reserved_state_with_selected_count(
     let before = state;
     state.queue.plan_state = IN_FLIGHT_FIRST_RELEASE_QUEUE_PLAN_SELECTED;
     state.queue.selected_count = selected_count;
-    state.history.ever_queue_plan_v4 = true;
+    state.history.ever_queue_plan_v1 = true;
     state = checked_in_flight_first_release_step(
-        IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V4,
+        IN_FLIGHT_FIRST_RELEASE_ACTION_SELECT_QUEUE_PLAN_V1,
         0,
         0,
         before,
@@ -416,9 +416,9 @@ fn in_flight_first_release_reserved_state_with_selected_count(
     );
     let before = state;
     state.queue.reservation_state = IN_FLIGHT_FIRST_RELEASE_RESERVATION_LIVE;
-    state.history.ever_reservation_v5 = true;
+    state.history.ever_reservation_v1 = true;
     checked_in_flight_first_release_step(
-        IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V5,
+        IN_FLIGHT_FIRST_RELEASE_ACTION_FSYNC_RESERVATION_V1,
         0,
         0,
         before,

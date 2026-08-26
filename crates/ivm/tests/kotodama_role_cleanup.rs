@@ -32,7 +32,6 @@ fn literal_account() -> ivm::mock_wsv::AccountId {
         "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
     )
     .expect("parse test account literal")
-    .into_account_id()
 }
 #[test]
 fn kotodama_revoke_role_denies_mint() {

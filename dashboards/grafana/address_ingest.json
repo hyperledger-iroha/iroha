@@ -9,11 +9,11 @@
   "templating": {
     "list": [
       {
-        "name": "context",
-        "label": "Context",
+        "name": "endpoint",
+        "label": "Endpoint",
         "type": "query",
         "datasource": "Prometheus",
-        "query": "label_values(torii_address_invalid_total, context)",
+        "query": "label_values(torii_address_invalid_total, endpoint)",
         "refresh": 1,
         "includeAll": true,
         "current": {
@@ -31,8 +31,8 @@
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "sum by (context) (rate(torii_address_invalid_total{context=~\"$context\"}[5m]))",
-          "legendFormat": "{{context}}",
+          "expr": "sum by (endpoint) (rate(torii_address_invalid_total{endpoint=~\"$endpoint\"}[5m]))",
+          "legendFormat": "{{endpoint}}",
           "refId": "A"
         }
       ],
@@ -57,8 +57,8 @@
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "sum by (context) (rate(torii_address_invalid_total{context=~\"$context\"}[5m]))",
-          "legendFormat": "{{context}}",
+          "expr": "sum by (endpoint) (rate(torii_address_invalid_total{endpoint=~\"$endpoint\"}[5m]))",
+          "legendFormat": "{{endpoint}}",
           "refId": "A"
         }
       ],
@@ -75,88 +75,6 @@
           "placement": "right"
         }
       }
-    },
-    {
-      "type": "timeseries",
-      "title": "Local-12 Collision Rate (5m)",
-      "id": 5,
-      "datasource": "Prometheus",
-      "targets": [
-        {
-          "expr": "sum by (context) (rate(torii_address_collision_total{kind=\"local12_digest\",context=~\"$context\"}[5m]))",
-          "legendFormat": "{{context}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "req/s",
-          "min": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right"
-        }
-      },
-      "description": "Collision counters increment when multiple Local-12 labels resolve to the same digest. Production should remain flat; any spike requires manifest review."
-    },
-    {
-      "type": "table",
-      "title": "Collision Domains (1h)",
-      "id": 6,
-      "datasource": "Prometheus",
-      "targets": [
-        {
-          "expr": "topk(10, sum by (context, domain) (increase(torii_address_collision_domain_total{context=~\"$context\"}[1h])))",
-          "refId": "A",
-          "legendFormat": "{{context}} – {{domain}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "left"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "showHeader": true,
-        "footer": {
-          "show": false
-        }
-      },
-      "description": "Breaks collision increments down by reported domain label so operators can spot staging/test environments before they hit production."
-    },
-    {
-      "type": "timeseries",
-      "title": "Domain Kind Mix (5m)",
-      "id": 7,
-      "datasource": "Prometheus",
-      "targets": [
-        {
-          "expr": "sum by (domain_kind) (rate(torii_address_domain_total{context=~\"$context\"}[5m]))",
-          "legendFormat": "{{domain_kind}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "req/s",
-          "min": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right"
-        }
-      },
-      "description": "Accepted address literals grouped by domain_kind so operators can prove Local-12 traffic has dropped to zero before retiring the archived selectors."
     },
     {
       "type": "stat",
@@ -202,9 +120,9 @@
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "topk(10, sum by (context, reason) (increase(torii_address_invalid_total{context=~\"$context\"}[1h])))",
+          "expr": "topk(10, sum by (endpoint, reason) (increase(torii_address_invalid_total{endpoint=~\"$endpoint\"}[1h])))",
           "refId": "A",
-          "legendFormat": "{{context}} – {{reason}}"
+          "legendFormat": "{{endpoint}} – {{reason}}"
         }
       ],
       "options": {

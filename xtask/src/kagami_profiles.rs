@@ -120,7 +120,6 @@ fn account_literal_string_for_chain_discriminant(raw: &str, chain_discriminant: 
         iroha_config::parameters::defaults::common::chain_discriminant(),
     );
     let account_id = iroha_data_model::account::AccountId::parse_encoded(raw)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .expect("known account literal must parse");
     account_literal_for_chain_discriminant(&account_id, chain_discriminant)
 }

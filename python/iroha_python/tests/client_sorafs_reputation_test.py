@@ -520,7 +520,6 @@ def test_sorafs_reputation_rejects_adapter_retries_before_signing() -> None:
 
 def test_sorafs_reputation_auth_honors_client_chain_discriminant() -> None:
     testnet_account = AccountAddress.from_account(
-        domain="default",
         public_key=bytes([0x5A] * 32),
     ).to_i105(0x0171)
     session = SequencedSession([StubResponse(200, snapshot_payload())])
@@ -567,9 +566,7 @@ def test_sorafs_reputation_witness_auth_is_exact_and_stream_is_single_attempt() 
     )
     client = ToriiClient("http://torii.example", session=session, max_retries=9)
     witness = base64_witness()
-    account = AccountAddress.from_account(
-        domain="reputation", public_key=bytes([0x36]) * 32
-    )
+    account = AccountAddress.from_account(public_key=bytes([0x36]) * 32)
     account_i105 = account.to_i105(0x02F1)
     headers = {
         "X-Iroha-Witness": witness,

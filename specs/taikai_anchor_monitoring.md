@@ -36,7 +36,7 @@ signals exported by Torii and the SoraFS orchestrator.
    incident record.
 4. **Inspect Prometheus directly when needed.** Use the PromQL snippets in
    §4 to check histogram quantiles and the alias rotation counter. If
-   `taikai_ingest_segment_errors_total{reason!="none"}` increases or
+   `taikai_ingest_errors_total{reason!="none"}` increases or
    `taikai_trm_alias_rotations_total` stalls for more than two windows,
    escalate to the DA program.
 5. **Reference alerting state.** Confirm whether any rules in
@@ -50,7 +50,7 @@ signals exported by Torii and the SoraFS orchestrator.
 | --- | --- | --- |
 | `taikai_ingest_segment_latency_ms` (histogram) | `crates/iroha_telemetry/src/metrics.rs:9065` | Measures CMAF ingest latency per cluster/stream. Keep p95 < 750 ms, p99 < 900 ms. Drives the "Segment Latency" panel and `TaikaiLiveEdgeDrift` alert indirectly. |
 | `taikai_ingest_live_edge_drift_ms` (histogram) | `crates/iroha_telemetry/src/metrics.rs:9076` | Tracks live-edge drift between encoder and anchor workers. `TaikaiLiveEdgeDrift` pages when p99 > 1.5 s for 10 min. |
-| `taikai_ingest_segment_errors_total{reason}` | `crates/iroha_telemetry/src/metrics.rs:9087` | Counts failed segments by reason (`decode`, `manifest_mismatch`, `lineage_replay`, etc.). Any increase triggers the `TaikaiIngestFailure` warning. |
+| `taikai_ingest_errors_total{reason}` | `crates/iroha_telemetry/src/metrics.rs` | Counts failed segments by reason (`decode`, `manifest_mismatch`, `lineage_replay`, etc.). Any increase triggers the `TaikaiIngestFailure` warning. |
 | `taikai_trm_alias_rotations_total` | `crates/iroha_torii/src/da/taikai.rs:1969`, `crates/iroha_telemetry/src/metrics.rs:11672` | Increments when `/v1/da/ingest` accepts a new TRM per alias. Use it to prove rotation cadence and detect stalled windows. |
 | `telemetry.taikai_alias_rotations[]` snapshot | `crates/iroha_telemetry/src/metrics.rs:2047` | JSON payload surfaced via `/status` showing `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total`, and timestamps per alias. Required for governance evidence. |
 | `taikai_viewer_*` metrics (`*_rebuffer_events_total`, `*_cek_rotation_seconds_ago`, `*_alerts_firing_total`) | `crates/iroha_telemetry/src/metrics.rs:5681-5693` | Viewer health telemetry surfacing CEK rotation age, PQ circuit percentages, and alert counts. Map to the viewer dashboard and CEK rotation warning. |
@@ -109,7 +109,7 @@ signals exported by Torii and the SoraFS orchestrator.
 - Error breakdown per reason:
   ```promql
   sum by (reason) (
-    rate(taikai_ingest_segment_errors_total{cluster=~"$cluster",stream=~"$stream"}[5m])
+    rate(taikai_ingest_errors_total{cluster=~"$cluster",stream=~"$stream"}[5m])
   )
   ```
 - Alias rotation counter for a specific alias:

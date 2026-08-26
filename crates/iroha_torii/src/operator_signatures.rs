@@ -982,11 +982,11 @@ pub async fn enforce_identity_bound_signature(
     next.run(req).await
 }
 fn torii_proxy_receiver_peer_id(app: &SharedAppState) -> Option<PeerId> {
-    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+    #[cfg(any(feature = "app_api", feature = "connect"))]
     {
         app.local_peer_id.clone()
     }
-    #[cfg(not(any(feature = "app_api", feature = "p2p_ws", feature = "connect")))]
+    #[cfg(not(any(feature = "app_api", feature = "connect")))]
     {
         let _ = app;
         None

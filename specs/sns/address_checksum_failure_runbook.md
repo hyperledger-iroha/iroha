@@ -12,9 +12,7 @@ This runbook documents the operational response when Torii, SDKs, or wallet
 surfaces report i105 checksum failures (`ERR_CHECKSUM_MISMATCH` /
 `ChecksumMismatch`). It complements the security analysis in
 [`address_security_review.md`](./address_security_review.md), the UX guidance in
-[`address_display_guidelines.md`](./address_display_guidelines.md), and the
-manifest procedures captured in
-[`address_manifest_ops.md`](../runbooks/address_manifest_ops.md).
+[`address_display_guidelines.md`](./address_display_guidelines.md).
 
 ## 1. When to run this play
 
@@ -35,29 +33,25 @@ Trigger this runbook whenever one or more of the following occurs:
    (see `crates/iroha_torii/src/utils.rs:439`), especially when impact spans
    multiple endpoints or dataspace contexts.
 
-If the incident is scoped to Local‑8 or Local‑12 digest collisions, refer to
-the `AddressLocal8Resurgence` or `AddressLocal12Collision` playbooks; otherwise
-follow the steps below.
-
 ## 2. Observability & evidence checklist
 
 | Evidence | Location / Command | Notes |
 |----------|-------------------|-------|
 | Grafana snapshot | `dashboards/grafana/address_ingest.json` | Capture the invalid reason breakdown, endpoint panels, and the raw `torii_address_invalid_total` graph filtered by `reason="ERR_CHECKSUM_MISMATCH"`. |
-| Alert context | `dashboards/alerts/address_ingest_rules.yml` | Include the firing alert payload (context label) and any linked PagerDuty/Slack ack. |
+| Alert context | `dashboards/alerts/address_ingest_rules.yml` | Include the firing alert payload and any linked PagerDuty/Slack ack. |
 | Fixture health | `dashboards/grafana/account_address_fixture_status.json` + `artifacts/account_fixture/address_fixture.prom` | Confirms whether SDK copies drifted from `fixtures/account/address_vectors.json`. |
-| PromQL query | `sum by (context) (increase(torii_address_invalid_total{reason="ERR_CHECKSUM_MISMATCH"}[5m]))` | Identifies the Torii endpoint causing the spike; export CSV for tickets. |
-| Logs | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` | Collect at least 5 sample payloads (redacting PII) per context. |
+| PromQL query | `sum by (endpoint) (increase(torii_address_invalid_total{reason="ERR_CHECKSUM_MISMATCH"}[5m]))` | Identifies the Torii endpoint causing the spike; export CSV for tickets. |
+| Logs | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` | Collect at least 5 sample payloads (redacting PII) per endpoint. |
 | Fixture verification | `cargo xtask address-vectors --verify` | Ensures canonical fixture matches committed JSON. |
 | SDK parity check | `python3 scripts/account_fixture_helper.py check --target <path> --metrics-out artifacts/account_fixture/<label>.prom --metrics-label <label>` | Run for each SDK copy referenced in alerts/tickets. |
-| Clipboard/IME sanity | `iroha tools address inspect <literal>` (documented in `address_display_guidelines.md`) | Confirms problematic strings were not mangled before reaching Torii. |
+| Clipboard/IME sanity | `iroha tools address convert <literal> --format json` (documented in `address_display_guidelines.md`) | Confirms problematic strings were not mangled before reaching Torii. |
 
 ## 3. Immediate response steps
 
 1. **Acknowledge the alert** in PagerDuty/Slack and post the Grafana link +
-   PromQL output to the incident thread. Note affected `context` labels (e.g.,
+   PromQL output to the incident thread. Note affected `endpoint` labels (e.g.,
    `/v1/accounts/{account_id}/transactions`).
-2. **Freeze risky deploys:** pause manifest promotions and SDK releases touching
+2. **Freeze risky deploys:** pause Torii and SDK releases touching
    address parsing until the root cause is understood.
 3. **Collect telemetry snapshots:** download image/JSON snapshots from
    `address_ingest.json` and `account_address_fixture_status.json`. Save them in
@@ -83,24 +77,15 @@ follow the steps below.
 
 ### 4.2 Client-side encoding/IME regressions
 
-- Use `iroha tools address inspect <literal>` to reconstruct the canonical payload and
+- Use `iroha tools address convert <literal> --format json` to reconstruct the canonical payload and
   detect hidden characters. Cross-check with `address_display_guidelines.md`
   (copy helpers, NFC handling, IME/Kana fuzz notes) and ensure affected clients
-  follow the documented dual-format display requirements.
+  follow the documented canonical-I105 display requirements.
 - If the incident stems from clipboard/camera ingestion, verify that wallets
   still use the shared QR helper endpoints documented in the ADDR‑6 roadmap
   entries.
 
-### 4.3 Manifest or registry corruption
-
-- If the checksum mismatch only affects a single suffix/domain, inspect the
-  latest manifest bundle following the
-  [`address_manifest_ops.md`](../runbooks/address_manifest_ops.md) runbook.
-- Use `scripts/address_local_toolkit.sh audit --input <file>` (doc:
-  `specs/sns/local_to_global_toolkit.md`) to confirm no Local-8 entries or
-  truncated digests were reintroduced.
-
-### 4.4 Malicious or malformed traffic
+### 4.3 Malicious or malformed traffic
 
 - Check whether requests originate from a single IP/guard; correlate with
   `torii_http_requests_total` to decide if rate-limits or bans are required.
@@ -112,8 +97,8 @@ follow the steps below.
 | Scenario | Actions |
 |----------|---------|
 | Fixture drift | Regenerate `fixtures/account/address_vectors.json`, land the update with `cargo xtask address-vectors --verify`, run `ci/account_fixture_metrics.sh`, and coordinate SDK releases so each language vendor consumes the refreshed bundle. Record the change in `status.md` and the governance tracker. |
-| SDK/client regression | File bugs against the offending SDK, link to the canonical fixtures, and provide the `iroha tools address inspect` output. Gate releases via `ci/check_address_normalize.sh` or the SDK’s existing parity jobs until the fix lands. |
-| Malicious submissions | Apply Torii-level filters (e.g., block offending JWT/app IDs), throttle via the gateway, and log the abusive addresses in the governance incident tracker so any corresponding Local selectors can be tombstoned if necessary. |
+| SDK/client regression | File bugs against the offending SDK, link to the canonical fixtures, and provide the `iroha tools address convert <literal> --format json` output. Gate releases via the SDK fixture-parity jobs until the fix lands. |
+| Malicious submissions | Apply Torii-level filters (e.g., block offending JWT/app IDs), throttle via the gateway, and retain redacted evidence in the security incident tracker. |
 
 After remediation, rerun the PromQL query for `ERR_CHECKSUM_MISMATCH` to confirm
 a sustained zero rate over a 30-minute window and verify the alert resets.
