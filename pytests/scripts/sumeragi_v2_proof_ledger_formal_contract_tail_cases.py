@@ -1,6 +1,45 @@
 # Executed lexically in sumeragi_v2_proof_ledger_test.py; do not collect directly.
 
 
+def test_async_release_requires_checked_type_closure_and_step_refinement(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    valid = r"""---- MODULE SumeragiV2AsyncLivenessProofs ----
+THEOREM AsyncStepRefinementObligation ==
+  AsyncNext => [Next]_vars
+BY DEF AsyncNext
+THEOREM AsyncTypeInvariantObligation ==
+  \A initialContext: AsyncSpecAt(initialContext) => []AsyncTypeInvariant
+BY PTL
+THEOREM AsyncNextPreservesNormalProposalPrepareCandidate ==
+  \A candidate:
+    /\ NormalProposalPrepareCandidate(candidate)
+    /\ AsyncNext
+    => NormalProposalPrepareCandidate(candidate)'
+BY PTL
+=============================================================================
+"""
+    path.write_text(valid, encoding="utf-8")
+
+    assert module._async_proof_architecture_errors(formal_dir) == []
+
+    path.write_text(
+        valid.replace(
+            "\\A initialContext: AsyncSpecAt(initialContext) => []AsyncTypeInvariant",
+            "AsyncTypeInvariant => []AsyncTypeInvariant",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._async_proof_architecture_errors(formal_dir)
+    assert any(
+        "AsyncTypeInvariantObligation must state only" in error for error in errors
+    )
+
+
 def test_production_trace_certificate_rejects_every_nested_field_hash_and_source_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

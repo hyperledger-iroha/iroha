@@ -1,4 +1,4 @@
-"""Contract tests for host native SDK ABI-22 artifact evidence."""
+"""Contract tests for host native SDK ABI-23 artifact evidence."""
 
 from __future__ import annotations
 
@@ -230,7 +230,7 @@ def test_record_and_verify_bind_exact_artifact_and_clean_revision(
         symbol_inventory=exact_symbol_inventory,
     )
 
-    assert manifest["bridge_abi_version"] == 22
+    assert manifest["bridge_abi_version"] == 23
     assert manifest["source_tree_clean"] is True
     assert checker.SHA256_RE.fullmatch(
         str(manifest["workspace_source_manifest_sha256"])
@@ -281,7 +281,7 @@ def test_record_and_verify_reject_missing_artifact(tmp_path: Path) -> None:
         )
 
 
-@pytest.mark.parametrize("observed", [19, 20, 21, 23])
+@pytest.mark.parametrize("observed", [19, 20, 21, 22])
 def test_record_rejects_every_non_exact_abi(
     tmp_path: Path,
     observed: int,
@@ -289,7 +289,7 @@ def test_record_rejects_every_non_exact_abi(
     source = clean_source(tmp_path)
     artifact = native_artifact(tmp_path)
 
-    with pytest.raises(checker.ArtifactContractError, match="exactly 22"):
+    with pytest.raises(checker.ArtifactContractError, match="exactly 23"):
         checker.build_manifest(
             sdk="c-jni",
             target="aarch64-apple-darwin",
@@ -300,7 +300,7 @@ def test_record_rejects_every_non_exact_abi(
         )
 
 
-@pytest.mark.parametrize("observed", [20, 21, 23])
+@pytest.mark.parametrize("observed", [20, 21, 22])
 def test_verify_rejects_every_non_exact_abi(
     tmp_path: Path,
     observed: int,
@@ -316,7 +316,7 @@ def test_verify_rejects_every_non_exact_abi(
         symbol_inventory=exact_symbol_inventory,
     )
 
-    with pytest.raises(checker.ArtifactContractError, match="exactly 22"):
+    with pytest.raises(checker.ArtifactContractError, match="exactly 23"):
         checker.verify_manifest(
             manifest,
             artifact_path=artifact,
@@ -370,10 +370,11 @@ def test_privacy_c_export_inventory_rejects_duplicate_and_unexpected() -> None:
     "stale",
     (
         "iroha_privacy_compiled_profile_catalog_v21",
-        "iroha_privacy_validate_compiled_profile_catalog_abi23",
+        "iroha_privacy_validate_compiled_profile_catalog_abi22",
         "connect_norito_privacy_abi_21_probe",
-        "connect_norito_privacy_abi-23-probe",
+        "connect_norito_privacy_abi-22-probe",
         "connect_norito_bridge_abi_version_v21",
+        "connect_norito_bridge_abi_version_v22",
     ),
 )
 def test_privacy_c_export_inventory_rejects_stale_abi_markers(stale: str) -> None:
@@ -965,10 +966,10 @@ def test_python_native_evidence_retention_is_opt_in_and_uploaded() -> None:
     )
     evidence_file = f"{evidence_directory}/python-native-abi22.json"
     assert f"SORAFS_PYTHON_SDK_EVIDENCE_DIR: {evidence_directory}" in workflow
-    assert "name: Upload verified Python ABI-22 evidence" in workflow
+    assert "name: Upload verified Python ABI-23 evidence" in workflow
     assert evidence_file in workflow
     assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in workflow
-    upload = workflow.split("name: Upload verified Python ABI-22 evidence", 1)[1]
+    upload = workflow.split("name: Upload verified Python ABI-23 evidence", 1)[1]
     upload = upload.split("- name: Upload parity evidence", 1)[0]
     assert "if: always()" in upload
     assert "if-no-files-found: error" in upload
@@ -983,7 +984,7 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
     complete = tmp_path / "complete.cjs"
     complete.write_text(
         "module.exports = {"
-        "connectNoritoBridgeAbiVersion() { return 22; },"
+        "connectNoritoBridgeAbiVersion() { return 23; },"
         "inspectSorafsOrderbookSubmissionForDiscriminantV1() {},"
         "sorafsValidateAppealFinanceCancelAssetLockJson() {}"
         ",verifySorafsOrderbookSubmissionReceiptV1() {}"
@@ -995,7 +996,7 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
             complete,
             checker.REQUIRED_SYMBOLS["node"],
         )
-        == 22
+        == 23
     )
 
     source = complete.read_text(encoding="utf-8")
@@ -1024,7 +1025,7 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
     complete = tmp_path / "complete.py"
     complete.write_text(
         "def connect_norito_bridge_abi_version():\n"
-        "    return 22\n"
+        "    return 23\n"
         "def inspect_sorafs_orderbook_submission_for_discriminant_v1():\n"
         "    return {}\n"
         "def sorafs_validate_appeal_finance_cancel_asset_lock_json():\n"
@@ -1038,7 +1039,7 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
             complete,
             checker.REQUIRED_SYMBOLS["python"],
         )
-        == 22
+        == 23
     )
 
     source = complete.read_text(encoding="utf-8")
@@ -1056,7 +1057,7 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
 
     complete.write_text(
         "def connect_norito_bridge_abi_version():\n"
-        "    return '22'\n"
+        "    return '23'\n"
         "def inspect_sorafs_orderbook_submission_for_discriminant_v1():\n"
         "    return {}\n"
         "def sorafs_validate_appeal_finance_cancel_asset_lock_json():\n"
@@ -1343,7 +1344,7 @@ def run_kotlin_localnet_evidence_program(
         json.dumps(
             {
                 "artifact_sha256": "a" * 64,
-                "bridge_abi_version": 22,
+                "bridge_abi_version": 23,
                 "sdk": "c-jni",
                 "source_commit": "b" * 40,
                 "source_tree_clean": True,
@@ -1433,7 +1434,7 @@ def test_kotlin_localnet_evidence_validator_rejects_every_skip(
     assert list(evidence_dir.iterdir()) == []
 
 
-def test_repository_wires_exact_abi22_release_contract() -> None:
+def test_repository_wires_exact_abi23_release_contract() -> None:
     """Freeze the fail-closed source and CI wiring without loading a native binary."""
 
     def read(relative: str) -> str:
@@ -1441,7 +1442,7 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
 
     node_copy = read("javascript/iroha_js/scripts/copy-native.mjs")
     for token in (
-        'export const REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 22;',
+        'export const REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 23;',
         '"connectNoritoBridgeAbiVersion"',
         '"inspectSorafsOrderbookSubmissionForDiscriminantV1"',
         '"sorafsValidateAppealFinanceCancelAssetLockJson"',
@@ -1535,7 +1536,7 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     assert "throw AssertionError(requiredMessage)" in kotlin_tests
     assert "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION" not in java_tests
     assert (
-        "ABI-22 connect_norito_bridge with all SoraFS reference symbols is required."
+        "ABI-23 connect_norito_bridge with all SoraFS reference symbols is required."
         in java_tests
     )
 
@@ -1566,7 +1567,7 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
         r"throw\s+XCTSkip\(\"[^\"\n]*"
         r"(?:NoritoNativeBridge|NoritoBridge|SorafsReferenceValidators|"
         r"PrivacyNativeBridge|KagemushaRecursiveSpend|native bridge|"
-        r"native encoder|ABI-22 bridge|bridge functions)",
+        r"native encoder|ABI-23 bridge|bridge functions)",
     )
     assert native_swift_skip.search(all_swift_tests) is None
     assert "func requireNativeTestCapability(" in all_swift_tests
@@ -1581,7 +1582,7 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
         all_kotlin_tests,
     ) is None
     assert (
-        "A freshly built connect_norito_bridge ABI 22 "
+        "A freshly built connect_norito_bridge ABI 23 "
         "artifact-streaming library is required"
         in all_kotlin_tests
     )
@@ -1597,7 +1598,7 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
         all_java_tests,
     ) is None
     assert (
-        "A freshly built connect_norito_bridge ABI 22 "
+        "A freshly built connect_norito_bridge ABI 23 "
         "artifact-streaming library is required"
         in all_java_tests
     )
@@ -1632,7 +1633,7 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
 
     mobile_checker = read("scripts/check_mobile_sdk_artifacts.sh")
     mobile_workflow = read(".github/workflows/mobile_sdk_artifacts.yml")
-    assert '"native_bridge_abi_version"] != 22' in mobile_checker
+    assert '"native_bridge_abi_version"] != 23' in mobile_checker
     assert "check_mobile_sdk_artifacts.sh --apple-only" in mobile_workflow
     assert "check_kagemusha_jvm_native_bridge.sh" in mobile_workflow
     jni_lane = read("ci/check_kagemusha_jvm_native_bridge.sh")

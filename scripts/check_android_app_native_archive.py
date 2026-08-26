@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed verifier for the ABI-22 bridge embedded in an APK or AAB."""
+"""Fail-closed verifier for the ABI-23 bridge embedded in an APK or AAB."""
 
 from __future__ import annotations
 
@@ -244,13 +244,13 @@ def strict_provenance(payload: bytes) -> dict[str, object]:
     if (
         decoded["schema"] != "iroha.android-native-build-provenance.v1"
         or type(decoded["native_bridge_abi_version"]) is not int
-        or decoded["native_bridge_abi_version"] != 22
+        or decoded["native_bridge_abi_version"] != 23
         or decoded["build_profile"] != "release"
         or decoded["cargo_locked"] is not True
         or decoded["privacy_production_enabled"] is not True
         or decoded["cargo_features"] != ["privacy-production-enabled"]
     ):
-        fail("native provenance does not bind the production ABI-22 release")
+        fail("native provenance does not bind the production ABI-23 release")
     if decoded["android_ndk_revision"] != ANDROID_NDK_BASE_REVISION:
         fail("native provenance Android NDK base revision is not exact")
     build_environment = decoded["build_environment"]
@@ -498,7 +498,7 @@ def main(argv: list[str]) -> int:
     except VerificationError as error:
         print(f"[android-native-archive] ERROR: {error}", file=sys.stderr)
         return 1
-    print("[android-native-archive] authenticated ABI-22 bridge bytes match SDK AAR and app archive")
+    print("[android-native-archive] authenticated ABI-23 bridge bytes match SDK AAR and app archive")
     return 0
 
 

@@ -10,7 +10,7 @@ import {
 import { getNativeBinding } from "../src/native.js";
 
 
-test("authenticated N-API ABI22 executes the canonical privacy catalog contract", () => {
+test("authenticated N-API ABI23 executes the canonical privacy catalog contract", () => {
   assert.equal(globalThis.__IROHA_NATIVE_BINDING__, undefined);
 
   const native = getNativeBinding();

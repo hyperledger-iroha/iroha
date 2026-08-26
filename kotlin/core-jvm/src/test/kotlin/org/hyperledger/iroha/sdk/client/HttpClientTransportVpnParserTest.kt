@@ -97,17 +97,19 @@ class HttpClientTransportVpnParserTest {
 
     @Test
     fun vpnSessionParserRejectsNonCanonicalHelperTicketHex() {
-        val sessionId = "33".repeat(32)
+        val sessionId = "33".repeat(16)
+        val quoteId = "34".repeat(32)
         val paymentTxHash = "44".repeat(32)
         val valid = vpnHelperTicketHex()
         val invalidValues = listOf(
             "0x$valid",
             valid.uppercase(),
+            valid.take(1_456),
             valid.dropLast(2),
         )
 
         invalidValues.forEach { invalid ->
-            val payload = vpnSessionJson(sessionId, paymentTxHash).replace(valid, invalid)
+            val payload = vpnSessionJson(sessionId, quoteId, paymentTxHash).replace(valid, invalid)
             assertFailsWith<IllegalStateException> {
                 VpnJsonParser.parseSession(payload.toByteArray(StandardCharsets.UTF_8))
             }
@@ -115,15 +117,48 @@ class HttpClientTransportVpnParserTest {
     }
 
     @Test
+    fun vpnReceiptParserRetainsExactLifecycleStatuses() {
+        @Suppress("UNCHECKED_CAST")
+        val receipt = (JsonParser.parse(
+            vpnReceiptJson(
+                sessionId = "33".repeat(16),
+                quoteId = "34".repeat(32),
+                leaseId = "35".repeat(32),
+                paymentTxHash = "44".repeat(32),
+                settled = true,
+            ),
+        ) as Map<String, Any?>).toMutableMap()
+        receipt.remove("tx_instructions")
+        listOf("disconnected", "expired", "replaced", "settlement_pending", "settled")
+            .forEach { status ->
+                receipt["status"] = status
+                val payload = JsonEncoder.encode(receipt).toByteArray(StandardCharsets.UTF_8)
+                assertEquals(
+                    status,
+                    VpnJsonParser.parseReceipt(payload).status,
+                )
+            }
+
+        receipt["status"] = "settlement_pending "
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseReceipt(
+                JsonEncoder.encode(receipt).toByteArray(StandardCharsets.UTF_8),
+            )
+        }
+    }
+
+    @Test
     fun vpnResponseParsersRejectNonCanonicalIdsHashesAndUnknownFields() {
-        val identifier = "ab".repeat(32)
+        val quoteId = "ab".repeat(32)
+        val leaseId = "bc".repeat(32)
+        val sessionId = "de".repeat(16)
         val paymentTxHash = "cd".repeat(32)
         val meteringKey = validEd25519PublicKeyHex
         fun bytes(value: String): ByteArray = value.toByteArray(StandardCharsets.UTF_8)
 
-        val quote = vpnQuoteJson(identifier, meteringKey)
+        val quote = vpnQuoteJson(quoteId, meteringKey)
         assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseQuote(bytes(quote.replace("\"quote_id\": \"$identifier\"", "\"quote_id\": \"0x$identifier\"")))
+            VpnJsonParser.parseQuote(bytes(quote.replace("\"quote_id\": \"$quoteId\"", "\"quote_id\": \"0x$quoteId\"")))
         }
         assertFailsWith<IllegalStateException> {
             VpnJsonParser.parseQuote(bytes(quote.replace("aa".repeat(16), "AA".repeat(16))))
@@ -137,9 +172,12 @@ class HttpClientTransportVpnParserTest {
             )
         }
 
-        val session = vpnSessionJson(identifier, paymentTxHash)
+        val session = vpnSessionJson(sessionId, quoteId, paymentTxHash)
         assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseSession(bytes(session.replace("\"session_id\": \"$identifier\"", "\"session_id\": \"${identifier.uppercase()}\"")))
+            VpnJsonParser.parseSession(bytes(session.replace("\"session_id\": \"$sessionId\"", "\"session_id\": \"${sessionId.uppercase()}\"")))
+        }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseSession(bytes(session.replace("\"session_id\": \"$sessionId\"", "\"session_id\": \"${"de".repeat(32)}\"")))
         }
         assertFailsWith<IllegalStateException> {
             VpnJsonParser.parseSession(bytes(session.replace("\"payment_tx_hash\": \"$paymentTxHash\"", "\"payment_tx_hash\": \"0x$paymentTxHash\"")))
@@ -148,9 +186,12 @@ class HttpClientTransportVpnParserTest {
             VpnJsonParser.parseSession(bytes(session.replaceFirst("{", "{\"unexpected\":true,")))
         }
 
-        val receipt = vpnReceiptJson(identifier, paymentTxHash, settled = true)
+        val receipt = vpnReceiptJson(sessionId, quoteId, leaseId, paymentTxHash, settled = true)
         assertFailsWith<IllegalStateException> {
-            VpnJsonParser.parseReceipt(bytes(receipt.replace("\"lease_id_hex\": \"$identifier\"", "\"lease_id_hex\": \"${identifier.uppercase()}\"")))
+            VpnJsonParser.parseReceipt(bytes(receipt.replace("\"lease_id_hex\": \"$leaseId\"", "\"lease_id_hex\": \"${leaseId.uppercase()}\"")))
+        }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseReceipt(bytes(receipt.replace("\"session_id\": \"$sessionId\"", "\"session_id\": \"${"de".repeat(32)}\"")))
         }
         assertFailsWith<IllegalStateException> {
             VpnJsonParser.parseReceipt(bytes(receipt.replace("\"payment_tx_hash\": \"$paymentTxHash\"", "\"payment_tx_hash\": \"0x$paymentTxHash\"")))
@@ -165,13 +206,15 @@ class HttpClientTransportVpnParserTest {
 
     @Test
     fun vpnResponseParsersRejectMissingRequiredFieldsAndSchemaBounds() {
-        val identifier = "ab".repeat(32)
+        val quoteId = "ab".repeat(32)
+        val leaseId = "bc".repeat(32)
+        val sessionId = "de".repeat(16)
         val paymentTxHash = "cd".repeat(32)
         val meteringKey = validEd25519PublicKeyHex
         val profile = vpnProfileJson()
-        val quote = vpnQuoteJson(identifier, meteringKey)
-        val session = vpnSessionJson(identifier, paymentTxHash)
-        val receipt = vpnReceiptJson(identifier, paymentTxHash, settled = true)
+        val quote = vpnQuoteJson(quoteId, meteringKey)
+        val session = vpnSessionJson(sessionId, quoteId, paymentTxHash)
+        val receipt = vpnReceiptJson(sessionId, quoteId, leaseId, paymentTxHash, settled = true)
         val receiptList = """{"items":[$receipt],"total":1}"""
 
         @Suppress("UNCHECKED_CAST")
@@ -254,7 +297,9 @@ class HttpClientTransportVpnParserTest {
 
     @Test
     fun vpnRoutesRejectWrongSuccessfulStatusCodes() {
-        val identifier = "33".repeat(32)
+        val sessionId = "33".repeat(16)
+        val quoteId = "34".repeat(32)
+        val leaseId = "35".repeat(32)
         val paymentTxHash = "44".repeat(32)
         val meteringKey = validEd25519PublicKeyHex
         val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
@@ -279,22 +324,19 @@ class HttpClientTransportVpnParserTest {
         }
 
         assertRejected(201, vpnProfileJson()) { it.getVpnProfile().join() }
-        assertRejected(200, vpnQuoteJson(identifier, meteringKey)) {
+        assertRejected(200, vpnQuoteJson(quoteId, meteringKey)) {
             it.createVpnQuote(VpnQuoteCreateRequest("standard", "0x$meteringKey"), auth).join()
         }
-        assertRejected(200, vpnSessionJson(identifier, paymentTxHash)) {
-            it.createVpnSession(VpnSessionCreateRequest("standard", identifier, "0x$paymentTxHash", meteringKey), auth).join()
+        assertRejected(200, vpnSessionJson(sessionId, quoteId, paymentTxHash)) {
+            it.createVpnSession(VpnSessionCreateRequest("standard", quoteId, "0x$paymentTxHash", meteringKey), auth).join()
         }
-        assertRejected(201, vpnSessionJson(identifier, paymentTxHash)) {
-            it.getVpnSession(identifier, auth).join()
+        assertRejected(201, vpnSessionJson(sessionId, quoteId, paymentTxHash)) {
+            it.getVpnSession(sessionId, auth).join()
         }
-        assertRejected(201, vpnReceiptJson(identifier, paymentTxHash, settled = false)) {
-            it.deleteVpnSession(identifier, auth).join()
+        assertRejected(200, vpnReceiptJson(sessionId, quoteId, leaseId, paymentTxHash, settled = true)) {
+            it.submitVpnReceipt(VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x$leaseId"), auth).join()
         }
-        assertRejected(200, vpnReceiptJson(identifier, paymentTxHash, settled = true)) {
-            it.submitVpnReceipt(VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x$identifier"), auth).join()
-        }
-        val receipt = vpnReceiptJson(identifier, paymentTxHash, settled = true)
+        val receipt = vpnReceiptJson(sessionId, quoteId, leaseId, paymentTxHash, settled = true)
         assertRejected(201, """{"items":[$receipt],"total":1}""") {
             it.listVpnReceipts(auth).join()
         }
@@ -366,9 +408,9 @@ class HttpClientTransportVpnParserTest {
             }
         """.trimIndent()
 
-    private fun vpnHelperTicketHex(): String = "5356504e48543100" + "00".repeat(688)
+    private fun vpnHelperTicketHex(): String = "5356504e48543100" + "00".repeat(780)
 
-    private fun vpnSessionJson(sessionId: String, paymentTxHash: String): String =
+    private fun vpnSessionJson(sessionId: String, quoteId: String, paymentTxHash: String): String =
         """
             {
               "session_id": "$sessionId",
@@ -379,8 +421,8 @@ class HttpClientTransportVpnParserTest {
               "expires_at_ms": 1700000600000,
               "connected_at_ms": 1700000000000,
               "meter_family": "soranet.vpn.standard",
-              "quote_id": "$sessionId",
-              "payment_reference": "$sessionId",
+              "quote_id": "$quoteId",
+              "payment_reference": "$quoteId",
               "payment_tx_hash": "$paymentTxHash",
               "fee_asset_id": "xor#universal.universal",
               "escrow_account_id": "sorauEscrow",
@@ -401,7 +443,13 @@ class HttpClientTransportVpnParserTest {
             }
         """.trimIndent()
 
-    private fun vpnReceiptJson(sessionId: String, paymentTxHash: String, settled: Boolean): String {
+    private fun vpnReceiptJson(
+        sessionId: String,
+        quoteId: String,
+        leaseId: String,
+        paymentTxHash: String,
+        settled: Boolean,
+    ): String {
         val status = if (settled) "settled" else "disconnected"
         val source = if (settled) "relay" else "torii"
         val earned = if (settled) "750000.125" else "0"
@@ -437,7 +485,7 @@ class HttpClientTransportVpnParserTest {
               "bytes_out": 2048,
               "status": "$status",
               "receipt_source": "$source",
-              "quote_id": "$sessionId",
+              "quote_id": "$quoteId",
               "payment_tx_hash": "$paymentTxHash",
               "fee_asset_id": "xor#universal.universal",
               "escrow_account_id": "sorauEscrow",
@@ -445,7 +493,7 @@ class HttpClientTransportVpnParserTest {
               "lease_fee": "1000000.25",
               "earned_fee": "$earned",
               "refunded_fee": "$refunded",
-              "lease_id_hex": "$sessionId"$settle
+              "lease_id_hex": "$leaseId"$settle
             }
         """.trimIndent()
     }

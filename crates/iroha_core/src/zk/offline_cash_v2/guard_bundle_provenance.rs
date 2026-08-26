@@ -20,6 +20,8 @@ use core::{convert::Infallible, fmt};
 use halo2_proofs::halo2curves::ff::PrimeField;
 use sha2::{Digest as _, Sha256};
 
+#[cfg(test)]
+use super::state_recursive_fold::StateRecursiveFoldParityV2;
 use super::{
     OFFLINE_CASH_CHILD_PROOF_ABSOLUTE_MAX_BYTES_V2, OFFLINE_CASH_HALO2_K_V2,
     OFFLINE_CASH_PARENT_LINEAGE_ACCUMULATOR_BYTES_V2, OfflineCashHalo2CircuitRoleV2,
@@ -33,9 +35,6 @@ use super::{
     },
     state_recursive_fold::CanonicalStateAccumulatorV2,
 };
-
-#[cfg(test)]
-use super::state_recursive_fold::StateRecursiveFoldParityV2;
 
 const PROTOCOL_DOMAIN_V2: &[u8] = b"iroha:offline-cash:v2:halo2-source-protocol";
 const HALO2_BACKEND_REVISION_V2: &[u8] = b"halo2-axiom/0.5.1";

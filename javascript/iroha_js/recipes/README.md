@@ -220,12 +220,14 @@ Environment variables:
 
 ## governance.mjs
 
-- Builds sample transactions for governance flows (propose deploy, cast ballot,
-  enact/finalize referendum, persist council) using the SDK builders.
+- Builds sample transactions for governance flows (propose deploy, cast a
+  standalone plain ballot, and persist a council snapshot) using the SDK builders.
 - Prints deterministic hashes for each transaction; optionally submits them to
   Torii when `GOV_SUBMIT=1`.
 - When `GOV_FETCH=1`, reuses the new `ToriiClient` governance helpers to fetch proposals, tallies,
   locks, and unlock stats so you can inspect live state after submitting transactions.
+- Parliament finalization, certificate derivation, and exact-height enactment are
+  automatic protocol work; the recipe does not expose public finalize/enact calls.
 
 Run with:
 
@@ -235,7 +237,7 @@ npm run build:native
 node ./recipes/governance.mjs
 ```
 
-Set `TORII_URL`, `CHAIN_ID`, `AUTHORITY`, and `PRIVATE_KEY_HEX` (32- or 64-byte Ed25519 key)
+Set `TORII_URL`, `NETWORK_ID`, `AUTHORITY`, and `PRIVATE_KEY_HEX` (32- or 64-byte Ed25519 key)
 when submitting to a live node. Ensure the authority holds the necessary
 governance permissions before enabling `GOV_SUBMIT=1`.
 

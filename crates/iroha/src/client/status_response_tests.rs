@@ -7,7 +7,7 @@ fn decode_status_response_returns_err_on_internal_server_error() {
 }
 
 #[test]
-fn get_status_bounds_preferred_and_json_fallback_responses() {
+fn get_status_does_not_retry_as_json_after_decode_failure() {
     let expected = Status::default();
     let json_body = norito::json::to_vec(&expected).expect("serialize status JSON");
     let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -34,19 +34,37 @@ fn get_status_bounds_preferred_and_json_fallback_responses() {
             }
         }
     };
-    let decoded = with_mock_http(responder, || client_with_base_url(base_url()).get_status())
-        .expect("JSON fallback status response");
-    assert_eq!(
-        norito::json::to_value(&decoded).expect("serialize decoded status"),
-        norito::json::to_value(&expected).expect("serialize expected status")
-    );
+    let error = with_mock_http(responder, || client_with_base_url(base_url()).get_status())
+        .expect_err("malformed negotiated status response must fail without retry");
+    assert!(error.to_string().contains("failed to decode status Norito"));
     let snapshots = snapshots.lock().expect("snapshot lock");
-    assert_eq!(snapshots.len(), 2);
-    for snapshot in snapshots.iter() {
-        assert_eq!(snapshot.url.path(), torii_uri::STATUS);
-        assert_eq!(snapshot.max_response_bytes, NODE_STATUS_RESPONSE_MAX_BYTES);
-    }
-    assert_single_accept_header(&snapshots[1], APPLICATION_JSON);
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].url.path(), torii_uri::STATUS);
+    assert_eq!(
+        snapshots[0].max_response_bytes,
+        NODE_STATUS_RESPONSE_MAX_BYTES
+    );
+    assert_single_accept_header(&snapshots[0], ACCEPT_NORITO_PREFERRED);
+}
+
+#[test]
+fn get_status_norito_only_rejects_json_without_retry() {
+    let body = norito::json::to_vec(&Status::default()).expect("serialize status JSON");
+    let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+    let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
+    let mut client = client_with_base_url(base_url());
+    client.set_wire_format_preference(WireFormatPreference::NoritoOnly);
+    let error = with_mock_http(respond_with(&snapshots, response), || client.get_status())
+        .expect_err("NoritoOnly must reject a JSON response");
+    assert!(error.to_string().contains("violates NoritoOnly"));
+    let snapshots = snapshots.lock().expect("snapshot lock");
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].url.path(), torii_uri::STATUS);
+    assert_eq!(
+        snapshots[0].max_response_bytes,
+        NODE_STATUS_RESPONSE_MAX_BYTES
+    );
+    assert_single_accept_header(&snapshots[0], APPLICATION_NORITO);
 }
 
 #[test]

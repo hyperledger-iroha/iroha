@@ -197,7 +197,7 @@ function sameBytes(left, right) {
 
 function fakeNative(payload = manifestPayload(), overrides = {}) {
   return {
-    connectNoritoBridgeAbiVersion: () => 22,
+    connectNoritoBridgeAbiVersion: () => 23,
     privacyCompiledProfileCatalogV1: () => Uint8Array.from(CATALOG),
     privacyValidateCompiledProfileCatalogV1: (bytes) =>
       sameBytes(bytes, CATALOG) ? 0 : 8,

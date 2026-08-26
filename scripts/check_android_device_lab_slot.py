@@ -23,6 +23,14 @@ from typing import Any, Iterable
 import unicodedata
 import zipfile
 
+# Isolated script execution omits both the working directory and the script
+# directory from ``sys.path``. Anchor local imports to this file so the
+# production runner's ``python -I /absolute/path/to/this/script`` invocation
+# remains independent of caller-controlled import paths.
+_REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPOSITORY_ROOT))
+
 try:
     from scripts.android_device_lab_candidate_stage import (
         CandidateStageContract,
@@ -333,6 +341,7 @@ def validate_kagemusha_candidate_stage_manifest_v2(
     stage_sha256: str,
     source_commit: str,
     source_tree_sha256: str,
+    reviewed_source_closure_descriptor_sha256: str | None = None,
     verify_entry_digests: bool = True,
 ) -> dict[str, Any]:
     """Verify the canonical candidate-stage manifest and its exact inventory."""
@@ -370,6 +379,9 @@ def validate_kagemusha_candidate_stage_manifest_v2(
         stage_sha256=stage_sha256,
         source_commit=source_commit,
         source_tree_sha256=source_tree_sha256,
+        reviewed_source_closure_descriptor_sha256=(
+            reviewed_source_closure_descriptor_sha256
+        ),
         verify_entry_digests=verify_entry_digests,
     )
 
@@ -1075,6 +1087,8 @@ RAW_TEST_COMMAND_REQUIRED_MARKERS: tuple[str, ...] = (
     "scripts/stage_kagemusha_candidate_android_artifacts.py",
     "--build-only",
     "--stage-sha256",
+    "--reviewed-source-closure",
+    "--reviewed-source-closure-sha256",
     "--attestation-slot",
     "--trusted-signer-public-key",
     "org.hyperledger.iroha.sdk.kagemusha.candidate.lab."
@@ -1091,6 +1105,8 @@ KAGEMUSHA_ANDROID_PRODUCTION_RAW_BUILD_COMMAND = (
     '--stage-sha256 "$STAGE_SHA256" '
     '--source-commit "$SOURCE_COMMIT" '
     '--source-tree-sha256 "$SOURCE_TREE_SHA256" '
+    '--reviewed-source-closure "$REVIEWED_SOURCE_CLOSURE" '
+    '--reviewed-source-closure-sha256 "$REVIEWED_SOURCE_CLOSURE_SHA256" '
     '--generation "$GENERATION" --slot-id "$SLOT_ID"'
 )
 KAGEMUSHA_ANDROID_PRODUCTION_RAW_HARNESS_COMMAND = (
@@ -1099,6 +1115,8 @@ KAGEMUSHA_ANDROID_PRODUCTION_RAW_HARNESS_COMMAND = (
     '--stage-sha256 "$STAGE_SHA256" '
     '--source-commit "$SOURCE_COMMIT" '
     '--source-tree-sha256 "$SOURCE_TREE_SHA256" '
+    '--reviewed-source-closure "$REVIEWED_SOURCE_CLOSURE" '
+    '--reviewed-source-closure-sha256 "$REVIEWED_SOURCE_CLOSURE_SHA256" '
     '--generation "$GENERATION" --slot-id "$SLOT_ID" '
     '--attestation-slot "$SLOT_PATH" '
     '--trusted-signer-public-key "$TRUSTED_SIGNER_PUBLIC_KEY"'
@@ -1314,7 +1332,7 @@ ATTESTATION_CERTIFICATE_CHAIN_SUFFIXES = (".der", ".pem")
 MAX_ATTESTATION_CERTIFICATE_CHAIN_BYTES = 64 * 1024
 SIGNED_EVIDENCE_SIGNATURE_ALGORITHMS = {"ed25519"}
 ED25519_SIGNATURE_BYTES = 64
-REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION = 22
+REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION = 23
 KAGEMUSHA_RECURSIVE_SPEND_JNI_PROBE_STATES = {"recursive_spend_verified"}
 KAGEMUSHA_RECURSIVE_SPEND_PROVER_STATES = {"multi_hop_proof_composed"}
 SIGNED_EVIDENCE_SLOT_STRING_FIELDS: tuple[str, ...] = (
@@ -6367,9 +6385,9 @@ def validate_candidate_binding_v2(
     for key in digest_fields:
         _candidate_binding_sha256(binding, key, errors)
     if binding.get("bridge_abi_version") != REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION:
-        errors.append("candidate binding bridge_abi_version must be 22")
+        errors.append("candidate binding bridge_abi_version must be 23")
     if binding.get("native_accepted_bridge_abi_version") != REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION:
-        errors.append("candidate binding native_accepted_bridge_abi_version must be 22")
+        errors.append("candidate binding native_accepted_bridge_abi_version must be 23")
     if binding.get("production_capability_observed") is not False:
         errors.append("candidate binding production_capability_observed must be false")
     if binding.get("source_repo_dirty") is not False:

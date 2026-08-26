@@ -919,12 +919,6 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "live dispatch completion must retain successors, acknowledge the exact producer, terminalize the selected parent before adapter-side orphans",
         ),
         (
-            "step_recovery",
-            "if token.identity().admission_ordinal() != owner.lifecycle_ordinal()",
-            "if false",
-            "recovery dispatch must retain successors, acknowledge the exact producer, terminalize the selected parent before adapter-side orphans",
-        ),
-        (
             "dispatch_one_adapter_deferred",
             "if token.identity().admission_ordinal() != "
             "lifecycle_owner.lifecycle_ordinal()",

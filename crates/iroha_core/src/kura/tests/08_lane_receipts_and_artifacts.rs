@@ -55,7 +55,8 @@ fn lane_block_application_receipt_persists_canonical_results_and_reloads() {
         "lane application receipt index file missing"
     );
     drop(kura);
-    let (reloaded, _) = Kura::new(&config, &lane_config).expect("reopen kura");
+    let (reloaded, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen kura");
     assert_eq!(
         reloaded.read_lane_block_application_receipt(lane_id, lane_block_height),
         Some(receipt)
@@ -219,7 +220,8 @@ fn lane_block_application_receipt_strict_retry_reissues_every_barrier() {
             .expect("receipt data metadata")
             .len();
         drop(kura);
-        let (kura, _) = Kura::new(&config, &lane_config).expect("reopen Kura after fault");
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+            .expect("reopen Kura after fault");
         failure.inject();
         assert_eq!(
             kura.read_lane_block_application_receipt(lane_id, lane_block_height),
@@ -343,7 +345,8 @@ fn current_application_receipt_fails_closed_after_lane_recreation() {
         "canonical global evidence must not authorize a retired-incarnation receipt replay",
     );
     drop(kura);
-    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reopen Kura");
     assert!(
         reopened
             .read_lane_block_application_receipt(lane_id, 1)
@@ -357,7 +360,8 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
     let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let lane_entry = lane_config.primary();
-    let (mut kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (mut kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("initialize Kura");
     let entrypoint = offline_top_up_entrypoint_for_index([0xC1; 32], [0xC2; 32]);
     let mut merge_entry = merge_entry_with_indexed_entrypoint(entrypoint);
     let execution = merge_entry
@@ -509,7 +513,7 @@ fn merge_application_receipt_is_first_release_retirement_admissible_and_fails_cl
     );
     drop(kura);
     assert!(
-        Kura::new(&config, &lane_config).is_err(),
+        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err(),
         "restart must fail closed when a recreated active directory still contains the old incarnation's terminal frontier",
     );
 }
@@ -640,7 +644,8 @@ fn lane_block_direct_application_receipt_persists_clean_preflight_results() {
     assert_eq!(receipt.results, vec![result]);
     assert!(kura.lane_block_application_receipt_available(&proposal));
     drop(kura);
-    let (reloaded, _) = Kura::new(&config, &lane_config).expect("reload kura");
+    let (reloaded, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reload kura");
     assert_eq!(
         reloaded.read_lane_block_application_receipt(lane_id, lane_block_height),
         Some(receipt)
@@ -1135,8 +1140,7 @@ fn lane_block_execution_input_read_heals_stale_canonical_artifact() {
     let payload = stale_artifact
         .encode_framed()
         .expect("encode stale lane artifact");
-    let (data_path, index_path) =
-        Kura::lane_artifact_paths_for_entry(&lane_entry, temp_dir.path());
+    let (data_path, index_path) = Kura::lane_artifact_paths_for_entry(&lane_entry, temp_dir.path());
     assert!(
         Kura::append_indexed_sidecar(
             &data_path,
@@ -1234,7 +1238,8 @@ fn lane_block_execution_preflight_persists_current_state_results_and_reloads() {
         "preflight evidence must be tied to the current local state tip"
     );
     drop(kura);
-    let (reloaded, _) = Kura::new(&config, &lane_config).expect("reload kura");
+    let (reloaded, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reload kura");
     assert_eq!(
         reloaded.read_lane_block_execution_preflight(lane_id, lane_block_height),
         Some(preflight)
@@ -1641,7 +1646,8 @@ fn canonical_lane_block_application_receipt_overrides_conflicting_preflight() {
         "canonical block results must keep the lane block applied despite stale preflight evidence"
     );
     drop(kura);
-    let (reloaded, _) = Kura::new(&config, &lane_config).expect("reload kura");
+    let (reloaded, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
+        .expect("reload kura");
     assert!(reloaded.lane_block_application_receipt_conflicts_with_preflight(&proposal));
     assert!(reloaded.lane_block_application_receipt_available(&proposal));
 }

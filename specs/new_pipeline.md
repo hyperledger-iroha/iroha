@@ -302,107 +302,40 @@ Testing & CI
 
 ---
 
-## Root/Sudo and Runtime Upgrade Governance
+## First-release Proposal and Runtime Upgrade Governance
 
-Goals
-- Provide three, composable paths to execute privileged (root) actions such as protocol parameter changes and runtime (executor/IVM) upgrades:
-  1) Admin Sudo (break‑glass) — a pre‑configured admin or multisig controls root.
-  2) On‑chain governance (referenda/conviction voting) — DAO‑style rules decide upgrades.
-  3) Multibody sortition (Parliament) — separate randomly‑selected bodies propose/review/enact.
+The normative public contract is defined by
+[`governance_api.md`](governance_api.md), while the consensus-owned attempt
+lifecycle is defined by [`governance_pipeline.md`](governance_pipeline.md).
+This section is only a pipeline summary.
 
-Root calls (normative)
-- Root calls are regular transactions whose top‑level instruction is wrapped in `RootCall { inner: InstructionBox }`.
-- Execution requires one of the following authorizations:
-  - Sudo: signed by an admin account present in `RootAdminSet` OR approved by an on‑chain multisig policy `RootMultisigPolicy` bound to a `ctx_hash` (see below).
-  - Governance: enacted referenda (see below) produce a signed `GovernanceEnactmentCertificate` (payload + signature set) that authorizes `RootCall` within an execution window `at_window = {lower, upper}`.
-  - Parliament: enacted decision from sortition bodies yields an authorization certificate `ParliamentEnactmentCertificate` (payload + signature set) with an execution window analogous to governance.
-- Root calls are executed in a dedicated, first epoch of the block, before normal transactions, to avoid interleaving state. The root epoch uses separate gas/time/memory quotas with identical error semantics. If quotas are exhausted, remaining root items defer in canonical order (index → hash) to the next block.
-
-Runtime upgrade artifacts
-- Default executor upgrade: artifact is IVM bytecode (`.to`) and manifest; instruction: `Upgrade<DefaultExecutor> { code_hash, activation_height }`.
-- IVM upgrade: instruction toggles feature gates or version parameters (protocol‑gated) after deterministic conformance tests; artifact: versioned manifest and configuration.
-- ABI surface is fixed to v1; runtime upgrade manifests must keep `abi_version = 1` with empty `added_syscalls`/`added_pointer_types`.
-- Protocol parameters: `SetParameter` root calls update consensus/limits (protocol‑gated, with enactment delay).
-
-Sudo path (admin/multisig)
-- `RootAdminSet`: set of admin accounts (sorted, unique); `RootMultisigPolicy { threshold, members }` optional with `1 ≤ threshold ≤ |members|`.
-- `Sudo::exec(inner)` requires either: (a) signed by any `RootAdminSet` member AND approved by `RootMultisigPolicy` via `ctx_hash = H("iroha/root-approve/v2", preimage_hash, call_selector(inner), at_height_lower_bound, expiry_height)`, or (b) a multisig envelope with ≥ threshold signatures. Approvals expire at `expiry_height` and are invalidated on policy rotation (which activates next epoch).
-- Intended for emergency fixes; actions are logged with an audit event including `proposal_id`, `sig_set_hash`, `event_version`, and `at_height`.
-
-On‑chain governance (conviction voting)
-- Referendum lifecycle: `ProposeUpgrade { preimage_hash, summary, requires? }` → deposit (see cost model) → `OpenVoting { start, end }` → conviction voting with fixed‑point weights → `Tally` → `Enact { at_window = {lower, upper} }` with delay windows.
-- Snapshots & voting asset: On `OpenVoting.start`, take `snapshot_height`; voting power is spendable balance of `GovernanceParameters.voting_asset` at `snapshot_height`. Conviction locks extend post‑enactment by `lock_multiplier × base_lock_period_blocks`; violating withdrawals are rejected.
-- Precision: Weights use unsigned Q64.64; thresholds (approval, quorum) use Q32.32; rounding is toward zero. Overflow reverts tally deterministically (no enactment).
-- End is exclusive: Votes accepted while `height < end`; late tallies must be deterministic. `max_active_referenda` enforced with FIFO queue; duplicate `preimage_hash` rejected/merged.
-- Dependencies: If `requires` present, all referenced proposals MUST be Enacted before execution; cycles rejected on propose.
-- Preimage: `SubmitPreimage { code_bytes, manifest }` stored content‑addressed by `preimage_hash`.
-- Fast‑track (optional): Parliament Review House (≥ 2/3) may shorten delay up to `fast_track_max_reduction_blocks`, preserving `min_enactment_delay ≥ finality_margin`. Emits `FastTrackGranted`.
-
-Examples (Torii JSON/CLI)
-
-- Propose upgrade
-
-```
-POST /governance/referenda
-Content-Type: application/json
-
-{
-  "preimage_hash": "0x0123...abcd",
-  "summary": "Executor upgrade vX.Y",
-  "requires": ["0xdeadbeef...", "0x012345..."]
-}
-```
-
-- Open voting (snapshot is taken at start)
-
-```
-POST /governance/referenda/{id}/open
-Content-Type: application/json
-
-{ "start": 123450, "end": 123650 }
-```
-
-- Cast vote (idempotent; conviction encoded as an integer index)
-
-```
-POST /governance/referenda/{id}/vote
-Content-Type: application/json
-
-{ "voter": "<i105-account-id>", "conviction": 2, "choice": "Aye" }
-```
-
-- Query enactments (shows execution windows)
-
-```
-GET /governance/enactments/{id}
-
-{
-  "referendum_id": "0x0123...",
-  "preimage_hash": "0x0123...",
-  "at_window": { "lower": 123700, "upper": 123750 }
-}
-```
-
-Multibody sortition (Parliament)
-- Bodies: Proposal, Review, Enactment Houses; members selected by deterministic sortition from eligible accounts for fixed terms.
-- Flow: Proposal House admits proposals → Review House audits preimages/manifests → Enactment House schedules and signs `ParliamentEnactmentCertificate` for the execution window.
-- Randomness: `epoch_beacon := H("iroha/beacon/v2", concat(finalized_block_hash[h−J..h]))` (blake2b‑256); `R = H("iroha/parliament/v2", chain_id, epoch_index, epoch_beacon)`. Eligibility set deduped and enumerated lexicographically.
-- Thresholds/timeouts: Proposal House admit ≥ simple majority; Review House approve ≥ 2/3 (veto on invalid manifest, reproducibility failure, or delay < minimum); Enactment House certify ≥ 2/3 within `T_sign` blocks else `ParliamentTimeout` and escalation/reselection. Track absenteeism; eject after K consecutive misses at rotation.
-
-Safety & determinism
-- Enactment delay: `min_enactment_delay ≥ finality_margin`; executions authorized only within `at_window`.
-- Reproducibility: manifests are canonical JSON (RFC 8785 JCS) with domain tag; only IVM `.to` and JSON manifest allowed; off‑chain URLs are non‑deterministic and do not affect consensus (hashes do).
-- Size/gas caps: root calls use separate quotas with deterministic rollover; manifest/code size limits enforced; archives must be single content blobs (no nested archives).
-
-- APIs & data model (additions)
-- `RootAdminSet`, `RootMultisigPolicy`, `GovernanceParameters` (voting_asset, base_lock_period_blocks, count_abstain_in_turnout, approval_threshold Q32.32, quorum_threshold Q32.32, max_active_referenda, fast_track_max_reduction_blocks, window_slack_blocks, deposit_base/byte/block), `Referendum { requires: Vec<ProposalId> }`, `Vote{account, conviction, choice}`, `GovernanceEnactment` + `GovernanceEnactmentCertificate`, `ParliamentBodies`, `ParliamentEnactment` + `ParliamentEnactmentCertificate`.
-- Torii endpoints (optional): propose/vote/status/enactment feeds; multisig proposal/approval endpoints for root.
-
-Conformance & tests
-- Sudo/multisig: threshold/membership checks; ctx_hash binding and expiry; audit events with fields.
-- Governance: snapshots at start; Q‑format arithmetic and overflow behavior; end exclusive; conflict resolution by fingerprint; window execution semantics and reschedule path; deposit function/refunds; dependency cycles rejected.
-- Parliament: beacon reproducibility; thresholds/timeouts/veto reasons; absenteeism handling; certificate windows and validation.
-- Upgrades: canonical manifest hashing; two‑phase activation; rollback on failure; content types/size limits enforced.
+- Iroha 3 has one ABI version: V1. Runtime-upgrade proposals target
+  `abi_version = 1`; this document does not define a V2 compatibility path.
+- Proposal-backed governance accepts the closed, typed seven-kind
+  `ProposalKind`: `DeployContract`, `RuntimeUpgrade`, `SccpRouteGovernance`,
+  `ValidationFeePolicy`, `ValidationFeePayoutLifecycle`,
+  `MusubiRegistryGovernance`, and `SorafsProviderGovernance`.
+- A Parliament attempt owns its body pipeline, sortition evidence, results,
+  policy and effect bindings, compare-and-set head, and
+  `GovernanceCertificateV1`. Core constructs the certificate automatically
+  when the final required result is accepted.
+- Core derives `enact_at_height` from the certification height and configured
+  minimum delay. At that exact height, the automatic block-start step
+  revalidates the certificate and compare-and-set head. Head drift records
+  `Superseded`; a matching head records `Enacted` after the typed effect
+  succeeds, or rolls back the effect and records `ExecutionFailed`.
+- A stored proposal has exactly `proposer`, `kind`, `created_height`, and
+  `status`. Its closed statuses are `Proposed`, `Rejected`, `Enacted`,
+  `Superseded`, and `ExecutionFailed`; there is no `Approved` compatibility
+  state.
+- Clients may create typed attempts, submit only the closed Parliament
+  lifecycle transitions, and read attempts and results. Certificate creation,
+  finalization, enactment, supersession, and execution-failure recording are
+  consensus-owned. There is no public or manual finalize, enact, or
+  certificate-submission path and no compatibility alias for one.
+- Standalone referenda remain a separate election product. Their public or
+  proof-backed ballots and tallies are not Parliament body results and cannot
+  authorize a typed proposal or contribute to `GovernanceCertificateV1`.
 
 Micro‑batch / multi‑call transactions
 - Allow a single transaction to contain a small bundle of calls to the same

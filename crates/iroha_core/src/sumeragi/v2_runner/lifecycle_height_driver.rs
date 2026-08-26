@@ -12,8 +12,8 @@ fn completion_selection_stops_batch(
     )
 }
 
-/// Return whether a just-published Validate retained its exact Ready-successor
-/// token and must re-enter Completion before any Runtime turn.
+/// Return whether a selected completion retained or exposed exact Ready work
+/// and must re-enter Completion before any Runtime turn.
 fn completion_selection_retries_before_runtime(
     selection: &super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1,
 ) -> bool {
@@ -21,6 +21,8 @@ fn completion_selection_retries_before_runtime(
         selection,
         super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished { .. }
             | super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWoken { .. }
+            | super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::ApplyTerminalDirectBroadcastCompleted
+            | super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::ApplyTerminalDirectBroadcastDeferred
     )
 }
 
@@ -82,11 +84,47 @@ pub(in crate::sumeragi) enum LifecycleProducerClaimDispositionV1 {
     AwaitingValidateSidecar,
     /// A typed Decision Apply owns the terminal barrier until Kura and LedgerV1 settle.
     AwaitingApplyCompletion,
-    /// Recovered Apply settled the reducer terminal; only durable rollover may follow.
+    /// Recovered Apply settled the reducer terminal; only authenticated direct/recovered
+    /// Broadcast output handoff and durable rollover may follow.
     ApplyTerminalSettled,
     /// A no-lease terminal replay worker must finish before finalization.
     AwaitingReplayCompletion,
 }
+
+/// Sealed authority to service only decided-lane recovery after Decision.
+///
+/// The active runner can mint this token from either of the two Apply
+/// dispositions, or from the narrower authoritative repair proof that an
+/// `Eligible` executor is terminal and ready for rollover. Both paths keep
+/// current-height certified-body service alive without reopening ordinary
+/// lifecycle admission.
+pub(in crate::sumeragi) struct LifecycleDecidedLaneRecoveryPermitV1 {
+    _seal: LifecycleDecidedLaneRecoveryPermitSealV1,
+}
+
+struct LifecycleDecidedLaneRecoveryPermitSealV1;
+
+/// Sealed authority to finish only authenticated Broadcast output after Apply.
+///
+/// The terminal Apply disposition cannot authorize the general Ready dispatcher because fresh
+/// Apply, Sign, and Fetch I/O would reopen the settled reducer. This token admits only exact
+/// direct-output settlement or the closed recovered-Broadcast refanout transaction.
+pub(in crate::sumeragi) struct LifecycleApplyTerminalReadyBroadcastPermitV1 {
+    _seal: LifecycleApplyTerminalReadyBroadcastPermitSealV1,
+}
+
+struct LifecycleApplyTerminalReadyBroadcastPermitSealV1;
+
+/// Sealed authority to consume only lane-local fair ingress while ordinary ingress is blocked.
+///
+/// This permit deliberately carries no Decision authority. In particular, it cannot serve or
+/// retire global leader-wire traffic and cannot enter the Apply-only exact-output corridor. Apply
+/// barriers use `LifecycleDecidedLaneRecoveryPermitV1` instead.
+pub(in crate::sumeragi) struct LifecycleBlockedOrdinaryLaneLocalIngressPermitV1 {
+    _seal: LifecycleBlockedOrdinaryLaneLocalIngressPermitSealV1,
+}
+
+struct LifecycleBlockedOrdinaryLaneLocalIngressPermitSealV1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LifecycleProducerClaimTransitionErrorV1 {
@@ -125,13 +163,7 @@ impl LifecycleProducerClaimDispositionV1 {
 
     /// Return whether the outer height must yield before ProducerTurn planning.
     pub(in crate::sumeragi) const fn requires_yield(self) -> bool {
-        matches!(
-            self,
-            Self::AwaitingCompletion
-                | Self::AwaitingValidateSidecar
-                | Self::AwaitingApplyCompletion
-                | Self::AwaitingReplayCompletion
-        )
+        !matches!(self, Self::Eligible | Self::ApplyTerminalSettled)
     }
 
     /// Return whether this state may consume the Ready scheduler branch.
@@ -202,12 +234,85 @@ impl LifecycleProducerClaimDispositionV1 {
         matches!(self, Self::ApplyTerminalSettled)
     }
 
+    /// Mint the Broadcast-only Ready authority after exact Apply settlement.
+    const fn apply_terminal_ready_broadcast_permit(
+        self,
+    ) -> Option<LifecycleApplyTerminalReadyBroadcastPermitV1> {
+        if self.apply_terminal_settled() {
+            Some(LifecycleApplyTerminalReadyBroadcastPermitV1 {
+                _seal: LifecycleApplyTerminalReadyBroadcastPermitSealV1,
+            })
+        } else {
+            None
+        }
+    }
+
     /// Return whether decided Apply recovery may consume decided-lane fair ingress.
     pub(super) const fn permits_decided_lane_recovery_ingress(self) -> bool {
         matches!(
             self,
             Self::AwaitingApplyCompletion | Self::ApplyTerminalSettled
         )
+    }
+
+    /// Return whether authoritative terminal executor state may repair a stale
+    /// process-local claim and enter decided-lane recovery directly.
+    ///
+    /// A peer can finish Apply through the ordinary executor path without
+    /// carrying either Apply-only process-local disposition into the next
+    /// runner turn. Once the executor is terminal and ready for rollover, an
+    /// exact current-height body request must be served from Kura instead of
+    /// attempting to append fresh lifecycle work after Decision.
+    pub(super) const fn permits_terminal_ready_decided_lane_recovery(
+        self,
+        executor_ready_to_finish: bool,
+        decided_subject_present: bool,
+    ) -> bool {
+        matches!(self, Self::Eligible) && executor_ready_to_finish && decided_subject_present
+    }
+
+    /// Mint decided-lane authority from authoritative terminal executor state.
+    pub(in crate::sumeragi) const fn terminal_ready_decided_lane_recovery_permit(
+        self,
+        executor_ready_to_finish: bool,
+        decided_subject_present: bool,
+    ) -> Option<LifecycleDecidedLaneRecoveryPermitV1> {
+        if self.permits_terminal_ready_decided_lane_recovery(
+            executor_ready_to_finish,
+            decided_subject_present,
+        ) {
+            Some(LifecycleDecidedLaneRecoveryPermitV1 {
+                _seal: LifecycleDecidedLaneRecoveryPermitSealV1,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Mint the sealed decided-lane recovery authority for either Apply barrier.
+    pub(in crate::sumeragi) const fn decided_lane_recovery_permit(
+        self,
+    ) -> Option<LifecycleDecidedLaneRecoveryPermitV1> {
+        if self.permits_decided_lane_recovery_ingress() {
+            Some(LifecycleDecidedLaneRecoveryPermitV1 {
+                _seal: LifecycleDecidedLaneRecoveryPermitSealV1,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Mint lane-local fair-ingress authority while a non-Apply owner blocks ordinary ingress.
+    pub(in crate::sumeragi) const fn blocked_ordinary_lane_local_ingress_permit(
+        self,
+    ) -> Option<LifecycleBlockedOrdinaryLaneLocalIngressPermitV1> {
+        if self.blocks_ingress() && !self.permits_decided_lane_recovery_ingress() {
+            Some(LifecycleBlockedOrdinaryLaneLocalIngressPermitV1 {
+                _seal: LifecycleBlockedOrdinaryLaneLocalIngressPermitSealV1,
+            })
+        } else {
+            None
+        }
     }
 
     fn observe_completion(
@@ -232,14 +337,23 @@ impl LifecycleProducerClaimDispositionV1 {
             (Self::AwaitingCompletion, Completion::LifecycleValidatePublished { ordinal }) => {
                 Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
             }
-            (Self::Eligible, Completion::LifecycleValidateSidecarWoken { ordinal }) => {
-                Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
-            }
-            (Self::AwaitingCompletion, Completion::LifecycleValidateSidecarWoken { ordinal }) => {
+            (
+                Self::Eligible | Self::AwaitingCompletion | Self::AwaitingValidateSidecar,
+                Completion::LifecycleValidateSidecarWoken { ordinal },
+            ) => {
+                // Woken retains the immutable registration that installed
+                // AwaitingValidateSidecar, so this is the same Validate row
+                // advancing back into its exact Ready-successor corridor.
                 Ok(Self::AwaitingValidateSuccessor { ordinal: *ordinal })
             }
             (
                 state @ Self::AwaitingValidateSuccessor { ordinal },
+                Completion::LifecycleValidateSuccessorCapacityPending {
+                    ordinal: pending_ordinal,
+                },
+            ) if ordinal == *pending_ordinal => Ok(state),
+            (
+                state @ Self::AwaitingValidateFence { ordinal, .. },
                 Completion::LifecycleValidateSuccessorCapacityPending {
                     ordinal: pending_ordinal,
                 },
@@ -455,7 +569,15 @@ impl LifecycleProducerClaimDispositionV1 {
                 Self::Eligible,
                 Completion::CompletionIoDispatch(Ok(Dispatch::CapacityUnavailable { .. })),
             )
-            | (Self::Eligible, Completion::RecoveredLifecycleBroadcastRefanout(_)) => Ok(self),
+            | (
+                Self::Eligible | Self::ApplyTerminalSettled,
+                Completion::RecoveredLifecycleBroadcastRefanout(_),
+            ) => Ok(self),
+            (
+                Self::ApplyTerminalSettled,
+                Completion::ApplyTerminalDirectBroadcastCompleted
+                | Completion::ApplyTerminalDirectBroadcastDeferred,
+            ) => Ok(self),
             _ => Err(LifecycleProducerClaimTransitionErrorV1::Completion),
         }
     }
@@ -595,17 +717,31 @@ fn recovered_output_drain_disposition(
 fn settled_apply_output_drain_disposition(
     settlement: super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1,
     producer_claim: LifecycleProducerClaimDispositionV1,
-) -> LifecycleV2IngressDrainDispositionV1 {
+) -> Option<LifecycleV2IngressDrainDispositionV1> {
     debug_assert!(producer_claim.apply_terminal_settled());
     match settlement {
         super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::SourceRetained => {
-            LifecycleV2IngressDrainDispositionV1::retry_before_producer(producer_claim)
+            Some(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                producer_claim,
+            ))
+        }
+        super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed => {
+            Some(LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(
+                producer_claim,
+            ))
         }
         super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty
-        | super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Deferred
-        | super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed => {
-            LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(producer_claim)
-        }
+        | super::super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Deferred => None,
+    }
+}
+
+const fn blocked_runtime_drain_disposition(
+    producer_claim: LifecycleProducerClaimDispositionV1,
+) -> LifecycleV2IngressDrainDispositionV1 {
+    if producer_claim.apply_terminal_settled() {
+        LifecycleV2IngressDrainDispositionV1::after_terminal_settlement(producer_claim)
+    } else {
+        LifecycleV2IngressDrainDispositionV1::ready(producer_claim)
     }
 }
 
@@ -633,16 +769,45 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
     block_sync: &mut V2BlockSyncDiscovery,
     block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
     npos_vrf: &mut V2NposVrfLifecycle,
+    npos_beacon: &mut V2GlobalBeaconLifecycle,
     limit: usize,
     mut producer_claim: LifecycleProducerClaimDispositionV1,
 ) -> Result<LifecycleV2IngressDrainDispositionV1, V2RunnerError> {
     if producer_claim.apply_terminal_settled() {
-        // Applied is already the exact reducer terminal. Drain only retained,
-        // authenticated output rows required by the finalization census; do
-        // not reopen generic Completion, Runtime, Ingress, or Producer work.
-        // A validator that originated a transaction can retain such an output
-        // after its peers have crossed Apply, so skipping this bounded drain
-        // would leave it permanently short of successor activation.
+        // Make an expired lower direct-output row visible to the cold-output
+        // order check before it can service a higher recovered Broadcast.
+        // Waking is itself a bounded state transition, so re-enter Completion
+        // on the next outer iteration rather than combining it with service I/O.
+        let direct_output_woken = activated.with_runner_runtime(
+            runner,
+            |owner, executor, services, _local_proposal| {
+                let fence = executor.lifecycle_reducer_fence_observation();
+                match owner.wake_apply_terminal_direct_broadcast_if_fenced(fence) {
+                    Ok(woken) => Ok(woken),
+                    Err(error) => {
+                        iroha_logger::error!(
+                            ?error,
+                            "Sumeragi v2 post-Apply direct-output fence wake failed closed"
+                        );
+                        services
+                            .lifecycle_output_guard()
+                            .close_admission_for_restart();
+                        Err(V2RunnerError::RestartRequired)
+                    }
+                }
+            },
+        )?;
+        if direct_output_woken {
+            return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                producer_claim,
+            ));
+        }
+        // Applied is already the exact reducer terminal. First drain retained,
+        // authenticated cold-open output rows required by the finalization
+        // census. If none owns this turn, continue only far enough for the
+        // ordinary Completion pre-gate and authenticated Ready classifier to
+        // park a recovered signed Broadcast on its exact-output wait. Runtime,
+        // Ingress, and Producer remain fenced by `ApplyTerminalSettled`.
         let settlement = activated.with_runner_runtime(
             runner,
             |owner, executor, services, _local_proposal| {
@@ -652,10 +817,11 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                 .map_err(V2RunnerError::from)
             },
         )?;
-        return Ok(settled_apply_output_drain_disposition(
-            settlement,
-            producer_claim,
-        ));
+        if let Some(disposition) =
+            settled_apply_output_drain_disposition(settlement, producer_claim)
+        {
+            return Ok(disposition);
+        }
     }
     let (context_id, height, output_guard) =
         activated.with_runner_runtime(runner, |_owner, executor, services, _local_proposal| {
@@ -709,6 +875,20 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                         None
                     }
                     PreGate::Selected(selected) => Some(selected),
+                    PreGate::Ready(ready) if producer_claim.apply_terminal_settled() => {
+                        let permit = producer_claim
+                            .apply_terminal_ready_broadcast_permit()
+                            .expect("the terminal Apply disposition mints its sealed Ready permit");
+                        match activated.drive_apply_terminal_ready_broadcast_turn(ready, permit) {
+                            CompletionTurn::PassThrough(empty_turn) => {
+                                // Completion I/O and an empty census retain the exact cursor.
+                                // Dropping it advances only to the existing Runtime fence below.
+                                drop(empty_turn);
+                                None
+                            }
+                            CompletionTurn::Selected(selected) => Some(selected),
+                        }
+                    }
                     PreGate::Ready(ready) if producer_claim.permits_ready_completion() => {
                         let completion = match producer_claim.required_ready_ordinal() {
                             Some(ordinal) => activated
@@ -775,7 +955,119 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                     // advance outside this batch. Its exact Completion owner
                     // is the sole progress target; ordinary runtime ingress
                     // remains inert until that barrier settles.
-                    return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
+                    return Ok(blocked_runtime_drain_disposition(producer_claim));
+                }
+                let (pre_timeout_cut, pre_timeout_advanced) = activated.with_runner_runtime(
+                    runner,
+                    |_owner, executor, services, _local_proposal| {
+                        let now = Instant::now();
+                        let Some(cut) = executor.freeze_pre_timeout_locked_prepare_qc_cut(
+                            now,
+                            receiver.next_physical_admission_ordinal(),
+                        )?
+                        else {
+                            return Ok::<_, V2RunnerError>((None, false));
+                        };
+                        match executor
+                            .step_pre_timeout_locked_prepare_qc_once(now, &cut, services)?
+                        {
+                            EffectExecutorStep::Idle => Ok((Some(cut), false)),
+                            EffectExecutorStep::Advanced { .. } => {
+                                let _ = reconcile_executor_locked_body(executor, services)?;
+                                Ok((None, true))
+                            }
+                        }
+                    },
+                )?;
+                if pre_timeout_advanced {
+                    // The exact already-admitted QC staged LockAndCommit ahead
+                    // of the frozen timeout owner. Re-enter Completion/Runtime
+                    // so the existing WAL fence settles before any Producer or
+                    // ordinary timeout turn.
+                    return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                        producer_claim,
+                    ));
+                }
+                if let Some(pre_timeout_cut) = pre_timeout_cut {
+                    use super::super::v2_lifecycle_coordinator::ProductionPreTimeoutLockedPrepareQcIngressTurnV1 as PreTimeoutIngress;
+                    match activated
+                        .prepare_pre_timeout_locked_prepare_qc_ingress_turn(&pre_timeout_cut)
+                    {
+                        PreTimeoutIngress::Empty => {}
+                        PreTimeoutIngress::RestartRequired => {
+                            return Err(ingress_restart_error(&output_guard));
+                        }
+                        PreTimeoutIngress::ObsoletePredecessor(prepared) => {
+                            let consumption = activated.consume_prepared_ordinary_ingress_turn(
+                                runner,
+                                prepared,
+                                lane_work,
+                                kura,
+                                local_key,
+                                block_sync_server,
+                                block_sync,
+                                block_sync_request,
+                                npos_vrf,
+                                npos_beacon,
+                            )?;
+                            match consumption {
+                                super::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue => {}
+                            }
+                            // Dequeue retirement strictly lowers the fixed
+                            // pre-cut predecessor rank. A fresh outer turn
+                            // remints the same timeout owner/cut and cannot see
+                            // any later producer append.
+                            return Ok(
+                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                                    producer_claim,
+                                ),
+                            );
+                        }
+                        PreTimeoutIngress::ExactPrepareQc(prepared) => {
+                            let consumption = activated.consume_prepared_ordinary_ingress_turn(
+                                runner,
+                                prepared,
+                                lane_work,
+                                kura,
+                                local_key,
+                                block_sync_server,
+                                block_sync,
+                                block_sync_request,
+                                npos_vrf,
+                                npos_beacon,
+                            )?;
+                            match consumption {
+                                super::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue => {}
+                            }
+                            let advanced = activated.with_runner_runtime(
+                                runner,
+                                |_owner, executor, services, _local_proposal| match executor
+                                    .step_pre_timeout_locked_prepare_qc_once(
+                                        Instant::now(),
+                                        &pre_timeout_cut,
+                                        services,
+                                    )? {
+                                    EffectExecutorStep::Idle => Ok::<_, V2RunnerError>(false),
+                                    EffectExecutorStep::Advanced { .. } => {
+                                        let _ = reconcile_executor_locked_body(executor, services)?;
+                                        Ok(true)
+                                    }
+                                },
+                            )?;
+                            if advanced {
+                                return Ok(
+                                    LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                                        producer_claim,
+                                    ),
+                                );
+                            }
+                            // Authentication or ordinary ingress admission may
+                            // have retired the previewed carrier without
+                            // queueing the exact runtime command. Grant no
+                            // further grace; the ordinary step below emits the
+                            // already-owned timeout in this same Runtime turn.
+                        }
+                    }
                 }
                 let (installed_terminal, executor_slice) = activated.with_runner_runtime(
                     runner,
@@ -833,6 +1125,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             block_sync,
                             block_sync_request,
                             npos_vrf,
+                            npos_beacon,
                         );
                         if let Err(error) = consumed {
                             iroha_logger::error!(
@@ -969,6 +1262,107 @@ mod tests {
     }
 
     #[test]
+    fn terminal_ready_executor_repairs_an_eligible_decided_lane_claim() {
+        let eligible = LifecycleProducerClaimDispositionV1::initial();
+        assert!(eligible.permits_terminal_ready_decided_lane_recovery(true, true));
+        assert!(
+            eligible
+                .terminal_ready_decided_lane_recovery_permit(true, true)
+                .is_some()
+        );
+        assert!(!eligible.permits_terminal_ready_decided_lane_recovery(false, true));
+        assert!(
+            eligible
+                .terminal_ready_decided_lane_recovery_permit(false, true)
+                .is_none()
+        );
+        assert!(!eligible.permits_terminal_ready_decided_lane_recovery(true, false));
+        assert!(
+            !LifecycleProducerClaimDispositionV1::AwaitingCompletion
+                .permits_terminal_ready_decided_lane_recovery(true, true),
+            "an unrelated live owner cannot be bypassed by terminal recovery"
+        );
+        assert!(
+            !LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion
+                .permits_terminal_ready_decided_lane_recovery(true, true),
+            "the existing Apply-only recovery corridor remains authoritative"
+        );
+    }
+
+    #[test]
+    fn settled_apply_reenters_ready_completion_for_recovered_broadcast() {
+        use super::super::super::v2_lifecycle_coordinator::{
+            ProductionLifecycleCompletionSelectionV1 as Completion,
+            ProductionRecoveredLifecycleSignedBroadcastRefanoutV1 as Refanout,
+            RecoveredLifecycleOutputSettlementV1 as OutputSettlement,
+        };
+
+        let claim = LifecycleProducerClaimDispositionV1::ApplyTerminalSettled;
+        assert!(
+            !claim.permits_ready_completion(),
+            "a terminal Apply cannot enter the general Ready I/O dispatcher"
+        );
+        assert!(
+            claim.apply_terminal_ready_broadcast_permit().is_some(),
+            "a terminal Apply mints only the sealed Broadcast-output Ready permit"
+        );
+        assert!(
+            LifecycleProducerClaimDispositionV1::Eligible
+                .apply_terminal_ready_broadcast_permit()
+                .is_none(),
+            "an ordinary eligible claim cannot mint terminal output authority"
+        );
+        assert_eq!(
+            settled_apply_output_drain_disposition(OutputSettlement::Empty, claim),
+            None,
+            "an empty cold-output owner must fall through to the Ready classifier"
+        );
+        assert_eq!(
+            settled_apply_output_drain_disposition(OutputSettlement::Deferred, claim),
+            None,
+            "a deferred cold-output owner must not hide registry-backed Ready work"
+        );
+
+        for outcome in [
+            Refanout::CapacityUnavailable,
+            Refanout::Refanned { ordinal: 86 },
+        ] {
+            assert_eq!(
+                claim.observe_completion(&Completion::RecoveredLifecycleBroadcastRefanout(Ok(
+                    outcome,
+                ))),
+                Ok(claim),
+                "refanout retains the terminal Apply barrier until durable output handoff"
+            );
+        }
+        for direct in [
+            Completion::ApplyTerminalDirectBroadcastCompleted,
+            Completion::ApplyTerminalDirectBroadcastDeferred,
+        ] {
+            assert_eq!(
+                claim.observe_completion(&direct),
+                Ok(claim),
+                "direct Broadcast settlement retains the terminal Apply barrier"
+            );
+            assert!(
+                completion_selection_retries_before_runtime(&direct),
+                "each direct Broadcast outcome must re-enter Completion before rollover"
+            );
+        }
+
+        let completed = settled_apply_output_drain_disposition(OutputSettlement::Completed, claim)
+            .expect("a completed cold output retains the existing one-turn barrier");
+        assert!(completed.terminal_settlement_stops_runtime());
+        assert_eq!(completed.producer_claim(), claim);
+        let after_ready_refanout = blocked_runtime_drain_disposition(claim);
+        assert!(
+            after_ready_refanout.terminal_settlement_stops_runtime(),
+            "a Ready refanout must not reopen the reducer/runtime suffix"
+        );
+        assert_eq!(after_ready_refanout.producer_claim(), claim);
+    }
+
+    #[test]
     fn published_validate_token_retries_before_runtime_and_apply_barrier_is_exact() {
         use super::super::super::v2_lifecycle_coordinator::{
             LifecycleWorkClass, ProductionCompletionDispatchV1 as Dispatch,
@@ -999,6 +1393,57 @@ mod tests {
             claim,
             LifecycleProducerClaimDispositionV1::AwaitingValidateSuccessor { ordinal: 7 }
         );
+        assert!(
+            claim.requires_yield(),
+            "the retained same-address Validate successor must precede ProducerTurn"
+        );
+        let fenced = claim
+            .observe_completion(&Completion::LifecycleValidateSuccessorFencePending {
+                ordinal: 7,
+                wait: super::super::super::v2_lifecycle_coordinator::wait_token_for_test(
+                    super::super::super::v2_lifecycle_coordinator::WaitSource::External(
+                        super::super::super::v2_lifecycle_coordinator::LifecycleDigest::new(
+                            [11; 32],
+                        ),
+                    ),
+                    3,
+                ),
+            })
+            .expect("the exact reducer-fence retry retains the Validate successor");
+        assert!(
+            fenced.requires_yield(),
+            "a reducer-fenced Validate successor must precede ProducerTurn"
+        );
+        assert_eq!(
+            fenced
+                .observe_completion(&Completion::LifecycleValidateSuccessorCapacityPending {
+                    ordinal: 7,
+                })
+                .expect("capacity retry retains the exact reducer-fenced Validate successor"),
+            fenced
+        );
+        assert!(
+            fenced
+                .observe_completion(&Completion::LifecycleValidateSuccessorCapacityPending {
+                    ordinal: 8,
+                })
+                .is_err(),
+            "capacity retry for another ordinal must fail closed"
+        );
+        let sidecar = LifecycleProducerClaimDispositionV1::AwaitingCompletion
+            .observe_completion(&Completion::LifecycleValidateSidecarWaiting)
+            .expect("registered Validate sidecar retains the height");
+        assert_eq!(
+            sidecar,
+            LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar
+        );
+        assert!(sidecar.requires_yield());
+        assert_eq!(
+            sidecar
+                .observe_completion(&Completion::LifecycleValidateSidecarWoken { ordinal: 17 })
+                .expect("normal sidecar wake retains its exact Validate successor"),
+            LifecycleProducerClaimDispositionV1::AwaitingValidateSuccessor { ordinal: 17 }
+        );
         let claim = claim
             .observe_completion(&Completion::CompletionIoDispatch(Ok(
                 Dispatch::BodyStageAdvanced {
@@ -1014,6 +1459,10 @@ mod tests {
                 parent_ordinal: 7,
                 child_ordinal: 13,
             }
+        );
+        assert!(
+            claim.requires_yield(),
+            "the protected live Apply child must precede ProducerTurn"
         );
         assert!(
             claim
@@ -1038,7 +1487,7 @@ mod tests {
             .expect("the exact child enters its dedicated queue");
         assert_eq!(
             claim,
-            LifecycleProducerClaimDispositionV1::AwaitingCompletion
+            LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion
         );
     }
 
@@ -1080,6 +1529,114 @@ mod tests {
             ))
             .expect("matching Sign completion clears the target");
         assert!(!applied_claim.requires_yield());
+    }
+
+    #[test]
+    fn blocked_ordinary_claims_mint_only_lane_local_fair_ingress_authority() {
+        for claim in [
+            LifecycleProducerClaimDispositionV1::AwaitingValidateSuccessor { ordinal: 1 },
+            LifecycleProducerClaimDispositionV1::AwaitingValidateFence {
+                ordinal: 1,
+                wait: super::super::super::v2_lifecycle_coordinator::wait_token_for_test(
+                    super::super::super::v2_lifecycle_coordinator::WaitSource::External(
+                        super::super::super::v2_lifecycle_coordinator::LifecycleDigest::new(
+                            [12; 32],
+                        ),
+                    ),
+                    4,
+                ),
+            },
+            LifecycleProducerClaimDispositionV1::AwaitingLiveApplyQueue {
+                parent_ordinal: 2,
+                child_ordinal: 3,
+            },
+            LifecycleProducerClaimDispositionV1::AwaitingCompletion,
+            LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar,
+            LifecycleProducerClaimDispositionV1::AwaitingReplayCompletion,
+        ] {
+            assert!(
+                claim.blocked_ordinary_lane_local_ingress_permit().is_some(),
+                "a non-Apply ordinary-ingress barrier must preserve independent lane progress"
+            );
+            assert!(claim.decided_lane_recovery_permit().is_none());
+        }
+
+        assert!(
+            LifecycleProducerClaimDispositionV1::Eligible
+                .blocked_ordinary_lane_local_ingress_permit()
+                .is_none()
+        );
+        for claim in [
+            LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion,
+            LifecycleProducerClaimDispositionV1::ApplyTerminalSettled,
+        ] {
+            assert!(
+                claim.blocked_ordinary_lane_local_ingress_permit().is_none(),
+                "Apply barriers retain their narrower decided-lane recovery authority"
+            );
+            assert!(claim.decided_lane_recovery_permit().is_some());
+        }
+    }
+
+    #[test]
+    fn registered_validate_sidecar_wake_advances_the_persisted_barrier() {
+        use super::super::super::v2_lifecycle_coordinator::{
+            ProductionCompletionDispatchV1 as Dispatch,
+            ProductionLifecycleCompletionSelectionV1 as Completion,
+        };
+
+        let claim = LifecycleProducerClaimDispositionV1::initial()
+            .observe_completion(&Completion::CompletionIoDispatch(Ok(
+                Dispatch::ValidateQueued { ordinal: 41 },
+            )))
+            .expect("queued Validate mints its Completion target")
+            .observe_completion(&Completion::LifecycleValidateDeferred)
+            .expect("missing sidecar retains the queued Validate target")
+            .observe_completion(&Completion::LifecycleValidateSidecarWaiting)
+            .expect("registered sidecar wait installs its lane-only barrier");
+        assert_eq!(
+            claim,
+            LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar
+        );
+        assert!(claim.blocks_runtime());
+
+        let claim = claim
+            .observe_completion(&Completion::LifecycleValidateSidecarWaiting)
+            .expect("an unchanged registered wait is an idempotent retry");
+        assert_eq!(
+            claim,
+            LifecycleProducerClaimDispositionV1::AwaitingValidateSidecar
+        );
+
+        let claim = claim
+            .observe_completion(&Completion::LifecycleValidateSidecarWoken { ordinal: 41 })
+            .expect("the registered wait wakes the same Validate row");
+        assert_eq!(
+            claim,
+            LifecycleProducerClaimDispositionV1::AwaitingValidateSuccessor { ordinal: 41 }
+        );
+        let claim = claim
+            .observe_completion(&Completion::LifecycleValidateSuccessorCapacityPending {
+                ordinal: 41,
+            })
+            .expect("capacity retry retains the exact woken successor");
+        assert_eq!(
+            claim,
+            LifecycleProducerClaimDispositionV1::AwaitingValidateSuccessor { ordinal: 41 }
+        );
+        assert_eq!(
+            claim.observe_completion(&Completion::LifecycleValidateSuccessorCapacityPending {
+                ordinal: 42
+            }),
+            Err(LifecycleProducerClaimTransitionErrorV1::Completion),
+            "a different successor still fails closed"
+        );
+        assert_eq!(
+            LifecycleProducerClaimDispositionV1::AwaitingApplyCompletion
+                .observe_completion(&Completion::LifecycleValidateSidecarWoken { ordinal: 41 }),
+            Err(LifecycleProducerClaimTransitionErrorV1::Completion),
+            "an unrelated non-Producer owner still fails closed"
+        );
     }
 
     #[test]

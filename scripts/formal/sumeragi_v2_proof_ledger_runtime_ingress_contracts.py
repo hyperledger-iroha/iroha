@@ -279,7 +279,7 @@ _REMOTE_PROPOSAL_REPLAY_ITEM_SHA256 = {
     "fetch_consumer_rebind": "fae6445791cb8e360adab46ae142cc4d3e291ddd40ed55393eeb67d369e61b18",
     "fetch_authority_adopt": "e846fda5841a09586c8baded336d1723f2cc2d625a1078ff21e8185913cb38b1",
     "body_fetch_rebind": "eba1c4dbbc4292774bfb50861995e9fb212643576d8522e318a91efa7cec6399",
-    "executor_retain": "2d7cbd5e2c9bcd323c60925770d8a9406ea85877cacac7b6a323729df07e3bde",
+    "executor_retain": "59ff1532bc4f12491fc9aaaa433c47bdb36b4560399548a4862362ea10576d00",
     "executor_ready": "8f91405f9c0ac870564dd0334596e55c8c9ccce435ee2a7684c7a22c32cde403",
     "ownership_fetch_replay": "1ac9ff4ff448a03d9348faab7796bc1c986cd0600f64d3feb27b4f0abee657c1",
     "authority_mint": "ea8680ad00ae88245688355cc371724b4a133b112be43c3d46fe50f9cc4785e3",
@@ -1053,12 +1053,34 @@ ingress.exactly_matches_authenticated(authenticated)
         errors,
     )
 
-    test_context = (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),)
+    runtime_test_context = (
+        (
+            "#",
+            "[",
+            "cfg",
+            "(",
+            "test",
+            ")",
+            "]",
+            "pub",
+            "(",
+            "in",
+            "crate",
+            "::",
+            "sumeragi",
+            ")",
+            "mod",
+            "tests",
+        ),
+    )
+    effects_test_context = (
+        ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
+    )
     regression = one_item(
         runtime_path,
         runtime_source,
         "authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origin",
-        test_context,
+        runtime_test_context,
         "runtime_regression",
         "authenticated remote Proposal Fetch/Store/Validate replay regression",
         attributes=("#[test]", "#[allow(clippy::too_many_lines)]"),
@@ -1087,7 +1109,7 @@ ingress.exactly_matches_authenticated(authenticated)
         runtime_path,
         runtime_source,
         "set_b_proposal_replay_waits_for_and_authenticates_periodic_fallback_fetch",
-        test_context,
+        runtime_test_context,
         "set_b_regression",
         "Set-B dormant Proposal replay regression",
         attributes=("#[test]",),
@@ -1130,7 +1152,7 @@ ingress.exactly_matches_authenticated(authenticated)
         effects_path,
         effects_source,
         "enter_view_and_ordinary_fetch_retry_preserve_authenticated_replay_owner",
-        test_context,
+        effects_test_context,
         "protected_rebind_regression",
         "post-EnterView ordinary Fetch replay regression",
         attributes=("#[test]",),

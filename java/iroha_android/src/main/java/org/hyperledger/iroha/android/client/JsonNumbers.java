@@ -31,6 +31,20 @@ public final class JsonNumbers {
     return (int) parsed;
   }
 
+  /** Require a lexical JSON integer without narrowing its mathematical value. */
+  public static BigInteger asBigInteger(final Object value, final String path) {
+    if (value instanceof BigInteger integer) {
+      return integer;
+    }
+    if (value instanceof Byte
+        || value instanceof Short
+        || value instanceof Integer
+        || value instanceof Long) {
+      return BigInteger.valueOf(((Number) value).longValue());
+    }
+    throw new IllegalStateException(path + " must be an integer");
+  }
+
   private static long asLong(
       final Object value, final String path, final boolean allowFloatingPoint) {
     if (!(value instanceof Number number)) {

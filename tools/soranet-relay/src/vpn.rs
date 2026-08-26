@@ -8,13 +8,15 @@ use crate::{
     metrics::Metrics,
     vpn_adapter::{VpnAdapter, VpnBridge},
 };
+use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::soranet::{
     RelayId,
     vpn::{
         VPN_CELL_LEN, VpnCellClassV1, VpnCellError, VpnCellFlagsV1, VpnCellHeaderV1, VpnCellV1,
         VpnControlPlaneV1, VpnCoverPlanEntryV1, VpnCoverScheduleV1, VpnExitClassV1, VpnFlowLabelV1,
         VpnHelperTicketV1, VpnPaddedCellV1, VpnRouteV1, VpnSessionReceiptV1,
-        VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
+        VpnSignedSessionReceiptV1, VpnTariffV1, VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
+        vpn_tariff_meter_hash_v1,
     },
 };
 use iroha_primitives::numeric::Quantity;
@@ -133,7 +135,7 @@ impl fmt::Debug for ScheduledFrame {
 /// Overlay that handles VPN cell framing, validation, and billing metadata.
 pub struct VpnOverlay {
     config: VpnConfig,
-    helper_ticket_secret: Option<[u8; 32]>,
+    helper_ticket_issuer_public_key: Option<PublicKey>,
     backend_bootstrap_secret: Option<[u8; 32]>,
     exit_class: VpnExitClassV1,
     meter_hash: [u8; 32],
@@ -145,7 +147,7 @@ impl std::fmt::Debug for VpnOverlay {
         formatter
             .debug_struct("VpnOverlay")
             .field("config", &"<redacted>")
-            .field("helper_ticket_secret", &"<redacted>")
+            .field("helper_ticket_issuer_public_key", &"<pinned>")
             .field("backend_bootstrap_secret", &"<redacted>")
             .field("exit_class", &self.exit_class)
             .field("meter_hash", &"<redacted>")
@@ -156,20 +158,10 @@ impl std::fmt::Debug for VpnOverlay {
 }
 impl Drop for VpnOverlay {
     fn drop(&mut self) {
-        clear_vpn_overlay_secrets(
-            &mut self.helper_ticket_secret,
-            &mut self.backend_bootstrap_secret,
-        );
+        clear_vpn_overlay_secret(&mut self.backend_bootstrap_secret);
     }
 }
-fn clear_vpn_overlay_secrets(
-    helper_ticket_secret: &mut Option<[u8; 32]>,
-    backend_bootstrap_secret: &mut Option<[u8; 32]>,
-) {
-    if let Some(secret) = helper_ticket_secret {
-        secret.fill(0);
-        std::hint::black_box(secret);
-    }
+fn clear_vpn_overlay_secret(backend_bootstrap_secret: &mut Option<[u8; 32]>) {
     if let Some(secret) = backend_bootstrap_secret {
         secret.fill(0);
         std::hint::black_box(secret);
@@ -187,12 +179,12 @@ impl VpnOverlay {
         let meter_hash = config.try_meter_hash_bytes()?;
         let routes = config.parse_route_push()?;
         let dns_overrides = config.parse_dns_overrides()?;
-        let helper_ticket_secret = config.try_helper_ticket_secret_bytes()?;
+        let helper_ticket_issuer_public_key = config.try_helper_ticket_issuer_public_key()?;
         let _ = config.try_backend_endpoint()?;
         let backend_bootstrap_secret = config.try_backend_bootstrap_secret_bytes()?;
         Ok(Self {
             config,
-            helper_ticket_secret,
+            helper_ticket_issuer_public_key,
             backend_bootstrap_secret,
             exit_class,
             meter_hash,
@@ -208,9 +200,9 @@ impl VpnOverlay {
     pub fn config(&self) -> &VpnConfig {
         &self.config
     }
-    /// Return the startup-loaded helper-ticket authentication secret.
-    pub fn helper_ticket_secret(&self) -> Option<&[u8; 32]> {
-        self.helper_ticket_secret.as_ref()
+    /// Return the startup-pinned helper-ticket issuer public key.
+    pub fn helper_ticket_issuer_public_key(&self) -> Option<&PublicKey> {
+        self.helper_ticket_issuer_public_key.as_ref()
     }
     /// Return the startup-loaded backend bootstrap authentication secret.
     pub fn backend_bootstrap_secret(&self) -> Option<&[u8; 32]> {
@@ -374,12 +366,14 @@ impl VpnOverlay {
         &self,
         session: VpnSession,
         helper_ticket: VpnHelperTicketV1,
-    ) -> VpnSessionHandle {
+        relay_identity_key: Arc<KeyPair>,
+    ) -> Result<VpnSessionHandle, String> {
         VpnSessionHandle::from_helper_ticket(
             session,
             helper_ticket,
             self.exit_class,
             self.meter_hash,
+            relay_identity_key,
         )
     }
     /// Start a new VPN session and return an adapter for recording ingress/egress.
@@ -405,7 +399,7 @@ impl VpnOverlay {
     fn framing_only_overlay(&self) -> Self {
         Self {
             config: self.config.clone(),
-            helper_ticket_secret: None,
+            helper_ticket_issuer_public_key: None,
             backend_bootstrap_secret: None,
             exit_class: self.exit_class,
             meter_hash: self.meter_hash,
@@ -741,11 +735,12 @@ impl VpnSession {
         exit_class: VpnExitClassV1,
         meter_hash: [u8; 32],
     ) -> VpnSessionReceiptV1 {
-        let uptime_secs = self
-            .state
-            .started_at
-            .elapsed()
+        // Round the monotonic duration up so a sub-second client voucher can
+        // never exceed the receipt's coarse whole-second authorization bound.
+        let elapsed = self.state.started_at.elapsed();
+        let uptime_secs = elapsed
             .as_secs()
+            .saturating_add(u64::from(elapsed.subsec_nanos() != 0))
             .min(u64::from(u32::MAX)) as u32;
         VpnSessionReceiptV1 {
             session_id,
@@ -788,17 +783,35 @@ fn record_monotonic_sequence(last: &Mutex<Option<u64>>, sequence: u64) -> Result
     Ok(())
 }
 /// Session handle that carries receipt metadata alongside accounting.
+#[derive(Debug, Default)]
+struct VpnMeteredServiceWindow {
+    started_at_ms: Option<u64>,
+    started_at: Option<Instant>,
+    elapsed_ms: Option<u64>,
+}
+#[derive(Debug, Default)]
+struct VpnMeteredUsage {
+    ingress_bytes: AtomicU64,
+    egress_bytes: AtomicU64,
+    service_window: Mutex<VpnMeteredServiceWindow>,
+}
 #[derive(Clone)]
 pub struct VpnSessionHandle {
     session: VpnSession,
     session_id: [u8; 16],
     quote_id: [u8; 32],
+    lease_id: [u8; 32],
     account_hash: [u8; 32],
     relay_id: [u8; 32],
     payment_tx_hash: [u8; 32],
+    valid_after_ms: u64,
+    expires_at_ms: u64,
     highest_voucher: Arc<Mutex<Option<VpnUsageVoucherEnvelopeV1>>>,
+    tariff: Option<VpnTariffV1>,
+    metered_usage: Arc<VpnMeteredUsage>,
     exit_class: VpnExitClassV1,
     meter_hash: [u8; 32],
+    relay_identity_key: Option<Arc<KeyPair>>,
 }
 impl fmt::Debug for VpnSessionHandle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -807,29 +820,38 @@ impl fmt::Debug for VpnSessionHandle {
             .field("session", &"<redacted>")
             .field("session_id", &"<redacted>")
             .field("quote_id", &"<redacted>")
+            .field("lease_id", &"<redacted>")
             .field("account_hash", &"<redacted>")
             .field("relay_id", &"<redacted>")
             .field("payment_tx_hash", &"<redacted>")
+            .field("valid_after_ms", &"<redacted>")
+            .field("expires_at_ms", &"<redacted>")
             .field("highest_voucher", &"<redacted>")
+            .field("tariff", &"<redacted>")
+            .field("metered_usage", &"<redacted>")
             .field("exit_class", &self.exit_class)
             .field("meter_hash", &"<redacted>")
+            .field("relay_identity_key", &"<redacted>")
             .finish()
     }
 }
 /// Operator settlement payload emitted when a VPN session has an accepted client voucher.
 #[derive(Clone)]
 pub struct VpnSettlementArtifact {
+    /// Consensus lease identifier authorized by the operator-signed helper ticket.
+    pub lease_id: [u8; 32],
     /// Relay receipt committing to the highest accepted client voucher.
-    pub receipt: VpnSessionReceiptV1,
+    pub receipt: VpnSignedSessionReceiptV1,
     /// Highest client-signed voucher accepted by the relay for this session.
     pub voucher: VpnUsageVoucherV1,
-    /// Earned fee carried by the accepted voucher envelope.
+    /// Earned fee computed from actual receipt usage within the prepaid ceilings.
     pub earned_fee: Quantity,
 }
 impl fmt::Debug for VpnSettlementArtifact {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("VpnSettlementArtifact")
+            .field("lease_id", &"<redacted>")
             .field("receipt", &"<redacted>")
             .field("voucher", &"<redacted>")
             .field("earned_fee", &"<redacted>")
@@ -847,37 +869,141 @@ impl VpnSessionHandle {
             session,
             session_id,
             quote_id: [0u8; 32],
+            lease_id: [0u8; 32],
             account_hash: [0u8; 32],
             relay_id: [0u8; 32],
             payment_tx_hash: [0u8; 32],
+            valid_after_ms: 0,
+            expires_at_ms: u64::MAX,
             highest_voucher: Arc::new(Mutex::new(None)),
+            tariff: None,
+            metered_usage: Arc::new(VpnMeteredUsage::default()),
             exit_class,
             meter_hash,
+            relay_identity_key: None,
         }
     }
     pub fn from_helper_ticket(
         session: VpnSession,
         helper_ticket: VpnHelperTicketV1,
         exit_class: VpnExitClassV1,
-        meter_hash: [u8; 32],
-    ) -> Self {
-        Self {
+        _meter_hash: [u8; 32],
+        relay_identity_key: Arc<KeyPair>,
+    ) -> Result<Self, String> {
+        let (relay_algorithm, relay_public_key) = relay_identity_key
+            .public_key()
+            .try_to_bytes()
+            .map_err(|error| format!("vpn relay identity key is malformed: {error}"))?;
+        if relay_algorithm != Algorithm::Ed25519 {
+            return Err("vpn relay identity key must use Ed25519".to_owned());
+        }
+        if relay_public_key != helper_ticket.relay_id {
+            return Err(
+                "vpn relay identity key does not match the helper-ticket relay id".to_owned(),
+            );
+        }
+        let meter_hash = vpn_tariff_meter_hash_v1(&helper_ticket.tariff);
+        let tariff = helper_ticket.tariff.clone();
+        Ok(Self {
             session,
             session_id: helper_ticket.session_id,
             quote_id: helper_ticket.quote_id,
+            lease_id: helper_ticket.lease_id,
             account_hash: helper_ticket.account_hash,
             relay_id: helper_ticket.relay_id,
             payment_tx_hash: helper_ticket.payment_tx_hash,
+            valid_after_ms: helper_ticket.valid_after_ms,
+            expires_at_ms: helper_ticket.expires_at_ms,
             highest_voucher: Arc::new(Mutex::new(None)),
+            tariff: Some(tariff),
+            metered_usage: Arc::new(VpnMeteredUsage::default()),
             exit_class,
             meter_hash,
-        }
+            relay_identity_key: Some(relay_identity_key),
+        })
     }
     pub fn session(&self) -> &VpnSession {
         &self.session
     }
     pub fn session_id(&self) -> [u8; 16] {
         self.session_id
+    }
+    /// Return the signed lower timestamp bound retained for WAL recovery validation.
+    pub(crate) fn valid_after_ms(&self) -> u64 {
+        self.valid_after_ms
+    }
+    /// Return the signed exclusive session expiry retained for WAL recovery validation.
+    pub(crate) fn expires_at_ms(&self) -> u64 {
+        self.expires_at_ms
+    }
+    /// Return the signed tariff retained for durable settlement recovery.
+    pub(crate) fn tariff(&self) -> Option<&VpnTariffV1> {
+        self.tariff.as_ref()
+    }
+    /// Start the billable service interval after prepaid admission and backend readiness.
+    pub(crate) fn begin_metered_service(&self, started_at_ms: u64) {
+        let started_at_ms = self
+            .highest_voucher
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map_or(started_at_ms, |envelope| {
+                started_at_ms.max(envelope.voucher.body.issued_at_ms)
+            });
+        let mut window = self
+            .metered_usage
+            .service_window
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if window.started_at_ms.is_none() {
+            window.started_at_ms = Some(started_at_ms);
+            window.started_at = Some(Instant::now());
+        }
+    }
+    /// Cancel a just-started service window when durable admission fails before forwarding.
+    pub(crate) fn cancel_metered_service_before_forwarding(&self) {
+        debug_assert_eq!(
+            self.metered_usage.ingress_bytes.load(Ordering::Relaxed),
+            0,
+            "ingress cannot be cancelled after forwarding"
+        );
+        debug_assert_eq!(
+            self.metered_usage.egress_bytes.load(Ordering::Relaxed),
+            0,
+            "egress cannot be cancelled after forwarding"
+        );
+        *self
+            .metered_usage
+            .service_window
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            VpnMeteredServiceWindow::default();
+    }
+    /// End the billable service interval as soon as forwarding stops.
+    ///
+    /// The wall-clock sample is intentionally ignored for billing duration;
+    /// only monotonic elapsed time can survive a clock rollback without
+    /// under-reporting service.
+    pub(crate) fn end_metered_service(&self, _ended_at_ms: u64) {
+        let mut window = self
+            .metered_usage
+            .service_window
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if window.elapsed_ms.is_none()
+            && let Some(started_at) = window.started_at
+        {
+            window.elapsed_ms =
+                Some(started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64);
+        }
+    }
+    /// Record one client-to-relay user packet after it was forwarded successfully.
+    pub(crate) fn record_metered_ingress(&self, bytes: u64) {
+        atomic_saturating_add(&self.metered_usage.ingress_bytes, bytes);
+    }
+    /// Record one relay-to-client user packet after it was forwarded successfully.
+    pub(crate) fn record_metered_egress(&self, bytes: u64) {
+        atomic_saturating_add(&self.metered_usage.egress_bytes, bytes);
     }
     /// Record the highest client-signed usage voucher accepted by the relay.
     pub fn record_usage_voucher(&self, envelope: VpnUsageVoucherEnvelopeV1) {
@@ -897,16 +1023,75 @@ impl VpnSessionHandle {
         let mut receipt =
             self.session
                 .finish_receipt(self.session_id, self.exit_class, self.meter_hash);
+        receipt.ended_at_ms = receipt.ended_at_ms.min(self.expires_at_ms);
+        receipt.uptime_secs = receipt
+            .ended_at_ms
+            .saturating_sub(receipt.started_at_ms)
+            .div_ceil(1_000)
+            .min(u64::from(u32::MAX)) as u32;
         receipt.quote_id = self.quote_id;
         receipt.account_hash = self.account_hash;
         receipt.relay_id = self.relay_id;
         receipt.payment_tx_hash = self.payment_tx_hash;
         if let Some(envelope) = voucher {
-            receipt.earned_fee = envelope.earned_fee.clone();
-            receipt.highest_voucher_sequence = envelope.voucher.body.sequence;
+            let body = &envelope.voucher.body;
+            let service_window = self
+                .metered_usage
+                .service_window
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let (started_at_ms, observed_active_ms) =
+                match (service_window.started_at_ms, service_window.started_at) {
+                    (Some(started_at_ms), Some(started_at)) => (
+                        started_at_ms,
+                        service_window.elapsed_ms.unwrap_or_else(|| {
+                            started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+                        }),
+                    ),
+                    _ => (body.issued_at_ms, 0),
+                };
+            let active_ms = observed_active_ms
+                .min(body.active_ms)
+                .min(self.expires_at_ms.saturating_sub(started_at_ms));
+            let ended_at_ms = started_at_ms.saturating_add(active_ms);
+            let ingress_bytes = self.metered_usage.ingress_bytes.load(Ordering::Relaxed);
+            let egress_bytes = self.metered_usage.egress_bytes.load(Ordering::Relaxed);
+            assert!(
+                body.authorizes(ingress_bytes, egress_bytes, active_ms),
+                "relay-observed VPN usage must remain within the accepted prepaid voucher"
+            );
+            // Settlement reports relay-observed payload and time, all bounded
+            // by the highest client-signed prepaid voucher. Cover accounting
+            // remains local telemetry and is not consensus evidence.
+            receipt.ingress_bytes = ingress_bytes;
+            receipt.egress_bytes = egress_bytes;
+            receipt.cover_bytes = 0;
+            receipt.started_at_ms = started_at_ms;
+            receipt.ended_at_ms = ended_at_ms;
+            receipt.uptime_secs = u32::try_from(active_ms.div_ceil(1_000).min(u64::from(u32::MAX)))
+                .expect("capped VPN uptime fits u32");
+            receipt.meter_hash = self.meter_hash;
+            receipt.earned_fee = self.tariff.as_ref().map_or_else(Quantity::zero, |tariff| {
+                tariff
+                    .fee_for_usage(ingress_bytes, egress_bytes, active_ms)
+                    .expect(
+                        "actual VPN usage bounded by an accepted voucher must preserve tariff arithmetic",
+                    )
+            });
+            receipt.highest_voucher_sequence = body.sequence;
             receipt.client_voucher_hash = envelope.voucher.hash();
         }
         receipt
+    }
+    fn sign_settlement_receipt(
+        &self,
+        receipt: VpnSessionReceiptV1,
+    ) -> Result<VpnSignedSessionReceiptV1, String> {
+        let relay_identity_key = self.relay_identity_key.as_ref().ok_or_else(|| {
+            "vpn settlement receipt is missing the relay identity signer".to_owned()
+        })?;
+        VpnSignedSessionReceiptV1::try_sign(receipt, relay_identity_key.private_key())
+            .map_err(|error| format!("vpn settlement receipt signing failed: {error}"))
     }
     /// Finalize the handle into a billing/telemetry receipt.
     pub fn receipt(&self) -> VpnSessionReceiptV1 {
@@ -917,33 +1102,133 @@ impl VpnSessionHandle {
             .clone();
         self.finalize_receipt(voucher.as_ref())
     }
+    /// Build the bounded receipt retained in the crash-recovery WAL.
+    ///
+    /// Before backend readiness the reservation is deliberately zero usage.
+    /// Once service is admitted, it reserves the signed byte ceilings and the
+    /// relay-effective active-time ceiling. A graceful close replaces this
+    /// reservation with the lower relay-observed usage before promotion.
+    pub(crate) fn settlement_reservation_artifact(
+        &self,
+        envelope: &VpnUsageVoucherEnvelopeV1,
+        authorized_active_ms: u64,
+        service_admitted: bool,
+    ) -> Result<VpnSettlementArtifact, String> {
+        let tariff = self
+            .tariff
+            .as_ref()
+            .ok_or_else(|| "vpn settlement reservation is missing the signed tariff".to_owned())?;
+        let body = &envelope.voucher.body;
+        let mut receipt = self.finalize_receipt(Some(envelope));
+        let (started_at_ms, ingress_bytes, egress_bytes, active_ms) = if service_admitted {
+            let started_at_ms = self
+                .metered_usage
+                .service_window
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .started_at_ms
+                .ok_or_else(|| {
+                    "vpn settlement reservation cannot admit service before its monotonic window starts"
+                        .to_owned()
+                })?;
+            let active_ms = authorized_active_ms
+                .min(body.active_ms)
+                .min(self.expires_at_ms.saturating_sub(started_at_ms));
+            (
+                started_at_ms,
+                body.ingress_bytes,
+                body.egress_bytes,
+                active_ms,
+            )
+        } else {
+            (body.issued_at_ms, 0, 0, 0)
+        };
+        let ended_at_ms = started_at_ms
+            .checked_add(active_ms)
+            .ok_or_else(|| "vpn settlement reservation timestamp overflowed".to_owned())?;
+        if started_at_ms < self.valid_after_ms || ended_at_ms > self.expires_at_ms {
+            return Err(
+                "vpn settlement reservation falls outside the signed helper-ticket window"
+                    .to_owned(),
+            );
+        }
+        if body.issued_at_ms < self.valid_after_ms
+            || body.issued_at_ms >= self.expires_at_ms
+            || body.issued_at_ms > ended_at_ms
+        {
+            return Err(
+                "vpn settlement reservation cannot project a consensus-valid voucher timestamp"
+                    .to_owned(),
+            );
+        }
+        if !body.authorizes(ingress_bytes, egress_bytes, active_ms) {
+            return Err(
+                "vpn settlement reservation exceeds the signed prepaid ceilings".to_owned(),
+            );
+        }
+        let earned_fee = tariff
+            .fee_for_usage(ingress_bytes, egress_bytes, active_ms)
+            .map_err(|error| {
+                format!("vpn settlement reservation tariff arithmetic failed: {error}")
+            })?;
+        receipt.ingress_bytes = ingress_bytes;
+        receipt.egress_bytes = egress_bytes;
+        receipt.cover_bytes = 0;
+        receipt.started_at_ms = started_at_ms;
+        receipt.ended_at_ms = ended_at_ms;
+        receipt.uptime_secs = u32::try_from(active_ms.div_ceil(1_000)).map_err(|_| {
+            "vpn settlement reservation active time exceeds the receipt range".to_owned()
+        })?;
+        receipt.meter_hash = self.meter_hash;
+        receipt.earned_fee = earned_fee.clone();
+        receipt.highest_voucher_sequence = body.sequence;
+        receipt.client_voucher_hash = envelope.voucher.hash();
+        let receipt = self.sign_settlement_receipt(receipt)?;
+        Ok(VpnSettlementArtifact {
+            lease_id: self.lease_id,
+            receipt,
+            voucher: envelope.voucher.clone(),
+            earned_fee,
+        })
+    }
     /// Finalize the handle into an operator settlement artifact if a voucher was accepted.
-    pub fn settlement_artifact(&self) -> Option<VpnSettlementArtifact> {
+    pub fn settlement_artifact(&self) -> Result<Option<VpnSettlementArtifact>, String> {
         let voucher = self
             .highest_voucher
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()?;
-        Some(VpnSettlementArtifact {
-            receipt: self.finalize_receipt(Some(&voucher)),
+            .clone();
+        let Some(voucher) = voucher else {
+            return Ok(None);
+        };
+        let receipt = self.finalize_receipt(Some(&voucher));
+        let earned_fee = receipt.earned_fee.clone();
+        let receipt = self.sign_settlement_receipt(receipt)?;
+        Ok(Some(VpnSettlementArtifact {
+            lease_id: self.lease_id,
+            earned_fee,
+            receipt,
             voucher: voucher.voucher,
-            earned_fee: voucher.earned_fee,
-        })
+        }))
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::metrics::Metrics;
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::soranet::vpn::VpnUsageVoucherBodyV1;
     use std::{
         sync::Arc,
         time::{Duration, UNIX_EPOCH},
     };
     #[test]
-    fn overlay_debug_redacts_and_drop_helper_clears_secrets() {
+    fn overlay_debug_redacts_and_drop_clears_backend_secret() {
+        let issuer =
+            KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519).expect("issuer keypair");
         let overlay = VpnOverlay {
             config: VpnConfig::default(),
-            helper_ticket_secret: Some([0xA5; 32]),
+            helper_ticket_issuer_public_key: Some(issuer.public_key().clone()),
             backend_bootstrap_secret: Some([0x5A; 32]),
             exit_class: VpnExitClassV1::Standard,
             meter_hash: [0; 32],
@@ -955,14 +1240,12 @@ mod tests {
         assert!(!rendered.contains("165, 165"));
         assert!(!rendered.contains("90, 90"));
         let framing = overlay.framing_only_overlay();
-        assert!(framing.helper_ticket_secret().is_none());
+        assert!(framing.helper_ticket_issuer_public_key().is_none());
         assert!(framing.backend_bootstrap_secret().is_none());
         assert_eq!(framing.meter_hash(), overlay.meter_hash());
 
-        let mut helper = Some([0xA5; 32]);
         let mut backend = Some([0x5A; 32]);
-        clear_vpn_overlay_secrets(&mut helper, &mut backend);
-        assert_eq!(helper, Some([0; 32]));
+        clear_vpn_overlay_secret(&mut backend);
         assert_eq!(backend, Some([0; 32]));
     }
     #[test]
@@ -1074,5 +1357,124 @@ mod tests {
         assert_eq!(u64::MAX, receipt.ingress_bytes);
         assert_eq!(u64::MAX, receipt.egress_bytes);
         assert_eq!(u64::MAX, receipt.cover_bytes);
+    }
+    #[test]
+    fn metered_receipt_uses_monotonic_elapsed_time_across_wall_clock_rollback() {
+        let tariff = VpnTariffV1 {
+            lease_fee: Quantity::from(10_u64),
+            active_fee_per_minute: Quantity::from(1_u64),
+            ingress_fee_per_mib: Quantity::zero(),
+            egress_fee_per_mib: Quantity::zero(),
+        };
+        let metering_keys =
+            KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519).expect("metering keypair");
+        let body = VpnUsageVoucherBodyV1 {
+            session_id: [0x11; 16],
+            quote_id: [0x22; 32],
+            relay_id: [0x33; 32],
+            sequence: 1,
+            ingress_bytes: 1,
+            egress_bytes: 1,
+            active_ms: 1_000,
+            issued_at_ms: 10_000,
+        };
+        let voucher = VpnUsageVoucherV1::try_sign(body, metering_keys.private_key())
+            .expect("signed prepaid voucher");
+        let envelope = VpnUsageVoucherEnvelopeV1 {
+            fee_ceiling: tariff.fee_ceiling(&body).expect("voucher fee ceiling"),
+            voucher,
+        };
+        let metrics = Arc::new(Metrics::new());
+        let mut handle = VpnSessionHandle::new(
+            VpnSession::from_parts(metrics),
+            body.session_id,
+            VpnExitClassV1::Standard,
+            vpn_tariff_meter_hash_v1(&tariff),
+        );
+        handle.tariff = Some(tariff.clone());
+        handle.record_usage_voucher(envelope);
+        handle.begin_metered_service(body.issued_at_ms);
+        std::thread::sleep(Duration::from_millis(5));
+        handle.end_metered_service(body.issued_at_ms.saturating_sub(1_000));
+
+        let receipt = handle.receipt();
+        let active_ms = receipt.ended_at_ms - receipt.started_at_ms;
+        assert!((1..=body.active_ms).contains(&active_ms));
+        assert_eq!(receipt.started_at_ms, body.issued_at_ms);
+        assert_eq!(receipt.ended_at_ms, body.issued_at_ms + active_ms);
+        assert_eq!(receipt.uptime_secs, 1);
+        assert_eq!(
+            receipt.earned_fee,
+            tariff
+                .fee_for_usage(0, 0, active_ms)
+                .expect("monotonic actual fee")
+        );
+        assert!(!receipt.earned_fee.is_zero());
+    }
+    #[test]
+    fn cancelled_durable_admission_does_not_charge_unforwarded_service_time() {
+        let tariff = VpnTariffV1 {
+            lease_fee: Quantity::from(10_u64),
+            active_fee_per_minute: Quantity::from(1_u64),
+            ingress_fee_per_mib: Quantity::from(1_u64),
+            egress_fee_per_mib: Quantity::from(1_u64),
+        };
+        let metering_keys =
+            KeyPair::try_from_seed(vec![0x67; 32], Algorithm::Ed25519).expect("metering keypair");
+        let relay_key = Arc::new(
+            KeyPair::try_from_seed(vec![0x68; 32], Algorithm::Ed25519)
+                .expect("relay identity keypair"),
+        );
+        let (_, relay_public_key) = relay_key
+            .public_key()
+            .try_to_bytes()
+            .expect("relay identity public key");
+        let mut relay_id = [0_u8; 32];
+        relay_id.copy_from_slice(relay_public_key);
+        let body = VpnUsageVoucherBodyV1 {
+            session_id: [0x12; 16],
+            quote_id: [0x23; 32],
+            relay_id,
+            sequence: 0,
+            ingress_bytes: 256 * 1_024,
+            egress_bytes: 256 * 1_024,
+            active_ms: 2_000,
+            issued_at_ms: 20_000,
+        };
+        let envelope = VpnUsageVoucherEnvelopeV1 {
+            voucher: VpnUsageVoucherV1::try_sign(body, metering_keys.private_key())
+                .expect("signed voucher"),
+            fee_ceiling: tariff.fee_ceiling(&body).expect("fee ceiling"),
+        };
+        let metrics = Arc::new(Metrics::new());
+        let mut handle = VpnSessionHandle::new(
+            VpnSession::from_parts(metrics),
+            body.session_id,
+            VpnExitClassV1::Standard,
+            vpn_tariff_meter_hash_v1(&tariff),
+        );
+        handle.quote_id = body.quote_id;
+        handle.relay_id = body.relay_id;
+        handle.valid_after_ms = body.issued_at_ms;
+        handle.expires_at_ms = body.issued_at_ms + 30_000;
+        handle.tariff = Some(tariff);
+        handle.relay_identity_key = Some(relay_key);
+        handle.record_usage_voucher(envelope);
+        handle.begin_metered_service(body.issued_at_ms);
+        std::thread::sleep(Duration::from_millis(2));
+        handle.cancel_metered_service_before_forwarding();
+
+        let artifact = handle
+            .settlement_artifact()
+            .expect("relay receipt signing succeeds")
+            .expect("accepted voucher remains settleable");
+        artifact
+            .receipt
+            .verify()
+            .expect("settlement artifact carries a valid relay signature");
+        assert_eq!(artifact.receipt.receipt.started_at_ms, body.issued_at_ms);
+        assert_eq!(artifact.receipt.receipt.ended_at_ms, body.issued_at_ms);
+        assert_eq!(artifact.receipt.receipt.uptime_secs, 0);
+        assert!(artifact.receipt.receipt.earned_fee.is_zero());
     }
 }

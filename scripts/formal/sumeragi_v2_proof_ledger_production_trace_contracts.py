@@ -138,6 +138,7 @@ self.retain_effect_batch_at_frontier(effects, ownership, frontier)
         preflight,
         """
 let entering_view = Self::entering_view_tag(effects)?;
+self.preflight_highest_prepare_frontier(frontier.tag, frontier.highest_prepare)?;
 if entering_view.is_some()
     && !matches!(effects.first(), Some(AdapterEffect::EnterView { .. }))
 {
@@ -146,7 +147,7 @@ if entering_view.is_some()
     ));
 }
 """,
-        "frontier preflight must require the unique EnterView at the batch head",
+        "frontier preflight must validate the cleanup-only highest Prepare before requiring the unique EnterView at the batch head",
         errors,
     )
     _require_rust_token_sequence(

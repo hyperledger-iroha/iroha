@@ -13,7 +13,10 @@ use crate::{
         SoracloudRuntimeSignerQualificationV1, SoracloudRuntimeSigningErrorV1,
     },
 };
-use iroha_config::parameters::actual::{NexusStorageWeights, Root as Config, SoracloudRuntime};
+use iroha_config::parameters::{
+    actual::{NexusStorageWeights, Root as Config, SoracloudRuntime},
+    defaults::soracloud_runtime as soracloud_runtime_defaults,
+};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     account::AccountId,
@@ -27,6 +30,7 @@ use std::{
     fmt,
     fs::{File, OpenOptions},
     io::{Read as _, Seek as _, Write as _},
+    num::{NonZeroU32, NonZeroU64},
     os::{
         fd::{FromRawFd as _, RawFd},
         unix::fs::MetadataExt as _,
@@ -59,14 +63,24 @@ pub const TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1: u64 = 68_719_476_736;
 pub const TAIRA_NEXUS_KURA_BLOCKS_BPS_V1: u16 = 5_500;
 /// Exact WSV snapshot share of the first-release Taira Nexus disk budget.
 pub const TAIRA_NEXUS_WSV_SNAPSHOTS_BPS_V1: u16 = 2_000;
-/// Exact SoraFS share of the first-release Taira Nexus disk budget.
+/// Exact `SoraFS` share of the first-release Taira Nexus disk budget.
 pub const TAIRA_NEXUS_SORAFS_BPS_V1: u16 = 2_000;
-/// Exact SoraNet spool share of the first-release Taira Nexus disk budget.
+/// Exact `SoraNet` spool share of the first-release Taira Nexus disk budget.
 pub const TAIRA_NEXUS_SORANET_SPOOL_BPS_V1: u16 = 250;
-/// Exact SoraVPN spool share of the first-release Taira Nexus disk budget.
+/// Exact `SoraVPN` spool share of the first-release Taira Nexus disk budget.
 pub const TAIRA_NEXUS_SORAVPN_SPOOL_BPS_V1: u16 = 250;
-/// Exact effective SoraFS component cap derived for first-release Taira.
+/// Exact effective `SoraFS` component cap derived for first-release Taira.
 pub const TAIRA_SORAFS_STORAGE_CAP_BYTES_V1: u64 = 13_743_895_347;
+/// Exact aggregate Inrou CPU ceiling for one first-release Taira validator.
+pub const TAIRA_INROU_MAX_CPU_MILLIS_V1: u32 = 8_000;
+/// Exact aggregate Inrou memory ceiling for one first-release Taira validator.
+pub const TAIRA_INROU_MAX_MEMORY_BYTES_V1: u64 = 8 * 1024 * 1024 * 1024;
+/// Exact aggregate Inrou writable-storage ceiling for one first-release Taira validator.
+pub const TAIRA_INROU_MAX_STORAGE_BYTES_V1: u64 = 64 * 1024 * 1024 * 1024;
+/// Exact Inrou egress request budget for one first-release Taira validator.
+pub const TAIRA_INROU_EGRESS_RATE_PER_MINUTE_V1: u32 = 600;
+/// Exact Inrou egress byte budget for one first-release Taira validator.
+pub const TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE_V1: u64 = 100 * 1024 * 1024;
 
 const TAIRA_RUNTIME_SIGNER_HANDLE_PREFIX_V1: &str = "software://taira/inrou/";
 const TAIRA_RUNTIME_SIGNER_POLICY_DIGEST_DOMAIN_V1: &[u8] =
@@ -114,14 +128,40 @@ fn validate_taira_launcher_profile_v1(
         return Err("Taira launcher requires Soracloud production mode".to_owned());
     }
     let inrou = &runtime.inrou;
-    if inrou.enabled
-        || !inrou.backends.is_empty()
-        || inrou.portable_vm_uid.is_some()
-        || inrou.portable_vm_gid.is_some()
+    if !inrou.enabled {
+        return Err("Taira launcher requires enabled Inrou PortableVM V1 hosting".to_owned());
+    }
+    let uid = inrou
+        .portable_vm_uid
+        .ok_or_else(|| "enabled Taira Inrou hosting requires portable_vm_uid".to_owned())?
+        .get();
+    let gid = inrou
+        .portable_vm_gid
+        .ok_or_else(|| "enabled Taira Inrou hosting requires portable_vm_gid".to_owned())?
+        .get();
+    if soracloud_runtime_defaults::inrou_portable_vm_identity_slot(uid, gid).is_none() {
+        return Err(format!(
+            "Taira Inrou uid/gid must be one equal canonical slot pair in {}..{} (upper bound exclusive)",
+            soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_BASE,
+            soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_MAX_EXCLUSIVE,
+        ));
+    }
+    if inrou.max_cpu_millis.get() != TAIRA_INROU_MAX_CPU_MILLIS_V1
+        || inrou.max_memory_bytes.get() != TAIRA_INROU_MAX_MEMORY_BYTES_V1
+        || inrou.max_storage_bytes.get() != TAIRA_INROU_MAX_STORAGE_BYTES_V1
+    {
+        return Err("Taira launcher requires the exact V1 Inrou resource ceilings".to_owned());
+    }
+    let egress = &runtime.egress;
+    if egress.default_allow
+        || !egress.allowed_hosts.is_empty()
+        || egress.rate_per_minute.map(NonZeroU32::get)
+            != Some(TAIRA_INROU_EGRESS_RATE_PER_MINUTE_V1)
+        || egress.max_bytes_per_minute.map(NonZeroU64::get)
+            != Some(TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE_V1)
     {
         return Err(
-            "Taira production launch forbids Inrou hosting until PortableVM has mandatory mount, network, IPC, and MAC confinement"
-                .to_owned()
+            "Taira launcher requires the exact deny-by-default V1 Inrou egress profile".to_owned(),
         );
     }
     Ok(())
@@ -139,8 +179,7 @@ fn validate_taira_storage_profile_v1(
         || effective_budget_bytes != Some(TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1)
     {
         return Err(format!(
-            "Taira launcher requires the exact {}-byte Nexus storage budget",
-            TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1
+            "Taira launcher requires the exact {TAIRA_NEXUS_STORAGE_BUDGET_BYTES_V1}-byte Nexus storage budget"
         ));
     }
     if weights.kura_blocks_bps != TAIRA_NEXUS_KURA_BLOCKS_BPS_V1
@@ -153,8 +192,7 @@ fn validate_taira_storage_profile_v1(
     }
     if configured_sorafs_capacity_bytes != Some(TAIRA_SORAFS_STORAGE_CAP_BYTES_V1) {
         return Err(format!(
-            "Taira launcher requires an explicit {}-byte SoraFS storage cap before Nexus clamping",
-            TAIRA_SORAFS_STORAGE_CAP_BYTES_V1
+            "Taira launcher requires an explicit {TAIRA_SORAFS_STORAGE_CAP_BYTES_V1}-byte SoraFS storage cap before Nexus clamping"
         ));
     }
     if sorafs_provider_enabled {
@@ -164,8 +202,7 @@ fn validate_taira_storage_profile_v1(
     }
     if sorafs_capacity_bytes != TAIRA_SORAFS_STORAGE_CAP_BYTES_V1 {
         return Err(format!(
-            "Taira launcher requires the exact {}-byte effective SoraFS storage cap",
-            TAIRA_SORAFS_STORAGE_CAP_BYTES_V1
+            "Taira launcher requires the exact {TAIRA_SORAFS_STORAGE_CAP_BYTES_V1}-byte effective SoraFS storage cap"
         ));
     }
     Ok(())
@@ -255,7 +292,7 @@ impl DescriptorIdentityV1 {
         }
     }
 
-    fn same_security_identity_after_consumption(self, metadata: &std::fs::Metadata) -> bool {
+    fn same_security_identity_after_consumption(&self, metadata: &std::fs::Metadata) -> bool {
         metadata.is_file()
             && metadata.dev() == self.device
             && metadata.ino() == self.inode
@@ -268,11 +305,12 @@ impl DescriptorIdentityV1 {
 
 fn consume_trusted_key_file(
     file: &mut File,
-    identity: DescriptorIdentityV1,
+    identity: &DescriptorIdentityV1,
+    zeroed_key_record: &[u8],
 ) -> Result<(), TairaRuntimeSignerErrorV1> {
     file.seek(std::io::SeekFrom::Start(0))
         .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?;
-    file.write_all(&[0; TAIRA_RUNTIME_SIGNER_KEY_FILE_BYTES_V1 as usize])
+    file.write_all(zeroed_key_record)
         .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?;
     file.sync_data()
         .map_err(|_| TairaRuntimeSignerErrorV1::DescriptorUnavailable)?;
@@ -341,7 +379,7 @@ fn load_key_pair_from_file(mut file: File) -> Result<KeyPair, TairaRuntimeSigner
         KeyPair::from_private_key(exposed.0).map_err(|_| TairaRuntimeSignerErrorV1::InvalidKey)
     })();
     bytes.fill(0);
-    consume_trusted_key_file(&mut file, before)?;
+    consume_trusted_key_file(&mut file, &before, &bytes)?;
     parsed
 }
 
@@ -537,6 +575,20 @@ mod tests {
     fn canonical_runtime_profile() -> SoracloudRuntime {
         let mut runtime = SoracloudRuntime::default();
         runtime.production_mode = true;
+        runtime.inrou.enabled = true;
+        runtime.inrou.portable_vm_uid = NonZeroU32::new(70_000);
+        runtime.inrou.portable_vm_gid = NonZeroU32::new(70_000);
+        runtime.inrou.max_cpu_millis =
+            NonZeroU32::new(TAIRA_INROU_MAX_CPU_MILLIS_V1).expect("nonzero CPU budget");
+        runtime.inrou.max_memory_bytes =
+            NonZeroU64::new(TAIRA_INROU_MAX_MEMORY_BYTES_V1).expect("nonzero memory budget");
+        runtime.inrou.max_storage_bytes =
+            NonZeroU64::new(TAIRA_INROU_MAX_STORAGE_BYTES_V1).expect("nonzero storage budget");
+        runtime.egress.default_allow = false;
+        runtime.egress.allowed_hosts.clear();
+        runtime.egress.rate_per_minute = NonZeroU32::new(TAIRA_INROU_EGRESS_RATE_PER_MINUTE_V1);
+        runtime.egress.max_bytes_per_minute =
+            NonZeroU64::new(TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE_V1);
         runtime
     }
 
@@ -581,20 +633,49 @@ mod tests {
             )
             .is_err()
         );
-        let mut enabled_inrou = runtime.clone();
-        enabled_inrou.inrou.enabled = true;
+        let mut disabled_inrou = runtime.clone();
+        disabled_inrou.inrou.enabled = false;
+        disabled_inrou.inrou.portable_vm_uid = None;
+        disabled_inrou.inrou.portable_vm_gid = None;
         assert!(
             validate_taira_launcher_profile_v1(
                 TAIRA_CHAIN_ID_V1,
                 TAIRA_CHAIN_DISCRIMINANT_V1,
                 TAIRA_VALIDATOR_COUNT_V1,
                 TAIRA_VALIDATOR_COUNT_V1,
-                &enabled_inrou,
+                &disabled_inrou,
             )
             .is_err()
         );
+        let mut exact_inrou = runtime.clone();
+        for slot in 0..soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_SLOT_COUNT {
+            let id = soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_BASE + slot;
+            exact_inrou.inrou.portable_vm_uid = NonZeroU32::new(id);
+            exact_inrou.inrou.portable_vm_gid = NonZeroU32::new(id);
+            validate_taira_launcher_profile_v1(
+                TAIRA_CHAIN_ID_V1,
+                TAIRA_CHAIN_DISCRIMINANT_V1,
+                TAIRA_VALIDATOR_COUNT_V1,
+                TAIRA_VALIDATOR_COUNT_V1,
+                &exact_inrou,
+            )
+            .expect("Taira accepts every canonical same-host PortableVM identity slot");
+        }
+        exact_inrou.inrou.portable_vm_uid = NonZeroU32::new(70_000);
+        exact_inrou.inrou.portable_vm_gid = NonZeroU32::new(70_001);
+        assert!(
+            validate_taira_launcher_profile_v1(
+                TAIRA_CHAIN_ID_V1,
+                TAIRA_CHAIN_DISCRIMINANT_V1,
+                TAIRA_VALIDATOR_COUNT_V1,
+                TAIRA_VALIDATOR_COUNT_V1,
+                &exact_inrou,
+            )
+            .is_err(),
+            "Taira must reject mismatched Inrou uid/gid slots"
+        );
         let mut configured_identity = runtime;
-        configured_identity.inrou.portable_vm_uid = NonZeroU32::new(70_000);
+        configured_identity.inrou.portable_vm_gid = None;
         assert!(
             validate_taira_launcher_profile_v1(
                 TAIRA_CHAIN_ID_V1,
@@ -605,6 +686,58 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn launcher_profile_rejects_noncanonical_inrou_resources_and_egress() {
+        let runtime = canonical_runtime_profile();
+        let assert_rejected = |runtime: &SoracloudRuntime| {
+            assert!(
+                validate_taira_launcher_profile_v1(
+                    TAIRA_CHAIN_ID_V1,
+                    TAIRA_CHAIN_DISCRIMINANT_V1,
+                    TAIRA_VALIDATOR_COUNT_V1,
+                    TAIRA_VALIDATOR_COUNT_V1,
+                    runtime,
+                )
+                .is_err()
+            );
+        };
+
+        let mut changed = runtime.clone();
+        changed.inrou.max_cpu_millis = NonZeroU32::new(TAIRA_INROU_MAX_CPU_MILLIS_V1 + 1)
+            .expect("changed CPU budget is nonzero");
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
+        changed.inrou.max_memory_bytes = NonZeroU64::new(TAIRA_INROU_MAX_MEMORY_BYTES_V1 + 1)
+            .expect("changed memory budget is nonzero");
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
+        changed.inrou.max_storage_bytes = NonZeroU64::new(TAIRA_INROU_MAX_STORAGE_BYTES_V1 + 1)
+            .expect("changed storage budget is nonzero");
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
+        changed.egress.default_allow = true;
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
+        changed
+            .egress
+            .allowed_hosts
+            .push("example.invalid".to_owned());
+        assert_rejected(&changed);
+
+        let mut changed = runtime.clone();
+        changed.egress.rate_per_minute = NonZeroU32::new(TAIRA_INROU_EGRESS_RATE_PER_MINUTE_V1 + 1);
+        assert_rejected(&changed);
+
+        let mut changed = runtime;
+        changed.egress.max_bytes_per_minute =
+            NonZeroU64::new(TAIRA_INROU_EGRESS_MAX_BYTES_PER_MINUTE_V1 + 1);
+        assert_rejected(&changed);
     }
 
     fn canonical_storage_weights() -> NexusStorageWeights {
@@ -731,11 +864,11 @@ mod tests {
             .expect("canonical private key");
         assert_eq!(
             literal.len() + 1,
-            TAIRA_RUNTIME_SIGNER_KEY_FILE_BYTES_V1 as usize
+            usize::try_from(TAIRA_RUNTIME_SIGNER_KEY_FILE_BYTES_V1)
+                .expect("fixed Taira key length fits usize")
         );
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true).mode(0o600);
-        use std::io::Write as _;
         writeln!(options.open(&path).expect("create signer key"), "{literal}")
             .expect("write signer key");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("protect signer key");
@@ -858,11 +991,13 @@ mod tests {
         )
         .into_payload()
         .expect("transaction payload");
-        let signed = signer
+        let signed_transaction = signer
             .sign_transaction(payload.clone())
             .expect("sign exact transaction");
-        assert_eq!(signed.payload(), &payload);
-        signed.verify_signature().expect("valid signature");
+        assert_eq!(signed_transaction.payload(), &payload);
+        signed_transaction
+            .verify_signature()
+            .expect("valid signature");
     }
 
     #[test]

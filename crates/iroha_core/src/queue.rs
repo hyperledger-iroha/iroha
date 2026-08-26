@@ -13364,10 +13364,14 @@ impl Queue {
                 }
                 GossipEntryState::Committed => {
                     drop(tx_arc);
-                    self.remove_committed_hashes_without_lane_reservation_ownership(
-                        [hash],
-                        backpressure_telemetry,
-                    );
+                    // A globally bound QueuePlan is still an authenticated
+                    // canonical-carrier owner after WSV publication. Gossip
+                    // retires only its own backlog cell; the State/Kura-bound
+                    // all-group cleanup must consume the Queue/FIFO/journal
+                    // owner. Removing it here races that cleanup and leaves a
+                    // raw FIFO tombstone which looks like conflicting live
+                    // ownership on lagging validators.
+                    self.remove_committed_hashes_inner([hash], backpressure_telemetry, true);
                 }
                 GossipEntryState::Other => {}
             }
@@ -18952,21 +18956,6 @@ impl Queue {
         guards.clear();
         Ok(report)
     }
-    /// Remove committed transactions that have no local durable lane-reservation owner.
-    ///
-    /// Canonical autonomous carriers execute on every validator, but only the
-    /// deterministic lane producer moves the selected transaction out of ordinary
-    /// FIFO ownership and into the reservation journal. Replica validators retain
-    /// their ordinary FIFO copy until the carrier commits. This helper consumes that
-    /// replica-side copy while leaving any live reservation, Commit barrier, or
-    /// release barrier untouched for the exact terminal reservation corridor.
-    pub(crate) fn remove_committed_hashes_without_lane_reservation_ownership(
-        &self,
-        hashes: impl IntoIterator<Item = EntrypointHash>,
-        telemetry: Option<&StateTelemetry>,
-    ) -> usize {
-        self.remove_committed_hashes_inner(hashes, telemetry, true)
-    }
     /// Remove committed transactions and their indexed queue metadata by hash.
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
     pub(crate) fn remove_committed_hashes(
@@ -18981,7 +18970,7 @@ impl Queue {
         &self,
         hashes: impl IntoIterator<Item = EntrypointHash>,
         telemetry: Option<&StateTelemetry>,
-        preserve_lane_reservation_owners: bool,
+        preserve_globally_bound_owners: bool,
     ) -> usize {
         let hashes = hashes.into_iter().collect::<Vec<_>>();
         // A hash being made durable is not yet selectable or externally acknowledged. If a
@@ -19003,13 +18992,12 @@ impl Queue {
             }
             let mut removed_inner = 0usize;
             let mut removals = Vec::new();
-            let lane_reservation_owned_hashes = preserve_lane_reservation_owners
-                .then(|| self.lane_reservations.lock().live_hashes());
             for hash in hashes {
-                if lane_reservation_owned_hashes
-                    .as_ref()
-                    .is_some_and(|owned| owned.contains(&hash))
-                {
+                // Strict QueuePlan publication and this check share the queue
+                // mutation lock. A gossip tick therefore cannot observe an
+                // unbound owner and delete it after a concurrent global claim
+                // becomes durable.
+                if preserve_globally_bound_owners && self.has_globally_bound_durable_claim(hash) {
                     continue;
                 }
                 let stale_fifo_hash_remains = self.queued_tx_enqueued_at_ms.contains_key(&hash);
@@ -20344,8 +20332,8 @@ pub mod tests {
         nexus.fees.per_instruction_fee = Quantity::zero();
         nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero!(8_u32);
+        nexus.autoscale.min_lane_id = nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
         nexus.lane_catalog = lane_catalog;
         nexus.lane_config = lane_config;
         *state.nexus.get_mut() = nexus;
@@ -21364,8 +21352,8 @@ pub mod tests {
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = nonzero!(1_u32);
-            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.autoscale.min_lane_id = nonzero!(1_u32);
+            nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
             nexus.autoscale.last_transition_height = 3;
         }
         seed_committed_height_for_queue_test(&state, 3);
@@ -21581,10 +21569,11 @@ pub mod tests {
         let mut nexus = Nexus::default();
         if let Some((autoscale_lane, _)) = autoscale_lane {
             nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes =
+            nexus.autoscale.min_lane_id =
                 NonZeroU32::new(autoscale_lane.as_u32()).expect("nonzero autoscale lane id");
-            nexus.autoscale.max_lanes = NonZeroU32::new(autoscale_lane.as_u32().saturating_add(1))
-                .expect("nonzero autoscale upper bound");
+            nexus.autoscale.max_lane_id_exclusive =
+                NonZeroU32::new(autoscale_lane.as_u32().saturating_add(1))
+                    .expect("nonzero autoscale upper bound");
         } else {
             nexus.autoscale.enabled = false;
         }
@@ -26421,8 +26410,8 @@ pub mod tests {
             crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
             let nexus = state.nexus.get_mut();
             nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = nonzero!(1_u32);
-            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.autoscale.min_lane_id = nonzero!(1_u32);
+            nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
             nexus.fees.base_fee = Quantity::zero();
             nexus.fees.per_byte_fee = Quantity::zero();
             nexus.fees.per_instruction_fee = Quantity::zero();
@@ -26554,8 +26543,8 @@ pub mod tests {
             nexus.fees.per_instruction_fee = Quantity::zero();
             nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = nonzero!(1_u32);
-            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.autoscale.min_lane_id = nonzero!(1_u32);
+            nexus.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
             nexus.lane_catalog =
                 LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
                     .expect("future-created lane catalog");

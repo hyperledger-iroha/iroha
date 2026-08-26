@@ -97,15 +97,12 @@ mod tests {
         assert!(cursor.remaining_slice().is_empty());
         assert_eq!(relay_identity, relay_identity_bytes(&relay_keys).unwrap());
         assert_eq!(signature.len(), algorithm.signature_payload_len());
-        if algorithm == Algorithm::Ed25519 {
-            assert_eq!(
-                relay_identity.len(),
-                32,
-                "Ed25519 keeps its legacy wire form"
-            );
-        } else {
-            assert_eq!(relay_identity.first().copied(), Some(algorithm as u8));
-        }
+        let (_, public_key_payload) = relay_keys
+            .public_key()
+            .try_to_bytes()
+            .expect("relay public key payload");
+        assert_eq!(relay_identity.len(), public_key_payload.len() + 1);
+        assert_eq!(relay_identity.first().copied(), Some(algorithm as u8));
         verify_relay_authentication(
             HandshakeSuite::Nk2Hybrid,
             client_hello,
@@ -159,6 +156,49 @@ mod tests {
     fn relay_authentication_ed25519_roundtrip_rejects_mismatch_and_tamper() {
         assert_relay_authentication_roundtrip(Algorithm::Ed25519, 0x61);
     }
+    #[test]
+    fn relay_identity_uses_canonical_tagged_ed25519_encoding() {
+        let relay_keys = checked_seeded_keypair(0x62);
+        let encoded = relay_identity_bytes(&relay_keys).expect("encode relay identity");
+        let (_, payload) = relay_keys
+            .public_key()
+            .try_to_bytes()
+            .expect("relay public key payload");
+
+        assert_eq!(encoded.len(), 33);
+        assert_eq!(encoded[0], Algorithm::Ed25519 as u8);
+        assert_eq!(&encoded[1..], payload);
+        assert_eq!(
+            parse_relay_identity(&encoded).expect("parse canonical tagged identity"),
+            relay_keys.public_key().clone()
+        );
+    }
+    #[test]
+    fn relay_identity_rejects_retired_untagged_ed25519_encoding() {
+        let relay_keys = checked_seeded_keypair(0x63);
+        let (_, payload) = relay_keys
+            .public_key()
+            .try_to_bytes()
+            .expect("relay public key payload");
+        let error = parse_relay_identity(payload)
+            .expect_err("retired untagged Ed25519 identity must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("retired untagged Ed25519 encoding")
+        );
+    }
+    #[test]
+    fn relay_identity_rejects_unknown_algorithm_tag() {
+        let error = parse_relay_identity(&[0xFF; 33])
+            .expect_err("unknown relay identity algorithm must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown relay identity algorithm tag 0xff")
+        );
+    }
     #[cfg(feature = "bls")]
     #[test]
     fn relay_authentication_bls_normal_roundtrip_rejects_mismatch_and_tamper() {
@@ -175,7 +215,7 @@ mod tests {
         let relay_keys = checked_seeded_keypair(relay_identity_seed);
         let (client_hello, client_state) =
             build_client_hello(&params, &mut rng_client).expect("client hello");
-        let (relay_hello, _relay_state) =
+        let (relay_hello, _relay_session) =
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("authenticated relay hello");
         (params, client_state, relay_hello, relay_keys)
@@ -406,10 +446,10 @@ mod tests {
         }
     }
     #[test]
-    fn update_suite_list_rejects_oversized_suite_list() {
-        let suites = vec![HandshakeSuite::Nk2Hybrid; usize::from(u16::MAX) + 1];
+    fn update_suite_list_rejects_duplicate_suite_ids() {
+        let suites = [HandshakeSuite::Nk2Hybrid, HandshakeSuite::Nk2Hybrid];
         let err = super::update_suite_list(&DEFAULT_CLIENT_CAPABILITIES, &suites, false)
-            .expect_err("oversized suite list must fail");
+            .expect_err("duplicate suite list must fail");
         match err {
             HarnessError::Validation(message) => {
                 assert!(
@@ -417,15 +457,16 @@ mod tests {
                     "unexpected message: {message}"
                 );
                 assert!(
-                    message.contains("exceeds u16::MAX"),
+                    message.contains("duplicate first-release handshake suite identifiers"),
                     "unexpected message: {message}"
                 );
+                assert!(message.contains("0x04"), "unexpected message: {message}");
             }
             other => panic!("expected validation error, got {other:?}"),
         }
     }
     #[test]
-    fn parse_suite_list_ignores_unknown_ids() {
+    fn parse_suite_list_rejects_unknown_ids_even_with_supported_suites() {
         let cap = CapabilityTlv {
             ty: CAPABILITY_SUITE_LIST,
             value: vec![
@@ -436,18 +477,17 @@ mod tests {
             ],
             required: false,
         };
-        let list = parse_suite_list(&cap).expect("parse suite list");
-        assert_eq!(
-            list.suites,
-            vec![
-                HandshakeSuite::Nk2Hybrid,
-                HandshakeSuite::Nk3PqForwardSecure
-            ]
-        );
-        assert!(!list.required);
+        let err = parse_suite_list(&cap)
+            .expect_err("unknown suite identifiers must invalidate the whole list");
+        let HarnessError::Validation(message) = err else {
+            panic!("expected validation error, got {err:?}");
+        };
+        assert!(message.contains("unsupported first-release handshake suite identifiers"));
+        assert!(message.contains("0x7d (unknown)"));
+        assert!(message.contains("0x7e (unknown)"));
     }
     #[test]
-    fn parse_suite_list_rejects_only_pre_release_ids() {
+    fn parse_suite_list_rejects_retired_pre_release_ids() {
         let cap = CapabilityTlv {
             ty: CAPABILITY_SUITE_LIST,
             value: vec![0x02, 0x03],
@@ -457,12 +497,48 @@ mod tests {
             parse_suite_list(&cap).expect_err("pre-release-only suite list must not negotiate");
         match err {
             HarnessError::Validation(message) => {
-                assert!(message.contains("pre-release handshake suite identifiers"));
-                assert!(message.contains("0x02"));
-                assert!(message.contains("0x03"));
+                assert!(message.contains("unsupported first-release handshake suite identifiers"));
+                assert!(message.contains("0x02 (retired pre-release)"));
+                assert!(message.contains("0x03 (retired pre-release)"));
             }
             other => panic!("expected validation error, got {other:?}"),
         }
+    }
+    #[test]
+    fn capability_parser_rejects_unknown_suite_identifier_on_the_wire() {
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&CAPABILITY_SUITE_LIST.to_be_bytes());
+        encoded.extend_from_slice(&2_u16.to_be_bytes());
+        encoded.extend_from_slice(&[
+            u8::from(HandshakeSuite::Nk2Hybrid) | SUITE_LIST_REQUIRED_FLAG,
+            0x7D,
+        ]);
+
+        let error = parse_capabilities(&encoded)
+            .expect_err("wire suite lists with unknown identifiers must fail closed");
+        assert!(
+            error.to_string().contains("0x7d (unknown)"),
+            "unexpected error: {error}"
+        );
+    }
+    #[test]
+    fn capability_parser_rejects_duplicate_suite_identifier_on_the_wire() {
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&CAPABILITY_SUITE_LIST.to_be_bytes());
+        encoded.extend_from_slice(&2_u16.to_be_bytes());
+        encoded.extend_from_slice(&[
+            u8::from(HandshakeSuite::Nk2Hybrid) | SUITE_LIST_REQUIRED_FLAG,
+            u8::from(HandshakeSuite::Nk2Hybrid),
+        ]);
+
+        let error = parse_capabilities(&encoded)
+            .expect_err("wire suite lists with duplicate identifiers must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate first-release handshake suite identifiers: 0x04"),
+            "unexpected error: {error}"
+        );
     }
     #[test]
     fn parse_capabilities_rejects_unknown_type() {
@@ -944,7 +1020,7 @@ mod tests {
             let relay_keys = checked_random_keypair();
             let (client_hello, client_state) =
                 build_client_hello(&params, &mut rng_client).expect("nk3 client hello");
-            let (relay_hello, _relay_state) =
+            let (relay_hello, _relay_session) =
                 process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                     .expect("nk3 relay response");
             let profile = kem_profile(params.kem_id).expect("kem profile");
@@ -1429,7 +1505,7 @@ mod tests {
         let relay_keys = checked_random_keypair();
         let (client_hello, _client_state) =
             build_client_hello(&params, &mut rng_client).expect("build nk2 client hello");
-        let (mut relay_response, _relay_state) =
+        let (mut relay_response, _relay_session) =
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("build nk2 relay response");
         let range = relay_response_ephemeral_range(&relay_response);
@@ -1478,7 +1554,7 @@ mod tests {
         let relay_keys = checked_random_keypair();
         let (client_hello, _client_state) =
             build_client_hello(&params, &mut rng_client).expect("build nk3 client hello");
-        let (mut relay_response, _relay_state) =
+        let (mut relay_response, _relay_session) =
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("build nk3 relay response");
         let range = relay_response_static_range(&relay_response);
@@ -1663,7 +1739,7 @@ mod tests {
         let relay_keys = checked_random_keypair();
         let (client_hello, _client_state) =
             build_client_hello(&params, &mut rng_client).expect("client hello");
-        let (mut relay_response, _relay_state) =
+        let (mut relay_response, _relay_session) =
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("relay response");
         let (_identity_range, ed25519_range) = relay_authentication_len_ranges(&relay_response);
@@ -1702,7 +1778,7 @@ mod tests {
         let relay_keys = checked_random_keypair();
         let (client_hello, _client_state) =
             build_client_hello(&params, &mut rng_client).expect("client hello");
-        let (mut relay_response, _relay_state) =
+        let (mut relay_response, _relay_session) =
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("relay response");
         let (_identity_header, ed25519_header) = relay_authentication_len_ranges(&relay_response);
@@ -1761,7 +1837,7 @@ mod tests {
         let relay_keys = checked_random_keypair();
         let (client_hello, client_state) =
             build_client_hello(&params, &mut rng_client).expect("client hello");
-        let (mut relay_response, _relay_state) =
+        let (mut relay_response, _relay_session) =
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("relay response");
         let mutated_relay_caps =
@@ -1774,7 +1850,6 @@ mod tests {
             &relay_response,
             relay_keys.public_key(),
             &params,
-            &mut rng_client,
         ) {
             Ok(_) => panic!("relay response missing selected KEM id must fail"),
             Err(err) => err,
@@ -1789,13 +1864,11 @@ mod tests {
         let (params, client_state, relay_hello, _relay_keys) =
             authenticated_exchange(8_001, 8_002, 0x41);
         let wrong_relay_keys = checked_seeded_keypair(0x42);
-        let mut rng = StdRng::seed_from_u64(8_003);
         let err = client_handle_relay_hello(
             client_state,
             &relay_hello,
             wrong_relay_keys.public_key(),
             &params,
-            &mut rng,
         )
         .err()
         .expect("an identity absent from the authenticated directory must fail");
@@ -1816,16 +1889,10 @@ mod tests {
             relay_hello[signature_payload].iter().any(|byte| *byte != 0),
             "fixture must remain a nonzero forged signature"
         );
-        let mut rng = StdRng::seed_from_u64(8_006);
-        let err = client_handle_relay_hello(
-            client_state,
-            &relay_hello,
-            relay_keys.public_key(),
-            &params,
-            &mut rng,
-        )
-        .err()
-        .expect("a nonzero forged signature must fail");
+        let err =
+            client_handle_relay_hello(client_state, &relay_hello, relay_keys.public_key(), &params)
+                .err()
+                .expect("a nonzero forged signature must fail");
         assert!(
             matches!(err, HarnessError::Validation(ref message) if message.contains("signature verification failed")),
             "unexpected error: {err:?}"
@@ -1842,13 +1909,11 @@ mod tests {
             tls_server_name,
             ..params
         };
-        let mut rng = StdRng::seed_from_u64(8_009);
         let err = client_handle_relay_hello(
             client_state,
             &relay_hello,
             relay_keys.public_key(),
             &mismatched_params,
-            &mut rng,
         )
         .err()
         .expect("transport identity mismatch must fail relay authentication");
@@ -1868,13 +1933,11 @@ mod tests {
             authenticated_exchange(8_010, 8_011, 0x45);
         let (_other_params, _other_state, substituted_relay_hello, relay_keys) =
             authenticated_exchange(8_012, 8_013, 0x45);
-        let mut rng = StdRng::seed_from_u64(8_014);
         let err = client_handle_relay_hello(
             client_state,
             &substituted_relay_hello,
             relay_keys.public_key(),
             &params,
-            &mut rng,
         )
         .err()
         .expect("a response signed for a different client hello must fail");
@@ -1974,95 +2037,16 @@ mod tests {
         assert_eq!(recomputed_dual_mix, relay_response.dual_mix);
     }
     #[test]
-    fn assemble_relay_state_populates_core_fields() {
-        let params = RuntimeParams::soranet_defaults();
-        let parsed = ClientHelloParsed {
-            client_nonce: [0x01; 32],
-            handshake_suite: HandshakeSuite::Nk2Hybrid,
-            kem_id: 5,
-            sig_id: 7,
-            client_ephemeral_public: [0x02; 32],
-            client_static_public: Some([0x03; 32]),
-            client_kem_public: vec![0x04, 0x05],
-            forward_kem_public: None,
-            forward_commitment: None,
-            client_capabilities: vec![0x06],
-            resume_hash: Some(vec![0x07]),
-        };
-        let ephemeral_secret = StaticSecret::from([0x22; 32]);
-        let expected_ephemeral_public = X25519PublicKey::from(&ephemeral_secret).to_bytes();
-        let static_secret = StaticSecret::from([0x33; 32]);
-        let expected_static_public = X25519PublicKey::from(&static_secret).to_bytes();
-        let noise = RelayNoiseState {
-            nonce: [0xAA; 32],
-            ephemeral_secret,
-            ephemeral_public: expected_ephemeral_public,
-            static_secret,
-            static_public: expected_static_public,
-        };
-        let kem = RuntimeKemArtifacts {
-            relay_public: vec![0x10, 0x11],
-            relay_secret: Zeroizing::new(vec![0x20]),
-            shared_secret: Zeroizing::new(vec![0x30]),
-            ciphertext: vec![0x40, 0x41],
-        };
-        let warning_message = "test warning propagated".to_owned();
-        let relay_hello = vec![0xDE, 0xAD];
-        let transcript = [0xBB; 32];
-        let state = assemble_relay_state(RelayStateInputs {
-            parsed,
-            params: &params,
-            noise,
-            kem,
-            transcript,
-            handshake_suite: HandshakeSuite::Nk2Hybrid,
-            warnings: vec![CapabilityWarning {
-                capability_type: 0x0101,
-                message: warning_message.clone(),
-            }],
-            relay_hello: relay_hello.clone(),
-        });
-        assert_eq!(state.client_nonce, [0x01; 32]);
-        assert_eq!(state.client_ephemeral_public, [0x02; 32]);
-        assert_eq!(state.client_capabilities, vec![0x06]);
-        assert_eq!(state.client_kem_public, vec![0x04, 0x05]);
-        assert_eq!(state.resume_hash.as_deref(), Some(&[0x07][..]));
-        assert_eq!(state.client_static_public, Some([0x03; 32]));
-        assert_eq!(state.relay_nonce, [0xAA; 32]);
-        assert_eq!(state.relay_ephemeral_public, expected_ephemeral_public);
-        assert_eq!(state.relay_static_public, expected_static_public);
-        assert_eq!(state.relay_capabilities, params.relay_capabilities);
-        assert_eq!(state.descriptor_commit, params.descriptor_commit);
-        assert_eq!(state.relay_hello, relay_hello);
-        assert_eq!(state.transcript_hash, transcript);
-        assert_eq!(state.kem_id, 5);
-        assert_eq!(state.sig_id, 7);
-        assert_eq!(state.handshake_suite, HandshakeSuite::Nk2Hybrid);
-        assert_eq!(state.warnings.len(), 1);
-        assert_eq!(state.warnings[0].capability_type, 0x0101);
-        assert_eq!(state.warnings[0].message, warning_message);
-        assert!(state.pending_session.is_none());
-        assert!(state.transcript_confirm_primary.is_none());
-        assert!(state.transcript_confirm_forward.is_none());
-        assert!(state.forward_kem_public.is_none());
-        assert!(!state.requires_client_finish);
-        assert_eq!(&**state.relay_kem_shared, &[0x30]);
-        assert_eq!(&**state.relay_kem_secret, &[0x20]);
-        assert_eq!(state.kem_ciphertext, vec![0x40, 0x41]);
-    }
-    #[test]
     fn pqfs_relay_response_serializes_inputs_and_signatures() {
         let params = RuntimeParams::soranet_defaults();
         let noise = fixture_noise_state();
         let primary = fixture_kem_artifacts(
             &[0x01, 0x02, 0x03],
-            &[0x04, 0x05],
             &[0x06, 0x07, 0x08, 0x09],
             &[0x0A, 0x0B, 0x0C, 0x0D],
         );
         let forward = fixture_kem_artifacts(
             &[0x21, 0x22, 0x23],
-            &[0x24, 0x25],
             &[0x26, 0x27, 0x28, 0x29],
             &[0x2A, 0x2B, 0x2C, 0x2D],
         );
@@ -2310,7 +2294,7 @@ mod tests {
             .expect_err("suite lists containing old IDs must fail");
         match err {
             HarnessError::Validation(message) => {
-                assert!(message.contains("pre-release handshake suite identifiers"));
+                assert!(message.contains("unsupported first-release handshake suite identifiers"));
                 assert!(message.contains("0x02"));
             }
             other => panic!("expected validation error, got {other:?}"),
@@ -2332,7 +2316,7 @@ mod tests {
             .expect_err("old-only suite lists must fail");
         match err {
             HarnessError::Validation(message) => {
-                assert!(message.contains("pre-release handshake suite identifiers"));
+                assert!(message.contains("unsupported first-release handshake suite identifiers"));
                 assert!(message.contains("0x02"));
                 assert!(message.contains("0x03"));
             }
@@ -2435,8 +2419,7 @@ mod tests {
     fn x25519_dh_rejects_an_all_zero_output() {
         let local_secret = StaticSecret::from([0x55; NOISE_SECRET_LEN]);
         let error = checked_x25519_dh("ee", &local_secret, &[0; NOISE_SECRET_LEN])
-            .err()
-            .expect("low-order peer must produce a rejected all-zero DH output");
+            .expect_err("low-order peer must produce a rejected all-zero DH output");
         assert!(
             matches!(error, HarnessError::Validation(ref message) if message.contains("Noise XX ee X25519 DH output must not be all zero")),
             "unexpected error: {error:?}"
@@ -2498,23 +2481,12 @@ mod tests {
         let relay_keys = checked_random_keypair();
         let (client_hello, client_state) =
             build_client_hello(&params, &mut rng_client).expect("client hello");
-        let (relay_hello, relay_state) =
+        let (relay_hello, relay_secrets) =
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("relay hello");
-        let (client_finish, client_secrets) = client_handle_relay_hello(
-            client_state,
-            &relay_hello,
-            relay_keys.public_key(),
-            &params,
-            &mut rng_client,
-        )
-        .expect("client finish");
-        let relay_secrets = match client_finish {
-            Some(frame) => {
-                relay_finalize_handshake(relay_state, &frame, &relay_keys).expect("relay finish")
-            }
-            None => relay_finalize_handshake(relay_state, &[], &relay_keys).expect("relay finish"),
-        };
+        let client_secrets =
+            client_handle_relay_hello(client_state, &relay_hello, relay_keys.public_key(), &params)
+                .expect("client session");
         assert_eq!(
             client_secrets.handshake_suite,
             relay_secrets.handshake_suite
@@ -2663,29 +2635,17 @@ mod tests {
         let mut rng_relay = StdRng::seed_from_u64(200);
         let (client_hello, client_state) =
             build_client_hello(&params, &mut rng_client).expect("nk2 client");
-        let (relay_hello, relay_state) =
+        let (relay_hello, relay_secrets) =
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("nk2 relay");
-        assert_eq!(relay_state.handshake_suite, HandshakeSuite::Nk2Hybrid);
-        assert!(!relay_state.requires_client_finish);
+        assert_eq!(relay_secrets.handshake_suite, HandshakeSuite::Nk2Hybrid);
         assert_eq!(
             relay_hello.first().copied(),
             Some(HYBRID_RELAY_RESPONSE_TYPE)
         );
-        let (client_finish, client_secrets) = client_handle_relay_hello(
-            client_state,
-            &relay_hello,
-            relay_keys.public_key(),
-            &params,
-            &mut rng_client,
-        )
-        .expect("nk2 client handle");
-        assert!(
-            client_finish.is_none(),
-            "nk2 handshake must not emit client finish"
-        );
-        let relay_secrets =
-            relay_finalize_handshake(relay_state, &[], &relay_keys).expect("nk2 relay finalize");
+        let client_secrets =
+            client_handle_relay_hello(client_state, &relay_hello, relay_keys.public_key(), &params)
+                .expect("nk2 client handle");
         assert_eq!(client_secrets.handshake_suite, HandshakeSuite::Nk2Hybrid);
         assert_eq!(relay_secrets.handshake_suite, HandshakeSuite::Nk2Hybrid);
         assert_eq!(
@@ -2903,32 +2863,20 @@ mod tests {
         let mut rng_relay = StdRng::seed_from_u64(4048);
         let (client_hello, client_state) =
             build_client_hello(&params, &mut rng_client).expect("nk3 client");
-        let (relay_hello, relay_state) =
+        let (relay_hello, relay_secrets) =
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("nk3 relay");
         assert_eq!(
-            relay_state.handshake_suite,
+            relay_secrets.handshake_suite,
             HandshakeSuite::Nk3PqForwardSecure
         );
-        assert!(!relay_state.requires_client_finish);
         assert_eq!(relay_hello.first().copied(), Some(PQFS_RELAY_RESPONSE_TYPE));
         let profile = kem_profile(params.kem_id).expect("kem profile");
         parse_pqfs_relay_response(&relay_hello, params.descriptor_commit, profile.suite())
             .expect("parse nk3 response");
-        let (client_finish, client_secrets) = client_handle_relay_hello(
-            client_state,
-            &relay_hello,
-            relay_keys.public_key(),
-            &params,
-            &mut rng_client,
-        )
-        .expect("nk3 client handle");
-        assert!(
-            client_finish.is_none(),
-            "nk3 handshake must not emit client finish"
-        );
-        let relay_secrets =
-            relay_finalize_handshake(relay_state, &[], &relay_keys).expect("nk3 relay finalize");
+        let client_secrets =
+            client_handle_relay_hello(client_state, &relay_hello, relay_keys.public_key(), &params)
+                .expect("nk3 client handle");
         assert_eq!(
             client_secrets.handshake_suite,
             HandshakeSuite::Nk3PqForwardSecure
@@ -3062,23 +3010,12 @@ mod tests {
         let relay_keys = checked_random_keypair();
         let (client_hello, client_state) =
             build_client_hello(&params, &mut rng_client).expect("client hello");
-        let (relay_hello, relay_state) =
+        let (relay_hello, relay_secrets) =
             process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
                 .expect("relay hello");
-        let (client_finish, client_secrets) = client_handle_relay_hello(
-            client_state,
-            &relay_hello,
-            relay_keys.public_key(),
-            &params,
-            &mut rng_client,
-        )
-        .expect("client finish");
-        let relay_secrets = match client_finish {
-            Some(frame) => {
-                relay_finalize_handshake(relay_state, &frame, &relay_keys).expect("relay")
-            }
-            None => relay_finalize_handshake(relay_state, &[], &relay_keys).expect("relay"),
-        };
+        let client_secrets =
+            client_handle_relay_hello(client_state, &relay_hello, relay_keys.public_key(), &params)
+                .expect("client session");
         assert_eq!(
             client_secrets.handshake_suite,
             relay_secrets.handshake_suite
@@ -3439,7 +3376,7 @@ mod tests {
         };
         let relay_keys = checked_random_keypair();
         let mut rng_relay = StdRng::seed_from_u64(6);
-        let (relay_hello, _relay_state) =
+        let (relay_hello, _relay_session) =
             process_client_hello(&client_hello, &bad_params, &relay_keys, &mut rng_relay)
                 .expect("relay hello");
         match client_handle_relay_hello(
@@ -3447,7 +3384,6 @@ mod tests {
             &relay_hello,
             relay_keys.public_key(),
             &defaults,
-            &mut rng_client,
         ) {
             Err(HarnessError::Validation(message)) => {
                 assert!(

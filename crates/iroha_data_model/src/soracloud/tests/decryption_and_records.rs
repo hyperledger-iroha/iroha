@@ -852,6 +852,132 @@ fn uploaded_model_bundle_validation_rejects_adversarial_modalities() {
     }
 }
 #[test]
+fn uploaded_model_bundle_validation_enforces_canonical_identifiers() {
+    let mut maximum = sample_uploaded_model_bundle();
+    maximum.model_id = "M".repeat(SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1);
+    maximum.weight_version = "v".repeat(SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1);
+    maximum
+        .validate()
+        .expect("maximum-length portable identifiers must validate");
+
+    for (field, invalid) in [
+        (
+            "model_id",
+            "M".repeat(SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1 + 1),
+        ),
+        ("model_id", "upload/model".to_owned()),
+        ("model_id", "upload‑model".to_owned()),
+        (
+            "weight_version",
+            "v".repeat(SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1 + 1),
+        ),
+        ("weight_version", "weights v1".to_owned()),
+        ("weight_version", "重み".to_owned()),
+    ] {
+        let mut bundle = sample_uploaded_model_bundle();
+        match field {
+            "model_id" => bundle.model_id = invalid,
+            "weight_version" => bundle.weight_version = invalid,
+            _ => unreachable!("fixture only covers uploaded-model identifiers"),
+        }
+        let error = bundle
+            .validate()
+            .expect_err("non-canonical uploaded-model identifier must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                manifest: "sora uploaded model bundle",
+                field: error_field,
+                ..
+            } if error_field == field
+        ));
+    }
+}
+#[test]
+fn uploaded_model_encryption_key_ids_must_be_exact() {
+    let mut recipient = sample_uploaded_model_encryption_recipient();
+    recipient.key_id = "recipient key".to_owned();
+    recipient
+        .validate()
+        .expect("internal key-id whitespace is part of the exact identifier");
+
+    for invalid in [" recipient", "recipient ", "recipient\nkey"] {
+        let mut recipient = sample_uploaded_model_encryption_recipient();
+        recipient.key_id = invalid.to_owned();
+        let error = recipient
+            .validate()
+            .expect_err("non-canonical recipient key id must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                manifest: "sora uploaded model encryption recipient",
+                field: "key_id",
+                ..
+            }
+        ));
+
+        let mut wrapped_key = sample_uploaded_model_wrapped_key();
+        wrapped_key.recipient_key_id = invalid.to_owned();
+        let error = wrapped_key
+            .validate()
+            .expect_err("non-canonical wrapped recipient key id must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                manifest: "sora uploaded model wrapped key",
+                field: "recipient_key_id",
+                ..
+            }
+        ));
+    }
+}
+#[test]
+fn private_model_artifact_context_enforces_canonical_release_identity() {
+    let mut maximum = sample_private_model_artifact_context();
+    let SoraPrivateModelArtifactContextV1::Model(context) = &mut maximum else {
+        unreachable!("sample context is a model context");
+    };
+    context.service_version = "s".repeat(SORA_UPLOADED_MODEL_SERVICE_VERSION_MAX_BYTES_V1);
+    context.model_id = "m".repeat(SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1);
+    context.weight_version = "w".repeat(SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1);
+    maximum
+        .validate()
+        .expect("maximum-length canonical release identity must validate");
+
+    for (field, invalid) in [
+        ("service_version", " 2026.1".to_owned()),
+        ("service_version", "2026\n1".to_owned()),
+        (
+            "service_version",
+            "s".repeat(SORA_UPLOADED_MODEL_SERVICE_VERSION_MAX_BYTES_V1 + 1),
+        ),
+        ("model_id", "model/id".to_owned()),
+        ("weight_version", "weight version".to_owned()),
+    ] {
+        let mut artifact_context = sample_private_model_artifact_context();
+        let SoraPrivateModelArtifactContextV1::Model(context) = &mut artifact_context else {
+            unreachable!("sample context is a model context");
+        };
+        match field {
+            "service_version" => context.service_version = invalid,
+            "model_id" => context.model_id = invalid,
+            "weight_version" => context.weight_version = invalid,
+            _ => unreachable!("fixture only covers release identity fields"),
+        }
+        let error = artifact_context
+            .validate()
+            .expect_err("non-canonical artifact release identity must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                manifest: "sora private model artifact context",
+                field: error_field,
+                ..
+            } if error_field == field
+        ));
+    }
+}
+#[test]
 fn private_model_artifact_ref_validation_rejects_zero_prehash_artifact_hash_sentinel() {
     let mut artifact = sample_private_model_artifact_ref("input", 0x11);
     artifact.artifact_hash = zero_prehash_statement_hash();
@@ -867,6 +993,42 @@ fn private_model_artifact_ref_validation_rejects_zero_prehash_artifact_hash_sent
         }
     ));
     assert!(error.to_string().contains("zero prehash sentinel"));
+}
+#[test]
+fn private_model_artifact_ref_validation_enforces_encrypted_size_bound() {
+    let mut artifact = sample_private_model_artifact_ref("input", 0x11);
+    artifact.ciphertext_bytes = 0;
+    let zero_error = artifact
+        .validate()
+        .expect_err("empty private artifact must fail admission");
+    assert!(matches!(
+        zero_error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora private model artifact ref",
+            field: "ciphertext_bytes",
+            ..
+        }
+    ));
+
+    let maximum = u64::try_from(SORA_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_MAX_BYTES_V1)
+        .expect("private encrypted artifact limit fits u64");
+    artifact.ciphertext_bytes = maximum;
+    artifact
+        .validate()
+        .expect("maximum-sized private artifact must pass admission");
+
+    artifact.ciphertext_bytes = maximum + 1;
+    let oversized_error = artifact
+        .validate()
+        .expect_err("oversized private artifact must fail admission");
+    assert!(matches!(
+        oversized_error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora private model artifact ref",
+            field: "ciphertext_bytes",
+            ..
+        }
+    ));
 }
 #[test]
 fn private_uploaded_model_execution_receipt_validation_rejects_zero_prehash_commitments() {
@@ -947,9 +1109,189 @@ fn private_uploaded_model_execution_receipt_round_trips_and_validates() {
         }
     ));
 }
+
+#[test]
+fn private_uploaded_model_execution_receipt_enforces_canonical_release_identity() {
+    let mut maximum = sample_private_uploaded_model_execution_receipt();
+    maximum.service_version = "s".repeat(SORA_UPLOADED_MODEL_SERVICE_VERSION_MAX_BYTES_V1);
+    maximum.model_id = "m".repeat(SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1);
+    maximum.weight_version = "w".repeat(SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1);
+    maximum.request_commitment = derive_soracloud_private_model_request_commitment_v1(&maximum);
+    maximum.result_commitment = derive_soracloud_private_model_result_commitment_v1(&maximum);
+    maximum.receipt_id = derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&maximum);
+    maximum
+        .validate()
+        .expect("maximum-length canonical receipt identity must validate");
+
+    for (field, invalid) in [
+        ("service_version", "2026.1 ".to_owned()),
+        ("service_version", "2026\u{7f}.1".to_owned()),
+        (
+            "service_version",
+            "s".repeat(SORA_UPLOADED_MODEL_SERVICE_VERSION_MAX_BYTES_V1 + 1),
+        ),
+        ("model_id", "upload/model".to_owned()),
+        (
+            "model_id",
+            "m".repeat(SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1 + 1),
+        ),
+        ("weight_version", "weight version".to_owned()),
+        (
+            "weight_version",
+            "w".repeat(SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1 + 1),
+        ),
+    ] {
+        let mut receipt = sample_private_uploaded_model_execution_receipt();
+        match field {
+            "service_version" => receipt.service_version = invalid,
+            "model_id" => receipt.model_id = invalid,
+            "weight_version" => receipt.weight_version = invalid,
+            _ => unreachable!("fixture only covers release identity fields"),
+        }
+        let error = receipt
+            .validate()
+            .expect_err("non-canonical receipt release identity must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                manifest: "sora private uploaded model execution receipt",
+                field: error_field,
+                ..
+            } if error_field == field
+        ));
+    }
+}
+
+#[test]
+fn private_uploaded_model_execution_receipt_requires_canonical_commitments_and_identity() {
+    let canonical = sample_private_uploaded_model_execution_receipt();
+
+    let mut substituted_runtime = canonical.clone();
+    substituted_runtime.runtime_version = "soracloud.quantized-cpu.v2".to_owned();
+    substituted_runtime.request_commitment =
+        derive_soracloud_private_model_request_commitment_v1(&substituted_runtime);
+    substituted_runtime.result_commitment =
+        derive_soracloud_private_model_result_commitment_v1(&substituted_runtime);
+    substituted_runtime.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&substituted_runtime);
+    let error = substituted_runtime
+        .validate()
+        .expect_err("a substituted private runtime version must fail validation");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora private uploaded model execution receipt",
+            field: "runtime_version",
+            ..
+        }
+    ));
+
+    let mut substituted_request = canonical.clone();
+    substituted_request.request_commitment = sample_hash(0xE1);
+    substituted_request.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&substituted_request);
+    let error = substituted_request
+        .validate()
+        .expect_err("a substituted private request commitment must fail validation");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora private uploaded model execution receipt",
+            field: "request_commitment",
+            ..
+        }
+    ));
+
+    let mut substituted_output_destination = canonical.clone();
+    substituted_output_destination.output_artifact.artifact_hash = sample_hash(0xE4);
+    substituted_output_destination.result_commitment =
+        derive_soracloud_private_model_result_commitment_v1(&substituted_output_destination);
+    substituted_output_destination.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(
+            &substituted_output_destination,
+        );
+    let error = substituted_output_destination
+        .validate()
+        .expect_err("a substituted private output destination must invalidate the request");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora private uploaded model execution receipt",
+            field: "request_commitment",
+            ..
+        }
+    ));
+
+    let mut substituted_result = canonical.clone();
+    substituted_result.result_commitment = sample_hash(0xE2);
+    substituted_result.receipt_id =
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&substituted_result);
+    let error = substituted_result
+        .validate()
+        .expect_err("a substituted private result commitment must fail validation");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora private uploaded model execution receipt",
+            field: "result_commitment",
+            ..
+        }
+    ));
+
+    let mut substituted_id = canonical.clone();
+    substituted_id.receipt_id = sample_hash(0xE3);
+    let error = substituted_id
+        .validate()
+        .expect_err("a substituted private receipt id must fail validation");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora private uploaded model execution receipt",
+            field: "receipt_id",
+            ..
+        }
+    ));
+
+    let canonical_id = canonical.receipt_id;
+    let mut submission = canonical;
+    submission.emitted_sequence = 0;
+    submission.emitted_block_height = 0;
+    assert_eq!(
+        derive_soracloud_private_uploaded_model_execution_receipt_id_v1(&submission),
+        canonical_id,
+        "ledger sequence and block-height assignment must not change private receipt identity"
+    );
+    submission
+        .validate_submission()
+        .expect("the canonical identity must remain valid before sequence assignment");
+}
+
 #[test]
 fn hf_source_record_validation_accepts_consistent_state() {
     sample_hf_source_record().validate().expect("valid source");
+}
+#[test]
+fn hf_source_record_validation_requires_full_lowercase_commit_oid() {
+    for mutable_or_noncanonical in [
+        "main",
+        "4f9d72c",
+        "4F9D72C4F9D72C4F9D72C4F9D72C4F9D72C4F9D",
+        "4f9d72c4f9d72c4f9d72c4f9d72c4f9d72c4f9g",
+    ] {
+        let mut source = sample_hf_source_record();
+        source.resolved_revision = mutable_or_noncanonical.to_owned();
+        let error = source
+            .validate()
+            .expect_err("mutable or noncanonical HF revision must fail admission");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                manifest: "sora hf source record",
+                field: "resolved_revision",
+                ..
+            }
+        ));
+    }
 }
 #[test]
 fn hf_source_record_validation_rejects_zero_prehash_digest_sentinels() {
@@ -990,17 +1332,91 @@ fn hf_shared_lease_pool_validation_rejects_zero_prehash_digest_sentinels() {
     assert_zero_prehash_digest_error(&error, "source_id");
 }
 #[test]
+fn hf_shared_lease_pool_binds_queued_profile_cap_and_asset() {
+    let mut pool = sample_hf_shared_lease_pool();
+    let resource_profile = sample_hf_resource_profile();
+    let canonical_cap =
+        hf_shared_lease_max_compute_reservation_fee_v1(&resource_profile, pool.lease_term_ms)
+            .expect("canonical compute cap");
+    pool.queued_next_window = Some(SoraHfSharedLeaseQueuedWindowV1 {
+        sponsor_account_id: sample_account_id(0xC3),
+        model_name: "demo_model".to_string(),
+        lease_asset_definition_id: pool.lease_asset_definition_id.clone(),
+        base_fee: xor_quantity_from_nanos(15_000),
+        compute_reservation_cap: canonical_cap,
+        resource_profile,
+        sponsored_at_ms: 20_000,
+        window_started_at_ms: pool.window_expires_at_ms,
+        window_expires_at_ms: pool.window_expires_at_ms.saturating_add(pool.lease_term_ms),
+        service_name: sample_name("demo_service"),
+        apartment_name: Some(sample_name("demo_apartment")),
+    });
+    pool.validate()
+        .expect("canonical queued-window cap and settlement asset are valid");
+    pool.queued_next_window
+        .as_mut()
+        .expect("queued window")
+        .compute_reservation_cap = xor_quantity_from_nanos(7_999);
+    let error = pool
+        .validate()
+        .expect_err("a non-canonical compute cap must fail");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora hf shared lease pool",
+            field: "queued_next_window.compute_reservation_cap",
+            ..
+        }
+    ));
+
+    let mut pool = sample_hf_shared_lease_pool();
+    let resource_profile = sample_hf_resource_profile();
+    let compute_reservation_cap =
+        hf_shared_lease_max_compute_reservation_fee_v1(&resource_profile, pool.lease_term_ms)
+            .expect("canonical compute cap");
+    pool.queued_next_window = Some(SoraHfSharedLeaseQueuedWindowV1 {
+        sponsor_account_id: sample_account_id(0xC3),
+        model_name: "demo_model".to_string(),
+        lease_asset_definition_id: AssetDefinitionId::from_uuid_bytes([
+            0x66, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4, 0xa7, 0x16, 0x44, 0x66, 0x55, 0x44,
+            0x00, 0x0b,
+        ])
+        .expect("alternate asset definition"),
+        base_fee: xor_quantity_from_nanos(15_000),
+        compute_reservation_cap,
+        resource_profile,
+        sponsored_at_ms: 20_000,
+        window_started_at_ms: pool.window_expires_at_ms,
+        window_expires_at_ms: pool.window_expires_at_ms.saturating_add(pool.lease_term_ms),
+        service_name: sample_name("demo_service"),
+        apartment_name: Some(sample_name("demo_apartment")),
+    });
+    let error = pool
+        .validate()
+        .expect_err("a queued settlement asset mismatch must fail");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            manifest: "sora hf shared lease pool",
+            field: "queued_next_window.lease_asset_definition_id",
+            ..
+        }
+    ));
+}
+#[test]
 fn hf_shared_lease_pool_validation_rejects_misaligned_queued_window() {
     let mut pool = sample_hf_shared_lease_pool();
-    let mut planned_placement = sample_hf_placement_record();
-    planned_placement.total_reservation_fee = xor_quantity_from_nanos(3_000);
+    let resource_profile = sample_hf_resource_profile();
+    let compute_reservation_cap =
+        hf_shared_lease_max_compute_reservation_fee_v1(&resource_profile, pool.lease_term_ms)
+            .expect("canonical compute cap");
     pool.queued_next_window = Some(SoraHfSharedLeaseQueuedWindowV1 {
         sponsor_account_id: sample_account_id(0xC3),
         model_name: "demo_model".to_string(),
         lease_asset_definition_id: sample_asset_definition_id("4cuvDVPuLBKJyN6dPbRQhmLh68sU"),
         base_fee: xor_quantity_from_nanos(15_000),
-        compute_reservation_fee: xor_quantity_from_nanos(3_000),
-        planned_placement,
+        compute_reservation_cap,
+        resource_profile,
         sponsored_at_ms: 20_000,
         window_started_at_ms: pool.window_expires_at_ms.saturating_add(1),
         window_expires_at_ms: pool
@@ -1049,6 +1465,37 @@ fn hf_shared_lease_audit_event_validation_accepts_consistent_state() {
     sample_hf_shared_lease_audit_event()
         .validate()
         .expect("valid shared lease audit event");
+}
+#[test]
+fn hf_shared_lease_audit_event_binds_activation_failure_reason() {
+    let mut event = sample_hf_shared_lease_audit_event();
+    event.action = SoraHfSharedLeaseActionV1::ActivationFailed;
+    let error = event
+        .validate()
+        .expect_err("activation failures require an explicit reason");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "failure_reason",
+            ..
+        }
+    ));
+    event.failure_reason = Some("queued sponsor could not fund compute".to_owned());
+    event
+        .validate()
+        .expect("an activation failure with a reason is valid");
+
+    event.action = SoraHfSharedLeaseActionV1::Activate;
+    let error = event
+        .validate()
+        .expect_err("successful activation must not carry a failure reason");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "failure_reason",
+            ..
+        }
+    ));
 }
 #[test]
 fn hf_shared_lease_audit_event_validation_rejects_zero_prehash_digest_sentinels() {

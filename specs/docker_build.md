@@ -143,6 +143,14 @@ python3 scripts/taira_devnet.py up --full-doctor
 ```
 
 The diagnostic uses the same-revision `iroha` CLI and the same three standard
-devnet binaries (`kagami`, `iroha3d_taira`, and `iroha`). It requires no Inrou
-workspace or SoraFS preseed; `--inrou-canary-dir` is not part of the
-first-release devnet interface.
+devnet binaries (`kagami`, `iroha3d_taira`, and `iroha`). The command requires
+Linux/AArch64, uid 0, KVM API version 12, and the canonical locked Inrou
+identities before it builds or replaces a cohort. The optional
+`--inrou-canary-dir <owner-only-workspace>` path additionally builds
+`sorafs-node`, preseeds the exact guest and bundle commitments into four
+disjoint stores, and proves four hosted replicas plus the authoritative route;
+it may be combined with `--full-doctor` when both checks are required.
+
+This optional local diagnostic is not public-ingress qualification. Run the
+same-revision `iroha taira doctor` directly against a public ingress when
+qualifying that deployment.

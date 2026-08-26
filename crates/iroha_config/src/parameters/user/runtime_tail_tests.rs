@@ -30,16 +30,27 @@ fn soracloud_runtime_json_rejects_removed_proxy_only_field() {
 }
 #[test]
 fn soracloud_runtime_json_rejects_retired_portable_vm_selectors() {
-    for field in [
-        r#""max_concurrent_vms":1"#,
-        r#""backends":["portable_vm"]"#,
-        r#""portable_vm_acceleration":"kvm""#,
-        r#""portable_vm_supplementary_gids":[108]"#,
+    for (name, field) in [
+        ("max_concurrent_vms", r#""max_concurrent_vms":1"#),
+        ("backends", r#""backends":["portable_vm"]"#),
+        (
+            "portable_vm_acceleration",
+            r#""portable_vm_acceleration":"kvm""#,
+        ),
+        (
+            "portable_vm_supplementary_gids",
+            r#""portable_vm_supplementary_gids":[108]"#,
+        ),
     ] {
-        norito::json::from_json::<crate::parameters::user::SoracloudRuntimeInrou>(&format!(
-            "{{{field}}}"
-        ))
+        let error = norito::json::from_json::<crate::parameters::user::SoracloudRuntimeInrou>(
+            &format!("{{{field}}}"),
+        )
         .expect_err("retired one-value PortableVM selectors must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("unknown field") && message.contains(name),
+            "unexpected retired-selector diagnostic: {message}"
+        );
     }
 }
 #[test]
@@ -83,7 +94,6 @@ fn soracloud_runtime_json_deserialize_applies_explicit_overrides() {
                 "local_runner_program":"python3.12",
                 "local_runner_timeout_ms":45000,
                 "model_host_heartbeat_ttl_ms":18000,
-                "allow_inference_bridge_fallback":false,
                 "import_max_files":48,
                 "import_max_file_bytes":777777,
                 "import_max_total_bytes":9999999,
@@ -160,7 +170,7 @@ fn soracloud_runtime_rejects_raw_hf_inference_credentials() {
     assert!(error.to_string().contains("inference_token"));
 }
 #[test]
-fn soracloud_runtime_hf_bridge_requires_exact_provider_binding() {
+fn soracloud_runtime_rejects_retired_hf_bridge_fallback_switch() {
     let mut table = base_table();
     let runtime = table
         .entry("soracloud_runtime")
@@ -173,12 +183,17 @@ fn soracloud_runtime_hf_bridge_requires_exact_provider_binding() {
         Value::Boolean(true),
     );
     runtime.insert("hf".into(), Value::Table(hf));
-    let error = actual::Root::from_toml_source(TomlSource::inline(table))
-        .expect_err("enabled HF bridge must require a provider binding");
-    let report = format!("{error:?}");
+    let _ = actual::Root::from_toml_source(TomlSource::inline(table))
+        .expect_err("retired HF bridge fallback switch must be an unknown TOML field");
+    let error = norito::json::from_json::<SoracloudRuntimeHuggingFace>(
+        r#"{"allow_inference_bridge_fallback":true}"#,
+    )
+    .expect_err("retired HF bridge fallback switch must be an unknown JSON field");
     assert!(
-        report.contains("requires inference_credential_provider"),
-        "{report}"
+        error
+            .to_string()
+            .contains("allow_inference_bridge_fallback"),
+        "{error}"
     );
 }
 #[test]
@@ -231,7 +246,6 @@ fn soracloud_runtime_json_deserialize_rejects_removed_legacy_runtime_field() {
                 "local_runner_program":"python3.12",
                 "local_runner_timeout_ms":45000,
                 "model_host_heartbeat_ttl_ms":18000,
-                "allow_inference_bridge_fallback":false,
                 "import_max_files":48,
                 "import_max_file_bytes":777777,
                 "import_max_total_bytes":9999999,
@@ -596,11 +610,11 @@ fn network_parse_clamps_zero_periods() {
 #[test]
 fn sumeragi_v2_exact_output_geometry_accepts_network_source_boundary() {
     let mut table = base_table();
-    let network = table
+    table
         .get_mut("network")
         .and_then(Value::as_table_mut)
-        .expect("network table");
-    network.insert("max_total_connections".into(), Value::Integer(97));
+        .expect("network table")
+        .insert("max_total_connections".into(), Value::Integer(2));
     let sumeragi = table
         .entry("sumeragi")
         .or_insert_with(|| Value::Table(Table::new()))
@@ -612,6 +626,23 @@ fn sumeragi_v2_exact_output_geometry_accepts_network_source_boundary() {
         .as_table_mut()
         .expect("sumeragi.queues table");
     queues.insert("commands".into(), Value::Integer(8_192));
+    let provisional = load_root(table.clone());
+    let shared_capacity = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
+        (provisional.sumeragi.queues.commands.get()
+            / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
+            .max(1),
+        provisional.sumeragi.queues.bodies.get(),
+    )
+    .expect("fixture capacity must be representable");
+    let source_boundary = shared_capacity / defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT;
+    table
+        .get_mut("network")
+        .and_then(Value::as_table_mut)
+        .expect("network table")
+        .insert(
+            "max_total_connections".into(),
+            Value::Integer(i64::try_from(source_boundary).expect("source boundary fits i64")),
+        );
     let actual = load_root(table.clone());
     assert_eq!(actual.sumeragi.queues.commands.get(), 8_192);
     assert_eq!(
@@ -619,20 +650,29 @@ fn sumeragi_v2_exact_output_geometry_accepts_network_source_boundary() {
             .network
             .max_total_connections
             .map(std::num::NonZeroUsize::get),
-        Some(97),
+        Some(source_boundary),
     );
+    let rejected_source_capacity = source_boundary + 1;
     table
         .get_mut("network")
         .and_then(Value::as_table_mut)
         .expect("network table")
-        .insert("max_total_connections".into(), Value::Integer(98));
+        .insert(
+            "max_total_connections".into(),
+            Value::Integer(
+                i64::try_from(rejected_source_capacity).expect("rejected source capacity fits i64"),
+            ),
+        );
     let error = actual::Root::from_toml_source(TomlSource::inline(table))
-        .expect_err("the next reply-source slot exceeds lifecycle capacity");
+        .expect_err("the next reply-source slot exceeds exact-output capacity");
     let report = format!("{error:?}");
+    let rejected_fanout = rejected_source_capacity
+        .checked_mul(defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT)
+        .expect("fixture fanout fits usize");
     assert!(
-        report.contains(
-            "Sumeragi v2 lifecycle record capacity 66084 exceeds maximum 65536; configured network reply-source capacity is 98"
-        ),
+        report.contains(&format!(
+            "Sumeragi v2 outbound shared ownership capacity {shared_capacity} is below one maximum fanout {rejected_fanout}; configured network reply-source capacity is {rejected_source_capacity}"
+        )),
         "{report}",
     );
 }

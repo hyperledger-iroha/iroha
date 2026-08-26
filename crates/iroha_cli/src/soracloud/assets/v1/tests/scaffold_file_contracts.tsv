@@ -274,7 +274,10 @@ app_init_split_app_template_scaffolds_live_and_vault_services	contains	upgrade.s
 app_init_split_app_template_scaffolds_live_and_vault_services	contains	upgrade.sh	IROHA_CARGO_HOME
 app_init_split_app_template_scaffolds_live_and_vault_services	contains	upgrade.sh	IROHA_CARGO_TARGET_DIR
 app_init_split_app_template_scaffolds_live_and_vault_services	contains	upgrade.sh	exec "${IROHA_CMD[@]}"
-app_init_split_app_template_scaffolds_live_and_vault_services	contains	deploy.sh	"$SCRIPT_DIR/release.sh"
+app_init_split_app_template_scaffolds_live_and_vault_services	contains	deploy.sh	"$SCRIPT_DIR/build-and-sync.sh"
+app_init_split_app_template_scaffolds_live_and_vault_services	contains	deploy.sh	soracloud app deploy
+app_init_split_app_template_scaffolds_live_and_vault_services	contains	deploy.sh	exec "${IROHA_CMD[@]}"
+app_init_split_app_template_scaffolds_live_and_vault_services	excludes	deploy.sh	"$SCRIPT_DIR/release.sh"
 app_init_split_app_template_scaffolds_live_and_vault_services	contains	doctor.sh	"$SCRIPT_DIR/build-and-sync.sh"
 app_init_split_app_template_scaffolds_live_and_vault_services	contains	doctor.sh	IROHA_BIN
 app_init_split_app_template_scaffolds_live_and_vault_services	contains	doctor.sh	IROHA_MANIFEST_PATH
@@ -336,7 +339,7 @@ init_http_service_template_scaffolds_inrou_service	contains	http-service/README.
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	`service_plan` projection that `plan` reports
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	iroha soracloud service config-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	iroha soracloud service secret-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
-init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	iroha soracloud service rollback --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	iroha soracloud service rollback --container ./container_manifest.json --service ./service_manifest.json --target-version <VERSION> --torii-url http://127.0.0.1:8080
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	hf deploy
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	hf status
 init_http_service_template_scaffolds_inrou_service	contains	http-service/README.md	training-job-*

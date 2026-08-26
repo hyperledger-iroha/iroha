@@ -123,7 +123,7 @@ export IROHA_TEST_REQUIRE_NETWORK=1
 unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami
 unset TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA CARGO_BIN_EXE_iroha
 unset TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO
-unset IROHA_TEST_SKIP_BUILD IROHA_TEST_ALLOW_REENTRANT_BUILD
+unset IROHA_TEST_SKIP_BUILD
 unset IROHA_TEST_TARGET_DIR IROHA_RELEASE_PREBUILT_MANIFEST_SHA256
 unset IROHA_TEST_BUILD_PROFILE IROHA_TEST_BUILD_TIMEOUT_MS PROFILE
 unset TLAPM_BIN TLAPM_STDLIB TLA2TOOLS_JAR
@@ -1770,7 +1770,6 @@ release_gate_boundary "release-runner:entry" || exit $?
 readonly release_source_bound_root="${IROHA_RELEASE_ARTIFACT_ROOT}/sumeragi-v2-release/${release_source_manifest_sha256}"
 export IROHA_RELEASE_SOURCE_MANIFEST_SHA256="$release_source_manifest_sha256"
 export IROHA_TEST_SKIP_BUILD=1
-export IROHA_TEST_ALLOW_REENTRANT_BUILD=0
 export IROHA_TEST_BUILD_TIMEOUT_MS=3600
 export IROHA_TEST_BUILD_PROFILE=release
 export PROFILE=release
@@ -1871,7 +1870,7 @@ if [[ "$profile" == "--release" ]]; then
 fi
 
 # Build every real-localnet executable before any Cargo test process starts.
-# Test processes are then permanently skip-build/reentrant-disabled, avoiding a
+# Test processes are then permanently lookup-only, avoiding a
 # Cargo-under-Cargo lock cycle while retaining a source/lock/binary attestation.
 release_gate_boundary "release-prebuilt-publication:before" || exit $?
 release_prebuilt_status=0
@@ -2404,7 +2403,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::adapter_command_identity_is_derived_from_exact_immutable_payload
   sumeragi::v2_runtime::tests::admission_ordinal_exhaustion_fails_runtime_closed
   sumeragi::v2_runtime::tests::runtime_rejects_replayed_foreign_and_mutated_deferred_tokens
-  sumeragi::v2_runtime::tests::scheduler_owner_carrier_covers_live_recovery_and_typed_deferred_branches
+  sumeragi::v2_runtime::tests::scheduler_owner_carrier_covers_live_and_typed_deferred_branches
   sumeragi::v2_runtime::tests::scheduler_owner_carrier_pins_exact_fifo_identity_and_rank_fields
   sumeragi::v2_runtime::tests::scheduler_owner_must_be_taken_before_a_later_step_can_enter
   sumeragi::v2_runtime::tests::selected_owner_without_a_runtime_minted_ordinal_fails_closed

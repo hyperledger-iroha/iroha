@@ -3,7 +3,7 @@ import Foundation
 /// Canonical first-release Kagemusha routes on Torii's `/v1/offline` wire namespace.
 public enum KagemushaToriiAPI {
     public enum Endpoint: String, Sendable {
-        case readiness = "/v1/offline/readiness"
+        case capability = "/v1/offline/readiness"
         case topUp = "/v1/offline/top-up"
         case redeem = "/v1/offline/redeem"
         case operations = "/v1/offline/operations"

@@ -286,7 +286,9 @@ fn permission_cache_rebuilds_after_restart_impl() {
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let lane_config = LaneConfig::default();
-    let (kura, _) = Kura::new(&make_config(&temp_dir), &lane_config).expect("init kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&make_config(&temp_dir), &lane_config)
+            .expect("init kura");
     let live_query = {
         let _guard = runtime.enter();
         crate::query::store::LiveQueryStore::start_test()

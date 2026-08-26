@@ -2270,8 +2270,6 @@ impl V2BodyStore {
         {
             return Err(V2BodyStoreError::ReceiptMismatch);
         }
-        let block = decode_framed_signed_block(&envelope.canonical_wire)
-            .map_err(|error| V2BodyStoreError::BlockDecode(error.to_string()))?;
         if let Some(validated) = self.validated.get(&key) {
             if validated.durable() != &durable {
                 return Err(V2BodyStoreError::ReceiptMismatch);
@@ -2286,6 +2284,16 @@ impl V2BodyStore {
             }
             return Ok(rejected.sealed_outcome());
         }
+        if let Some(execution_commitment) =
+            self.reusable_validated_commitment_for_exact_body(&durable, &envelope)?
+        {
+            let validated = self.persist_validated_receipt(&durable, execution_commitment)?;
+            return Ok(DurableBodyValidationOutcome(
+                DurableBodyValidationOutcomeBody::Validated(validated),
+            ));
+        }
+        let block = decode_framed_signed_block(&envelope.canonical_wire)
+            .map_err(|error| V2BodyStoreError::BlockDecode(error.to_string()))?;
         match validator(&block) {
             Ok(execution_commitment) => {
                 let validated = self.persist_validated_receipt(&durable, execution_commitment)?;
@@ -2308,6 +2316,51 @@ impl V2BodyStore {
                 Ok(rejected.sealed_outcome())
             }
         }
+    }
+    /// Reuse an already authenticated semantic result for an unchanged body.
+    ///
+    /// A locked-body reproposal changes the manifest round but retains the
+    /// exact signed block bytes and subject. Deterministic validation consumes
+    /// those bytes under this immutable height context, not the proposal
+    /// round. Reloading and comparing the checksummed canonical bytes keeps
+    /// this shortcut behind the same body-store authority as ordinary
+    /// validation. The caller still persists a fresh round-local marker before
+    /// the result can authorize a vote.
+    fn reusable_validated_commitment_for_exact_body(
+        &self,
+        durable: &DurableBodyReceipt,
+        current: &StoredBodyEnvelope,
+    ) -> Result<Option<wire::ExecutionCommitment>, V2BodyStoreError> {
+        let Some(((source_round, source_subject), validated)) = self
+            .validated
+            .iter()
+            .filter(|((round, subject), _)| {
+                *subject == durable.subject()
+                    && round.context_id == durable.context_id()
+                    && round.height == durable.round().height
+                    && round.view < durable.round().view
+            })
+            .max_by_key(|((round, _), _)| round.view)
+        else {
+            return Ok(None);
+        };
+        if *source_round != validated.durable().round()
+            || *source_subject != validated.durable().subject()
+        {
+            return Err(V2BodyStoreError::ReceiptMismatch);
+        }
+        let previous = self.load_envelope(validated.durable())?;
+        let same_manifest_body = previous.manifest.subject == current.manifest.subject
+            && previous.manifest.payload_size_bytes == current.manifest.payload_size_bytes
+            && previous.manifest.layout == current.manifest.layout
+            && previous.manifest.chunk_hashes == current.manifest.chunk_hashes
+            && previous.manifest.chunk_root == current.manifest.chunk_root;
+        if !same_manifest_body || previous.canonical_wire != current.canonical_wire {
+            return Err(V2BodyStoreError::ConflictingBody);
+        }
+        let commitment = validated.execution_commitment();
+        commitment.validate()?;
+        Ok(Some(commitment))
     }
     // DURABLE_BODY_VALIDATION_API_END
     /// Durably persist the exact body carried by an authenticated certified

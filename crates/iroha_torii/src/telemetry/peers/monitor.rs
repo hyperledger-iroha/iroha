@@ -464,15 +464,6 @@ fn decode_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSnapshot> 
         .map_err(|error| eyre!("failed to decode canonical /v1/configuration payload: {error}"))?;
     Ok(PeerConfigSnapshot::from(&config))
 }
-fn decode_operator_access_error(bytes: &[u8]) -> Option<String> {
-    let value: Value = json::from_slice(bytes).ok()?;
-    let payload = value.as_object()?;
-    let code = payload.get("code")?.as_str()?;
-    if code.starts_with("operator_") {
-        return Some(code.to_owned());
-    }
-    None
-}
 fn configuration_request(
     client: &Client,
     url: Url,
@@ -502,22 +493,6 @@ fn decode_peer_config_response(
     status: StatusCode,
     bytes: &[u8],
 ) -> eyre::Result<PeerConfigSnapshot> {
-    if status == StatusCode::NOT_FOUND {
-        iroha_logger::debug!(
-            %status,
-            "peer does not expose /v1/configuration; continuing without config snapshot"
-        );
-        return Ok(PeerConfigSnapshot::default());
-    }
-    if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
-        && decode_operator_access_error(bytes).is_some()
-    {
-        iroha_logger::debug!(
-            %status,
-            "peer /v1/configuration requires operator access; continuing without config snapshot"
-        );
-        return Ok(PeerConfigSnapshot::default());
-    }
     if !status.is_success() {
         return Err(eyre!("/v1/configuration returned HTTP {status}"));
     }
@@ -1124,22 +1099,6 @@ mod tests {
         );
     }
     #[test]
-    fn operator_access_error_payload_is_detected() {
-        let payload = br#"{
-            "code":"operator_signature_missing",
-            "message":"missing required operator signature header"
-        }"#;
-        assert_eq!(
-            decode_operator_access_error(payload).as_deref(),
-            Some("operator_signature_missing")
-        );
-    }
-    #[test]
-    fn non_operator_error_payload_is_not_treated_as_configless_fallback() {
-        let payload = br#"{"code":"some_other_error","message":"boom"}"#;
-        assert!(decode_operator_access_error(payload).is_none());
-    }
-    #[test]
     fn peer_monitor_configuration_request_accepts_json() {
         let cfg = crate::test_utils::mk_minimal_root_cfg();
         let network_id = crate::test_utils::signed_query_network_id();
@@ -1162,15 +1121,18 @@ mod tests {
             "/v1/configuration returned HTTP 500 Internal Server Error"
         );
 
-        let missing = decode_peer_config_response(StatusCode::NOT_FOUND, b"not-json")
-            .expect("404 remains a configless compatibility fallback");
-        assert!(missing.public_key.is_none());
-        let protected = decode_peer_config_response(
+        for status in [
+            StatusCode::NOT_FOUND,
+            StatusCode::UNAUTHORIZED,
             StatusCode::FORBIDDEN,
-            br#"{"code":"operator_signature_missing","message":"signature required"}"#,
-        )
-        .expect("operator access failure remains a configless fallback");
-        assert!(protected.public_key.is_none());
+        ] {
+            let error = decode_peer_config_response(status, b"not-json")
+                .expect_err("missing or unauthorized configuration must fail closed");
+            assert_eq!(
+                error.to_string(),
+                format!("/v1/configuration returned HTTP {status}")
+            );
+        }
     }
     #[test]
     fn peer_monitor_builds_an_exact_signed_empty_body_get() {

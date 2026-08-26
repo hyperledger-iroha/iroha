@@ -123,9 +123,10 @@ certified `EnterView` transition restarts the clocks. See
 Authenticated `/v1/sumeragi/status` is the authoritative reducer/operator
 snapshot. It exposes protocol/context fingerprints, height/view/phase/leader,
 QC and TimeoutCertificate references, body/persistence state, latest durable
-commit, and finite adapter/transaction queues. Legacy-labeled collector, RBC,
-DA, and adaptive-pacemaker observability fields are non-authoritative and may
-remain zero; they do not define revision-4 state or configuration.
+commit, and finite adapter/transaction queues. Retired global-RBC
+INIT/READY/DELIVER status and metric fields are absent; signed RS16
+`PayloadManifest`/`PayloadChunk` DA diagnostics describe the revision-4
+availability path.
 
 Safety tests inject authenticated revision-4 messages at the runner boundary.
 Availability and liveness tests use signed genesis/current configuration plus

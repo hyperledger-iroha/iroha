@@ -6,6 +6,8 @@
 //! hash chained so corruption before the final, incomplete crash tail fails closed. Recovery
 //! verifies frames incrementally and fixed height-local record/payload ceilings are enforced both
 //! while opening and before append I/O, keeping valid replay memory bounded.
+//! Platforms without descriptor-relative, no-follow directory and file operations reject safety
+//! WAL storage as unsupported; lexical path checks are not an authenticated storage substitute.
 use super::v2_core::{
     SAFETY_WAL_FILE_HEADER_LEN as FILE_HEADER_LEN, SAFETY_WAL_FRAME_HEADER_LEN as FRAME_HEADER_LEN,
     SAFETY_WAL_FRAME_MAGIC as FRAME_MAGIC, SAFETY_WAL_HASH_LEN as HASH_LEN,
@@ -13,11 +15,11 @@ use super::v2_core::{
     WalCodecError, WalFileIdentity, WalFrameCorruption, WalHeaderCorruption, WalIdentityField,
     WalIoStage, WalRetirementAuthorization, encode_wal_file_header, recover_wal_file,
 };
-#[cfg(test)]
+#[cfg(all(test, unix, not(target_os = "espidf")))]
 use super::v2_core::{
     SAFETY_WAL_FILE_MAGIC as FILE_MAGIC, SAFETY_WAL_FORMAT_VERSION as FORMAT_VERSION,
 };
-#[cfg(any(test, not(all(unix, not(target_os = "espidf")))))]
+#[cfg(all(test, unix, not(target_os = "espidf")))]
 use std::fs::OpenOptions;
 #[cfg(all(unix, not(target_os = "espidf")))]
 use std::path::Component;
@@ -31,7 +33,7 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
-#[cfg(test)]
+#[cfg(all(test, unix, not(target_os = "espidf")))]
 const FILE_HEADER_PREFIX_LEN: usize = FILE_MAGIC.len() + 2 + 2 + HASH_LEN + HASH_LEN;
 /// Maximum complete frames retained by one height-local safety WAL.
 pub(crate) const SAFETY_WAL_MAX_RECORDS: usize = 8 * 1024;
@@ -316,44 +318,25 @@ impl BoundSafetyWalDirectory {
             identity,
         })
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix, not(target_os = "espidf")))]
     fn bind(expected_path: &Path) -> io::Result<Self> {
-        #[cfg(all(unix, not(target_os = "espidf")))]
-        {
-            let lexical_metadata = direct_lexical_directory_metadata(expected_path)?;
-            let canonical_path = fs::canonicalize(expected_path)?;
-            let directory = open_canonical_directory_nofollow(&canonical_path)?;
-            let metadata = directory.metadata()?;
-            let identity = unix_file_identity(&metadata);
-            if !metadata.is_dir() || unix_file_identity(&lexical_metadata) != identity {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "safety WAL parent is not a directory",
-                ));
-            }
-            Ok(Self {
-                expected_path: expected_path.to_path_buf(),
-                canonical_path,
-                directory,
-                identity,
-            })
+        let lexical_metadata = direct_lexical_directory_metadata(expected_path)?;
+        let canonical_path = fs::canonicalize(expected_path)?;
+        let directory = open_canonical_directory_nofollow(&canonical_path)?;
+        let metadata = directory.metadata()?;
+        let identity = unix_file_identity(&metadata);
+        if !metadata.is_dir() || unix_file_identity(&lexical_metadata) != identity {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "safety WAL parent is not a directory",
+            ));
         }
-        #[cfg(not(all(unix, not(target_os = "espidf"))))]
-        {
-            let metadata = fs::symlink_metadata(expected_path)?;
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "safety WAL immediate parent must be a direct directory",
-                ));
-            }
-            // TODO: Add a handle-relative Windows implementation which rejects
-            // reparse points before enabling production adjacent Sumeragi v2
-            // storage. Basic WAL I/O retains its legacy path fallback here.
-            Ok(Self {
-                expected_path: expected_path.to_path_buf(),
-            })
-        }
+        Ok(Self {
+            expected_path: expected_path.to_path_buf(),
+            canonical_path,
+            directory,
+            identity,
+        })
     }
     fn verify_linked(&self) -> io::Result<()> {
         #[cfg(all(unix, not(target_os = "espidf")))]
@@ -384,16 +367,7 @@ impl BoundSafetyWalDirectory {
         }
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
-            fs::symlink_metadata(&self.expected_path).and_then(|metadata| {
-                if !metadata.file_type().is_symlink() && metadata.is_dir() {
-                    Ok(())
-                } else {
-                    Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "safety WAL immediate parent must be a direct directory",
-                    ))
-                }
-            })
+            Err(unsupported_storage_binding_io())
         }
     }
     fn open_wal_leaf(&self, name: &OsStr) -> io::Result<(File, bool)> {
@@ -450,23 +424,8 @@ impl BoundSafetyWalDirectory {
         }
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
-            self.verify_linked()?;
-            let path = self.expected_path.join(name);
-            let (file, created) = match OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(file) => (file, true),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (
-                    OpenOptions::new().read(true).write(true).open(&path)?,
-                    false,
-                ),
-                Err(error) => return Err(error),
-            };
-            self.verify_leaf(&file, name)?;
-            Ok((file, created))
+            let _ = name;
+            Err(unsupported_storage_binding_io())
         }
     }
     fn verify_leaf(&self, file: &File, name: &OsStr) -> io::Result<()> {
@@ -493,20 +452,8 @@ impl BoundSafetyWalDirectory {
         }
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
-            self.verify_linked()?;
-            let opened = file.metadata()?;
-            let linked = fs::symlink_metadata(self.expected_path.join(name))?;
-            if !opened.is_file()
-                || linked.file_type().is_symlink()
-                || !linked.is_file()
-                || opened.len() != linked.len()
-            {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "safety WAL leaf changed its opened file shape",
-                ));
-            }
-            Ok(())
+            let _ = (file, name);
+            Err(unsupported_storage_binding_io())
         }
     }
     fn sync(&self) -> io::Result<()> {
@@ -518,7 +465,7 @@ impl BoundSafetyWalDirectory {
         }
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
-            self.verify_linked()
+            Err(unsupported_storage_binding_io())
         }
     }
     fn unlink_exact_leaf(&self, name: &OsStr, file: &File) -> io::Result<()> {
@@ -531,14 +478,13 @@ impl BoundSafetyWalDirectory {
         }
         #[cfg(not(all(unix, not(target_os = "espidf"))))]
         {
-            self.verify_leaf(file, name)?;
-            fs::remove_file(self.expected_path.join(name))?;
-            self.sync()
+            let _ = (name, file);
+            Err(unsupported_storage_binding_io())
         }
     }
 }
 impl BoundSafetyWalAdjacentEntry {
-    #[cfg(any(test, all(unix, not(target_os = "espidf"))))]
+    #[cfg(all(unix, not(target_os = "espidf")))]
     fn from_wal(
         directory: Arc<BoundSafetyWalDirectory>,
         wal_path: &Path,
@@ -553,23 +499,31 @@ impl BoundSafetyWalAdjacentEntry {
         let mut entry_name = wal_name.to_os_string();
         entry_name.push(suffix);
         let display_path = wal_path.with_file_name(&entry_name);
-        #[cfg(not(all(unix, not(target_os = "espidf"))))]
-        let _ = directory;
         Ok(Self {
-            #[cfg(all(unix, not(target_os = "espidf")))]
             directory,
-            #[cfg(all(unix, not(target_os = "espidf")))]
             entry_name,
             display_path,
         })
     }
     #[cfg(test)]
     fn for_test_path(safety_wal_path: &Path, suffix: &str) -> Result<Self, String> {
-        let parent = safety_wal_parent(safety_wal_path).map_err(|error| error.to_string())?;
-        fs::create_dir_all(&parent).map_err(|error| error.to_string())?;
-        let directory =
-            Arc::new(BoundSafetyWalDirectory::bind(&parent).map_err(|error| error.to_string())?);
-        Self::from_wal(directory, safety_wal_path, suffix).map_err(|error| error.to_string())
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            let parent = safety_wal_parent(safety_wal_path).map_err(|error| error.to_string())?;
+            fs::create_dir_all(&parent).map_err(|error| error.to_string())?;
+            let directory = Arc::new(
+                BoundSafetyWalDirectory::bind(&parent).map_err(|error| error.to_string())?,
+            );
+            Self::from_wal(directory, safety_wal_path, suffix).map_err(|error| error.to_string())
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = suffix;
+            Err(format!(
+                "descriptor-relative no-follow safety-WAL storage is unsupported on this platform: {}",
+                safety_wal_path.display()
+            ))
+        }
     }
     fn read_bounded(&self, maximum: u64, label: &str) -> Result<Option<Vec<u8>>, String> {
         #[cfg(all(unix, not(target_os = "espidf")))]
@@ -1086,12 +1040,15 @@ fn wal_metadata_revision_unchanged(left: &fs::Metadata, right: &fs::Metadata) ->
     unix_metadata_revision_unchanged(left, right)
 }
 #[cfg(not(all(unix, not(target_os = "espidf"))))]
-fn wal_metadata_revision_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.is_file()
-        && right.is_file()
-        && left.len() == right.len()
-        && left.modified().ok() == right.modified().ok()
-        && left.permissions().readonly() == right.permissions().readonly()
+fn wal_metadata_revision_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
+}
+#[cfg(not(all(unix, not(target_os = "espidf"))))]
+fn unsupported_storage_binding_io() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "descriptor-relative no-follow safety-WAL storage is unavailable on this platform",
+    )
 }
 #[cfg(all(unix, not(target_os = "espidf")))]
 fn ensure_unix_regular_single_link_stat(stat: &rustix::fs::Stat) -> io::Result<()> {
@@ -1192,40 +1149,51 @@ impl SafetyWal {
         key_hash: [u8; HASH_LEN],
     ) -> Result<Self, SafetyWalError> {
         let path = path.into();
-        let parent = safety_wal_parent(&path).map_err(|source| SafetyWalError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        fs::create_dir_all(&parent).map_err(|source| SafetyWalError::Io {
-            path: parent.clone(),
-            source,
-        })?;
-        let directory = Arc::new(BoundSafetyWalDirectory::bind(&parent).map_err(|source| {
-            if source.kind() == io::ErrorKind::Unsupported {
-                SafetyWalError::UnsupportedStorageBinding {
-                    path: path.clone(),
-                    reason: "descriptor-relative storage is unavailable",
-                }
-            } else {
+        #[cfg(all(unix, not(target_os = "espidf")))]
+        {
+            let parent = safety_wal_parent(&path).map_err(|source| SafetyWalError::Io {
+                path: path.clone(),
+                source,
+            })?;
+            fs::create_dir_all(&parent).map_err(|source| SafetyWalError::Io {
+                path: parent.clone(),
+                source,
+            })?;
+            let directory = Arc::new(BoundSafetyWalDirectory::bind(&parent).map_err(|source| {
                 SafetyWalError::Io {
                     path: parent.clone(),
                     source,
                 }
-            }
-        })?);
-        let wal_name = path
-            .file_name()
-            .expect("safety_wal_parent rejected a missing file name")
-            .to_os_string();
-        Self::open_bound(
-            path,
-            directory,
-            wal_name,
-            protocol_version,
-            network_id,
-            key_hash,
-        )
+            })?);
+            let wal_name = path
+                .file_name()
+                .expect("safety_wal_parent rejected a missing file name")
+                .to_os_string();
+            Self::open_bound(
+                path,
+                directory,
+                wal_name,
+                protocol_version,
+                network_id,
+                key_hash,
+            )
+        }
+        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = (protocol_version, network_id, key_hash);
+            Err(SafetyWalError::UnsupportedStorageBinding {
+                path,
+                reason: "descriptor-relative storage is unavailable",
+            })
+        }
     }
+    #[cfg_attr(
+        not(all(unix, not(target_os = "espidf"))),
+        allow(
+            dead_code,
+            reason = "unsupported platforms reject before constructing a bound WAL"
+        )
+    )]
     fn open_bound(
         path: PathBuf,
         directory: Arc<BoundSafetyWalDirectory>,
@@ -1874,7 +1842,7 @@ fn map_codec_error(path: &Path, error: WalCodecError) -> SafetyWalError {
 fn frame_hash(bytes: &[u8]) -> [u8; HASH_LEN] {
     *blake3::hash(bytes).as_bytes()
 }
-#[cfg(test)]
+#[cfg(all(test, unix, not(target_os = "espidf")))]
 mod tests {
     use super::*;
     const NETWORK_ID: [u8; HASH_LEN] = [0x11; HASH_LEN];
@@ -2362,5 +2330,31 @@ mod tests {
         let retired_path = path.clone();
         remove_wal_file(path, &directory, &wal_name, file).expect("retire finalized WAL bytes");
         assert!(!retired_path.exists());
+    }
+}
+
+#[cfg(all(test, not(all(unix, not(target_os = "espidf")))))]
+mod unsupported_platform_tests {
+    use super::*;
+
+    #[test]
+    fn lexical_test_open_fails_closed_without_descriptor_relative_storage() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let parent = directory.path().join("must-not-be-created");
+        let path = parent.join("sumeragi-v2.wal");
+        let result = SafetyWal::open(
+            path,
+            iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
+            [0x11; HASH_LEN],
+            [0x22; HASH_LEN],
+        );
+        assert!(matches!(
+            result,
+            Err(SafetyWalError::UnsupportedStorageBinding { .. })
+        ));
+        assert!(
+            !parent.exists(),
+            "unsupported test opening must fail before filesystem mutation"
+        );
     }
 }

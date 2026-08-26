@@ -18,9 +18,6 @@ dev-tools = []
 # General application surface. Consensus-only consumers should use
 # `consensus` so they do not pull PQC and batch-verification helpers.
 application = ["std", "rand", "json", "ecc-batch", "bfv-accel", "pqc"]
-# Compatibility marker for the exported SoraNet record-I/O macro. Tokio names
-# resolve in each consumer crate, so the crypto crate does not own the runtime.
-soranet-record-io = []
 # Cryptography required by consensus and canonical node identities.
 consensus = ["std", "rand", "bls"]
 # Complete shipping node surface.
@@ -43,7 +40,7 @@ bench = []
 # Backend selection:
 # - bls-backend-blstrs: pure Rust blstrs backend (no arkworks)
 # - default (no bls-backend-blstrs): w3f-bls backend
-bls = ["bls-backend-w3f", "dep:blstrs", "dep:group", "dep:pairing"]
+bls = ["bls-backend-w3f", "dep:blst", "dep:blstrs", "dep:group", "dep:pairing", "dep:subtle"]
 bls-backend-blstrs = ["bls", "dep:blstrs", "dep:group", "dep:subtle", "dep:pairing", "dep:w3f-bls"]
 # Baseline backend (enabled when bls is set and bls-backend-blstrs is NOT set)
 bls-backend-w3f = ["bls", "dep:w3f-bls"]
@@ -90,6 +87,7 @@ sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
 hkdf = { version = "0.12.4", default-features = false, features = ["std"] }
 w3f-bls = { version = "0.1.9", default-features = false, optional = true, features = ["std"] }
 rayon = { version = "1.11.0", optional = true }
+blst = { version = "0.3.16", default-features = false, optional = true }
 blstrs = { version = "0.7.1", default-features = false, optional = true }
 group = { version = "0.13", default-features = false, optional = true }
 subtle = { version = "2.6.1", default-features = false, optional = true }

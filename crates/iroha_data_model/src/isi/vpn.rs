@@ -20,7 +20,7 @@ isi! {
         #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
         pub lease_id: [u8; 32],
         /// Relay receipt describing final session counters.
-        pub relay_receipt: crate::soranet::vpn::VpnSessionReceiptV1,
+        pub relay_receipt: crate::soranet::vpn::VpnSignedSessionReceiptV1,
         /// Highest cumulative usage voucher signed by the client.
         pub client_voucher: crate::soranet::vpn::VpnUsageVoucherV1,
     }
@@ -30,7 +30,7 @@ impl SettleVpnLease {
     #[must_use]
     pub fn new(
         lease_id: [u8; 32],
-        relay_receipt: crate::soranet::vpn::VpnSessionReceiptV1,
+        relay_receipt: crate::soranet::vpn::VpnSignedSessionReceiptV1,
         client_voucher: crate::soranet::vpn::VpnUsageVoucherV1,
     ) -> Self {
         Self {
@@ -91,7 +91,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SettleVpnLease {
             flags,
         )?;
         let relay_receipt = super::decode_aos_canonical_field::<
-            crate::soranet::vpn::VpnSessionReceiptV1,
+            crate::soranet::vpn::VpnSignedSessionReceiptV1,
         >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
         let client_voucher = super::decode_aos_canonical_field::<
             crate::soranet::vpn::VpnUsageVoucherV1,
@@ -140,9 +140,9 @@ mod tests {
         domain::DomainId,
         soranet::vpn::{
             VpnAddressSlotV1, VpnExitClassV1, VpnQuoteBodyV1, VpnQuotePolicyV1,
-            VpnSessionReceiptV1, VpnSignedQuoteV1, VpnTariffV1, VpnUsageVoucherBodyV1,
-            VpnUsageVoucherV1, derive_vpn_address_plan_v1, derive_vpn_lease_id_v1,
-            derive_vpn_session_id_v1,
+            VpnSessionReceiptV1, VpnSignedQuoteV1, VpnSignedSessionReceiptV1, VpnTariffV1,
+            VpnUsageVoucherBodyV1, VpnUsageVoucherV1, derive_vpn_address_plan_v1,
+            derive_vpn_lease_id_v1, derive_vpn_session_id_v1,
         },
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
@@ -309,34 +309,40 @@ mod tests {
             "VPN escrow instruction decoding must reject a forged negative lease quantity"
         );
     }
+    fn relay_keypair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0x44; 32], Algorithm::Ed25519)
+            .expect("derive checked VPN relay-receipt fixture keypair")
+    }
     fn usage_voucher() -> VpnUsageVoucherV1 {
         let key_pair = KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
             .expect("derive checked VPN usage-voucher fixture keypair");
+        let relay_key = relay_keypair();
+        let (_, relay_public_key) = relay_key
+            .public_key()
+            .try_to_bytes()
+            .expect("checked VPN relay fixture public key");
+        let mut relay_id = [0_u8; 32];
+        relay_id.copy_from_slice(relay_public_key);
         let body = VpnUsageVoucherBodyV1 {
             session_id: [0x11; 16],
             quote_id: [0x22; 32],
-            relay_id: [0x33; 32],
+            relay_id,
             sequence: 7,
             ingress_bytes: 128,
             egress_bytes: 256,
             active_ms: 1_500,
             issued_at_ms: 1_700_000_000_000,
         };
-        let signature = Signature::try_new(key_pair.private_key(), &body.encode())
-            .expect("checked VPN usage-voucher ISI fixture signature");
-        VpnUsageVoucherV1 {
-            body,
-            client_public_key: key_pair.public_key().clone(),
-            signature,
-        }
+        VpnUsageVoucherV1::try_sign(body, key_pair.private_key())
+            .expect("checked VPN usage-voucher ISI fixture signature")
     }
-    fn session_receipt(voucher: &VpnUsageVoucherV1) -> VpnSessionReceiptV1 {
-        VpnSessionReceiptV1 {
+    fn session_receipt(voucher: &VpnUsageVoucherV1) -> VpnSignedSessionReceiptV1 {
+        let receipt = VpnSessionReceiptV1 {
             session_id: [0x11; 16],
             quote_id: [0x22; 32],
             payment_tx_hash: [0x44; 32],
             account_hash: [0x55; 32],
-            relay_id: [0x33; 32],
+            relay_id: voucher.body.relay_id,
             ingress_bytes: 128,
             egress_bytes: 256,
             cover_bytes: 64,
@@ -345,10 +351,14 @@ mod tests {
             ended_at_ms: 1_700_000_090_000,
             exit_class: VpnExitClassV1::Standard,
             meter_hash: [0x66; 32],
-            earned_fee: tariff().earned_fee(&voucher.body).expect("bounded VPN fee"),
+            earned_fee: tariff()
+                .fee_ceiling(&voucher.body)
+                .expect("bounded VPN fee"),
             highest_voucher_sequence: voucher.body.sequence,
             client_voucher_hash: voucher.hash(),
-        }
+        };
+        VpnSignedSessionReceiptV1::try_sign(receipt, relay_keypair().private_key())
+            .expect("checked VPN relay-receipt ISI fixture signature")
     }
     #[test]
     fn vpn_decode_from_slice_roundtrips() {

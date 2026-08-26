@@ -1196,25 +1196,6 @@ impl PersistentDirectRelationUseSelectorV1 {
         Ok(())
     }
 }
-/// Legacy selector wrapper retained only for verifier-side compatibility tests.
-#[cfg(test)]
-pub(super) fn mint_rkg_round_one_selector_v1(
-    roster: &ZkAmsMkheGovernedActiveRosterV1,
-    bindings: &VerifiedPersistentWitnessBindingSetV1,
-    context: ZkAmsMkheDirectCeremonyContextV1,
-    prior_round_digest: [u8; 32],
-    contribution_statement_digest: [u8; 32],
-    proof_commitment_transcript_digest: [u8; 32],
-) -> Result<PersistentDirectRelationUseSelectorV1, ZkAmsMkheErrorV1> {
-    direct_common_a_v1::mint_rkg_round_one_selector_v1(
-        roster,
-        bindings,
-        context,
-        prior_round_digest,
-        contribution_statement_digest,
-        proof_commitment_transcript_digest,
-    )
-}
 /// Mint the only production Galois selector from exact CPK authority.
 ///
 /// The target-`a` seed, schedule coordinates, and prior-round digest are inherited from the
@@ -3180,10 +3161,25 @@ mod tests {
             ),
             Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
         );
-        let rkg_one = mint_rkg_round_one_selector_v1(
+        let profile = release_profile_v1();
+        let mut common_a_workspace = vec![0_u64; profile.ring_degree];
+        let mut h0 = direct_common_a_v1::prepare_direct_common_a_creator_h0_v1(
             &roster,
             &set,
             direct_context,
+        )
+        .unwrap()
+        .begin_h0_v1()
+        .unwrap();
+        for _ in 0..profile.moduli.len() {
+            h0.derive_next_limb_into(&mut common_a_workspace).unwrap();
+        }
+        let mut h1 = h0.finish_h0_v1().unwrap().begin_h1_v1().unwrap();
+        for _ in 0..profile.moduli.len() {
+            h1.derive_next_limb_into(&mut common_a_workspace).unwrap();
+        }
+        let rkg_one = direct_common_a_v1::consume_completed_creator_authority_v1(
+            h1.finish_h1_v1().unwrap(),
             digest(b"direct-prior-one"),
             digest(b"direct-h0-h1-statement"),
             digest(b"direct-rkg-one-proof-commitments"),

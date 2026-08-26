@@ -24,9 +24,8 @@ The default four-validator topology is the smallest exact Sumeragi committee.
 Custom profiles may use four or seven validators and use the one-second
 localnet cadence so crash-safe consensus persistence can keep up when all
 validators share one development machine. Explicit Kagami genesis profiles
-retain their profile-defined cadence. The historical `single-peer` profile
-name remains readable for saved-config compatibility but launches four
-validators.
+retain their profile-defined cadence. The only built-in topology preset is the
+exact name `four-peer-bft`.
 
 The desktop app now treats the selected workspace as the home for bootstrap files and uses
 `<workspace>/.mochi/sandbox/<profile>` as the default runtime state root. The dashboard and the
@@ -109,6 +108,9 @@ carried by the signed genesis/height context, so Mochi does not emit the retired
 consensus; Mochi requires an NPoS signed genesis for custom multi-lane topology.
 
 Mochi publishes configs and genesis as immutable generations under `generations/<generation-id>`.
+Each published peer config selects that generation's one checked
+`genesis/genesis.expected_hash` artifact through `genesis.expected_hash_file`; only the transient
+pre-signing config carries the unresolved inline value needed to derive genesis policies.
 The closed `generation.json` inventory binds every artifact and its BLAKE3 digest; the
 `current-generation` record is replaced atomically while `.generation.lock` serializes writers.
 Failed candidates never replace the selected record, and previously published generations remain

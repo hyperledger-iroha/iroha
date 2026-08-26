@@ -23,6 +23,33 @@ impl ProductionLifecycleOwnerV1 {
 }
 
 #[cfg(test)]
+macro_rules! expand_reviewed_includes {
+    ($source:expr; $($path:literal),+ $(,)?) => {{
+        let mut expanded = $source.to_owned();
+        $(
+            expanded = expanded.replacen(
+                concat!("include!(\"", $path, "\");\n"),
+                include_str!($path),
+                1,
+            );
+        )+
+        expanded
+    }};
+}
+
+#[cfg(test)]
+fn reviewed_registry_recovery_impl_source_for_test() -> String {
+    expand_reviewed_includes!(
+        include_str!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs");
+        "v2_lifecycle_work_registry_validate_recovery_census_impl.rs",
+        "v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs",
+        "v2_lifecycle_work_registry_validate_completion_impl.rs",
+        "v2_lifecycle_work_registry_access_impl.rs",
+        "v2_lifecycle_work_registry_validate_recovery_execution_impl.rs",
+    )
+}
+
+#[cfg(test)]
 /// Reconstruct the ledger source exactly as Rust expands its reviewed providers.
 pub(crate) fn reviewed_lifecycle_ledger_source_for_test() -> &'static str {
     static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -78,32 +105,7 @@ pub(crate) fn reviewed_lifecycle_work_registry_source_for_test() -> &'static str
                     ),
                     1,
                 );
-            let recovery_registry_impl =
-                include_str!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs")
-                    .replacen(
-                        "include!(\"v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs\");\n",
-                        include_str!(
-                            "v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs"
-                        ),
-                        1,
-                    )
-                    .replacen(
-                        "include!(\"v2_lifecycle_work_registry_validate_completion_impl.rs\");\n",
-                        include_str!("v2_lifecycle_work_registry_validate_completion_impl.rs"),
-                        1,
-                    )
-                    .replacen(
-                        "include!(\"v2_lifecycle_work_registry_access_impl.rs\");\n",
-                        include_str!("v2_lifecycle_work_registry_access_impl.rs"),
-                        1,
-                    )
-                    .replacen(
-                        "include!(\"v2_lifecycle_work_registry_validate_recovery_execution_impl.rs\");\n",
-                        include_str!(
-                            "v2_lifecycle_work_registry_validate_recovery_execution_impl.rs"
-                        ),
-                        1,
-                    );
+            let recovery_registry_impl = reviewed_registry_recovery_impl_source_for_test();
             let recovery = include_str!("v2_lifecycle_work_registry_validate_recovery.rs")
                 .replacen(
                     "include!(\"v2_lifecycle_work_registry_validate_recovery_registry_impl.rs\");\n",
@@ -116,6 +118,11 @@ pub(crate) fn reviewed_lifecycle_work_registry_source_for_test() -> &'static str
                     1,
                 );
             include_str!("v2_lifecycle_work_registry.rs")
+                .replacen(
+                    "include!(\"v2_lifecycle_work_registry_body_validate_carriers.rs\");\n",
+                    include_str!("v2_lifecycle_work_registry_body_validate_carriers.rs"),
+                    1,
+                )
                 .replacen(
                     "include!(\"v2_lifecycle_work_registry_pre_admission.rs\");\n",
                     include_str!("v2_lifecycle_work_registry_pre_admission.rs"),
@@ -168,6 +175,11 @@ pub(crate) fn reviewed_v2_adapter_source_for_test() -> &'static str {
         .get_or_init(|| {
             include_str!("v2.rs")
                 .replacen(
+                    "include!(\"v2_adapter_persistence_and_wal_types.rs\");\n",
+                    include_str!("v2_adapter_persistence_and_wal_types.rs"),
+                    1,
+                )
+                .replacen(
                     "include!(\"v2_authenticated_recovered_adapter_startup_impl.rs\");\n",
                     include_str!("v2_authenticated_recovered_adapter_startup_impl.rs"),
                     1,
@@ -202,17 +214,13 @@ pub(crate) fn reviewed_v2_effects_source_for_test() -> &'static str {
     static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SOURCE
         .get_or_init(|| {
-            include_str!("v2_effects.rs")
-                .replacen(
-                    "include!(\"v2_effects_recovered_lifecycle_output_service.rs\");\n",
-                    include_str!("v2_effects_recovered_lifecycle_output_service.rs"),
-                    1,
-                )
-                .replacen(
-                    "include!(\"v2_effects_lifecycle_admission_settlement.rs\");\n",
-                    include_str!("v2_effects_lifecycle_admission_settlement.rs"),
-                    1,
-                )
+            expand_reviewed_includes!(
+                include_str!("v2_effects.rs");
+                "v2_effects_recovered_fetch_and_pipeline_types.rs",
+                "v2_effects_recovered_lifecycle_output_service.rs",
+                "v2_effects_lifecycle_admission_settlement.rs",
+                "v2_effects_runner_decision_cleanup_plan.rs",
+            )
         })
         .as_str()
 }
@@ -247,13 +255,19 @@ pub(crate) fn reviewed_v2_runtime_source_for_test() -> &'static str {
         })
         .as_str()
 }
-
 #[cfg(test)]
 /// Reconstruct the worker source exactly as Rust expands its reviewed providers.
 pub(crate) fn reviewed_v2_worker_source_for_test() -> &'static str {
     static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SOURCE
         .get_or_init(|| {
+            let services_impl = expand_reviewed_includes!(
+                include_str!("v2_worker_services_impl.rs");
+                "v2_worker/pending_kura_apply_io_snapshot.rs",
+                "v2_worker/current_lane_output_rollover_claim.rs",
+                "v2_worker/production_services_drop_impl.rs",
+                "v2_worker/effect_services_impl.rs",
+            );
             include_str!("v2_worker.rs")
                 .replacen(
                     "include!(\"v2_worker_completion.rs\");\n",
@@ -277,13 +291,12 @@ pub(crate) fn reviewed_v2_worker_source_for_test() -> &'static str {
                 )
                 .replacen(
                     "include!(\"v2_worker_services_impl.rs\");\n",
-                    include_str!("v2_worker_services_impl.rs"),
+                    services_impl.as_str(),
                     1,
                 )
         })
         .as_str()
 }
-
 #[cfg(test)]
 const SOURCE_CONTRACT_ASSET: &str = include_str!("source_contracts_v1.txt");
 
@@ -429,29 +442,7 @@ fn source(id: SourceId) -> String {
         SourceId::RegistryRecovery => {
             include_str!("v2_lifecycle_work_registry_validate_recovery.rs").to_owned()
         }
-        SourceId::RegistryRecoveryImpl => include_str!(
-            "v2_lifecycle_work_registry_validate_recovery_registry_impl.rs"
-        )
-        .replacen(
-            "include!(\"v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs\");\n",
-            include_str!("v2_lifecycle_work_registry_validate_recovery_registry_tail_impl.rs"),
-            1,
-        )
-        .replacen(
-            "include!(\"v2_lifecycle_work_registry_validate_completion_impl.rs\");\n",
-            include_str!("v2_lifecycle_work_registry_validate_completion_impl.rs"),
-            1,
-        )
-        .replacen(
-            "include!(\"v2_lifecycle_work_registry_access_impl.rs\");\n",
-            include_str!("v2_lifecycle_work_registry_access_impl.rs"),
-            1,
-        )
-        .replacen(
-            "include!(\"v2_lifecycle_work_registry_validate_recovery_execution_impl.rs\");\n",
-            include_str!("v2_lifecycle_work_registry_validate_recovery_execution_impl.rs"),
-            1,
-        ),
+        SourceId::RegistryRecoveryImpl => reviewed_registry_recovery_impl_source_for_test(),
         SourceId::ReplayAuthority => include_str!("v2_lifecycle_replay_authority.rs")
             .replacen(
                 "include!(\"v2_lifecycle_replay_authority_live_wal.rs\");\n",
@@ -490,7 +481,11 @@ fn source(id: SourceId) -> String {
         }
         SourceId::RunnerOuterCursor => include_str!("v2_runner/outer_ingress_cursor.rs").to_owned(),
         SourceId::Runtime => reviewed_v2_runtime_source_for_test().to_owned(),
-        SourceId::SchedulerInputs => include_str!("v2_lifecycle_scheduler_inputs.rs").to_owned(),
+        SourceId::SchedulerInputs => include_str!("v2_lifecycle_scheduler_inputs.rs").replacen(
+            "include!(\"tests/v2_lifecycle_scheduler_completion_cases.rs\");\n",
+            include_str!("tests/v2_lifecycle_scheduler_completion_cases.rs"),
+            1,
+        ),
         SourceId::Schema => include_str!("v2_lifecycle_schema.rs").to_owned(),
         SourceId::Selector => include_str!("v2_lifecycle_selector.rs").to_owned(),
         SourceId::Settlement => include_str!("v2_lifecycle_settlement.rs").to_owned(),

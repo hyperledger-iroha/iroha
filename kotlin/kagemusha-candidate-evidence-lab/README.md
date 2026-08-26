@@ -1,7 +1,10 @@
 # Kagemusha candidate evidence lab (never ship)
 
 This module is a marker-bearing Android application used only to gather real
-ABI-21 evidence from a physical ARM64 device before a candidate is promoted.
+native-bridge ABI-23 evidence from a physical ARM64 device before a candidate
+is promoted.
+Here, ABI-23 names the native bridge; the Kagemusha protocol envelope remains
+ABI-21/V4.
 It is not in the normal Gradle project graph, has no publication, has no
 `INTERNET` permission, disables its release variant, and stores every build
 intermediate under the exact candidate directory:
@@ -127,17 +130,21 @@ Before Gradle runs, the runner invokes this exact current-source native build:
 ```bash
 scripts/build_kagemusha_candidate_android_native.sh \
   --candidate-sha256 "$CANDIDATE_SHA256" \
+  --stage-sha256 "$STAGE_SHA256" \
   --source-commit "$SOURCE_COMMIT" \
-  --source-tree-sha256 "$SOURCE_TREE_SHA256"
+  --source-tree-sha256 "$SOURCE_TREE_SHA256" \
+  --reviewed-source-closure "$REVIEWED_SOURCE_CLOSURE" \
+  --reviewed-source-closure-sha256 "$REVIEWED_SOURCE_CLOSURE_SHA256"
 ```
 
 That helper runs `cargo ndk -t arm64-v8a` with
 `--features kagemusha-candidate-evidence-lab`, a candidate-scoped Cargo target,
 and canonical full-source-tree seal checks before and after compilation. It
-accepts no prebuilt or production `.so`, refuses a dirty or mismatched Git
-index/worktree (including untracked files), validates the result as
-marker-bearing AArch64 ELF, and atomically writes only the candidate lab native
-path.
+requires the independently reviewed canonical source-closure descriptor and
+its SHA-256 pin to match the staged candidate validation report, accepts no
+prebuilt or production `.so`, refuses a dirty or mismatched Git index/worktree
+(including untracked files), validates the result as marker-bearing AArch64
+ELF, and atomically writes only the candidate lab native path.
 
 The device must have no active Android network. The first process dynamically
 builds and performs real init and two-hop proving, then persists the observed

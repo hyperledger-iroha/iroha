@@ -960,6 +960,50 @@ pub(in crate::sumeragi) struct RecoveredDecisionFetchStoreProjectionV1 {
     body: RecoveredDecisionFetchStoreBodyAuthorityV1,
     candidate: CandidateAdmission,
 }
+/// Recovered-WAL authority for the exact Store-to-Validate continuation.
+///
+/// Construction reauthenticates the retained Decision frame, CommitQC,
+/// body frame, and live Store candidate under one verified height.  The value
+/// exposes no WAL or candidate parts; it can only project the Validate child
+/// while paired with that unchanged Store projection.
+#[must_use = "recovered Decision Store-to-Validate authority must remain attached to its Store"]
+pub(super) struct RecoveredDecisionStoreValidateProjectionV1 {
+    lineage: RecoveredDecisionApplyReplayLineageV1,
+    verified: VerifiedHeightContext,
+    store_candidate: CandidateAdmission,
+}
+/// Sealed cold-start projection of an exact recovered Decision Validate row.
+///
+/// The reducer-derived effect and pending owner remain inseparable from the
+/// fsynced body, authenticated Store predecessor, complete recovered WAL
+/// lineage, and both logical candidates. Only the concrete registry may
+/// consume its parts.
+#[must_use = "recovered Decision Validate startup projection must enter its registry carrier"]
+pub(in crate::sumeragi) struct RecoveredDecisionValidateProjectionV1 {
+    effect: AdapterEffect,
+    pending: PendingRuntimeEffectBinding,
+    durable_body: DurableBodyReceipt,
+    expected_manifest_hash: iroha_crypto::HashOf<wire::PayloadManifest>,
+    replay_evidence: DurableValidateReplayEvidenceV1,
+    store_candidate: CandidateAdmission,
+    validate_candidate: CandidateAdmission,
+}
+/// Inert post-install identity for one recovered Decision Validate carrier.
+///
+/// The executable pending owner moves into `DurableValidateBody`; this seal
+/// retains only immutable carrier coordinates, replay fingerprints, and the
+/// Store/Validate candidates needed by ledger and recovery joins.
+#[must_use = "recovered Decision Validate installed identity must remain with its registry cut"]
+pub(in crate::sumeragi) struct RecoveredDecisionValidateInstalledSealV1 {
+    address: super::work_registry::ConcreteWorkAddress,
+    digest: super::LifecycleDigest,
+    effect: AdapterEffect,
+    durable_body: DurableBodyReceipt,
+    expected_manifest_hash: iroha_crypto::HashOf<wire::PayloadManifest>,
+    replay_evidence: super::replay_authority::RecoveredDecisionValidateReplayEvidenceV1,
+    store_candidate: CandidateAdmission,
+    validate_candidate: CandidateAdmission,
+}
 /// Carrier-authenticated input for the direct recovered Fetch body preview.
 #[must_use = "recovered Decision Store adapter authority must be consumed exactly once"]
 pub(in crate::sumeragi) struct RecoveredDecisionFetchStoreAdapterAuthorityV1 {
@@ -1844,6 +1888,126 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             candidate,
         })
     }
+    /// Rejoin one durable recovered Store to the original authenticated WAL Decision.
+    pub(super) fn project_decision_store_validate(
+        &self,
+        verified: &VerifiedHeightContext,
+        store: &RecoveredDecisionFetchStoreProjectionV1,
+    ) -> Option<RecoveredDecisionStoreValidateProjectionV1> {
+        if !self.is_exact(verified) || !store.is_exact(verified) {
+            return None;
+        }
+        let lineage = RecoveredDecisionApplyReplayLineageV1::from_sealed_recovered_decision(
+            &self.replay_evidence,
+            verified,
+            self.wal_identity,
+            &self.effect,
+            store.body.manifest(),
+            store.body.durable(),
+        )?;
+        let candidate = lineage.project_recovered_fetch_store_candidate(
+            verified,
+            store.body.durable(),
+            &store.effect,
+            &store.pending,
+        )?;
+        (candidate == store.candidate
+            && candidate.causal_root == self.candidate.causal_root
+            && candidate.reconstruction_source == self.candidate.reconstruction_source)
+            .then_some(RecoveredDecisionStoreValidateProjectionV1 {
+                lineage,
+                verified: verified.clone(),
+                store_candidate: candidate,
+            })
+    }
+    /// Project one sealed recovered Validate startup child from the exact live Store.
+    pub(in crate::sumeragi) fn project_decision_store_validate_successor(
+        &self,
+        verified: &VerifiedHeightContext,
+        store: &RecoveredDecisionFetchStoreProjectionV1,
+        validate_effect: &AdapterEffect,
+    ) -> Option<RecoveredDecisionValidateProjectionV1> {
+        self.project_decision_store_validate(verified, store)?
+            .project_validate(store, validate_effect)
+    }
+    /// Reauthenticate one sealed cold Validate projection against this WAL Fetch and Store.
+    pub(super) fn owns_decision_validate_projection(
+        &self,
+        verified: &VerifiedHeightContext,
+        store: &RecoveredDecisionFetchStoreProjectionV1,
+        validate: &RecoveredDecisionValidateProjectionV1,
+    ) -> bool {
+        self.project_decision_store_validate_successor(verified, store, &validate.effect)
+            .is_some_and(|expected| expected.exactly_equals(validate))
+    }
+    /// Build the exact three-row Validate crash cut without exposing candidates.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn exact_decision_validate_ledger_for_test(
+        &self,
+        verified: &VerifiedHeightContext,
+        store: &RecoveredDecisionFetchStoreProjectionV1,
+        validate: &RecoveredDecisionValidateProjectionV1,
+    ) -> Option<super::ledger::LifecycleLedgerV1> {
+        if !self.owns_decision_validate_projection(verified, store, validate) {
+            return None;
+        }
+        let owner = super::OwnerId::new(self.candidate.causal_root, 1);
+        let fetch_record = super::ledger::LifecycleLedgerRecordV1::new(
+            self.candidate.key,
+            owner,
+            1,
+            self.candidate.work_class,
+            self.candidate.stage,
+            Some(super::TerminalOutcome::Advanced),
+            self.candidate.reconstruction_source,
+            self.candidate.payload,
+            self.candidate.replay_authority.clone(),
+            super::schema::DurableContinuation::successor(DurableContinuationEdge::FetchToStore, 2),
+        )
+        .ok()?;
+        let store_record = super::ledger::LifecycleLedgerRecordV1::new(
+            store.candidate.key,
+            owner,
+            2,
+            store.candidate.work_class,
+            store.candidate.stage,
+            Some(super::TerminalOutcome::Advanced),
+            store.candidate.reconstruction_source,
+            store.candidate.payload,
+            store.candidate.replay_authority.clone(),
+            super::schema::DurableContinuation::successor(
+                DurableContinuationEdge::StoreToValidate,
+                3,
+            ),
+        )
+        .ok()?;
+        let validate_record = super::ledger::LifecycleLedgerRecordV1::new(
+            validate.validate_candidate.key,
+            owner,
+            3,
+            validate.validate_candidate.work_class,
+            validate.validate_candidate.stage,
+            None,
+            validate.validate_candidate.reconstruction_source,
+            validate.validate_candidate.payload,
+            validate.validate_candidate.replay_authority.clone(),
+            super::schema::DurableContinuation::None,
+        )
+        .ok()?;
+        let context = projection::lifecycle_context(verified.context());
+        let ledger = super::ledger::LifecycleLedgerV1::new(
+            context,
+            3,
+            vec![fetch_record, store_record, validate_record],
+            std::collections::BTreeMap::new(),
+        )
+        .ok()?;
+        (ledger
+            .authenticate_recovered_decision_store_validate(self, store, validate)
+            .ok()
+            == Some((1, 2, 3)))
+        .then_some(ledger)
+    }
     /// Bind one exact durable body to the current recovered Fetch adapter event.
     pub(in crate::sumeragi) fn project_store_adapter_authority(
         &self,
@@ -2227,6 +2391,14 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
     }
 }
 impl RecoveredDecisionFetchStoreProjectionV1 {
+    /// Borrow the exact Store effect retained by this recovered projection.
+    pub(super) const fn store_effect(&self) -> &AdapterEffect {
+        &self.effect
+    }
+    /// Borrow the ordinal-free pending binding retained by this Store.
+    pub(super) const fn pending_effect_binding(&self) -> &PendingRuntimeEffectBinding {
+        &self.pending
+    }
     /// Rejoin exact already-sealed constituents for staged-address regressions.
     #[cfg(test)]
     pub(super) fn for_staged_address_test(
@@ -2287,6 +2459,32 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
             self.candidate.key.round().height(),
         )
     }
+    /// Return the reducer coordinates retained by this exact Store projection.
+    pub(in crate::sumeragi) fn adapter_preview_inputs(
+        &self,
+    ) -> Option<(
+        crate::sumeragi::v2_core::EventTag,
+        wire::ConsensusRound,
+        wire::BlockSubject,
+    )> {
+        let AdapterEffect::StoreBody {
+            tag,
+            round,
+            subject,
+        } = &self.effect
+        else {
+            return None;
+        };
+        Some((*tag, *round, *subject))
+    }
+    /// Borrow the exact fsynced body retained by this Store projection.
+    pub(in crate::sumeragi) fn durable_body_receipt(&self) -> &DurableBodyReceipt {
+        self.body.durable()
+    }
+    /// Return the manifest hash independently retained by the recovered body authority.
+    pub(super) fn expected_manifest_hash(&self) -> iroha_crypto::HashOf<wire::PayloadManifest> {
+        iroha_crypto::HashOf::new(self.body.manifest())
+    }
     /// Recheck one installed child address without releasing successor parts.
     pub(super) fn validates_at(
         &self,
@@ -2327,6 +2525,27 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
             && record.reconstruction_source() == self.candidate.reconstruction_source
             && record.durable_payload() == Some(self.candidate.payload)
             && record.continuation() == Some(super::schema::DurableContinuation::None)
+            && record.replay_matches_candidate(&self.candidate)
+    }
+    /// Compare this Store with its exact advanced parent row of one live Validate.
+    pub(super) fn exactly_matches_advanced_validate_parent(
+        &self,
+        record: &super::ledger::LifecycleLedgerRecordV1,
+        owner: super::OwnerId,
+        validate_ordinal: u128,
+    ) -> bool {
+        record.key() == Some(self.candidate.key)
+            && record.owner() == owner
+            && record.work_class() == Some(LifecycleWorkClass::Store)
+            && record.stage() == Some(self.candidate.stage)
+            && record.terminal() == Some(Some(super::TerminalOutcome::Advanced))
+            && record.reconstruction_source() == self.candidate.reconstruction_source
+            && record.durable_payload() == Some(self.candidate.payload)
+            && record.continuation()
+                == Some(super::schema::DurableContinuation::successor(
+                    DurableContinuationEdge::StoreToValidate,
+                    validate_ordinal,
+                ))
             && record.replay_matches_candidate(&self.candidate)
     }
     /// Insert the exact live Store candidate during typed cold recovery.
@@ -2385,6 +2604,376 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
             && coordinator.key_index.get(&self.candidate.key) == Some(&address.ordinal)
             && coordinator.owner_index.get(&self.candidate.causal_root) == Some(&address.owner)
             && coordinator.ready_index.contains(&address.ordinal)
+    }
+}
+impl RecoveredDecisionStoreValidateProjectionV1 {
+    fn project_validate(
+        &self,
+        store: &RecoveredDecisionFetchStoreProjectionV1,
+        validate_effect: &AdapterEffect,
+    ) -> Option<RecoveredDecisionValidateProjectionV1> {
+        if !store.is_exact(&self.verified) || store.candidate != self.store_candidate {
+            return None;
+        }
+        if self
+            .lineage
+            .project_recovered_fetch_store_candidate(
+                &self.verified,
+                store.body.durable(),
+                &store.effect,
+                &store.pending,
+            )
+            .as_ref()
+            != Some(&self.store_candidate)
+        {
+            return None;
+        }
+        let validate_pending = store
+            .pending
+            .project_store_validate_successor(&store.effect, validate_effect)?;
+        let replay_evidence = self.lineage.project_recovered_store_validate_evidence(
+            &self.verified,
+            store.body.durable(),
+            &store.effect,
+            &store.pending,
+            &store.candidate,
+            validate_effect,
+            &validate_pending,
+        )?;
+        let validate_candidate = self.lineage.project_recovered_store_validate_candidate(
+            &self.verified,
+            store.body.durable(),
+            &store.candidate,
+            validate_effect,
+            &validate_pending,
+        )?;
+        Some(RecoveredDecisionValidateProjectionV1 {
+            effect: validate_effect.clone(),
+            pending: validate_pending,
+            durable_body: store.body.durable().clone(),
+            expected_manifest_hash: iroha_crypto::HashOf::new(store.body.manifest()),
+            replay_evidence,
+            store_candidate: store.candidate.clone(),
+            validate_candidate,
+        })
+    }
+    /// Project the exact Validate child while the authenticated Store remains installed.
+    pub(super) fn project_validate_successor(
+        &self,
+        store: &RecoveredDecisionFetchStoreProjectionV1,
+        validate_effect: &AdapterEffect,
+    ) -> Option<(PendingRuntimeEffectBinding, DurableValidateReplayEvidenceV1)> {
+        let projection = self.project_validate(store, validate_effect)?;
+        Some((projection.pending, projection.replay_evidence))
+    }
+}
+impl RecoveredDecisionValidateProjectionV1 {
+    /// Return the immutable lifecycle context retained by both body candidates.
+    pub(super) fn context(&self) -> super::LifecycleContext {
+        super::LifecycleContext::new(
+            self.validate_candidate.key.context(),
+            self.validate_candidate.key.round().height(),
+        )
+    }
+    fn exactly_equals(&self, other: &Self) -> bool {
+        self.effect == other.effect
+            && self.pending == other.pending
+            && self.durable_body == other.durable_body
+            && self.expected_manifest_hash == other.expected_manifest_hash
+            && self
+                .replay_evidence
+                .same_recovered_decision_registry_evidence(&other.replay_evidence)
+            && self.replay_evidence.exactly_matches_validate_pending(
+                &self.effect,
+                &self.durable_body,
+                &self.pending,
+            )
+            && other.replay_evidence.exactly_matches_validate_pending(
+                &other.effect,
+                &other.durable_body,
+                &other.pending,
+            )
+            && self.store_candidate == other.store_candidate
+            && self.validate_candidate == other.validate_candidate
+    }
+    /// Compare the authenticated Store/Validate candidates with one exact live prefix.
+    pub(super) fn exactly_matches_live_records(
+        &self,
+        owner: super::OwnerId,
+        store: &super::ledger::LifecycleLedgerRecordV1,
+        validate: &super::ledger::LifecycleLedgerRecordV1,
+    ) -> bool {
+        let validate_ordinal = validate.ordinal();
+        store.ordinal() < validate_ordinal
+            && store.key() == Some(self.store_candidate.key)
+            && store.owner() == owner
+            && store.work_class() == Some(LifecycleWorkClass::Store)
+            && store.stage() == Some(self.store_candidate.stage)
+            && store.terminal() == Some(Some(super::TerminalOutcome::Advanced))
+            && store.reconstruction_source() == self.store_candidate.reconstruction_source
+            && store.durable_payload() == Some(self.store_candidate.payload)
+            && store.continuation()
+                == Some(super::schema::DurableContinuation::successor(
+                    DurableContinuationEdge::StoreToValidate,
+                    validate_ordinal,
+                ))
+            && store.replay_matches_candidate(&self.store_candidate)
+            && validate.key() == Some(self.validate_candidate.key)
+            && validate.owner() == owner
+            && validate.work_class() == Some(LifecycleWorkClass::Validate)
+            && validate.stage() == Some(self.validate_candidate.stage)
+            && validate.terminal() == Some(None)
+            && validate.reconstruction_source() == self.validate_candidate.reconstruction_source
+            && validate.durable_payload() == Some(self.validate_candidate.payload)
+            && validate.continuation() == Some(super::schema::DurableContinuation::None)
+            && validate.replay_matches_candidate(&self.validate_candidate)
+    }
+    /// Return the sole exact live Validate ordinal without exposing either candidate.
+    pub(super) fn live_validate_record<'ledger>(
+        &self,
+        ledger: &'ledger super::ledger::LifecycleLedgerV1,
+    ) -> Option<&'ledger super::ledger::LifecycleLedgerRecordV1> {
+        let mut validates = ledger
+            .records()
+            .iter()
+            .filter(|record| record.key() == Some(self.validate_candidate.key));
+        let validate = validates.next()?;
+        if validates.next().is_some() {
+            return None;
+        }
+        let owner = validate.owner();
+        let mut stores = ledger.records().iter().filter(|record| {
+            record.key() == Some(self.store_candidate.key) && record.owner() == owner
+        });
+        let store = stores.next()?;
+        (stores.next().is_none()
+            && ledger
+                .records()
+                .iter()
+                .filter(|record| record.owner() == owner)
+                .count()
+                == 3
+            && self.exactly_matches_live_records(owner, store, validate))
+        .then_some(validate)
+    }
+    /// Insert the exact Validate candidate only after both durable rows match.
+    pub(super) fn splice_candidate_from_records(
+        &self,
+        owner: super::OwnerId,
+        store: &super::ledger::LifecycleLedgerRecordV1,
+        validate: &super::ledger::LifecycleLedgerRecordV1,
+        candidates: &mut std::collections::BTreeMap<super::LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        self.exactly_matches_live_records(owner, store, validate)
+            && !candidates.contains_key(&self.validate_candidate.key)
+            && candidates
+                .insert(self.validate_candidate.key, self.validate_candidate.clone())
+                .is_none()
+    }
+    /// Confirm that recovery retained the exact Validate candidate.
+    pub(super) fn owns_spliced_candidate(
+        &self,
+        candidates: &std::collections::BTreeMap<super::LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        candidates.get(&self.validate_candidate.key) == Some(&self.validate_candidate)
+    }
+    /// Preflight and seal the non-executable identity retained after installation.
+    pub(super) fn prepare_installed_seal(
+        &self,
+        verified: &VerifiedHeightContext,
+        address: super::work_registry::ConcreteWorkAddress,
+    ) -> Option<RecoveredDecisionValidateInstalledSealV1> {
+        let replay_evidence = self
+            .replay_evidence
+            .seal_recovered_decision_registry_evidence()?;
+        let mut digest = [0_u8; 32];
+        digest.copy_from_slice(self.pending.exact_effect_identity().as_ref());
+        let seal = RecoveredDecisionValidateInstalledSealV1 {
+            address,
+            digest: super::LifecycleDigest::new(digest),
+            effect: self.effect.clone(),
+            durable_body: self.durable_body.clone(),
+            expected_manifest_hash: self.expected_manifest_hash.clone(),
+            replay_evidence,
+            store_candidate: self.store_candidate.clone(),
+            validate_candidate: self.validate_candidate.clone(),
+        };
+        (seal.exactly_matches_projection(self)
+            && self
+                .replay_evidence
+                .exactly_projects_recovered_decision_validate_candidate(
+                    verified,
+                    &self.effect,
+                    &self.durable_body,
+                    &self.pending,
+                    &self.validate_candidate,
+                ))
+        .then_some(seal)
+    }
+    /// Consume this projection only under the concrete registry's private permit.
+    pub(super) fn consume_for_registry(
+        self,
+        _permit: super::work_registry::RecoveredDecisionValidateRegistryProjectionPermitV1,
+        seal: RecoveredDecisionValidateInstalledSealV1,
+    ) -> (
+        AdapterEffect,
+        PendingRuntimeEffectBinding,
+        DurableBodyReceipt,
+        iroha_crypto::HashOf<wire::PayloadManifest>,
+        DurableValidateReplayEvidenceV1,
+        RecoveredDecisionValidateInstalledSealV1,
+    ) {
+        debug_assert!(seal.exactly_matches_projection(&self));
+        (
+            self.effect,
+            self.pending,
+            self.durable_body,
+            self.expected_manifest_hash,
+            self.replay_evidence,
+            seal,
+        )
+    }
+}
+impl RecoveredDecisionValidateInstalledSealV1 {
+    fn exactly_matches_projection(
+        &self,
+        projection: &RecoveredDecisionValidateProjectionV1,
+    ) -> bool {
+        let Ok((physical, universe, consumed)) =
+            self.validate_candidate.physical_geometry.normalized()
+        else {
+            return false;
+        };
+        self.effect == projection.effect
+            && self.durable_body == projection.durable_body
+            && self.expected_manifest_hash == projection.expected_manifest_hash
+            && projection
+                .replay_evidence
+                .matches_recovered_decision_registry_evidence(&self.replay_evidence)
+            && projection.replay_evidence.exactly_matches_validate_pending(
+                &projection.effect,
+                &projection.durable_body,
+                &projection.pending,
+            )
+            && self.store_candidate == projection.store_candidate
+            && self.validate_candidate == projection.validate_candidate
+            && self.digest == {
+                let mut bytes = [0_u8; 32];
+                bytes.copy_from_slice(projection.pending.exact_effect_identity().as_ref());
+                super::LifecycleDigest::new(bytes)
+            }
+            && self.address.owner.causal_root() == self.validate_candidate.causal_root
+            && self.address.slot == super::PhysicalSlotId::for_capacity(CapacityClass::Effect, 0)
+            && physical == std::collections::BTreeMap::from([(self.address.slot, self.digest)])
+            && universe == std::collections::BTreeSet::from([self.address.slot])
+            && consumed == universe
+    }
+    /// Return the immutable lifecycle context retained by both body candidates.
+    pub(super) fn context(&self) -> super::LifecycleContext {
+        super::LifecycleContext::new(
+            self.validate_candidate.key.context(),
+            self.validate_candidate.key.round().height(),
+        )
+    }
+    /// Compare the inert Store/Validate candidates with one exact live prefix.
+    pub(super) fn exactly_matches_live_records(
+        &self,
+        owner: super::OwnerId,
+        store: &super::ledger::LifecycleLedgerRecordV1,
+        validate: &super::ledger::LifecycleLedgerRecordV1,
+    ) -> bool {
+        let validate_ordinal = validate.ordinal();
+        store.ordinal() < validate_ordinal
+            && store.key() == Some(self.store_candidate.key)
+            && store.owner() == owner
+            && store.work_class() == Some(LifecycleWorkClass::Store)
+            && store.stage() == Some(self.store_candidate.stage)
+            && store.terminal() == Some(Some(super::TerminalOutcome::Advanced))
+            && store.reconstruction_source() == self.store_candidate.reconstruction_source
+            && store.durable_payload() == Some(self.store_candidate.payload)
+            && store.continuation()
+                == Some(super::schema::DurableContinuation::successor(
+                    DurableContinuationEdge::StoreToValidate,
+                    validate_ordinal,
+                ))
+            && store.replay_matches_candidate(&self.store_candidate)
+            && validate.key() == Some(self.validate_candidate.key)
+            && validate.owner() == owner
+            && validate.work_class() == Some(LifecycleWorkClass::Validate)
+            && validate.stage() == Some(self.validate_candidate.stage)
+            && validate.terminal() == Some(None)
+            && validate.reconstruction_source() == self.validate_candidate.reconstruction_source
+            && validate.durable_payload() == Some(self.validate_candidate.payload)
+            && validate.continuation() == Some(super::schema::DurableContinuation::None)
+            && validate.replay_matches_candidate(&self.validate_candidate)
+    }
+    /// Return the sole exact live Validate record retained by this installed seal.
+    pub(super) fn live_validate_record<'ledger>(
+        &self,
+        ledger: &'ledger super::ledger::LifecycleLedgerV1,
+    ) -> Option<&'ledger super::ledger::LifecycleLedgerRecordV1> {
+        let mut validates = ledger
+            .records()
+            .iter()
+            .filter(|record| record.key() == Some(self.validate_candidate.key));
+        let validate = validates.next()?;
+        if validates.next().is_some() {
+            return None;
+        }
+        let owner = validate.owner();
+        let mut stores = ledger.records().iter().filter(|record| {
+            record.key() == Some(self.store_candidate.key) && record.owner() == owner
+        });
+        let store = stores.next()?;
+        (stores.next().is_none()
+            && ledger
+                .records()
+                .iter()
+                .filter(|record| record.owner() == owner)
+                .count()
+                == 3
+            && self.exactly_matches_live_records(owner, store, validate))
+        .then_some(validate)
+    }
+    /// Confirm that recovery retained this exact inert Validate candidate.
+    pub(super) fn owns_spliced_candidate(
+        &self,
+        candidates: &std::collections::BTreeMap<super::LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        candidates.get(&self.validate_candidate.key) == Some(&self.validate_candidate)
+    }
+    /// Compare one installed carrier without cloning its executable pending owner.
+    pub(super) fn exactly_matches_carrier(
+        &self,
+        address: super::work_registry::ConcreteWorkAddress,
+        digest: super::LifecycleDigest,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        durable_body: &DurableBodyReceipt,
+        expected_manifest_hash: iroha_crypto::HashOf<wire::PayloadManifest>,
+        replay_evidence: &DurableValidateReplayEvidenceV1,
+    ) -> bool {
+        let Ok((physical, universe, consumed)) =
+            self.validate_candidate.physical_geometry.normalized()
+        else {
+            return false;
+        };
+        self.address == address
+            && self.digest == digest
+            && self.effect == *effect
+            && self.durable_body == *durable_body
+            && self.expected_manifest_hash == expected_manifest_hash
+            && replay_evidence.matches_recovered_decision_registry_evidence(&self.replay_evidence)
+            && replay_evidence.exactly_matches_validate_pending(effect, durable_body, pending)
+            && address.owner.causal_root() == self.validate_candidate.causal_root
+            && address.slot == super::PhysicalSlotId::for_capacity(CapacityClass::Effect, 0)
+            && physical == std::collections::BTreeMap::from([(address.slot, digest)])
+            && universe == std::collections::BTreeSet::from([address.slot])
+            && consumed == universe
+    }
+    /// Compare the candidate reprojected from the installed executable carrier.
+    pub(super) fn matches_projected_candidate(&self, candidate: &CandidateAdmission) -> bool {
+        candidate == &self.validate_candidate
     }
 }
 impl DurableRecoveredWalDecisionFetchCarrierV1 {
@@ -2548,6 +3137,17 @@ impl DurableRecoveredWalDecisionFetchCarrierV1 {
     ) -> Option<RecoveredDecisionFetchStoreProjectionV1> {
         self.projection
             .project_decision_fetch_store(verified, body, store_effect)
+    }
+    /// Authenticate the retained live Store as this WAL Fetch's exact successor.
+    pub(super) fn project_store_validate_successor(
+        &self,
+        verified: &VerifiedHeightContext,
+        store: &RecoveredDecisionFetchStoreProjectionV1,
+    ) -> Option<RecoveredDecisionStoreValidateProjectionV1> {
+        self.validates(verified).then_some(()).and_then(|()| {
+            self.projection
+                .project_decision_store_validate(verified, store)
+        })
     }
     /// Prove the authenticated recovery cut retains this exact Fetch.
     pub(super) fn owns_recovery(

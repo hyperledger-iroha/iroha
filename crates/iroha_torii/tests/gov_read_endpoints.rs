@@ -42,22 +42,18 @@ async fn gov_proposal_get_returns_record() {
     let proposer: iroha_data_model::account::AccountId =
         iroha_data_model::account::AccountId::new(kp.public_key().clone());
     let rec = iroha_core::state::GovernanceProposalRecord {
-        proposer,
+        proposer: proposer.clone(),
         kind: ProposalKind::DeployContract(DeployContractProposal {
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
-            code_hash_hex: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),
-            abi_hash_hex: ContractAbiHash::from_hex_str(&"22".repeat(32)).expect("abi hash"),
+            code_hash: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),
+            abi_hash: ContractAbiHash::from_hex_str(&"22".repeat(32)).expect("abi hash"),
             abi_version: AbiVersion::new(1),
             manifest_provenance: None,
         }),
         created_height: 0,
         status: iroha_core::state::GovernanceProposalStatus::Proposed,
-        pipeline: iroha_core::state::GovernancePipeline::default(),
-        parliament_snapshot: None,
-        finalization_evidence: None,
-        enacted_at_height: None,
     };
     iroha_core::query::insert_gov_proposal_for_test(&mut st_raw, id_bytes, rec);
     {
@@ -204,7 +200,12 @@ async fn gov_referendum_and_locks_and_tally_endpoints() {
         expiry_height: 1_000,
         direction: 0, // approve
         duration_blocks,
-        custody: None,
+        custody: iroha_core::state::GovernanceLockCustody {
+            escrowed: !raw_state.gov.min_bond_amount.is_zero(),
+            asset_definition_id: raw_state.gov.voting_asset_id.clone(),
+            bond_escrow_account: raw_state.gov.bond_escrow_account.clone(),
+            slash_receiver_account: raw_state.gov.slash_receiver_account.clone(),
+        },
     };
     locks.locks.insert(owner, rec);
     let prev_height = raw_state.view().height();

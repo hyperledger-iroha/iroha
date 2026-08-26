@@ -1559,9 +1559,9 @@ def test_nightly_chaos_cold_cache_is_offline_shared_policy_and_fail_closed(
         ),
         (
             harness,
-            "    if ((${#listed_unit_tests[@]} != 140)); then\n",
+            "    if ((${#listed_unit_tests[@]} != 187)); then\n",
             "    if ((${#listed_unit_tests[@]} != 139)); then\n",
-            "must seal exactly 140 runnable",
+            "must seal exactly 187 runnable",
         ),
         (
             harness,

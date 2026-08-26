@@ -22,6 +22,7 @@ const KAGEMUSHA_CATALOG_REVALIDATION_RECEIPT_ROOT_V1: &str =
     "/Library/SORA/Kagemusha/catalog-revalidation";
 
 /// Controller-authenticated root-custodied promotion reservation.
+#[derive(Debug)]
 pub struct TrustedKagemushaPromotionReservationV1 {
     exact_reservation_bytes: Vec<u8>,
     catalog_revalidation_receipt_json: Vec<u8>,
@@ -113,8 +114,9 @@ fn read_configured_kagemusha_promotion_reservation_with(
 
 #[cfg(any(target_os = "macos", test))]
 fn kagemusha_catalog_revalidation_receipt_path_v1(promotion_id: [u8; 32]) -> PathBuf {
+    let promotion_id_hex = hex::encode(promotion_id);
     Path::new(KAGEMUSHA_CATALOG_REVALIDATION_RECEIPT_ROOT_V1)
-        .join(format!("{}.json", hex::encode(promotion_id)))
+        .join(format!("{promotion_id_hex}.json"))
 }
 
 /// Read exact bytes of the already-published catalog seal for same-load comparison.
@@ -137,7 +139,7 @@ pub fn read_configured_kagemusha_catalog_qualification_seal(
 }
 
 /// Read and verify the exact configured root-owned local validator seal.
-pub(super) fn read_configured_kagemusha_validator_qualification_seal(
+pub fn read_configured_kagemusha_validator_qualification_seal(
     config: &Config,
 ) -> Result<KagemushaV4ValidatorQualificationSealV1, String> {
     let path = config
@@ -161,8 +163,7 @@ fn decode_exact_kagemusha_validator_qualification_seal(
 ) -> Result<KagemushaV4ValidatorQualificationSealV1, String> {
     if exact.is_empty() || exact.len() > KAGEMUSHA_VALIDATOR_QUALIFICATION_SEAL_MAX_BYTES_V1 {
         return Err(format!(
-            "Kagemusha validator seal exceeds the {}-byte limit",
-            KAGEMUSHA_VALIDATOR_QUALIFICATION_SEAL_MAX_BYTES_V1
+            "Kagemusha validator seal exceeds the {KAGEMUSHA_VALIDATOR_QUALIFICATION_SEAL_MAX_BYTES_V1}-byte limit"
         ));
     }
     let seal = norito::decode_canonical_with_limits::<KagemushaV4ValidatorQualificationSealV1>(
@@ -184,6 +185,7 @@ fn decode_exact_kagemusha_validator_qualification_seal(
 }
 
 /// Prepared root-owned, no-replace destination for one local validator seal.
+#[derive(Debug)]
 pub struct KagemushaValidatorSealPublicationTarget {
     inner: RootOwnedNoReplaceArtifactPublicationTarget,
 }
@@ -337,8 +339,7 @@ mod tests {
         let error = read_configured_kagemusha_promotion_reservation_with(&config, |_, _, _| {
             unreachable!("missing config must fail before reading")
         })
-        .err()
-        .expect("missing reservation configuration must fail");
+        .expect_err("missing reservation configuration must fail");
         assert!(error.contains("reservation_path"));
 
         let mut configured = config_fixture();
@@ -364,8 +365,7 @@ mod tests {
                 Ok(b"not canonical Norito".to_vec())
             },
         )
-        .err()
-        .expect("noncanonical reservation must fail");
+        .expect_err("noncanonical reservation must fail");
         assert!(error.contains("invalid configured"));
     }
 
@@ -389,8 +389,7 @@ mod tests {
             &config,
             Path::new("/trusted/substituted.norito"),
         )
-        .err()
-        .expect("substituted output path must fail before custody inspection");
+        .expect_err("substituted output path must fail before custody inspection");
         assert!(error.contains("does not exactly match"));
     }
 
@@ -439,9 +438,7 @@ mod tests {
     fn configured_reservation_reader_pins_the_derived_catalog_receipt() {
         let controller = KeyPair::from_seed(vec![0x45; 32], Algorithm::Ed25519);
         let reservation =
-            super::super::kagemusha_validator_qualification::tests::reservation_fixture(
-                &controller,
-            );
+            super::super::kagemusha_validator_qualification::reservation_fixture(&controller);
         let reservation_bytes =
             norito::encode_canonical(&reservation).expect("canonical reservation fixture");
         let mut config = config_fixture();
@@ -496,8 +493,7 @@ mod tests {
                 Ok(b"substituted catalog receipt".to_vec())
             }
         })
-        .err()
-        .expect("a different promotion-scoped receipt must fail closed");
+        .expect_err("a different promotion-scoped receipt must fail closed");
         assert!(error.contains("does not bind the exact"));
     }
 

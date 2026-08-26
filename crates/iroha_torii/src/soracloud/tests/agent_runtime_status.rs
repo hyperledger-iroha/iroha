@@ -37,9 +37,9 @@ fn authoritative_agent_autonomy_status_includes_runtime_recent_runs() -> Result<
                 manifest_hash: Hash::new(b"agent-manifest"),
                 status: SoraAgentRuntimeStatusV1::Running,
                 deployed_sequence: 1,
-                lease_started_sequence: 1,
-                lease_expires_sequence: 100,
-                last_renewed_sequence: 1,
+                lease_started_height: 1,
+                lease_expires_height: 100,
+                last_renewed_height: 1,
                 restart_count: 0,
                 last_restart_sequence: None,
                 last_restart_reason: None,
@@ -79,9 +79,7 @@ fn authoritative_agent_autonomy_status_includes_runtime_recent_runs() -> Result<
                 mailbox_message_id: None,
                 journal_artifact_hash: Some(Hash::new(b"ops-agent-authoritative-journal")),
                 checkpoint_artifact_hash: Some(Hash::new(br#"{"text":"ok"}"#)),
-                placement_id: None,
-                selected_validator_account_id: None,
-                selected_peer_id: None,
+                execution_host: None,
             },
         );
         world
@@ -91,10 +89,12 @@ fn authoritative_agent_autonomy_status_includes_runtime_recent_runs() -> Result<
                 SoraAgentApartmentAuditEventV1 {
                     schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
                     sequence: 78,
+                    block_height: 78,
+                    block_timestamp_ms: 78,
                     action: SoraAgentApartmentActionV1::AutonomyRunExecuted,
                     apartment_name: "ops_agent".parse().expect("valid apartment name"),
                     status: SoraAgentRuntimeStatusV1::Running,
-                    lease_expires_sequence: 100,
+                    lease_expires_height: 100,
                     manifest_hash: Hash::new(b"agent-manifest"),
                     restart_count: 0,
                     signer: checked_test_keypair(0xB4).public_key().clone(),
@@ -136,7 +136,7 @@ fn authoritative_agent_autonomy_status_includes_runtime_recent_runs() -> Result<
             .join("runs")
             .join(sanitize_runtime_path_component(&run.run_id));
         fs::create_dir_all(&summary_dir)?;
-        let summary = SoracloudApartmentAutonomyExecutionSummaryV1 {
+        let mut summary = SoracloudApartmentAutonomyExecutionSummaryV1 {
             schema_version: SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1,
             apartment_name: "ops_agent".to_owned(),
             run_id: run.run_id.clone(),
@@ -160,9 +160,7 @@ fn authoritative_agent_autonomy_status_includes_runtime_recent_runs() -> Result<
                 mailbox_message_id: None,
                 journal_artifact_hash: Some(Hash::new(b"ops-agent-authoritative-journal")),
                 checkpoint_artifact_hash: Some(Hash::new(br#"{"text":"ok"}"#)),
-                placement_id: None,
-                selected_validator_account_id: None,
-                selected_peer_id: None,
+                execution_host: None,
             }),
             workflow_steps: Vec::new(),
             content_type: Some("application/json".to_owned()),
@@ -170,6 +168,11 @@ fn authoritative_agent_autonomy_status_includes_runtime_recent_runs() -> Result<
             response_text: Some(r#"{"text":"ok","backend":"local_fixture"}"#.to_owned()),
             error: None,
         };
+        summary.result_commitment = derive_soracloud_apartment_autonomy_result_commitment_v1(
+            &summary,
+            1,
+            run.request_commitment,
+        )?;
         let summary_bytes = norito::json::to_vec_pretty(&summary)?;
         fs::write(summary_dir.join("execution_summary.json"), &summary_bytes)?;
         let status = authoritative_agent_autonomy_status_response(&app, "ops_agent")

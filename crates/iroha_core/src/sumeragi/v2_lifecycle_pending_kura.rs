@@ -545,6 +545,9 @@ impl PendingKuraActivatedProductionLifecycleV1 {
         {
             return Err(ProductionLifecycleFinalizationErrorV1::NotReady);
         }
+        self.launched
+            .verify_published_store_marker_finalization_census()
+            .map_err(ProductionLifecycleFinalizationErrorV1::StoreMarkerCensus)?;
 
         let Self {
             mut launched,

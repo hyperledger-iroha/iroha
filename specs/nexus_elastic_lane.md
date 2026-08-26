@@ -178,10 +178,9 @@ directly inside the smoke helper, and pass
 `--allow-missing-lane-metrics` only when staging clusters have not yet exposed those gauges
 (production evidence should keep the defaults enforced).
 
-`--lifecycle-url` and `--lifecycle-file` are the canonical spellings.
-`--status-url` and `--status-file` remain deprecated script aliases for
-compatibility, but they still expect the `/v1/nexus/lifecycle` shape; they must
-not be pointed at `/v1/sumeragi/status`.
+`--lifecycle-url` and `--lifecycle-file` are the only accepted spellings and
+both expect the `/v1/nexus/lifecycle` shape; they must not be pointed at
+`/v1/sumeragi/status`.
 
 The same helper now enforces scheduler load-test telemetry. Use `--min-teu-capacity` to prove each
 lane reports a non-zero `nexus_scheduler_lane_teu_capacity`, gate the slot utilisation with
@@ -228,15 +227,15 @@ scripts/nexus_lane_smoke.py \
 
 The recorded fixtures under `fixtures/nexus/lanes/` mirror the artefacts
 produced by the bootstrap helper so new manifests can be linted without
-bespoke scripting. The historical `status_ready.json` filename contains a
-Nexus lifecycle payload. CI exercises the same flow via
+bespoke scripting. The `status_ready.json` fixture contains a Nexus lifecycle
+payload. CI exercises the same flow via
 `ci/check_nexus_lane_smoke.sh` and also runs `ci/check_nexus_lane_registry_bundle.sh`
 (alias: `make check-nexus-lanes`) to prove the NX-7 smoke helper stays aligned with the published
 payload format and to ensure bundle digests/overlays remain reproducible.
 
 When a lane is renamed, capture the `nexus.lane.topology` telemetry events (for example with
 `journalctl -u irohad -o json | jq 'select(.msg=="nexus.lane.topology")'`) and feed them back into
-the smoke helper. The new `--telemetry-file/--from-telemetry` flag accepts the newline-delimited log
+the smoke helper. The `--telemetry-file` flag accepts the newline-delimited log
 and `--require-alias-migration old:new` asserts that a `alias_migrated` event recorded the rename:
 
 ```bash

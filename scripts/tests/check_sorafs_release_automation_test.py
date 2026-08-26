@@ -713,7 +713,7 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     assert "WhenAvailable" not in validator_tests
     assert "Assert.True(" in validator_tests
     assert (
-        "ABI-22 connect_norito_bridge with Governance DAG symbols is required."
+        "ABI-23 connect_norito_bridge with Governance DAG symbols is required."
         in validator_tests
     )
 
@@ -1018,7 +1018,7 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",
-            "Build and authenticate the exact ABI-22 C# bridge",
+            "Build and authenticate the exact ABI-23 C# bridge",
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",

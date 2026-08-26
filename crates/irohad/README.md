@@ -401,7 +401,7 @@ You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#
       file = "genesis.signed.nrt"
       manifest_json = "genesis.json"
       public_key = "<GENESIS_PUBLIC_KEY>"
-      expected_hash = "<EXACT_HASH_FROM_genesis.expected_hash>"
+      expected_hash_file = "genesis.expected_hash"
       ```
 
       See `crates/iroha_kagami/CommandLineHelp.md` and the

@@ -38,7 +38,8 @@ pub(in crate::sumeragi) use turn_driver::{
     ProductionLifecycleCompletionPreGateV1, ProductionLifecycleCompletionSelectionV1,
     ProductionLifecycleCompletionTurnV1, ProductionLifecycleIngressSelectionV1,
     ProductionLifecycleIngressTurnV1, ProductionLifecycleReadyCompletionTurnV1,
-    ProductionPreparedOrdinaryIngressTurnV1, ProductionRecoveredLifecycleSignCompletionSelectionV1,
+    ProductionPreTimeoutLockedPrepareQcIngressTurnV1, ProductionPreparedOrdinaryIngressTurnV1,
+    ProductionRecoveredLifecycleSignCompletionSelectionV1,
 };
 
 use super::{
@@ -674,6 +675,13 @@ impl LaunchedProductionLifecycleV1 {
         let Some(body) = completion.completion().project_store_body_authority() else {
             retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Body);
         };
+        let retry_marker =
+            match executor.prepare_published_lifecycle_store_retry_marker(body.durable()) {
+                Ok(marker) => marker,
+                Err(_) => {
+                    retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Executor)
+                }
+            };
         let selector = match executor.prepare_lifecycle_ingress_selector(
             &leader_wire_ingress_binding.ingress,
             physical_ordinal,
@@ -751,6 +759,16 @@ impl LaunchedProductionLifecycleV1 {
                 retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Registry)
             }
         };
+        let retry_marker = match retry_marker
+            .bind_store_successor(successor.store_effect(), successor.pending_effect_binding())
+        {
+            Ok(marker) => marker,
+            Err(_) => {
+                drop(successor);
+                drop(locked_dequeue);
+                retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Executor)
+            }
+        };
         let transition = match owner
             .coordinator
             .prepare_recovered_decision_fetch_store_transition(&lease, &owner.verified, successor)
@@ -779,6 +797,7 @@ impl LaunchedProductionLifecycleV1 {
             return ProductionRecoveredDecisionFetchStoreSettlementV1::RestartRequired;
         }
         transition.commit_after_publication();
+        executor.commit_published_lifecycle_store_retry_marker(retry_marker);
         executor.commit_recovered_decision_fetch_owner_retirement(retirement);
         locked_dequeue.commit();
         completion.acknowledge_after_publication();
@@ -1786,6 +1805,9 @@ pub(in crate::sumeragi) enum ProductionLifecycleFinalizationErrorV1 {
     /// Executor, lifecycle owner, or dedicated completion ownership is not quiescent.
     #[error("activated lifecycle height is not ready for final rollover")]
     NotReady,
+    /// Executor and registry retained different immutable Store publications.
+    #[error("published lifecycle Store finalization census failed: {0}")]
+    StoreMarkerCensus(String),
     /// The runner readiness owner no longer names the launched ingress.
     #[error("activated lifecycle runner retirement failed: {0}")]
     Runner(String),
@@ -2201,8 +2223,25 @@ impl LaunchedProductionLifecycleV1 {
         })
     }
 
-    fn ready_for_finalized_rollover(&mut self) -> bool {
-        self.executor.ready_to_finish()
+    fn verify_published_store_marker_finalization_census(&self) -> Result<(), String> {
+        let executor = self.executor.published_lifecycle_store_retry_census()?;
+        let registry = self
+            .owner
+            .registry
+            .registry()
+            .published_lifecycle_store_retry_census()?;
+        if executor != registry {
+            return Err(
+                "executor markers differ from authenticated lifecycle Store rows".to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    fn ready_for_finalized_rollover(
+        &mut self,
+    ) -> Result<bool, ProductionLifecycleFinalizationErrorV1> {
+        let locally_ready = self.executor.ready_to_finish()
             && !self.owner.has_recovered_lifecycle_outputs()
             && self.pending_kura_apply_replay.is_none()
             && self.recovered_local_proposal_attempt.is_none()
@@ -2213,7 +2252,13 @@ impl LaunchedProductionLifecycleV1 {
                 .owner
                 .registry
                 .registry_mut()
-                .exactly_covers_finalization_work(&self.owner.coordinator)
+                .exactly_covers_finalization_work(&self.owner.coordinator);
+        if !locally_ready {
+            return Ok(false);
+        }
+        self.verify_published_store_marker_finalization_census()
+            .map_err(ProductionLifecycleFinalizationErrorV1::StoreMarkerCensus)?;
+        Ok(true)
     }
 }
 
@@ -2227,7 +2272,7 @@ impl ActivatedProductionLifecycleV1 {
     pub(in crate::sumeragi) fn ready_for_finalized_rollover(
         &mut self,
         _runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
-    ) -> bool {
+    ) -> Result<bool, ProductionLifecycleFinalizationErrorV1> {
         self.launched.ready_for_finalized_rollover()
     }
 
@@ -2282,7 +2327,7 @@ impl ActivatedProductionLifecycleV1 {
         _runner: &mut super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
     ) -> Result<FinalizedProductionLifecycleRolloverV1, ProductionLifecycleFinalizationErrorV1>
     {
-        if !self.launched.ready_for_finalized_rollover() {
+        if !self.launched.ready_for_finalized_rollover()? {
             return Err(ProductionLifecycleFinalizationErrorV1::NotReady);
         }
 
@@ -2802,6 +2847,19 @@ impl ProductionLifecycleOwnerV1 {
         if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref() {
             executor
                 .install_authenticated_genesis_body(authenticated_genesis)
+                .map_err(ProductionLifecycleLaunchErrorV1::Executor)?;
+        }
+        for (effect, pending, durable_receipt) in self
+            .registry
+            .registry()
+            .recovered_published_store_retry_markers()
+        {
+            executor
+                .install_recovered_published_lifecycle_store_retry_marker(
+                    effect,
+                    pending,
+                    durable_receipt,
+                )
                 .map_err(ProductionLifecycleLaunchErrorV1::Executor)?;
         }
         for (effect, pending, durable_receipt) in self

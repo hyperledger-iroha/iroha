@@ -10,10 +10,11 @@ import java.nio.charset.StandardCharsets
 /** Minimal JSON parser for Sora VPN Torii responses. */
 object VpnJsonParser {
 
-    private const val VPN_HELPER_TICKET_HEX_LENGTH = 1_392
+    private const val VPN_HELPER_TICKET_HEX_LENGTH = 1_576
     private const val U32_MAX = 4_294_967_295L
     private val EXIT_CLASSES = setOf("standard", "low-latency", "high-security")
-    private val RECEIPT_STATUSES = setOf("disconnected", "expired", "replaced", "settled")
+    private val RECEIPT_STATUSES =
+        setOf("disconnected", "expired", "replaced", "settlement_pending", "settled")
     private val RECEIPT_SOURCES = setOf("torii", "relay", "wsv")
     private val PROFILE_FIELDS = setOf(
         "available", "relay_endpoint", "supported_exit_classes", "default_exit_class",
@@ -145,7 +146,7 @@ object VpnJsonParser {
         requireExactFields(root, SESSION_FIELDS, "vpn session response")
         val trust = vpnTrustTuple(root, "vpn session response", allowEmpty = false)
         return VpnSession(
-            sessionId = hex32(root["session_id"], "sessionId"),
+            sessionId = hex16(root["session_id"], "sessionId"),
             accountId = requiredString(root["account_id"], "vpn session response.account_id"),
             exitClass = exitClass(root["exit_class"], "vpn session response.exit_class"),
             relayEndpoint = relayEndpoint(root["relay_endpoint"], "vpn session response.relay_endpoint"),
@@ -204,7 +205,7 @@ object VpnJsonParser {
     private fun parseReceiptObject(root: Map<String, Any?>, path: String): VpnReceipt {
         requireExactFields(root, RECEIPT_FIELDS, path)
         return VpnReceipt(
-            sessionId = hex32(root["session_id"], "sessionId"),
+            sessionId = hex16(root["session_id"], "sessionId"),
             accountId = requiredString(root["account_id"], "$path.account_id"),
             exitClass = exitClass(root["exit_class"], "$path.exit_class"),
             relayEndpoint = requiredString(root["relay_endpoint"], "$path.relay_endpoint"),

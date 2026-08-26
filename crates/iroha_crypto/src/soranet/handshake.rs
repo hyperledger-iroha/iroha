@@ -126,6 +126,8 @@ const CAPABILITY_ROLE: u16 = 0x0201;
 const CAPABILITY_PADDING: u16 = 0x0202;
 const CAPABILITY_CONSTANT_RATE: u16 = 0x0203;
 const CAPABILITY_REQUIRED_FLAG: u8 = 0x01;
+const SUITE_LIST_REQUIRED_FLAG: u8 = 0x80;
+const SUITE_LIST_ID_MASK: u8 = 0x7F;
 const FIRST_RELEASE_PQSIG_ID: u8 = 0x01;
 const FIRST_RELEASE_ROLE_MASK: u8 = 0x07;
 const FIRST_RELEASE_CONSTANT_RATE_VERSION: u8 = 0x01;
@@ -560,6 +562,13 @@ fn validate_capability_payload(ty: u16, value: &[u8]) -> Result<(), HarnessError
                     "suite_list capability must contain at least one identifier".into(),
                 ));
             }
+            parse_first_release_suite_ids(value.iter().enumerate().map(|(index, &id)| {
+                if index == 0 {
+                    id & SUITE_LIST_ID_MASK
+                } else {
+                    id
+                }
+            }))?;
         }
         CAPABILITY_ROLE => {
             if value.len() != 1 {
@@ -621,8 +630,8 @@ fn validate_capability_flag_bits(ty: u16, flags: u8) -> Result<(), HarnessError>
 fn parse_required_flag(ty: u16, value: &mut [u8]) -> bool {
     match ty {
         CAPABILITY_SUITE_LIST => value.first_mut().is_some_and(|first| {
-            let required = (*first & 0x80) != 0;
-            *first &= 0x7F;
+            let required = (*first & SUITE_LIST_REQUIRED_FLAG) != 0;
+            *first &= SUITE_LIST_ID_MASK;
             required
         }),
         CAPABILITY_PQKEM | CAPABILITY_PQSIG | CAPABILITY_CONSTANT_RATE => value
@@ -636,9 +645,9 @@ fn apply_required_flag(ty: u16, value: &mut [u8], required: bool) {
         CAPABILITY_SUITE_LIST => {
             if let Some(first) = value.first_mut() {
                 if required {
-                    *first |= 0x80;
+                    *first |= SUITE_LIST_REQUIRED_FLAG;
                 } else {
-                    *first &= 0x7F;
+                    *first &= SUITE_LIST_ID_MASK;
                 }
             }
         }
@@ -654,48 +663,62 @@ fn apply_required_flag(ty: u16, value: &mut [u8], required: bool) {
         _ => {}
     }
 }
-fn parse_suite_list(cap: &CapabilityTlv) -> Result<SuiteList, HarnessError> {
-    if cap.value.is_empty() {
+fn parse_first_release_suite_ids(
+    ids: impl IntoIterator<Item = u8>,
+) -> Result<Vec<HandshakeSuite>, HarnessError> {
+    let mut suites = Vec::new();
+    let mut unsupported = Vec::new();
+    let mut duplicates = Vec::new();
+    for id in ids {
+        match HandshakeSuite::try_from(id) {
+            Ok(suite) if suites.contains(&suite) => {
+                if !duplicates.contains(&id) {
+                    duplicates.push(id);
+                }
+            }
+            Ok(suite) => suites.push(suite),
+            Err(_) => {
+                if !unsupported.contains(&id) {
+                    unsupported.push(id);
+                }
+            }
+        }
+    }
+    if !unsupported.is_empty() {
+        let rejected = unsupported
+            .iter()
+            .map(|id| {
+                if matches!(id, 0x02 | 0x03) {
+                    format!("{id:#04x} (retired pre-release)")
+                } else {
+                    format!("{id:#04x} (unknown)")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(HarnessError::Validation(format!(
+            "suite_list contains unsupported first-release handshake suite identifiers: {rejected}"
+        )));
+    }
+    if !duplicates.is_empty() {
+        let repeated = duplicates
+            .iter()
+            .map(|id| format!("{id:#04x}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(HarnessError::Validation(format!(
+            "suite_list contains duplicate first-release handshake suite identifiers: {repeated}"
+        )));
+    }
+    if suites.is_empty() {
         return Err(HarnessError::Validation(
             "suite_list capability must contain at least one identifier".into(),
         ));
     }
-    let mut suites = Vec::with_capacity(cap.value.len());
-    let mut ignored = Vec::new();
-    let mut pre_release = Vec::new();
-    for &id in &cap.value {
-        // Ignore unknown suite identifiers for forward compatibility.
-        match HandshakeSuite::try_from(id) {
-            Ok(suite) => {
-                if suites.contains(&suite) {
-                    continue;
-                }
-                suites.push(suite);
-            }
-            Err(_) if matches!(id, 0x02 | 0x03) => pre_release.push(id),
-            Err(_) => ignored.push(id),
-        }
-    }
-    if !pre_release.is_empty() {
-        let rejected = pre_release
-            .iter()
-            .map(|id| format!("{id:#04x}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(HarnessError::Validation(format!(
-            "pre-release handshake suite identifiers are not accepted: {rejected}"
-        )));
-    }
-    if suites.is_empty() {
-        let unsupported = ignored
-            .iter()
-            .map(|id| format!("{id:#04x}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(HarnessError::Validation(format!(
-            "suite_list capability must include at least one supported identifier; got {unsupported}"
-        )));
-    }
+    Ok(suites)
+}
+fn parse_suite_list(cap: &CapabilityTlv) -> Result<SuiteList, HarnessError> {
+    let suites = parse_first_release_suite_ids(cap.value.iter().copied())?;
     Ok(SuiteList {
         suites,
         required: cap.required,
@@ -981,24 +1004,19 @@ fn encode_capabilities(entries: &[CapabilityTlv]) -> Result<Vec<u8>, HarnessErro
 /// Return a capability vector based on `base` with the suite list replaced by `suites`.
 ///
 /// # Errors
-/// Returns [`HarnessError::Validation`] when `suites` is empty, the capability stream is malformed,
-/// the encoded suite list would exceed a single capability field, or the
-/// resulting capability vector would exceed the first-release aggregate limit.
+/// Returns [`HarnessError::Validation`] when `suites` is empty or contains duplicates, the
+/// capability stream is malformed, or the resulting capability vector would exceed the
+/// first-release aggregate limit.
 pub fn update_suite_list(
     base: &[u8],
     suites: &[HandshakeSuite],
     required: bool,
 ) -> Result<Vec<u8>, HarnessError> {
-    if suites.is_empty() {
-        return Err(HarnessError::Validation(
-            "interop suite list requires at least one entry".into(),
-        ));
-    }
     let mut entries = parse_capabilities(base)?;
-    let mut value = Vec::with_capacity(suites.len());
-    for suite in suites {
-        value.push(u8::from(*suite));
-    }
+    let value = parse_first_release_suite_ids(suites.iter().copied().map(u8::from))?
+        .into_iter()
+        .map(u8::from)
+        .collect();
     if let Some(existing) = entries
         .iter_mut()
         .find(|cap| cap.ty == CAPABILITY_SUITE_LIST)
@@ -1453,7 +1471,7 @@ pub struct CapabilityWarning {
 pub struct SimulationResult {
     /// SHA3-256 transcript hash computed for the handshake.
     pub transcript_hash: [u8; 32],
-    /// Capability compatibility warnings surfaced during the run.
+    /// Capability negotiation warnings surfaced during the run.
     pub warnings: Vec<CapabilityWarning>,
     /// Negotiated handshake suite for the simulation.
     pub handshake_suite: HandshakeSuite,
@@ -2113,39 +2131,24 @@ fn relay_identity_bytes(key_pair: &KeyPair) -> Result<Vec<u8>, HarnessError> {
         .public_key()
         .try_to_bytes()
         .map_err(|error| HarnessError::Validation(format!("invalid relay identity: {error}")))?;
-    if algorithm == Algorithm::Ed25519 {
-        if bytes.len() != 32 {
-            return Err(HarnessError::Validation(format!(
-                "relay Ed25519 identity must be 32 bytes, got {}",
-                bytes.len()
-            )));
-        }
-        // Preserve the original Ed25519 wire representation for compatibility.
-        return Ok(bytes.to_vec());
-    }
     let mut encoded = Vec::with_capacity(bytes.len() + 1);
     encoded.push(algorithm as u8);
     encoded.extend_from_slice(bytes);
     Ok(encoded)
 }
 fn parse_relay_identity(bytes: &[u8]) -> Result<PublicKey, HarnessError> {
-    let (algorithm, payload) = if bytes.len() == 32 {
-        (Algorithm::Ed25519, bytes)
-    } else {
-        let (&tag, payload) = bytes.split_first().ok_or_else(|| {
-            HarnessError::Validation("relay identity must not be empty".to_owned())
-        })?;
-        let algorithm = Algorithm::try_from(tag).map_err(|()| {
-            HarnessError::Validation(format!("unknown relay identity algorithm tag {tag}"))
-        })?;
-        if algorithm == Algorithm::Ed25519 {
-            return Err(HarnessError::Validation(
-                "relay Ed25519 identity must use the canonical untagged 32-byte encoding"
-                    .to_owned(),
-            ));
-        }
-        (algorithm, payload)
-    };
+    if bytes.len() == 32 {
+        return Err(HarnessError::Validation(
+            "relay identity uses the retired untagged Ed25519 encoding; first-release V1 requires tag 0x00 followed by the 32-byte key"
+                .to_owned(),
+        ));
+    }
+    let (&tag, payload) = bytes
+        .split_first()
+        .ok_or_else(|| HarnessError::Validation("relay identity must not be empty".to_owned()))?;
+    let algorithm = Algorithm::try_from(tag).map_err(|()| {
+        HarnessError::Validation(format!("unknown relay identity algorithm tag {tag:#04x}"))
+    })?;
     PublicKey::from_bytes(algorithm, payload).map_err(|error| {
         HarnessError::Validation(format!("relay {algorithm} identity is invalid: {error}"))
     })
@@ -3418,7 +3421,7 @@ pub struct SessionSecrets {
     /// Optional telemetry payload emitted as part of the handshake.
     pub telemetry_payload: Option<Vec<u8>>,
 }
-/// Opaque state retained by the client between `ClientHello` and `ClientFinish`.
+/// Opaque state retained by the client between its hello and the relay response.
 #[allow(dead_code)]
 pub struct ClientState {
     client_nonce: [u8; 32],
@@ -3437,54 +3440,6 @@ pub struct ClientState {
     sig_id: u8,
     handshake_suite: HandshakeSuite,
     client_hello: Vec<u8>,
-}
-/// Opaque state retained by the relay between `RelayHello` and `ClientFinish`.
-#[allow(dead_code)]
-pub struct RelayState {
-    client_nonce: [u8; 32],
-    client_ephemeral_public: [u8; 32],
-    client_capabilities: Vec<u8>,
-    client_kem_public: Vec<u8>,
-    resume_hash: Option<Vec<u8>>,
-    client_static_public: Option<[u8; 32]>,
-    relay_nonce: [u8; 32],
-    relay_ephemeral_secret: StaticSecret,
-    relay_ephemeral_public: [u8; 32],
-    relay_static_secret: StaticSecret,
-    relay_static_public: [u8; 32],
-    relay_kem_secret: Zeroizing<Vec<u8>>,
-    relay_kem_public: Vec<u8>,
-    /// Shared secret derived when encapsulating to the client.
-    relay_kem_shared: Zeroizing<Vec<u8>>,
-    forward_kem_secret: Option<Zeroizing<Vec<u8>>>,
-    forward_kem_public: Option<Vec<u8>>,
-    forward_kem_shared: Option<Zeroizing<Vec<u8>>>,
-    forward_ciphertext: Option<Vec<u8>>,
-    relay_capabilities: Vec<u8>,
-    descriptor_commit: Vec<u8>,
-    kem_ciphertext: Vec<u8>,
-    transcript_confirm_primary: Option<Vec<u8>>,
-    transcript_confirm_forward: Option<Vec<u8>>,
-    dual_mix: Option<Vec<u8>>,
-    transcript_hash: [u8; 32],
-    kem_id: u8,
-    sig_id: u8,
-    handshake_suite: HandshakeSuite,
-    warnings: Vec<CapabilityWarning>,
-    relay_hello: Vec<u8>,
-    pending_session: Option<SessionSecrets>,
-    requires_client_finish: bool,
-}
-impl RelayState {
-    /// Returns `true` if the relay must await a `ClientFinish` frame before the session is usable.
-    pub fn requires_client_finish(&self) -> bool {
-        self.requires_client_finish
-    }
-    /// Transcript hash derived during the handshake.
-    #[must_use]
-    pub const fn transcript_hash(&self) -> &[u8; 32] {
-        &self.transcript_hash
-    }
 }
 struct ClientHelloMaterials {
     nonce: [u8; 32],
@@ -3705,15 +3660,9 @@ fn fixture_noise_state() -> RelayNoiseState {
     }
 }
 #[cfg(test)]
-fn fixture_kem_artifacts(
-    public: &[u8],
-    secret: &[u8],
-    shared: &[u8],
-    ciphertext: &[u8],
-) -> RuntimeKemArtifacts {
+fn fixture_kem_artifacts(public: &[u8], shared: &[u8], ciphertext: &[u8]) -> RuntimeKemArtifacts {
     RuntimeKemArtifacts {
         relay_public: public.to_vec(),
-        relay_secret: Zeroizing::new(secret.to_vec()),
         shared_secret: Zeroizing::new(shared.to_vec()),
         ciphertext: ciphertext.to_vec(),
     }
@@ -3929,29 +3878,28 @@ fn parse_pqfs_relay_response(
 /// # Errors
 /// Returns an error when the relay message is malformed, negotiates unsupported
 /// capabilities, or cryptographic verification fails during the handshake.
-pub fn client_handle_relay_hello<R: TryCryptoRng>(
+pub fn client_handle_relay_hello(
     state: ClientState,
     relay_hello: &[u8],
     expected_relay_identity: &PublicKey,
     params: &RuntimeParams<'_>,
-    _rng: &mut R,
-) -> Result<(Option<Vec<u8>>, SessionSecrets), HarnessError> {
+) -> Result<SessionSecrets, HarnessError> {
     validate_runtime_params(params)?;
     match state.handshake_suite {
         HandshakeSuite::Nk2Hybrid => {
-            handle_nk2_client_finish(state, relay_hello, expected_relay_identity, params)
+            handle_nk2_relay_response(state, relay_hello, expected_relay_identity, params)
         }
         HandshakeSuite::Nk3PqForwardSecure => {
-            handle_nk3_client_finish(state, relay_hello, expected_relay_identity, params)
+            handle_nk3_relay_response(state, relay_hello, expected_relay_identity, params)
         }
     }
 }
-fn handle_nk2_client_finish(
+fn handle_nk2_relay_response(
     state: ClientState,
     relay_message: &[u8],
     expected_relay_identity: &PublicKey,
     params: &RuntimeParams<'_>,
-) -> Result<(Option<Vec<u8>>, SessionSecrets), HarnessError> {
+) -> Result<SessionSecrets, HarnessError> {
     let ClientState {
         client_nonce,
         client_ephemeral_secret,
@@ -4036,16 +3984,13 @@ fn handle_nk2_client_finish(
             "relay confirmation mismatch in NK2 handshake".to_owned(),
         ));
     }
-    Ok((
-        None,
-        SessionSecrets {
-            session_key,
-            transcript_hash: transcript,
-            handshake_suite: HandshakeSuite::Nk2Hybrid,
-            warnings: Vec::new(),
-            telemetry_payload: None,
-        },
-    ))
+    Ok(SessionSecrets {
+        session_key,
+        transcript_hash: transcript,
+        handshake_suite: HandshakeSuite::Nk2Hybrid,
+        warnings: Vec::new(),
+        telemetry_payload: None,
+    })
 }
 fn ensure_nk3_negotiation(
     client_capabilities: &[u8],
@@ -4147,12 +4092,12 @@ fn decapsulate_nk3_secrets(
     }
     Ok((primary_shared, forward_shared))
 }
-fn handle_nk3_client_finish(
+fn handle_nk3_relay_response(
     state: ClientState,
     relay_message: &[u8],
     expected_relay_identity: &PublicKey,
     params: &RuntimeParams<'_>,
-) -> Result<(Option<Vec<u8>>, SessionSecrets), HarnessError> {
+) -> Result<SessionSecrets, HarnessError> {
     let ClientState {
         client_nonce,
         client_ephemeral_secret,
@@ -4223,16 +4168,13 @@ fn handle_nk3_client_finish(
             primary_shared: primary_shared.as_bytes(),
             forward_shared: Some(forward_shared.as_bytes()),
         })?;
-    Ok((
-        None,
-        SessionSecrets {
-            session_key,
-            transcript_hash: transcript,
-            handshake_suite: HandshakeSuite::Nk3PqForwardSecure,
-            warnings: Vec::new(),
-            telemetry_payload: None,
-        },
-    ))
+    Ok(SessionSecrets {
+        session_key,
+        transcript_hash: transcript,
+        handshake_suite: HandshakeSuite::Nk3PqForwardSecure,
+        warnings: Vec::new(),
+        telemetry_payload: None,
+    })
 }
 struct ClientHelloParsed {
     client_nonce: [u8; 32],
@@ -4455,7 +4397,6 @@ impl RelayNoiseState {
 }
 struct RuntimeKemArtifacts {
     relay_public: Vec<u8>,
-    relay_secret: Zeroizing<Vec<u8>>,
     shared_secret: Zeroizing<Vec<u8>>,
     ciphertext: Vec<u8>,
 }
@@ -4465,15 +4406,13 @@ impl RuntimeKemArtifacts {
             .map_err(|err| HarnessError::Kem(err.to_string()))?;
         let soranet_pq::MlKemKeyPair {
             public_key: relay_public,
-            secret_key: relay_secret_raw,
+            secret_key: _relay_secret,
         } = generate_mlkem_keypair_from_os(suite)
             .map_err(|err| HarnessError::Kem(err.to_string()))?;
-        let relay_secret = Zeroizing::new(relay_secret_raw.deref().clone());
         let (shared_secret, ciphertext) = encapsulate_mlkem_from_os(suite, client_public)
             .map_err(|err| HarnessError::Kem(err.to_string()))?;
         Ok(Self {
             relay_public,
-            relay_secret,
             shared_secret: Zeroizing::new(shared_secret.as_bytes().to_vec()),
             ciphertext: ciphertext.as_bytes().to_vec(),
         })
@@ -4649,74 +4588,6 @@ fn build_pqfs_relay_response(
     validate_handshake_frame_len("NK3 relay response", relay_response.len())?;
     Ok(relay_response)
 }
-struct RelayStateInputs<'params, 'runtime> {
-    parsed: ClientHelloParsed,
-    params: &'params RuntimeParams<'runtime>,
-    noise: RelayNoiseState,
-    kem: RuntimeKemArtifacts,
-    transcript: [u8; 32],
-    handshake_suite: HandshakeSuite,
-    warnings: Vec<CapabilityWarning>,
-    relay_hello: Vec<u8>,
-}
-fn assemble_relay_state(inputs: RelayStateInputs<'_, '_>) -> RelayState {
-    let RelayStateInputs {
-        parsed,
-        params,
-        noise,
-        kem,
-        transcript,
-        handshake_suite,
-        warnings,
-        relay_hello,
-    } = inputs;
-    let ClientHelloParsed {
-        client_nonce,
-        client_static_public,
-        kem_id,
-        sig_id,
-        client_ephemeral_public,
-        client_kem_public,
-        client_capabilities,
-        resume_hash,
-        ..
-    } = parsed;
-    RelayState {
-        client_nonce,
-        client_ephemeral_public,
-        client_capabilities,
-        client_kem_public,
-        resume_hash,
-        client_static_public,
-        relay_nonce: noise.nonce,
-        relay_ephemeral_secret: noise.ephemeral_secret,
-        relay_ephemeral_public: noise.ephemeral_public,
-        relay_static_secret: noise.static_secret,
-        relay_static_public: noise.static_public,
-        relay_kem_secret: kem.relay_secret,
-        relay_kem_public: kem.relay_public,
-        relay_kem_shared: kem.shared_secret,
-        forward_kem_secret: None,
-        forward_kem_public: None,
-        forward_kem_shared: None,
-        forward_ciphertext: None,
-        relay_capabilities: params.relay_capabilities.to_vec(),
-        descriptor_commit: params.descriptor_commit.to_vec(),
-        kem_ciphertext: kem.ciphertext,
-        transcript_confirm_primary: None,
-        transcript_confirm_forward: None,
-        dual_mix: None,
-        transcript_hash: transcript,
-        kem_id,
-        sig_id,
-        handshake_suite,
-        warnings,
-        relay_hello,
-        pending_session: None,
-        requires_client_finish: false,
-    }
-}
-#[allow(dead_code)]
 fn process_nk2_client_hello<R: TryCryptoRng>(
     client_init: &[u8],
     parsed: ClientHelloParsed,
@@ -4724,7 +4595,7 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
     rng: &mut R,
     kem_suite: MlKemSuite,
     relay_identity_key: &KeyPair,
-) -> Result<(Vec<u8>, RelayState), HarnessError> {
+) -> Result<(Vec<u8>, SessionSecrets), HarnessError> {
     let client_static_public = parsed.client_static_public.ok_or_else(|| {
         HarnessError::Validation("NK2 handshake requires client static key".into())
     })?;
@@ -4760,26 +4631,14 @@ fn process_nk2_client_hello<R: TryCryptoRng>(
         &transcript,
         relay_identity_key,
     )?;
-    let mut state = assemble_relay_state(RelayStateInputs {
-        parsed,
-        params,
-        noise,
-        kem: primary,
-        transcript,
-        handshake_suite: HandshakeSuite::Nk2Hybrid,
-        warnings: Vec::new(),
-        relay_hello: relay_response.clone(),
-    });
-    state.transcript_confirm_primary = Some(confirmation.clone());
-    state.pending_session = Some(SessionSecrets {
+    let session = SessionSecrets {
         session_key,
         transcript_hash: transcript,
         handshake_suite: HandshakeSuite::Nk2Hybrid,
         warnings: Vec::new(),
         telemetry_payload: None,
-    });
-    state.requires_client_finish = false;
-    Ok((relay_response, state))
+    };
+    Ok((relay_response, session))
 }
 /// Required payloads carried by the NK3 client hello message.
 struct Nk3HandshakeRequirements {
@@ -4829,7 +4688,6 @@ impl Nk3ConfirmationBundle {
         })
     }
 }
-#[allow(dead_code)]
 fn process_nk3_client_hello<R: TryCryptoRng>(
     client_commit: &[u8],
     parsed: ClientHelloParsed,
@@ -4837,7 +4695,7 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
     rng: &mut R,
     kem_suite: MlKemSuite,
     relay_identity_key: &KeyPair,
-) -> Result<(Vec<u8>, RelayState), HarnessError> {
+) -> Result<(Vec<u8>, SessionSecrets), HarnessError> {
     let requirements = Nk3HandshakeRequirements::collect(&parsed)?;
     let noise = RelayNoiseState::generate(rng)?;
     let noise_xx_dh = derive_relay_noise_xx_dh(
@@ -4880,38 +4738,14 @@ fn process_nk3_client_hello<R: TryCryptoRng>(
         relay_identity_key,
     };
     let relay_response = build_pqfs_relay_response(&response_inputs)?;
-    let mut state = assemble_relay_state(RelayStateInputs {
-        parsed,
-        params,
-        noise,
-        kem: primary,
-        transcript,
-        handshake_suite: HandshakeSuite::Nk3PqForwardSecure,
-        warnings: Vec::new(),
-        relay_hello: relay_response.clone(),
-    });
-    let RuntimeKemArtifacts {
-        relay_public: forward_relay_public,
-        relay_secret: forward_relay_secret,
-        shared_secret: forward_shared_secret,
-        ciphertext: forward_ciphertext,
-    } = forward;
-    state.forward_kem_secret = Some(forward_relay_secret);
-    state.forward_kem_public = Some(forward_relay_public);
-    state.forward_kem_shared = Some(forward_shared_secret);
-    state.forward_ciphertext = Some(forward_ciphertext);
-    state.transcript_confirm_primary = Some(confirmations.primary.clone());
-    state.transcript_confirm_forward = Some(confirmations.forward.clone());
-    state.dual_mix = Some(confirmations.dual_mix.clone());
-    state.pending_session = Some(SessionSecrets {
+    let session = SessionSecrets {
         session_key,
         transcript_hash: transcript,
         handshake_suite: HandshakeSuite::Nk3PqForwardSecure,
         warnings: Vec::new(),
         telemetry_payload: None,
-    });
-    state.requires_client_finish = false;
-    Ok((relay_response, state))
+    };
+    Ok((relay_response, session))
 }
 /// Parse an incoming `ClientHello` for bounded relay-side admission preflight.
 ///
@@ -4934,7 +4768,7 @@ pub fn inspect_client_hello(client_hello: &[u8]) -> Result<ClientHelloMetadata, 
         resume_hash: parsed.resume_hash,
     })
 }
-/// Parse an incoming `ClientHello` and craft the `RelayHello` response.
+/// Parse an incoming `ClientHello`, craft the relay response, and derive the relay session.
 ///
 /// # Errors
 /// Returns an error when the client message is malformed, capabilities are
@@ -4944,7 +4778,7 @@ pub fn process_client_hello<R: TryCryptoRng>(
     params: &RuntimeParams<'_>,
     key_pair: &KeyPair,
     rng: &mut R,
-) -> Result<(Vec<u8>, RelayState), HarnessError> {
+) -> Result<(Vec<u8>, SessionSecrets), HarnessError> {
     validate_runtime_params(params)?;
     let parsed = parse_client_hello(client_hello, params.resume_hash)?;
     let profile = ensure_kem_profile(params, parsed.kem_id)?;
@@ -5030,24 +4864,6 @@ fn validate_client_kem_publics(
         })?;
     }
     Ok(())
-}
-/// Finalise the relay side of the handshake after the relay response is sent.
-///
-/// # Errors
-/// Returns an error if the handshake expects a client-finish message.
-pub fn relay_finalize_handshake(
-    state: RelayState,
-    _client_finish: &[u8],
-    _key_pair: &KeyPair,
-) -> Result<SessionSecrets, HarnessError> {
-    if !state.requires_client_finish {
-        return state
-            .pending_session
-            .ok_or_else(|| HarnessError::Validation("handshake already finalised".into()));
-    }
-    Err(HarnessError::Validation(
-        "client-finish handshakes are no longer supported".into(),
-    ))
 }
 fn build_telemetry_payload(
     kem_id: u8,

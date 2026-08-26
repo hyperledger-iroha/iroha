@@ -3868,12 +3868,6 @@
           "scope": "test"
         },
         {
-          "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
-          "line": 19,
-          "path": "crates/iroha_torii/tests/gov_enact_handler.rs",
-          "scope": "test"
-        },
-        {
           "context": "if env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() == Some(\"1\") {",
           "line": 39,
           "path": "crates/iroha_torii/tests/gov_mode_mismatch_and_autoclose.rs",

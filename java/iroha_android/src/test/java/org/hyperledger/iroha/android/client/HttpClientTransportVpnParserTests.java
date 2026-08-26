@@ -25,7 +25,7 @@ import org.hyperledger.iroha.android.testing.TestNetworkIds;
 
 /** Strict VPN response-schema and successful-status contract coverage. */
 final class HttpClientTransportVpnParserTests {
-  private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(688);
+  private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(780);
   private static final String VALID_ED25519_PUBLIC_KEY_HEX = TestEd25519Keys.publicKeyHex(0x22);
 
   private HttpClientTransportVpnParserTests() {}
@@ -33,6 +33,7 @@ final class HttpClientTransportVpnParserTests {
   static void runAll() throws Exception {
     vpnProfileRequestParsesNativeLeaseFields();
     vpnSessionParserRejectsNonCanonicalHelperTicketHex();
+    vpnReceiptParserRetainsExactLifecycleStatuses();
     vpnResponseParsersRejectNonCanonicalIdsHashesAndUnknownFields();
     vpnResponseParsersRejectMissingRequiredFieldsAndSchemaBounds();
     vpnRoutesRejectWrongSuccessfulStatusCodes();
@@ -130,16 +131,18 @@ final class HttpClientTransportVpnParserTests {
   }
 
   private static void vpnSessionParserRejectsNonCanonicalHelperTicketHex() {
-    final String sessionId = "33".repeat(32);
+    final String sessionId = "33".repeat(16);
+    final String quoteId = "34".repeat(32);
     final String paymentTxHash = "44".repeat(32);
     final String[] invalidValues = {
       "0x" + VPN_HELPER_TICKET_HEX,
       VPN_HELPER_TICKET_HEX.toUpperCase(Locale.ROOT),
+      VPN_HELPER_TICKET_HEX.substring(0, 1456),
       VPN_HELPER_TICKET_HEX.substring(0, VPN_HELPER_TICKET_HEX.length() - 2)
     };
     for (final String invalid : invalidValues) {
       final byte[] payload =
-          vpnSessionJson(sessionId, paymentTxHash)
+          vpnSessionJson(sessionId, quoteId, paymentTxHash)
               .replace(VPN_HELPER_TICKET_HEX, invalid)
               .getBytes(StandardCharsets.UTF_8);
       expectRuntimeException(
@@ -148,19 +151,45 @@ final class HttpClientTransportVpnParserTests {
     }
   }
 
+  private static void vpnReceiptParserRetainsExactLifecycleStatuses() {
+    final String receiptJson =
+        vpnReceiptJson(
+            "33".repeat(16), "34".repeat(32), "35".repeat(32), "44".repeat(32), true);
+    for (final String status :
+        List.of("disconnected", "expired", "replaced", "settlement_pending", "settled")) {
+      final VpnReceipt receipt =
+          VpnJsonParser.parseReceipt(
+              receiptJson
+                  .replace("\"status\":\"settled\"", "\"status\":\"" + status + "\"")
+                  .getBytes(StandardCharsets.UTF_8));
+      assert status.equals(receipt.status()) : "VPN receipt status mismatch: " + status;
+    }
+
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseReceipt(
+                receiptJson
+                    .replace(
+                        "\"status\":\"settled\"", "\"status\":\"settlement_pending \"")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN receipt parser must reject padded status values");
+  }
+
   private static void vpnResponseParsersRejectNonCanonicalIdsHashesAndUnknownFields() {
-    final String identifier = "ab".repeat(32);
+    final String quoteId = "ab".repeat(32);
+    final String leaseId = "bc".repeat(32);
+    final String sessionId = "de".repeat(16);
     final String paymentTxHash = "cd".repeat(32);
     final String meteringKey = VALID_ED25519_PUBLIC_KEY_HEX;
-    final String quote = vpnQuoteJson(identifier, meteringKey);
+    final String quote = vpnQuoteJson(quoteId, meteringKey);
 
     expectRuntimeException(
         () ->
             VpnJsonParser.parseQuote(
                 quote
                     .replace(
-                        "\"quote_id\":\"" + identifier + "\"",
-                        "\"quote_id\":\"0x" + identifier + "\"")
+                        "\"quote_id\":\"" + quoteId + "\"",
+                        "\"quote_id\":\"0x" + quoteId + "\"")
                     .getBytes(StandardCharsets.UTF_8)),
         "VPN quote parser must reject prefixed quote ids");
     expectRuntimeException(
@@ -185,16 +214,25 @@ final class HttpClientTransportVpnParserTests {
                     .getBytes(StandardCharsets.UTF_8)),
         "VPN transaction instruction parser must reject unknown fields");
 
-    final String session = vpnSessionJson(identifier, paymentTxHash);
+    final String session = vpnSessionJson(sessionId, quoteId, paymentTxHash);
     expectRuntimeException(
         () ->
             VpnJsonParser.parseSession(
                 session
                     .replace(
-                        "\"session_id\":\"" + identifier + "\"",
-                        "\"session_id\":\"" + identifier.toUpperCase(Locale.ROOT) + "\"")
+                        "\"session_id\":\"" + sessionId + "\"",
+                        "\"session_id\":\"" + sessionId.toUpperCase(Locale.ROOT) + "\"")
                     .getBytes(StandardCharsets.UTF_8)),
         "VPN session parser must reject uppercase session ids");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseSession(
+                session
+                    .replace(
+                        "\"session_id\":\"" + sessionId + "\"",
+                        "\"session_id\":\"" + "de".repeat(32) + "\"")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN session parser must reject 32-byte session ids");
     expectRuntimeException(
         () ->
             VpnJsonParser.parseSession(
@@ -211,16 +249,25 @@ final class HttpClientTransportVpnParserTests {
                     .getBytes(StandardCharsets.UTF_8)),
         "VPN session parser must reject unknown fields");
 
-    final String receipt = vpnReceiptJson(identifier, paymentTxHash, true);
+    final String receipt = vpnReceiptJson(sessionId, quoteId, leaseId, paymentTxHash, true);
     expectRuntimeException(
         () ->
             VpnJsonParser.parseReceipt(
                 receipt
                     .replace(
-                        "\"lease_id_hex\":\"" + identifier + "\"",
-                        "\"lease_id_hex\":\"" + identifier.toUpperCase(Locale.ROOT) + "\"")
+                        "\"lease_id_hex\":\"" + leaseId + "\"",
+                        "\"lease_id_hex\":\"" + leaseId.toUpperCase(Locale.ROOT) + "\"")
                     .getBytes(StandardCharsets.UTF_8)),
         "VPN receipt parser must reject uppercase lease ids");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseReceipt(
+                receipt
+                    .replace(
+                        "\"session_id\":\"" + sessionId + "\"",
+                        "\"session_id\":\"" + "de".repeat(32) + "\"")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN receipt parser must reject 32-byte session ids");
     expectRuntimeException(
         () ->
             VpnJsonParser.parseReceipt(
@@ -245,13 +292,15 @@ final class HttpClientTransportVpnParserTests {
   }
 
   private static void vpnResponseParsersRejectMissingRequiredFieldsAndSchemaBounds() {
-    final String identifier = "ab".repeat(32);
+    final String quoteId = "ab".repeat(32);
+    final String leaseId = "bc".repeat(32);
+    final String sessionId = "de".repeat(16);
     final String paymentTxHash = "cd".repeat(32);
     final String meteringKey = VALID_ED25519_PUBLIC_KEY_HEX;
     final String profile = vpnProfileJson();
-    final String quote = vpnQuoteJson(identifier, meteringKey);
-    final String session = vpnSessionJson(identifier, paymentTxHash);
-    final String receipt = vpnReceiptJson(identifier, paymentTxHash, true);
+    final String quote = vpnQuoteJson(quoteId, meteringKey);
+    final String session = vpnSessionJson(sessionId, quoteId, paymentTxHash);
+    final String receipt = vpnReceiptJson(sessionId, quoteId, leaseId, paymentTxHash, true);
     final String receiptList = "{\"items\":[" + receipt + "],\"total\":1}";
 
     final List<Runnable> missingCases =
@@ -349,7 +398,9 @@ final class HttpClientTransportVpnParserTests {
   }
 
   private static void vpnRoutesRejectWrongSuccessfulStatusCodes() throws Exception {
-    final String identifier = "33".repeat(32);
+    final String sessionId = "33".repeat(16);
+    final String quoteId = "34".repeat(32);
+    final String leaseId = "35".repeat(32);
     final String paymentTxHash = "44".repeat(32);
     final String meteringKey = VALID_ED25519_PUBLIC_KEY_HEX;
     final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
@@ -359,38 +410,34 @@ final class HttpClientTransportVpnParserTests {
     assertVpnWrongStatusRejected(201, vpnProfileJson(), transport -> transport.getVpnProfile().join());
     assertVpnWrongStatusRejected(
         200,
-        vpnQuoteJson(identifier, meteringKey),
+        vpnQuoteJson(quoteId, meteringKey),
         transport ->
             transport
                 .createVpnQuote(new VpnQuoteCreateRequest("standard", "0x" + meteringKey), auth)
                 .join());
     assertVpnWrongStatusRejected(
         200,
-        vpnSessionJson(identifier, paymentTxHash),
+        vpnSessionJson(sessionId, quoteId, paymentTxHash),
         transport ->
             transport
                 .createVpnSession(
                     new VpnSessionCreateRequest(
-                        "standard", identifier, "0x" + paymentTxHash, meteringKey),
+                        "standard", quoteId, "0x" + paymentTxHash, meteringKey),
                     auth)
                 .join());
     assertVpnWrongStatusRejected(
         201,
-        vpnSessionJson(identifier, paymentTxHash),
-        transport -> transport.getVpnSession(identifier, auth).join());
-    assertVpnWrongStatusRejected(
-        201,
-        vpnReceiptJson(identifier, paymentTxHash, false),
-        transport -> transport.deleteVpnSession(identifier, auth).join());
+        vpnSessionJson(sessionId, quoteId, paymentTxHash),
+        transport -> transport.getVpnSession(sessionId, auth).join());
     assertVpnWrongStatusRejected(
         200,
-        vpnReceiptJson(identifier, paymentTxHash, true),
+        vpnReceiptJson(sessionId, quoteId, leaseId, paymentTxHash, true),
         transport ->
             transport
                 .submitVpnReceipt(
-                    new VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x" + identifier), auth)
+                    new VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x" + leaseId), auth)
                 .join());
-    final String receipt = vpnReceiptJson(identifier, paymentTxHash, true);
+    final String receipt = vpnReceiptJson(sessionId, quoteId, leaseId, paymentTxHash, true);
     assertVpnWrongStatusRejected(
         201,
         "{\"items\":[" + receipt + "],\"total\":1}",

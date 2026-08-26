@@ -334,7 +334,7 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
         Hash::new(&residue_bytes)
     ));
     drop(crashing);
-    assert!(Kura::new(&config, &lane_config).is_err());
+    assert!(Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).is_err());
     assert!(
         atomic_temps[0].exists(),
         "unauthenticated startup must retain the process-generation residue",
@@ -773,8 +773,9 @@ fn debug_block_dump_is_pinned_single_link_and_counted() {
     let temp_dir = TempDir::new().expect("bound debug-dump temp dir");
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.debug_output_new_blocks = true;
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("initialize bound debug-dump Kura");
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("initialize bound debug-dump Kura");
     let path = kura
         .block_plain_text_path
         .lock()
@@ -832,7 +833,8 @@ fn debug_block_dump_reserves_capacity_before_first_creation() {
     let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     config.debug_output_new_blocks = true;
     let (mut kura, _) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize debug capacity Kura");
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("initialize debug capacity Kura");
     let baseline = kura
         .kura_disk_usage_bytes()
         .expect("measure debug baseline");

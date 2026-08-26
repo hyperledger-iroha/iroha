@@ -1864,7 +1864,8 @@ mod tests {
             None,
         );
         let verifier =
-            AdmissionTokenVerifier::new(MlDsaSuite::MlDsa44, public_key, max_ttl, clock_skew);
+            AdmissionTokenVerifier::try_new(MlDsaSuite::MlDsa44, public_key, max_ttl, clock_skew)
+                .expect("generated verifier key must match ML-DSA-44");
         let service = PuzzleService {
             descriptor_commit: [0u8; 32],
             relay_id,
@@ -1896,12 +1897,14 @@ mod tests {
     #[test]
     fn token_issuer_requires_an_explicit_private_cli_secret_path() {
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("token fixture keypair");
-        let mut pow = PowConfig::default();
-        pow.token = Some(soranet_relay::config::TokenConfig {
-            enabled: true,
-            issuer_public_key_hex: Some(hex::encode(keypair.public_key())),
-            ..soranet_relay::config::TokenConfig::default()
-        });
+        let pow = PowConfig {
+            token: Some(soranet_relay::config::TokenConfig {
+                enabled: true,
+                issuer_public_key_hex: Some(hex::encode(keypair.public_key())),
+                ..soranet_relay::config::TokenConfig::default()
+            }),
+            ..PowConfig::default()
+        };
         let options = TokenCliOptions {
             secret_path: None,
             revocation_file: None,

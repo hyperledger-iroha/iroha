@@ -20,9 +20,9 @@ use iroha_data_model::nexus::{
     AxtPolicySnapshotValidationError as ModelAxtPolicySnapshotValidationError,
     AxtProofEnvelope as ModelAxtProofEnvelope, AxtTouchSpec as ModelAxtTouchSpec, DataSpaceId,
     GroupBinding as ModelGroupBinding, HandleBudget as ModelHandleBudget,
-    HandleSubject as ModelHandleSubject, LaneId, ProofBlob as ModelProofBlob,
-    RemoteSpendIntent as ModelRemoteSpendIntent, SpendOp as ModelSpendOp,
-    TouchManifest as ModelTouchManifest, compute_descriptor_binding,
+    HandleSubject as ModelHandleSubject, LaneId, MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+    ProofBlob as ModelProofBlob, RemoteSpendIntent as ModelRemoteSpendIntent,
+    SpendOp as ModelSpendOp, TouchManifest as ModelTouchManifest, compute_descriptor_binding,
     compute_remote_spend_intent_commitment_v1, validate_descriptor as validate_model_descriptor,
 };
 use iroha_data_model::{
@@ -31,6 +31,7 @@ use iroha_data_model::{
 };
 use norito::codec::{Decode, Encode};
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     num::NonZeroU64,
 };
@@ -196,12 +197,17 @@ pub fn derive_amount_commitment(
     proof_payload: Option<&[u8]>,
 ) -> [u8; 32] {
     let normalized_proof_payload = proof_payload.map(|payload| {
+        if payload.len() > MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES {
+            return Cow::Borrowed(payload);
+        }
         decode_canonical_norito::<AxtProofEnvelope>(payload).map_or_else(
-            |_| payload.to_vec(),
+            |_| Cow::Borrowed(payload),
             |mut envelope| {
                 envelope.amount_commitment = None;
-                encode_canonical_norito(&envelope)
-                    .expect("a decoded canonical AXT proof envelope always re-encodes")
+                Cow::Owned(
+                    encode_canonical_norito(&envelope)
+                        .expect("a decoded canonical AXT proof envelope always re-encodes"),
+                )
             },
         )
     });
@@ -219,21 +225,27 @@ fn derive_amount_commitment_from_normalized_payload(
     let amount_text = amount.to_string();
     let amount_len =
         u16::try_from(amount_text.len()).expect("bounded Quantity text length always fits in u16");
-    let mut message = Vec::with_capacity(
-        AMOUNT_COMMITMENT_DOMAIN_SEPARATOR.len()
-            + core::mem::size_of::<u64>()
-            + core::mem::size_of::<u16>()
-            + amount_text.len()
-            + proof_payload.map_or(0, |payload| payload.len()),
-    );
-    message.extend_from_slice(AMOUNT_COMMITMENT_DOMAIN_SEPARATOR);
-    message.extend_from_slice(&dsid.as_u64().to_be_bytes());
-    message.extend_from_slice(&amount_len.to_be_bytes());
-    message.extend_from_slice(amount_text.as_bytes());
-    if let Some(payload) = proof_payload {
-        message.extend_from_slice(payload);
-    }
-    Hash::new(&message).into()
+    let dsid_bytes = dsid.as_u64().to_be_bytes();
+    let amount_len_bytes = amount_len.to_be_bytes();
+    let fixed_chunks = [
+        AMOUNT_COMMITMENT_DOMAIN_SEPARATOR,
+        dsid_bytes.as_slice(),
+        amount_len_bytes.as_slice(),
+        amount_text.as_bytes(),
+    ];
+    proof_payload.map_or_else(
+        || Hash::new_from_chunks(&fixed_chunks).into(),
+        |payload| {
+            Hash::new_from_chunks(&[
+                fixed_chunks[0],
+                fixed_chunks[1],
+                fixed_chunks[2],
+                fixed_chunks[3],
+                payload,
+            ])
+            .into()
+        },
+    )
 }
 /// Resolve an effective amount and commitment for a handle usage.
 ///
@@ -277,6 +289,9 @@ pub fn resolve_handle_amount_components(
             amount_commitment: None,
         });
     };
+    if proof_payload.len() > MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES {
+        return Err(HandleAmountResolutionError::InvalidProofEnvelope);
+    }
     let envelope = decode_canonical_norito::<AxtProofEnvelope>(proof_payload)
         .map_err(|_| HandleAmountResolutionError::InvalidProofEnvelope)?;
     let facts = AxtProofUseFacts::from_canonical_envelope(envelope);
@@ -1049,6 +1064,9 @@ fn validate_remote_spend_intent_commitment_components(
     expected: [u8; 32],
     proof_payload: &[u8],
 ) -> Result<(), VMError> {
+    if proof_payload.len() > MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES {
+        return Err(VMError::NoritoInvalid);
+    }
     let envelope = decode_canonical_norito::<ModelAxtProofEnvelope>(proof_payload)
         .map_err(|_| VMError::NoritoInvalid)?;
     let binding = envelope
@@ -1072,7 +1090,7 @@ fn validate_remote_spend_intent_commitment_components_from_commitments(
 /// Wrapper around proof artifacts provided by dataspace verifiers.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct ProofBlob {
-    /// Raw proof bytes.
+    /// Raw proof bytes, bounded by the shared AXT proof-envelope payload limit.
     pub payload: Vec<u8>,
     /// Outer mirror of the proof-bound optional expiry slot.
     ///
@@ -1089,10 +1107,13 @@ pub struct ProofBlob {
 ///
 /// # Errors
 ///
-/// Returns [`VMError::NoritoInvalid`] when proof bytes are empty or an explicit
-/// expiry uses the forbidden zero sentinel.
+/// Returns [`VMError::NoritoInvalid`] when proof bytes are empty or oversized,
+/// or an explicit expiry uses the forbidden zero sentinel.
 pub fn validate_proof_blob(proof: &ProofBlob) -> Result<(), VMError> {
-    if proof.payload.is_empty() || proof.expiry_slot == Some(0) {
+    if proof.payload.is_empty()
+        || proof.payload.len() > MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES
+        || proof.expiry_slot == Some(0)
+    {
         return Err(VMError::NoritoInvalid);
     }
     Ok(())
@@ -1799,6 +1820,13 @@ mod tests {
             }),
             Err(VMError::NoritoInvalid)
         );
+        assert_eq!(
+            validate_proof_blob(&ProofBlob {
+                payload: vec![0; MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1],
+                expiry_slot: None,
+            }),
+            Err(VMError::NoritoInvalid)
+        );
     }
     #[test]
     fn proof_blob_requires_explicit_nullable_expiry_slot() {
@@ -2018,6 +2046,47 @@ mod tests {
             .expect("encode remote-spend proof envelope"),
             expiry_slot: Some(10),
         }
+    }
+    #[test]
+    fn proof_payload_decode_helpers_reject_oversized_canonical_envelope() {
+        let dsid = DataSpaceId::new(94);
+        let descriptor_binding = [0x94; 32];
+        let intent = sample_intent(dsid, Some(5));
+        let amount = quantity(5);
+        let handle = sample_handle(dsid, descriptor_binding, 10, Some(10));
+        let proof = proof_for_remote_spends(&[(&handle, &intent, amount.clone())]);
+        let mut envelope = decode_canonical_norito::<AxtProofEnvelope>(&proof.payload)
+            .expect("decode canonical remote-spend proof");
+        envelope.proof = vec![0xA5; MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES];
+        envelope.committed_amount = Some(5);
+        envelope.amount_commitment = Some([0x5A; 32]);
+        let oversized_payload =
+            encode_canonical_norito(&envelope).expect("encode oversized canonical proof envelope");
+        assert!(oversized_payload.len() > MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES);
+        let oversized = ProofBlob {
+            payload: oversized_payload,
+            expiry_slot: Some(10),
+        };
+
+        assert_eq!(validate_proof_blob(&oversized), Err(VMError::NoritoInvalid));
+        assert_eq!(
+            resolve_handle_amount(&intent, Some(&oversized)),
+            Err(HandleAmountResolutionError::InvalidProofEnvelope)
+        );
+        assert_eq!(
+            validate_remote_spend_intent_commitment(&handle, &intent, &amount, &oversized),
+            Err(VMError::NoritoInvalid)
+        );
+        let expected_raw = derive_amount_commitment_from_normalized_payload(
+            dsid,
+            &amount,
+            Some(&oversized.payload),
+        );
+        assert_eq!(
+            derive_amount_commitment(dsid, &amount, Some(&oversized.payload)),
+            expected_raw,
+            "oversized envelopes must be treated as opaque commitment bytes without decoding"
+        );
     }
     #[test]
     fn remote_spend_intent_commitment_rejects_substitution_and_supports_proof_reuse() {

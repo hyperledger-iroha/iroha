@@ -91,7 +91,9 @@ _CHECKER_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_successor_production_recovery_contracts.py",
     "sumeragi_v2_proof_ledger_successor_production_contracts.py",
     "sumeragi_v2_proof_ledger_successor_recovery_contracts.py",
+    "sumeragi_v2_proof_ledger_successor_recovery_lifecycle_contracts.py",
     "sumeragi_v2_proof_ledger_successor_recovery_source_contracts.py",
+    "sumeragi_v2_proof_ledger_successor_recovery_support_contracts.py",
     "sumeragi_v2_proof_ledger_successor_recovery_tail_contracts.py",
     "sumeragi_v2_proof_ledger_chain_inventory_contracts.py",
     "sumeragi_v2_proof_ledger_release_inventory_contracts.py",
@@ -101,6 +103,7 @@ _CHECKER_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_leader_wire_contracts.py",
     "sumeragi_v2_proof_ledger_timeout_vote_episode_contracts.py",
     "sumeragi_v2_proof_ledger_terminal_discharge_contracts.py",
+    "sumeragi_v2_proof_ledger_kura_native_amx_contracts.py",
 )
 
 
@@ -676,13 +679,13 @@ _LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal(
         "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
         "ProductionLeaderWireAdmissionTraceProjection",
-        "ea211b5db207669fe33f0777a4d6b23ba27f2274567f93c05667ba32132b9e80",
+        "dbbf3247268c65631adf19dd72c2db1c0b5f3e48a546106aa52d836843a86306",
         "struct",
     ),
     CrossToolSourceItemSeal(
         "crates/iroha_sumeragi_core/src/verus_proofs.rs",
         "ProductionLeaderWireAdmissionTraceProjection",
-        "f7eb87962b42a18b8ae689b9bff673920ee5734e4d5712f5331a8fa8d1d0a9a0",
+        "e9c5a0c37a8aa7d58167c5643565a4b2d34fcbf2305cc28f893c1f04068c4797",
         "struct",
         (("verus", "!"),),
     ),
@@ -748,7 +751,7 @@ _LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal(
         "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
         "leader_wire_admission_trace_projection",
-        "aeb0f964af869ae011f3546eb00a70c1bacebbf1160c82ceb88ef9c2ca281755",
+        "28597024f3571c0deae6af6c8daba1bc7cca513d98a8186aa0e9d4c7658284b4",
     ),
     *(
         CrossToolSourceItemSeal(
@@ -849,7 +852,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "ingress_atomic_commit": "6842895a159090efa2c4da65863b2e1f83f3afbb2bab05e55e8cfbfb0092d640",
     "lifecycle_ordinal_source_commit": "ededc4d64c8d76d3458b7bcf2f7e9812fe7303673b9d314686968a2369d7c4f6",
     "body_available_commit": "d2f24737c0a9ed5fddc579101ab48ea8a1820ef83508319b9942f6381a65109b",
-    "effect_candidate_retain": "56512d3347fa9d328c342e3982e6b03f3a9699fcc4ed7daeac854277838d59f4",
+    "effect_candidate_retain": "59ff1532bc4f12491fc9aaaa433c47bdb36b4560399548a4862362ea10576d00",
     "relay_retry": "052e90cc19d9416a0546c0938c57592da456a5bf98d9c9d64939dc4469d258ac",
     # Refresh after atomic-reservation work stops touching v2_worker.rs.
     "worker_poll_reply_flushes": "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749",
@@ -1606,7 +1609,7 @@ def _leader_wire_admission_supplemental_total_contract(
         """,
         brace_context=(("impl", "LeaderWireLifecycleStoreGate"),),
         item_token_sha256=(
-            "63fa62149b425ccc550f90aca763b3d978f329347e9d636e1a1791376cb495ee"
+            "d4eea302e2a740ee0821930f843bca551590bce92c78a79231aaaa0cee55b9af"
         ),
         gate_call_count=3,
         gate_arguments=("trace,", "trace", "trace"),
@@ -1658,7 +1661,7 @@ def _leader_wire_admission_supplemental_total_contract(
             ),
             (
                 "production_leader_wire_admission_trace_body",
-                "5ea12af9c322bd6ed26c51b17d884852e3647386c93b4036ba95d0aa3177a3a7",
+                "96099250efa85c1b1e03d3b525c4e60fb0ce00079cc780649534e1b42151038a",
             ),
         ),
         production_call_sites=(call_site,),
@@ -1670,7 +1673,7 @@ def _leader_wire_admission_supplemental_total_contract(
             "projection: ProductionLeaderWireAdmissionTraceProjection,"
         ),
         auxiliary_verus_theorem_item_sha256=(
-            "5bdde2aaa7d01511752aac612a8d4d90a5bd30e15ac238a43cf8b54170ce4e7b"
+            "89a2e3d0267235c4cfcc9620134abac195da514c271540613ee33d7dcf84f639"
         ),
     )
 
@@ -14422,25 +14425,13 @@ def _worker_test_include_source_fidelity_errors(repo_root: Path) -> list[str]:
     return errors
 
 
-def _serve_ingress_ordinal_production_source_fidelity_errors(repo_root: Path) -> list[str]:
-    """Delegate the retired entry point to the lifecycle-owned Serve seal."""
-
-    return _lifecycle_certified_serve_production_source_fidelity_errors(repo_root)
-
-
-def _serve_lifecycle_production_source_fidelity_errors(repo_root: Path) -> list[str]:
-    """Delegate the retired entry point to the lifecycle-owned Serve seal."""
-
-    return _lifecycle_certified_serve_production_source_fidelity_errors(repo_root)
-
-
 _execute_checker_component("sumeragi_v2_proof_ledger_serviced_candidate_contracts.py")
 
 
 def _timeout_vote_semantic_capacity_source_fidelity_errors(
     repo_root: Path,
 ) -> list[str]:
-    """Seal exact current/adjacent TimeoutVote capacity and pruning ownership."""
+    """Seal protected vote capacity and current/adjacent TimeoutVote ownership."""
 
     relative = "crates/iroha_core/src/sumeragi/v2.rs"
     path = repo_root / relative
@@ -14479,8 +14470,337 @@ def _timeout_vote_semantic_capacity_source_fidelity_errors(
     _require_rust_token_sequence(
         path,
         capacity,
-        "MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(3))",
-        "semantic capacity must reserve the three roster-bounded protected sets",
+        "MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(4))",
+        "semantic capacity must reserve the four roster-bounded protected sets",
+        errors,
+    )
+
+    locked_reproposal_prepare = _require_qualified_rust_item(
+        path,
+        source,
+        "SumeragiV2Adapter",
+        "is_exact_locked_reproposal_prepare_vote",
+        errors,
+        "exact current locked-reproposal Prepare Progress classifier",
+    )
+    wire_progress = _require_qualified_rust_item(
+        path,
+        source,
+        "SumeragiV2Adapter",
+        "wire_ingress_may_use_progress",
+        errors,
+        "wire locked-reproposal Prepare Progress hint",
+    )
+    for name, item in (
+        ("is_exact_locked_reproposal_prepare_vote", locked_reproposal_prepare),
+        ("wire_ingress_may_use_progress", wire_progress),
+    ):
+        _require_rust_item_token_sha256(
+            path,
+            item,
+            _LOCKED_REPROPOSAL_PREPARE_PROGRESS_ITEM_SHA256[name],
+            {
+                "is_exact_locked_reproposal_prepare_vote": (
+                    "exact current locked-reproposal Prepare Progress classifier"
+                ),
+                "wire_ingress_may_use_progress": (
+                    "wire locked-reproposal Prepare Progress hint"
+                ),
+            }[name],
+            errors,
+        )
+    locked_reproposal_support_items: dict[str, RustItem | None] = {}
+    for name in (
+        "deferred_progress_capacity",
+        "deferred_progress_owner",
+        "append_deferred_projection_admission",
+        "deferred_service_projection_hash",
+    ):
+        item = _require_rust_item(path, source, name, errors)
+        locked_reproposal_support_items[name] = item
+        _require_rust_item_token_sha256(
+            path,
+            item,
+            _LOCKED_REPROPOSAL_PREPARE_PROGRESS_ITEM_SHA256[name],
+            f"locked-reproposal Prepare support item {name}",
+            errors,
+        )
+    for owner, name in (
+        ("DeferredServiceEvidence", "validate_exact"),
+        ("DeferredProgressOwner", "class"),
+        ("SumeragiV2Adapter", "authenticated_ingress_is_progress"),
+        ("SumeragiV2Adapter", "step_authenticated_ingress_with_ownership"),
+        ("SumeragiV2Adapter", "record_ingress_delivery"),
+        ("SumeragiV2Adapter", "enqueue_deferred"),
+    ):
+        key = (
+            f"{owner}::{name}"
+            if owner in {"DeferredServiceEvidence", "DeferredProgressOwner"}
+            else name
+        )
+        item = _require_qualified_rust_item(
+            path,
+            source,
+            owner,
+            name,
+            errors,
+            f"locked-reproposal Prepare support item {key}",
+        )
+        locked_reproposal_support_items[key] = item
+        _require_rust_item_token_sha256(
+            path,
+            item,
+            _LOCKED_REPROPOSAL_PREPARE_PROGRESS_ITEM_SHA256[key],
+            f"locked-reproposal Prepare support item {key}",
+            errors,
+        )
+    _require_rust_source_token_sequence(
+        path,
+        source,
+        "const MAX_DEFERRED_PROGRESS_INPUTS: usize = wire::MAX_VALIDATORS_PER_HEIGHT * 3 + 3;",
+        "deferred Progress storage must reserve three roster-indexed classes plus three certificate classes",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        locked_reproposal_support_items.get("deferred_progress_capacity"),
+        """
+let required = roster_len.saturating_mul(3).saturating_add(3);
+if required < MAX_DEFERRED_PROGRESS_INPUTS {
+    required
+} else {
+    MAX_DEFERRED_PROGRESS_INPUTS
+}
+""",
+        "deferred Progress capacity must equal the capped 3R+3 partition",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        locked_reproposal_support_items.get("deferred_progress_owner"),
+        """
+reducer::Event::VoteReceived { vote, .. }
+    if vote.vote().phase() == reducer::Phase::Commit =>
+{
+    Some(DeferredProgressOwner::LockedCommitVote(
+        vote.vote().signer(),
+    ))
+}
+reducer::Event::VoteReceived { vote, .. }
+    if vote.vote().phase() == reducer::Phase::Prepare =>
+{
+    Some(DeferredProgressOwner::LockedReproposalPrepareVote(
+        vote.vote().signer(),
+    ))
+}
+""",
+        "protected deferred votes must map Commit and Prepare into distinct signer owners",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        locked_reproposal_support_items.get("DeferredProgressOwner::class"),
+        """
+Self::LockedCommitVote(_) => DeferredProgressClass::LockedCommitVote,
+Self::LockedReproposalPrepareVote(_) => {
+    DeferredProgressClass::LockedReproposalPrepareVote
+}
+Self::TimeoutVote(_) => DeferredProgressClass::TimeoutVote,
+""",
+        "deferred vote owners must retain three distinct partition classes",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        locked_reproposal_support_items.get("append_deferred_projection_admission"),
+        """
+projection.push(u8::from(admission.locked_commit_progress));
+projection.push(u8::from(admission.locked_reproposal_prepare_progress));
+""",
+        "deferred admission projection must bind both protected vote markers in order",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        locked_reproposal_support_items.get("deferred_service_projection_hash"),
+        """
+append_deferred_projection_admission(&mut projection, evidence.original_admission);
+append_deferred_projection_admission(&mut projection, evidence.effective_admission);
+""",
+        "deferred evidence hash must bind both original and effective typed admissions",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        locked_reproposal_support_items.get("DeferredServiceEvidence::validate_exact"),
+        """
+reducer::Phase::Prepare => {
+    !admission.locked_commit_progress
+        && admission.locked_reproposal_prepare_progress
+}
+reducer::Phase::Commit => {
+    admission.locked_commit_progress
+        && !admission.locked_reproposal_prepare_progress
+}
+""",
+        "deferred service evidence must enforce one-hot protected admission phase correspondence",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        locked_reproposal_support_items.get("authenticated_ingress_is_progress"),
+        "self.wire_ingress_may_use_progress(message.payload())",
+        "authenticated Progress classification must reuse the exact sealed wire predicate",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        locked_reproposal_support_items.get("step_authenticated_ingress_with_ownership"),
+        """
+) || admission.is_some_and(|admission| admission.locked_commit_progress)
+    || admission.is_some_and(|admission| admission.locked_reproposal_prepare_progress)
+{
+    DeferredPriority::Progress
+} else {
+    DeferredPriority::Normal
+}
+""",
+        "authenticated runtime selection must give either exact protected vote marker ordinary Progress service",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        locked_reproposal_support_items.get("record_ingress_delivery"),
+        """
+locked_commit_progress: admission.locked_commit_progress,
+locked_reproposal_prepare_progress: admission.locked_reproposal_prepare_progress,
+""",
+        "ingress delivery records must preserve both protected vote markers",
+        errors,
+    )
+    enqueue_deferred = locked_reproposal_support_items.get("enqueue_deferred")
+    _require_rust_token_sequence(
+        path,
+        enqueue_deferred,
+        """
+let protected_progress = admission.is_some_and(|admission| {
+    admission.locked_commit_progress || admission.locked_reproposal_prepare_progress
+});
+""",
+        "deferred enqueue must freeze either protected vote marker into the retained owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        enqueue_deferred,
+        """
+DeferredProgressClass::LockedCommitVote
+| DeferredProgressClass::LockedReproposalPrepareVote
+| DeferredProgressClass::TimeoutVote => self.wire_context.roster.len(),
+""",
+        "each of the three vote classes must own an independent roster-sized partition",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        enqueue_deferred,
+        """
+if self.deferred_progress_inputs.iter().any(|queued| {
+    deferred_progress_owner(queued)
+        .is_some_and(|queued_owner| queued_owner == owner)
+}) {
+    return Ok(None);
+}
+""",
+        "deferred Progress enqueue must reject a second identical class-and-signer owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        enqueue_deferred,
+        """
+if class_len >= class_capacity
+    || self.deferred_progress_inputs.len() >= progress_capacity
+{
+    return Ok(None);
+}
+""",
+        "deferred Progress enqueue must enforce both partition and total 3R+3 capacity",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        locked_reproposal_prepare,
+        """
+if vote.phase != wire::GlobalPhase::Prepare || vote.round != vote.proposal_round {
+    return false;
+}
+""",
+        "locked-reproposal Prepare Progress must require Prepare and equal current/proposal rounds",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        locked_reproposal_prepare,
+        """
+if vote.round.context_id != self.wire_context.id()
+    || vote.round.height != current.height()
+    || vote.round.view != current.view()
+{
+    return false;
+}
+""",
+        "locked-reproposal Prepare Progress must name the exact current context, height, and view",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        locked_reproposal_prepare,
+        """
+if durable.decision().is_some() {
+    return false;
+}
+let Some(locked) = durable.locked() else {
+    return false;
+};
+if locked.round().height() != current.height() || locked.round().view() >= current.view() {
+    return false;
+}
+""",
+        "locked-reproposal Prepare Progress must require an undecided strictly older durable lock at the current height",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        locked_reproposal_prepare,
+        """
+self.registry
+    .subject(locked.subject())
+    .is_ok_and(|subject| subject == vote.subject)
+    && self
+        .registry
+        .execution_commitment(locked.round(), locked.subject())
+        .is_ok_and(|commitment| commitment == vote.execution_commitment)
+    && self
+        .registry
+        .execution_commitment(current_round, locked.subject())
+        .is_ok_and(|commitment| commitment == vote.execution_commitment)
+""",
+        "locked-reproposal Prepare Progress must match the locked subject plus pre-existing historical and current execution bindings",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        wire_progress,
+        """
+matches!(
+    payload,
+    wire::ConsensusMessageV2Payload::Vote(vote)
+        if self.is_exact_locked_commit_vote(vote)
+            || self.is_exact_locked_reproposal_prepare_vote(vote)
+)
+""",
+        "wire Progress hint must contain only the exact locked Commit or exact current locked-reproposal Prepare vote",
         errors,
     )
 
@@ -14699,8 +15019,9 @@ if !reducer::timeout_vote_view_is_admissible(current_view, vote.round.view) {
         path,
         admission,
         """
-let protected_capacity_bypass =
-    locked_commit_progress || matches!(key, IngressSemanticKey::TimeoutVote { .. });
+let protected_capacity_bypass = locked_commit_progress
+    || locked_reproposal_prepare_progress
+    || matches!(key, IngressSemanticKey::TimeoutVote { .. });
 if capacity_bypass && !protected_capacity_bypass {
 """,
         "authenticated TimeoutVote admission must bypass only ordinary semantic capacity",
@@ -14709,9 +15030,12 @@ if capacity_bypass && !protected_capacity_bypass {
     if admission is not None:
         tokens = rust_code_tokens(admission.body)
         ordered_sequences = (
+            "let locked_reproposal_prepare_progress = match payload",
+            "let (key, fingerprint) = ingress_equivocation_identity(payload)",
             "let capacity_bypass = self.ingress_equivocations.len() "
             ">= MAX_INGRESS_SEMANTIC_KEYS",
             "let protected_capacity_bypass = locked_commit_progress "
+            "|| locked_reproposal_prepare_progress "
             "|| matches!(key, IngressSemanticKey::TimeoutVote { .. })",
             "if capacity_bypass && !protected_capacity_bypass",
             "self.ingress_equivocations.insert",
@@ -14727,8 +15051,8 @@ if capacity_bypass && !protected_capacity_bypass {
         ):
             errors.append(
                 f"{path}:{admission.line}: authenticated TimeoutVote "
-                "protected-capacity selection must precede Busy rejection "
-                "and semantic-owner insertion"
+                "and locked-reproposal Prepare classification must precede "
+                "wire identity conversion, Busy rejection, and semantic-owner insertion"
             )
 
     _require_rust_token_sequence(
@@ -14753,10 +15077,13 @@ let matches_retained_timeout = |key: IngressSemanticKey| {
         prune,
         """
 if record.capacity_bypass {
-    matches_current_lock(*key, record.fingerprint) || matches_retained_timeout(*key)
+    matches_current_lock(*key, record.fingerprint)
+        || matches_current_locked_reproposal(*key, record.fingerprint)
+        || matches_retained_timeout(*key)
 } else {
 """,
-        "capacity-bypass pruning must preserve either the exact lock or retained TimeoutVote",
+        "capacity-bypass pruning must preserve the exact Commit lock, current locked "
+        "reproposal, or retained TimeoutVote",
         errors,
     )
     if prune is not None:
@@ -14764,6 +15091,7 @@ if record.capacity_bypass {
         ordered_sequences = (
             "let current_view = self.reducer.current_tag().view()",
             "let current_height = self.wire_context.height",
+            "let matches_current_locked_reproposal =",
             "let matches_retained_timeout = |key: IngressSemanticKey|",
             "self.ingress_equivocations.retain",
             "self.ingress_deliveries.retain",
@@ -17320,13 +17648,13 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             "ProtectedProgressSlotUniverseSize": (
                 "ModelConfiguration => "
                 "/\\ IsFiniteSet(ProtectedProgressSlotUniverse) "
-                "/\\ Cardinality(ProtectedProgressSlotUniverse) = 2 * N + 3"
+                "/\\ Cardinality(ProtectedProgressSlotUniverse) = 3 * N + 3"
             ),
             "ProtectedProgressSlotIdIsBounded": (
                 "\\A command: /\\ N \\in Nat \\ {0} "
                 "/\\ AsyncCandidateTyped(command) "
                 "/\\ ProtectedProgressCommand(command) "
-                "=> ProtectedProgressSlotId(command) \\in 0..(2 * N + 2)"
+                "=> ProtectedProgressSlotId(command) \\in 0..(3 * N + 2)"
             ),
             "AppendFreshServeJobPreservesNonceOwnership": (
                 "\\A queue, job: /\\ AsyncIoSequenceTyped(queue) "
@@ -17350,6 +17678,64 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             ),
         })
     errors: list[str] = []
+    protected_slot_path = formal_dir / "SumeragiV2AsyncProtectedSlotProofs.tla"
+    if not protected_slot_path.is_file() or protected_slot_path.is_symlink():
+        errors.append(
+            f"{protected_slot_path}: protected Progress slot proof source must "
+            "be a regular file"
+        )
+    else:
+        protected_slot_source = protected_slot_path.read_text(encoding="utf-8")
+        exact_protected_slot_operator_bodies = {
+            "ProtectedProgressSlotUniverse": (
+                '({"CommitVote", "PrepareVote", "TimeoutVote"} '
+                "\\X ValidatorIds) \\cup "
+                '({"PrepareQC", "CommitQC", "TimeoutCertificate"} '
+                "\\X {0})"
+            ),
+            "ProtectedProgressSlot": (
+                'CASE command.kind = "DeliverVote" -> '
+                "<<command.item.kind, command.item.envelope.vote.signer>> "
+                '[] command.kind = "DeliverTimeout" -> '
+                '<<"TimeoutVote", command.item.envelope.vote.signer>> '
+                '[] command.kind = "DeliverQC" -> '
+                "<<command.item.kind, 0>> "
+                '[] OTHER -> <<"TimeoutCertificate", 0>>'
+            ),
+            "ProtectedProgressSlotId": (
+                'CASE command.kind = "DeliverVote" -> '
+                'IF command.item.kind = "CommitVote" '
+                "THEN command.item.envelope.vote.signer "
+                "ELSE N + command.item.envelope.vote.signer "
+                '[] command.kind = "DeliverTimeout" -> '
+                "2 * N + command.item.envelope.vote.signer "
+                '[] command.kind = "DeliverQC" -> '
+                'IF command.item.kind = "PrepareQC" '
+                "THEN 3 * N ELSE 3 * N + 1 "
+                "[] OTHER -> 3 * N + 2"
+            ),
+        }
+        for symbol, exact_body in exact_protected_slot_operator_bodies.items():
+            extracted = _top_level_operator_body(
+                protected_slot_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{protected_slot_path}: missing protected Progress slot "
+                    f"operator {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            expected_normalized = " ".join(exact_body.split())
+            if normalized != expected_normalized:
+                errors.append(
+                    f"{protected_slot_path}:{line}: {symbol} must equal the "
+                    "exact phase-aware 3 * N + 3 protected-slot mapping; "
+                    f"expected {expected_normalized!r}; found {normalized!r}"
+                )
     if has_strong_type_architecture:
         scheduler_gate_operator_bodies = {
             "UngatedSerializedRuntimeStep": (
@@ -19592,12 +19978,6 @@ def _safety_property_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "PotentialCommitSigners": (
             "{vote.signer: vote \\in PotentialCommitVotes( "
             "certificateContext, roundView, subject)}"
-        ),
-        "InstalledTcAuthorizedPotentialCommitIntersection": (
-            "FALSE"
-        ),
-        "TCProtectsOrInstalledTcAuthorizesPotentialCommit": (
-            "TCProtectsPotentialCommit(tc)"
         ),
         "TimeoutProtectionProperty": (
             "specification => [](\\A tc \\in formedTCs: "
@@ -28467,6 +28847,7 @@ pub(crate) struct FairV2Ingress {
     authenticated_non_validator_source_capacity: Option<usize>,
     service_lock: Mutex<()>, producer_publication_lock: Mutex<()>,
     state: Mutex<FairV2IngressState>,
+    last_selector_attempt: Mutex<Option<FairV2IngressSelectorAttemptDiagnosticV1>>,
 }
 """,
         "bounded authenticated non-validator fair-ingress lane geometry",
@@ -28691,7 +29072,14 @@ if uses_certified_fence_escape_reserve {
     _require_rust_token_sequence(
         core_path,
         ordinary_receive,
-        "self.try_recv_if_at_checked_classified(service_attempt_at, false, predicate)",
+        """
+self.try_recv_if_at_checked_classified(
+    service_attempt_at,
+    false,
+    FairV2IngressCheckedSelectionScope::Ordinary,
+    predicate,
+)
+""",
         "ordinary timestamped ingress must delegate to the single classifier",
         errors,
     )
@@ -41521,7 +41909,26 @@ match self.clock_owner_reservation_blocks_occurrence(
     _require_rust_item_context(
         runtime_path,
         regression,
-        (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+        (
+            (
+                "#",
+                "[",
+                "cfg",
+                "(",
+                "test",
+                ")",
+                "]",
+                "pub",
+                "(",
+                "in",
+                "crate",
+                "::",
+                "sumeragi",
+                ")",
+                "mod",
+                "tests",
+            ),
+        ),
         "post-cut replay and stale FIFO-debt regression",
         errors,
         expected_attributes=("#[test]",),
@@ -41559,7 +41966,26 @@ assert_eq!(runtime.ingress.commands.len(), queue_len_before_replay,);
     _require_rust_item_context(
         runtime_path,
         pre_runtime_regression,
-        (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+        (
+            (
+                "#",
+                "[",
+                "cfg",
+                "(",
+                "test",
+                ")",
+                "]",
+                "pub",
+                "(",
+                "in",
+                "crate",
+                "::",
+                "sumeragi",
+                ")",
+                "mod",
+                "tests",
+            ),
+        ),
         "pre-runtime exact-retry coalescing regression",
         errors,
         expected_attributes=("#[test]",),
@@ -41601,7 +42027,26 @@ runtime
     _require_rust_item_context(
         runtime_path,
         restored_tc_regression,
-        (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+        (
+            (
+                "#",
+                "[",
+                "cfg",
+                "(",
+                "test",
+                ")",
+                "]",
+                "pub",
+                "(",
+                "in",
+                "crate",
+                "::",
+                "sumeragi",
+                ")",
+                "mod",
+                "tests",
+            ),
+        ),
         "restart-restored TC versus frozen timeout regression",
         errors,
         expected_attributes=("#[test]",),
@@ -42214,7 +42659,7 @@ if let wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) =
 const MAX_ADAPTER_EFFECTS_PER_MACRO_STEP: usize =
     reducer::MAX_EFFECTS_PER_STEP;
 const MAX_RECOVERED_VALIDATION_AUTHORITIES: usize =
-    MAX_ADAPTER_EFFECTS_PER_MACRO_STEP + 2;
+    MAX_ADAPTER_EFFECTS_PER_MACRO_STEP + 3;
 const MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP: usize = 4;
 const _: () = assert!(
     MAX_FLATTENED_PERSISTENCE_EFFECTS_PER_MACRO_STEP
@@ -42229,7 +42674,7 @@ const _: () = assert!(
         if macro_bound_count != 1:
             errors.append(
                 f"{adapter_path}: the adapter macro-step bound must remain the "
-                "reducer source bound with the exact reviewed two-authority "
+                "reducer source bound with the exact reviewed three-authority "
                 "recovery allowance and four-effect persistence witness; found "
                 f"{macro_bound_count} contracts"
             )
@@ -43982,7 +44427,26 @@ if matches!(
         _require_rust_item_context(
             runtime_path,
             response_regression,
-            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            (
+                (
+                    "#",
+                    "[",
+                    "cfg",
+                    "(",
+                    "test",
+                    ")",
+                    "]",
+                    "pub",
+                    "(",
+                    "in",
+                    "crate",
+                    "::",
+                    "sumeragi",
+                    ")",
+                    "mod",
+                    "tests",
+                ),
+            ),
             "CommitCertificateResponse progress-reservation regression",
             errors,
             expected_attributes=("#[test]",),
@@ -44021,9 +44485,49 @@ assert!(
             "the CommitCertificateResponse regression must retain the final physical certified-fence reservation",
             errors,
         )
+        _require_rust_token_sequence(
+            runtime_path,
+            response_regression,
+            """
+assert!(
+    runtime.can_admit_network_payload(&vote),
+    "the exact current locked-reproposal Prepare can use the Progress reserve"
+);
+assert!(!runtime.can_admit_network_payload(&mismatched_prepare_vote));
+""",
+            "the runtime regression must admit only the exact current locked-reproposal Prepare through a saturated Normal prefix",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            response_regression,
+            """
+assert!(!runtime.can_admit_network_payload(&vote));
+assert!(!runtime.can_admit_network_payload(&mismatched_prepare_vote));
+""",
+            "the runtime regression must not let either Prepare spend the final certified-fence-only slot after Progress saturation",
+            errors,
+        )
         causal_runtime_regressions: dict[str, RustItem | None] = {}
         runtime_test_context = (
-            ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
+            (
+                "#",
+                "[",
+                "cfg",
+                "(",
+                "test",
+                ")",
+                "]",
+                "pub",
+                "(",
+                "in",
+                "crate",
+                "::",
+                "sumeragi",
+                ")",
+                "mod",
+                "tests",
+            ),
         )
         for name, expected_sha256 in (
             _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256.items()
@@ -44522,11 +45026,6 @@ assert_eq!(unminted_runtime.queued_commands(), 0);
                 "physical-cut clock and FIFO arbitration projection",
             ),
             ("step", "runtime_step", "live serialized runtime step"),
-            (
-                "step_recovery",
-                "runtime_step_recovery",
-                "recovery serialized runtime step",
-            ),
             (
                 "dispatch_one_adapter_deferred",
                 "dispatch_one_adapter_deferred",
@@ -45446,33 +45945,6 @@ self.complete_driver_dispatch_leader_wire_owners(
             "orphans, and publish every terminal before observing effects",
         )
         require_runtime_item_order(
-            observed_runtime_items.get("step_recovery"),
-            (
-                """
-self.retain_effect_ownership(
-    RuntimeEffectSource::Fifo,
-    Some(&owner),
-    parent_statement.as_ref(),
-    &effects,
-)
-""",
-                "token.identity().admission_ordinal() != owner.lifecycle_ordinal()",
-                "self.driver.producer_handoff_evidence(token, !effects.is_empty())",
-                "self.driver.acknowledge_producer_handoff(token, evidence)",
-                """
-self.complete_driver_dispatch_leader_wire_owners(
-    &owner,
-    retained_deferred_ingress,
-    completed_producer_handoff,
-)
-""",
-                "self.observe_effects(now, &effects)",
-            ),
-            "recovery dispatch must retain successors, acknowledge the exact "
-            "producer, terminalize the selected parent before adapter-side "
-            "orphans, and publish every terminal before observing effects",
-        )
-        require_runtime_item_order(
             observed_runtime_items.get("dispatch_one_adapter_deferred"),
             (
                 "self.retain_effect_ownership",
@@ -45494,10 +45966,6 @@ self.complete_driver_dispatch_leader_wire_owners(
         )
         for item_name, later_contract in (
             ("step", "let selected_round_tag = self.round_tag"),
-            (
-                "step_recovery",
-                "let round_tag = self.round_tag",
-            ),
         ):
             item = observed_runtime_items.get(item_name)
             if item is None:
@@ -47538,6 +48006,9 @@ asyncServeProducerTurnReady' =
         "HistoricalLockedCommitItem": (
             ("DeliveryClass", "operator"),
         ),
+        "CurrentLockedReproposalPrepareItem": (
+            ("DeliveryClass", "operator"),
+        ),
         "DeliveryKind": (
             ("AsyncDeliveryCandidateCausalOriginAt", "operator"),
             ("DeliveryCandidate", "operator"),
@@ -48291,7 +48762,7 @@ asyncServeProducerTurnReady' =
             "\\/ evidence \\in BodyRecordSet"
         ),
         "AsyncSemanticIngressLifecycleCapacity": (
-            "AsyncIngressCapacity + 2 * N"
+            "AsyncIngressCapacity + 3 * N"
         ),
         "AsyncServicedCandidateLifecycleCapacity": (
             "AsyncSemanticIngressLifecycleCapacity + 2 * "
@@ -49315,7 +49786,12 @@ asyncServeProducerTurnReady' =
             "\\/ NodeHasDecision(recipient)"
         ),
         "AsyncControlIngressStageRetired": (
-            "AsyncControlServiceIdentityServicedOrAdvanced(item)"
+            "/\\ item.kind \\in AsyncControlKinds "
+            "/\\ \\/ NodeHasDecision(item.envelope.recipient) "
+            "\\/ AsyncControlServiceConsumed(item) "
+            '\\/ /\\ item.kind # "CommitQC" '
+            "/\\ ~HistoricalLockedCommitItem(item) "
+            "/\\ AsyncControlServiceIdentityServicedOrAdvanced(item)"
         ),
         "AsyncCertifiedResponseIngressStageRetired": (
             "LET recipient == item.envelope.recipient body == "
@@ -50492,7 +50968,9 @@ asyncServeProducerTurnReady' =
             ),
             "ProtectedProgressCommand": (
                 'CASE command.kind = "DeliverVote" -> '
-                "HistoricalLockedCommitItem(command.item) "
+                "\\/ HistoricalLockedCommitItem(command.item) "
+                '\\/ /\\ command.class = "Progress" '
+                '/\\ command.item.kind = "PrepareVote" '
                 '[] command.kind = "DeliverTimeout" -> '
                 'command.item.kind = "TimeoutVote" '
                 '[] command.kind = "DeliverQC" -> '
@@ -50507,6 +50985,7 @@ asyncServeProducerTurnReady' =
                 "/\\ left.node = right.node "
                 '/\\ CASE left.kind = "DeliverVote" -> '
                 '/\\ right.kind = "DeliverVote" '
+                "/\\ left.item.kind = right.item.kind "
                 "/\\ left.item.envelope.vote.signer = "
                 "right.item.envelope.vote.signer "
                 '[] left.kind = "DeliverQC" -> '
@@ -50528,6 +51007,7 @@ asyncServeProducerTurnReady' =
             ),
             "DeliveryClass": (
                 "IF HistoricalLockedCommitItem(item) "
+                "\\/ CurrentLockedReproposalPrepareItem(item) "
                 '\\/ item.kind \\in {"PrepareQC", "CommitQC", '
                 '"TimeoutVote", "TimeoutCertificate", "Chunk", '
                 '"CertifiedResponse", "CommitCertificateResponse", '
@@ -53405,17 +53885,41 @@ asyncServeProducerTurnReady' =
         required_body_tokens.update({
             "DeliveryClass": (
                 "HistoricalLockedCommitItem(item)",
+                "CurrentLockedReproposalPrepareItem(item)",
                 '"TimeoutVote"',
                 '"CertifiedResponse"',
                 '"CommitCertificateResponse"',
                 'THEN "Progress"',
+            ),
+            "CurrentLockedReproposalPrepareItem": (
+                'item.kind = "PrepareVote"',
+                "vote.context = context",
+                "vote.view = nodeView[node]",
+                "lockRank[node] < vote.view",
+                "lockSubject[node] = vote.subject",
+                "LockedPrepareRound(node, lockRank[node], vote.subject)",
+                "NoDecisionForNode(node)",
+                "\\E validation \\in validatedBodies",
+                "validation.node = node",
+                "validation.context = context",
+                "validation.view = vote.view",
+                "validation.subject = vote.subject",
+            ),
+            "ProtectedProgressCommand": (
+                "HistoricalLockedCommitItem(command.item)",
+                'command.class = "Progress"',
+                'command.item.kind = "PrepareVote"',
+            ),
+            "SameProtectedProgressSlot": (
+                "left.item.kind = right.item.kind",
+                "left.item.envelope.vote.signer = right.item.envelope.vote.signer",
             ),
             "DeferredProgressAfter": (
                 "SameProtectedProgressSlotIndices(node, command)",
                 "Append(queue, command)",
             ),
             "AsyncConfiguration": (
-                "AsyncDeferredProgressCapacity >= 2 * N + 3",
+                "AsyncDeferredProgressCapacity >= 3 * N + 3",
                 "AsyncIngressCapacity >= 5 * N + 2",
                 "AsyncValidTimeoutVoteWireByteBound <= AsyncTimeoutVoteByteReserve",
             ),
@@ -53434,6 +53938,17 @@ asyncServeProducerTurnReady' =
             errors.append(
                 f"{path}:{line}: {symbol} omits required production behavior {missing}"
             )
+        if symbol == "CurrentLockedReproposalPrepareItem":
+            if "ProposalAt" in normalized:
+                errors.append(
+                    f"{path}:{line}: {symbol} must require a pre-existing "
+                    "local validation binding, not mere proposal receipt"
+                )
+            if "generation[node]" in normalized:
+                errors.append(
+                    f"{path}:{line}: {symbol} must retain the monotone local "
+                    "round binding across same-view consumer-generation changes"
+                )
 
     exact_capacity_operator_bodies = {
         "AsyncNormalLimit": (
@@ -53857,6 +54372,117 @@ asyncServeProducerTurnReady' =
                         f"{expected_sha256}; found {observed_sha256}"
                     )
 
+        retained_debt_progress_regression = _require_rust_item(
+            effects_path,
+            effects_source,
+            "retained_effect_debt_admits_only_pacemaker_progress_leader_wires",
+            errors,
+        )
+        _require_rust_item_context(
+            effects_path,
+            retained_debt_progress_regression,
+            (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+            "retained-effect debt protected Progress ingress regression",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        _require_rust_item_token_sha256(
+            effects_path,
+            retained_debt_progress_regression,
+            _RETAINED_EFFECT_PROGRESS_INGRESS_REGRESSION_SHA256,
+            "retained-effect debt protected Progress ingress regression",
+            errors,
+        )
+        _require_rust_token_sequence(
+            effects_path,
+            retained_debt_progress_regression,
+            """
+executor.runtime.protected_commit = Some((
+    fixture.manifest.round,
+    fixture.manifest.subject,
+    fixture_execution_commitment(),
+));
+executor.runtime.protected_prepare = Some((
+    fixture.manifest.round,
+    fixture.manifest.subject,
+    fixture_execution_commitment(),
+));
+""",
+            "retained-effect debt regression must install both exact protected vote authorities",
+            errors,
+        )
+        _require_rust_token_sequence(
+            effects_path,
+            retained_debt_progress_regression,
+            """
+let mut mismatched_prepare_vote = vote(&fixture);
+mismatched_prepare_vote.subject.block_hash =
+    HashOf::from_untyped_unchecked(Hash::new(b"effects retained-debt mismatched Prepare"));
+mismatched_prepare_vote.signature = vec![0x76];
+""",
+            "retained-effect debt regression must construct a subject-mismatched Prepare negative control",
+            errors,
+        )
+        for required, description in (
+            (
+                """
+assert!(
+    can_drain(executor, &prepare_qc),
+    "PrepareQC must reach the protected Progress prefix across {debt} debt"
+);
+assert!(
+    can_drain(executor, &timeout_vote),
+    "TimeoutVote must reach the protected Progress prefix across {debt} debt"
+);
+assert!(
+    can_drain(executor, &timeout_certificate),
+    "the certified timeout escape remains admissible across {debt} debt"
+);
+assert!(
+    can_drain(executor, &exact_commit_vote),
+    "the exact active-lock CommitVote reaches Progress across {debt} debt"
+);
+assert!(
+    can_drain(executor, &prepare_vote),
+    "the exact current locked-reproposal PrepareVote reaches Progress across {debt} debt"
+);
+assert!(
+    !can_drain(executor, &proposal),
+    "Proposal remains behind {debt} reducer-effect order"
+);
+assert!(
+    !can_drain(executor, &mismatched_prepare_vote),
+    "an unrelated PrepareVote remains ordinary ingress across {debt} debt"
+);
+assert!(
+    !can_drain(executor, &mismatched_commit_vote),
+    "a mismatched CommitVote remains ordinary across {debt} debt"
+);
+""",
+                "retained-effect debt regression must admit only pacemaker and exact protected-vote Progress traffic",
+            ),
+            (
+                """
+assert_matrix(&executor, "retained");
+assert!(executor.retained_effect_batch.is_some());
+executor
+    .park_retained_effect_batch()
+    .expect("park the exact ordinary suffix behind protected Progress");
+assert!(executor.retained_effect_batch.is_none());
+assert!(executor.parked_effect_batch.is_some());
+assert_matrix(&executor, "parked");
+""",
+                "retained-effect debt regression must replay the same Progress matrix after debt moves to the parked owner",
+            ),
+        ):
+            _require_rust_token_sequence(
+                effects_path,
+                retained_debt_progress_regression,
+                required,
+                description,
+                errors,
+            )
+
         effect_runtime_context = (
             ("impl", "EffectRuntime", "for", "SerializedV2Runtime"),
         )
@@ -53994,10 +54620,30 @@ if apply_count > 1
             effects_path,
             cleanup_plan,
             """
-let (None, Some(decision)) = (before, after) else {
+let Some(decision) = after else {
     return Ok(None);
 };
-let owner_tag = self.runtime.authoritative_tag().ok_or_else(|| {
+if before.is_some_and(|existing| existing != decision) {
+    return Err(EffectExecutorError::Contract(
+        "one runtime step changed an already durable Decision".to_owned(),
+    ));
+}
+let installed_by_step = before.is_none();
+let live_unreconciled_decision =
+    self.runtime.lifecycle_live_clocks_are_armed() && self.protected_decision.is_none();
+if !installed_by_step && !live_unreconciled_decision {
+    return Ok(None);
+}
+let frontier = self
+    .runtime
+    .reconciliation_frontier()
+    .map_err(EffectExecutorError::Runtime)?;
+if frontier.decision != Some(decision) {
+    return Err(EffectExecutorError::Contract(
+        "new Decision changed across its post-step reconciliation frontier".to_owned(),
+    ));
+}
+let owner_tag = frontier.tag.ok_or_else(|| {
     EffectExecutorError::Contract(
         "new Decision omitted its exact local runner owner".to_owned(),
     )
@@ -54012,7 +54658,7 @@ Ok(Some(PendingRunnerDecisionCleanup {
     owner_tag,
 }))
 """,
-            "only the first Decision transition may mint cleanup debt bound to its authoritative same-height runner owner",
+            "a newly installed or live unreconciled same-Decision completion must mint cleanup debt from its exact post-step frontier owner",
             errors,
         )
 
@@ -54443,12 +55089,21 @@ let retained = effects
     .into_iter()
     .zip(ownership)
     .zip(retain_effect)
-    .filter_map(|((effect, ownership), retain)| {
-        retain.then_some(OwnedAdapterEffect { effect, ownership })
+    .enumerate()
+    .filter_map(|(index, ((effect, ownership), retain))| {
+        let highest_prepare_retention = (index == 0
+            && matches!(&effect, AdapterEffect::EnterView { .. }))
+        .then_some(frontier.highest_prepare)
+        .flatten();
+        retain.then_some(OwnedAdapterEffect {
+            effect,
+            ownership,
+            highest_prepare_retention,
+        })
     })
     .collect::<VecDeque<_>>();
 """,
-            "retained effect construction must zip each retained effect with its immutable owner",
+            "retained effect construction must enumerate each immutable owner and carry only the leading EnterView highest-Prepare cleanup sidecar",
             errors,
         )
         _require_rust_token_sequence(
@@ -54456,10 +55111,11 @@ let retained = effects
             retain,
             """
 self.durable_validate_retry_seals = retained_validate_retry_seals;
+self.published_lifecycle_store_retry_markers = retained_published_store_retry_markers;
 self.published_lifecycle_validate_retry_markers =
     retained_published_validate_retry_markers;
 """,
-            "retained Validate retry projection must atomically commit both retry-owner maps",
+            "retained body-stage retry projection must atomically commit the durable Validate, published Store, and published Validate marker maps",
             errors,
         )
 
@@ -54519,9 +55175,14 @@ if matches!(&owned.effect, AdapterEffect::Apply { .. })
     break;
 }
 let pending_work_producer = Self::pending_work_producer(&owned.effect);
-match self.consume_one(owned.effect, owned.ownership, services)
+match self.consume_one(
+    owned.effect,
+    owned.ownership,
+    owned.highest_prepare_retention,
+    services,
+)
 """,
-            "retained Apply dispatch must stop at the runner-cleanup fence before consume_one",
+            "retained Apply dispatch must stop at the runner-cleanup fence and carry its highest-Prepare cleanup sidecar into consume_one",
             errors,
         )
         _require_rust_token_sequence(
@@ -54544,7 +55205,8 @@ Err(
             fifo_fragments = (
                 rust_code_tokens("batch.effects.front()"),
                 rust_code_tokens(
-                    "self.consume_one(owned.effect, owned.ownership, services)"
+                    "self.consume_one(owned.effect, owned.ownership, "
+                    "owned.highest_prepare_retention, services)"
                 ),
                 rust_code_tokens("batch.effects.pop_front()"),
             )
@@ -55305,7 +55967,7 @@ _OWNERSHIP_N1_MODEL_SHA256 = (
     "e17ccb5ece6ab20e132328f8f462b2506a9d0674c60bb030a18806551e5d4664"
 )
 _OWNERSHIP_N1_CONFIG_SHA256 = (
-    "0171f01d126953564035f963a51f4d9c396b1e53adcac62c2d92f42b71ea637a"
+    "4947346091a0400e6c64ea0a90b935064798063b7542b28d8414c0d46b66e67b"
 )
 _OWNERSHIP_N1_DEFINITION_OVERRIDES = (
     ("InstallTcFromEvidence", "OwnershipInstallTcFromEvidence"),
@@ -55533,14 +56195,14 @@ def _ownership_n1_configuration_errors(formal_dir: Path) -> list[str]:
                 f"geometry (7), found {ingress_capacity}"
             )
     if validator_count is not None and deferred_progress_capacity is not None:
-        exact_deferred_capacity = 2 * validator_count + 3
+        exact_deferred_capacity = 3 * validator_count + 3
         if (
             deferred_progress_capacity != exact_deferred_capacity
-            or deferred_progress_capacity != 5
+            or deferred_progress_capacity != 6
         ):
             errors.append(
                 f"{path}: N=1 AsyncDeferredProgressCapacity must equal exact "
-                f"2 * N + 3 geometry (5), found {deferred_progress_capacity}"
+                f"3 * N + 3 geometry (6), found {deferred_progress_capacity}"
             )
     for refinement_constant in (
         "ProductionEnterViewUsesPostInstallEffectiveLock",
@@ -67914,6 +68576,8 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
     )
     expected_exact_output_runner_items = {
         "authorize_decided_lane_recovery_drain",
+        "select_blocked_ordinary_lane_local_ingress",
+        "drain_blocked_ordinary_lane_local_ingress",
         "preflight_finalized_lane_rollover", "rollover_finalized_height_outputs",
         "dispatch_lane_work_effects", "dispatch_lane_work_effects_with_progress",
         "drain_finalized_lane_work_output",
@@ -68445,7 +69109,7 @@ def _local_runner_service_contract_source_fidelity_errors(
             paths["ordinary"],
             ordinary,
             "ordinary lifecycle height",
-            3,
+            4,
             "activated.claim_producer_turn_for_local_proposal(&mut active_runner)",
         ),
         (
@@ -69006,617 +69670,15 @@ if recovery_directory.expected_path != immutable_directory.expected_path
     return errors
 
 
-def _kura_native_amx_standalone_evidence_production_source_fidelity_errors(
-    repo_root: Path = ROOT_DIR,
-) -> list[str]:
-    """Bind retirement/archive GC to the standalone Native AMX namespace."""
-
-    kura_path = repo_root / "crates" / "iroha_core" / "src" / "kura.rs"
-    lane_geometry_path = (
-        repo_root / "crates" / "iroha_core" / "src" / "kura" / "lane_geometry.rs"
-    )
-    errors: list[str] = []
-    if not kura_path.is_file() or kura_path.is_symlink():
-        errors.append(
-            f"{kura_path}: Kura Native AMX aggregate-byte source must be a "
-            "regular file"
-        )
-        return errors
-    if not lane_geometry_path.is_file() or lane_geometry_path.is_symlink():
-        errors.append(
-            f"{lane_geometry_path}: Kura standalone Native AMX production "
-            "source must be a regular file"
-        )
-        return errors
-    kura_source = kura_path.read_text(encoding="utf-8")
-    source = lane_geometry_path.read_text(encoding="utf-8")
-
-    aggregate_byte_source = _require_qualified_rust_item(
-        kura_path,
-        kura_source,
-        "Kura",
-        "native_amx_participant_evidence_file_bytes",
-        errors,
-        "standalone Native AMX configured aggregate-byte source",
-    )
-    _require_exact_rust_tokens(
-        kura_path,
-        aggregate_byte_source,
-        """
-fn native_amx_participant_evidence_file_bytes(&self) -> u64 {
-u64::try_from(self.pending_control_sidecar_limits.aggregate_bytes)
-    .expect("configured pending-control sidecar bytes fit u64")
-}
-""",
-        "standalone Native AMX configured aggregate byte source must be the "
-        "pending-control sidecar geometry",
-        errors,
-    )
-
-    scanner = _require_qualified_rust_item(
-        lane_geometry_path,
-        source,
-        "Kura",
-        "read_geometry_native_amx_per_height_evidence",
-        errors,
-        "standalone Native AMX per-height evidence scanner",
-    )
-    scanner_contracts = (
-        (
-            """
-for (raw_name, entry_snapshot) in artifact_snapshot {
-    let path = lane_artifacts.join(raw_name);
-    let Some((kind, lane_block_height, temporary)) =
-        Self::parse_native_amx_evidence_path(&path)?
-    else {
-        continue;
-    };
-    if temporary {
-""",
-            "standalone Native AMX scanner must classify only canonical "
-            "per-height names and reject temporary evidence",
-        ),
-        (
-            """
-let retained_count = match kind {
-    NativeAmxEvidenceKind::Manifest => manifests.len(),
-    NativeAmxEvidenceKind::Receipt => receipts.len(),
-};
-if retained_count >= retained_record_limit {
-""",
-            "standalone Native AMX manifest and receipt counts must be bounded "
-            "independently",
-        ),
-        (
-            """
-if entry_snapshot.kind != BoundProgressDirectoryEntryKind::File {
-""",
-            "standalone Native AMX scanner must reject non-regular snapshot "
-            "entries",
-        ),
-        (
-            """
-let metadata =
-    Self::regular_sidecar_metadata_for(&self.store_root, &path, lane_artifacts)?
-""",
-            "standalone Native AMX scanner must use the bound regular-file "
-            "metadata path",
-        ),
-        (
-            """
-evidence_bytes = evidence_bytes.checked_add(encoded_len).ok_or_else(|| {
-""",
-            "standalone Native AMX shared aggregate byte total must be "
-            "overflow checked",
-        ),
-        (
-            """
-if evidence_bytes > self.native_amx_participant_evidence_file_bytes() {
-""",
-            "standalone Native AMX shared aggregate byte bound must use the "
-            "configured source of truth",
-        ),
-        (
-            """
-let before = self
-    .read_regular_sidecar_snapshot(&path, lane_artifacts, payload_limit)?
-""",
-            "standalone Native AMX scanner must use bounded stable snapshot "
-            "reads",
-        ),
-        (
-            """
-if !Self::stable_sidecar_metadata_unchanged(&metadata, &before.metadata) {
-""",
-            "standalone Native AMX scanner must bind stable metadata before "
-            "decode",
-        ),
-        (
-            """
-NativeAmxEvidenceKind::Manifest => {
-    let artifact = norito::decode_from_bytes::<
-        NativeAmxParticipantApplicationManifestArtifactV1,
-    >(&before.bytes)
-    .map_err(Error::NoritoFrame)?;
-    if norito::to_bytes(&artifact).map_err(Error::NoritoFrame)? != before.bytes
-        || artifact.leaf.participant_height != lane_block_height
-        || Self::validate_native_amx_participant_application_manifest_artifact(
-            &artifact,
-        )
-        .is_err()
-""",
-            "standalone Native AMX manifest canonical decode, height binding, "
-            "and validation",
-        ),
-        (
-            """
-NativeAmxEvidenceKind::Receipt => {
-    let artifact = norito::decode_from_bytes::<
-        NativeAmxParticipantApplicationReceiptArtifact,
-    >(&before.bytes)
-    .map_err(Error::NoritoFrame)?;
-    if norito::to_bytes(&artifact).map_err(Error::NoritoFrame)? != before.bytes
-        || artifact.participant_proposal.descriptor.lane_block_height
-            != lane_block_height
-        || Self::validate_native_amx_participant_application_receipt_artifact(
-            &artifact,
-        )
-        .is_err()
-""",
-            "standalone Native AMX receipt canonical decode, height binding, "
-            "and validation",
-        ),
-        (
-            """
-if !Self::sidecar_file_metadata_unchanged(&before.metadata.file, &opened_metadata) {
-""",
-            "standalone Native AMX durability open must retain the scanned file "
-            "identity",
-        ),
-        (
-            """
-file.sync_all()
-""",
-            "standalone Native AMX files must be durability attested",
-        ),
-        (
-            """
-if after.bytes_hash != before.bytes_hash
-    || !Self::stable_sidecar_metadata_unchanged(&before.metadata, &after.metadata)
-{
-""",
-            "standalone Native AMX durability sync must preserve exact bytes "
-            "and stable metadata",
-        ),
-        (
-            """
-sync_dir(lane_artifacts)
-""",
-            "standalone Native AMX directory must be durability attested",
-        ),
-    )
-    for fragment, description in scanner_contracts:
-        _require_rust_token_sequence(
-            lane_geometry_path,
-            scanner,
-            fragment,
-            description,
-            errors,
-        )
-
-    retirement = _require_qualified_rust_item(
-        lane_geometry_path,
-        source,
-        "Kura",
-        "ensure_first_release_lane_retirement_admissible_with_certified_locked",
-        errors,
-        "live standalone Native AMX retirement evidence join",
-    )
-    retirement_contracts = (
-        (
-            """
-let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(
-    &lane_artifacts_guard,
-    per_route_artifact_file_limit,
-    "first-release lane retirement artifact scan",
-)?;
-""",
-            "live Native AMX retirement must bind an immutable artifact snapshot",
-        ),
-        (
-            """
-if snapshot.kind == BoundProgressDirectoryEntryKind::Symlink {
-""",
-            "live Native AMX retirement must reject symlink artifacts",
-        ),
-        (
-            """
-if snapshot.kind != BoundProgressDirectoryEntryKind::File {
-""",
-            "live Native AMX retirement must reject non-regular artifacts",
-        ),
-        (
-            """
-if name.ends_with(".tmp") {
-""",
-            "live Native AMX retirement must reject temporary artifacts",
-        ),
-        (
-            """
-if Self::parse_native_amx_evidence_path(&path)?.is_some() {
-    continue;
-}
-""",
-            "live Native AMX retirement allowlist must use the standalone "
-            "per-height parser",
-        ),
-        (
-            """
-if Self::autonomous_lane_block_attempt_coordinates(name).is_some()
-    || Self::autonomous_lifecycle_cursor_coordinates(name).is_some() || Self::autonomous_lifecycle_terminal_outcome_coordinates(name).is_some()
-    || Self::autonomous_two_height_coordinates(
-        name,
-        AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
-    )
-    .is_some()
-    || Self::autonomous_one_height_coordinate(
-        name,
-        AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX,
-    )
-    .is_some()
-    || name == AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE
-{
-    continue;
-}
-return Err(Error::IO(
-    std::io::Error::new(
-        ErrorKind::InvalidData,
-        "lane retirement scan encountered an unknown artifact filename",
-    ),
-    path,
-));
-""",
-            "live Native AMX retirement must reject every unexpected or legacy "
-            "artifact after the complete allowlist",
-        ),
-        (
-            """
-let (retained_native_manifests, retained_native_receipts) = self
-    .read_geometry_native_amx_per_height_evidence(
-        &lane_artifacts,
-        &artifact_snapshot,
-        self.native_amx_participant_evidence_retention().get(),
-        "lane retirement",
-    )?;
-""",
-            "live Native AMX retirement must scan the exact immutable snapshot",
-        ),
-        (
-            """
-if manifest.leaf.lane_id != entry.lane_id
-    || manifest.leaf.dataspace_id != entry.dataspace_id
-    || self
-        .require_active_lane_incarnation(
-            &entry,
-            manifest.leaf.lane_incarnation,
-            manifest.leaf.application_block_height,
-        )
-        .is_err()
-""",
-            "live Native AMX manifests must join the active route, incarnation, "
-            "and application height",
-        ),
-        (
-            """
-if self
-    .require_active_lane_artifact(&entry, descriptor)
-    .is_err()
-    || receipt.manifest_artifact_hash != HashOf::new(manifest)
-    || !Self::native_amx_participant_receipt_matches_manifest_leaf(
-        &receipt,
-        &manifest.leaf,
-    )
-""",
-            "live Native AMX receipts must join the active descriptor and exact "
-            "manifest leaf",
-        ),
-        (
-            """
-if !native_amx_retained_windows_are_complete(
-    &native_manifest_heights,
-    &native_receipt_heights,
-) {
-""",
-            "live Native AMX evidence must form a complete retained suffix",
-        ),
-        (
-            """
-match native_receipt_heights.last().copied() {
-    Some(latest_height) => {
-""",
-            "live Native AMX latest lookup must select the highest retained "
-            "receipt",
-        ),
-        (
-            """
-self.require_active_lane_incarnation(
-    &entry,
-    latest.lane_incarnation,
-    latest.application_block_height,
-)
-.is_ok()
-    && latest.matches_receipt(receipt)
-""",
-            "live Native AMX latest pointer must exactly join the active "
-            "incarnation and highest receipt",
-        ),
-        (
-            """
-for manifest in native_manifests.values() {
-    if !self
-        .native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(manifest)
-""",
-            "live Native AMX manifests must revalidate canonical finality",
-        ),
-        (
-            """
-if !self.native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards(
-    receipt,
-    manifest,
-)
-""",
-            "live Native AMX receipts must revalidate exact application "
-            "evidence",
-        ),
-        (
-            """
-let confirmed_snapshot = self.geometry_bound_progress_directory_snapshot(
-    &lane_artifacts_guard,
-    per_route_artifact_file_limit,
-    "lane retirement artifact rescan",
-)?;
-if confirmed_snapshot != artifact_snapshot
-    || !self.geometry_bound_progress_directory_unchanged(&lane_artifacts_guard)
-{
-""",
-            "live Native AMX retirement must prove the immutable snapshot "
-            "unchanged",
-        ),
-    )
-    for fragment, description in retirement_contracts:
-        _require_rust_token_sequence(
-            lane_geometry_path,
-            retirement,
-            fragment,
-            description,
-            errors,
-        )
-
-    archive = _require_qualified_rust_item(
-        lane_geometry_path,
-        source,
-        "Kura",
-        "ensure_archived_lane_work_released",
-        errors,
-        "archived standalone Native AMX evidence join",
-    )
-    archive_contracts = (
-        (
-            """
-let lane_artifacts_guard =
-    Self::open_bound_progress_directory(&self.store_root, &lane_artifacts)?;
-let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(
-    &lane_artifacts_guard,
-    MAX_GEOMETRY_ARCHIVE_ENTRIES,
-    "retired lane artifact scan",
-)?;
-""",
-            "archived Native AMX GC must bind an immutable artifact snapshot",
-        ),
-        (
-            """
-if snapshot.kind == BoundProgressDirectoryEntryKind::Symlink {
-""",
-            "archived Native AMX GC must reject symlink artifacts",
-        ),
-        (
-            """
-if snapshot.kind != BoundProgressDirectoryEntryKind::File {
-""",
-            "archived Native AMX GC must reject non-regular artifacts",
-        ),
-        (
-            """
-if name.ends_with(".tmp") {
-""",
-            "archived Native AMX GC must reject temporary artifacts",
-        ),
-        (
-            """
-if Self::parse_native_amx_evidence_path(&path)?.is_some() {
-    continue;
-}
-""",
-            "archived Native AMX allowlist must use the standalone per-height "
-            "parser",
-        ),
-        (
-            """
-if Self::autonomous_lane_block_attempt_coordinates(name).is_some()
-    || Self::autonomous_lifecycle_cursor_coordinates(name).is_some()
-    || Self::autonomous_lifecycle_terminal_outcome_coordinates(name).is_some()
-    || Self::autonomous_two_height_coordinates(
-        name,
-        AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
-    )
-    .is_some()
-    || Self::autonomous_one_height_coordinate(
-        name,
-        AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX,
-    )
-    .is_some()
-    || name == AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE
-{
-    continue;
-}
-return Err(Error::IO(
-    std::io::Error::new(
-        ErrorKind::InvalidData,
-        "lane artifact archive contains an unexpected artifact",
-    ),
-    path,
-));
-""",
-            "archived Native AMX GC must reject every unexpected or legacy "
-            "artifact after the complete allowlist",
-        ),
-        (
-            """
-let (retained_native_manifests, retained_native_receipts) = self
-    .read_geometry_native_amx_per_height_evidence(
-        &lane_artifacts,
-        &artifact_snapshot,
-        self.native_amx_participant_evidence_retention().get(),
-        "retired lane",
-    )?;
-""",
-            "archived Native AMX GC must scan the exact immutable snapshot",
-        ),
-        (
-            """
-if manifest.leaf.lane_incarnation != binding.incarnation
-    || !self
-        .native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(
-            &manifest,
-        )
-""",
-            "archived Native AMX manifests must join the archived incarnation "
-            "and canonical finality",
-        ),
-        (
-            """
-if !native_amx_retained_windows_are_complete(
-    &native_manifest_heights,
-    &native_receipt_heights,
-) {
-""",
-            "archived Native AMX evidence must form a complete retained suffix",
-        ),
-        (
-            """
-if receipt.participant_proposal.descriptor.lane_incarnation != binding.incarnation
-    || receipt.manifest_artifact_hash != HashOf::new(manifest)
-    || !Self::native_amx_participant_receipt_matches_manifest_leaf(
-        &receipt,
-        &manifest.leaf,
-    )
-    || !self.native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards(
-        &receipt,
-        manifest,
-    )
-""",
-            "archived Native AMX receipts must join the incarnation, manifest, "
-            "and canonical application",
-        ),
-        (
-            """
-if native_receipt_heights.last().copied() == Some(lane_block_height) {
-    latest_native_receipt = Some(receipt);
-}
-""",
-            "archived Native AMX latest selection must use the highest retained "
-            "receipt",
-        ),
-        (
-            """
-decode_native_amx_participant_receipt_latest_index_for_route(
-    binding.lane_id,
-    receipt.participant_proposal.descriptor.dataspace_id,
-    &native_receipt_latest,
-)
-""",
-            "archived Native AMX latest pointer must join the exact route",
-        ),
-        (
-            """
-latest.lane_incarnation == binding.incarnation
-    && latest.matches_receipt(receipt)
-""",
-            "archived Native AMX latest pointer must join the archived "
-            "incarnation and highest receipt",
-        ),
-        (
-            """
-let confirmed_snapshot = self.geometry_bound_progress_directory_snapshot(
-    &lane_artifacts_guard,
-    MAX_GEOMETRY_ARCHIVE_ENTRIES,
-    "retired lane artifact rescan",
-)?;
-if confirmed_snapshot != artifact_snapshot
-    || !self.geometry_bound_progress_directory_unchanged(&lane_artifacts_guard)
-{
-""",
-            "archived Native AMX GC must prove the immutable snapshot unchanged",
-        ),
-    )
-    for fragment, description in archive_contracts:
-        _require_rust_token_sequence(
-            lane_geometry_path,
-            archive,
-            fragment,
-            description,
-            errors,
-        )
-
-    obsolete_dense_symbols = (
-        "native_amx_application_manifest_paths_for_entry",
-        "native_amx_participant_receipt_paths_for_entry",
-        "NATIVE_AMX_APPLICATION_MANIFESTS_DATA_FILE",
-        "NATIVE_AMX_APPLICATION_MANIFESTS_INDEX_FILE",
-        "NATIVE_AMX_PARTICIPANT_RECEIPTS_DATA_FILE",
-        "NATIVE_AMX_PARTICIPANT_RECEIPTS_INDEX_FILE",
-    )
-    obsolete_dense_filenames = (
-        "native_amx_application_manifests.norito",
-        "native_amx_application_manifests.index",
-        "native_amx_participant_receipts.norito",
-        "native_amx_participant_receipts.index",
-    )
-    for item, label in (
-        (scanner, "standalone Native AMX scanner"),
-        (retirement, "live Native AMX retirement"),
-        (archive, "archived Native AMX GC"),
-    ):
-        if item is None:
-            continue
-        item_tokens = rust_code_tokens(item.source)
-        for symbol in obsolete_dense_symbols:
-            observed = _token_sequence_count(
-                item_tokens,
-                rust_code_tokens(symbol),
-            )
-            if observed:
-                errors.append(
-                    f"{lane_geometry_path}:{item.line}: {label} must reject "
-                    "obsolete dense Native AMX evidence acceptance; found "
-                    f"{symbol} {observed} time(s)"
-                )
-        for filename in obsolete_dense_filenames:
-            observed = item.source.count(filename)
-            if observed:
-                errors.append(
-                    f"{lane_geometry_path}:{item.line}: {label} must reject "
-                    "obsolete dense Native AMX evidence acceptance; found "
-                    f"{filename} {observed} time(s)"
-                )
-
-    return errors
+_execute_checker_component("sumeragi_v2_proof_ledger_kura_native_amx_contracts.py")
 
 
 _execute_checker_component("sumeragi_v2_proof_ledger_successor_production_recovery_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_successor_production_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_successor_recovery_contracts.py")
+_execute_checker_component("sumeragi_v2_proof_ledger_successor_recovery_lifecycle_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_successor_recovery_source_contracts.py")
+_execute_checker_component("sumeragi_v2_proof_ledger_successor_recovery_support_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_successor_recovery_tail_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_chain_inventory_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_release_inventory_contracts.py")
@@ -69871,7 +69933,9 @@ def validate_ledger(
     errors.extend(
         _process_lifetime_worker_launch_source_fidelity_errors(ROOT_DIR)
     )
-    errors.extend(_serve_lifecycle_production_source_fidelity_errors(ROOT_DIR))
+    errors.extend(
+        _lifecycle_certified_serve_production_source_fidelity_errors(ROOT_DIR)
+    )
     errors.extend(
         _serviced_candidate_production_source_fidelity_errors(ROOT_DIR)
     )

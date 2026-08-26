@@ -25,10 +25,12 @@ async fn submit_vpn_receipt_requires_operator_and_client_voucher() {
             VpnLeaseStatusV1::Active,
             None,
         ));
-    let relay_session_id = relay_session_id_from_session_id(&session.session_id);
+    let relay_session_id =
+        parse_vpn_session_id_hex(&session.session_id).expect("fixture session id");
     let quote_id = decode_hex_32(&session.quote_id, "quote").expect("quote id");
     assert_eq!(session.relay_id_hex, hex::encode(active_record.relay_id));
     let relay_id = active_record.relay_id;
+    let issued_at_ms = now_ms();
     let voucher_body = VpnUsageVoucherBodyV1 {
         session_id: relay_session_id,
         quote_id,
@@ -37,18 +39,16 @@ async fn submit_vpn_receipt_requires_operator_and_client_voucher() {
         ingress_bytes: 1_024,
         egress_bytes: 2_048,
         active_ms: 10_000,
-        issued_at_ms: now_ms(),
+        issued_at_ms,
     };
     let voucher = VpnUsageVoucherV1::try_sign(voucher_body, metering_keys.private_key())
         .expect("checked usage voucher fixture");
-    let earned_fee = {
-        let record = app
-            .vpn_sessions
-            .get(&session.session_id)
-            .expect("active session record");
-        session_earned_fee(&record, &voucher).expect("fixture tariff arithmetic")
-    };
-    let receipt = VpnSessionReceiptV1 {
+    let active_ms = issued_at_ms.saturating_sub(session.connected_at_ms);
+    let earned_fee = active_record
+        .tariff
+        .fee_for_usage(1_024, 2_048, active_ms)
+        .expect("fixture tariff arithmetic");
+    let receipt = sign_test_relay_receipt(VpnSessionReceiptV1 {
         session_id: relay_session_id,
         quote_id,
         payment_tx_hash: decode_hex_32(&session.payment_tx_hash, "payment").expect("payment"),
@@ -56,16 +56,16 @@ async fn submit_vpn_receipt_requires_operator_and_client_voucher() {
         relay_id,
         ingress_bytes: 1_024,
         egress_bytes: 2_048,
-        cover_bytes: 128,
-        uptime_secs: 10,
+        cover_bytes: 0,
+        uptime_secs: u32::try_from(active_ms.div_ceil(1_000)).expect("fixture uptime"),
         started_at_ms: session.connected_at_ms,
-        ended_at_ms: now_ms(),
+        ended_at_ms: issued_at_ms,
         exit_class: VpnExitClassV1::Standard,
-        meter_hash: [0x44; 32],
+        meter_hash: vpn_tariff_meter_hash_v1(&active_record.tariff),
         earned_fee: earned_fee.clone(),
         highest_voucher_sequence: voucher.body.sequence,
         client_voucher_hash: voucher.hash(),
-    };
+    });
     let body = norito::json::to_vec(&VpnReceiptSubmitRequestDto {
         relay_receipt_hex: hex::encode(receipt.encode()),
         client_voucher_hex: hex::encode(voucher.encode()),
@@ -113,10 +113,6 @@ async fn submit_vpn_receipt_requires_operator_and_client_voucher() {
     assert_eq!(app.vpn_sessions.len(), 0);
     assert!(!app.vpn_used_payments.contains_key(&session.payment_tx_hash));
     let runtime = lock_vpn_runtime(&app);
-    assert!(
-        !runtime
-            .session_ids_by_account
-            .contains_key(&user.to_string())
-    );
+    assert!(!runtime.session_ids_by_account.contains_key(&user));
     assert!(runtime.settling_session_ids.is_empty());
 }

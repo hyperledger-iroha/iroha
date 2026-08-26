@@ -316,7 +316,7 @@ public final class IrohaKeyManagerTests {
 
   private static void shouldGenerateMlDsaKeysWhenConfigured() throws Exception {
     if (!NativeSignerBridge.isNativeAvailable()) {
-      throw new AssertionError("connect_norito_bridge ABI 22 is required for ML-DSA keys");
+      throw new AssertionError("connect_norito_bridge ABI 23 is required for ML-DSA keys");
     }
     final IrohaKeyManager manager = IrohaKeyManager.withSoftwareProvider(SigningAlgorithm.ML_DSA);
     final KeyPair keyPair =
@@ -344,7 +344,7 @@ public final class IrohaKeyManagerTests {
   private static void shouldRejectMalformedMlDsaSignatures() throws Exception {
     if (!NativeSignerBridge.isNativeAvailable()) {
       throw new AssertionError(
-          "connect_norito_bridge ABI 22 is required for ML-DSA signature admission");
+          "connect_norito_bridge ABI 23 is required for ML-DSA signature admission");
     }
     final byte[] seed = new byte[32];
     Arrays.fill(seed, (byte) 0x44);
@@ -379,7 +379,7 @@ public final class IrohaKeyManagerTests {
   private static void shouldRejectMlDsaHardwarePreferences() throws Exception {
     if (!NativeSignerBridge.isNativeAvailable()) {
       throw new AssertionError(
-          "connect_norito_bridge ABI 22 is required for ML-DSA hardware preference checks");
+          "connect_norito_bridge ABI 23 is required for ML-DSA hardware preference checks");
     }
     final IrohaKeyManager manager = IrohaKeyManager.withSoftwareProvider(SigningAlgorithm.ML_DSA);
     boolean threw = false;

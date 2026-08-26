@@ -508,7 +508,6 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
         if let Some(profile_value) = supervisor.get("profile") {
             match profile_value {
                 Value::String(profile) => {
-                    let profile = profile.trim();
                     if !profile.is_empty() {
                         config.profile = Some(NetworkProfile::from_preset(
                             parse_profile(profile).map_err(|value| {
@@ -540,17 +539,16 @@ fn parse_bundle_config(path: &Path, contents: &str) -> Result<BundleConfig, Conf
             }
         }
         if let Some(profile) = supervisor.get("genesis_profile").and_then(Value::as_str) {
-            let trimmed = profile.trim();
-            if !trimmed.is_empty() {
+            if !profile.is_empty() {
                 if profile_genesis.is_some() {
                     return Err(ConfigError::new(format!(
                         "config {} sets genesis_profile in both `supervisor.profile` and `supervisor.genesis_profile`",
                         path.display()
                     )));
                 }
-                config.genesis_profile = Some(trimmed.parse().map_err(|err: String| {
+                config.genesis_profile = Some(profile.parse().map_err(|err: String| {
                     ConfigError::new(format!(
-                        "invalid genesis_profile `{trimmed}` in {}: {err}",
+                        "invalid genesis_profile `{profile}` in {}: {err}",
                         path.display()
                     ))
                 })?);
@@ -650,7 +648,6 @@ fn parse_profile_table(
     let genesis_profile = table
         .get("genesis_profile")
         .and_then(Value::as_str)
-        .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| {
             value.parse().map_err(|err: String| {
@@ -725,9 +722,8 @@ fn parse_consensus_mode(
             path.display()
         ))
     })?;
-    let normalized = raw.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "permissioned" | "permissioned-sumeragi" => Ok(SumeragiConsensusMode::Permissioned),
+    match raw {
+        "permissioned" => Ok(SumeragiConsensusMode::Permissioned),
         "npos" => Ok(SumeragiConsensusMode::Npos),
         other => Err(ConfigError::new(format!(
             "config {} has invalid consensus mode `{other}` for `{key}`",
@@ -793,8 +789,7 @@ fn normalize_path(path: &Path) -> PathBuf {
 }
 fn parse_profile(value: &str) -> Result<ProfilePreset, String> {
     match value {
-        "single-peer" | "single_peer" | "singlepeer" => Ok(ProfilePreset::SinglePeer),
-        "four-peer-bft" | "four_peer_bft" | "fourpeerbft" => Ok(ProfilePreset::FourPeerBft),
+        "four-peer-bft" => Ok(ProfilePreset::FourPeerBft),
         other => Err(other.to_owned()),
     }
 }
@@ -1035,6 +1030,23 @@ profile = "unknown"
         );
     }
     #[test]
+    fn parse_rejects_profile_aliases() {
+        for profile in [
+            "single-peer",
+            "four_peer_bft",
+            "Four-Peer-Bft",
+            " four-peer-bft ",
+        ] {
+            let (_dir, path) = temp_file(&format!("[supervisor]\nprofile = {profile:?}\n"));
+            let err = parse_bundle_config(&path, &fs::read_to_string(&path).unwrap())
+                .expect_err("profile alias should fail");
+            assert!(
+                err.to_string().contains("invalid profile"),
+                "unexpected error for `{profile}`: {err}"
+            );
+        }
+    }
+    #[test]
     fn parse_rejects_invalid_genesis_profile() {
         let (_dir, path) = temp_file(
             r#"
@@ -1064,6 +1076,25 @@ profile = { peer_count = 7, consensus_mode = "permissioned" }
         assert_eq!(profile.topology.peer_count, 7);
         assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Permissioned);
         assert!(config.genesis_profile.is_none());
+    }
+    #[test]
+    fn parse_custom_profile_rejects_consensus_aliases() {
+        for mode in [
+            "permissioned-sumeragi",
+            "permissioned_sumeragi",
+            "Permissioned",
+            " permissioned ",
+        ] {
+            let (_dir, path) = temp_file(&format!(
+                "[supervisor]\nprofile = {{ peer_count = 4, consensus_mode = {mode:?} }}\n"
+            ));
+            let err = parse_bundle_config(&path, &fs::read_to_string(&path).unwrap())
+                .expect_err("consensus alias should fail");
+            assert!(
+                err.to_string().contains("invalid consensus mode"),
+                "unexpected error for `{mode}`: {err}"
+            );
+        }
     }
     #[test]
     fn parse_custom_profile_table_rejects_conflicting_genesis_profile() {
@@ -1395,7 +1426,7 @@ backoff_ms = 1000
         config.set_profile(Some(NetworkProfile::from_preset(
             ProfilePreset::FourPeerBft,
         )));
-        let builder = config.apply_to(SupervisorBuilder::new(ProfilePreset::SinglePeer));
+        let builder = config.apply_to(SupervisorBuilder::new(ProfilePreset::FourPeerBft));
         assert_eq!(builder.profile().preset, Some(ProfilePreset::FourPeerBft));
         assert_eq!(builder.profile().topology.peer_count, 4);
     }
@@ -1415,7 +1446,7 @@ note = "keep-root"
 
 [supervisor]
 data_root = "{data_root}"
-profile = "single-peer"
+profile = "four-peer-bft"
 chain_id = "existing-chain"
 custom = "preserve-me"
 
@@ -1507,23 +1538,24 @@ extra_setting = "keep"
         }
     }
     #[test]
-    fn parse_profile_mappings_cover_aliases() {
-        assert_eq!(
-            parse_profile("single-peer").ok(),
-            Some(ProfilePreset::SinglePeer)
-        );
-        assert_eq!(
-            parse_profile("single_peer").ok(),
-            Some(ProfilePreset::SinglePeer)
-        );
-        assert_eq!(
-            parse_profile("singlepeer").ok(),
-            Some(ProfilePreset::SinglePeer)
-        );
+    fn parse_profile_accepts_only_canonical_name() {
         assert_eq!(
             parse_profile("four-peer-bft").ok(),
             Some(ProfilePreset::FourPeerBft)
         );
-        assert!(parse_profile("invalid").is_err());
+        for invalid in [
+            "single-peer",
+            "single_peer",
+            "singlepeer",
+            "four_peer_bft",
+            "fourpeerbft",
+            "Four-Peer-Bft",
+            " four-peer-bft ",
+        ] {
+            assert!(
+                parse_profile(invalid).is_err(),
+                "accepted alias `{invalid}`"
+            );
+        }
     }
 }

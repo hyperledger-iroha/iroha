@@ -2,6 +2,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoracloudHostOperationV1 {
     /// Read committed service-state metadata visible to the active handler.
     ReadCommittedState,
@@ -27,6 +28,7 @@ pub enum SoracloudHostOperationV1 {
 /// Request envelope decoded from the Soracloud request pointer-ABI payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudHostRequestEnvelopeV1 {
     /// Schema version; must equal [`SORACLOUD_HOST_REQUEST_VERSION_V1`].
     pub schema_version: u16,
@@ -61,6 +63,7 @@ impl SoracloudHostRequestEnvelopeV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "payload_type", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoracloudHostRequestPayloadV1 {
     /// Request to read committed service-state metadata.
     ReadCommittedState(SoracloudReadCommittedStateRequestV1),
@@ -123,6 +126,7 @@ impl SoracloudHostRequestPayloadV1 {
 /// Response envelope encoded into the Soracloud response pointer-ABI payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudHostResponseEnvelopeV1 {
     /// Schema version; must equal [`SORACLOUD_HOST_RESPONSE_VERSION_V1`].
     pub schema_version: u16,
@@ -157,6 +161,7 @@ impl SoracloudHostResponseEnvelopeV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "payload_type", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum SoracloudHostResponsePayloadV1 {
     /// Response to committed service-state metadata lookups.
     ReadCommittedState(SoracloudReadCommittedStateResponseV1),
@@ -218,6 +223,7 @@ impl SoracloudHostResponsePayloadV1 {
 /// Read committed service-state metadata for one binding/key pair.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudReadCommittedStateRequestV1 {
     /// Declared binding name to read from.
     pub binding_name: Name,
@@ -236,9 +242,10 @@ impl SoracloudReadCommittedStateRequestV1 {
 /// Response to a committed service-state metadata lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudReadCommittedStateResponseV1 {
     /// Matching entry when one exists.
-    #[norito(default)]
+    #[norito(required)]
     pub entry: Option<SoraServiceStateEntryV1>,
 }
 impl SoracloudReadCommittedStateResponseV1 {
@@ -256,6 +263,7 @@ impl SoracloudReadCommittedStateResponseV1 {
 /// Stage a deterministic service-state mutation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudEmitStateMutationRequestV1 {
     /// Binding mutated by the runtime.
     pub binding_name: Name,
@@ -266,13 +274,13 @@ pub struct SoracloudEmitStateMutationRequestV1 {
     /// Encryption contract expected by the binding.
     pub encryption: SoraStateEncryptionV1,
     /// Declared payload size when the mutation upserts content.
-    #[norito(default)]
+    #[norito(required)]
     pub payload_bytes: Option<u64>,
     /// Full payload bytes when the mutation upserts content.
-    #[norito(default)]
+    #[norito(required)]
     pub payload: Option<Vec<u8>>,
     /// Deterministic commitment over the opaque payload.
-    #[norito(default)]
+    #[norito(required)]
     pub payload_commitment: Option<Hash>,
 }
 impl SoracloudEmitStateMutationRequestV1 {
@@ -330,6 +338,7 @@ impl SoracloudEmitStateMutationRequestV1 {
 /// Response to a staged service-state mutation.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudEmitStateMutationResponseV1 {
     /// Stable mutation digest returned by the host after staging the write-back.
     pub mutation_commitment: Hash,
@@ -350,51 +359,35 @@ impl SoracloudEmitStateMutationResponseV1 {
 /// Stage an outbound Soracloud mailbox message.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudEmitMailboxMessageRequestV1 {
     /// Destination service name.
     pub to_service: Name,
     /// Destination handler name.
     pub to_handler: Name,
     /// Opaque mailbox payload bytes.
-    #[norito(default)]
     pub payload_bytes: Vec<u8>,
-    /// Earliest execution sequence for the emitted message.
-    pub available_after_sequence: u64,
-    /// Optional expiry sequence for the emitted message.
-    #[norito(default)]
-    pub expires_at_sequence: Option<u64>,
+    /// Number of consensus blocks to delay delivery.
+    pub delivery_delay_blocks: u32,
 }
 impl SoracloudEmitMailboxMessageRequestV1 {
     /// Validate outbound mailbox request fields.
     ///
     /// # Errors
-    /// Returns [`SoracloudManifestError`] when mailbox sequence bounds are malformed.
+    /// Returns [`SoracloudManifestError`] when mailbox request fields are malformed.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
-        if self.available_after_sequence == 0 {
-            return Err(invalid_field(
-                "soracloud emit mailbox message request",
-                "available_after_sequence",
-                "must be greater than zero",
-            ));
-        }
-        if self
-            .expires_at_sequence
-            .is_some_and(|expires_at| expires_at <= self.available_after_sequence)
-        {
-            return Err(invalid_field(
-                "soracloud emit mailbox message request",
-                "expires_at_sequence",
-                "must be greater than available_after_sequence",
-            ));
-        }
         Ok(())
     }
 }
 /// Response to a staged outbound mailbox message.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudEmitMailboxMessageResponseV1 {
-    /// Deterministic mailbox message identifier.
+    /// Deterministic execution-local staging identifier.
+    ///
+    /// The ledger derives the canonical persisted mailbox message identifier after assigning the
+    /// authoritative service versions and delivery schedule.
     pub message_id: Hash,
     /// Commitment over the emitted mailbox payload.
     pub payload_commitment: Hash,
@@ -421,11 +414,11 @@ impl SoracloudEmitMailboxMessageResponseV1 {
 /// Append deterministic journal material for the active handler execution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudAppendJournalRequestV1 {
     /// Runtime-relative journal path for the appended material.
     pub artifact_path: String,
     /// Journal payload bytes.
-    #[norito(default)]
     pub payload_bytes: Vec<u8>,
 }
 impl SoracloudAppendJournalRequestV1 {
@@ -443,6 +436,7 @@ impl SoracloudAppendJournalRequestV1 {
 /// Response to appended journal material.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudAppendJournalResponseV1 {
     /// Content-addressed digest of the materialized journal payload.
     pub artifact_hash: Hash,
@@ -463,11 +457,11 @@ impl SoracloudAppendJournalResponseV1 {
 /// Publish deterministic checkpoint material for the active handler execution.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudPublishCheckpointRequestV1 {
     /// Runtime-relative checkpoint path for the published material.
     pub artifact_path: String,
     /// Checkpoint payload bytes.
-    #[norito(default)]
     pub payload_bytes: Vec<u8>,
 }
 impl SoracloudPublishCheckpointRequestV1 {
@@ -485,6 +479,7 @@ impl SoracloudPublishCheckpointRequestV1 {
 /// Response to published checkpoint material.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudPublishCheckpointResponseV1 {
     /// Content-addressed digest of the materialized checkpoint payload.
     pub artifact_hash: Hash,
@@ -505,6 +500,7 @@ impl SoracloudPublishCheckpointResponseV1 {
 /// Read authoritative service config material for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudReadConfigRequestV1 {
     /// Stable config identifier relative to the authoritative service-config set.
     pub config_name: String,
@@ -525,11 +521,11 @@ impl SoracloudReadConfigRequestV1 {
 /// Response to an authoritative service config lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudReadConfigResponseV1 {
     /// Whether the requested config was found for the active service revision.
     pub found: bool,
     /// Canonical JSON payload bytes when the lookup succeeds.
-    #[norito(default)]
     pub payload_bytes: Vec<u8>,
 }
 impl SoracloudReadConfigResponseV1 {
@@ -548,6 +544,7 @@ impl SoracloudReadConfigResponseV1 {
 /// Read an authoritative service secret envelope for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudReadSecretEnvelopeRequestV1 {
     /// Stable secret identifier relative to the authoritative service-secret set.
     pub secret_name: String,
@@ -568,9 +565,10 @@ impl SoracloudReadSecretEnvelopeRequestV1 {
 /// Response to an authoritative service secret-envelope lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudReadSecretEnvelopeResponseV1 {
     /// Matching authoritative secret envelope when one exists.
-    #[norito(default)]
+    #[norito(required)]
     pub envelope: Option<SecretEnvelopeV1>,
 }
 impl SoracloudReadSecretEnvelopeResponseV1 {
@@ -588,6 +586,7 @@ impl SoracloudReadSecretEnvelopeResponseV1 {
 /// Read node-local secret material for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudReadSecretRequestV1 {
     /// Stable secret identifier relative to the node-local secret root.
     pub secret_name: String,
@@ -608,11 +607,11 @@ impl SoracloudReadSecretRequestV1 {
 /// Response to a node-local secret lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudReadSecretResponseV1 {
     /// Whether the requested secret was found locally.
     pub found: bool,
     /// Secret payload bytes when the lookup succeeds.
-    #[norito(default)]
     pub payload_bytes: Vec<u8>,
 }
 impl SoracloudReadSecretResponseV1 {
@@ -631,6 +630,7 @@ impl SoracloudReadSecretResponseV1 {
 /// Read node-local credential material for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudReadCredentialRequestV1 {
     /// Stable credential identifier relative to the node-local credential root.
     pub credential_name: String,
@@ -651,11 +651,11 @@ impl SoracloudReadCredentialRequestV1 {
 /// Response to a node-local credential lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudReadCredentialResponseV1 {
     /// Whether the requested credential was found locally.
     pub found: bool,
     /// Credential payload bytes when the lookup succeeds.
-    #[norito(default)]
     pub payload_bytes: Vec<u8>,
 }
 impl SoracloudReadCredentialResponseV1 {
@@ -674,13 +674,14 @@ impl SoracloudReadCredentialResponseV1 {
 /// Perform a bounded, policy-checked egress fetch from an allowlisted host.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudEgressFetchRequestV1 {
     /// Absolute URL to fetch.
     pub url: String,
     /// Maximum number of response bytes the caller is willing to accept.
     pub max_bytes: u64,
     /// Optional expected digest for content-addressed verification.
-    #[norito(default)]
+    #[norito(required)]
     pub expected_hash: Option<Hash>,
 }
 impl SoracloudEgressFetchRequestV1 {
@@ -711,14 +712,14 @@ impl SoracloudEgressFetchRequestV1 {
 /// Response to a bounded egress fetch.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
 pub struct SoracloudEgressFetchResponseV1 {
     /// HTTP status code returned by the fetch.
     pub status_code: u16,
     /// Content type reported by the source when present.
-    #[norito(default)]
+    #[norito(required)]
     pub content_type: Option<String>,
     /// Response body bytes, truncated only by caller/configured ceilings.
-    #[norito(default)]
     pub body: Vec<u8>,
     /// Content-addressed hash of `body`.
     pub body_hash: Hash,
@@ -920,21 +921,24 @@ pub fn encode_bundle_provenance_payload(
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(bundle)
 }
-/// Encode the canonical provenance signature payload for app-level infrastructure manifests.
+/// Encode the canonical provenance signature payload for an app-level infrastructure mutation.
 ///
-/// The payload layout is the canonical Norito encoding of [`SoraAppInfraManifestV1`].
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(manifest, precondition)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
 pub fn encode_app_infra_provenance_payload(
     manifest: &SoraAppInfraManifestV1,
+    precondition: &SoraAppInfraMutationPreconditionV1,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::encode_canonical(manifest)
+    norito::encode_canonical(&(manifest.clone(), precondition.clone()))
 }
-/// Encode the canonical provenance signature payload for deployment bundles plus inline materials.
+/// Encode the canonical provenance signature payload for deployment bundles,
+/// inline materials, and the exact ledger mutation precondition.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
-/// `(bundle, initial_service_configs, initial_service_secrets)`.
+/// `(bundle, initial_service_configs, initial_service_secrets, precondition)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
@@ -942,11 +946,13 @@ pub fn encode_bundle_with_materials_provenance_payload(
     bundle: &SoraDeploymentBundleV1,
     initial_service_configs: &BTreeMap<String, Json>,
     initial_service_secrets: &BTreeMap<String, SecretEnvelopeV1>,
+    precondition: &SoraServiceMutationPreconditionV1,
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(
         bundle.clone(),
         initial_service_configs.clone(),
         initial_service_secrets.clone(),
+        precondition.clone(),
     ))
 }
 /// Encode the canonical provenance signature payload for service rollback.
@@ -958,7 +964,7 @@ pub fn encode_bundle_with_materials_provenance_payload(
 /// Returns an encoding error when Norito serialization fails.
 pub fn encode_rollback_provenance_payload(
     service_name: &str,
-    target_version: Option<&str>,
+    target_version: &str,
 ) -> Result<Vec<u8>, norito::Error> {
     norito::encode_canonical(&(service_name, target_version))
 }
@@ -1188,28 +1194,28 @@ pub fn encode_rollout_provenance_payload(
 /// Encode the canonical provenance signature payload for apartment deployment.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
-/// `(manifest, lease_ticks, autonomy_budget_units)`.
+/// `(manifest, lease_blocks, autonomy_budget_units)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
 pub fn encode_agent_deploy_provenance_payload(
     manifest: AgentApartmentManifestV1,
-    lease_ticks: u64,
+    lease_blocks: u64,
     autonomy_budget_units: Option<u64>,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::encode_canonical(&(manifest, lease_ticks, autonomy_budget_units))
+    norito::encode_canonical(&(manifest, lease_blocks, autonomy_budget_units))
 }
 /// Encode the canonical provenance signature payload for apartment lease renewal.
 ///
-/// The payload layout is a Norito tuple in this exact field order: `(apartment_name, lease_ticks)`.
+/// The payload layout is a Norito tuple in this exact field order: `(apartment_name, lease_blocks)`.
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
 pub fn encode_agent_lease_renew_provenance_payload(
     apartment_name: &str,
-    lease_ticks: u64,
+    lease_blocks: u64,
 ) -> Result<Vec<u8>, norito::Error> {
-    norito::encode_canonical(&(apartment_name, lease_ticks))
+    norito::encode_canonical(&(apartment_name, lease_blocks))
 }
 /// Encode the canonical provenance signature payload for apartment restart requests.
 ///

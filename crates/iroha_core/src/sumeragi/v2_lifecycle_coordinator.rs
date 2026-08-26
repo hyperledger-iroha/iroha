@@ -14,8 +14,9 @@ mod coordinator_support;
 #[cfg(test)]
 pub(crate) use coordinator_support::{
     reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
-    reviewed_v2_adapter_source_for_test, reviewed_v2_runtime_source_for_test,
-    reviewed_v2_worker_source_for_test, run_source_contract, source_contract_test,
+    reviewed_v2_adapter_source_for_test, reviewed_v2_effects_source_for_test,
+    reviewed_v2_runtime_source_for_test, reviewed_v2_worker_source_for_test, run_source_contract,
+    source_contract_test,
 };
 /// Sealed coordinator cuts for adjacent direct body-pipeline transitions.
 #[path = "v2_lifecycle_body_pipeline_transition.rs"]
@@ -110,7 +111,8 @@ pub(in crate::sumeragi) use launch::{
     ProductionLifecyclePreparedLocalProposalStateV1, ProductionLifecycleReadyCompletionTurnV1,
     ProductionLifecycleServeRetirementAuthenticationPermitV1, ProductionLifecycleShutdownErrorV1,
     ProductionPendingKuraApplyInstallErrorV1, ProductionPendingKuraApplyRecoveryErrorV1,
-    ProductionPendingKuraApplyRecoveryProgressV1, ProductionPreparedOrdinaryIngressTurnV1,
+    ProductionPendingKuraApplyRecoveryProgressV1, ProductionPreTimeoutLockedPrepareQcIngressTurnV1,
+    ProductionPreparedOrdinaryIngressTurnV1,
     ProductionRecoveredDecisionFetchStoreSettlementFailureV1,
     ProductionRecoveredDecisionFetchStoreSettlementV1,
     ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1,
@@ -251,6 +253,15 @@ pub(crate) use schema::{
     ProducerTurnAdmission, ReadyEvent, SchedulerEpisodeUniverse, SchedulerInputs, SchedulerRank,
     TerminalOutcome, TurnLease, TurnOutcome, TurnPlan, WaitSource, WaitToken,
 };
+
+/// Construct one exact wait token for tests outside the lifecycle coordinator module.
+#[cfg(test)]
+pub(in crate::sumeragi) const fn wait_token_for_test(
+    source: schema::WaitSource,
+    observed_generation: u64,
+) -> schema::WaitToken {
+    schema::WaitToken::new(source, observed_generation)
+}
 use schema::{
     CapacityAdmissionWait, CapacityGeometry, DurablePayloadReference, DurableRecordMetadata,
     DurableServeNegativeOutcome, LeaseCapacityReservation, RecoveredLifecycleRecord,
@@ -296,6 +307,7 @@ pub(in crate::sumeragi) use wal_recovery::{
     AuthenticatedRecoveredWalControlProjection, AuthenticatedRecoveredWalDecisionFetchProjection,
     AuthenticatedRecoveredWalVoteProjection, RecoveredDecisionApplyPendingLineageV1,
     RecoveredDecisionFetchStoreAdapterAuthorityV1, RecoveredDecisionFetchStoreProjectionV1,
+    RecoveredDecisionValidateProjectionV1,
 };
 #[allow(unused_imports, reason = "reviewed recovered-WAL successor namespace")]
 pub(in crate::sumeragi) use wal_recovery::{
@@ -346,7 +358,8 @@ pub(in crate::sumeragi) use work_registry::{
 pub(in crate::sumeragi) use work_registry::{
     DurableStoreTerminalRetrySealV1, LifecycleOutputAdmissionKeyV1,
     PendingDurableValidateAdmissionV1, PendingLifecycleOutputAdmissionV1,
-    PendingLiveWalSignAdmissionV1, PreparedAuthenticatedGenesisFetchReplayPreAdmission,
+    PendingLiveWalSignAdmissionV1, PreparedApplyTerminalDirectBroadcastV1,
+    PreparedAuthenticatedGenesisFetchReplayPreAdmission,
     PreparedAuthenticatedGenesisStoreReplayPreAdmission,
     PreparedAuthenticatedGenesisStoredReplayPreAdmission,
     PreparedLocalBodyValidateReplayPreAdmission, PreparedRemoteProposalFetchReplayPreAdmission,

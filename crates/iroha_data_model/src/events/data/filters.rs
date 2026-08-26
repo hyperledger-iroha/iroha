@@ -1571,9 +1571,27 @@ fn governance_matches(
         | GovernanceEvent::CitizenRevoked(_)
         | GovernanceEvent::CitizenServiceRecorded(_)
         | GovernanceEvent::CouncilPersisted(_)
-        | GovernanceEvent::ParliamentSelected(_) => true,
+        | GovernanceEvent::ParliamentSelected(_)
+        | GovernanceEvent::ParliamentBodyTransitioned(_)
+        | GovernanceEvent::ParliamentBallotTransitioned(_)
+        | GovernanceEvent::ThresholdKeyLifecycleApplied(_)
+        | GovernanceEvent::ParliamentConcentrationWarning(_) => true,
+        GovernanceEvent::ParliamentAttemptTransitioned(ev) => {
+            proposal_matches(ev.proposal_content_id.as_bytes())
+        }
+        GovernanceEvent::ParliamentAttemptCreated(ev) => {
+            proposal_matches(ev.proposal_content_id.as_bytes())
+        }
+        GovernanceEvent::ParliamentLifecycleTransitionApplied(ev) => {
+            proposal_matches(ev.proposal_content_id.as_bytes())
+        }
+        GovernanceEvent::ParliamentAggregateFinalized(ev) => {
+            proposal_matches(ev.proposal_content_id.as_bytes())
+        }
+        GovernanceEvent::ParliamentCertificateIssued(ev) => {
+            proposal_matches(ev.proposal_content_id.as_bytes())
+        }
         GovernanceEvent::ParliamentApprovalRecorded(ev) => proposal_matches(&ev.proposal_id),
-        GovernanceEvent::ParliamentBallotRecorded(ev) => proposal_matches(&ev.proposal_id),
         GovernanceEvent::LockSlashed(ev) => referendum_matches(&ev.referendum_id),
         GovernanceEvent::LockRestituted(ev) => referendum_matches(&ev.referendum_id),
     }

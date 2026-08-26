@@ -21,9 +21,6 @@ Options:
   --segmented-fast  Run non-integration workspace tests one package at a time.
   --fast            Run cargo via scripts/cargo_fast.sh when available.
   --fast-zero-debug When used with --fast, set CARGO_PROFILE_{DEV,TEST}_DEBUG=0.
-  --fast-no-incremental
-                    Set CARGO_INCREMENTAL=0; kept for compatibility with older
-                    --fast workflows.
   --no-incremental  Set CARGO_INCREMENTAL=0.
   --cargo-jobs N    Set CARGO_BUILD_JOBS for build and test compile phases.
   --test-threads N  Pass --test-threads=N to the fast and integration suites.
@@ -78,9 +75,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --fast-zero-debug)
             fast_zero_debug=true
-            ;;
-        --fast-no-incremental)
-            disable_incremental=true
             ;;
         --no-incremental)
             disable_incremental=true

@@ -81,7 +81,7 @@ case "${HOST_TRIPLE}" in
   *) NATIVE_LIBRARY="${TARGET_ARTIFACT_DIR}/libconnect_norito_bridge.so" ;;
 esac
 [[ -f "${NATIVE_LIBRARY}" && ! -L "${NATIVE_LIBRARY}" ]] \
-  || fail "fresh ABI22 privacy JVM bridge is unavailable: ${NATIVE_LIBRARY}"
+  || fail "fresh ABI23 privacy JVM bridge is unavailable: ${NATIVE_LIBRARY}"
 NATIVE_LIBRARY_DIR="$(cd "$(dirname "${NATIVE_LIBRARY}")" && pwd -P)"
 NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi22.json"
 CSHARP_NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi22-csharp.json"

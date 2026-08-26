@@ -55,13 +55,10 @@ REQUIRED_SELECTED_ORIGINS = {
     "scripts/check_compile_unit_budget.py": "donor",
     "scripts/check_dependency_budget.py": "donor",
     "scripts/check_source_file_budget.py": "donor",
-    "scripts/profile_build.py": "donor",
-    "scripts/profile_build.sh": "donor",
     "scripts/profile_cargo_build.py": "protected_integration",
     "scripts/tests/check_compile_unit_budget_test.py": "donor",
     "scripts/tests/check_dependency_budget_test.py": "protected_integration",
     "scripts/tests/check_source_file_budget_test.py": "donor",
-    "scripts/tests/profile_build_test.py": "donor",
     "scripts/tests/profile_cargo_build_test.py": "protected_integration",
 }
 REQUIRED_SOURCE_BUDGET = {

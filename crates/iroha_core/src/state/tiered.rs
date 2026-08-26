@@ -2048,6 +2048,51 @@ impl TieredStateBackend {
             world.parliament_bodies
         );
         collect_map!(
+            TieredSegment::ParliamentAttempts,
+            ParliamentAttempt,
+            world.parliament_attempts
+        );
+        collect_map!(
+            TieredSegment::TleKeySessions,
+            TleKeySession,
+            world.tle_key_sessions
+        );
+        collect_map!(
+            TieredSegment::TleActiveKeySession,
+            TleActiveKeySession,
+            world.tle_active_key_session
+        );
+        collect_map!(
+            TieredSegment::TimedOvnEvidence,
+            TimedOvnEvidence,
+            world.timed_ovn_evidence
+        );
+        collect_map!(
+            TieredSegment::GlobalBeaconDkg,
+            GlobalBeaconDkg,
+            world.global_beacon_dkg
+        );
+        collect_map!(
+            TieredSegment::GlobalBeaconKeySessions,
+            GlobalBeaconKeySession,
+            world.global_beacon_key_sessions
+        );
+        collect_map!(
+            TieredSegment::GlobalBeaconActiveSession,
+            GlobalBeaconActiveSession,
+            world.global_beacon_active_session
+        );
+        collect_map!(
+            TieredSegment::GlobalBeaconLatestPulse,
+            GlobalBeaconLatestPulse,
+            world.global_beacon_latest_pulse
+        );
+        collect_map!(
+            TieredSegment::GlobalBeaconPulses,
+            GlobalBeaconPulse,
+            world.global_beacon_pulses
+        );
+        collect_map!(
             TieredSegment::KagemushaReplayKeys,
             KagemushaReplayKey,
             world.kagemusha_replay_keys
@@ -2545,7 +2590,14 @@ mod measured_bytes_impls {
     use super::MeasuredBytes;
     use crate::state::SmartContractCodeUploadDescriptor;
     use crate::{
-        governance::state::ParliamentTerm,
+        beacon::{
+            FinalizedGlobalThresholdBeaconKeySessionRecordV1, GlobalThresholdBeaconDkgSnapshotV1,
+            GlobalThresholdBeaconPulseLinkV1,
+        },
+        governance::{
+            parliament::ParliamentAttemptStateV1, state::ParliamentTerm,
+            timed_ovn::TimedOvnLifecycleStateV1,
+        },
         privacy_state::{
             PrivacyPgcAccountProvenanceV1, PrivacyPgcAccountStateV1, PrivacyPgcPoolInvariantV1,
             PrivacyRootHeadRecordV1, PrivacyRootProvenanceV1, PrivacyStateItemRecordV1,
@@ -2555,13 +2607,11 @@ mod measured_bytes_impls {
             AssetDefinitionAliasBindingRecord, ConfidentialTreeProfile, ContractAliasBindingRecord,
             DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker, ElectionState,
             FrontierCheckpoint, GovernanceLockCustody, GovernanceLockRecord,
-            GovernanceLocksForReferendum, GovernanceParliamentSnapshot, GovernancePipeline,
-            GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumMode,
-            GovernanceReferendumRecord, GovernanceReferendumStatus, GovernanceSlashEntry,
-            GovernanceSlashLedger, GovernanceStage, GovernanceStageApproval,
-            GovernanceStageApprovals, GovernanceStageFailure, GovernanceStageRecord, ZkAssetState,
-            ZkAssetVerifierBinding,
+            GovernanceLocksForReferendum, GovernanceProposalRecord, GovernanceProposalStatus,
+            GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
+            GovernanceSlashEntry, GovernanceSlashLedger, ZkAssetState, ZkAssetVerifierBinding,
         },
+        tle_release::TleKeySessionPublicStateV1,
     };
     use iroha_crypto::{
         Hash, HashOf, LaneCommitmentId, MerkleProof, MerkleTree, PublicKey, Signature, SignatureOf,
@@ -2590,14 +2640,14 @@ mod measured_bytes_impls {
         },
         common::Owned,
         confidential::ConfidentialStatus,
-        consensus::{CertPhase, QcRef},
+        consensus::{CertPhase, FinalizedGlobalThresholdBeaconPulseV1, QcRef},
         domain::{Domain, DomainId},
         events::EventFilterBox,
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
             ParliamentBodies, ParliamentBody, ParliamentRoster, ProposalKind,
             RuntimeUpgradeProposal, SccpRouteGovernanceProposal, SorafsProviderGovernanceProposal,
-            ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+            TleKeySessionId, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         },
         ipfs::IpfsPath,
         isi::governance::CouncilDerivationKind,
@@ -2631,9 +2681,6 @@ mod measured_bytes_impls {
         },
         sorafs_uri::SorafsUri,
         trigger::{TriggerId, action::Repeats},
-        validation_fee::{
-            ValidationFeePlainElectorateMemberV1, ValidationFeePlainElectorateSnapshotV1,
-        },
         zk::BackendTag,
     };
     use iroha_primitives::{
@@ -2701,8 +2748,7 @@ mod measured_bytes_impls {
         GovernanceReferendumMode,
         GovernanceReferendumStatus,
         GovernanceProposalStatus,
-        GovernanceStage,
-        GovernanceStageFailure,
+        GlobalThresholdBeaconPulseLinkV1,
         LaneCommitmentId,
         Mintable,
         NumericSpec,
@@ -2712,6 +2758,7 @@ mod measured_bytes_impls {
         Repeats,
         RuntimeUpgradeId,
         RuntimeUpgradeStatus,
+        TleKeySessionId,
         PrivacyProtocolActivationRecordV1,
         PrivacyPgcAccountProvenanceV1,
         PrivacyPgcAccountStateV1,
@@ -3602,8 +3649,8 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<DeployContractProposal>();
             total = total.saturating_add(self.contract_address.measured_bytes_extra());
-            total = total.saturating_add(self.code_hash_hex.measured_bytes_extra());
-            total = total.saturating_add(self.abi_hash_hex.measured_bytes_extra());
+            total = total.saturating_add(self.code_hash.measured_bytes_extra());
+            total = total.saturating_add(self.abi_hash.measured_bytes_extra());
             total = total.saturating_add(self.abi_version.measured_bytes_extra());
             total = total.saturating_add(self.manifest_provenance.measured_bytes_extra());
             total
@@ -3632,15 +3679,15 @@ mod measured_bytes_impls {
     impl MeasuredBytes for ValidationFeePolicyProposal {
         fn measured_bytes(&self) -> usize {
             size_of::<ValidationFeePolicyProposal>()
+                .saturating_add(norito::codec::Encode::encode(&self.proposal_operator).len())
                 .saturating_add(norito::codec::Encode::encode(&self.policy).len())
-                .saturating_add(norito::codec::Encode::encode(&self.plain_electorate_rules).len())
         }
     }
     impl MeasuredBytes for ValidationFeePayoutLifecycleProposal {
         fn measured_bytes(&self) -> usize {
             size_of::<ValidationFeePayoutLifecycleProposal>()
+                .saturating_add(norito::codec::Encode::encode(&self.proposal_operator).len())
                 .saturating_add(norito::codec::Encode::encode(&self.payout_binding).len())
-                .saturating_add(norito::codec::Encode::encode(&self.plain_electorate_rules).len())
         }
     }
     impl MeasuredBytes for ProposalKind {
@@ -3672,70 +3719,6 @@ mod measured_bytes_impls {
             total
         }
     }
-    impl MeasuredBytes for GovernanceStageApproval {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<GovernanceStageApproval>();
-            total = total.saturating_add(self.approvers.measured_bytes_extra());
-            total = total.saturating_add(self.rejections.measured_bytes_extra());
-            total = total.saturating_add(self.abstentions.measured_bytes_extra());
-            total
-        }
-    }
-    impl MeasuredBytes for GovernanceStageRecord {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<GovernanceStageRecord>();
-            total = total.saturating_add(self.stage.measured_bytes_extra());
-            total = total.saturating_add(self.started_at.measured_bytes_extra());
-            total = total.saturating_add(self.deadline.measured_bytes_extra());
-            total = total.saturating_add(self.completed_at.measured_bytes_extra());
-            total = total.saturating_add(self.failure.measured_bytes_extra());
-            total
-        }
-    }
-    impl MeasuredBytes for GovernanceStageApprovals {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<GovernanceStageApprovals>();
-            total = total.saturating_add(self.stages.measured_bytes_extra());
-            total = total.saturating_add(
-                self.validation_fee_plain_electorate_snapshot
-                    .measured_bytes_extra(),
-            );
-            total
-        }
-    }
-    impl MeasuredBytes for ValidationFeePlainElectorateMemberV1 {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<ValidationFeePlainElectorateMemberV1>();
-            total = total.saturating_add(self.account_id.measured_bytes_extra());
-            total = total.saturating_add(self.bonded_amount.measured_bytes_extra());
-            total
-        }
-    }
-    impl MeasuredBytes for ValidationFeePlainElectorateSnapshotV1 {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<ValidationFeePlainElectorateSnapshotV1>();
-            total = total.saturating_add(self.proposal_operator.measured_bytes_extra());
-            total = total.saturating_add(self.members.measured_bytes_extra());
-            total
-        }
-    }
-    impl MeasuredBytes for GovernancePipeline {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<GovernancePipeline>();
-            total = total.saturating_add(self.stages.measured_bytes_extra());
-            total
-        }
-    }
-    impl MeasuredBytes for GovernanceParliamentSnapshot {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<GovernanceParliamentSnapshot>();
-            total = total.saturating_add(self.selection_epoch.measured_bytes_extra());
-            total = total.saturating_add(self.beacon.measured_bytes_extra());
-            total = total.saturating_add(self.roster_root.measured_bytes_extra());
-            total = total.saturating_add(self.bodies.measured_bytes_extra());
-            total
-        }
-    }
     impl MeasuredBytes for GovernanceProposalRecord {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceProposalRecord>();
@@ -3743,8 +3726,6 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.kind.measured_bytes_extra());
             total = total.saturating_add(self.created_height.measured_bytes_extra());
             total = total.saturating_add(self.status.measured_bytes_extra());
-            total = total.saturating_add(self.pipeline.measured_bytes_extra());
-            total = total.saturating_add(self.parliament_snapshot.measured_bytes_extra());
             total
         }
     }
@@ -3894,6 +3875,42 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.selection_epoch.measured_bytes_extra());
             total = total.saturating_add(self.rosters.measured_bytes_extra());
             total
+        }
+    }
+    impl MeasuredBytes for ParliamentAttemptStateV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<ParliamentAttemptStateV1>()
+                .saturating_add(norito::codec::Encode::encode(self).len())
+        }
+    }
+    impl MeasuredBytes for TleKeySessionPublicStateV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<TleKeySessionPublicStateV1>()
+                .saturating_add(norito::codec::Encode::encode(self).len())
+        }
+    }
+    impl MeasuredBytes for TimedOvnLifecycleStateV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<TimedOvnLifecycleStateV1>()
+                .saturating_add(norito::codec::Encode::encode(self).len())
+        }
+    }
+    impl MeasuredBytes for GlobalThresholdBeaconDkgSnapshotV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<GlobalThresholdBeaconDkgSnapshotV1>()
+                .saturating_add(norito::codec::Encode::encode(self).len())
+        }
+    }
+    impl MeasuredBytes for FinalizedGlobalThresholdBeaconKeySessionRecordV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<FinalizedGlobalThresholdBeaconKeySessionRecordV1>()
+                .saturating_add(norito::codec::Encode::encode(self).len())
+        }
+    }
+    impl MeasuredBytes for FinalizedGlobalThresholdBeaconPulseV1 {
+        fn measured_bytes(&self) -> usize {
+            size_of::<FinalizedGlobalThresholdBeaconPulseV1>()
+                .saturating_add(norito::codec::Encode::encode(self).len())
         }
     }
     impl MeasuredBytes for ParliamentTerm {
@@ -4109,6 +4126,15 @@ enum TieredSegment {
     GovernanceSlashes,
     Council,
     ParliamentBodies,
+    ParliamentAttempts,
+    TleKeySessions,
+    TleActiveKeySession,
+    TimedOvnEvidence,
+    GlobalBeaconDkg,
+    GlobalBeaconKeySessions,
+    GlobalBeaconActiveSession,
+    GlobalBeaconLatestPulse,
+    GlobalBeaconPulses,
     KagemushaReplayKeys,
     DirectLaneBlockApplicationMarkers,
 }
@@ -4170,6 +4196,15 @@ impl TieredSegment {
             TieredSegment::GovernanceSlashes => "governance_slashes",
             TieredSegment::Council => "council",
             TieredSegment::ParliamentBodies => "parliament_bodies",
+            TieredSegment::ParliamentAttempts => "parliament_attempts",
+            TieredSegment::TleKeySessions => "tle_key_sessions",
+            TieredSegment::TleActiveKeySession => "tle_active_key_session",
+            TieredSegment::TimedOvnEvidence => "timed_ovn_evidence",
+            TieredSegment::GlobalBeaconDkg => "global_beacon_dkg",
+            TieredSegment::GlobalBeaconKeySessions => "global_beacon_key_sessions",
+            TieredSegment::GlobalBeaconActiveSession => "global_beacon_active_session",
+            TieredSegment::GlobalBeaconLatestPulse => "global_beacon_latest_pulse",
+            TieredSegment::GlobalBeaconPulses => "global_beacon_pulses",
             TieredSegment::KagemushaReplayKeys => "kagemusha_replay_keys",
             TieredSegment::DirectLaneBlockApplicationMarkers => {
                 "direct_lane_block_application_markers"
@@ -4243,6 +4278,15 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "governance_slashes" => TieredSegment::GovernanceSlashes,
             "council" => TieredSegment::Council,
             "parliament_bodies" => TieredSegment::ParliamentBodies,
+            "parliament_attempts" => TieredSegment::ParliamentAttempts,
+            "tle_key_sessions" => TieredSegment::TleKeySessions,
+            "tle_active_key_session" => TieredSegment::TleActiveKeySession,
+            "timed_ovn_evidence" => TieredSegment::TimedOvnEvidence,
+            "global_beacon_dkg" => TieredSegment::GlobalBeaconDkg,
+            "global_beacon_key_sessions" => TieredSegment::GlobalBeaconKeySessions,
+            "global_beacon_active_session" => TieredSegment::GlobalBeaconActiveSession,
+            "global_beacon_latest_pulse" => TieredSegment::GlobalBeaconLatestPulse,
+            "global_beacon_pulses" => TieredSegment::GlobalBeaconPulses,
             "kagemusha_replay_keys" => TieredSegment::KagemushaReplayKeys,
             "direct_lane_block_application_markers" => {
                 TieredSegment::DirectLaneBlockApplicationMarkers
@@ -4445,6 +4489,15 @@ pub(crate) enum TieredKeyHandle {
     GovernanceSlash(String),
     Council(u64),
     ParliamentBodies(u64),
+    ParliamentAttempt(iroha_data_model::governance::types::GovernanceAttemptId),
+    TleKeySession(iroha_data_model::governance::types::TleKeySessionId),
+    TleActiveKeySession(u64),
+    TimedOvnEvidence(iroha_data_model::governance::types::BallotAttemptId),
+    GlobalBeaconDkg([u8; 32]),
+    GlobalBeaconKeySession([u8; 32]),
+    GlobalBeaconActiveSession(u64),
+    GlobalBeaconLatestPulse(u64),
+    GlobalBeaconPulse([u8; 32]),
     KagemushaReplayKey(iroha_crypto::Hash),
     DirectLaneBlockApplicationMarker(super::DirectLaneBlockApplicationKey),
 }
@@ -4512,6 +4565,17 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceSlash(_) => TieredSegment::GovernanceSlashes,
             TieredKeyHandle::Council(_) => TieredSegment::Council,
             TieredKeyHandle::ParliamentBodies(_) => TieredSegment::ParliamentBodies,
+            TieredKeyHandle::ParliamentAttempt(_) => TieredSegment::ParliamentAttempts,
+            TieredKeyHandle::TleKeySession(_) => TieredSegment::TleKeySessions,
+            TieredKeyHandle::TleActiveKeySession(_) => TieredSegment::TleActiveKeySession,
+            TieredKeyHandle::TimedOvnEvidence(_) => TieredSegment::TimedOvnEvidence,
+            TieredKeyHandle::GlobalBeaconDkg(_) => TieredSegment::GlobalBeaconDkg,
+            TieredKeyHandle::GlobalBeaconKeySession(_) => TieredSegment::GlobalBeaconKeySessions,
+            TieredKeyHandle::GlobalBeaconActiveSession(_) => {
+                TieredSegment::GlobalBeaconActiveSession
+            }
+            TieredKeyHandle::GlobalBeaconLatestPulse(_) => TieredSegment::GlobalBeaconLatestPulse,
+            TieredKeyHandle::GlobalBeaconPulse(_) => TieredSegment::GlobalBeaconPulses,
             TieredKeyHandle::KagemushaReplayKey(_) => TieredSegment::KagemushaReplayKeys,
             TieredKeyHandle::DirectLaneBlockApplicationMarker(_) => {
                 TieredSegment::DirectLaneBlockApplicationMarkers
@@ -4583,6 +4647,17 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceSlash(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Council(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ParliamentBodies(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::ParliamentAttempt(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::TleKeySession(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::TleActiveKeySession(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::TimedOvnEvidence(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::GlobalBeaconDkg(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::GlobalBeaconKeySession(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::GlobalBeaconActiveSession(key) => {
+                Ok(norito::codec::Encode::encode(key))
+            }
+            TieredKeyHandle::GlobalBeaconLatestPulse(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::GlobalBeaconPulse(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::KagemushaReplayKey(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::DirectLaneBlockApplicationMarker(key) => {
                 Ok(norito::codec::Encode::encode(key))
@@ -4694,6 +4769,23 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
             TieredKeyHandle::Council(id) => fetch!(world.council, id),
             TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
+            TieredKeyHandle::ParliamentAttempt(id) => fetch!(world.parliament_attempts, id),
+            TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
+            TieredKeyHandle::TleActiveKeySession(id) => {
+                fetch!(world.tle_active_key_session, id)
+            }
+            TieredKeyHandle::TimedOvnEvidence(id) => fetch!(world.timed_ovn_evidence, id),
+            TieredKeyHandle::GlobalBeaconDkg(id) => fetch!(world.global_beacon_dkg, id),
+            TieredKeyHandle::GlobalBeaconKeySession(id) => {
+                fetch!(world.global_beacon_key_sessions, id)
+            }
+            TieredKeyHandle::GlobalBeaconActiveSession(id) => {
+                fetch!(world.global_beacon_active_session, id)
+            }
+            TieredKeyHandle::GlobalBeaconLatestPulse(id) => {
+                fetch!(world.global_beacon_latest_pulse, id)
+            }
+            TieredKeyHandle::GlobalBeaconPulse(id) => fetch!(world.global_beacon_pulses, id),
             TieredKeyHandle::KagemushaReplayKey(id) => {
                 fetch!(world.kagemusha_replay_keys, id)
             }
@@ -4801,6 +4893,23 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
             TieredKeyHandle::Council(id) => fetch!(world.council, id),
             TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
+            TieredKeyHandle::ParliamentAttempt(id) => fetch!(world.parliament_attempts, id),
+            TieredKeyHandle::TleKeySession(id) => fetch!(world.tle_key_sessions, id),
+            TieredKeyHandle::TleActiveKeySession(id) => {
+                fetch!(world.tle_active_key_session, id)
+            }
+            TieredKeyHandle::TimedOvnEvidence(id) => fetch!(world.timed_ovn_evidence, id),
+            TieredKeyHandle::GlobalBeaconDkg(id) => fetch!(world.global_beacon_dkg, id),
+            TieredKeyHandle::GlobalBeaconKeySession(id) => {
+                fetch!(world.global_beacon_key_sessions, id)
+            }
+            TieredKeyHandle::GlobalBeaconActiveSession(id) => {
+                fetch!(world.global_beacon_active_session, id)
+            }
+            TieredKeyHandle::GlobalBeaconLatestPulse(id) => {
+                fetch!(world.global_beacon_latest_pulse, id)
+            }
+            TieredKeyHandle::GlobalBeaconPulse(id) => fetch!(world.global_beacon_pulses, id),
             TieredKeyHandle::KagemushaReplayKey(id) => {
                 fetch!(world.kagemusha_replay_keys, id)
             }
@@ -4954,6 +5063,27 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::GovernanceSlash(id) => write!(f, "gov_slash:{id}"),
             TieredKeyHandle::Council(id) => write!(f, "council:{id}"),
             TieredKeyHandle::ParliamentBodies(id) => write!(f, "parliament_bodies:{id}"),
+            TieredKeyHandle::ParliamentAttempt(id) => write!(f, "parliament_attempt:{id}"),
+            TieredKeyHandle::TleKeySession(id) => write!(f, "tle_key_session:{id}"),
+            TieredKeyHandle::TleActiveKeySession(id) => {
+                write!(f, "tle_active_key_session:{id}")
+            }
+            TieredKeyHandle::TimedOvnEvidence(id) => write!(f, "timed_ovn_evidence:{id}"),
+            TieredKeyHandle::GlobalBeaconDkg(id) => {
+                write!(f, "global_beacon_dkg:{}", id.encode_hex::<String>())
+            }
+            TieredKeyHandle::GlobalBeaconKeySession(id) => {
+                write!(f, "global_beacon_key_session:{}", id.encode_hex::<String>())
+            }
+            TieredKeyHandle::GlobalBeaconActiveSession(id) => {
+                write!(f, "global_beacon_active_session:{id}")
+            }
+            TieredKeyHandle::GlobalBeaconLatestPulse(id) => {
+                write!(f, "global_beacon_latest_pulse:{id}")
+            }
+            TieredKeyHandle::GlobalBeaconPulse(id) => {
+                write!(f, "global_beacon_pulse:{}", id.encode_hex::<String>())
+            }
             TieredKeyHandle::KagemushaReplayKey(id) => {
                 write!(f, "kagemusha_replay_key:{id}")
             }

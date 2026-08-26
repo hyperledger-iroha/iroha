@@ -91,8 +91,8 @@ DESCRIPTOR_KEYS = {
     "untracked_file_count",
     "untracked_path_mode_blob_oid_manifest",
     "untracked_path_mode_blob_oid_manifest_sha256",
-    "ignored_cargo_lock_size_bytes",
-    "ignored_cargo_lock_sha256",
+    "tracked_cargo_lock_size_bytes",
+    "tracked_cargo_lock_sha256",
     "combined_source_fingerprint_sha256",
 }
 MANIFEST_ENTRY_KEYS = {
@@ -1264,8 +1264,8 @@ def _capture_observed_descriptor(root: pathlib.Path) -> dict[str, Any]:
     descriptor = {
         "base_commit": head_before.decode("ascii"),
         "combined_source_fingerprint_sha256": combined.hexdigest(),
-        "ignored_cargo_lock_sha256": cargo_lock_sha256,
-        "ignored_cargo_lock_size_bytes": cargo_lock_size,
+        "tracked_cargo_lock_sha256": cargo_lock_sha256,
+        "tracked_cargo_lock_size_bytes": cargo_lock_size,
         "schema": REVIEWED_SOURCE_CLOSURE_SCHEMA,
         "source_commit": head_before.decode("ascii"),
         "source_repo_dirty": source_repo_dirty,
@@ -1352,12 +1352,12 @@ def _validate_descriptor(value: Any, required_commit: str) -> dict[str, Any]:
         "source_tree_sha256",
         "tracked_binary_diff_sha256",
         "untracked_path_mode_blob_oid_manifest_sha256",
-        "ignored_cargo_lock_sha256",
+        "tracked_cargo_lock_sha256",
         "combined_source_fingerprint_sha256",
     ):
         _require_digest(value[field], field)
     file_count = value["untracked_file_count"]
-    cargo_lock_size = value["ignored_cargo_lock_size_bytes"]
+    cargo_lock_size = value["tracked_cargo_lock_size_bytes"]
     if (
         type(file_count) is not int
         or file_count < 0
@@ -1370,7 +1370,7 @@ def _validate_descriptor(value: Any, required_commit: str) -> dict[str, Any]:
         or cargo_lock_size > MAX_CARGO_LOCK_BYTES
     ):
         raise SourceSealError(
-            "ignored_cargo_lock_size_bytes is not one bounded positive JSON integer"
+            "tracked_cargo_lock_size_bytes is not one bounded positive JSON integer"
         )
     raw_manifest = value["untracked_path_mode_blob_oid_manifest"]
     if not isinstance(raw_manifest, list) or len(raw_manifest) != file_count:

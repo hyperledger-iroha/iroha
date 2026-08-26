@@ -364,6 +364,15 @@ runner now mints and drives these states. PendingKura uses a separate one-height
 lifecycle-owned no-clock path before handing its verified successor to the
 ordinary lifecycle loop; no legacy height loop remains.
 
+Closing ordinary ingress does not head-block independent lane progress. A
+non-Apply lifecycle blocker can mint one sealed selector permit which may
+dequeue only a fair lane-local message; global V2 traffic, Certified Serve,
+Kura adverts, and all other classes remain in their original queue positions.
+The two Apply barriers cannot mint that permit. They use the separately sealed
+decided-lane recovery authority, which alone may classify current or historical
+Serve, Kura adverts, lane-local traffic, and obsolete leader-wire retirement
+while the exact Apply output is settling.
+
 `ProductionV2Services::capture_lifecycle_capacity_rank` consumes the complete
 selector. Under one locked transaction it either retains the physical I/O FIFO
 guard, the correctly derived Consensus admission slot, and the canonical-output
@@ -507,7 +516,10 @@ activated runner-only borrow supplies that same opaque scheduler owner beside
 the lifecycle owner, executor, and services. The non-Pending production runner
 mints that owner before setup and retains it through activation and live proposal
 scheduling. Only the isolated PendingKura no-clock recovery height continues to
-use the legacy `LocalProposalState`.
+use the legacy `LocalProposalState`. The superseded generic runtime
+`step_recovery` entry point and its `RecoveryFifo`, retry-retained, and idle
+scheduler-owner variants are absent; lifecycle-owned PendingKura is the sole
+production recovery scheduler.
 
 Ingress first consumes and retries any retained recovered capacity wait, then
 freezes exactly one winner with the same queue-owned strict-before-dependency
@@ -1492,6 +1504,20 @@ terminal LedgerV1 successor is even staged. The height driver yields and
 schedules its timed retry before Producer planning. Only an `Accepted` service
 result may stage, fsync, and publish the exact same-row terminal successor,
 remove the carrier, and return `Completed`.
+Logical terminalization is not a remote-delivery receipt. A later direct
+duplicate normally stutters before service I/O, but a `Broadcast` carried by a
+fresh serialized periodic-retransmit root may physically service the exact
+signed control again while the LedgerV1 row remains terminal. The classifier
+requires `Inherit` causality, the exact effect binding, the shared
+`periodic-retransmit` root identity, and that root's actor-global ordinal; no
+caller-supplied flag can reopen this path. `Accepted` leaves the terminal row
+unchanged, while `SourceRetained` or a service error returns the same move-only
+pending owner for a later attempt. This is the implementation cut for the
+formal retained-control action: repeated packets preserve one logical wire
+identity without resurrecting lifecycle state.
+An authenticated control packet that is older than an already-fsynced
+monotone view or Decision cut likewise settles as a WAL-obsolete stutter;
+current-view slot and identity conflicts remain fail-closed.
 Cold open rejoins that exact row pair to the recovered WAL request, verifies the
 signed consensus message against the recovered roster, replays `Signed` on the
 cold reducer, and installs only the authenticated Broadcast carrier. Proposal's
@@ -1609,6 +1635,26 @@ returns the complete owner unchanged; a queue-owner mismatch closes output for
 restart. The serialized runner consumes the sealed owner factory and its final
 observer-activation permit before entering this driver; independent runner
 constructors are absent.
+
+Once Apply reaches that exact terminal, the height driver keeps Runtime,
+Ingress, Producer, and the general Ready I/O dispatcher fenced. An empty or
+deferred output scan may proceed only through a sealed Ready-Broadcast permit.
+The closed classifier passes ordinary Completion I/O through to the existing
+terminal Runtime stop and fails closed on an invalid census. If the exact
+global Ready minimum is a retained direct Broadcast, the permit binds its
+registry address, digest, and executor pending-map key; source retention
+reinstalls that same pending owner, while acceptance fsyncs its terminal
+LedgerV1 row before publishing volatile state. An authenticated recovered
+Broadcast instead enters only its existing exact-output refanout wait. This
+narrow handoff prevents predecessor rollover from stranding either signed
+Broadcast shape without reopening Apply, Sign, Fetch, diagnostics, later
+outputs, or fresh work after terminal settlement.
+
+Production exposes this composition only as the sealed pre-gate followed by
+the separately authorized Ready dispatcher. The former all-in-one Completion
+driver is retained under `cfg(test)` solely as a fixture adapter, so production
+callers cannot skip the lease and post-Apply fences by invoking a composite
+entrypoint.
 
 The live recovered Decision-Fetch path is closed through its first durable
 Store successor. A Ready carrier projects only an

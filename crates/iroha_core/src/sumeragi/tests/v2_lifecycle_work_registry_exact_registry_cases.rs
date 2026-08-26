@@ -462,7 +462,9 @@ fn live_wal_sign_carrier_uses_typed_dispatch_and_both_signed_successor_families(
         .split("fn install_live_sign(self, prepared: PreparedLiveValidateSignRegistryWork)")
         .nth(1)
         .expect("live Validate Sign has one registry installation")
-        .split("impl LiveValidateApplyRegistryReservation")
+        .split(
+            "#[cfg_attr(not(test), allow(dead_code))]\nimpl<'registry> AuthenticatedRecoveredWalValidateLifecycleRepair",
+        )
         .next()
         .expect("live Validate Sign installation stays bounded");
     assert!(live_validate_install.contains("DurableLiveWalSignOriginV1::Validate"));

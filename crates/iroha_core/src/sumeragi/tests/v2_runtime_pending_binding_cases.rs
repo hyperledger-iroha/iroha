@@ -128,6 +128,11 @@ struct FakeDriver {
         wire::BlockSubject,
         wire::ExecutionCommitment,
     )>,
+    protected_prepare: Option<(
+        wire::ConsensusRound,
+        wire::BlockSubject,
+        wire::ExecutionCommitment,
+    )>,
     signature_fence_active: bool,
     signature_fence_identity: u64,
 }
@@ -151,6 +156,7 @@ impl FakeDriver {
             admission_preflight_override: None,
             dormant_local_fifo_reservations: Vec::new(),
             protected_commit: None,
+            protected_prepare: None,
             signature_fence_active: false,
             signature_fence_identity: 1,
         }
@@ -328,6 +334,16 @@ impl RuntimeDriver for FakeDriver {
                 Some((round, subject, execution_commitment))
             ) if vote.phase == wire::GlobalPhase::Commit
                 && vote.round == round
+                && vote.subject == subject
+                && vote.execution_commitment == execution_commitment
+        ) || matches!(
+            (payload, self.protected_prepare),
+            (
+                wire::ConsensusMessageV2Payload::Vote(vote),
+                Some((round, subject, execution_commitment))
+            ) if vote.phase == wire::GlobalPhase::Prepare
+                && vote.round == round
+                && vote.proposal_round == round
                 && vote.subject == subject
                 && vote.execution_commitment == execution_commitment
         )
@@ -957,6 +973,13 @@ fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
         validate_successor.projection_hash, successor.projection_hash,
         "the concrete successor receives a new integrity projection",
     );
+    let recovered_store = validate_successor
+        .project_validate_store_predecessor(&validate, &store)
+        .expect("the exact Validate round-trips to its ordinal-free Store predecessor");
+    assert_eq!(
+        recovered_store, successor,
+        "the inverse must recover the byte-identical causal binding"
+    );
     assert!(!successor.exactly_binds_adapter_effect(&validate));
     assert!(!validate_successor.exactly_binds_adapter_effect(&store));
     let wrong_tag = AdapterEffect::StoreBody {
@@ -968,6 +991,47 @@ fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
         pending
             .project_certified_fetch_store_successor(&fetch, &wrong_tag)
             .is_none()
+    );
+    assert!(
+        validate_successor
+            .project_validate_store_predecessor(&validate, &wrong_tag)
+            .is_none(),
+        "the inverse cannot change the exact Store tag"
+    );
+    let wrong_round_store = AdapterEffect::StoreBody {
+        tag,
+        round: wire::ConsensusRound {
+            view: manifest.round.view.saturating_add(1),
+            ..manifest.round
+        },
+        subject: manifest.subject,
+    };
+    assert!(
+        validate_successor
+            .project_validate_store_predecessor(&validate, &wrong_round_store)
+            .is_none(),
+        "the inverse cannot change the exact Store round"
+    );
+    let wrong_subject_store = AdapterEffect::StoreBody {
+        tag,
+        round: manifest.round,
+        subject: runtime_manifest(&context, 0x6B).subject,
+    };
+    assert!(
+        validate_successor
+            .project_validate_store_predecessor(&validate, &wrong_subject_store)
+            .is_none(),
+        "the inverse cannot change the exact Store subject"
+    );
+    let mut corrupted_statement_validate = successor
+        .project_store_validate_successor(&store, &validate)
+        .expect("derive a second exact Validate binding for corruption testing");
+    corrupted_statement_validate.candidate_statement = None;
+    assert!(
+        corrupted_statement_validate
+            .project_validate_store_predecessor(&validate, &store)
+            .is_none(),
+        "the inverse cannot accept a binding whose authority statement lost integrity"
     );
     let ordinary_fetch = AdapterEffect::FetchBody {
         tag,
@@ -991,6 +1055,12 @@ fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
         successor
             .project_store_validate_successor(&store, &wrong_validate_tag)
             .is_none()
+    );
+    assert!(
+        validate_successor
+            .project_validate_store_predecessor(&wrong_validate_tag, &store)
+            .is_none(),
+        "the inverse cannot substitute another Validate tag"
     );
     assert!(
         successor
@@ -1098,6 +1168,46 @@ fn pending_validate_projects_only_the_exact_commit_authorized_apply_successor() 
     assert_eq!(
         prepare_apply.candidate_statement(),
         local_apply.candidate_statement()
+    );
+    let rebound_tag = EventTag::new(
+        context.height,
+        tag.view().checked_add(1).expect("fixture view remains bounded"),
+        tag.generation(),
+    );
+    let rebound_apply = AdapterEffect::Apply {
+        tag: rebound_tag,
+        subject: commit.subject,
+        certificate: commit.clone(),
+    };
+    let rebound = prepare_validate
+        .project_validate_apply_successor(&validate, &rebound_apply)
+        .expect("a later-view Apply may consume the exact stale Validate completion");
+    assert!(rebound.exactly_binds_adapter_effect(&rebound_apply));
+    assert_eq!(
+        rebound.causal_lifecycle_key(),
+        prepare_validate.causal_lifecycle_key(),
+        "view rebinding cannot change the physical lifecycle root"
+    );
+    let wrong_rebound_generation = AdapterEffect::Apply {
+        tag: EventTag::new(
+            context.height,
+            rebound_tag.view(),
+            Generation::new(
+                rebound_tag
+                    .generation()
+                    .get()
+                    .checked_add(1)
+                    .expect("fixture generation remains bounded"),
+            ),
+        ),
+        subject: commit.subject,
+        certificate: commit.clone(),
+    };
+    assert!(
+        prepare_validate
+            .project_validate_apply_successor(&validate, &wrong_rebound_generation)
+            .is_none(),
+        "a later view cannot launder another local generation"
     );
     let wrong_tag_apply = AdapterEffect::Apply {
         tag: EventTag::new(context.height, commit.round.view, Generation::new(3)),

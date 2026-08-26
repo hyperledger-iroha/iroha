@@ -21,8 +21,8 @@ pub(super) enum LifecycleOutputRegistryJoinV1 {
     /// Broadcast carrier and must not enter generic service I/O.
     RecoveredBroadcastOwned,
     /// A byte-identical direct output already has an exact terminal durable
-    /// row. Its volatile runtime root may have been reminted after the first
-    /// service call, so it stutters without re-entering direct admission.
+    /// row. Logical admission always stutters on that row; only a sealed fresh
+    /// periodic-retransmit occurrence may repeat physical Broadcast service.
     TerminalDirectOutputDuplicate,
     /// A process-local carrier was reinstalled at the same exact address as an
     /// already-durable terminal direct output. Only the volatile carrier must
@@ -95,6 +95,37 @@ impl SchedulableRetainedDirectBroadcastAttestationV1 {
             && record.ordinal == self.address.ordinal
             && exact_single_record_slot(record, LifecycleWorkClass::Broadcast.capacity_class())
                 == Some((self.address.slot, self.digest))
+    }
+}
+
+/// Move-only authority to settle one exact Ready direct Broadcast after Apply.
+///
+/// The pending-map key is copied from the already-installed `PendingAdapter`
+/// carrier. Callers can neither select another pending output nor widen this
+/// authority to diagnostic output classes.
+#[must_use = "the attested direct Broadcast must be settled or failed closed"]
+pub(in crate::sumeragi) struct PreparedApplyTerminalDirectBroadcastV1 {
+    address: ConcreteWorkAddress,
+    digest: LifecycleDigest,
+    pending_key: LifecycleOutputAdmissionKeyV1,
+    _linearity: ApplyTerminalDirectBroadcastLinearityV1,
+}
+
+struct ApplyTerminalDirectBroadcastLinearityV1;
+
+impl Drop for ApplyTerminalDirectBroadcastLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl PreparedApplyTerminalDirectBroadcastV1 {
+    /// Return the immutable lifecycle ordinal of the attested Broadcast row.
+    pub(in crate::sumeragi) const fn ordinal(&self) -> u128 {
+        self.address.ordinal
+    }
+
+    /// Return the exact executor pending-map key copied from the installed carrier.
+    pub(in crate::sumeragi) const fn pending_key(&self) -> LifecycleOutputAdmissionKeyV1 {
+        self.pending_key
     }
 }
 
@@ -436,6 +467,90 @@ impl ConcreteLifecycleWorkRegistry {
             | ConcreteLifecycleWorkKind::DurableCertifiedServe(_)
             | ConcreteLifecycleWorkKind::DurableProducerTurn(_) => Err(RegistryError::CorruptWork),
         }
+    }
+
+    /// Bind the global Ready minimum to its exact installed direct-Broadcast pending key.
+    pub(super) fn prepare_apply_terminal_direct_broadcast(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ordinal: u128,
+    ) -> Result<PreparedApplyTerminalDirectBroadcastV1, RegistryError> {
+        let SchedulableLifecycleBroadcastCarrierV1::RetainedDirectOutput(attestation) = self
+            .attest_schedulable_lifecycle_broadcast_carrier(coordinator, ordinal, None)?
+        else {
+            return Err(RegistryError::CorruptWork);
+        };
+        let record = coordinator
+            .records
+            .get(&ordinal)
+            .ok_or(RegistryError::Missing)?;
+        if record.state != super::LifecycleState::Ready
+            || coordinator.ready_index.first().copied() != Some(ordinal)
+            || !attestation.matches_schedulable_record(record)
+        {
+            return Err(RegistryError::CorruptWork);
+        }
+        let work = self
+            .entries
+            .get(&attestation.address)
+            .ok_or(RegistryError::Missing)?;
+        let ConcreteLifecycleWorkKind::PendingAdapter {
+            effect,
+            pending,
+            replay_authority: _,
+        } = &work.kind
+        else {
+            return Err(RegistryError::CorruptWork);
+        };
+        if !matches!(effect, AdapterEffect::Broadcast(_))
+            || work.digest != attestation.digest
+            || !lifecycle_output_row_matches(
+                coordinator,
+                attestation.address,
+                work,
+                effect,
+                pending,
+            )
+        {
+            return Err(RegistryError::CorruptWork);
+        }
+        Ok(PreparedApplyTerminalDirectBroadcastV1 {
+            address: attestation.address,
+            digest: attestation.digest,
+            pending_key: LifecycleOutputAdmissionKeyV1 {
+                causal_lifecycle_key: *pending.causal_lifecycle_key().as_ref(),
+                effect_identity: *pending.exact_effect_identity().as_ref(),
+            },
+            _linearity: ApplyTerminalDirectBroadcastLinearityV1,
+        })
+    }
+
+    /// Rejoin a move-only pending output to the exact attested Ready Broadcast.
+    pub(super) fn apply_terminal_direct_broadcast_pending_is_exact(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        prepared: &PreparedApplyTerminalDirectBroadcastV1,
+        pending: &PendingLifecycleOutputAdmissionV1,
+    ) -> bool {
+        let Some(record) = coordinator.records.get(&prepared.address.ordinal) else {
+            return false;
+        };
+        let Some(work) = self.entries.get(&prepared.address) else {
+            return false;
+        };
+        record.state == super::LifecycleState::Ready
+            && coordinator.active_lease.is_none()
+            && coordinator.ready_index.first().copied() == Some(prepared.address.ordinal)
+            && work.digest == prepared.digest
+            && pending.key() == prepared.pending_key
+            && matches!(&pending.effect, AdapterEffect::Broadcast(_))
+            && lifecycle_output_row_matches(
+                coordinator,
+                prepared.address,
+                work,
+                &pending.effect,
+                &pending.pending,
+            )
     }
 
     /// Join one runtime output to its sole exact installed lifecycle row.

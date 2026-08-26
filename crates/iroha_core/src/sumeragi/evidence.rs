@@ -1197,6 +1197,7 @@ mod tests {
         );
         let mut state_block = state.block(header);
         let effects = iroha_data_model::consensus::NposConsensusEffects {
+            finalized_global_beacon_pulse: None,
             vrf_epoch_seals: Vec::new(),
             v2_evidence_admissions: admissions,
             penalty_actions: Vec::new(),
@@ -1205,6 +1206,7 @@ mod tests {
         super::super::penalties::apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,
+            None,
             height,
             view,
             now_ms,

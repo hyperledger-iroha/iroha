@@ -106,6 +106,7 @@ fn register_and_revoke_citizenship_moves_bond() {
     );
     assert!(stx.world.assets().get(&escrow_asset_id).is_none());
 }
+
 #[test]
 fn citizenship_gate_blocks_and_allows_governance() {
     let def_id: AssetDefinitionId =

@@ -1,11 +1,11 @@
-/** Transport-only ABI-22/manifest-V4 Kagemusha projections.
+/** Transport-only ABI-23/manifest-V4 Kagemusha projections.
  *
  * This module deliberately has no native prover or artifact-install surface.
  * Top-up and redemption methods accept canonical Norito archives produced by
  * a supported wallet/prover implementation.
  */
 
-export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 22;
+export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 23;
 export const KAGEMUSHA_MANIFEST_VERSION = 4;
 export const KAGEMUSHA_MAX_HOPS = 8;
 export const KAGEMUSHA_CASH_HANDOFF_CAPABILITY = "cash_handoff_v1";
@@ -17,13 +17,10 @@ const OPERATION_ID = /^(?!0{64}$)[0-9a-f]{64}$/u;
 const EXACT_JSON_MEDIA_TYPE =
   /^[ \t]*application\/json(?:[ \t]*;[ \t]*[!#$%&'*+\-.^_`|~0-9A-Za-z]+=(?:[!#$%&'*+\-.^_`|~0-9A-Za-z]+|"(?:[ \t!#-\[\]-~\u0080-\u00ff]|\\[ \t!-~\u0080-\u00ff])*"))*[ \t]*$/iu;
 const OFFLINE_STATUS_FIELDS = Object.freeze([
-  "mandatory",
   "cash_handoff_capability",
   "required_bridge_abi_version",
   "max_hops",
   "ready",
-  "assets",
-  "blockers",
 ]);
 
 function record(value, context) {
@@ -94,9 +91,6 @@ export function requireKagemushaJsonContentType(value, context) {
 export function normalizeOfflineStatus(payload) {
   const context = "Offline capability";
   const item = exactFields(payload, context, OFFLINE_STATUS_FIELDS);
-  if (item.mandatory !== false) {
-    throw new TypeError(`${context}.mandatory must be false`);
-  }
   if (
     exactString(
       item.cash_handoff_capability,
@@ -113,7 +107,7 @@ export function normalizeOfflineStatus(payload) {
       maximum: 0xffff_ffff,
     }) !== KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION
   ) {
-    throw new TypeError(`${context}.required_bridge_abi_version must be 22`);
+    throw new TypeError(`${context}.required_bridge_abi_version must be 23`);
   }
   if (
     safeUnsigned(item.max_hops, `${context}.max_hops`, {
@@ -126,20 +120,11 @@ export function normalizeOfflineStatus(payload) {
   if (item.ready !== true) {
     throw new TypeError(`${context}.ready must be true`);
   }
-  if (!Array.isArray(item.assets) || item.assets.length !== 0) {
-    throw new TypeError(`${context}.assets must be an empty array`);
-  }
-  if (!Array.isArray(item.blockers) || item.blockers.length !== 0) {
-    throw new TypeError(`${context}.blockers must be an empty array`);
-  }
   return Object.freeze({
-    mandatory: false,
     cash_handoff_capability: KAGEMUSHA_CASH_HANDOFF_CAPABILITY,
     required_bridge_abi_version: KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
     max_hops: KAGEMUSHA_MAX_HOPS,
     ready: true,
-    assets: Object.freeze([]),
-    blockers: Object.freeze([]),
   });
 }
 

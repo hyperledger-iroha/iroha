@@ -1,26 +1,25 @@
 # Soracloud Uploaded Models
 
-Production V1 supports uploaded-model registration as a storage and registry
-workflow only. Model bytes are encrypted and pinned through SoraFS, then
-Soracloud records the approved SoraFS manifest digest plus deterministic roots,
-byte counts, artifact metadata, and weight-version metadata.
+Production V1 supports uploaded-model registration and runtime-owned private
+execution. Model, input, and output plaintext never enter Torii or world state.
+SoraFS stores the encrypted artifacts; Soracloud records their canonical
+content identities, finalized model metadata, and committed execution receipts.
 
 The chain never stores uploaded model bytes, encrypted chunk payloads, or
-process-local upload sessions. Torii exposes one signed mutation for the
-uploaded-model path:
+process-local upload sessions. Torii exposes the signed registration mutation:
 
 - `POST /v1/soracloud/model/upload/register`
 
-Torii also exposes upload readiness and deterministic private execution
-endpoints:
+Torii also exposes upload readiness and private-execution routes:
 
 - `GET /v1/soracloud/model/upload/encryption-recipient` (public, one response
   object capped at 64 KiB of encoded JSON)
 - `GET /v1/soracloud/model/upload/status` (exact-network canonical account
   authentication)
-- `POST /v1/soracloud/model/upload/private/execute`
+- `POST /v1/soracloud/model/upload/private/execute` (authenticated,
+  runtime-owned deterministic execution and atomic submission)
 - `GET /v1/soracloud/model/upload/private/receipts` (exact-network canonical
-  account authentication; private, non-storable responses)
+  account authentication over committed receipts)
 
 ## Register Flow
 
@@ -62,22 +61,12 @@ prepare the storage, runtime, and signing surfaces as one controlled change.
    provenance signatures. The bundle provenance and final registry provenance
    must cover the exact committed roots, artifact id, weight version, dataset
    reference, policy id, and SoraFS digest.
-5. For private execution, require clients to call
-   `POST /v1/soracloud/model/upload/private/execute` and inspect the returned
-   receipt. Route the returned
-   `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction to a
-   controlled `CanManageSoracloud` authority for signing and submission;
-   validators and ordinary client authorities cannot commit this privileged
-   ledger projection. The JavaScript helper returns an unsigned instruction
-   skeleton only; raw private keys must not be embedded in helper inputs,
-   browser payloads, logs, or repository files.
-6. After submission, query
-   `GET /v1/soracloud/model/upload/private/receipts` with the expected service,
-   model id, weight version, and `count_mode=exact` when an operator needs an
-   audited total. Sign the exact GET path and sorted query with the configured
-   NetworkId and local account key; an API token is not a substitute for this
-   proof. Compare the committed receipt commitments and encrypted artifact
-   references with the runtime response before marking the release complete.
+5. Qualify the local deterministic runtime, embedded SoraFS storage, validator
+   identity, runtime-owned journal, and atomic mutation sink together. The
+   execute route accepts only an authenticated exact service/model release,
+   committed decryption request, rooted encrypted input reference, and typed
+   output recipient. Treat `202 Accepted` as transaction submission; use the
+   committed receipt query or an exact `200 OK` replay as commit evidence.
 
 ## Chain State
 
@@ -99,111 +88,200 @@ prepare the storage, runtime, and signing surfaces as one controlled change.
 `SoraModelArtifactRecordV1` and `SoraModelWeightVersionRecordV1` link the
 uploaded model into the normal Soracloud model registry. For uploaded models,
 their `source_provenance` uses `UserUpload` and points back to the uploaded
-model id.
+model id. V1 model ids and weight versions are `1..=128` ASCII bytes drawn
+from letters, digits, and `[-_.:#]`. Service versions are exact, well-formed
+Unicode-scalar, unpadded, control-free strings of at most 256 UTF-8 bytes.
+Recipient key ids are also exact, unpadded, control-free Unicode-scalar
+strings; no compatibility normalization is applied.
+Finalization verifies provenance over the exact submitted spelling: model names
+must already be NFC, artifact ids use the same canonical identifier alphabet,
+and dataset references are unpadded, control-free strings of at most 512 UTF-8
+bytes. A `(service_name, model_id, weight_version)` uploaded release is
+finalized exactly once across the service, regardless of model-name or artifact
+aliases; any pre-existing `UserUpload` projection rejects another finalization.
 
 ## Runtime Posture
 
-Production V1 exposes only the deterministic quantized CPU private runtime for
-uploaded models admitted with `DeterministicQuantizedCpuV1`. The CPU runtime is
-the authoritative semantics: fixed signed-integer linear operations,
-nearest-away-from-zero rounding, saturating output bounds, and stable receipt
-commitments. Hardware acceleration is not part of the V1 correctness surface.
+`PrivateUploadedModelExecuteRequest` is a closed authenticated request. It
+contains exact `service_name`, `service_version`, and `weight_version` values;
+exactly one of `model_id` or `model_name`; an optional exact `bundle_root`
+constraint; the committed `decryption_request_id`; a rooted `input`-role
+`SoraPrivateModelArtifactRefV1`; and the typed
+`SoraUploadedModelEncryptionRecipientV1` for the output. The input reference
+binds its SoraFS manifest digest, root CID, ciphertext hash, and ciphertext
+length, with encrypted artifacts restricted to `1..=72 MiB` in V1. The output
+recipient carries one canonical non-low-order X25519 public key and its exact
+Iroha BLAKE2b-256 prehash fingerprint. Plaintext, model weights, policy
+overrides, execution-host claims, output claims, and receipts are not request
+fields.
 
-The private execution route validates that the finalized uploaded-model bundle
-is backed by an active approved SoraFS pin, validates encrypted input and output
-artifact references against active approved SoraFS pins, executes the CPU
-reference runtime, and returns:
+Torii verifies the canonical account-signature headers and requires one
+verified signer to equal the signer recorded on the decryption request. The
+selector must resolve one finalized
+`DeterministicQuantizedCpuV1` bundle, and the exact retained service revision
+must permit model inference. Finalization means exactly one `UserUpload`
+weight projection and one linked artifact projection whose service/model keys,
+weight-version links, source identity, provenance hashes, and chunk root agree
+exactly. The artifact registration sequence must be the checked consecutive
+successor of the weight registration sequence. `service_version` remains
+lifecycle metadata: promotion may update the weight projection without
+rewriting the immutable artifact, so request revision admission is enforced
+separately. The model and input SoraFS pins must be active and match their
+authoritative content identities. The decryption record and audit event must
+match the service version, bundle policy, and input ciphertext commitment and
+remain active at the candidate block height.
 
-- `SoraPrivateUploadedModelExecutionReceiptV1`, containing only commitments,
-  runtime version, policy id, bundle identifiers, and encrypted artifact
-  references;
-- `tx_instructions`, containing a canonical
-  `RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction payload for
-  signing and transaction submission by a `CanManageSoracloud` authority.
+The qualified runtime independently revalidates those bindings, reads the
+encrypted model and input under admitted SoraFS leases, and opens only canonical
+envelopes addressed to its persisted custody recipient. Envelope contexts bind
+the service, service version, model id, weight version, policy, and decryption
+request. Execution uses the bounded deterministic quantized-CPU V1 integer
+rules. The runtime derives custody-blinded input and output commitments,
+zeroizes decrypted working material, and encrypts the canonical result to the
+request's typed recipient.
 
-Plaintext input and output are runtime-local and must not be written to chain
-state. Committed chain state stores receipt commitments and encrypted artifact
-references only. Receipt identifiers are append-only: a later instruction
-cannot replace an already committed receipt.
+Torii derives a canonical single-file SoraFS manifest for the encrypted output,
+inherits the input pin's governed storage policy, and durably ingests the
+ciphertext before publishing recovery evidence. An existing output is reused
+only when its content-addressed bytes match exactly.
 
-Committed private uploaded-model receipts can be queried with optional
-`receipt_id`, `service_name`, `model_id`, `weight_version`, `limit`, and
-`count_mode` filters. The list response defaults to `count_mode=bounded` and
-accepts explicit `count_mode=exact` when clients need a `total`. It includes
-pagination metadata (`returned_items`, `remaining_items`, `has_more`,
-`count_mode`) alongside the receipt records.
+`SoracloudPrivateUploadedModelExecutionJournalV1` is the runtime-owned durable
+outbox keyed by service and decryption request. It stores only the complete
+request fingerprint, canonical output manifest, receipt submission, and latest
+signed transaction; decrypted model, input, and output payloads are absent.
+The runtime durably writes `Prepared(0)` after output ingestion, then journals
+the exact validator-signed transaction before enqueue. Recovery verifies the
+output is still readable, reuses a pending transaction, replaces an expired
+transaction within the three-attempt bound, removes committed or
+authorization-expired entries, and retains terminal evidence for a permanently
+rejected transaction without re-executing.
 
-The JavaScript SDK exposes unsigned helpers for this V1 flow:
-`buildSoracloudPrivateUploadedModelExecuteRequest`,
-`buildSoracloudPrivateUploadedModelReceiptQuery`, and
-`privateUploadedModelReceiptInstruction`. These helpers normalize the Torii
-request/query shapes, reject embedded signing secrets, and extract the returned
-receipt instruction skeleton for external transaction signing by a controlled
-`CanManageSoracloud` authority.
+The signed transaction contains one
+`RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction. Its authority
+must be the receipt's exact active public-lane validator attester. Consensus
+revalidates the finalized model, service revision, decryption authorization and
+audit event, authorization height, and input pin. It verifies that the
+canonical output manifest matches the receipt, then atomically registers or
+reuses the output pin and persists the validator receipt. Consensus assigns
+`emitted_sequence` and `emitted_block_height`; exact transaction replay is a
+no-op, while different evidence cannot reuse a receipt id or consume the same
+service/decryption request. Both ledger coordinates use the complete unsigned
+64-bit range; Java and Kotlin expose them as `BigInteger` so no valid chain
+height or sequence is narrowed to a signed `long`.
 
-The Kotlin core SDK and Java Android SDK mirror the client-visible response
-parsers for private execute and committed receipt-list responses. Both expose a
-helper that extracts the
-`RecordSoracloudPrivateUploadedModelExecutionReceipt` instruction skeleton from
-the Torii response so mobile clients can pass it to a manager-controlled
-external transaction signing pipeline.
+A fresh or durably recovered submission returns HTTP `202 Accepted` with
+`submission_status = "submitted"`, the signed transaction hash, receipt
+submission, and encrypted output reference. This is admission evidence, not
+commit evidence. Once the exact receipt is visible in world state, replaying
+the request returns HTTP `200 OK` with `submission_status = "committed"`, no
+transaction hash, and the ledger-owned receipt. Concurrent and pre-commit
+exact retries are coalesced without executing the released ciphertext twice.
+
+The authenticated receipts route queries committed world state by optional
+`receipt_id`, `service_name`, `model_id`, and `weight_version`, with bounded or
+exact count mode. Its `limit` is optional, defaults to `50`, and must be in
+`1..=500`; out-of-range values are rejected instead of normalized. Results are
+ordered by emitted sequence and receipt id. When another page exists, the
+response carries one canonical opaque `continue_cursor`; pass it unchanged as
+the next request's `cursor`. The token binds the exact filters and the first
+page's ledger sequence snapshot, so later append-only receipts do not change an
+in-progress traversal. `has_more` and cursor presence agree exactly. Bounded
+mode leaves both `total` and `remaining_items` null and retains only a bounded
+page candidate set; exact mode returns the snapshot-wide `total` and the exact
+number of rows remaining after the current page. Every receipt carries the
+SoraFS output reference needed to retrieve the encrypted result.
 
 ## Production Gates
 
 Soracloud production deployments must enable `soracloud_runtime.production_mode`.
-The first release fails closed whenever Inrou hosting is enabled, in both
-production and non-production configuration. The current QEMU boundary does not yet provide mandatory mount,
-network, IPC, and MAC isolation; QEMU's deny-list seccomp sandbox and uid-based
-IP firewall cannot contain all host capabilities such as AF_UNIX. Production
-nodes, including Taira, therefore advertise no Inrou hosting capability.
-
-The built-in PortableVM implementation is retained only behind private unit
-test fixtures while a mandatory privileged confinement launcher is developed.
-It intrinsically means one Linux KVM VM; the former backend, accelerator,
-concurrency, and supplementary-group selectors are retired. Its defense-in-depth
-checks require dedicated `portable_vm_uid`/`portable_vm_gid` values in
-`65536..524288` and exact resource budgets, with the sole supplementary gid
-derived from the validated `/dev/kvm` device. A future qualified host must use
-exactly `passwd: files` and `group: files` in a
-root-custodied `/etc/nsswitch.conf`. The exact locked local account/group name
-is `iroha-inrou` (uid/gid `70000` is the recommended qualification profile): password fields `x`, home
+`soracloud_runtime.inrou.enabled` remains false by default. Explicit enablement
+accepts exactly one Linux KVM PortableVM V1 backend and requires an equal
+`portable_vm_uid`/`portable_vm_gid` pair selecting one of four canonical slots,
+`70000` through `70003`, plus exact CPU, memory, and storage budgets. Backend, accelerator, concurrency,
+supplementary-group, and control-path selectors are retired; `backends` and
+`max_concurrent_vms` are unknown Inrou configuration keys. A qualified host
+must use exactly `passwd: files` and `group: files` in a
+root-custodied `/etc/nsswitch.conf`. Slot `i` requires the exact locked local
+account/group name `iroha-inrou-i`; a same-host four-validator qualification
+provisions all four slots and a single-validator public host uses
+`iroha-inrou-0` at uid/gid `70000`: password fields `x`, home
 `/nonexistent`, trusted nologin/false shell, locked shadow/gshadow entries, and
 no extra membership, administrator entry, duplicate, decimal-name collision,
 or primary-gid reuse. `subid` NSS, when declared, must use only `files`; no
 subordinate range may belong to that identity/numeric spelling or cover a
-configured id. Reused disks require Linux write-lease support. Root-custodied
-`iptables` and `ip6tables` are required. PortableVM V1 accepts only `Isolated`
-networking until kernel-owned traffic counters provide complete egress
-accounting; `Open` and `Allowlist` are rejected.
+configured id. Reused disks require Linux write-lease support.
+
+Capability advertisement and local hosting activate only after the same
+startup invocation authenticates the fixed QEMU runtime closure and passes the
+KVM, identity, filesystem, anonymous-QMP, root-owned `iptables`, private
+mount/network/IPC/UTS/PID/cgroup namespace, loopback-only connector, and exact
+cgroup-v2 CPU/memory/swap/pids/I/O preflight. The minimal root exposes no host
+`/run`, broad `/sys`, Unix socket, or unrelated descriptor. PortableVM V1
+accepts only `Isolated` networking; `Open` and `Allowlist` are rejected.
 Production mode also rejects broad runtime egress, missing fail-closed egress
 budgets, and Hugging Face inference-bridge fallback. Production profiles should
 state the runtime fee payer explicitly; `authority` is the deterministic
 development default.
 
+Generated public Hugging Face imports are authenticated inert storage in V1;
+they are not a host-local execution backend. `local_execution_enabled = true`
+is a configuration error in every mode, direct actual/runtime-manager
+construction is checked again, and the resident Python worker boundary is
+closed. Import reconciliation must not probe the host model stack, emit warmth
+heartbeats, or project a fully hydrated source as locally `Ready`. Re-enabling
+execution requires routing the worker through the same authenticated Inrou
+isolation and resource corridor used for hostile service workloads.
+
+HF source admission uses one exact case-sensitive `namespace/repository`
+identity and one full lowercase commit OID. Model-info must return that same
+`modelId` and commit byte-for-byte and must be requested with `blobs=true`.
+Torii and the importer select GGUF, then SafeTensors, then PyTorch, require
+canonical LFS SHA-256 and positive size metadata for every selected shard, and
+apply identical file-count, per-file, and aggregate byte limits. The consensus
+resource profile records the selected shard count, authenticated byte total,
+format/backend family, and domain-separated commitment to the sorted exact
+path/size/digest set.
+
 Production behavior is sourced from configuration, not environment variables.
-Shipping configuration rejects enabled Inrou before startup or reconciliation.
-A disabled node does not advertise hosting capacity and actively withdraws a
-pre-existing local advert.
+An unqualified or disabled node does not advertise or materialize Inrou
+capacity and actively withdraws a pre-existing local advert. Code-path
+admission is not a claim of Linux/AArch64/KVM deployment qualification.
 
 ## Test Expectations
 
 Focused V1 coverage should include:
 
-- approved active SoraFS pin succeeds;
-- missing, pending, and retired SoraFS pins fail;
-- world state contains no uploaded-model bytes;
-- deterministic quantized CPU private execution emits stable receipts and a
-  receipt-recording transaction instruction;
-- receipt recording rejects validators and other authorities that do not hold
-  `CanManageSoracloud`;
-- receipt recording rejects non-deterministic uploaded-model formats and
-  mismatched manifest, bundle-root, or policy bindings;
-- production config and programmatic manager construction reject enabled Inrou
-  hosting; retired backend, accelerator, concurrency, and supplementary-group
-  selectors are configuration errors;
-- non-production config and direct manager construction also reject enabled
-  Inrou; private runtime tests cover the KVM, identity, and custody checks;
+- registration accepts an exact approved SoraFS pin and rejects missing,
+  pending, retired, or mismatched pin metadata;
+- execute decoding requires explicit selector keys, the service version,
+  committed release id, rooted input artifact, and typed output recipient and
+  rejects caller-controlled plaintext, policy, host, output, and receipt
+  claims;
+- authentication, exact service/model selection, release signer, audit
+  binding, half-open authorization window, service inference capability, pin
+  identity, retention, and local admitted bytes fail closed independently;
+- deterministic quantized execution validates both encrypted envelope
+  contexts and their commitments and binds repeatable output metadata to the
+  exact request and recipient;
+- encrypted output is durable before `Prepared(0)`, signed evidence is durable
+  before enqueue, and restart recovery covers pending, unknown, expired,
+  rejected, committed, and authorization-expired journal states;
+- the validator-signed instruction atomically registers the matching output
+  manifest and receipt, assigns sequence and block height, treats exact replay
+  idempotently, and rejects duplicate decryption-request or conflicting
+  receipt evidence;
+- HTTP behavior distinguishes `202 submitted` from `200 committed` replay,
+  coalesces concurrent and pre-commit retries, and exposes committed receipts
+  through authenticated filtered queries;
+- world state and the durable journal contain no model, input, or output
+  plaintext;
+- production and non-production parsing accept only the exact opt-in
+  PortableVM V1 shape; retired selectors and programmatic shape drift are
+  configuration or startup errors;
+- capability publication remains absent until the exact production preflight
+  passes; runtime tests cover namespace, cgroup, KVM, identity, filesystem,
+  QMP, connector, and firewall checks;
 - unavailable PortableVm capability rejects startup, and capability loss withdraws
-  the host advert and reconciles affected placements;
-- JavaScript Soracloud helpers expose unsigned drafts and do not accept raw
-  private keys.
+  the host advert and reconciles affected placements; and
+- SDK helpers encode the exact request and receipt-query shapes without
+  accepting raw private keys.

@@ -1,8 +1,8 @@
 //! Rendering helpers for local contract-debug responses.
-use std::collections::BTreeMap;
+use super::{LocalContractDebugEntrypoint, LocalContractDebugParam};
 use eyre::{Result, WrapErr as _};
 use iroha::data_model::{isi::InstructionBox, prelude::StatePath};
-use super::{LocalContractDebugEntrypoint, LocalContractDebugParam};
+use std::collections::BTreeMap;
 /// Build the stable JSON-facing entrypoint description for a local execution.
 pub(super) fn build_local_debug_entrypoint(
     descriptor: &ivm::EmbeddedEntrypointDescriptor,

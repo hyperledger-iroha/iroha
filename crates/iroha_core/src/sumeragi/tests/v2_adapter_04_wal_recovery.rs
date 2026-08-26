@@ -2926,6 +2926,38 @@ fn recovered_current_timeout_then_historical_commit_keeps_intrinsic_vote_round()
     let authenticated = startup
         .authenticate_final_wal_startup_authority()
         .unwrap_or_else(|(error, _)| panic!("authenticate current Timeout owner: {error}"));
+    let recovery_authority = authenticated
+        .leader_wire_recovery_authority()
+        .expect("replay projects the exact durable lock into leader-wire recovery");
+    let origin = context.roster[1].validator.clone();
+    let phase = super::super::FairV2IngressLeaderWirePhase::CommitVote;
+    let protected_commit = super::super::FairV2IngressLeaderWireToken {
+        identity: super::super::FairV2IngressLeaderWireIdentity {
+            context_id: context.id(),
+            height: context.height,
+            view: locked_round.view,
+            subject_hash: Hash::new(subject.encode()),
+            manifest_hash: None,
+            phase,
+            semantic_origin: origin.clone(),
+            canonical_wire_hash: Hash::new(b"replayed historical Commit vote"),
+        },
+        slot: super::super::FairV2IngressLeaderWireSlot {
+            semantic_origin: origin,
+            phase,
+            chunk_index: None,
+        },
+        admission_ordinal: 1,
+        scheduler_ordinal: 1,
+        source_class: super::super::FairV2IngressLeaderWireSourceClass::Control,
+    };
+    assert!(
+        !recovery_authority.retires(&protected_commit),
+        "startup recovery must preserve peer votes for its replayed durable lock"
+    );
+    let mut wrong_subject_commit = protected_commit.clone();
+    wrong_subject_commit.identity.subject_hash = Hash::new(b"wrong replayed Commit subject");
+    assert!(recovery_authority.retires(&wrong_subject_commit));
     let RecoveredWalStartupAuthorityV1::ControlSign(control) = &authenticated.authority else {
         panic!("the current FIFO head must be the Timeout control Sign")
     };

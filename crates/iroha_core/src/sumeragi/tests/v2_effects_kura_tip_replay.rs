@@ -337,6 +337,17 @@ fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         Err(RuntimeClockError::PendingKuraRecovery),
         "pending Kura recovery must keep the ordinary pacemaker sealed",
     );
+    let mut non_local_executor = fixture.executor(EffectQueueConfig::default());
+    non_local_executor.pending_tip_recovery = Some(evidence.clone());
+    let mut non_local_services = fixture.services();
+    assert!(matches!(
+        non_local_executor.consume_pending_tip_recovery_effects(
+            vec![AdapterEffect::Broadcast(proposal(&fixture))],
+            &mut non_local_services,
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("non-local consensus effect")
+    ));
     let mut direct_apply_executor = fixture.executor(EffectQueueConfig::default());
     direct_apply_executor.validated_bodies = validations.clone();
     direct_apply_executor.pending_tip_recovery = Some(evidence.clone());
@@ -1398,6 +1409,129 @@ fn enter_view_preserves_inflight_authenticated_genesis_store_replay() {
         Some(AuthenticatedGenesisReplayStageV1::Stored { .. })
     ));
     assert!(!executor.status().fail_closed);
+    assert!(services.closed.is_empty());
+}
+
+#[test]
+fn published_store_marker_absorbs_detached_authenticated_genesis_store_completion() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    executor.runtime.retain_body_available_effect_ownership = true;
+    let mut services = fixture.services();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    let original_tag = tag(0);
+    let published_tag = tag(1);
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    executor
+        .install_authenticated_genesis_body_for_test(&fixture.block)
+        .expect("retain authenticated staged genesis");
+    executor
+        .consume_effects(
+            vec![AdapterEffect::FetchBody {
+                tag: original_tag,
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+                manifest: Some(fixture.manifest.clone()),
+                certified_sources: certified_sources(&fixture, &prepare),
+                certificate: Some(prepare.clone()),
+            }],
+            &mut services,
+        )
+        .expect("project authenticated genesis into the body pipeline");
+    executor
+        .consume_effects(
+            vec![AdapterEffect::StoreBody {
+                tag: original_tag,
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            }],
+            &mut services,
+        )
+        .expect("start the authenticated-genesis Store");
+    let store_id = services.store_tasks[0].id();
+    let completion = services.execute_store(store_id);
+    let durable = completion.receipt().clone();
+    executor.runtime.completions.clear();
+
+    let mut timeout = timeout_certificate(&fixture);
+    timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+    executor.runtime.round_tag = Some(published_tag);
+    executor.runtime.locked_body = Some(key);
+    executor
+        .install_view(
+            published_tag,
+            timeout,
+            Some(prepare.clone()),
+            None,
+            &mut services,
+        )
+        .expect("EnterView detaches the authenticated-genesis Store");
+    assert!(executor.pending_stores[&store_id].consumer.is_none());
+    assert!(matches!(
+        executor.authenticated_genesis_replay.get(&key),
+        Some(AuthenticatedGenesisReplayStageV1::Store { work_id, .. })
+            if *work_id == store_id
+    ));
+    assert!(executor.body_pipeline_owners.contains_key(&key));
+
+    assert!(
+        executor
+            .recovered_bodies
+            .insert(key, (fixture.manifest.clone(), durable.clone()))
+            .is_none()
+    );
+    assert!(executor.durable_bodies.insert(key, durable.clone()).is_none());
+    let published_fetch = AdapterEffect::FetchBody {
+        tag: published_tag,
+        round: prepare.proposal_round,
+        subject: prepare.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: certified_sources(&fixture, &prepare),
+        certificate: Some(prepare),
+    };
+    let published_store = AdapterEffect::StoreBody {
+        tag: published_tag,
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+    };
+    let published_ownership = bound_test_effect_ownership(&published_fetch, published_tag, 9_040)
+        .rebind_as_inherited_adapter_effect(&published_store)
+        .expect("project the published genesis Store owner");
+    let published_pending = published_ownership
+        .exact_pending_adapter_effect_binding(&published_store)
+        .expect("seal the published genesis Store binding");
+    let marker = executor
+        .prepare_published_lifecycle_store_retry_marker(&durable)
+        .expect("preflight the marker beside detached genesis work")
+        .bind_store_successor(&published_store, &published_pending)
+        .expect("bind the marker beside detached genesis work");
+    executor.commit_published_lifecycle_store_retry_marker(marker);
+    let accepted_marker = executor.published_lifecycle_store_retry_markers[&key].clone();
+    let completions_before = executor.runtime.completions.clone();
+
+    assert_eq!(
+        executor
+            .complete_body_store(completion, &mut services)
+            .expect("the published marker absorbs the detached genesis completion"),
+        CompletionDisposition::Accepted,
+    );
+
+    assert!(executor.pending_stores.is_empty());
+    assert_eq!(executor.pending_store_bytes, 0);
+    assert!(executor.authenticated_genesis_replay.is_empty());
+    assert!(!executor.body_pipeline_owners.contains_key(&key));
+    assert_eq!(
+        executor.published_lifecycle_store_retry_markers[&key],
+        accepted_marker,
+    );
+    assert_eq!(
+        executor.recovered_bodies.get(&key),
+        Some(&(fixture.manifest.clone(), durable.clone())),
+    );
+    assert_eq!(executor.durable_bodies.get(&key), Some(&durable));
+    assert_eq!(executor.runtime.completions, completions_before);
+    assert!(!executor.status().fail_closed);
+    assert!(!executor.output_guard.restart_required());
     assert!(services.closed.is_empty());
 }
 

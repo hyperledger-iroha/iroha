@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.hyperledger.iroha.android.client.MultisigProposeRequest;
+import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
@@ -33,6 +34,7 @@ import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
+import org.hyperledger.iroha.android.util.HashLiteral;
 import org.hyperledger.iroha.android.SigningException;
 import org.hyperledger.iroha.android.sccp.SccpV1;
 import org.hyperledger.iroha.norito.NoritoAdapters;
@@ -69,6 +71,7 @@ public final class NoritoCodecAdapterTests {
     javaCodecEncodesAccountIdAuthority();
     javaCodecEncodesMultisigAuthority();
     javaCodecEncodesNativeMultisigProposeRequest();
+    javaCodecVerifiesExactMultisigProposeExecutable();
     javaCodecRejectsInvalidValidationFeePolicyMetadata();
     javaCodecEncodesMultisigSignatures();
     javaCodecRejectsMalformedSignedTransactions();
@@ -112,6 +115,123 @@ public final class NoritoCodecAdapterTests {
     assert JsonValue.string("unit-test").equals(decoded.metadata().get("purpose"))
         : "Metadata must round-trip";
     assertBarePayload(encoded);
+  }
+
+  private static void javaCodecVerifiesExactMultisigProposeExecutable()
+      throws NoritoException {
+    final String account = sampleAuthority((byte) 0x35);
+    final InstructionBox transfer =
+        TransferWirePayloadEncoder.encodeAssetTransfer(
+            DS_ASSET_DEFINITION_ID + "#" + account, "2", sampleAuthority((byte) 0x36));
+    final byte[] encodedTransfer = NoritoJavaCodecAdapter.encodeInstructionBox(transfer);
+    final List<byte[]> expected = List.of(encodedTransfer);
+    final byte[] instructionsHash =
+        NoritoJavaCodecAdapter.hashCanonicalInstructionBoxes(expected);
+
+    final Map<String, Object> proposeBody = new LinkedHashMap<>();
+    proposeBody.put("account", account);
+    proposeBody.put(
+        "instructions", List.of(Base64.getEncoder().encodeToString(encodedTransfer)));
+    proposeBody.put("transaction_ttl_ms", null);
+    final InstructionBox propose = multisigCustomInstruction("Propose", proposeBody);
+
+    final Map<String, Object> approveBody = new LinkedHashMap<>();
+    approveBody.put("account", account);
+    approveBody.put("instructions_hash", HashLiteral.canonicalize(instructionsHash));
+    final InstructionBox approve = multisigCustomInstruction("Approve", approveBody);
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
+            .setNetworkId(TEST_NETWORK_ID)
+            .setAuthority(account)
+            .setCreationTimeMs(1_735_000_111_000L)
+            .setExecutable(Executable.instructions(List.of(propose, approve)))
+            .build();
+
+    final byte[] verified =
+        NoritoJavaCodecAdapter.verifyCanonicalMultisigProposeExecutable(
+            payload, account, expected);
+    assert Arrays.equals(instructionsHash, verified)
+        : "multisig executable verifier must return the exact local instruction hash";
+
+    final Map<String, Object> wrongAccountBody = new LinkedHashMap<>(proposeBody);
+    wrongAccountBody.put("account", sampleAuthority((byte) 0x37));
+    final TransactionPayload substitutedAccount =
+        payload.toBuilder()
+            .setExecutable(
+                Executable.instructions(
+                    List.of(multisigCustomInstruction("Propose", wrongAccountBody), approve)))
+            .build();
+    expectNoritoFailure(
+        () ->
+            NoritoJavaCodecAdapter.verifyCanonicalMultisigProposeExecutable(
+                substitutedAccount, account, expected));
+
+    final Map<String, Object> wrongApproveBody = new LinkedHashMap<>(approveBody);
+    wrongApproveBody.put("instructions_hash", HashLiteral.canonicalize(new byte[32]));
+    final TransactionPayload substitutedApproval =
+        payload.toBuilder()
+            .setExecutable(
+                Executable.instructions(
+                    List.of(propose, multisigCustomInstruction("Approve", wrongApproveBody))))
+            .build();
+    expectNoritoFailure(
+        () ->
+            NoritoJavaCodecAdapter.verifyCanonicalMultisigProposeExecutable(
+                substitutedApproval, account, expected));
+
+    final byte[] differentTransfer = encodedTransfer.clone();
+    differentTransfer[differentTransfer.length - 1] ^= 1;
+    expectNoritoFailure(
+        () ->
+            NoritoJavaCodecAdapter.verifyCanonicalMultisigProposeExecutable(
+                payload, account, List.of(differentTransfer)));
+
+    // Golden generated by @iroha/iroha-js's independent pure-JS Norito implementation. This
+    // guards the cross-SDK CustomInstruction schema and nested Json field layout, not just a Java
+    // encode/decode round trip.
+    final String goldenAccount =
+        "testuﾛ1PﾀUﾒtBｷﾒﾗjdﾗshyｱﾕmｼxhGv9ﾘﾅﾆｴZｴd96oBｲﾓﾌRF1ULM8";
+    final byte[] goldenInner =
+        Base64.getDecoder()
+            .decode(
+                "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQBHAAAAAAAAACFpTnfilX7QAg0MaXJvaGEu"
+                    + "Y3VzdG9tODAAAAAAAAAATlJUMAAAa4aQKnVgBkjRhtUs1mKyKQAIAAAAAAAAAKj8"
+                    + "osodxkaYAgcGBQRudWxs");
+    final byte[] goldenOuter =
+        Base64.getDecoder()
+            .decode(
+                "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQB8AQAAAAAAALrA9qn8DJszAg0MaXJvaGEu"
+                    + "Y3VzdG9t7AJkAQAAAAAAAE5SVDAAAGuGkCp1YAZI0YbVLNZisikAPAEAAAAAAADp"
+                    + "KdbQjYDnsgK6ArgCtgK0AnsiUHJvcG9zZSI6eyJhY2NvdW50IjoidGVzdHXvvpsx"
+                    + "UO++gFXvvpJ0Qu+9t+++ku++l2pk776Xc2h5772x776Vbe+9vHhoR3Y5776Y776F"
+                    + "776G7720Wu+9tGQ5Nm9C772y776T776MUkYxVUxNOCIsImluc3RydWN0aW9ucyI6"
+                    + "WyJUbEpVTUFBQWhpcDlkd2RkVFNQL2JCSmgyd0o0RVFCSEFBQUFBQUFBQUNGcFRu"
+                    + "ZmlsWDdRQWcwTWFYSnZhR0V1WTNWemRHOXRPREFBQUFBQUFBQUFUbEpVTUFBQWE0"
+                    + "YVFLblZnQmtqUmh0VXMxbUt5S1FBSUFBQUFBQUFBQUtqOG9zb2R4a2FZQWdjR0JR"
+                    + "UnVkV3hzIl0sInRyYW5zYWN0aW9uX3R0bF9tcyI6bnVsbH19");
+    final TransactionPayload goldenPayload =
+        payload.toBuilder()
+            .setAuthority(goldenAccount)
+            .setExecutable(
+                Executable.instructions(
+                    List.of(TransactionPayloadAdapter.decodeInstructionBox(goldenOuter))))
+            .build();
+    final byte[] goldenHash =
+        NoritoJavaCodecAdapter.verifyCanonicalMultisigProposeExecutable(
+            goldenPayload, goldenAccount, List.of(goldenInner));
+    assert "5f957f67a4236eb16f9df0d81170f3a70656942b4e171a208c26de02e8e99acf"
+        .equals(toHex(goldenHash))
+        : "instruction-vector hash must match the independent JS Norito/BLAKE2b golden";
+  }
+
+  private static InstructionBox multisigCustomInstruction(
+      final String variant, final Map<String, Object> body) {
+    final Map<String, Object> root = new LinkedHashMap<>();
+    root.put(variant, body);
+    final String canonical = JsonValue.parse(JsonEncoder.encode(root)).canonicalJson();
+    return InstructionBox.fromWirePayload(
+        "iroha.custom", TransactionPayloadAdapter.encodeCanonicalCustomInstructionJson(canonical));
   }
 
   private static void javaSignedTairaTransferRoundTripsAuthorityAndDestination()
@@ -1359,6 +1479,14 @@ public final class NoritoCodecAdapterTests {
     for (int index = 0; index < Long.BYTES; index++) {
       destination[offset + index] = (byte) (value >>> (8 * index));
     }
+  }
+
+  private static String toHex(final byte[] bytes) {
+    final StringBuilder output = new StringBuilder(bytes.length * 2);
+    for (final byte value : bytes) {
+      output.append(String.format(java.util.Locale.ROOT, "%02x", value));
+    }
+    return output.toString();
   }
 
   private static void expectNoritoFailure(final CheckedNoritoRunnable action) {

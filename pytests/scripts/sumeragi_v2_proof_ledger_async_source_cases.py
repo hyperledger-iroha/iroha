@@ -1436,14 +1436,14 @@ def test_ownership_n1_pins_exact_ingress_and_deferred_progress_geometry(
 
     path.write_text(
         source.replace(
+            "  AsyncDeferredProgressCapacity = 6\n",
             "  AsyncDeferredProgressCapacity = 5\n",
-            "  AsyncDeferredProgressCapacity = 4\n",
             1,
         ),
         encoding="utf-8",
     )
     errors = module._ownership_n1_configuration_errors(formal_dir)
-    assert any("exact 2 * N + 3 geometry (5)" in error for error in errors)
+    assert any("exact 3 * N + 3 geometry (6)" in error for error in errors)
 
     path.write_text(
         source.replace("  N = 1\n", "  N = 2\n", 1),
@@ -1452,7 +1452,7 @@ def test_ownership_n1_pins_exact_ingress_and_deferred_progress_geometry(
     errors = module._ownership_n1_configuration_errors(formal_dir)
     assert any("must remain the N=1 boundary" in error for error in errors)
     assert any("exact 5 * N + 2 geometry (7)" in error for error in errors)
-    assert any("exact 2 * N + 3 geometry (5)" in error for error in errors)
+    assert any("exact 3 * N + 3 geometry (6)" in error for error in errors)
 
     path.write_text(
         source.replace(

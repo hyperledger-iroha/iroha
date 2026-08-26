@@ -1756,6 +1756,68 @@ impl LifecycleLedgerV1 {
                         && store.work_class() == Some(LifecycleWorkClass::Store)
                 })
     }
+    /// Distinguish the crash cut after recovered Store advanced to live Validate.
+    ///
+    /// This is only a routing predicate for the dedicated cold replay. The
+    /// reconstructed Store and Validate projections must still authenticate
+    /// every replay authority, body frame, and pending binding before install.
+    pub(super) fn has_recovered_decision_live_validate_parent(
+        &self,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> bool {
+        if self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT).is_err()
+            || !projection.belongs_to_context(self.context())
+        {
+            return false;
+        }
+        let matching = self
+            .records
+            .iter()
+            .filter(|record| projection.names_record(record))
+            .collect::<Vec<_>>();
+        let [fetch] = matching.as_slice() else {
+            return false;
+        };
+        let Some((DurableContinuationEdge::FetchToStore, store_ordinal)) = fetch
+            .continuation()
+            .and_then(DurableContinuation::successor_parts)
+        else {
+            return false;
+        };
+        if !projection.exactly_matches_advanced_apply_parent(fetch, store_ordinal) {
+            return false;
+        }
+        let record_at = |ordinal| {
+            self.records
+                .binary_search_by_key(&ordinal, LifecycleLedgerRecordV1::ordinal)
+                .ok()
+                .and_then(|index| self.records.get(index))
+        };
+        let Some(store) = record_at(store_ordinal) else {
+            return false;
+        };
+        let Some((DurableContinuationEdge::StoreToValidate, validate_ordinal)) = store
+            .continuation()
+            .and_then(DurableContinuation::successor_parts)
+        else {
+            return false;
+        };
+        let Some(validate) = record_at(validate_ordinal) else {
+            return false;
+        };
+        self.records
+            .iter()
+            .filter(|record| record.owner() == fetch.owner())
+            .count()
+            == 3
+            && store.owner() == fetch.owner()
+            && store.work_class() == Some(LifecycleWorkClass::Store)
+            && store.terminal() == Some(Some(TerminalOutcome::Advanced))
+            && validate.owner() == fetch.owner()
+            && validate.work_class() == Some(LifecycleWorkClass::Validate)
+            && validate.terminal() == Some(None)
+            && validate.continuation() == Some(DurableContinuation::None)
+    }
     /// Authenticate the crash cut after a recovered Fetch advanced to one live Store.
     ///
     /// The WAL parent remains payload-free. The sole same-owner child must be
@@ -1834,12 +1896,108 @@ impl LifecycleLedgerV1 {
         }
         Ok((fetch.ordinal(), store_ordinal))
     }
+    /// Authenticate the crash cut after recovered Store advanced to one live Validate.
+    pub(super) fn authenticate_recovered_decision_store_validate(
+        &self,
+        fetch_projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+        store_projection: &RecoveredDecisionFetchStoreProjectionV1,
+        validate_projection: &RecoveredDecisionValidateProjectionV1,
+    ) -> Result<(u128, u128, u128), LifecycleLedgerError> {
+        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        if !fetch_projection.belongs_to_context(self.context())
+            || store_projection.context() != self.context()
+            || validate_projection.context() != self.context()
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "recovered Decision Validate belongs to another lifecycle context".to_owned(),
+            ));
+        }
+        let matching = self
+            .records
+            .iter()
+            .filter(|record| fetch_projection.names_record(record))
+            .collect::<Vec<_>>();
+        let [fetch] = matching.as_slice() else {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "recovered Decision Validate requires one exact WAL Fetch parent".to_owned(),
+            ));
+        };
+        let Some((DurableContinuationEdge::FetchToStore, store_ordinal)) = fetch
+            .continuation()
+            .and_then(DurableContinuation::successor_parts)
+        else {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "recovered Decision Validate Fetch lost its Store continuation".to_owned(),
+            ));
+        };
+        let record_at = |ordinal| {
+            self.records
+                .binary_search_by_key(&ordinal, LifecycleLedgerRecordV1::ordinal)
+                .ok()
+                .and_then(|index| self.records.get(index))
+        };
+        let store = record_at(store_ordinal).ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "recovered Decision Validate lost its Store predecessor".to_owned(),
+            )
+        })?;
+        let Some((DurableContinuationEdge::StoreToValidate, validate_ordinal)) = store
+            .continuation()
+            .and_then(DurableContinuation::successor_parts)
+        else {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "recovered Decision Store lost its Validate continuation".to_owned(),
+            ));
+        };
+        let validate = record_at(validate_ordinal).ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "recovered Decision Validate continuation is a partial durable prefix".to_owned(),
+            )
+        })?;
+        let owner = fetch.owner();
+        let store_slot =
+            PhysicalSlotId::for_capacity(LifecycleWorkClass::Store.capacity_class(), 0);
+        let store_address =
+            super::work_registry::ConcreteWorkAddress::new(owner, store_ordinal, store_slot)
+                .ok_or_else(|| {
+                    LifecycleLedgerError::InvalidLedger(
+                        "recovered Decision Store address is not representable".to_owned(),
+                    )
+                })?;
+        if self
+            .records
+            .iter()
+            .filter(|record| record.owner() == owner)
+            .count()
+            != 3
+            || !fetch_projection.exactly_matches_advanced_apply_parent(fetch, store_ordinal)
+            || !store_projection.exactly_matches_advanced_validate_parent(
+                store,
+                owner,
+                validate_ordinal,
+            )
+            || !store_projection.validates_at(
+                self.context(),
+                store_address,
+                store_projection.digest(),
+            )
+            || !validate_projection.exactly_matches_live_records(owner, store, validate)
+            || validate_ordinal > self.high_water
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "recovered Decision Store-to-Validate crash cut changed exact durable semantics"
+                    .to_owned(),
+            ));
+        }
+        Ok((fetch.ordinal(), store_ordinal, validate_ordinal))
+    }
     /// Stage or exactly coalesce the first-release recovered Decision body chain.
     ///
     /// The payload-free Decision Fetch must already be durable. A live exact
     /// Fetch advances directly to three adjacent BodyFrame successors in one
     /// prospective frame. A crash-cut live Store advances to an exact adjacent
-    /// Validate/Apply tail, and an already complete four-row chain stutters
+    /// Validate/Apply tail; a crash-cut live Validate advances only to its
+    /// exact Apply child; and an already complete four-row chain stutters
     /// without rewriting. Missing Fetch, other partial prefixes, foreign
     /// same-owner rows, or any semantic drift fail closed; history is never
     /// synthesized.
@@ -2000,6 +2158,45 @@ impl LifecycleLedgerV1 {
                 "recovered Decision body chain is a partial durable prefix".to_owned(),
             ));
         };
+        if lineage.exactly_matches_live_validate_records(owner, store, validate) {
+            if owner_records.len() != 3 {
+                return Err(LifecycleLedgerError::InvalidLedger(
+                    "live recovered Decision Validate owner names foreign lifecycle history"
+                        .to_owned(),
+                ));
+            }
+            let apply_ordinal = self.high_water.checked_add(1).ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "recovered Decision Apply ordinal exhausted after Validate restart"
+                        .to_owned(),
+                )
+            })?;
+            let [advanced_store, advanced_validate, apply] = lineage
+                .successor_records_after_live_validate(owner, store, validate, apply_ordinal)
+                .ok_or_else(|| {
+                    LifecycleLedgerError::InvalidLedger(
+                        "recovered Decision Validate restart lost exact body lineage".to_owned(),
+                    )
+                })?;
+            let mut staged = self.clone();
+            let store_index = staged
+                .records
+                .iter()
+                .position(|record| record.ordinal() == store_ordinal)
+                .expect("the exact advanced Store belongs to the cloned ledger");
+            let validate_index = staged
+                .records
+                .iter()
+                .position(|record| record.ordinal() == validate_ordinal)
+                .expect("the exact live Validate belongs to the cloned ledger");
+            staged.records[store_index] = advanced_store;
+            staged.records[validate_index] = advanced_validate;
+            staged.records.push(apply);
+            staged.records.sort_by_key(LifecycleLedgerRecordV1::ordinal);
+            staged.high_water = apply_ordinal;
+            staged.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+            return Ok((staged, apply_ordinal, true));
+        }
         let Some((DurableContinuationEdge::ValidateToApply, apply_ordinal)) = validate
             .continuation()
             .and_then(DurableContinuation::successor_parts)

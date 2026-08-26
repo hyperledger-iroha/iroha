@@ -108,9 +108,8 @@ contract:
 3. For clients that cannot resolve SoraDNS aliases directly yet, use the
    selected browser gateway host. On Taira this is
    `https://<fqdn>.mon.taira.sora.net/...`.
-4. Legacy Torii compatibility gateways may also expose
-   `https://<gateway>/soradns/<fqdn>/...`, but this is not the preferred public
-   browser URL.
+4. Gateways reject path-encoded aliases; the alias is carried only by the
+   canonical `Host` authority.
 
 Example:
 
@@ -118,12 +117,9 @@ Example:
   `https://solswap-indexer.sora/api/indexer/v1/health`
 - Taira public browser gateway:
   `https://solswap-indexer.sora.mon.taira.sora.net/api/indexer/v1/health`
-- fallback gateway origin:
-  `https://taira.sora.org/soradns/solswap-indexer.sora/api/indexer/v1/health`
 
-The `/soradns/<alias>/...` fallback path is transitional. Tooling, manifests,
-and app configs should continue to prefer the vanity alias host itself, while
-non-SoraDNS browser examples for Taira should use `mon.taira.sora.net`.
+Tooling, manifests, and app configs use the vanity alias host itself, while
+non-SoraDNS browser examples for Taira use `mon.taira.sora.net`.
 
 ## 5. GAR Requirements
 

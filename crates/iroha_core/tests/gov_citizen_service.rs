@@ -13,6 +13,7 @@ use iroha_data_model::{
     domain::{Domain, DomainId},
     isi::governance::{
         CitizenServiceEvent, PersistCouncilForEpoch, RecordCitizenServiceOutcome, RegisterCitizen,
+        UnregisterCitizen,
     },
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant},
@@ -90,8 +91,8 @@ fn xor_definition_id() -> AssetDefinitionId {
 #[test]
 fn council_persist_enforces_service_discipline() {
     let def_id: AssetDefinitionId = xor_definition_id();
-    // Seat cap when cooldown is disabled.
-    let seat_err = {
+    // Exact replay is idempotent and must not consume another service slot.
+    {
         let state = configure_state(&def_id, 0);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -126,12 +127,16 @@ fn council_persist_enforces_service_discipline() {
             alternates: Vec::new(),
         }
         .execute(&ALICE_ID, &mut tx)
-        .unwrap_err()
-    };
-    assert!(
-        format!("{seat_err:?}").contains("seat limit"),
-        "seat cap enforced"
-    );
+        .expect("identical council replay is idempotent");
+        assert_eq!(
+            tx.world
+                .citizens()
+                .get(&*ALICE_ID)
+                .expect("citizen record retained"),
+            &record,
+            "identical replay must not consume another seat or extend cooldown"
+        );
+    }
     // Cooldown guard when a validator tries to re-enter before the cooldown elapses.
     let cooldown_err = {
         let state = configure_state(&def_id, 5);
@@ -167,6 +172,83 @@ fn council_persist_enforces_service_discipline() {
         "cooldown blocks subsequent epoch"
     );
 }
+
+#[test]
+fn council_roster_is_immutable_after_first_persistence() {
+    let def_id: AssetDefinitionId = xor_definition_id();
+    let state = configure_state(&def_id, 0);
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+    for owner in [&*ALICE_ID, &*CARPENTER_ID] {
+        RegisterCitizen {
+            owner: owner.clone(),
+            amount: 25_u64.into(),
+        }
+        .execute(owner, &mut tx)
+        .expect("citizen bond succeeds");
+    }
+    Grant::account_permission(Permission::from(CanManageParliament), ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut tx)
+        .expect("grant parliament management permission");
+    PersistCouncilForEpoch {
+        epoch: 1,
+        members: vec![ALICE_ID.clone()],
+        alternates: vec![CARPENTER_ID.clone()],
+    }
+    .execute(&ALICE_ID, &mut tx)
+    .expect("initial council persist succeeds");
+
+    let unbond_err = UnregisterCitizen {
+        owner: ALICE_ID.clone(),
+    }
+    .execute(&ALICE_ID, &mut tx)
+    .expect_err("scheduled council service must retain citizenship collateral");
+    assert!(
+        format!("{unbond_err:?}").contains("current or scheduled parliament service epoch"),
+        "unexpected scheduled-service unbond error: {unbond_err:?}"
+    );
+
+    let council_before = tx.world.council().get(&1).cloned().expect("council");
+    let bodies_before = tx
+        .world
+        .parliament_bodies()
+        .get(&1)
+        .cloned()
+        .expect("parliament bodies");
+    let alice_before = tx
+        .world
+        .citizens()
+        .get(&*ALICE_ID)
+        .cloned()
+        .expect("Alice citizen record");
+    let carpenter_before = tx
+        .world
+        .citizens()
+        .get(&*CARPENTER_ID)
+        .cloned()
+        .expect("Carpenter citizen record");
+
+    let err = PersistCouncilForEpoch {
+        epoch: 1,
+        members: vec![CARPENTER_ID.clone()],
+        alternates: vec![ALICE_ID.clone()],
+    }
+    .execute(&ALICE_ID, &mut tx)
+    .expect_err("same-epoch council replacement must fail");
+    assert!(
+        format!("{err:?}").contains("immutable once persisted"),
+        "unexpected replacement error: {err:?}"
+    );
+    assert_eq!(tx.world.council().get(&1), Some(&council_before));
+    assert_eq!(tx.world.parliament_bodies().get(&1), Some(&bodies_before));
+    assert_eq!(tx.world.citizens().get(&*ALICE_ID), Some(&alice_before));
+    assert_eq!(
+        tx.world.citizens().get(&*CARPENTER_ID),
+        Some(&carpenter_before)
+    );
+}
+
 #[test]
 fn council_persist_requires_exact_manage_permission_before_mutating_state() {
     let def_id: AssetDefinitionId = xor_definition_id();

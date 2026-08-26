@@ -6,15 +6,20 @@
 //! deployment/routing policy, state mutation limits, agent-policy envelopes, and deterministic
 //! confidential-compute policy in a form suitable for validator admission and audit trails.
 #![allow(clippy::module_name_repetitions)]
+#[cfg(test)]
+use crate::sorafs::pin_registry::derive_sorafs_auto_replication_order_id_v1;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
+    NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
     name::Name,
+    nexus::LaneId,
+    peer::PeerId,
     proof::ProofAttachment,
     sorafs::pin_registry::{
-        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, StorageClass,
+        MANIFEST_ROOT_CID_LENGTH, ManifestDigest, ManifestRootCid, ReplicationOrderId, StorageClass,
     },
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
@@ -224,17 +229,175 @@ pub const SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1: u16 = 1;
 pub const SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraUploadedModelWrappedKeyV1`].
 pub const SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1: u16 = 1;
+/// Maximum byte length of an uploaded-model id or weight-version identifier.
+pub const SORA_UPLOADED_MODEL_IDENTIFIER_MAX_BYTES_V1: usize = 128;
+/// Maximum UTF-8 byte length of an uploaded-model service revision.
+pub const SORA_UPLOADED_MODEL_SERVICE_VERSION_MAX_BYTES_V1: usize = 256;
 const SORA_UPLOADED_MODEL_X25519_PUBLIC_KEY_BYTES: usize = 32;
 /// Schema version for [`SoraPrivateModelArtifactRefV1`].
 pub const SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateModelEncryptedArtifactV1`].
+pub const SORA_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateQuantizedCpuModelV1`].
+pub const SORA_PRIVATE_QUANTIZED_CPU_MODEL_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateQuantizedCpuInputV1`].
+pub const SORA_PRIVATE_QUANTIZED_CPU_INPUT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraPrivateQuantizedCpuOutputV1`].
+pub const SORA_PRIVATE_QUANTIZED_CPU_OUTPUT_VERSION_V1: u16 = 1;
+/// AES-256-GCM key length used by private-model artifact envelopes.
+pub const SORA_PRIVATE_MODEL_AEAD_KEY_BYTES_V1: usize = 32;
+/// AES-256-GCM nonce length used by private-model artifact envelopes.
+pub const SORA_PRIVATE_MODEL_AEAD_NONCE_BYTES_V1: usize = 12;
+/// AES-256-GCM authentication-tag length carried in ciphertext fields.
+pub const SORA_PRIVATE_MODEL_AEAD_TAG_BYTES_V1: usize = 16;
+/// Maximum encoded encrypted artifact accepted at the private runtime boundary.
+pub const SORA_PRIVATE_MODEL_ENCRYPTED_ARTIFACT_MAX_BYTES_V1: usize = 72 * 1024 * 1024;
+/// Maximum quantized inputs admitted by the deterministic private CPU runtime.
+pub const SORA_PRIVATE_QUANTIZED_CPU_MAX_INPUTS_V1: usize = 16_384;
+/// Maximum quantized outputs admitted by the deterministic private CPU runtime.
+pub const SORA_PRIVATE_QUANTIZED_CPU_MAX_OUTPUTS_V1: usize = 4_096;
+/// Maximum signed 8-bit weights admitted by one deterministic private CPU model.
+pub const SORA_PRIVATE_QUANTIZED_CPU_MAX_WEIGHTS_V1: usize = 64 * 1024 * 1024;
 /// Schema version for [`SoraPrivateUploadedModelExecutionReceiptV1`].
 pub const SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHfSourceRecordV1`].
 pub const SORA_HF_SOURCE_RECORD_VERSION_V1: u16 = 1;
+/// Maximum byte length of one canonical, fully-qualified Hugging Face repository identifier.
+pub const SORA_HF_REPO_ID_MAX_BYTES_V1: usize = 96;
+/// Exact lowercase hexadecimal length of a first-release Hugging Face commit OID.
+pub const SORA_HF_COMMIT_OID_HEX_BYTES_V1: usize = 40;
+/// Return whether `value` is one canonical, fully-qualified Hugging Face repository identifier.
+///
+/// V1 requires the exact `namespace/repository` spelling returned by the Hub. Both components use
+/// the Hub's portable ASCII alphabet, while unqualified aliases, URL encodings, path traversal,
+/// repeated punctuation aliases, and Git transport suffixes are rejected.
+#[must_use]
+pub fn is_canonical_hf_repo_id_v1(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > SORA_HF_REPO_ID_MAX_BYTES_V1
+        || value.trim() != value
+        || value.contains("--")
+        || value.contains("..")
+        || value
+            .get(value.len().saturating_sub(4)..)
+            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(".git"))
+    {
+        return false;
+    }
+    let mut components = value.split('/');
+    let Some(namespace) = components.next() else {
+        return false;
+    };
+    let Some(repository) = components.next() else {
+        return false;
+    };
+    if components.next().is_some() {
+        return false;
+    }
+    [namespace, repository].into_iter().all(|component| {
+        !component.is_empty()
+            && !matches!(component, "." | "..")
+            && !component.starts_with('.')
+            && !component.starts_with('-')
+            && !component.ends_with('.')
+            && !component.ends_with('-')
+            && component
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    })
+}
+/// Return whether `value` is a canonical immutable Hugging Face commit OID.
+///
+/// V1 accepts only the full 40-character lowercase SHA-1 object identifier;
+/// branch names, tags, abbreviated OIDs, and case aliases are not canonical.
+#[must_use]
+pub fn is_canonical_hf_commit_oid_v1(value: &str) -> bool {
+    value.len() == SORA_HF_COMMIT_OID_HEX_BYTES_V1
+        && value
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+}
+/// Derive the canonical source identifier for one fully-qualified repository and immutable commit.
+///
+/// # Errors
+/// Returns [`SoracloudManifestError`] when either identity component is not canonical.
+pub fn derive_hf_source_id_v1(
+    repo_id: &str,
+    resolved_revision: &str,
+) -> Result<Hash, SoracloudManifestError> {
+    if !is_canonical_hf_repo_id_v1(repo_id) {
+        return Err(invalid_field(
+            "sora hf source identity",
+            "repo_id",
+            "must be one exact fully-qualified `namespace/repository` identifier",
+        ));
+    }
+    if !is_canonical_hf_commit_oid_v1(resolved_revision) {
+        return Err(invalid_field(
+            "sora hf source identity",
+            "resolved_revision",
+            "must be the full 40-character lowercase hexadecimal commit OID",
+        ));
+    }
+    let payload = norito::to_bytes(&("soracloud:hf-source-id:v1", repo_id, resolved_revision))
+        .map_err(|error| {
+            invalid_field(
+                "sora hf source identity",
+                "source_id",
+                format!("failed to encode the canonical source preimage: {error}"),
+            )
+        })?;
+    Ok(Hash::new(payload))
+}
+/// Derive the canonical placement identifier for one HF lease pool and selection seed.
+///
+/// # Errors
+/// Returns [`SoracloudManifestError`] when the canonical preimage cannot be encoded.
+pub fn derive_hf_placement_id_v1(
+    pool_id: Hash,
+    selection_seed_hash: Hash,
+) -> Result<Hash, SoracloudManifestError> {
+    let payload = norito::to_bytes(&("soracloud:hf-placement-id:v1", pool_id, selection_seed_hash))
+        .map_err(|error| {
+            invalid_field(
+                "sora hf placement identity",
+                "placement_id",
+                format!("failed to encode the canonical placement preimage: {error}"),
+            )
+        })?;
+    Ok(Hash::new(payload))
+}
+/// Derive the canonical shared-lease pool identifier from its immutable pricing dimensions.
+///
+/// # Errors
+/// Returns [`SoracloudManifestError`] when the canonical preimage cannot be encoded.
+pub fn derive_hf_shared_lease_pool_id_v1(
+    source_id: Hash,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+) -> Result<Hash, SoracloudManifestError> {
+    let payload = norito::to_bytes(&(
+        "soracloud:hf-shared-lease-pool-id:v1",
+        source_id,
+        storage_class,
+        lease_term_ms,
+    ))
+    .map_err(|error| {
+        invalid_field(
+            "sora hf shared lease pool identity",
+            "pool_id",
+            format!("failed to encode the canonical pool preimage: {error}"),
+        )
+    })?;
+    Ok(Hash::new(payload))
+}
 /// Schema version for [`SoraModelHostCapabilityRecordV1`].
 pub const SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraInrouHostCapabilityRecordV1`].
 pub const SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
+/// Exact hosted-replica capacity of one qualified Inrou V1 host advert.
+pub const SORA_INROU_HOSTED_REPLICA_CAPACITY_V1: u16 = 1;
 /// Fixed signature-domain tag for Soracloud runtime provenance preimages.
 pub const SORACLOUD_RUNTIME_PROVENANCE_DOMAIN_V1: &[u8] =
     b"iroha:soracloud:runtime-provenance:v1\x00";
@@ -264,6 +427,10 @@ pub const SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraRuntimeReceiptV1`].
 pub const SORA_RUNTIME_RECEIPT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraOrderedMailboxStateMutationV1`].
+pub const SORA_ORDERED_MAILBOX_STATE_MUTATION_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraOrderedMailboxResultV1`].
+pub const SORA_ORDERED_MAILBOX_RESULT_VERSION_V1: u16 = 1;
 /// Schema version for [`CanonicalRequestWitnessV1`].
 pub const CANONICAL_REQUEST_WITNESS_VERSION_V1: u16 = 1;
 /// Schema version for [`SoracloudHostRequestEnvelopeV1`].
@@ -276,6 +443,14 @@ pub const SORA_SERVICE_ROLLOUT_STATE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseStateV1`].
 pub const SORA_SERVICE_LEASE_STATE_VERSION_V1: u16 = 1;
+/// Consensus-block grace before an idle egress reporter may be force-finalized.
+pub const SORA_SERVICE_LEASE_REPORTER_IDLE_GRACE_BLOCKS_V1: u64 = 10_000;
+/// Schema version for [`SoraServiceLeaseUsageAuditV1`].
+pub const SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraServiceLeaseReporterAssignmentV1`].
+pub const SORA_SERVICE_LEASE_REPORTER_ASSIGNMENT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraServiceLeaseReportingEpochRolloverV1`].
+pub const SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceLeaseVolumeStateV1`].
 pub const SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceAuditEventV1`].

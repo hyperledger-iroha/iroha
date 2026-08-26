@@ -3477,10 +3477,10 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
         unit_branch if unit_start >= 0 and fast_network_start >= 0 else ""
     )
     required_unit_inventory_tokens = (
-        "    if ((${#listed_unit_tests[@]} != 140)); then",
-        '      echo "expected exactly 140 Sumeragi v2 reducer unit tests" >&2',
+        "    if ((${#listed_unit_tests[@]} != 187)); then",
+        '      echo "expected exactly 187 Sumeragi v2 reducer unit tests" >&2',
         "    if ((${#listed_ignored_unit_tests[@]} != 0)); then",
-        '      echo "reducer unit gate requires all 140 tests to be runnable" >&2',
+        '      echo "reducer unit gate requires all 187 tests to be runnable" >&2',
     )
     missing_unit_inventory_tokens = [
         token
@@ -3489,7 +3489,7 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
     ]
     if missing_unit_inventory_tokens:
         errors.append(
-            f"{harness_path}: --unit must seal exactly 140 runnable "
+            f"{harness_path}: --unit must seal exactly 187 runnable "
             "source-shared tests; missing or repeated "
             f"{missing_unit_inventory_tokens}"
         )

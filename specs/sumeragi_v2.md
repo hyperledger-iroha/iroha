@@ -576,14 +576,10 @@ Without that prerequisite, or when the proposal origin or subject differs, repla
 validation rather than inferring a Commit signature from the certificate alone.
 
 An earlier-view CommitQC remains decisive even when its final shares are assembled or delivered
-after a TC. The timeout fence prevents arbitrary new honest votes in the closed view. Its one exact
-historical-Commit exception cannot change the installed lock. For every old value which can still
-reach a Commit quorum, quorum intersection now proves the exact disjunction the implementation
-supports: either the target TC's selected high directly protects that proposal origin and subject, or an
-honest TC/Commit intersection signer has a non-strict timeout/Commit pair whose exact Commit keeps
-durable installed-TC authorization. The target TC may have been formed before that late Commit, so
-claiming that its own high must always protect the Commit would be false. The formal operator
-`TCProtectsOrInstalledTcAuthorizesPotentialCommit` states the corrected safety property.
+after a TC. The timeout fence prevents new honest Commit votes in the closed view. For every old
+value that can still reach a Commit quorum, quorum intersection proves that the target TC strictly
+protects that proposal origin and subject. The formal operator `TCProtectsPotentialCommit` states
+this safety property directly; installed TC state provides no alternative Commit authorization.
 Installing a TC never lowers or clears a local lock: only a strictly higher PrepareQC can release it
 for another subject. Because timeout votes transport that full QC to every voter, an omitted lock
 becomes known to the honest quorum and is selected by a subsequent TC after GST without depending
@@ -939,6 +935,10 @@ retires that marker authority while retaining the exact body; only later live
 reducer work may enter the existing bounded sidecar-fetch and validation retry
 path. A later snapshot is written only after complete commit evidence exists
 and is not accepted as a recovery root for that pre-finality window.
+
+This retires only the quarantined outcome-marker authority; an fsynced
+lifecycle Validate sidecar registration, when present, reopens the same Waiting
+row and ordinal for authenticated wake after launch.
 
 Before replay mutates WSV, startup preflights the entire requested height range. Every executable
 height must have a locally retrievable canonical body; ordinary finalized body eviction remains

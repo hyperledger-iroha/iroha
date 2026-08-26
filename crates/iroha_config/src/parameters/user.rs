@@ -150,7 +150,7 @@ use iroha_crypto::{
     streaming::{KeyMaterialError, STREAMING_DEFAULT_KEM_SUITE, StreamingKeyMaterial},
 };
 use iroha_data_model::{
-    ChainId, Level,
+    ChainId, Level, NetworkId,
     account::{AccountId, curve::CurveId},
     asset::{AssetDefinitionAlias, prelude::AssetDefinitionId},
     block::BlockHeader,
@@ -179,7 +179,7 @@ use iroha_data_model::{
         LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility, ShardId,
         UniversalAccountId,
     },
-    peer::{Peer, PeerId},
+    peer::Peer,
     privacy::{PrivacyIssuerIdV1, PrivacyPolicyIdV1},
     role::RoleId,
     sorafs::{
@@ -293,18 +293,14 @@ fn read_private_key_file(
             )
         })
 }
-fn resolve_public_identity_source<T>(
-    inline: Option<WithOrigin<T>>,
+fn resolve_genesis_identity_source(
+    inline: Option<WithOrigin<NetworkId>>,
     file: Option<WithOrigin<PathBuf>>,
     inline_field: &'static str,
     file_field: &'static str,
     error: ParseError,
     emitter: &mut Emitter<ParseError>,
-) -> Option<T>
-where
-    T: FromStr + ToString,
-    T::Err: std::fmt::Display,
-{
+) -> Option<HashOf<BlockHeader>> {
     let file = match (inline, file) {
         (Some(_), Some(_)) => {
             emitter.emit(Report::new(error).attach(format!(
@@ -312,7 +308,7 @@ where
             )));
             return None;
         }
-        (Some(inline), None) => return Some(inline.into_value()),
+        (Some(inline), None) => return Some(inline.into_value().into_genesis_hash()),
         (None, Some(file)) => file,
         (None, None) => {
             emitter.emit(Report::new(error).attach(format!(
@@ -321,22 +317,18 @@ where
             return None;
         }
     };
-    match read_public_identity_file::<T>(file, file_field) {
-        Ok((identity, _)) => Some(identity),
+    match read_network_identity_file(file, file_field) {
+        Ok((identity, _)) => Some(identity.into_genesis_hash()),
         Err(message) => {
             emitter.emit(Report::new(error).attach(message));
             None
         }
     }
 }
-fn read_public_identity_file<T>(
+fn read_network_identity_file(
     file: WithOrigin<PathBuf>,
     file_field: &'static str,
-) -> core::result::Result<(T, ParameterOrigin), String>
-where
-    T: FromStr + ToString,
-    T::Err: std::fmt::Display,
-{
+) -> core::result::Result<(NetworkId, ParameterOrigin), String> {
     let path = file.resolve_relative_path();
     let (_, origin) = file.into_tuple();
     if path.as_os_str().is_empty() {
@@ -369,23 +361,29 @@ where
             path.display()
         ));
     }
-    let encoded = encoded
-        .strip_suffix("\r\n")
-        .or_else(|| encoded.strip_suffix('\n'))
-        .unwrap_or(&encoded);
-    if encoded.is_empty() || encoded.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
+    let Some(identity_text) = encoded.strip_suffix('\n') else {
         return Err(format!(
-            "{file_field} `{}` must contain exactly one canonical public identity",
+            "{file_field} `{}` must contain exactly one LF-terminated canonical public identity",
+            path.display()
+        ));
+    };
+    if identity_text.is_empty()
+        || identity_text
+            .bytes()
+            .any(|byte| matches!(byte, b'\r' | b'\n'))
+    {
+        return Err(format!(
+            "{file_field} `{}` must contain exactly one LF-terminated canonical public identity",
             path.display()
         ));
     }
-    let identity = T::from_str(encoded).map_err(|err| {
+    let identity = NetworkId::from_str(identity_text).map_err(|err| {
         format!(
             "{file_field} `{}` does not contain a valid public identity: {err}",
             path.display()
         )
     })?;
-    if identity.to_string() != encoded {
+    if encoded != format!("{identity}\n") {
         return Err(format!(
             "{file_field} `{}` does not contain the canonical public identity spelling",
             path.display()
@@ -402,6 +400,41 @@ use crate::{
     },
     snapshot::Mode as SnapshotMode,
 };
+
+fn validate_consensus_signer_provider_binding_v1(
+    handle: Option<&str>,
+    revision: Option<u64>,
+    policy_digest_hex: Option<&str>,
+) -> core::result::Result<Option<[u8; 32]>, &'static str> {
+    match (handle, revision, policy_digest_hex) {
+        (None, None, None) => Ok(None),
+        (Some(handle), Some(revision), Some(policy_digest_hex)) => {
+            if !is_production_runtime_handle(handle) {
+                return Err("provider handle is not a canonical production runtime handle");
+            }
+            if revision == 0 {
+                return Err("provider revision must be non-zero");
+            }
+            if policy_digest_hex.len() != 64
+                || !policy_digest_hex
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(
+                    "provider policy digest must be exactly 64 lowercase hexadecimal characters",
+                );
+            }
+            let mut policy_digest = [0_u8; 32];
+            hex::decode_to_slice(policy_digest_hex, &mut policy_digest)
+                .map_err(|_| "provider policy digest is malformed")?;
+            if policy_digest == [0; 32] {
+                return Err("provider policy digest must be non-zero");
+            }
+            Ok(Some(policy_digest))
+        }
+        _ => Err("provider handle, revision, and policy digest must be configured together"),
+    }
+}
 use iroha_primitives::{
     addr::SocketAddr,
     numeric::{Quantity, XorQuantity},
@@ -1405,7 +1438,38 @@ impl Root {
         let ivm = self.ivm.parse();
         let mut zk = self.zk.parse();
         let concurrency = self.concurrency.parse();
-        let gov = self.gov.parse();
+        let mut gov_provider_binding_valid = true;
+        if let Err(reason) = validate_consensus_signer_provider_binding_v1(
+            self.gov
+                .parliament_tle_partial_release_signer_provider_handle
+                .as_deref(),
+            self.gov
+                .parliament_tle_partial_release_signer_provider_revision,
+            self.gov
+                .parliament_tle_partial_release_signer_provider_policy_digest_hex
+                .as_deref(),
+        ) {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                    "governance Parliament TLE partial-release signer binding is invalid: {reason}"
+                )),
+            );
+            gov_provider_binding_valid = false;
+        }
+        if self
+            .gov
+            .parliament_tle_partial_release_signer_provider_handle
+            .is_some()
+            && sumeragi
+                .as_ref()
+                .is_some_and(|sumeragi| sumeragi.role == actual::NodeRole::Observer)
+        {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "an observer must not configure a Parliament TLE partial-release signer provider",
+            ));
+            gov_provider_binding_valid = false;
+        }
+        let gov = gov_provider_binding_valid.then(|| self.gov.parse());
         let nts = self.nts.parse();
         let nexus = self.nexus.parse(&mut emitter);
         let confidential = self.confidential.parse();
@@ -1458,6 +1522,7 @@ impl Root {
         zk.registry_max_delta_per_block = confidential.registry_max_delta_per_block;
         zk.gas = confidential.gas;
         emitter.into_result()?;
+        soracloud_runtime.assert_runtime_posture();
         let sumeragi =
             sumeragi.expect("sumeragi configuration should be valid when emitter succeeds");
         let nexus = nexus.expect("nexus configuration should be valid when emitter succeeds");
@@ -1465,6 +1530,7 @@ impl Root {
         let streaming =
             streaming.expect("streaming configuration should be valid when emitter succeeds");
         let compute = compute.expect("compute configuration should be valid when emitter succeeds");
+        let gov = gov.expect("governance provider binding should be valid when emitter succeeds");
         let genesis = genesis.expect("genesis configuration should be valid when emitter succeeds");
         let key_pair = key_pair.unwrap();
         let soranet_transport_key_pair = soranet_transport_key_pair
@@ -2251,6 +2317,62 @@ impl Default for RuntimeUpgradeProvenance {
         }
     }
 }
+/// Consensus-critical deterministic block-height and resource policy for private Parliament ballots.
+#[derive(Debug, ReadConfig, Clone, Copy)]
+pub struct ParliamentTimedOvn {
+    /// Consensus block-height span allotted to proof-validated registration submissions.
+    #[config(default = "defaults::governance::parliament_timed_ovn::REGISTRATION_PHASE_BLOCKS")]
+    pub registration_phase_blocks: u64,
+    /// Consensus block-height span allotted to freezing pre-ballot dropouts and survivors.
+    #[config(default = "defaults::governance::parliament_timed_ovn::SURVIVOR_FREEZE_PHASE_BLOCKS")]
+    pub survivor_freeze_phase_blocks: u64,
+    /// Consensus block-height span allotted to the exact masked-ballot commitment corpus.
+    #[config(default = "defaults::governance::parliament_timed_ovn::COMMITMENT_PHASE_BLOCKS")]
+    pub commitment_phase_blocks: u64,
+    /// Consensus block-height span between commitment close and the earliest timed release.
+    #[config(default = "defaults::governance::parliament_timed_ovn::RELEASE_DELAY_BLOCKS")]
+    pub release_delay_blocks: u64,
+    /// Consensus block-height grace window for aggregate opening after release begins.
+    #[config(default = "defaults::governance::parliament_timed_ovn::OPENING_PHASE_BLOCKS")]
+    pub opening_phase_blocks: u64,
+    /// Retry attempts permitted after the initial private ballot attempt, capped at 16.
+    #[config(default = "defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES")]
+    pub max_ballot_retries: u32,
+    /// Maximum entries retained in any registration, survivor, or ballot corpus, capped at 1,000.
+    #[config(default = "defaults::governance::parliament_timed_ovn::MAX_CORPUS_ENTRIES")]
+    pub max_corpus_entries: u32,
+}
+impl ParliamentTimedOvn {
+    fn parse(self) -> actual::ParliamentTimedOvn {
+        let policy = actual::ParliamentTimedOvn {
+            registration_phase_blocks: self.registration_phase_blocks,
+            survivor_freeze_phase_blocks: self.survivor_freeze_phase_blocks,
+            commitment_phase_blocks: self.commitment_phase_blocks,
+            release_delay_blocks: self.release_delay_blocks,
+            opening_phase_blocks: self.opening_phase_blocks,
+            max_ballot_retries: self.max_ballot_retries,
+            max_corpus_entries: self.max_corpus_entries,
+        };
+        policy.assert_valid();
+        policy
+    }
+}
+impl Default for ParliamentTimedOvn {
+    fn default() -> Self {
+        Self {
+            registration_phase_blocks:
+                defaults::governance::parliament_timed_ovn::REGISTRATION_PHASE_BLOCKS,
+            survivor_freeze_phase_blocks:
+                defaults::governance::parliament_timed_ovn::SURVIVOR_FREEZE_PHASE_BLOCKS,
+            commitment_phase_blocks:
+                defaults::governance::parliament_timed_ovn::COMMITMENT_PHASE_BLOCKS,
+            release_delay_blocks: defaults::governance::parliament_timed_ovn::RELEASE_DELAY_BLOCKS,
+            opening_phase_blocks: defaults::governance::parliament_timed_ovn::OPENING_PHASE_BLOCKS,
+            max_ballot_retries: defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES,
+            max_corpus_entries: defaults::governance::parliament_timed_ovn::MAX_CORPUS_ENTRIES,
+        }
+    }
+}
 /// Governance configuration (user view).
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Governance {
@@ -2489,6 +2611,25 @@ pub struct Governance {
         default = "crate::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS"
     )]
     pub parliament_quorum_bps: u16,
+    /// Consensus block-height span for immutable primary and alternate invitation responses.
+    #[config(
+        default = "crate::parameters::defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS"
+    )]
+    pub parliament_invitation_phase_blocks: u64,
+    /// Consensus block-height span for public-finding endorsements after Reflection begins.
+    #[config(
+        default = "crate::parameters::defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS"
+    )]
+    pub parliament_public_finding_phase_blocks: u64,
+    /// Consensus-critical timed-OVN phase and resource policy.
+    #[config(nested)]
+    pub parliament_timed_ovn: ParliamentTimedOvn,
+    /// Credential-free deployment handle for the Parliament TLE release-share signer.
+    pub parliament_tle_partial_release_signer_provider_handle: Option<String>,
+    /// Exact non-zero provider contract revision for the Parliament TLE release-share signer.
+    pub parliament_tle_partial_release_signer_provider_revision: Option<u64>,
+    /// Exact non-zero public-policy digest for the Parliament TLE signer.
+    pub parliament_tle_partial_release_signer_provider_policy_digest_hex: Option<String>,
     /// Rules Committee size.
     #[config(
         env = "GOV_RULES_COMMITTEE_SIZE",
@@ -2513,42 +2654,37 @@ pub struct Governance {
         default = "crate::parameters::defaults::governance::PARLIAMENT_REVIEW_PANEL_SIZE"
     )]
     pub review_panel_size: usize,
+    /// Coordination Council size.
+    #[config(
+        default = "crate::parameters::defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE"
+    )]
+    pub coordination_council_size: usize,
     /// Policy Jury size.
     #[config(
         env = "GOV_POLICY_JURY_SIZE",
         default = "crate::parameters::defaults::governance::PARLIAMENT_POLICY_JURY_SIZE"
     )]
     pub policy_jury_size: usize,
+    /// Maximum Confirmation Jury size.
+    #[config(
+        default = "crate::parameters::defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE"
+    )]
+    pub confirmation_jury_size: usize,
     /// Oversight Committee size.
     #[config(
         env = "GOV_OVERSIGHT_COMMITTEE_SIZE",
         default = "crate::parameters::defaults::governance::PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE"
     )]
     pub oversight_committee_size: usize,
-    /// MPC/FMA board size.
+    /// MPC Committee size.
+    #[config(default = "crate::parameters::defaults::governance::PARLIAMENT_MPC_COMMITTEE_SIZE")]
+    pub mpc_committee_size: usize,
+    /// FMA Committee size.
     #[config(
         env = "GOV_FMA_COMMITTEE_SIZE",
         default = "crate::parameters::defaults::governance::PARLIAMENT_FMA_COMMITTEE_SIZE"
     )]
     pub fma_committee_size: usize,
-    /// SLA (blocks) from proposal submission to referendum opening.
-    #[config(env = "GOV_PIPELINE_STUDY_SLA_BLOCKS")]
-    pub pipeline_study_sla_blocks: Option<u64>,
-    /// SLA (blocks) allotted to the referendum voting window.
-    #[config(env = "GOV_PIPELINE_REVIEW_SLA_BLOCKS")]
-    pub pipeline_review_sla_blocks: Option<u64>,
-    /// SLA (blocks) allotted to record the referendum decision.
-    #[config(env = "GOV_PIPELINE_DECISION_SLA_BLOCKS")]
-    pub pipeline_decision_sla_blocks: Option<u64>,
-    /// SLA (blocks) to enact an approved proposal after decision.
-    #[config(env = "GOV_PIPELINE_ENACTMENT_SLA_BLOCKS")]
-    pub pipeline_enactment_sla_blocks: Option<u64>,
-    /// SLA (blocks) for rules committee approvals.
-    #[config(env = "GOV_PIPELINE_RULES_SLA_BLOCKS")]
-    pub pipeline_rules_sla_blocks: Option<u64>,
-    /// SLA (blocks) for agenda council scheduling.
-    #[config(env = "GOV_PIPELINE_AGENDA_SLA_BLOCKS")]
-    pub pipeline_agenda_sla_blocks: Option<u64>,
 }
 impl Default for Governance {
     fn default() -> Self {
@@ -2607,31 +2743,74 @@ impl Default for Governance {
             ),
             parliament_alternate_size: defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
             parliament_quorum_bps: defaults::governance::PARLIAMENT_QUORUM_BPS,
+            parliament_invitation_phase_blocks:
+                defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
+            parliament_public_finding_phase_blocks:
+                defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
+            parliament_timed_ovn: ParliamentTimedOvn::default(),
+            parliament_tle_partial_release_signer_provider_handle: None,
+            parliament_tle_partial_release_signer_provider_revision: None,
+            parliament_tle_partial_release_signer_provider_policy_digest_hex: None,
             rules_committee_size: defaults::governance::PARLIAMENT_RULES_COMMITTEE_SIZE,
             agenda_council_size: defaults::governance::PARLIAMENT_AGENDA_COUNCIL_SIZE,
             interest_panel_size: defaults::governance::PARLIAMENT_INTEREST_PANEL_SIZE,
             review_panel_size: defaults::governance::PARLIAMENT_REVIEW_PANEL_SIZE,
+            coordination_council_size: defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE,
             policy_jury_size: defaults::governance::PARLIAMENT_POLICY_JURY_SIZE,
+            confirmation_jury_size: defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE,
             oversight_committee_size: defaults::governance::PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE,
+            mpc_committee_size: defaults::governance::PARLIAMENT_MPC_COMMITTEE_SIZE,
             fma_committee_size: defaults::governance::PARLIAMENT_FMA_COMMITTEE_SIZE,
-            pipeline_study_sla_blocks: None,
-            pipeline_review_sla_blocks: None,
-            pipeline_decision_sla_blocks: None,
-            pipeline_enactment_sla_blocks: None,
-            pipeline_rules_sla_blocks: None,
-            pipeline_agenda_sla_blocks: None,
         }
     }
 }
 impl Governance {
     /// Convert user-supplied governance settings into the runtime representation.
     pub fn parse(self) -> actual::Governance {
+        let parliament_tle_partial_release_signer_provider_policy_digest =
+            validate_consensus_signer_provider_binding_v1(
+                self.parliament_tle_partial_release_signer_provider_handle
+                    .as_deref(),
+                self.parliament_tle_partial_release_signer_provider_revision,
+                self.parliament_tle_partial_release_signer_provider_policy_digest_hex
+                    .as_deref(),
+            )
+            .expect("invalid Parliament TLE partial-release signer provider binding");
         let citizen_service = self.citizen_service.parse();
         citizen_service.assert_valid();
+        assert!(
+            self.min_enactment_delay > 0,
+            "min_enactment_delay must be non-zero"
+        );
         assert!(
             (1..=10_000).contains(&self.parliament_quorum_bps),
             "parliament_quorum_bps must be within 1..=10_000 (basis points)"
         );
+        assert!(
+            self.parliament_invitation_phase_blocks > 0,
+            "parliament_invitation_phase_blocks must be non-zero"
+        );
+        assert!(
+            self.parliament_public_finding_phase_blocks > 0,
+            "parliament_public_finding_phase_blocks must be non-zero"
+        );
+        for (name, size) in [
+            ("rules_committee_size", self.rules_committee_size),
+            ("agenda_council_size", self.agenda_council_size),
+            ("interest_panel_size", self.interest_panel_size),
+            ("review_panel_size", self.review_panel_size),
+            ("coordination_council_size", self.coordination_council_size),
+            ("policy_jury_size", self.policy_jury_size),
+            ("confirmation_jury_size", self.confirmation_jury_size),
+            ("oversight_committee_size", self.oversight_committee_size),
+            ("mpc_committee_size", self.mpc_committee_size),
+            ("fma_committee_size", self.fma_committee_size),
+        ] {
+            assert!(
+                (1..=1_000).contains(&size),
+                "{name} must be within 1..=1_000"
+            );
+        }
         let viral_incentives = actual::ViralIncentives {
             incentive_pool_account: parse_account_id_literal(
                 &self.viral_incentive_pool_account,
@@ -2761,33 +2940,224 @@ impl Governance {
                 .expect("invalid parliament eligibility asset id"),
             parliament_alternate_size: self.parliament_alternate_size,
             parliament_quorum_bps: self.parliament_quorum_bps,
+            parliament_invitation_phase_blocks: self.parliament_invitation_phase_blocks,
+            parliament_public_finding_phase_blocks: self.parliament_public_finding_phase_blocks,
+            parliament_timed_ovn: self.parliament_timed_ovn.parse(),
+            parliament_tle_partial_release_signer_provider_handle: self
+                .parliament_tle_partial_release_signer_provider_handle,
+            parliament_tle_partial_release_signer_provider_revision: self
+                .parliament_tle_partial_release_signer_provider_revision,
+            parliament_tle_partial_release_signer_provider_policy_digest,
             rules_committee_size: self.rules_committee_size,
             agenda_council_size: self.agenda_council_size,
             interest_panel_size: self.interest_panel_size,
             review_panel_size: self.review_panel_size,
+            coordination_council_size: self.coordination_council_size,
             policy_jury_size: self.policy_jury_size,
+            confirmation_jury_size: self.confirmation_jury_size,
             oversight_committee_size: self.oversight_committee_size,
+            mpc_committee_size: self.mpc_committee_size,
             fma_committee_size: self.fma_committee_size,
-            pipeline_study_sla_blocks: self
-                .pipeline_study_sla_blocks
-                .unwrap_or(self.min_enactment_delay),
-            pipeline_review_sla_blocks: self.pipeline_review_sla_blocks.unwrap_or(self.window_span),
-            pipeline_decision_sla_blocks: self.pipeline_decision_sla_blocks.unwrap_or(1),
-            pipeline_enactment_sla_blocks: self
-                .pipeline_enactment_sla_blocks
-                .unwrap_or(self.window_span.saturating_mul(2)),
-            pipeline_rules_sla_blocks: self
-                .pipeline_rules_sla_blocks
-                .unwrap_or(defaults::governance::PIPELINE_RULES_SLA_BLOCKS),
-            pipeline_agenda_sla_blocks: self
-                .pipeline_agenda_sla_blocks
-                .unwrap_or(defaults::governance::PIPELINE_AGENDA_SLA_BLOCKS),
         }
     }
 }
 #[cfg(test)]
 mod governance_tests {
     use super::*;
+    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+
+    #[test]
+    fn parliament_invitation_window_is_file_configured_and_nonzero() {
+        let table: toml::Table = toml::from_str("parliament_invitation_phase_blocks = 17")
+            .expect("parse Parliament invitation policy TOML");
+        let parsed = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<Governance>()
+            .expect("read Governance with invitation policy")
+            .parse();
+
+        assert_eq!(parsed.parliament_invitation_phase_blocks, 17);
+    }
+
+    #[test]
+    fn parliament_public_finding_window_is_file_configured_and_nonzero() {
+        let table: toml::Table = toml::from_str("parliament_public_finding_phase_blocks = 19")
+            .expect("parse Parliament public-finding policy TOML");
+        let parsed = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<Governance>()
+            .expect("read Governance with public-finding policy")
+            .parse();
+
+        assert_eq!(parsed.parliament_public_finding_phase_blocks, 19);
+
+        let mut invalid = Governance::default();
+        invalid.parliament_public_finding_phase_blocks = 0;
+        assert!(
+            std::panic::catch_unwind(|| invalid.parse()).is_err(),
+            "zero public-finding phase must fail before Reflection can be entered"
+        );
+    }
+
+    #[test]
+    fn parliament_public_finding_window_defaults_to_one_hour_at_one_second_blocks() {
+        let parsed = Governance::default().parse();
+        assert_eq!(
+            parsed.parliament_public_finding_phase_blocks,
+            defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS
+        );
+        assert_eq!(parsed.parliament_public_finding_phase_blocks, 3_600);
+    }
+
+    #[test]
+    fn parliament_enactment_delay_rejects_zero_at_startup() {
+        let mut governance = Governance::default();
+        governance.min_enactment_delay = 0;
+        let panic = std::panic::catch_unwind(|| governance.parse());
+        assert!(
+            panic.is_err(),
+            "zero enactment delay must fail before a proposal can become stranded"
+        );
+    }
+
+    #[test]
+    fn parliament_timed_ovn_file_config_parses_deterministic_height_windows() {
+        let table: toml::Table = toml::from_str(
+            r#"
+[parliament_timed_ovn]
+registration_phase_blocks = 11
+survivor_freeze_phase_blocks = 12
+commitment_phase_blocks = 13
+release_delay_blocks = 14
+opening_phase_blocks = 15
+max_ballot_retries = 15
+max_corpus_entries = 16
+"#,
+        )
+        .expect("parse timed-OVN policy TOML");
+        let parsed = ConfigReader::new()
+            .with_toml_source(TomlSource::inline(table))
+            .read_and_complete::<Governance>()
+            .expect("read Governance with timed-OVN policy")
+            .parse()
+            .parliament_timed_ovn;
+
+        assert_eq!(
+            parsed,
+            actual::ParliamentTimedOvn {
+                registration_phase_blocks: 11,
+                survivor_freeze_phase_blocks: 12,
+                commitment_phase_blocks: 13,
+                release_delay_blocks: 14,
+                opening_phase_blocks: 15,
+                max_ballot_retries: 15,
+                max_corpus_entries: 16,
+            }
+        );
+        assert_eq!(parsed.checked_attempt_span_blocks(), Some(65));
+        assert_eq!(parsed.checked_max_lifecycle_span_blocks(), Some(1_040));
+    }
+
+    #[test]
+    fn parliament_timed_ovn_defaults_are_bounded_and_valid() {
+        let parsed = ParliamentTimedOvn::default().parse();
+
+        assert_eq!(parsed.checked_attempt_span_blocks(), Some(8_700));
+        assert_eq!(parsed.checked_max_lifecycle_span_blocks(), Some(34_800));
+        assert_eq!(
+            parsed.opening_phase_blocks,
+            defaults::governance::parliament_timed_ovn::OPENING_PHASE_BLOCKS
+        );
+        assert_eq!(parsed.opening_phase_blocks, 600);
+        assert!(
+            parsed.max_ballot_retries
+                <= defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT
+        );
+        assert_eq!(
+            defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT,
+            16
+        );
+        assert_eq!(
+            parsed.max_corpus_entries,
+            u32::try_from(iroha_crypto::timed_ovn::TIMED_OVN_MAX_PARTICIPANTS_V1)
+                .expect("timed-OVN participant limit fits u32")
+        );
+        assert_eq!(
+            defaults::governance::parliament_timed_ovn::MAX_CORPUS_ENTRIES_LIMIT,
+            1_000
+        );
+
+        let no_retries = actual::ParliamentTimedOvn {
+            max_ballot_retries: 0,
+            ..parsed
+        };
+        no_retries.assert_valid();
+        let maximum_retries = actual::ParliamentTimedOvn {
+            max_ballot_retries:
+                defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT,
+            ..parsed
+        };
+        maximum_retries.assert_valid();
+    }
+
+    #[test]
+    fn parliament_timed_ovn_rejects_zero_overflow_and_resource_overruns() {
+        let valid = actual::ParliamentTimedOvn::default();
+        let invalid = [
+            actual::ParliamentTimedOvn {
+                registration_phase_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                survivor_freeze_phase_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                commitment_phase_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                release_delay_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                opening_phase_blocks: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                registration_phase_blocks: u64::MAX,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                registration_phase_blocks: u64::MAX / 2,
+                max_ballot_retries:
+                    defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                max_ballot_retries:
+                    defaults::governance::parliament_timed_ovn::MAX_BALLOT_RETRIES_LIMIT + 1,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                max_corpus_entries: 0,
+                ..valid
+            },
+            actual::ParliamentTimedOvn {
+                max_corpus_entries:
+                    defaults::governance::parliament_timed_ovn::MAX_CORPUS_ENTRIES_LIMIT + 1,
+                ..valid
+            },
+        ];
+
+        for policy in invalid {
+            assert!(
+                std::panic::catch_unwind(|| policy.assert_valid()).is_err(),
+                "invalid timed-OVN policy must fail closed: {policy:?}"
+            );
+        }
+    }
+
     #[test]
     fn debug_trace_pipeline_defaults_false() {
         let cfg = Governance::default();
@@ -3142,12 +3512,6 @@ pub struct Pipeline {
         default = "defaults::pipeline::DEBUG_TRACE_TX_EVAL"
     )]
     pub debug_trace_tx_eval: bool,
-    /// Maximum size for deterministic signature micro-batches (0 disables; historical alias for Ed25519).
-    #[config(
-        env = "PIPELINE_SIGNATURE_BATCH_MAX",
-        default = "defaults::pipeline::SIGNATURE_BATCH_MAX"
-    )]
-    pub signature_batch_max: usize,
     /// Per-scheme caps (0 disables) for signature batch verification.
     #[config(
         env = "PIPELINE_SIGNATURE_BATCH_MAX_ED25519",
@@ -3955,7 +4319,6 @@ impl Pipeline {
             gpu_key_bucket: self.gpu_key_bucket,
             debug_trace_scheduler_inputs: self.debug_trace_scheduler_inputs,
             debug_trace_tx_eval: self.debug_trace_tx_eval,
-            signature_batch_max: self.signature_batch_max,
             signature_batch_max_ed25519: self.signature_batch_max_ed25519,
             signature_batch_max_secp256k1: self.signature_batch_max_secp256k1,
             signature_batch_max_pqc: self.signature_batch_max_pqc,
@@ -4034,7 +4397,6 @@ mod pipeline_tests {
             gpu_key_bucket: defaults::pipeline::GPU_KEY_BUCKET,
             debug_trace_scheduler_inputs: trace_scheduler_inputs,
             debug_trace_tx_eval: trace_tx_eval,
-            signature_batch_max: defaults::pipeline::SIGNATURE_BATCH_MAX,
             signature_batch_max_ed25519: defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
             signature_batch_max_secp256k1: defaults::pipeline::SIGNATURE_BATCH_MAX_SECP256K1,
             signature_batch_max_pqc: defaults::pipeline::SIGNATURE_BATCH_MAX_PQC,
@@ -4333,7 +4695,7 @@ impl Sccp {
     fn parse(self) -> actual::Sccp {
         fn require_json_safe(value: NonZeroU64, name: &str) {
             assert!(
-                value.get() <= iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX,
+                value.get() <= iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64,
                 "zk.sccp.{name} must not exceed the SCCP V1 JSON-safe integer maximum"
             );
         }
@@ -4508,7 +4870,7 @@ mod sccp_limit_tests {
     #[test]
     fn rejects_byte_limits_outside_the_exact_json_integer_range() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
-        let maximum = iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX;
+        let maximum = iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64;
         let exact = NonZeroU64::new(maximum).expect("JSON-safe maximum is nonzero");
         let over = NonZeroU64::new(maximum + 1).expect("one above maximum is nonzero");
         let mut boundary = Sccp::default();
@@ -5720,20 +6082,25 @@ pub struct Genesis {
     /// Optional path to genesis manifest JSON for startup validation.
     #[config(env = "GENESIS_MANIFEST_JSON")]
     pub manifest_json: Option<WithOrigin<PathBuf>>,
-    /// Exact genesis consensus-header hash used as the startup trust anchor.
+    /// Canonical checked network identity derived from the exact genesis consensus-header hash.
     ///
     /// This is mandatory even when a local signed genesis file is configured. Requiring an
     /// independently provisioned value prevents the artifact being authenticated from selecting
     /// its own trust root.
     #[config(env = "GENESIS_EXPECTED_HASH")]
-    pub expected_hash: Option<WithOrigin<HashOf<BlockHeader>>>,
-    /// Public file containing the canonical expected consensus-header hash.
+    pub expected_hash: Option<WithOrigin<NetworkId>>,
+    /// Public file containing the canonical checked network identity derived from the expected
+    /// consensus-header hash.
+    ///
+    /// The sole accepted file content is one LF-terminated
+    /// `hash:<64 uppercase hex digits>#<CRC16>` record, byte-identical to client
+    /// `network_id_file`.
     #[config(env = "GENESIS_EXPECTED_HASH_FILE")]
     pub expected_hash_file: Option<WithOrigin<PathBuf>>,
 }
 impl Genesis {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Genesis> {
-        let expected_hash = resolve_public_identity_source(
+        let expected_hash = resolve_genesis_identity_source(
             self.expected_hash,
             self.expected_hash_file,
             "genesis.expected_hash",
@@ -5913,6 +6280,12 @@ pub struct Sumeragi {
     /// Node-local participation role.
     #[config(default = "NodeRole::Validator")]
     pub role: NodeRole,
+    /// Credential-free deployment handle for the global beacon share signer.
+    pub global_beacon_partial_signer_provider_handle: Option<String>,
+    /// Exact non-zero provider contract revision for the global beacon share signer.
+    pub global_beacon_partial_signer_provider_revision: Option<u64>,
+    /// Exact non-zero public-policy digest for the global beacon signer.
+    pub global_beacon_partial_signer_provider_policy_digest_hex: Option<String>,
     /// Finite candidate block limits.
     #[config(nested)]
     pub block: SumeragiBlock,
@@ -6017,12 +6390,40 @@ impl Sumeragi {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Sumeragi> {
         let Self {
             role,
+            global_beacon_partial_signer_provider_handle,
+            global_beacon_partial_signer_provider_revision,
+            global_beacon_partial_signer_provider_policy_digest_hex,
             block,
             queues,
             limits,
             keys,
         } = self;
         let mut valid = true;
+        let global_beacon_partial_signer_provider_policy_digest =
+            match validate_consensus_signer_provider_binding_v1(
+                global_beacon_partial_signer_provider_handle.as_deref(),
+                global_beacon_partial_signer_provider_revision,
+                global_beacon_partial_signer_provider_policy_digest_hex.as_deref(),
+            ) {
+                Ok(policy_digest) => policy_digest,
+                Err(reason) => {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                            "sumeragi global beacon partial signer binding is invalid: {reason}"
+                        )),
+                    );
+                    valid = false;
+                    None
+                }
+            };
+        if global_beacon_partial_signer_provider_handle.is_some() && role != NodeRole::Validator {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "an observer must not configure a global beacon partial signer provider",
+                ),
+            );
+            valid = false;
+        }
         if queues.commands.get() < defaults::sumeragi::MIN_RUNTIME_COMMAND_CAPACITY {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
@@ -6159,6 +6560,9 @@ impl Sumeragi {
                 NodeRole::Validator => actual::NodeRole::Validator,
                 NodeRole::Observer => actual::NodeRole::Observer,
             },
+            global_beacon_partial_signer_provider_handle,
+            global_beacon_partial_signer_provider_revision,
+            global_beacon_partial_signer_provider_policy_digest,
             block: actual::SumeragiBlock {
                 max_transactions: block.max_transactions,
                 max_payload_bytes: block.max_payload_bytes,
@@ -6696,329 +7100,6 @@ mod soranet_privacy_config_tests {
     }
 }
 
-const SORANET_VPN_HELPER_SECRET_HEX_BYTES: usize = 64;
-const SORANET_VPN_HELPER_SECRET_READ_BYTES: usize = SORANET_VPN_HELPER_SECRET_HEX_BYTES + 1;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-const SORANET_VPN_NOFOLLOW_FLAG: i32 = 0x0000_0100;
-#[cfg(any(target_os = "linux", target_os = "android"))]
-const SORANET_VPN_NOFOLLOW_FLAG: i32 = 0x0002_0000;
-#[cfg(any(
-    target_os = "freebsd",
-    target_os = "netbsd",
-    target_os = "openbsd",
-    target_os = "dragonfly"
-))]
-const SORANET_VPN_NOFOLLOW_FLAG: i32 = 0x0000_0100;
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd",
-        target_os = "dragonfly"
-    ))
-))]
-compile_error!("SoraNet VPN secret loading requires a defined no-follow open flag");
-
-struct SoranetVpnSecretBuffer([u8; SORANET_VPN_HELPER_SECRET_READ_BYTES]);
-
-#[allow(
-    unsafe_code,
-    reason = "volatile clearing is confined to this uniquely borrowed fixed-size secret buffer"
-)]
-impl Drop for SoranetVpnSecretBuffer {
-    fn drop(&mut self) {
-        for byte in &mut self.0 {
-            // SAFETY: `byte` is a valid, uniquely borrowed byte in this stack buffer.
-            unsafe { std::ptr::write_volatile(byte, 0) };
-        }
-        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
-#[cfg(unix)]
-#[allow(unsafe_code, reason = "geteuid has no safe standard-library wrapper")]
-fn soranet_vpn_effective_uid() -> u32 {
-    unsafe extern "C" {
-        fn geteuid() -> u32;
-    }
-    // SAFETY: `geteuid` has no arguments or memory-safety preconditions.
-    unsafe { geteuid() }
-}
-
-#[cfg(unix)]
-fn trusted_soranet_vpn_helper_secret_path(path: &Path) -> io::Result<PathBuf> {
-    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
-    const STICKY_BIT: u32 = 0o1000;
-    if !path.is_absolute() {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "resolved helper ticket secret path must be absolute",
-        ));
-    }
-    let file_name = path.file_name().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "helper ticket secret path must name a file",
-        )
-    })?;
-    let parent = path.parent().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "helper ticket secret path must have a parent directory",
-        )
-    })?;
-    // Pin the resolved parent once. This permits system aliases such as macOS
-    // `/var` while ensuring the subsequent open does not traverse a mutable alias.
-    let canonical_parent = fs::canonicalize(parent)?;
-    let effective_uid = soranet_vpn_effective_uid();
-    for ancestor in canonical_parent.ancestors() {
-        let metadata = fs::symlink_metadata(ancestor)?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "helper ticket secret parent {} must be a direct directory",
-                    ancestor.display()
-                ),
-            ));
-        }
-        let owner = metadata.uid();
-        if owner != effective_uid && owner != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "helper ticket secret parent {} must be owned by the effective user or root",
-                    ancestor.display()
-                ),
-            ));
-        }
-        let mode = metadata.permissions().mode();
-        let trusted_sticky_root = owner == 0 && mode & STICKY_BIT != 0;
-        if mode & 0o022 != 0 && !trusted_sticky_root {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "helper ticket secret parent {} must not be group- or other-writable",
-                    ancestor.display()
-                ),
-            ));
-        }
-    }
-    Ok(canonical_parent.join(file_name))
-}
-
-#[cfg(not(unix))]
-fn trusted_soranet_vpn_helper_secret_path(_path: &Path) -> io::Result<PathBuf> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "secure helper ticket secret loading is unavailable on this platform",
-    ))
-}
-
-#[cfg(unix)]
-fn open_soranet_vpn_helper_secret(path: &Path) -> io::Result<File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-
-    let mut options = fs::OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(SORANET_VPN_NOFOLLOW_FLAG)
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn open_soranet_vpn_helper_secret(_path: &Path) -> io::Result<File> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "secure helper ticket secret loading is unavailable on this platform",
-    ))
-}
-
-#[cfg(unix)]
-fn validate_soranet_vpn_helper_secret_metadata(metadata: &fs::Metadata) -> io::Result<()> {
-    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "helper ticket secret must be a direct regular file",
-        ));
-    }
-    let effective_uid = soranet_vpn_effective_uid();
-    if metadata.uid() != effective_uid && metadata.uid() != 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "helper ticket secret must be owned by the effective user or root",
-        ));
-    }
-    if metadata.nlink() != 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "helper ticket secret must have exactly one hard link",
-        ));
-    }
-    if metadata.permissions().mode() & 0o077 != 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "helper ticket secret must have no group or other permissions",
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn validate_soranet_vpn_helper_secret_metadata(_metadata: &fs::Metadata) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "secure helper ticket secret loading is unavailable on this platform",
-    ))
-}
-
-#[cfg(unix)]
-fn same_soranet_vpn_helper_secret_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.len() == right.len()
-        && left.uid() == right.uid()
-        && left.gid() == right.gid()
-        && left.nlink() == right.nlink()
-        && left.mode() == right.mode()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
-
-#[cfg(not(unix))]
-fn same_soranet_vpn_helper_secret_snapshot(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
-    false
-}
-
-#[cfg(test)]
-static SORANET_VPN_SECRET_OPEN_REPLACEMENT: std::sync::Mutex<Option<(PathBuf, PathBuf)>> =
-    std::sync::Mutex::new(None);
-
-#[cfg(test)]
-fn replace_soranet_vpn_helper_secret_for_test(path: &Path) -> io::Result<()> {
-    let replacement = {
-        let mut hook = SORANET_VPN_SECRET_OPEN_REPLACEMENT
-            .lock()
-            .expect("SoraNet VPN secret replacement hook lock");
-        if hook.as_ref().is_some_and(|(expected, _)| expected == path) {
-            hook.take().map(|(_, replacement)| replacement)
-        } else {
-            None
-        }
-    };
-    if let Some(replacement) = replacement {
-        fs::rename(replacement, path)?;
-    }
-    Ok(())
-}
-
-fn read_soranet_vpn_helper_secret(
-    source: &WithOrigin<PathBuf>,
-) -> core::result::Result<[u8; 32], String> {
-    const FIELD: &str = "network.soranet_vpn.helper_ticket_secret_path";
-    let resolved = source.resolve_relative_path();
-    let path = trusted_soranet_vpn_helper_secret_path(&resolved)
-        .map_err(|error| format!("invalid {FIELD} `{}`: {error}", resolved.display()))?;
-    let named_before = fs::symlink_metadata(&path)
-        .map_err(|error| format!("failed to inspect {FIELD} `{}`: {error}", path.display()))?;
-    validate_soranet_vpn_helper_secret_metadata(&named_before)
-        .map_err(|error| format!("invalid {FIELD} `{}`: {error}", path.display()))?;
-    if named_before.len() != SORANET_VPN_HELPER_SECRET_HEX_BYTES as u64 {
-        return Err(format!(
-            "{FIELD} `{}` must contain exactly 64 lowercase hexadecimal bytes",
-            path.display()
-        ));
-    }
-    #[cfg(test)]
-    replace_soranet_vpn_helper_secret_for_test(&path).map_err(|error| {
-        format!(
-            "failed to exercise the {FIELD} replacement hook for `{}`: {error}",
-            path.display()
-        )
-    })?;
-    let mut file = open_soranet_vpn_helper_secret(&path)
-        .map_err(|error| format!("failed to open {FIELD} `{}`: {error}", path.display()))?;
-    let opened_before = file.metadata().map_err(|error| {
-        format!(
-            "failed to inspect opened {FIELD} `{}`: {error}",
-            path.display()
-        )
-    })?;
-    validate_soranet_vpn_helper_secret_metadata(&opened_before)
-        .map_err(|error| format!("invalid opened {FIELD} `{}`: {error}", path.display()))?;
-    if !same_soranet_vpn_helper_secret_snapshot(&named_before, &opened_before) {
-        return Err(format!(
-            "{FIELD} `{}` changed while it was opened",
-            path.display()
-        ));
-    }
-
-    let mut encoded = SoranetVpnSecretBuffer([0; SORANET_VPN_HELPER_SECRET_READ_BYTES]);
-    let mut length = 0;
-    while length < encoded.0.len() {
-        let read = file
-            .read(&mut encoded.0[length..])
-            .map_err(|error| format!("failed to read {FIELD} `{}`: {error}", path.display()))?;
-        if read == 0 {
-            break;
-        }
-        length += read;
-    }
-    let opened_after = file.metadata().map_err(|error| {
-        format!(
-            "failed to re-inspect opened {FIELD} `{}`: {error}",
-            path.display()
-        )
-    })?;
-    let named_after = fs::symlink_metadata(&path)
-        .map_err(|error| format!("failed to re-inspect {FIELD} `{}`: {error}", path.display()))?;
-    validate_soranet_vpn_helper_secret_metadata(&opened_after)
-        .and_then(|()| validate_soranet_vpn_helper_secret_metadata(&named_after))
-        .map_err(|error| format!("invalid {FIELD} `{}` after read: {error}", path.display()))?;
-    if !same_soranet_vpn_helper_secret_snapshot(&opened_before, &opened_after)
-        || !same_soranet_vpn_helper_secret_snapshot(&opened_after, &named_after)
-    {
-        return Err(format!(
-            "{FIELD} `{}` changed while it was read",
-            path.display()
-        ));
-    }
-    if length != SORANET_VPN_HELPER_SECRET_HEX_BYTES {
-        return Err(format!(
-            "{FIELD} `{}` must contain exactly 64 lowercase hexadecimal bytes",
-            path.display()
-        ));
-    }
-    if !encoded.0[..length]
-        .iter()
-        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
-    {
-        return Err(format!(
-            "{FIELD} `{}` must contain exactly 64 lowercase hexadecimal bytes",
-            path.display()
-        ));
-    }
-    let mut secret = [0_u8; 32];
-    hex::decode_to_slice(&encoded.0[..length], &mut secret)
-        .expect("canonical 64-byte hexadecimal validation makes decoding infallible");
-    if secret.iter().all(|byte| *byte == 0) {
-        return Err(format!("{FIELD} `{}` must not be all zero", path.display()));
-    }
-    Ok(secret)
-}
-
 /// User-level configuration container for `Network`.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct SoranetVpn {
@@ -7061,11 +7142,13 @@ pub struct SoranetVpn {
     /// Meter family identifier.
     #[config(default = "defaults::soranet::vpn::METER_FAMILY.to_string()")]
     pub meter_family: String,
-    /// Owner-private file containing the canonical lowercase hex helper-ticket secret.
-    pub helper_ticket_secret_path: Option<WithOrigin<PathBuf>>,
     /// Relay operator account eligible for receipt settlement.
     #[config(default = "defaults::soranet::vpn::operator_account_id()")]
     pub operator_account_id: String,
+    /// Dedicated Ed25519 private key used to sign VPN quotes and helper tickets.
+    pub operator_private_key: Option<PrivateKey>,
+    /// Owner-private file containing the dedicated VPN operator private key.
+    pub operator_private_key_file: Option<WithOrigin<PathBuf>>,
     /// Fixed prepaid XOR lease fee.
     #[config(default = "defaults::soranet::vpn::lease_fee()")]
     pub lease_fee: Quantity,
@@ -7104,8 +7187,9 @@ impl Default for SoranetVpn {
             dns_push_interval_secs: defaults::soranet::vpn::dns_push_interval_secs_u64(),
             exit_class: defaults::soranet::vpn::EXIT_CLASS.to_string(),
             meter_family: defaults::soranet::vpn::METER_FAMILY.to_string(),
-            helper_ticket_secret_path: None,
             operator_account_id: defaults::soranet::vpn::operator_account_id(),
+            operator_private_key: None,
+            operator_private_key_file: None,
             lease_fee: defaults::soranet::vpn::lease_fee(),
             settlement_grace_secs: defaults::soranet::vpn::SETTLEMENT_GRACE_SECS,
             route_pushes: defaults::soranet::vpn::route_pushes(),
@@ -7133,8 +7217,9 @@ impl SoranetVpn {
             dns_push_interval_secs,
             exit_class,
             meter_family,
-            helper_ticket_secret_path,
             operator_account_id,
+            operator_private_key,
+            operator_private_key_file,
             lease_fee,
             settlement_grace_secs,
             route_pushes,
@@ -7170,16 +7255,51 @@ impl SoranetVpn {
             .expect("network.soranet_vpn.exit_class must be standard|low-latency|high-security")
             .as_label()
             .to_string();
-        let helper_ticket_secret = helper_ticket_secret_path.as_ref().map(|source| {
-            read_soranet_vpn_helper_secret(source).unwrap_or_else(|error| panic!("{error}"))
-        });
-        if enabled && helper_ticket_secret.is_none() {
-            panic!("network.soranet_vpn.helper_ticket_secret_path must be set when VPN is enabled");
-        }
         let operator_account_id = parse_account_id_literal(
             &operator_account_id,
             "invalid network.soranet_vpn.operator_account_id",
         );
+        let operator_private_key = match (operator_private_key, operator_private_key_file) {
+            (Some(_), Some(_)) => panic!(
+                "network.soranet_vpn.operator_private_key and network.soranet_vpn.operator_private_key_file are mutually exclusive"
+            ),
+            (Some(private_key), None) => Some(private_key),
+            (None, Some(file)) => Some(
+                read_private_key_file(file, "network.soranet_vpn.operator_private_key_file")
+                    .unwrap_or_else(|error| {
+                        panic!("invalid VPN operator private-key file: {error}")
+                    })
+                    .0,
+            ),
+            (None, None) => None,
+        };
+        let operator_key_pair = operator_private_key.map(|private_key| {
+            let key_pair = KeyPair::from_private_key(private_key).unwrap_or_else(|error| {
+                panic!("invalid network.soranet_vpn.operator_private_key: {error}")
+            });
+            if !matches!(
+                key_pair.public_key().try_algorithm(),
+                Ok(Algorithm::Ed25519)
+            ) {
+                panic!("network.soranet_vpn.operator_private_key must use Ed25519");
+            }
+            let account_signatory = operator_account_id.try_signatory().unwrap_or_else(|| {
+                panic!(
+                    "network.soranet_vpn.operator_account_id must use a single-key controller"
+                )
+            });
+            if account_signatory != key_pair.public_key() {
+                panic!(
+                    "network.soranet_vpn.operator_private_key must match network.soranet_vpn.operator_account_id"
+                );
+            }
+            key_pair
+        });
+        if enabled && operator_key_pair.is_none() {
+            panic!(
+                "exactly one of network.soranet_vpn.operator_private_key or network.soranet_vpn.operator_private_key_file is required when VPN is enabled"
+            );
+        }
         if enabled && route_pushes.is_empty() {
             panic!("network.soranet_vpn.route_pushes must not be empty when VPN is enabled");
         }
@@ -7246,8 +7366,8 @@ impl SoranetVpn {
             dns_push_interval,
             exit_class,
             meter_family,
-            helper_ticket_secret,
             operator_account_id,
+            operator_key_pair,
             lease_fee,
             settlement_grace: Duration::from_secs(settlement_grace_secs.max(1)),
             route_pushes,
@@ -7262,63 +7382,21 @@ impl SoranetVpn {
 #[cfg(test)]
 mod soranet_vpn_tests {
     use super::*;
+    use iroha_data_model::account::{MultisigMember, MultisigPolicy};
 
     const TEST_RELAY_ID_HEX: &str =
         "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
 
-    #[cfg(unix)]
-    struct TestSecretFile {
-        directory: PathBuf,
-        path: PathBuf,
+    fn test_operator_key_pair(seed: u8, algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], algorithm).expect("valid VPN operator fixture key")
     }
 
-    #[cfg(unix)]
-    impl TestSecretFile {
-        fn new(contents: &[u8]) -> Self {
-            use std::{
-                os::unix::fs::PermissionsExt as _,
-                sync::atomic::{AtomicU64, Ordering},
-            };
-
-            static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
-            let directory = loop {
-                let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-                let candidate = std::env::temp_dir().join(format!(
-                    "iroha-config-vpn-secret-{}-{sequence}",
-                    std::process::id()
-                ));
-                match fs::create_dir(&candidate) {
-                    Ok(()) => break candidate,
-                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                    Err(error) => panic!("create VPN secret test directory: {error}"),
-                }
-            };
-            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
-                .expect("set private test directory permissions");
-            let path = directory.join("helper-ticket.hex");
-            fs::write(&path, contents).expect("write test helper ticket secret");
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-                .expect("set private test secret permissions");
-            Self { directory, path }
-        }
-
-        fn source(&self) -> WithOrigin<PathBuf> {
-            WithOrigin::inline(self.path.clone())
-        }
-    }
-
-    #[cfg(unix)]
-    impl Drop for TestSecretFile {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.directory);
-        }
-    }
-
-    #[cfg(unix)]
-    fn enabled_vpn_config(secret: &TestSecretFile) -> SoranetVpn {
+    fn enabled_vpn_config() -> SoranetVpn {
+        let operator = test_operator_key_pair(0xD1, Algorithm::Ed25519);
         SoranetVpn {
             enabled: true,
-            helper_ticket_secret_path: Some(secret.source()),
+            operator_account_id: AccountId::new(operator.public_key().clone()).to_string(),
+            operator_private_key: Some(operator.private_key().clone()),
             relay_id_hex: Some(TEST_RELAY_ID_HEX.to_owned()),
             guard_directory_path: Some(PathBuf::from("guard-directory.to")),
             guard_directory_digest_hex: Some("cd".repeat(32)),
@@ -7365,80 +7443,118 @@ mod soranet_vpn_tests {
         assert_eq!("high-security", parsed.exit_class);
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn soranet_vpn_accepts_origin_resolved_private_helper_ticket_secret() {
-        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
-        let origin = ParameterOrigin::file(
-            ParameterId::from(["network", "soranet_vpn", "helper_ticket_secret_path"]),
-            secret.directory.join("config.toml"),
-        );
-        let cfg = SoranetVpn {
-            helper_ticket_secret_path: Some(WithOrigin::new(
-                PathBuf::from("helper-ticket.hex"),
-                origin,
-            )),
-            ..SoranetVpn::default()
-        };
-        let parsed = cfg.parse();
-        assert_eq!(Some([0xAB; 32]), parsed.helper_ticket_secret);
-    }
     #[test]
     fn soranet_vpn_defaults_to_disabled() {
         let parsed = SoranetVpn::default().parse();
         assert!(!parsed.enabled);
+        assert!(parsed.operator_key_pair.is_none());
         assert_eq!(parsed.route_pushes, defaults::soranet::vpn::route_pushes());
         assert_eq!(parsed.dns_servers, defaults::soranet::vpn::dns_servers());
     }
     #[test]
-    #[should_panic(expected = "helper_ticket_secret_path must be set when VPN is enabled")]
-    fn soranet_vpn_enabled_requires_helper_ticket_secret() {
-        let cfg = SoranetVpn {
-            enabled: true,
-            ..SoranetVpn::default()
-        };
+    fn soranet_vpn_enabled_derives_matching_dedicated_operator_signer() {
+        let parsed = enabled_vpn_config().parse();
+        let signer = parsed
+            .operator_key_pair
+            .expect("enabled VPN must retain its dedicated signer");
+        assert_eq!(
+            parsed.operator_account_id.try_signatory(),
+            Some(signer.public_key())
+        );
+        assert_eq!(signer.algorithm(), Algorithm::Ed25519);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "operator_private_key or network.soranet_vpn.operator_private_key_file is required"
+    )]
+    fn soranet_vpn_enabled_requires_dedicated_operator_key() {
+        let mut cfg = enabled_vpn_config();
+        cfg.operator_private_key = None;
         let _ = cfg.parse();
     }
 
-    #[cfg(unix)]
+    #[test]
+    #[should_panic(
+        expected = "operator_private_key must match network.soranet_vpn.operator_account_id"
+    )]
+    fn soranet_vpn_rejects_operator_key_account_mismatch() {
+        let mut cfg = enabled_vpn_config();
+        cfg.operator_private_key = Some(
+            test_operator_key_pair(0xD2, Algorithm::Ed25519)
+                .private_key()
+                .clone(),
+        );
+        let _ = cfg.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "operator_private_key must use Ed25519")]
+    fn soranet_vpn_rejects_non_ed25519_operator_key() {
+        let operator = test_operator_key_pair(0xD3, Algorithm::Secp256k1);
+        let mut cfg = enabled_vpn_config();
+        cfg.operator_account_id = AccountId::new(operator.public_key().clone()).to_string();
+        cfg.operator_private_key = Some(operator.private_key().clone());
+        let _ = cfg.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "operator_account_id must use a single-key controller")]
+    fn soranet_vpn_rejects_multisig_operator_account() {
+        let operator = test_operator_key_pair(0xD4, Algorithm::Ed25519);
+        let second = test_operator_key_pair(0xD5, Algorithm::Ed25519);
+        let policy = MultisigPolicy::new(
+            1,
+            vec![
+                MultisigMember::new(operator.public_key().clone(), 1).expect("first member"),
+                MultisigMember::new(second.public_key().clone(), 1).expect("second member"),
+            ],
+        )
+        .expect("valid multisig fixture");
+        let mut cfg = enabled_vpn_config();
+        cfg.operator_account_id = AccountId::new_multisig(policy).to_string();
+        cfg.operator_private_key = Some(operator.private_key().clone());
+        let _ = cfg.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "operator_private_key and network.soranet_vpn.operator_private_key_file are mutually exclusive"
+    )]
+    fn soranet_vpn_rejects_multiple_operator_key_sources() {
+        let mut cfg = enabled_vpn_config();
+        cfg.operator_private_key_file =
+            Some(WithOrigin::inline(PathBuf::from("unused-vpn-operator.key")));
+        let _ = cfg.parse();
+    }
     #[test]
     #[should_panic(expected = "relay_id_hex must be set when VPN is enabled")]
     fn soranet_vpn_enabled_requires_relay_identity() {
-        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
-        let cfg = SoranetVpn {
-            enabled: true,
-            helper_ticket_secret_path: Some(secret.source()),
-            ..SoranetVpn::default()
-        };
+        let mut cfg = enabled_vpn_config();
+        cfg.relay_id_hex = None;
         let _ = cfg.parse();
     }
 
-    #[cfg(unix)]
     #[test]
     #[should_panic(expected = "guard_directory_path must be set when VPN is enabled")]
     fn soranet_vpn_enabled_requires_guard_directory_path() {
-        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
-        let mut cfg = enabled_vpn_config(&secret);
+        let mut cfg = enabled_vpn_config();
         cfg.guard_directory_path = None;
         let _ = cfg.parse();
     }
 
-    #[cfg(unix)]
     #[test]
     #[should_panic(expected = "guard_directory_digest_hex must be set when VPN is enabled")]
     fn soranet_vpn_enabled_requires_guard_directory_digest() {
-        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
-        let mut cfg = enabled_vpn_config(&secret);
+        let mut cfg = enabled_vpn_config();
         cfg.guard_directory_digest_hex = None;
         let _ = cfg.parse();
     }
 
-    #[cfg(unix)]
     #[test]
     #[should_panic(expected = "exactly 64 lowercase hexadecimal characters")]
     fn soranet_vpn_rejects_noncanonical_trust_digest_hex() {
-        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
-        let mut cfg = enabled_vpn_config(&secret);
+        let mut cfg = enabled_vpn_config();
         cfg.guard_directory_digest_hex = Some("CD".repeat(32));
         let _ = cfg.parse();
     }
@@ -7447,135 +7563,6 @@ mod soranet_vpn_tests {
     fn soranet_vpn_rejects_overflowing_lease_secs() {
         let cfg = SoranetVpn {
             lease_secs: u64::from(u32::MAX) + 1,
-            ..SoranetVpn::default()
-        };
-        let _ = cfg.parse();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    #[should_panic(expected = "must contain exactly 64 lowercase hexadecimal bytes")]
-    fn soranet_vpn_rejects_short_helper_ticket_secret_file() {
-        let secret = TestSecretFile::new("ab".repeat(16).as_bytes());
-        let cfg = SoranetVpn {
-            helper_ticket_secret_path: Some(secret.source()),
-            ..SoranetVpn::default()
-        };
-        let _ = cfg.parse();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    #[should_panic(expected = "must contain exactly 64 lowercase hexadecimal bytes")]
-    fn soranet_vpn_rejects_noncanonical_helper_ticket_secret_file() {
-        let secret = TestSecretFile::new("AB".repeat(32).as_bytes());
-        let cfg = SoranetVpn {
-            helper_ticket_secret_path: Some(secret.source()),
-            ..SoranetVpn::default()
-        };
-        let _ = cfg.parse();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    #[should_panic(expected = "must not be all zero")]
-    fn soranet_vpn_rejects_zero_helper_ticket_secret() {
-        let secret = TestSecretFile::new("00".repeat(32).as_bytes());
-        let cfg = SoranetVpn {
-            helper_ticket_secret_path: Some(secret.source()),
-            ..SoranetVpn::default()
-        };
-        let _ = cfg.parse();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    #[should_panic(expected = "must be a direct regular file")]
-    fn soranet_vpn_rejects_symlinked_helper_ticket_secret() {
-        use std::os::unix::fs::symlink;
-
-        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
-        let link = secret.directory.join("helper-ticket-link.hex");
-        symlink(&secret.path, &link).expect("create helper ticket secret symlink");
-        let cfg = SoranetVpn {
-            helper_ticket_secret_path: Some(WithOrigin::inline(link)),
-            ..SoranetVpn::default()
-        };
-        let _ = cfg.parse();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    #[should_panic(expected = "must have exactly one hard link")]
-    fn soranet_vpn_rejects_hard_linked_helper_ticket_secret() {
-        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
-        fs::hard_link(
-            &secret.path,
-            secret.directory.join("helper-ticket-copy.hex"),
-        )
-        .expect("create helper ticket secret hard link");
-        let cfg = SoranetVpn {
-            helper_ticket_secret_path: Some(secret.source()),
-            ..SoranetVpn::default()
-        };
-        let _ = cfg.parse();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    #[should_panic(expected = "changed while it was opened")]
-    fn soranet_vpn_rejects_helper_ticket_secret_replaced_during_open() {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
-        let replacement = secret.directory.join("replacement.hex");
-        fs::write(&replacement, "cd".repeat(32)).expect("write replacement secret");
-        fs::set_permissions(&replacement, fs::Permissions::from_mode(0o600))
-            .expect("set private replacement permissions");
-        let trusted_path = trusted_soranet_vpn_helper_secret_path(&secret.path)
-            .expect("resolve trusted helper ticket secret path");
-        let trusted_replacement = trusted_path
-            .parent()
-            .expect("trusted secret parent")
-            .join("replacement.hex");
-        *SORANET_VPN_SECRET_OPEN_REPLACEMENT
-            .lock()
-            .expect("SoraNet VPN secret replacement hook lock") =
-            Some((trusted_path, trusted_replacement));
-        let cfg = SoranetVpn {
-            helper_ticket_secret_path: Some(secret.source()),
-            ..SoranetVpn::default()
-        };
-        let _ = cfg.parse();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    #[should_panic(expected = "must have no group or other permissions")]
-    fn soranet_vpn_rejects_nonprivate_helper_ticket_secret() {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
-        fs::set_permissions(&secret.path, fs::Permissions::from_mode(0o640))
-            .expect("make helper ticket secret group-readable");
-        let cfg = SoranetVpn {
-            helper_ticket_secret_path: Some(secret.source()),
-            ..SoranetVpn::default()
-        };
-        let _ = cfg.parse();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    #[should_panic(expected = "must not be group- or other-writable")]
-    fn soranet_vpn_rejects_untrusted_helper_ticket_secret_parent() {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let secret = TestSecretFile::new("ab".repeat(32).as_bytes());
-        fs::set_permissions(&secret.directory, fs::Permissions::from_mode(0o777))
-            .expect("make helper ticket secret parent writable");
-        let cfg = SoranetVpn {
-            helper_ticket_secret_path: Some(secret.source()),
             ..SoranetVpn::default()
         };
         let _ = cfg.parse();
@@ -7747,17 +7734,6 @@ pub struct Network {
     /// Send buffer reserved for QUIC datagrams per active QUIC connection (bytes).
     #[config(default = "defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES")]
     pub quic_datagram_send_buffer_bytes: NonZeroUsize,
-    /// Enable SCION-guided outbound dialing when peer routes are configured.
-    #[config(default = "defaults::network::SCION_ENABLED")]
-    pub scion_enabled: bool,
-    /// Allow fallback to legacy dialing when SCION route dialing is unavailable or fails.
-    #[config(default = "defaults::network::SCION_FALLBACK_TO_LEGACY")]
-    pub scion_fallback_to_legacy: bool,
-    /// Optional SCION listener endpoint hint (reserved for future inbound support).
-    pub scion_listen_endpoint: Option<String>,
-    /// Optional per-peer SCION route map (`peer_id/public_key` -> `host:port`).
-    #[config(default)]
-    pub scion_routes: BTreeMap<String, String>,
     /// Optional outbound proxy URL for TCP-based dials (e.g., `http://user:pass@host:port`,
     /// `https://host:port`, `socks5://user:pass@host:port`, or `socks5h://host:port`).
     ///
@@ -7985,26 +7961,6 @@ pub struct Network {
     pub quic_max_idle_timeout_ms: Option<DurationMs>,
 }
 impl Network {
-    fn parse_scion_routes(routes: BTreeMap<String, String>) -> BTreeMap<PeerId, SocketAddr> {
-        routes
-            .into_iter()
-            .map(|(raw_peer_id, raw_route)| {
-                let peer_label = raw_peer_id.trim();
-                let route_label = raw_route.trim();
-                let peer_id = peer_label.parse::<PeerId>().unwrap_or_else(|err| {
-                    panic!(
-                        "network.scion_routes key `{peer_label}` must be a peer public key: {err}"
-                    )
-                });
-                let route = route_label.parse::<SocketAddr>().unwrap_or_else(|err| {
-                    panic!(
-                        "network.scion_routes[{peer_label}] value `{route_label}` must be a socket address: {err}"
-                    )
-                });
-                (peer_id, route)
-            })
-            .collect()
-    }
     #[allow(clippy::too_many_lines)]
     fn parse(
         self,
@@ -8063,10 +8019,6 @@ impl Network {
             quic_datagram_max_payload_bytes,
             quic_datagram_receive_buffer_bytes,
             quic_datagram_send_buffer_bytes,
-            scion_enabled,
-            scion_fallback_to_legacy,
-            scion_listen_endpoint,
-            scion_routes,
             p2p_proxy,
             p2p_proxy_required,
             p2p_no_proxy,
@@ -8193,15 +8145,6 @@ impl Network {
         let soranet_handshake = soranet_handshake.parse(emitter);
         let soranet_privacy = user_soranet_privacy.parse(emitter);
         let soranet_vpn = soranet_vpn.parse();
-        let scion_listen_endpoint = scion_listen_endpoint.and_then(|endpoint| {
-            let trimmed = endpoint.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_owned())
-            }
-        });
-        let scion_routes = Self::parse_scion_routes(scion_routes);
         let lane_profile = actual::LaneProfile::from_label(&lane_profile);
         if debug_packet_loss_inbound_percent > 100 {
             panic!(
@@ -8315,12 +8258,6 @@ impl Network {
                 quic_datagram_max_payload_bytes: quic_datagram_max_payload_bytes.get(),
                 quic_datagram_receive_buffer_bytes: quic_datagram_receive_buffer_bytes.get(),
                 quic_datagram_send_buffer_bytes: quic_datagram_send_buffer_bytes.get(),
-                scion: actual::ScionConfig {
-                    enabled: scion_enabled,
-                    fallback_to_legacy: scion_fallback_to_legacy,
-                    listen_endpoint: scion_listen_endpoint,
-                    routes: scion_routes,
-                },
                 tls_enabled,
                 tls_fallback_to_plain,
                 tls_listen_address,
@@ -8408,55 +8345,6 @@ impl Network {
                 },
             },
         )
-    }
-}
-#[cfg(test)]
-mod network_scion_route_tests {
-    use super::*;
-    fn checked_scion_route_ed25519_peer_key_fixture() -> KeyPair {
-        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
-            .expect("generate checked SCION route Ed25519 peer key fixture")
-    }
-    #[test]
-    fn scion_route_fixture_uses_checked_ed25519_key_generation() {
-        let key_pair = checked_scion_route_ed25519_peer_key_fixture();
-        let algorithm = key_pair
-            .public_key()
-            .try_algorithm()
-            .expect("SCION route fixture peer key advertises a valid algorithm");
-        assert_eq!(algorithm, Algorithm::Ed25519);
-    }
-    #[test]
-    fn parse_scion_routes_accepts_peer_key_map() {
-        let peer_key = checked_scion_route_ed25519_peer_key_fixture()
-            .public_key()
-            .to_string();
-        let mut routes = BTreeMap::new();
-        routes.insert(
-            peer_key.clone(),
-            "scion-gateway.example.com:30257".to_owned(),
-        );
-        let parsed = Network::parse_scion_routes(routes);
-        let peer_id = peer_key.parse::<PeerId>().expect("peer id should parse");
-        let route = parsed.get(&peer_id).expect("route should exist");
-        assert_eq!("scion-gateway.example.com:30257", route.to_string());
-    }
-    #[test]
-    #[should_panic(expected = "network.scion_routes key")]
-    fn parse_scion_routes_rejects_invalid_peer_key() {
-        let mut routes = BTreeMap::new();
-        routes.insert("not-a-peer-key".to_owned(), "127.0.0.1:30257".to_owned());
-        let _ = Network::parse_scion_routes(routes);
-    }
-    #[test]
-    #[should_panic(expected = "network.scion_routes[")]
-    fn parse_scion_routes_rejects_invalid_route() {
-        let peer_key = checked_scion_route_ed25519_peer_key_fixture()
-            .public_key()
-            .to_string();
-        let mut routes = BTreeMap::new();
-        routes.insert(peer_key, "not-a-socket-address".to_owned());
-        let _ = Network::parse_scion_routes(routes);
     }
 }
 /// User-level configuration container for `Queue`.
@@ -10838,20 +10726,17 @@ impl_default!(Fusion {
 });
 /// User-level configuration container for deterministic lane autoscaling.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct Autoscale {
     /// Whether consensus-driven lane autoscaling is enabled.
     #[config(default = "defaults::nexus::autoscale::ENABLED")]
     pub enabled: bool,
     /// Inclusive lower lane-id bound reserved for autoscale-managed elastic lanes.
-    ///
-    /// Despite the legacy field name, this is not an active-lane count.
-    #[config(default = "defaults::nexus::autoscale::MIN_LANES")]
-    pub min_lanes: u32,
+    #[config(default = "defaults::nexus::autoscale::MIN_LANE_ID")]
+    pub min_lane_id: u32,
     /// Exclusive upper lane-id bound reserved for autoscale-managed elastic lanes.
-    ///
-    /// Despite the legacy field name, this is not an active-lane count.
-    #[config(default = "defaults::nexus::autoscale::MAX_LANES")]
-    pub max_lanes: u32,
+    #[config(default = "defaults::nexus::autoscale::MAX_LANE_ID_EXCLUSIVE")]
+    pub max_lane_id_exclusive: u32,
     /// Target block interval used by the autoscaler (milliseconds).
     #[config(default = "defaults::nexus::autoscale::TARGET_BLOCK_MS")]
     pub target_block_ms: u64,
@@ -10882,8 +10767,8 @@ pub struct Autoscale {
 }
 impl_default!(Autoscale {
     enabled: defaults::nexus::autoscale::ENABLED,
-    min_lanes: defaults::nexus::autoscale::MIN_LANES,
-    max_lanes: defaults::nexus::autoscale::MAX_LANES,
+    min_lane_id: defaults::nexus::autoscale::MIN_LANE_ID,
+    max_lane_id_exclusive: defaults::nexus::autoscale::MAX_LANE_ID_EXCLUSIVE,
     target_block_ms: defaults::nexus::autoscale::TARGET_BLOCK_MS,
     scale_out_latency_ratio: defaults::nexus::autoscale::SCALE_OUT_LATENCY_RATIO,
     scale_in_latency_ratio: defaults::nexus::autoscale::SCALE_IN_LATENCY_RATIO,
@@ -11081,8 +10966,8 @@ impl Autoscale {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Autoscale> {
         let Autoscale {
             enabled,
-            min_lanes,
-            max_lanes,
+            min_lane_id,
+            max_lane_id_exclusive,
             target_block_ms,
             scale_out_latency_ratio,
             scale_in_latency_ratio,
@@ -11094,22 +10979,22 @@ impl Autoscale {
             per_lane_target_tps,
         } = self;
         let mut invalid = false;
-        let min_lanes = NonZeroU32::new(min_lanes).or_else(|| {
+        let min_lane_id = NonZeroU32::new(min_lane_id).or_else(|| {
             invalid = true;
             emitter.emit(
                 Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.autoscale.min_lanes lane-id lower bound must be > 0"),
+                    .attach("nexus.autoscale.min_lane_id lane-id lower bound must be > 0"),
             );
             None
         });
-        let max_lanes = NonZeroU32::new(max_lanes).or_else(|| {
-            invalid = true;
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.autoscale.max_lanes lane-id upper bound must be > 0"),
-            );
-            None
-        });
+        let max_lane_id_exclusive =
+            NonZeroU32::new(max_lane_id_exclusive).or_else(|| {
+                invalid = true;
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                    "nexus.autoscale.max_lane_id_exclusive lane-id upper bound must be > 0",
+                ));
+                None
+            });
         let target_block_ms = NonZeroU64::new(target_block_ms).or_else(|| {
             invalid = true;
             emitter.emit(
@@ -11177,19 +11062,19 @@ impl Autoscale {
                 "nexus.autoscale.scale_in_utilization_ratio must be finite, > 0, and round to at least 1 permille",
             ));
         }
-        if let (Some(min), Some(max)) = (min_lanes, max_lanes) {
+        if let (Some(min), Some(max)) = (min_lane_id, max_lane_id_exclusive) {
             if min >= max {
                 invalid = true;
                 emitter.emit(
                     Report::new(ParseError::InvalidNexusConfig)
-                        .attach("nexus.autoscale.min_lanes must be < max_lanes so the elastic lane-id range is non-empty"),
+                        .attach("nexus.autoscale.min_lane_id must be < max_lane_id_exclusive so the elastic lane-id range is non-empty"),
                 );
             }
-            if max.get() > defaults::nexus::autoscale::MAX_LANES {
+            if max.get() > defaults::nexus::autoscale::MAX_LANE_ID_EXCLUSIVE {
                 invalid = true;
                 emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.autoscale.max_lanes must be <= {} because it is an exclusive lane-id bound",
-                    defaults::nexus::autoscale::MAX_LANES,
+                    "nexus.autoscale.max_lane_id_exclusive must be <= {} because it is an exclusive lane-id bound",
+                    defaults::nexus::autoscale::MAX_LANE_ID_EXCLUSIVE,
                 )));
             }
         }
@@ -11227,8 +11112,8 @@ impl Autoscale {
         }
         Some(actual::Autoscale {
             enabled,
-            min_lanes: min_lanes.expect("validated"),
-            max_lanes: max_lanes.expect("validated"),
+            min_lane_id: min_lane_id.expect("validated"),
+            max_lane_id_exclusive: max_lane_id_exclusive.expect("validated"),
             target_block_ms: target_block_ms.expect("validated"),
             scale_out_latency_ratio,
             scale_in_latency_ratio,
@@ -11838,14 +11723,14 @@ impl Nexus {
             return None;
         }
         if autoscale.enabled {
-            let min_lanes = autoscale.min_lanes.get();
-            let max_lanes = autoscale.max_lanes.get();
+            let min_lane_id = autoscale.min_lane_id.get();
+            let max_lane_id_exclusive = autoscale.max_lane_id_exclusive.get();
             let mut reserved_range_error = false;
             let default_lane = routing_policy.default_lane.as_u32();
-            if default_lane >= min_lanes {
+            if default_lane >= min_lane_id {
                 reserved_range_error = true;
                 emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.routing_policy.default_lane {} must be below nexus.autoscale.min_lanes {min_lanes} when autoscale is enabled",
+                    "nexus.routing_policy.default_lane {} must be below nexus.autoscale.min_lane_id {min_lane_id} when autoscale is enabled",
                     routing_policy.default_lane
                 )));
             }
@@ -11853,7 +11738,7 @@ impl Nexus {
                 if autoscale.contains_elastic_lane_id(lane.id) && !lane.claims_autoscale_managed() {
                     reserved_range_error = true;
                     emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                        "nexus.lane_catalog lane {} is inside reserved autoscale elastic lane id range [{min_lanes}, {max_lanes}); move manual lanes outside the autoscale range",
+                        "nexus.lane_catalog lane {} is inside reserved autoscale elastic lane id range [{min_lane_id}, {max_lane_id_exclusive}); move manual lanes outside the autoscale range",
                         lane.id
                     )));
                 }
@@ -13266,7 +13151,7 @@ impl SoracloudRuntime {
         let egress = self.egress.parse();
         let hf = self.hf.parse(emitter);
         let submission = self.submission.parse(production_mode, emitter);
-        let actual = actual::SoracloudRuntime {
+        actual::SoracloudRuntime {
             production_mode,
             state_dir: self.state_dir.resolve_relative_path(),
             reconcile_interval: self.reconcile_interval_ms.get().max(MIN_TIMER_INTERVAL),
@@ -13276,9 +13161,7 @@ impl SoracloudRuntime {
             submission,
             egress,
             hf,
-        };
-        actual.assert_runtime_posture();
-        actual
+        }
     }
 }
 #[derive(Default)]
@@ -13465,9 +13348,6 @@ impl SoracloudRuntimeCacheBudgets {
         }
     }
 }
-/// User-level mutable `Inrou` microVM ceilings.
-const SORACLOUD_INROU_PRIMARY_ID_MIN: u32 = 65_536;
-const SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE: u32 = 524_288;
 /// User-level Inrou PortableVM configuration and resource ceilings.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -13476,10 +13356,10 @@ pub struct SoracloudRuntimeInrou {
     #[config(default = "defaults::soracloud_runtime::INROU_ENABLED")]
     #[norito(default = "default_soracloud_runtime_inrou_enabled")]
     pub enabled: bool,
-    /// Fixed-corridor uid of the locked local `iroha-inrou` service account.
+    /// Canonical slot uid of the locked local `iroha-inrou-{slot}` service account.
     #[norito(default)]
     pub portable_vm_uid: Option<NonZeroU32>,
-    /// Fixed-corridor gid of the locked local `iroha-inrou` primary group.
+    /// Canonical slot gid of the locked local `iroha-inrou-{slot}` primary group.
     #[norito(default)]
     pub portable_vm_gid: Option<NonZeroU32>,
     /// Maximum aggregate hosted CPU budget in millicores.
@@ -13511,13 +13391,13 @@ pub struct SoracloudRuntimeInrou {
     #[config(default = "defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES")]
     #[norito(default = "default_soracloud_runtime_inrou_bundle_archive_max_total_file_bytes")]
     pub bundle_archive_max_total_file_bytes: NonZeroU64,
-    /// Startup grace window in milliseconds.
+    /// Operator minimum startup grace in milliseconds (100 through 600,000 inclusive).
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS))"
     )]
     #[norito(default = "default_soracloud_runtime_inrou_start_grace_ms")]
     pub start_grace_ms: DurationMs,
-    /// Shutdown grace window in milliseconds.
+    /// Operator minimum shutdown grace in milliseconds (100 through 600,000 inclusive).
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::INROU_STOP_GRACE_MS))"
     )]
@@ -13576,16 +13456,29 @@ impl_default!(SoracloudRuntimeInrou {
 });
 impl SoracloudRuntimeInrou {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoracloudRuntimeInrou {
-        if self.enabled {
-            emitter.emit(
-                Report::new(ParseError::InvalidSoracloudConfig).attach(
-                    "first-release iroha3d forbids soracloud_runtime.inrou.enabled = true until PortableVM has mandatory mount, network, IPC, and MAC confinement",
-                ),
-            );
+        let mut archive_limits_valid = true;
+        for (field, value) in [
+            ("start_grace_ms", self.start_grace_ms.get()),
+            ("stop_grace_ms", self.stop_grace_ms.get()),
+        ] {
+            let minimum =
+                Duration::from_millis(defaults::soracloud_runtime::INROU_LIFECYCLE_GRACE_MIN_MS);
+            let maximum =
+                Duration::from_millis(defaults::soracloud_runtime::INROU_LIFECYCLE_GRACE_MAX_MS);
+            if !(minimum..=maximum).contains(&value) {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                        "soracloud_runtime.inrou.{field} must be between {} and {} milliseconds inclusive",
+                        defaults::soracloud_runtime::INROU_LIFECYCLE_GRACE_MIN_MS,
+                        defaults::soracloud_runtime::INROU_LIFECYCLE_GRACE_MAX_MS,
+                    )),
+                );
+            }
         }
         if self.bundle_archive_max_compressed_bytes.get()
             > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES_LIMIT
         {
+            archive_limits_valid = false;
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
                     "soracloud_runtime.inrou.bundle_archive_max_compressed_bytes must not exceed {}",
@@ -13596,6 +13489,7 @@ impl SoracloudRuntimeInrou {
         if self.bundle_archive_max_decoded_bytes.get()
             > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES_LIMIT
         {
+            archive_limits_valid = false;
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
                     "soracloud_runtime.inrou.bundle_archive_max_decoded_bytes must not exceed {}",
@@ -13606,6 +13500,7 @@ impl SoracloudRuntimeInrou {
         if self.bundle_archive_max_file_bytes.get()
             > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES_LIMIT
         {
+            archive_limits_valid = false;
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
                     "soracloud_runtime.inrou.bundle_archive_max_file_bytes must not exceed {}",
@@ -13616,6 +13511,7 @@ impl SoracloudRuntimeInrou {
         if self.bundle_archive_max_total_file_bytes.get()
             > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES_LIMIT
         {
+            archive_limits_valid = false;
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
                     "soracloud_runtime.inrou.bundle_archive_max_total_file_bytes must not exceed {}",
@@ -13624,6 +13520,7 @@ impl SoracloudRuntimeInrou {
             );
         }
         if self.bundle_archive_max_file_bytes > self.bundle_archive_max_total_file_bytes {
+            archive_limits_valid = false;
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig).attach(
                     "soracloud_runtime.inrou.bundle_archive_max_file_bytes must not exceed bundle_archive_max_total_file_bytes",
@@ -13631,6 +13528,7 @@ impl SoracloudRuntimeInrou {
             );
         }
         if self.bundle_archive_max_total_file_bytes > self.bundle_archive_max_decoded_bytes {
+            archive_limits_valid = false;
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig).attach(
                     "soracloud_runtime.inrou.bundle_archive_max_total_file_bytes must not exceed bundle_archive_max_decoded_bytes",
@@ -13640,6 +13538,7 @@ impl SoracloudRuntimeInrou {
         if self.bundle_archive_max_entries.get()
             > defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES_LIMIT
         {
+            archive_limits_valid = false;
             emitter.emit(
                 Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
                     "soracloud_runtime.inrou.bundle_archive_max_entries must not exceed {}",
@@ -13647,22 +13546,20 @@ impl SoracloudRuntimeInrou {
                 )),
             );
         }
-        let backends = BTreeSet::new();
-        let portable_backend_enabled = self.enabled;
         for (field, present) in [
             ("portable_vm_uid", self.portable_vm_uid.is_some()),
             ("portable_vm_gid", self.portable_vm_gid.is_some()),
         ] {
-            if self.enabled && portable_backend_enabled && !present {
+            if self.enabled && !present {
                 emitter.emit(
                     Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
-                        "soracloud_runtime.inrou.{field} is required when `portable_vm` is enabled"
+                        "soracloud_runtime.inrou.{field} is required when Inrou PortableVM V1 hosting is enabled"
                     )),
                 );
-            } else if !portable_backend_enabled && present {
+            } else if !self.enabled && present {
                 emitter.emit(
                     Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
-                        "soracloud_runtime.inrou.{field} is only valid when `portable_vm` is enabled"
+                        "soracloud_runtime.inrou.{field} is only valid when Inrou hosting is enabled"
                     )),
                 );
             }
@@ -13672,13 +13569,26 @@ impl SoracloudRuntimeInrou {
             ("portable_vm_gid", self.portable_vm_gid),
         ] {
             if value.is_some_and(|value| {
-                !(SORACLOUD_INROU_PRIMARY_ID_MIN..SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE)
+                !(defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_BASE
+                    ..defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_MAX_EXCLUSIVE)
                     .contains(&value.get())
             }) {
                 emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
-                    "soracloud_runtime.inrou.{field} must be in the fixed host-reserved corridor {SORACLOUD_INROU_PRIMARY_ID_MIN}..{SORACLOUD_INROU_PRIMARY_ID_MAX_EXCLUSIVE} (upper bound exclusive)"
+                    "soracloud_runtime.inrou.{field} must select one canonical host identity in {}..{} (upper bound exclusive)",
+                    defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_BASE,
+                    defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_MAX_EXCLUSIVE,
                 )));
             }
+        }
+        if let (Some(uid), Some(gid)) = (self.portable_vm_uid, self.portable_vm_gid)
+            && defaults::soracloud_runtime::inrou_portable_vm_identity_slot(uid.get(), gid.get())
+                .is_none()
+        {
+            emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(format!(
+                "soracloud_runtime.inrou PortableVM uid/gid must be one equal canonical slot pair in {}..{} (upper bound exclusive)",
+                defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_BASE,
+                defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_MAX_EXCLUSIVE,
+            )));
         }
         for (field, present) in [
             ("max_cpu_millis", self.max_cpu_millis.is_some()),
@@ -13693,10 +13603,31 @@ impl SoracloudRuntimeInrou {
                 );
             }
         }
+        // Root parsing accumulates diagnostics before returning. Keep the discarded
+        // projection internally valid so its invariant assertion cannot turn bad
+        // user input into a panic before the emitter returns the configuration error.
+        let archive_limits = archive_limits_valid.then_some((
+            self.bundle_archive_max_compressed_bytes,
+            self.bundle_archive_max_decoded_bytes,
+            self.bundle_archive_max_entries,
+            self.bundle_archive_max_file_bytes,
+            self.bundle_archive_max_total_file_bytes,
+        ));
+        let (
+            bundle_archive_max_compressed_bytes,
+            bundle_archive_max_decoded_bytes,
+            bundle_archive_max_entries,
+            bundle_archive_max_file_bytes,
+            bundle_archive_max_total_file_bytes,
+        ) = archive_limits.unwrap_or((
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_COMPRESSED_BYTES,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_DECODED_BYTES,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_ENTRIES,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_FILE_BYTES,
+            defaults::soracloud_runtime::INROU_BUNDLE_ARCHIVE_MAX_TOTAL_FILE_BYTES,
+        ));
         actual::SoracloudRuntimeInrou {
-            max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
-            enabled: false,
-            backends,
+            enabled: self.enabled,
             portable_vm_uid: self.portable_vm_uid,
             portable_vm_gid: self.portable_vm_gid,
             max_cpu_millis: self
@@ -13708,13 +13639,13 @@ impl SoracloudRuntimeInrou {
             max_storage_bytes: self
                 .max_storage_bytes
                 .unwrap_or(defaults::soracloud_runtime::INROU_MAX_STORAGE_BYTES),
-            bundle_archive_max_compressed_bytes: self.bundle_archive_max_compressed_bytes,
-            bundle_archive_max_decoded_bytes: self.bundle_archive_max_decoded_bytes,
-            bundle_archive_max_entries: self.bundle_archive_max_entries,
-            bundle_archive_max_file_bytes: self.bundle_archive_max_file_bytes,
-            bundle_archive_max_total_file_bytes: self.bundle_archive_max_total_file_bytes,
-            start_grace: self.start_grace_ms.get().max(MIN_TIMER_INTERVAL),
-            stop_grace: self.stop_grace_ms.get().max(MIN_TIMER_INTERVAL),
+            bundle_archive_max_compressed_bytes,
+            bundle_archive_max_decoded_bytes,
+            bundle_archive_max_entries,
+            bundle_archive_max_file_bytes,
+            bundle_archive_max_total_file_bytes,
+            start_grace: self.start_grace_ms.get(),
+            stop_grace: self.stop_grace_ms.get(),
         }
     }
 }
@@ -14015,11 +13946,15 @@ pub struct SoracloudRuntimeHuggingFace {
     )]
     #[norito(default = "default_soracloud_runtime_hf_request_timeout_ms")]
     pub request_timeout_ms: DurationMs,
-    /// Whether generated HF services should prefer the on-node local runner path.
+    /// Exact HTTPS origins admitted for cross-origin importer redirects.
+    #[config(default = "defaults::soracloud_runtime::hf::import_redirect_allowed_origins()")]
+    #[norito(default = "default_soracloud_runtime_hf_import_redirect_allowed_origins")]
+    pub import_redirect_allowed_origins: Vec<String>,
+    /// Reserved host-local execution switch; V1 rejects `true`.
     #[config(default = "defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED")]
     #[norito(default = "default_soracloud_runtime_hf_local_execution_enabled")]
     pub local_execution_enabled: bool,
-    /// Program used to invoke the embedded local HF runner script.
+    /// Reserved local runner program; host-local execution is unavailable in V1.
     #[config(default = "defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_string()")]
     #[norito(default = "default_soracloud_runtime_hf_local_runner_program")]
     pub local_runner_program: String,
@@ -14029,16 +13964,12 @@ pub struct SoracloudRuntimeHuggingFace {
     )]
     #[norito(default = "default_soracloud_runtime_hf_local_runner_timeout_ms")]
     pub local_runner_timeout_ms: DurationMs,
-    /// TTL applied when the runtime emits authoritative model-host heartbeats after a successful local probe (milliseconds).
+    /// Reserved local-probe heartbeat TTL; host-local probing is unavailable in V1.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS))"
     )]
     #[norito(default = "default_soracloud_runtime_hf_model_host_heartbeat_ttl_ms")]
     pub model_host_heartbeat_ttl_ms: DurationMs,
-    /// Whether the runtime may fall back to HF Inference when local execution fails.
-    #[config(default = "defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK")]
-    #[norito(default = "default_soracloud_runtime_hf_allow_inference_bridge_fallback")]
-    pub allow_inference_bridge_fallback: bool,
     /// Maximum number of imported Hub files retained per shared source.
     #[config(default = "defaults::soracloud_runtime::hf::IMPORT_MAX_FILES")]
     #[norito(default = "default_soracloud_runtime_hf_import_max_files")]
@@ -14146,6 +14077,9 @@ fn default_soracloud_runtime_hf_request_timeout_ms() -> DurationMs {
         defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS,
     ))
 }
+fn default_soracloud_runtime_hf_import_redirect_allowed_origins() -> Vec<String> {
+    defaults::soracloud_runtime::hf::import_redirect_allowed_origins()
+}
 fn default_soracloud_runtime_hf_local_execution_enabled() -> bool {
     defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED
 }
@@ -14161,9 +14095,6 @@ fn default_soracloud_runtime_hf_model_host_heartbeat_ttl_ms() -> DurationMs {
     DurationMs(std::time::Duration::from_millis(
         defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS,
     ))
-}
-fn default_soracloud_runtime_hf_allow_inference_bridge_fallback() -> bool {
-    defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK
 }
 fn default_soracloud_runtime_hf_import_max_files() -> u32 {
     defaults::soracloud_runtime::hf::IMPORT_MAX_FILES
@@ -14192,6 +14123,8 @@ impl Default for SoracloudRuntimeHuggingFace {
             request_timeout_ms: DurationMs(std::time::Duration::from_millis(
                 defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS,
             )),
+            import_redirect_allowed_origins:
+                defaults::soracloud_runtime::hf::import_redirect_allowed_origins(),
             local_execution_enabled: defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED,
             local_runner_program: defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_string(),
             local_runner_timeout_ms: DurationMs(std::time::Duration::from_millis(
@@ -14200,8 +14133,6 @@ impl Default for SoracloudRuntimeHuggingFace {
             model_host_heartbeat_ttl_ms: DurationMs(std::time::Duration::from_millis(
                 defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS,
             )),
-            allow_inference_bridge_fallback:
-                defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK,
             import_max_files: defaults::soracloud_runtime::hf::IMPORT_MAX_FILES,
             import_max_file_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES,
             import_max_total_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES,
@@ -14218,6 +14149,12 @@ impl SoracloudRuntimeHuggingFace {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SoracloudRuntimeHuggingFace {
         fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
             emitter.emit(Report::new(ParseError::InvalidSoracloudConfig).attach(message.into()));
+        }
+        if self.local_execution_enabled {
+            emit(
+                emitter,
+                "soracloud_runtime.hf.local_execution_enabled is unavailable until generated HF execution is isolated by Inrou",
+            );
         }
         if self.import_max_files == 0
             || self.import_max_files > defaults::soracloud_runtime::hf::IMPORT_MAX_FILES_LIMIT
@@ -14292,6 +14229,46 @@ impl SoracloudRuntimeHuggingFace {
             .collect::<Vec<_>>();
         import_file_allowlist.sort();
         import_file_allowlist.dedup();
+        if self.import_redirect_allowed_origins.len()
+            > defaults::soracloud_runtime::hf::IMPORT_REDIRECT_ALLOWED_ORIGINS_LIMIT
+        {
+            emit(
+                emitter,
+                format!(
+                    "soracloud_runtime.hf.import_redirect_allowed_origins must contain at most {} entries",
+                    defaults::soracloud_runtime::hf::IMPORT_REDIRECT_ALLOWED_ORIGINS_LIMIT
+                ),
+            );
+        }
+        let mut import_redirect_allowed_origins = self
+            .import_redirect_allowed_origins
+            .into_iter()
+            .filter_map(|raw| {
+                let trimmed = raw.trim();
+                let parsed = Url::parse(trimmed).ok();
+                let Some(parsed) = parsed.filter(|parsed| {
+                    parsed.scheme() == "https"
+                        && parsed.host_str().is_some()
+                        && parsed.port() != Some(0)
+                        && parsed.username().is_empty()
+                        && parsed.password().is_none()
+                        && parsed.path() == "/"
+                        && parsed.query().is_none()
+                        && parsed.fragment().is_none()
+                }) else {
+                    emit(
+                        emitter,
+                        format!(
+                            "soracloud_runtime.hf.import_redirect_allowed_origins entry `{raw}` must be one exact HTTPS origin"
+                        ),
+                    );
+                    return None;
+                };
+                Some(parsed.origin().ascii_serialization())
+            })
+            .collect::<Vec<_>>();
+        import_redirect_allowed_origins.sort();
+        import_redirect_allowed_origins.dedup();
         let local_runner_program = {
             let trimmed = self.local_runner_program.trim();
             if trimmed.is_empty() {
@@ -14300,12 +14277,6 @@ impl SoracloudRuntimeHuggingFace {
                 trimmed.to_owned()
             }
         };
-        if self.allow_inference_bridge_fallback && self.inference_credential_provider.is_none() {
-            emit(
-                emitter,
-                "soracloud_runtime.hf.allow_inference_bridge_fallback requires inference_credential_provider",
-            );
-        }
         let inference_credential_provider = self
             .inference_credential_provider
             .and_then(|provider| provider.parse(emitter));
@@ -14318,14 +14289,16 @@ impl SoracloudRuntimeHuggingFace {
                 .trim_end_matches('/')
                 .to_owned(),
             request_timeout: self.request_timeout_ms.get().max(MIN_TIMER_INTERVAL),
-            local_execution_enabled: self.local_execution_enabled,
+            import_redirect_allowed_origins,
+            // Parsing already rejects `true`; pin the actual value so an
+            // accumulated parse error cannot accidentally retain launch intent.
+            local_execution_enabled: false,
             local_runner_program,
             local_runner_timeout: self.local_runner_timeout_ms.get().max(MIN_TIMER_INTERVAL),
             model_host_heartbeat_ttl: self
                 .model_host_heartbeat_ttl_ms
                 .get()
                 .max(MIN_TIMER_INTERVAL),
-            allow_inference_bridge_fallback: self.allow_inference_bridge_fallback,
             import_max_files: self.import_max_files,
             import_max_file_bytes: self.import_max_file_bytes,
             import_max_total_bytes: self.import_max_total_bytes,
@@ -15076,6 +15049,7 @@ mod torii_bootle_lantern_issuer_tests {
 }
 /// Push-notification configuration (FCM/APNS bridge).
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct ToriiPush {
     /// Master enable switch for the push bridge.
     #[config(default = "defaults::torii::PUSH_ENABLED")]
@@ -15101,8 +15075,6 @@ pub struct ToriiPush {
     pub fcm_project_id: Option<String>,
     /// Path to a Firebase service-account JSON key used to mint FCM OAuth tokens.
     pub fcm_service_account_path: Option<PathBuf>,
-    /// Deprecated FCM legacy API key. Kept for configuration compatibility only.
-    pub fcm_api_key: Option<String>,
     /// APNs environment (`sandbox` or `production`).
     #[config(default = "defaults::torii::PUSH_APNS_ENVIRONMENT.to_owned()")]
     pub apns_environment: String,
@@ -15116,8 +15088,6 @@ pub struct ToriiPush {
     pub apns_private_key_path: Option<PathBuf>,
     /// Optional APNs endpoint base URL override for tests or private deployments.
     pub apns_endpoint: Option<String>,
-    /// Deprecated static APNs auth token. Kept for configuration compatibility only.
-    pub apns_auth_token: Option<String>,
 }
 impl Default for ToriiPush {
     fn default() -> Self {
@@ -15134,14 +15104,12 @@ impl Default for ToriiPush {
             max_topics_per_device: defaults::torii::PUSH_MAX_TOPICS_PER_DEVICE,
             fcm_project_id: None,
             fcm_service_account_path: None,
-            fcm_api_key: None,
             apns_environment: defaults::torii::PUSH_APNS_ENVIRONMENT.to_owned(),
             apns_topic: None,
             apns_team_id: None,
             apns_key_id: None,
             apns_private_key_path: None,
             apns_endpoint: None,
-            apns_auth_token: None,
         }
     }
 }
@@ -15173,7 +15141,6 @@ impl ToriiPush {
                 .unwrap_or(nonzero!(1_usize)),
             fcm_project_id: trim_optional(self.fcm_project_id),
             fcm_service_account_path: self.fcm_service_account_path,
-            fcm_api_key: self.fcm_api_key,
             apns_environment: if self.apns_environment.trim().is_empty() {
                 defaults::torii::PUSH_APNS_ENVIRONMENT.to_owned()
             } else {
@@ -15184,7 +15151,6 @@ impl ToriiPush {
             apns_key_id: trim_optional(self.apns_key_id),
             apns_private_key_path: self.apns_private_key_path,
             apns_endpoint: self.apns_endpoint,
-            apns_auth_token: self.apns_auth_token,
         }
     }
 }
@@ -15227,7 +15193,7 @@ mod torii_push_tests {
         assert!(parsed.apns_private_key_path.is_none());
     }
     #[test]
-    fn torii_push_parse_http_v1_apns_and_deprecated_fields() {
+    fn torii_push_parse_canonical_fcm_http_v1_and_apns_bindings() {
         let parsed = ToriiPush {
             enabled: true,
             rate_per_minute: Some(0),
@@ -15237,14 +15203,12 @@ mod torii_push_tests {
             max_topics_per_device: 0,
             fcm_project_id: Some("  taira-mobile  ".to_owned()),
             fcm_service_account_path: Some(PathBuf::from("/run/secrets/fcm.json")),
-            fcm_api_key: Some("legacy-key".to_owned()),
             apns_environment: "  PRODUCTION  ".to_owned(),
             apns_topic: Some("  org.sora.wallet  ".to_owned()),
             apns_team_id: Some("  TEAMID  ".to_owned()),
             apns_key_id: Some("  KEYID  ".to_owned()),
             apns_private_key_path: Some(PathBuf::from("/run/secrets/AuthKey_KEYID.p8")),
             apns_endpoint: Some("https://apns.internal.example".to_owned()),
-            apns_auth_token: Some("legacy-apns-token".to_owned()),
         }
         .parse();
         assert!(parsed.enabled);
@@ -15258,7 +15222,6 @@ mod torii_push_tests {
             parsed.fcm_service_account_path.as_deref(),
             Some(Path::new("/run/secrets/fcm.json"))
         );
-        assert_eq!(parsed.fcm_api_key.as_deref(), Some("legacy-key"));
         assert_eq!(parsed.apns_environment, "production");
         assert_eq!(parsed.apns_topic.as_deref(), Some("org.sora.wallet"));
         assert_eq!(parsed.apns_team_id.as_deref(), Some("TEAMID"));
@@ -15271,7 +15234,6 @@ mod torii_push_tests {
             parsed.apns_endpoint.as_deref(),
             Some("https://apns.internal.example")
         );
-        assert_eq!(parsed.apns_auth_token.as_deref(), Some("legacy-apns-token"));
     }
 }
 impl Torii {
@@ -17096,8 +17058,6 @@ impl AccountOnboarding {
             "CanManageSorafsPopRegistry",
             "CanOperateSorafsPopIssuer",
             "CanUpsertSorafsProviderCredit",
-            "CanRegisterSorafsProviderOwner",
-            "CanUnregisterSorafsProviderOwner",
             "CanIngestSoranetPrivacy",
             "CanRegisterOracleFeed",
             "CanProposeOracleChange",
@@ -17870,8 +17830,58 @@ impl WebhookSecurity {
         }
     }
 }
+/// Exact first-release Connect relay strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectRelayStrategy {
+    /// Re-broadcast Connect envelopes across the peer network.
+    Broadcast,
+    /// Keep Connect delivery inside the local Torii process.
+    LocalOnly,
+}
+/// Error returned for a non-canonical Connect relay strategy.
+#[derive(Debug, Error)]
+#[error("invalid Connect relay strategy `{0}` (expected exact `broadcast` or `local_only`)")]
+pub struct ConnectRelayStrategyParseError(String);
+impl FromStr for ConnectRelayStrategy {
+    type Err = ConnectRelayStrategyParseError;
+
+    fn from_str(raw: &str) -> std::result::Result<Self, Self::Err> {
+        match raw {
+            "broadcast" => Ok(Self::Broadcast),
+            "local_only" => Ok(Self::LocalOnly),
+            other => Err(ConnectRelayStrategyParseError(other.to_owned())),
+        }
+    }
+}
+impl json::JsonDeserialize for ConnectRelayStrategy {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> std::result::Result<Self, json::Error> {
+        let value = parser.parse_string()?;
+        value.parse().map_err(
+            |error: ConnectRelayStrategyParseError| json::Error::InvalidField {
+                field: "torii.connect.relay_strategy".into(),
+                message: error.to_string(),
+            },
+        )
+    }
+}
+impl json::JsonSerialize for ConnectRelayStrategy {
+    fn json_serialize(&self, out: &mut String) {
+        json::write_json_string(
+            match self {
+                Self::Broadcast => "broadcast",
+                Self::LocalOnly => "local_only",
+            },
+            out,
+        );
+    }
+}
+fn default_connect_relay_strategy() -> ConnectRelayStrategy {
+    defaults::connect::RELAY_STRATEGY
+        .parse()
+        .expect("Connect relay strategy default must be canonical")
+}
 /// User-level configuration container for `Connect`.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
 pub struct Connect {
     /// Enable Iroha Connect WS + P2P relay.
     #[config(env = "CONNECT_ENABLED", default = "defaults::connect::ENABLED")]
@@ -17939,12 +17949,12 @@ pub struct Connect {
         default = "defaults::connect::RELAY_ENABLED"
     )]
     pub relay_enabled: bool,
-    /// Relay strategy string.
+    /// Exact relay strategy.
     #[config(
         env = "CONNECT_RELAY_STRATEGY",
-        default = "defaults::connect::RELAY_STRATEGY.to_string()"
+        default = "default_connect_relay_strategy()"
     )]
-    pub relay_strategy: String,
+    pub relay_strategy: ConnectRelayStrategy,
     /// Hop TTL for Connect relay envelopes (0 disables cross-node rebroadcast).
     #[config(
         env = "CONNECT_P2P_TTL_HOPS",
@@ -17976,7 +17986,10 @@ impl Connect {
             dedupe_ttl: self.dedupe_ttl_ms.get(),
             dedupe_cap: self.dedupe_cap,
             relay_enabled: self.relay_enabled,
-            relay_strategy: Box::leak(self.relay_strategy.into_boxed_str()),
+            relay_strategy: match self.relay_strategy {
+                ConnectRelayStrategy::Broadcast => actual::ConnectRelayStrategy::Broadcast,
+                ConnectRelayStrategy::LocalOnly => actual::ConnectRelayStrategy::LocalOnly,
+            },
             p2p_ttl_hops: self.p2p_ttl_hops,
         }
     }
@@ -18835,7 +18848,7 @@ impl Sorafs {
             self.storage.parse(repair_enabled, emitter),
             self.discovery.parse(emitter),
             self.repair.parse(emitter),
-            self.gc.parse(),
+            self.gc.parse(emitter),
             self.quota.parse(),
             self.alias_cache.parse(),
             self.gateway.parse(emitter),
@@ -28320,12 +28333,24 @@ impl Default for SorafsGc {
     }
 }
 impl SorafsGc {
-    fn parse(self) -> actual::SorafsGc {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsGc {
+        if self.interval_secs == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSorafsConfig)
+                    .attach("sorafs.gc.interval_secs must be non-zero"),
+            );
+        }
+        if self.max_deletions_per_run == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidSorafsConfig)
+                    .attach("sorafs.gc.max_deletions_per_run must be non-zero"),
+            );
+        }
         actual::SorafsGc {
             enabled: self.enabled,
             state_dir: self.state_dir,
-            interval_secs: self.interval_secs.max(1),
-            max_deletions_per_run: self.max_deletions_per_run.max(1),
+            interval_secs: self.interval_secs,
+            max_deletions_per_run: self.max_deletions_per_run,
             retention_grace_secs: self.retention_grace_secs,
         }
     }
@@ -28385,7 +28410,7 @@ mod sorafs_repair_gc_tests {
         );
     }
     #[test]
-    fn sorafs_gc_parse_clamps_legacy_zero_worker_values() {
+    fn sorafs_gc_parse_rejects_zero_scheduler_values_without_clamping() {
         let gc = SorafsGc {
             enabled: true,
             state_dir: None,
@@ -28393,10 +28418,21 @@ mod sorafs_repair_gc_tests {
             max_deletions_per_run: 0,
             retention_grace_secs: 42,
         };
-        let actual_gc = gc.parse();
-        assert_eq!(actual_gc.interval_secs, 1);
-        assert_eq!(actual_gc.max_deletions_per_run, 1);
+        let mut emitter = Emitter::new();
+        let actual_gc = gc.parse(&mut emitter);
+        assert!(emitter.into_result().is_err());
+        assert_eq!(actual_gc.interval_secs, 0);
+        assert_eq!(actual_gc.max_deletions_per_run, 0);
         assert_eq!(actual_gc.retention_grace_secs, 42);
+
+        let mut emitter = Emitter::new();
+        let actual_gc = SorafsGc::default().parse(&mut emitter);
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(actual_gc.interval_secs, defaults::sorafs::gc::INTERVAL_SECS);
+        assert_eq!(
+            actual_gc.max_deletions_per_run,
+            defaults::sorafs::gc::MAX_DELETIONS_PER_RUN
+        );
     }
     #[test]
     fn sorafs_runtime_retention_enforces_shared_projection_ceiling() {
@@ -32008,6 +32044,7 @@ mod duration_clamp_tests {
     use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource, util::Bytes};
     use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair};
     use iroha_data_model::{
+        NetworkId,
         account::AccountId,
         block::BlockHeader,
         name::Name,
@@ -32144,6 +32181,172 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let report = format!("{error:?}");
         assert!(report.contains(expected), "{report}");
     }
+    fn provider_table_mut<'a>(table: &'a mut Table, section: &str) -> &'a mut Table {
+        table
+            .entry(section)
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("provider configuration section")
+    }
+    fn set_global_beacon_provider_binding(
+        table: &mut Table,
+        handle: Option<&str>,
+        revision: Option<i64>,
+        policy_digest_hex: Option<&str>,
+    ) {
+        let section = provider_table_mut(table, "sumeragi");
+        if let Some(handle) = handle {
+            section.insert(
+                "global_beacon_partial_signer_provider_handle".into(),
+                Value::String(handle.to_owned()),
+            );
+        }
+        if let Some(revision) = revision {
+            section.insert(
+                "global_beacon_partial_signer_provider_revision".into(),
+                Value::Integer(revision),
+            );
+        }
+        if let Some(policy_digest_hex) = policy_digest_hex {
+            section.insert(
+                "global_beacon_partial_signer_provider_policy_digest_hex".into(),
+                Value::String(policy_digest_hex.to_owned()),
+            );
+        }
+    }
+    fn set_parliament_tle_provider_binding(
+        table: &mut Table,
+        handle: Option<&str>,
+        revision: Option<i64>,
+        policy_digest_hex: Option<&str>,
+    ) {
+        let section = provider_table_mut(table, "gov");
+        if let Some(handle) = handle {
+            section.insert(
+                "parliament_tle_partial_release_signer_provider_handle".into(),
+                Value::String(handle.to_owned()),
+            );
+        }
+        if let Some(revision) = revision {
+            section.insert(
+                "parliament_tle_partial_release_signer_provider_revision".into(),
+                Value::Integer(revision),
+            );
+        }
+        if let Some(policy_digest_hex) = policy_digest_hex {
+            section.insert(
+                "parliament_tle_partial_release_signer_provider_policy_digest_hex".into(),
+                Value::String(policy_digest_hex.to_owned()),
+            );
+        }
+    }
+    #[test]
+    fn consensus_signer_provider_bindings_are_exact_and_public_only() {
+        let beacon_digest = "11".repeat(32);
+        let tle_digest = "22".repeat(32);
+        let mut table = base_table();
+        set_global_beacon_provider_binding(
+            &mut table,
+            Some("hsm://iroha/global-beacon/primary"),
+            Some(7),
+            Some(&beacon_digest),
+        );
+        set_parliament_tle_provider_binding(
+            &mut table,
+            Some("hsm://iroha/parliament-tle/primary"),
+            Some(9),
+            Some(&tle_digest),
+        );
+        let parsed = load_root(table);
+        assert_eq!(
+            parsed
+                .sumeragi
+                .global_beacon_partial_signer_provider_policy_digest,
+            Some([0x11; 32])
+        );
+        assert_eq!(
+            parsed
+                .gov
+                .parliament_tle_partial_release_signer_provider_policy_digest,
+            Some([0x22; 32])
+        );
+    }
+    #[test]
+    fn consensus_signer_provider_bindings_reject_partial_inert_and_test_marked_values() {
+        let valid_digest = "31".repeat(32);
+        for (handle, revision, digest) in [
+            (Some("hsm://iroha/global-beacon/primary"), None, None),
+            (None, Some(1), Some(valid_digest.as_str())),
+            (Some(""), Some(1), Some(valid_digest.as_str())),
+            (Some("   "), Some(1), Some(valid_digest.as_str())),
+            (
+                Some("hsm://iroha/global-beacon/test"),
+                Some(1),
+                Some(valid_digest.as_str()),
+            ),
+            (
+                Some("hsm://iroha/global-beacon/mock"),
+                Some(1),
+                Some(valid_digest.as_str()),
+            ),
+            (
+                Some("hsm://iroha/global-beacon/demo"),
+                Some(1),
+                Some(valid_digest.as_str()),
+            ),
+            (
+                Some("hsm://iroha/global-beacon/primary"),
+                Some(0),
+                Some(valid_digest.as_str()),
+            ),
+            (
+                Some("hsm://iroha/global-beacon/primary"),
+                Some(1),
+                Some("00"),
+            ),
+        ] {
+            let mut table = base_table();
+            set_global_beacon_provider_binding(&mut table, handle, revision, digest);
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "invalid beacon provider binding must fail: {handle:?}/{revision:?}/{digest:?}"
+            );
+        }
+
+        let mut partial_tle = base_table();
+        set_parliament_tle_provider_binding(
+            &mut partial_tle,
+            Some("hsm://iroha/parliament-tle/primary"),
+            Some(1),
+            None,
+        );
+        assert!(actual::Root::from_toml_source(TomlSource::inline(partial_tle)).is_err());
+    }
+    #[test]
+    fn observer_cannot_configure_consensus_share_providers() {
+        let digest = "41".repeat(32);
+        for configure_tle in [false, true] {
+            let mut table = base_table();
+            provider_table_mut(&mut table, "sumeragi")
+                .insert("role".into(), Value::String("observer".into()));
+            if configure_tle {
+                set_parliament_tle_provider_binding(
+                    &mut table,
+                    Some("hsm://iroha/parliament-tle/primary"),
+                    Some(1),
+                    Some(&digest),
+                );
+            } else {
+                set_global_beacon_provider_binding(
+                    &mut table,
+                    Some("hsm://iroha/global-beacon/primary"),
+                    Some(1),
+                    Some(&digest),
+                );
+            }
+            assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
+        }
+    }
     #[test]
     fn torii_http_per_ip_connection_limit_must_not_exceed_global_limit() {
         assert_torii_http_config_rejected(
@@ -32211,6 +32414,9 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let canonical_private_key = ExposedPrivateKey(private_key.clone()).to_string();
         let mut config = load_user_root(base_table());
         config.snapshot.signing_private_key = Some(private_key.clone());
+        config.network.soranet_vpn.operator_account_id =
+            AccountId::new(key_pair.public_key().clone()).to_string();
+        config.network.soranet_vpn.operator_private_key = Some(private_key.clone());
         config.torii.receipt_public_key = Some(key_pair.public_key().clone());
         config.torii.receipt_private_key = Some(private_key.clone());
         config.torii.kagemusha_commands = Some(super::ToriiKagemushaCommands {
@@ -32236,6 +32442,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         });
         let debug_outputs = [
             ("snapshot", format!("{:?}", config.snapshot)),
+            ("SoraNet VPN", format!("{:?}", config.network.soranet_vpn)),
             ("torii receipt", format!("{:?}", config.torii)),
             (
                 "kagemusha commands",
@@ -32271,6 +32478,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let actual = config.parse().expect("valid secret-bearing configuration");
         for (subtree, debug) in [
             ("actual snapshot", format!("{:?}", actual.snapshot)),
+            (
+                "actual SoraNet VPN",
+                format!("{:?}", actual.network.soranet_vpn),
+            ),
             ("actual Torii", format!("{:?}", actual.torii)),
             (
                 "actual Kagemusha commands",
@@ -32601,8 +32812,8 @@ policy_digest_hex = "{policy_digest_hex}"
     fn set_valid_autoscale_defaults(nexus: &mut Table) {
         let mut autoscale = Table::new();
         autoscale.insert("enabled".into(), Value::Boolean(true));
-        autoscale.insert("min_lanes".into(), Value::Integer(1));
-        autoscale.insert("max_lanes".into(), Value::Integer(3));
+        autoscale.insert("min_lane_id".into(), Value::Integer(1));
+        autoscale.insert("max_lane_id_exclusive".into(), Value::Integer(3));
         autoscale.insert("target_block_ms".into(), Value::Integer(1_000));
         autoscale.insert("scale_out_latency_ratio".into(), Value::Float(2.0));
         autoscale.insert("scale_in_latency_ratio".into(), Value::Float(0.5));
@@ -32971,7 +33182,7 @@ policy_digest_hex = "{policy_digest_hex}"
             .expect_err("default lane must be below the autoscale elastic range");
         let report = format!("{error:?}");
         assert!(
-            report.contains("nexus.routing_policy.default_lane 1 must be below nexus.autoscale.min_lanes 1 when autoscale is enabled"),
+            report.contains("nexus.routing_policy.default_lane 1 must be below nexus.autoscale.min_lane_id 1 when autoscale is enabled"),
             "{report}"
         );
     }
@@ -32993,7 +33204,7 @@ policy_digest_hex = "{policy_digest_hex}"
             .expect_err("high-side default lane must be rejected");
         let report = format!("{error:?}");
         assert!(
-            report.contains("nexus.routing_policy.default_lane 3 must be below nexus.autoscale.min_lanes 1 when autoscale is enabled"),
+            report.contains("nexus.routing_policy.default_lane 3 must be below nexus.autoscale.min_lane_id 1 when autoscale is enabled"),
             "{report}"
         );
     }
@@ -34946,13 +35157,35 @@ publish_delay_seconds = 17
         );
     }
     #[test]
+    fn genesis_expected_hash_rejects_raw_genesis_hash() {
+        let mut table = base_table();
+        table
+            .get_mut("genesis")
+            .and_then(Value::as_table_mut)
+            .expect("genesis table")
+            .insert(
+                "expected_hash".into(),
+                Value::String(
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                        b"obsolete inline raw genesis hash identity",
+                    ))
+                    .to_string(),
+                ),
+            );
+        assert!(
+            actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+            "the first-release inline trust root must reject raw hash compatibility"
+        );
+    }
+    #[test]
     fn genesis_expected_hash_file_supplies_the_exact_trust_root() {
         let expected_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             b"configuration file backed genesis identity",
         ));
+        let network_id = NetworkId::from_genesis_hash(expected_hash);
         let identity_dir = TestDir::create("genesis-identity");
         let identity_path = identity_dir.path().join("expected_hash");
-        fs::write(&identity_path, format!("{expected_hash}\n")).expect("write identity");
+        fs::write(&identity_path, format!("{network_id}\n")).expect("write identity");
         let mut table = base_table();
         let genesis = table
             .get_mut("genesis")
@@ -34966,6 +35199,62 @@ publish_delay_seconds = 17
         let root = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect("canonical identity file must be accepted");
         assert_eq!(root.genesis.expected_hash, expected_hash);
+    }
+    #[test]
+    fn genesis_expected_hash_file_rejects_noncanonical_record_bytes() {
+        let expected_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"validator canonical network identity file bytes",
+        ));
+        let canonical = NetworkId::from_genesis_hash(expected_hash).to_string();
+        for (label, contents) in [
+            ("missing final LF", canonical.clone()),
+            ("CRLF terminator", format!("{canonical}\r\n")),
+            ("leading space", format!(" {canonical}\n")),
+            ("trailing space", format!("{canonical} \n")),
+            ("extra empty record", format!("{canonical}\n\n")),
+            ("multiple records", format!("{canonical}\n{canonical}\n")),
+        ] {
+            let identity_dir = TestDir::create(label);
+            let identity_path = identity_dir.path().join("expected_hash");
+            fs::write(&identity_path, contents).expect("write malformed identity");
+            let mut table = base_table();
+            let genesis = table
+                .get_mut("genesis")
+                .and_then(Value::as_table_mut)
+                .expect("genesis table");
+            genesis.remove("expected_hash");
+            genesis.insert(
+                "expected_hash_file".into(),
+                Value::String(identity_path.display().to_string()),
+            );
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "{label} must fail closed"
+            );
+        }
+    }
+    #[test]
+    fn genesis_expected_hash_file_rejects_raw_genesis_hash() {
+        let expected_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"obsolete raw genesis hash identity",
+        ));
+        let identity_dir = TestDir::create("raw-genesis-identity");
+        let identity_path = identity_dir.path().join("expected_hash");
+        fs::write(&identity_path, format!("{expected_hash}\n")).expect("write raw hash identity");
+        let mut table = base_table();
+        let genesis = table
+            .get_mut("genesis")
+            .and_then(Value::as_table_mut)
+            .expect("genesis table");
+        genesis.remove("expected_hash");
+        genesis.insert(
+            "expected_hash_file".into(),
+            Value::String(identity_path.display().to_string()),
+        );
+        assert!(
+            actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+            "the first-release shared identity file must reject raw hash compatibility"
+        );
     }
     #[test]
     fn genesis_rejects_ambiguous_inline_and_file_trust_roots() {
@@ -35187,7 +35476,6 @@ publish_delay_seconds = 17
             runtime.reconcile_interval => StdDuration::from_millis(defaults::soracloud_runtime::RECONCILE_INTERVAL_MS),
             runtime.hydration_concurrency => defaults::soracloud_runtime::HYDRATION_CONCURRENCY,
             runtime.cache_budgets.bundle_bytes => defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES,
-            inrou.max_concurrent_vms => defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
             inrou.enabled => defaults::soracloud_runtime::INROU_ENABLED,
             inrou.max_cpu_millis => defaults::soracloud_runtime::INROU_MAX_CPU_MILLIS,
             inrou.max_memory_bytes => defaults::soracloud_runtime::INROU_MAX_MEMORY_BYTES,
@@ -35206,13 +35494,65 @@ publish_delay_seconds = 17
             hf.import_max_files => defaults::soracloud_runtime::hf::IMPORT_MAX_FILES,
             hf.model_info_max_response_bytes => defaults::soracloud_runtime::hf::MODEL_INFO_MAX_RESPONSE_BYTES,
             hf.inference_max_response_bytes => defaults::soracloud_runtime::hf::INFERENCE_MAX_RESPONSE_BYTES,
-            hf.allow_inference_bridge_fallback => defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK,
         );
         assert!(matches!(
             &runtime.submission.fee_payer,
             actual::SoracloudRuntimeFeePayer::Authority
         ));
         assert!(hf.inference_credential_provider.is_none());
+    }
+    #[test]
+    fn soracloud_runtime_inrou_lifecycle_grace_rejects_out_of_range_values() {
+        for (field, value) in [
+            ("start_grace_ms", 99_u64),
+            ("start_grace_ms", 600_001),
+            ("stop_grace_ms", 99),
+            ("stop_grace_ms", 600_001),
+        ] {
+            let table = table_with_soracloud_runtime(&format!("[inrou]\n{field} = {value}\n"));
+            let error = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect_err("an out-of-range Inrou lifecycle grace must fail parsing");
+            assert!(
+                format!("{error:?}").contains(&format!(
+                    "soracloud_runtime.inrou.{field} must be between 100 and 600000 milliseconds inclusive"
+                )),
+                "unexpected parse error for {field}={value}: {error:?}"
+            );
+        }
+    }
+    #[test]
+    fn soracloud_runtime_inrou_lifecycle_grace_accepts_exact_bounds() {
+        for value in [
+            defaults::soracloud_runtime::INROU_LIFECYCLE_GRACE_MIN_MS,
+            defaults::soracloud_runtime::INROU_LIFECYCLE_GRACE_MAX_MS,
+        ] {
+            let actual = load_root(table_with_soracloud_runtime(&format!(
+                "[inrou]\nstart_grace_ms = {value}\nstop_grace_ms = {value}\n"
+            )));
+            assert_eq!(
+                actual.soracloud_runtime.inrou.start_grace,
+                StdDuration::from_millis(value)
+            );
+            assert_eq!(
+                actual.soracloud_runtime.inrou.stop_grace,
+                StdDuration::from_millis(value)
+            );
+        }
+    }
+    #[test]
+    fn soracloud_runtime_rejects_host_local_hf_execution() {
+        let table = table_with_soracloud_runtime(
+            r#"
+[hf]
+local_execution_enabled = true
+"#,
+        );
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("host-local HF execution must be rejected during user-config parsing");
+        assert!(
+            format!("{error:?}").contains("local_execution_enabled is unavailable"),
+            "unexpected parse error: {error:?}"
+        );
     }
     #[test]
     fn soracloud_runtime_inrou_bundle_archive_limits_allow_equal_file_total_and_decoded() {
@@ -35455,7 +35795,7 @@ publish_delay_seconds = 17
         if let Some(enabled) = inrou_enabled {
             write!(
                 source,
-                r#"
+                r"
 [inrou]
 enabled = {enabled}
 portable_vm_uid = 70000
@@ -35465,7 +35805,7 @@ max_memory_bytes = 8589934592
 max_storage_bytes = 68719476736
 start_grace_ms = 30000
 stop_grace_ms = 10000
-"#,
+",
             )
             .expect("writing to an owned string cannot fail");
         }
@@ -35506,7 +35846,6 @@ max_bytes_per_minute = 1048576
             runtime.egress.rate_per_minute.expect("rate quota").get(),
             60
         );
-        assert!(!runtime.hf.allow_inference_bridge_fallback);
         let signer = runtime
             .submission
             .signer
@@ -35519,9 +35858,12 @@ max_bytes_per_minute = 1048576
         );
     }
     #[test]
-    #[should_panic(expected = "first-release iroha3d forbids")]
-    fn soracloud_runtime_first_release_rejects_enabled_inrou() {
-        let _ = load_root(production_soracloud_runtime_table(Some(true), true));
+    fn soracloud_runtime_first_release_accepts_exact_portable_vm_v1() {
+        let actual = load_root(production_soracloud_runtime_table(Some(true), true));
+        let inrou = actual.soracloud_runtime.inrou;
+        assert!(inrou.enabled);
+        assert_eq!(inrou.portable_vm_uid.expect("PortableVM uid").get(), 70_000);
+        assert_eq!(inrou.portable_vm_gid.expect("PortableVM gid").get(), 70_000);
     }
     #[test]
     #[should_panic(expected = "sponsor payer requires fee_program_id")]
@@ -35571,13 +35913,13 @@ max_bytes_per_minute = 1048576
     fn soracloud_runtime_portable_vm_requires_dedicated_identity() {
         let result =
             actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
-                r#"
+                r"
 [inrou]
 enabled = true
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-"#,
+",
             )));
         assert!(
             result.is_err(),
@@ -35585,49 +35927,66 @@ max_storage_bytes = 10737418240
         );
     }
     #[test]
-    fn soracloud_runtime_portable_vm_rejects_ids_outside_the_fixed_corridor() {
-        for identity_fields in [
-            "portable_vm_uid = 65535\nportable_vm_gid = 70001",
-            "portable_vm_uid = 524288\nportable_vm_gid = 70001",
-            "portable_vm_uid = 4294967294\nportable_vm_gid = 70001",
-            "portable_vm_uid = 70000\nportable_vm_gid = 4294967295",
-        ] {
+    fn soracloud_runtime_portable_vm_rejects_ids_outside_the_four_slots() {
+        for id in [65_536_u32, 69_999, 70_004, 524_287, u32::MAX] {
+            let identity_fields = format!("portable_vm_uid = {id}\nportable_vm_gid = {id}");
             let result = actual::Root::from_toml_source(TomlSource::inline(
                 table_with_soracloud_runtime(&format!(
-                    r#"
+                    r"
 [inrou]
 enabled = true
 {identity_fields}
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-"#,
+",
                 )),
             ));
             assert!(
                 result.is_err(),
-                "primary uid/gid values outside the fixed reservation corridor must fail closed"
+                "primary uid/gid values outside the canonical four-slot reservation must fail closed"
             );
         }
     }
     #[test]
-    fn soracloud_runtime_release_gate_rejects_enabled_inrou_at_fixed_corridor_boundaries() {
-        let runtime =
-            actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
-                r#"
+    fn soracloud_runtime_portable_vm_rejects_mismatched_slot_ids() {
+        for (uid, gid) in [(70_000_u32, 70_001_u32), (70_003, 70_002)] {
+            let result = actual::Root::from_toml_source(TomlSource::inline(
+                table_with_soracloud_runtime(&format!(
+                    r#"
 [inrou]
 enabled = true
-portable_vm_uid = 65536
-portable_vm_gid = 524287
+portable_vm_uid = {uid}
+portable_vm_gid = {gid}
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
 "#,
-            )));
-        assert!(
-            runtime.is_err(),
-            "even structurally reserved primary ids cannot bypass the first-release hosting gate"
-        );
+                )),
+            ));
+            assert!(result.is_err(), "uid/gid must select the same Inrou slot");
+        }
+    }
+    #[test]
+    fn soracloud_runtime_accepts_all_four_canonical_inrou_slots() {
+        for slot in 0..defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_SLOT_COUNT {
+            let id = defaults::soracloud_runtime::INROU_PORTABLE_VM_ID_BASE + slot;
+            let mut table = production_soracloud_runtime_table(Some(true), true);
+            let inrou = table
+                .get_mut("soracloud_runtime")
+                .and_then(Value::as_table_mut)
+                .and_then(|runtime| runtime.get_mut("inrou"))
+                .and_then(Value::as_table_mut)
+                .expect("production Inrou table");
+            inrou.insert("portable_vm_uid".into(), Value::Integer(i64::from(id)));
+            inrou.insert("portable_vm_gid".into(), Value::Integer(i64::from(id)));
+            let runtime = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect("canonical production Inrou identity slot is valid");
+            let inrou = runtime.soracloud_runtime.inrou;
+            assert!(inrou.enabled);
+            assert_eq!(inrou.portable_vm_uid.expect("PortableVM uid").get(), id);
+            assert_eq!(inrou.portable_vm_gid.expect("PortableVM gid").get(), id);
+        }
     }
     #[test]
     fn soracloud_runtime_rejects_retired_portable_vm_selectors() {
@@ -35638,47 +35997,50 @@ max_storage_bytes = 10737418240
             "portable_vm_supplementary_gids = [108]",
             "portable_vm_control_dir = \"/run/iroha-inrou-test\"",
         ] {
-            let result = actual::Root::from_toml_source(TomlSource::inline(
+            let field = retired.split_once(' ').expect("retired selector name").0;
+            let error = actual::Root::from_toml_source(TomlSource::inline(
                 table_with_soracloud_runtime(&format!(
-                    r#"
+                    r"
 [inrou]
 enabled = true
 portable_vm_uid = 70000
-portable_vm_gid = 70001
+portable_vm_gid = 70000
 {retired}
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
-"#,
+",
                 )),
-            ));
+            ))
+            .expect_err("retired first-release selector must be unknown");
+            let report = format!("{error:?}");
             assert!(
-                result.is_err(),
-                "retired first-release selector `{retired}` must be rejected"
+                report.contains(&format!("unknown field `{field}`")),
+                "unexpected retired-selector diagnostic: {report}"
             );
         }
     }
     #[test]
-    fn soracloud_runtime_nonproduction_also_rejects_enabled_inrou() {
-        let result =
-            actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
-                r#"
+    #[should_panic(expected = "inrou.enabled requires soracloud_runtime.production_mode = true")]
+    fn soracloud_runtime_nonproduction_rejects_exact_portable_vm_v1() {
+        let _ = actual::Root::from_toml_source(TomlSource::inline(table_with_soracloud_runtime(
+            r#"
 [inrou]
 enabled = true
 portable_vm_uid = 70000
-portable_vm_gid = 70001
+portable_vm_gid = 70000
 max_cpu_millis = 1000
 max_memory_bytes = 1073741824
 max_storage_bytes = 10737418240
 "#,
-            )));
-        assert!(result.is_err());
+        )));
     }
     #[test]
-    fn soracloud_runtime_disabled_inrou_keeps_backend_set_empty() {
+    fn soracloud_runtime_disabled_inrou_keeps_identity_absent() {
         let actual = load_root(table_with_soracloud_runtime(""));
         assert!(!actual.soracloud_runtime.inrou.enabled);
-        assert!(actual.soracloud_runtime.inrou.backends.is_empty());
+        assert!(actual.soracloud_runtime.inrou.portable_vm_uid.is_none());
+        assert!(actual.soracloud_runtime.inrou.portable_vm_gid.is_none());
     }
     #[test]
     fn soracloud_runtime_partial_hf_overrides_keep_defaults() {
@@ -35739,11 +36101,11 @@ hub_base_url = " https://mirror.hf.test/ "
 api_base_url = "https://mirror.hf.test/api/"
 inference_base_url = "https://router.hf.test/hf-inference/models/"
 request_timeout_ms = 21000
+import_redirect_allowed_origins = [" https://downloads.hf.test/ ", "https://downloads.hf.test"]
 local_execution_enabled = false
 local_runner_program = " python3.12 "
 local_runner_timeout_ms = 45000
 model_host_heartbeat_ttl_ms = 18000
-allow_inference_bridge_fallback = false
 import_max_files = 48
 import_max_file_bytes = 777777
 import_max_total_bytes = 9999999
@@ -35775,7 +36137,6 @@ policy_digest_hex = "{}"
             runtime.hydration_concurrency.get() => 7,
             runtime.cache_budgets.bundle_bytes.get() => 1_024,
             runtime.cache_budgets.model_weight_bytes.get() => 6_144,
-            inrou.max_concurrent_vms.get() => 1,
             inrou.bundle_archive_max_compressed_bytes.get() => 10_000,
             inrou.bundle_archive_max_decoded_bytes.get() => 40_000,
             inrou.bundle_archive_max_entries.get() => 123,
@@ -35790,6 +36151,7 @@ policy_digest_hex = "{}"
             hf.api_base_url => "https://mirror.hf.test/api",
             hf.inference_base_url => "https://router.hf.test/hf-inference/models",
             hf.request_timeout => StdDuration::from_millis(21_000),
+            hf.import_redirect_allowed_origins => vec!["https://downloads.hf.test".to_string()],
             hf.local_runner_program => "python3.12",
             hf.local_runner_timeout => StdDuration::from_millis(45_000),
             hf.model_host_heartbeat_ttl => StdDuration::from_millis(18_000),
@@ -35812,7 +36174,6 @@ policy_digest_hex = "{}"
         ));
         assert!(egress.default_allow);
         assert!(!hf.local_execution_enabled);
-        assert!(!hf.allow_inference_bridge_fallback);
         let credential_provider = hf
             .inference_credential_provider
             .as_ref()

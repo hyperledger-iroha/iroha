@@ -6,10 +6,10 @@
 # and comments or test-only lookalikes cannot satisfy this contract.
 _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
     "fair_v2_ingress_leader_wire_selector_projection": (
-        "08ce0575f38ec671cff556b343d981536dd24fb5bc6c49874b76508cd9cd8104"
+        "76784616876c15608e352a93941912c2002d252ceda70ebefedf4a10495a8730"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
-        "73b744b27b3cc5ffe642fec4a017aeca5bb4fb314205afa0b66531d9fdbf776d"
+        "f36657087882729316031bc2d321b625ee4eba01b742645757a20d31f4001fa8"
     ),
     "fair_v2_ingress_required_capacity": (
         "8ad1236ac1728e777706855b7fe53bdaf43e85bfe1e613d2fd0efd18ff9eac50"
@@ -732,7 +732,7 @@ _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
 }
 _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
     "new_with_source_geometry_and_transport_frame_caps": (
-        "a41b4736d1aa01919dcbccf0b5c71378682e9ad5fd2c64909972f17f6d6c2be8"
+        "cb0a4afccddb9b23417de8471d44d9e82bdecf6931c5af21e2d15ead8a3a68d9"
     ),
     "configure_roster_for_context": (
         "19c00b3b692c6dba9ada1003dff9483ea7a90a47263a506dd6c764f1d24fc68c"
@@ -747,13 +747,13 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "eb2a36ec0884655d739e38e34b4031467c0f5ed983c77583b3d331df6cceffac"
     ),
     "try_recv_if_at_checked": (
-        "7b3b4b907715d56dba2dcc36dee64db07ef61cd7a456d039e24146cf4d60d20d"
+        "73722eaedc36f6ef5265f77198fb95ea520b686ea71406cca9326a8376c2c13b"
     ),
     "try_recv_if_at_checked_classified": (
-        "5f6184b1089ce6fee2ccb7f1ad8dadc5d47b8b017dfec383f7211eaec6fe9060"
+        "ca657eaedc48fdfdf96aeca1558d4b17774762c22fd0cd7e8cce82270aff5487"
     ),
     "dequeue_selected_locked": (
-        "14a706a0784006194f78d56b50268fca87a84de28f2bf0447d757f7c9dcd63a8"
+        "09219d6ee0f38a277e24a57d4cc9938be2902ec9f7cb45f2aea9e421bb5a24d3"
     ),
 }
 _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256 = {
@@ -771,7 +771,7 @@ _PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 = {
         "66d33b07c062bd6dc4a1b879b0b3624bc0403e59305cbc44763d409f97d109fc"
     ),
     "LockedPreparedFairIngressExactDequeue::commit": (
-        "2df7516317611dcc3fc0f959cca1e80a7b6aa3670a90d2add798f744cfebbd4c"
+        "abdd5434d703b75f26bb2053ac05942564deffb181ddfe040609f6583405ebe9"
     ),
     "locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit": (
         "ea093accfdb33740bc7f21e9c26b17e74a1d7600c885ff45a5718caed8cb457a"

@@ -1239,7 +1239,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runtime.rs",
                         item="step_recovery",
                         item_token_sha256=(
-                            "a4afc9d28aab61fcffcc52cb7576854877c7c4d81ff3e39f694ae2c2896d97e6"
+                            "1eb3d1b0b66470838f73b59646a0a8df315d00f6d2913c826f29f19fceda1da1"
                         ),
                         brace_context=((
                             "impl", "<", "D", ":", "RuntimeDriver", ">",
@@ -3160,7 +3160,7 @@ _CHECKED_PRODUCTION_TOKEN_DEFINITION_SOURCE = (
     "crates/iroha_core/src/sumeragi/v2_core/refinement/first_release_witness.rs"
 )
 _CHECKED_PRODUCTION_TOKEN_CLOSURE_SHA256 = (
-    "52558a7c6976fc869b1e6214202190ef3eb0111231e8c49d990a7e36fe2c63d7"
+    "a4bf41d3a4389122cad3e4aafa0c86b159ec5cc6ea245756d28ecca446d23819"
 )
 _CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256 = (
     "c79d22d356c0f53aceb7b771cb14660ea68ab6da856d46e186506bb5e570a9aa"

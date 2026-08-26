@@ -141,20 +141,21 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   ownership metadata; invalid owned lanes may be explicitly retired for repair.
   When autoscale is enabled, manual lifecycle additions and full
   config swaps also reserve the configured
-  `autoscale.min_lanes..autoscale.max_lanes` elastic id range for the
+  `autoscale.min_lane_id..autoscale.max_lane_id_exclusive` elastic id range for the
   autoscaler, so operator-managed base/governance/zk lanes cannot silently
-  consume future scale-out ids. These legacy-named fields are half-open lane-id
-  bounds, not active-lane counts: `min_lanes` is inclusive and `max_lanes` is
-  exclusive. Sparse holes remain eligible for deterministic creation, and the
+  consume future scale-out ids. These fields are half-open lane-id bounds, not
+  active-lane counts: `min_lane_id` is inclusive and
+  `max_lane_id_exclusive` is exclusive. Sparse holes remain eligible for
+  deterministic creation, and the
   range may begin above the initial catalog namespace because lifecycle
   additions expand that namespace. The routing `default_lane` must stay below
-  `autoscale.min_lanes`, so the default route has a stable base anchor and
+  `autoscale.min_lane_id`, so the default route has a stable base anchor and
   cannot point at or above the autoscale-owned elastic range. Full config swaps
   may preserve active autoscale-managed lanes unchanged, but swaps that add,
   mutate, omit, or replace one are treated as
   manual autoscale-lane changes and fail atomically. Preserved
   autoscale-managed lanes must also remain inside the configured
-  `autoscale.min_lanes..autoscale.max_lanes` id range and stay bound to
+  `autoscale.min_lane_id..autoscale.max_lane_id_exclusive` id range and stay bound to
   `nexus.routing_policy.default_dataspace`, so config changes cannot strand an
   owned elastic lane outside the range or dataspace the autoscaler can manage.
   A config swap also cannot disable `autoscale.enabled` while autoscale-managed
@@ -215,7 +216,7 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   shards by transaction hash across the default lane plus those valid elastic
   lanes only when live Nexus and autoscale are enabled, the default lane remains
   outside the elastic id range, and the managed lane id remains in
-  `autoscale.min_lanes..autoscale.max_lanes`. If autoscale is disabled or no
+  `autoscale.min_lane_id..autoscale.max_lane_id_exclusive`. If autoscale is disabled or no
   eligible elastic lane remains, live routing falls back to the default lane.
   If the active elastic range contains a manual
   lane, malformed autoscale-managed lane, or managed lane outside the default
@@ -332,7 +333,7 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   base/governance/zk, manually managed, malformed, or out-of-range lanes do not
   dilute default-lane scale-out decisions. Live routing disables elastic
   default-route sharding when runtime autoscale bounds are invalid or the
-  default lane is at or above `autoscale.min_lanes`, keeping no-target traffic
+  default lane is at or above `autoscale.min_lane_id`, keeping no-target traffic
   on the configured default lane until runtime state is repaired. Scale-out
   eligibility uses that same default-route autoscale
   capacity instead of total catalog length, so unrelated manual lanes and
@@ -347,7 +348,7 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   extrapolating load from the current block alone or clamping bad timing
   evidence into synthetic hot/cold samples.
 - Autoscale config parsing rejects zero lane/window/target values, empty or
-  inverted `min_lanes`/`max_lanes`, configured maxima above the compiled safety
+  inverted `min_lane_id`/`max_lane_id_exclusive`, configured maxima above the compiled safety
   cap, and scale-in thresholds that are not strictly below scale-out thresholds. Ratio
   thresholds must also round to at least one permille, so tiny positive values
   cannot become zero thresholds, and scale-in ratios must still round below
@@ -355,7 +356,7 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   lifecycle, and block application paths repeat the lane-bound safety-cap
   checks, and block application also repeats the effective-ratio checks.
   Autoscale transitions are skipped if runtime state contains an excessive
-  `max_lanes`, non-finite ratios, zero or sub-permille ratios, or thresholds
+  `max_lane_id_exclusive`, non-finite ratios, zero or sub-permille ratios, or thresholds
   whose effective permille hysteresis has collapsed. A future
   `last_transition_height` is treated as an active cooldown and suppresses
   create/retire transitions without overwriting the marker. If the internal

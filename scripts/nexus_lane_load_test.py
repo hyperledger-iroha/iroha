@@ -60,7 +60,7 @@ def build_smoke_command(args: argparse.Namespace, script: Path) -> List[str]:
         args.python,
         str(script),
         "--lifecycle-file",
-        str(args.status_file),
+        str(args.lifecycle_file),
         "--metrics-file",
         str(args.metrics_file),
         "--min-da-quorum",
@@ -139,7 +139,7 @@ def write_manifest(args: argparse.Namespace, out_dir: Path, artefacts: Dict[str,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "lanes": args.lane_alias,
         "inputs": {
-            "status_file": str(args.status_file),
+            "lifecycle_file": str(args.lifecycle_file),
             "metrics_file": str(args.metrics_file),
             "telemetry_file": str(args.telemetry_file) if args.telemetry_file else None,
             "alias_migrations": args.alias_migrations,
@@ -179,8 +179,7 @@ def parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--lifecycle-file",
-        "--status-file",
-        dest="status_file",
+        dest="lifecycle_file",
         required=True,
         type=Path,
         help="Recorded /v1/nexus/lifecycle JSON payload.",

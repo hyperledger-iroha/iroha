@@ -807,7 +807,6 @@ mod tests {
                 p2p_no_proxy: Vec::new(),
                 p2p_proxy_tls_verify: true,
                 p2p_proxy_tls_pinned_cert_der_base64: None,
-                scion: iroha_config::parameters::actual::ScionConfig::default(),
                 quic_enabled: false,
                 quic_datagrams_enabled: defaults::network::QUIC_DATAGRAMS_ENABLED,
                 quic_datagram_max_payload_bytes: defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES
@@ -1058,7 +1057,8 @@ mod tests {
                     dedupe_ttl: std::time::Duration::from_secs(60),
                     dedupe_cap: 1024,
                     relay_enabled: false,
-                    relay_strategy: "broadcast",
+                    relay_strategy:
+                        iroha_config::parameters::actual::ConnectRelayStrategy::Broadcast,
                     p2p_ttl_hops: 0,
                 },
                 iso_bridge: IsoBridge {
@@ -1214,7 +1214,6 @@ mod tests {
                     .expect("non-zero push topics cap"),
                     fcm_project_id: None,
                     fcm_service_account_path: None,
-                    fcm_api_key: None,
                     apns_environment:
                         iroha_config::parameters::defaults::torii::PUSH_APNS_ENVIRONMENT.to_string(),
                     apns_topic: None,
@@ -1222,7 +1221,6 @@ mod tests {
                     apns_key_id: None,
                     apns_private_key_path: None,
                     apns_endpoint: None,
-                    apns_auth_token: None,
                 },
             },
             soracloud_runtime: iroha_config::parameters::actual::SoracloudRuntime::default(),
@@ -1302,8 +1300,6 @@ mod tests {
                     iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_SCHEDULER_INPUTS,
                 debug_trace_tx_eval:
                     iroha_config::parameters::defaults::pipeline::DEBUG_TRACE_TX_EVAL,
-                signature_batch_max:
-                    iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX,
                 signature_batch_max_ed25519:
                     iroha_config::parameters::defaults::pipeline::SIGNATURE_BATCH_MAX_ED25519,
                 signature_batch_max_secp256k1:
@@ -1702,6 +1698,15 @@ mod tests {
                     iroha_config::parameters::defaults::governance::PARLIAMENT_ALTERNATE_SIZE,
                 parliament_quorum_bps:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_QUORUM_BPS,
+                parliament_invitation_phase_blocks:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_INVITATION_PHASE_BLOCKS,
+                parliament_public_finding_phase_blocks:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_PUBLIC_FINDING_PHASE_BLOCKS,
+                parliament_timed_ovn:
+                    iroha_config::parameters::actual::ParliamentTimedOvn::default(),
+                parliament_tle_partial_release_signer_provider_handle: None,
+                parliament_tle_partial_release_signer_provider_revision: None,
+                parliament_tle_partial_release_signer_provider_policy_digest: None,
                 rules_committee_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_RULES_COMMITTEE_SIZE,
                 agenda_council_size:
@@ -1710,24 +1715,18 @@ mod tests {
                     iroha_config::parameters::defaults::governance::PARLIAMENT_INTEREST_PANEL_SIZE,
                 review_panel_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_REVIEW_PANEL_SIZE,
+                coordination_council_size:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_COORDINATION_COUNCIL_SIZE,
                 policy_jury_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_POLICY_JURY_SIZE,
+                confirmation_jury_size:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_CONFIRMATION_JURY_SIZE,
                 oversight_committee_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_OVERSIGHT_COMMITTEE_SIZE,
+                mpc_committee_size:
+                    iroha_config::parameters::defaults::governance::PARLIAMENT_MPC_COMMITTEE_SIZE,
                 fma_committee_size:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_FMA_COMMITTEE_SIZE,
-                pipeline_study_sla_blocks:
-                    iroha_config::parameters::defaults::governance::PIPELINE_STUDY_SLA_BLOCKS,
-                pipeline_review_sla_blocks:
-                    iroha_config::parameters::defaults::governance::PIPELINE_REVIEW_SLA_BLOCKS,
-                pipeline_decision_sla_blocks:
-                    iroha_config::parameters::defaults::governance::PIPELINE_DECISION_SLA_BLOCKS,
-                pipeline_enactment_sla_blocks:
-                    iroha_config::parameters::defaults::governance::PIPELINE_ENACTMENT_SLA_BLOCKS,
-                pipeline_rules_sla_blocks:
-                    iroha_config::parameters::defaults::governance::PIPELINE_RULES_SLA_BLOCKS,
-                pipeline_agenda_sla_blocks:
-                    iroha_config::parameters::defaults::governance::PIPELINE_AGENDA_SLA_BLOCKS,
             },
             nts: iroha_config::parameters::actual::Nts {
                 sample_interval: iroha_config::parameters::defaults::time::NTS_SAMPLE_INTERVAL,

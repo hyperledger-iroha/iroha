@@ -11,31 +11,51 @@
 //! - JSON parsing uses Norito's serde wrappers via the `NoritoJson` extractor.
 //! - Keep responses stable and explicit; map input errors to 400.
 use crate::{
-    JsonBody, NoritoJson, NoritoJsonWithBytes, NoritoQuery,
+    JsonBody, NoritoBody, NoritoJson, NoritoJsonWithBytes, NoritoQuery,
     json_macros::{JsonDeserialize, JsonSerialize},
     routing::{MaybeTelemetry, parse_account_literal_with_state},
 };
 use base64::Engine as _;
 use core::str::FromStr;
 use iroha_core::{
+    governance::parliament::ParliamentDecisionModeV1,
+    kura::Kura,
     smartcontracts::Execute as _,
     state::{StateReadOnly, WorldReadOnly},
 };
-use iroha_crypto::blake2::{Blake2b512, digest::Digest};
 use iroha_data_model::{
-    governance::types::{AtWindow, ParliamentBody},
-    isi::governance::{CouncilDerivationKind, ParliamentDecision},
+    governance::types::{
+        AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
+        ParliamentNoResultKindV1, ProposalContentId, ProposalKind, SccpRouteGovernanceProposal,
+    },
+    isi::governance::CouncilDerivationKind,
     ministry::{AgendaProposalRecordV1, AgendaProposalV1},
     smart_contract::manifest::{EntryPointKind, ManifestProvenance},
-    validation_fee::{
-        VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1, ValidationFeePlainElectorateEligibilityRuleV1,
-        ValidationFeePlainElectorateRulesV1,
-    },
 };
 use iroha_primitives::numeric::Quantity;
+use iroha_torii_shared::governance_proposal_api::{
+    DeployContractProposalDraftRequestV1, DeployContractProposalDraftResponseV1,
+    GovernanceProposalInstructionDraftV1, SccpRouteGovernanceProposalDraftRequestV1,
+    SccpRouteGovernanceProposalDraftResponseV1,
+};
+use iroha_torii_shared::parliament_api::{
+    PARLIAMENT_API_VERSION_V1, PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_FINALITY_CHAIN_BYTES_V1,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_RESPONSE_BYTES_V1,
+    PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1, ParliamentAttemptDraftRequestV1,
+    ParliamentAttemptDraftResponseV1, ParliamentAttemptReadResponseV1,
+    ParliamentBodyStateProjectionV1, ParliamentDecisionModeProjectionV1,
+    ParliamentInstructionDraftV1, ParliamentTimedOvnCastingContextResponseV1,
+    ParliamentTimedOvnCastingPhaseProjectionV1, ParliamentTimedOvnCastingProofRequestV1,
+    ParliamentTimedOvnCastingProofResponseV1, ParliamentTimedOvnReleaseIdentityProjectionV1,
+    ParliamentTimedOvnSessionProjectionV1, ParliamentTleAdaptiveDealerCommitmentV1,
+    ParliamentTleAdaptivePublicShareV1, ParliamentTleKeySessionBindingV1,
+    ParliamentTleReleaseContextResponseV1, ParliamentTransitionDraftRequestV1,
+    ParliamentTransitionDraftResponseV1, RequiredParliamentBodyProjectionV1,
+    parliament_timed_ovn_casting_proof_page_tip,
+};
 use mv::storage::StorageReadOnly;
 use norito::{
-    codec::Encode as _,
     derive::{NoritoDeserialize, NoritoSerialize},
     json,
 };
@@ -47,148 +67,7 @@ const CONTEXT_GOV_BALLOT_PLAIN_OWNER: &str = "/v1/gov/ballots/plain#owner";
 const CONTEXT_GOV_PROTECTED_AUTHORITY: &str = "/v1/gov/protected-namespaces#authority";
 const CONTEXT_MINISTRY_AGENDA_DRAFT_AUTHORITY: &str =
     "/v1/ministry/agenda/proposals/draft#authority";
-const CONTEXT_GOV_PARLIAMENT_BALLOT_AUTHORITY: &str = "/v1/gov/parliament/ballots#authority";
 use std::{collections::BTreeSet, sync::Arc};
-#[derive(Debug, JsonDeserialize, JsonSerialize, Clone, Copy)]
-#[norito(deny_unknown_fields)]
-/// Inclusive height window used for governance scheduling.
-///
-/// Both bounds are block heights; handlers treat missing windows as
-/// implementation-defined defaults appropriate for the action.
-pub struct AtWindowDto {
-    /// Lower bound (inclusive) in blocks.
-    pub lower: u64,
-    /// Upper bound (inclusive) in blocks.
-    pub upper: u64,
-}
-impl norito::core::NoritoSerialize for AtWindowDto {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let tuple = (self.lower, self.upper);
-        <(u64, u64) as norito::core::NoritoSerialize>::serialize(&tuple, writer)
-    }
-}
-impl<'de> norito::core::NoritoDeserialize<'de> for AtWindowDto {
-    fn try_deserialize(
-        archived: &'de norito::core::Archived<AtWindowDto>,
-    ) -> Result<Self, norito::core::Error> {
-        let archived_tuple: &norito::core::Archived<(u64, u64)> = archived.cast();
-        let (lower, upper) =
-            <(u64, u64) as norito::core::NoritoDeserialize>::try_deserialize(archived_tuple)?;
-        Ok(Self { lower, upper })
-    }
-    fn deserialize(archived: &'de norito::core::Archived<AtWindowDto>) -> Self {
-        Self::try_deserialize(archived)
-            .expect("AtWindowDto should deserialize from (lower, upper) tuple")
-    }
-}
-impl norito::core::DecodeFromSlice<'_> for AtWindowDto {
-    fn decode_from_slice(bytes: &[u8]) -> Result<(Self, usize), norito::core::Error> {
-        let ((lower, upper), used) =
-            <(u64, u64) as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-        Ok((Self { lower, upper }, used))
-    }
-}
-#[derive(Debug, JsonDeserialize, JsonSerialize)]
-#[norito(deny_unknown_fields)]
-/// Request body for proposing deployment of IVM bytecode via governance.
-///
-/// All hashes are 32-byte hex, with or without `0x` prefix.
-pub struct ProposeDeployContractDto {
-    /// Optional canonical contract address targeted by the proposal.
-    #[norito(default)]
-    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
-    /// Optional on-chain contract alias resolved to the canonical contract address.
-    #[norito(default)]
-    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
-    /// Exact first-release ABI version (`"1"`).
-    pub abi_version: String,
-    /// Deterministic code hash (blake2b-32; prefixed or raw hex)
-    pub code_hash: String,
-    /// Deterministic ABI hash (blake2b-32; prefixed or raw hex)
-    pub abi_hash: String,
-    /// Optional enactment window override (inclusive)
-    pub window: Option<AtWindowDto>,
-    /// Optional exact voting mode (`Zk` or `Plain`; defaults to `Zk`).
-    #[norito(default)]
-    pub mode: Option<iroha_data_model::isi::governance::VotingMode>,
-    /// Optional manifest provenance (public key + signature over the manifest payload).
-    #[norito(default)]
-    pub manifest_provenance: Option<ManifestProvenance>,
-}
-impl norito::core::NoritoSerialize for ProposeDeployContractDto {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let value = norito::json::to_value(self)
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        let json = norito::json::to_string(&value)
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        <String as norito::core::NoritoSerialize>::serialize(&json, writer)
-    }
-}
-impl<'de> norito::core::NoritoDeserialize<'de> for ProposeDeployContractDto {
-    fn try_deserialize(
-        archived: &'de norito::core::Archived<ProposeDeployContractDto>,
-    ) -> Result<Self, norito::core::Error> {
-        let archived_json: &norito::core::Archived<String> = archived.cast();
-        let json = <String as norito::core::NoritoDeserialize>::try_deserialize(archived_json)?;
-        norito::json::from_str(&json).map_err(|err| norito::core::Error::Message(err.to_string()))
-    }
-    fn deserialize(archived: &'de norito::core::Archived<ProposeDeployContractDto>) -> Self {
-        Self::try_deserialize(archived)
-            .expect("ProposeDeployContractDto should deserialize from JSON string")
-    }
-}
-/// Response body for a deploy-contract proposal
-#[derive(Debug, JsonSerialize)]
-pub struct ProposeDeployContractResponse {
-    pub ok: bool,
-    /// Deterministic 32-byte BLAKE2b proposal id, encoded as lowercase hex.
-    pub proposal_id: String,
-    /// Optional transaction skeleton for clients to sign and submit
-    pub tx_instructions: Vec<TxInstr>,
-}
-#[derive(Debug, JsonDeserialize, JsonSerialize)]
-#[norito(deny_unknown_fields)]
-/// Request body for proposing one closed SCCP registry action via governance.
-pub struct ProposeSccpRouteGovernanceDto {
-    /// Atomic closed registry action to apply if governance enacts the proposal.
-    pub action: iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
-    /// Optional enactment window override (inclusive).
-    pub window: Option<AtWindowDto>,
-    /// Optional exact voting mode (default `Zk`).
-    #[norito(default)]
-    pub mode: Option<iroha_data_model::isi::governance::VotingMode>,
-}
-impl norito::core::NoritoSerialize for ProposeSccpRouteGovernanceDto {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let value = norito::json::to_value(self)
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        let json = norito::json::to_string(&value)
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        <String as norito::core::NoritoSerialize>::serialize(&json, writer)
-    }
-}
-impl<'de> norito::core::NoritoDeserialize<'de> for ProposeSccpRouteGovernanceDto {
-    fn try_deserialize(
-        archived: &'de norito::core::Archived<ProposeSccpRouteGovernanceDto>,
-    ) -> Result<Self, norito::core::Error> {
-        let archived_json: &norito::core::Archived<String> = archived.cast();
-        let json = <String as norito::core::NoritoDeserialize>::try_deserialize(archived_json)?;
-        norito::json::from_str(&json).map_err(|err| norito::core::Error::Message(err.to_string()))
-    }
-    fn deserialize(archived: &'de norito::core::Archived<ProposeSccpRouteGovernanceDto>) -> Self {
-        Self::try_deserialize(archived)
-            .expect("ProposeSccpRouteGovernanceDto should deserialize from JSON string")
-    }
-}
-/// Response body for an SCCP route-governance proposal.
-#[derive(Debug, JsonSerialize)]
-pub struct ProposeSccpRouteGovernanceResponse {
-    pub ok: bool,
-    /// Deterministic 32-byte BLAKE2b proposal id, encoded as lowercase hex.
-    pub proposal_id: String,
-    /// Optional transaction skeleton for clients to sign and submit.
-    pub tx_instructions: Vec<TxInstr>,
-}
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Request body for drafting a Ministry agenda proposal submission transaction.
@@ -245,43 +124,6 @@ pub struct PlainBallotDto {
     pub duration_blocks: String,
     /// One of: "Aye" | "Nay" | "Abstain"
     pub direction: String,
-}
-#[derive(Debug, JsonDeserialize, JsonSerialize)]
-#[norito(deny_unknown_fields)]
-/// Request body for drafting an equal signed Parliament body ballot.
-pub struct ParliamentBallotDto {
-    /// Authority as canonical I105 or on-chain account alias.
-    pub authority: String,
-    /// Exact genesis-derived network to build the transaction skeleton for.
-    pub network_id: iroha_data_model::NetworkId,
-    /// Proposal id as 32-byte hex, optionally prefixed with `0x` or `blake2b32:`.
-    pub proposal_id: String,
-    /// Parliament body casting the stage ballot.
-    pub body: ParliamentBody,
-    /// Equal citizen decision.
-    pub decision: ParliamentDecision,
-}
-impl norito::core::NoritoSerialize for ParliamentBallotDto {
-    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let value = norito::json::to_value(self)
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        let json = norito::json::to_string(&value)
-            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
-        <String as norito::core::NoritoSerialize>::serialize(&json, writer)
-    }
-}
-impl<'de> norito::core::NoritoDeserialize<'de> for ParliamentBallotDto {
-    fn try_deserialize(
-        archived: &'de norito::core::Archived<ParliamentBallotDto>,
-    ) -> Result<Self, norito::core::Error> {
-        let archived_json: &norito::core::Archived<String> = archived.cast();
-        let json = <String as norito::core::NoritoDeserialize>::try_deserialize(archived_json)?;
-        norito::json::from_str(&json).map_err(|err| norito::core::Error::Message(err.to_string()))
-    }
-    fn deserialize(archived: &'de norito::core::Archived<ParliamentBallotDto>) -> Self {
-        Self::try_deserialize(archived)
-            .expect("ParliamentBallotDto should deserialize from JSON string")
-    }
 }
 impl norito::core::NoritoSerialize for PlainBallotDto {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
@@ -432,6 +274,38 @@ fn validate_governance_selector_v1(field: &str, value: &str) -> Result<(), Strin
     }
     Ok(())
 }
+
+fn is_stored_typed_proposal_fingerprint(state: &iroha_core::state::State, selector: &str) -> bool {
+    if selector.len() != 64
+        || !selector
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return false;
+    }
+    let mut proposal_id = [0_u8; 32];
+    if hex::decode_to_slice(selector, &mut proposal_id).is_err() {
+        return false;
+    }
+    state
+        .world_view()
+        .governance_proposals()
+        .get(&proposal_id)
+        .is_some()
+}
+
+fn reject_typed_proposal_ballot_selector(
+    state: &iroha_core::state::State,
+    selector: &str,
+) -> Result<(), String> {
+    if is_stored_typed_proposal_fingerprint(state, selector) {
+        return Err(
+            "typed proposal fingerprints use the authenticated Parliament lifecycle, not standalone referendum ballots"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
 fn parse_exact_lower_hex32_path(field: &str, value: &str) -> Result<[u8; 32], crate::Error> {
     if value.len() != 64
         || !value
@@ -538,6 +412,9 @@ pub async fn handle_gov_ballot_zk_v1(
     if let Err(reason) = validate_governance_selector_v1("election_id", &body.election_id) {
         return Ok(ballot_rejection(&reason));
     }
+    if let Err(reason) = reject_typed_proposal_ballot_selector(state.as_ref(), &body.election_id) {
+        return Ok(ballot_rejection(&reason));
+    }
     // Minimal size check for b64
     if base64::engine::general_purpose::STANDARD
         .decode(body.envelope_b64.as_bytes())
@@ -563,6 +440,9 @@ pub async fn handle_gov_ballot_zk_v1(
     if let Some(owner) = &body.owner {
         if let Err(reason) = ensure_owner_canonical(owner) {
             return Ok(ballot_rejection(&reason));
+        }
+        if owner != &authority_id.to_string() {
+            return Ok(ballot_rejection("owner must equal authority"));
         }
     }
     if let Err(reason) = validate_optional_ballot_direction(body.direction.as_deref()) {
@@ -649,6 +529,9 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
     if let Err(reason) = validate_governance_selector_v1("election_id", &body.election_id) {
         return Ok(ballot_rejection(&reason));
     }
+    if let Err(reason) = reject_typed_proposal_ballot_selector(state.as_ref(), &body.election_id) {
+        return Ok(ballot_rejection(&reason));
+    }
     if body.ballot.envelope_bytes.is_empty() {
         return Ok(JsonBody(BallotSubmitResponse {
             ok: false,
@@ -664,6 +547,14 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         return Ok(ballot_rejection(
             "lock hints must include owner, amount, duration_blocks",
         ));
+    }
+    if body
+        .ballot
+        .owner
+        .as_ref()
+        .is_some_and(|owner| owner != &authority_id)
+    {
+        return Ok(ballot_rejection("owner must equal authority"));
     }
     if let Err(reason) = validate_optional_ballot_direction(body.ballot.direction.as_deref()) {
         return Ok(ballot_rejection(&reason));
@@ -754,30 +645,7 @@ pub struct CitizenCountResponse {
 pub const GOVERNANCE_CAPABILITIES_SCHEMA_V1: &str = "iroha.governance.capabilities.v1";
 /// Current strict governance readiness projection version.
 pub const GOVERNANCE_CAPABILITIES_VERSION_V1: u16 = 1;
-/// Project the exact first-release validation-fee PLAIN electorate contract
-/// from the active governance configuration.
-#[must_use]
-pub(crate) fn validation_fee_plain_electorate_rules(
-    gov: &iroha_config::parameters::actual::Governance,
-) -> ValidationFeePlainElectorateRulesV1 {
-    ValidationFeePlainElectorateRulesV1 {
-        voting_asset_id: gov.voting_asset_id.clone(),
-        bond_escrow_account: gov.bond_escrow_account.clone(),
-        slash_receiver_account: gov.slash_receiver_account.clone(),
-        ballot_amount: gov.min_bond_amount.clone(),
-        ballot_duration_blocks: gov.window_span,
-        citizenship_amount: gov.citizenship_bond_amount.clone(),
-        max_members: VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1,
-        conviction_step_blocks: gov.conviction_step_blocks,
-        max_conviction: gov.max_conviction,
-        min_turnout: gov.min_turnout,
-        approval_threshold_numerator: gov.approval_threshold_q_num,
-        approval_threshold_denominator: gov.approval_threshold_q_den,
-        eligibility_rule:
-            ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
-    }
-}
-/// Configured target sizes for all seven SORA Parliament bodies.
+/// Configured target sizes for all ten SORA Parliament bodies.
 #[derive(Debug, Clone, JsonSerialize)]
 pub struct GovernanceTargetBodySizesV1 {
     /// Rules Committee target seats.
@@ -788,12 +656,18 @@ pub struct GovernanceTargetBodySizesV1 {
     pub interest_panel: String,
     /// Review Panel target seats.
     pub review_panel: String,
-    /// Policy Jury target seats.
-    pub policy_jury: String,
+    /// Coordination Council target seats.
+    pub coordination_council: String,
+    /// Monetary Policy Committee target seats.
+    pub mpc_committee: String,
+    /// Financial Markets Authority Committee target seats.
+    pub fma_committee: String,
     /// Oversight Committee target seats.
     pub oversight_committee: String,
-    /// FMA Committee target seats.
-    pub fma_committee: String,
+    /// Policy Jury target seats.
+    pub policy_jury: String,
+    /// Maximum Confirmation Jury target seats.
+    pub confirmation_jury: String,
 }
 /// Public fail-closed governance configuration and route projection.
 #[derive(Debug, JsonSerialize)]
@@ -814,14 +688,16 @@ pub struct GovernanceCapabilitiesV1 {
     pub data_model_version: String,
     /// Exact configured governance approval mode.
     pub approval_mode: String,
-    /// Whether first-release PLAIN voting is enabled.
-    pub plain_voting_enabled: bool,
-    /// Whether PLAIN referenda deterministically finalize after their inclusive end height.
-    pub auto_finalize_plain: bool,
-    /// Exact scope in which deterministic PLAIN auto-finalization remains enabled.
-    pub auto_finalize_plain_scope: String,
-    /// Validation-fee PLAIN referenda require an explicit typed finalization instruction.
-    pub validation_fee_plain_requires_explicit_finalization: bool,
+    /// Mandatory private binding-ballot protocol.
+    pub private_ballot_protocol: String,
+    /// Whether every binding Parliament ballot is private and timed-opened.
+    pub mandatory_private_ballots: bool,
+    /// Whether proposal-backed referendum ballot routes may replace Parliament.
+    pub proposal_backed_referendum_ballots_supported: bool,
+    /// Whether explicitly standalone PLAIN referenda retain their separate route.
+    pub standalone_plain_ballots_supported: bool,
+    /// Whether explicitly standalone ZK referenda retain their separate route.
+    pub standalone_zk_ballots_supported: bool,
     /// Citizenship bond asset.
     pub citizenship_asset_id: String,
     /// Exact citizenship bond as a decimal string.
@@ -834,24 +710,24 @@ pub struct GovernanceCapabilitiesV1 {
     pub min_bond_amount: String,
     /// Account that custodies citizen ballot bonds.
     pub bond_escrow_account: String,
-    /// Exact immutable PLAIN electorate rules required by validation-fee proposals.
-    pub validation_fee_plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
-    /// Conviction step in blocks.
-    pub conviction_step_blocks: String,
-    /// Maximum conviction multiplier.
-    pub max_conviction: String,
-    /// Proposal-to-voting minimum delay in blocks.
+    /// Certification-to-enactment delay in blocks.
     pub min_enactment_delay: String,
-    /// Inclusive referendum span in blocks.
-    pub window_span: String,
-    /// Exact minimum turnout as a decimal string.
-    pub min_turnout: String,
-    /// Approval fraction numerator.
-    pub approval_threshold_numerator: String,
-    /// Approval fraction denominator.
-    pub approval_threshold_denominator: String,
-    /// Parliament approval quorum in basis points.
-    pub parliament_quorum_bps: String,
+    /// Invitation-response window in blocks.
+    pub invitation_phase_blocks: String,
+    /// Timed-OVN proof-registration window in blocks.
+    pub registration_phase_blocks: String,
+    /// Timed-OVN authenticated-dropout/survivor window in blocks.
+    pub survivor_freeze_phase_blocks: String,
+    /// Timed-OVN masked-ballot commitment window in blocks.
+    pub commitment_phase_blocks: String,
+    /// Delay from commitment close to threshold release in blocks.
+    pub release_delay_blocks: String,
+    /// Timed-OVN aggregate-opening window in blocks.
+    pub opening_phase_blocks: String,
+    /// Retry attempts permitted after the initial private ballot.
+    pub max_ballot_retries: String,
+    /// Hard participant/corpus entry bound.
+    pub max_corpus_entries: String,
     /// Configured targets; actual proposal rosters are capped by eligible citizens.
     pub target_body_sizes: GovernanceTargetBodySizesV1,
     /// Typed proposal kinds supported by the first release.
@@ -859,24 +735,7 @@ pub struct GovernanceCapabilitiesV1 {
     /// Canonical public governance routes supported by the node.
     pub supported_routes: Vec<String>,
 }
-fn governance_approval_mode(state: &iroha_core::state::State) -> String {
-    let catalog = state.nexus_snapshot().governance;
-    let configured = catalog
-        .default_module
-        .as_deref()
-        .and_then(|name| catalog.modules.get(name))
-        .and_then(|module| module.module_type.as_deref())
-        .or(catalog.default_module.as_deref())
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase()
-        .replace('-', "_");
-    if configured.contains("parliament") || configured.contains("sortition") {
-        "PARLIAMENT_SORTITION_JIT".to_owned()
-    } else {
-        "LEGACY_COUNCIL_EPOCH".to_owned()
-    }
-}
+const GOVERNANCE_APPROVAL_MODE_V1: &str = "PARLIAMENT_ATTEMPT_TIMED_OVN_V1";
 /// GET `/v1/gov/capabilities` — return strict public governance readiness.
 ///
 /// # Errors
@@ -892,7 +751,6 @@ pub async fn handle_gov_capabilities(
         ));
     }
     let gov = state.governance_snapshot();
-    let validation_fee_plain_electorate_rules = validation_fee_plain_electorate_rules(&gov);
     let world = state.world_view();
     Ok(JsonBody(GovernanceCapabilitiesV1 {
         schema: GOVERNANCE_CAPABILITIES_SCHEMA_V1.to_owned(),
@@ -904,50 +762,666 @@ pub async fn handle_gov_capabilities(
         network_prefix: iroha_data_model::account::address::chain_discriminant().to_string(),
         abi_version: world.abi_version().to_string(),
         data_model_version: iroha_data_model::DATA_MODEL_VERSION.to_string(),
-        approval_mode: governance_approval_mode(state.as_ref()),
-        plain_voting_enabled: gov.plain_voting_enabled,
-        auto_finalize_plain: true,
-        auto_finalize_plain_scope: "GENERIC_NON_VALIDATION_FEE_ONLY".to_owned(),
-        validation_fee_plain_requires_explicit_finalization: true,
+        approval_mode: GOVERNANCE_APPROVAL_MODE_V1.to_owned(),
+        private_ballot_protocol: "TIMED_OVN_TLE_THRESHOLD_BLS_V1".to_owned(),
+        mandatory_private_ballots: true,
+        proposal_backed_referendum_ballots_supported: false,
+        standalone_plain_ballots_supported: gov.plain_voting_enabled,
+        standalone_zk_ballots_supported: true,
         citizenship_asset_id: gov.citizenship_asset_id.to_string(),
         citizenship_bond_amount: gov.citizenship_bond_amount.to_string(),
         citizenship_escrow_account: gov.citizenship_escrow_account.to_string(),
         voting_asset_id: gov.voting_asset_id.to_string(),
         min_bond_amount: gov.min_bond_amount.to_string(),
         bond_escrow_account: gov.bond_escrow_account.to_string(),
-        validation_fee_plain_electorate_rules,
-        conviction_step_blocks: gov.conviction_step_blocks.to_string(),
-        max_conviction: gov.max_conviction.to_string(),
         min_enactment_delay: gov.min_enactment_delay.to_string(),
-        window_span: gov.window_span.to_string(),
-        min_turnout: gov.min_turnout.to_string(),
-        approval_threshold_numerator: gov.approval_threshold_q_num.to_string(),
-        approval_threshold_denominator: gov.approval_threshold_q_den.to_string(),
-        parliament_quorum_bps: gov.parliament_quorum_bps.to_string(),
+        invitation_phase_blocks: gov.parliament_invitation_phase_blocks.to_string(),
+        registration_phase_blocks: gov
+            .parliament_timed_ovn
+            .registration_phase_blocks
+            .to_string(),
+        survivor_freeze_phase_blocks: gov
+            .parliament_timed_ovn
+            .survivor_freeze_phase_blocks
+            .to_string(),
+        commitment_phase_blocks: gov.parliament_timed_ovn.commitment_phase_blocks.to_string(),
+        release_delay_blocks: gov.parliament_timed_ovn.release_delay_blocks.to_string(),
+        opening_phase_blocks: gov.parliament_timed_ovn.opening_phase_blocks.to_string(),
+        max_ballot_retries: gov.parliament_timed_ovn.max_ballot_retries.to_string(),
+        max_corpus_entries: gov.parliament_timed_ovn.max_corpus_entries.to_string(),
         target_body_sizes: GovernanceTargetBodySizesV1 {
             rules_committee: gov.rules_committee_size.to_string(),
             agenda_council: gov.agenda_council_size.to_string(),
             interest_panel: gov.interest_panel_size.to_string(),
             review_panel: gov.review_panel_size.to_string(),
-            policy_jury: gov.policy_jury_size.to_string(),
-            oversight_committee: gov.oversight_committee_size.to_string(),
+            coordination_council: gov.coordination_council_size.to_string(),
+            mpc_committee: gov.mpc_committee_size.to_string(),
             fma_committee: gov.fma_committee_size.to_string(),
+            oversight_committee: gov.oversight_committee_size.to_string(),
+            policy_jury: gov.policy_jury_size.to_string(),
+            confirmation_jury: gov.confirmation_jury_size.to_string(),
         },
         supported_proposal_kinds: vec![
+            "DEPLOY_CONTRACT".to_owned(),
+            "MUSUBI_REGISTRY_GOVERNANCE".to_owned(),
+            "RUNTIME_UPGRADE".to_owned(),
+            "SCCP_ROUTE_GOVERNANCE".to_owned(),
+            "SORAFS_PROVIDER_GOVERNANCE".to_owned(),
             "VALIDATION_FEE_PAYOUT_LIFECYCLE".to_owned(),
             "VALIDATION_FEE_POLICY".to_owned(),
         ],
         supported_routes: vec![
             "/v1/gov/capabilities".to_owned(),
             "/v1/gov/citizens/draft".to_owned(),
+            "/v1/gov/parliament/attempts/draft".to_owned(),
+            "/v1/gov/parliament/attempts/{governance_attempt_id}".to_owned(),
+            "/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof".to_owned(),
+            "/v1/gov/parliament/transitions/draft".to_owned(),
+            "/v1/gov/ballots/plain".to_owned(),
+            "/v1/gov/ballots/zk-v1".to_owned(),
+            "/v1/gov/ballots/zk-v1/ballot-proof".to_owned(),
             "/v1/validation-fee/proposals".to_owned(),
             "/v1/validation-fee/proposals/{proposal_id}".to_owned(),
             "/v1/validation-fee/proposals/draft".to_owned(),
-            "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft".to_owned(),
-            "/v1/gov/parliament/ballots".to_owned(),
-            "/v1/gov/ballots/plain".to_owned(),
-            "/v1/gov/enact".to_owned(),
         ],
+    }))
+}
+
+/// POST `/v1/gov/parliament/attempts/draft` — draft one canonical attempt creation.
+///
+/// Authentication is enforced by the route wrapper. The response is bound to
+/// the exact proposal and retry sequence and contains no signing material.
+///
+/// # Errors
+/// Returns a conversion error for an unsupported request version.
+pub async fn handle_gov_parliament_attempt_draft(
+    NoritoJson(body): NoritoJson<ParliamentAttemptDraftRequestV1>,
+) -> Result<JsonBody<ParliamentAttemptDraftResponseV1>, crate::Error> {
+    if body.version != PARLIAMENT_API_VERSION_V1 {
+        return Err(crate::routing::conversion_error(format!(
+            "unsupported Parliament attempt draft version {}; expected {}",
+            body.version, PARLIAMENT_API_VERSION_V1
+        )));
+    }
+    let instruction = iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1 {
+        proposal: body.proposal,
+        attempt_sequence: body.attempt_sequence,
+    };
+    let proposal_content_id = instruction.proposal_content_id();
+    let governance_attempt_id = instruction.governance_attempt_id();
+    let draft = tx_instr_from_box(instruction.into());
+    Ok(JsonBody(ParliamentAttemptDraftResponseV1 {
+        version: PARLIAMENT_API_VERSION_V1,
+        proposal_content_id,
+        governance_attempt_id,
+        tx_instructions: vec![ParliamentInstructionDraftV1 {
+            wire_id: draft.wire_id,
+            payload_hex: draft.payload_hex,
+        }],
+    }))
+}
+
+/// POST `/v1/gov/parliament/transitions/draft` — draft one closed transition.
+///
+/// The state-independent request bounds are checked before framing. Consensus
+/// still rechecks authority, state, phase, height, proof, roster, and
+/// certificate bindings when the locally signed instruction executes.
+///
+/// # Errors
+/// Returns a conversion error for an unsupported version or invalid static
+/// bound.
+pub async fn handle_gov_parliament_transition_draft(
+    NoritoJson(body): NoritoJson<ParliamentTransitionDraftRequestV1>,
+) -> Result<JsonBody<ParliamentTransitionDraftResponseV1>, crate::Error> {
+    body.validate_static()
+        .map_err(|reason| crate::routing::conversion_error(reason.to_owned()))?;
+    let transition_kind = body.transition.kind();
+    let transition_digest = body.transition.digest_v1();
+    let governance_attempt_id = body.governance_attempt_id;
+    let instruction = iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1 {
+        governance_attempt_id,
+        transition: body.transition,
+    };
+    let draft = tx_instr_from_box(instruction.into());
+    Ok(JsonBody(ParliamentTransitionDraftResponseV1 {
+        version: PARLIAMENT_API_VERSION_V1,
+        governance_attempt_id,
+        transition_kind,
+        transition_digest,
+        tx_instructions: vec![ParliamentInstructionDraftV1 {
+            wire_id: draft.wire_id,
+            payload_hex: draft.payload_hex,
+        }],
+    }))
+}
+
+/// GET `/v1/gov/parliament/attempts/{governance_attempt_id}` — read one attempt.
+///
+/// The typed summary and complete reducer bytes come from one committed query
+/// view. The payload is canonical Norito and never includes secret DKG shares,
+/// plaintext ballots, or a recovery fallback.
+///
+/// # Errors
+/// Returns a conversion error for a noncanonical identifier, a missing attempt,
+/// or a reducer payload exceeding the defensive response bound.
+pub async fn handle_gov_parliament_attempt_read(
+    state: Arc<iroha_core::state::State>,
+    governance_attempt_id: String,
+) -> Result<JsonBody<ParliamentAttemptReadResponseV1>, crate::Error> {
+    let governance_attempt_id = governance_attempt_id
+        .parse::<iroha_data_model::governance::types::GovernanceAttemptId>()
+        .map_err(|_| {
+            crate::routing::conversion_error(
+                "governance_attempt_id must be exactly 64 lowercase hexadecimal characters"
+                    .to_owned(),
+            )
+        })?;
+    if governance_attempt_id
+        .as_bytes()
+        .iter()
+        .all(|byte| *byte == 0)
+    {
+        return Err(crate::routing::conversion_error(
+            "governance_attempt_id must be non-zero".to_owned(),
+        ));
+    }
+    let view = state.query_view();
+    let attempt = view
+        .world()
+        .parliament_attempts()
+        .get(&governance_attempt_id)
+        .ok_or_else(|| {
+            crate::routing::conversion_error("Parliament governance attempt was not found".into())
+        })?;
+    let state_payload = norito::core::to_bytes_bounded(
+        attempt,
+        PARLIAMENT_ATTEMPT_READ_MAX_STATE_BYTES_V1,
+    )
+    .map_err(|_| {
+        crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
+            "Parliament attempt projection exceeds or violates the first-release framed Norito bound"
+                .into(),
+        ))
+    })?;
+    let required_bodies = attempt
+        .required_bodies()
+        .iter()
+        .map(|entry| RequiredParliamentBodyProjectionV1 {
+            body: entry.body,
+            decision_mode: match entry.decision_mode {
+                ParliamentDecisionModeV1::PublicFinding => {
+                    ParliamentDecisionModeProjectionV1::PublicFinding
+                }
+                ParliamentDecisionModeV1::HiddenBindingBallot => {
+                    ParliamentDecisionModeProjectionV1::HiddenBindingBallot
+                }
+            },
+        })
+        .collect::<Vec<_>>();
+    let body_states = attempt
+        .required_bodies()
+        .iter()
+        .map(|entry| {
+            let state = attempt.sealed_body_for_role(entry.body);
+            let ballot = state.and_then(|body| attempt.active_ballot_for_body(&body.instance().id));
+            let no_result_kind = state
+                .and_then(iroha_core::governance::parliament::ParliamentBodyStateV1::public_finding_no_result_kind)
+                .or_else(|| {
+                    ballot
+                        .and_then(iroha_core::governance::parliament::ParliamentBallotStateV1::failure_kind)
+                        .map(ParliamentNoResultKindV1::from)
+                });
+            let no_result_height = state
+                .and_then(iroha_core::governance::parliament::ParliamentBodyStateV1::public_finding_no_result_height)
+                .or_else(|| {
+                    ballot.and_then(
+                        iroha_core::governance::parliament::ParliamentBallotStateV1::failure_height,
+                    )
+                });
+            ParliamentBodyStateProjectionV1 {
+                body: entry.body,
+                body_instance_id: state.map(|body| body.instance().id),
+                status: state.map(|body| body.instance().status),
+                public_finding_opened_at_height: state
+                    .and_then(iroha_core::governance::parliament::ParliamentBodyStateV1::public_finding_opened_at_height),
+                public_finding_phase_blocks: state
+                    .and_then(iroha_core::governance::parliament::ParliamentBodyStateV1::public_finding_phase_blocks),
+                public_finding_deadline_height: state
+                    .and_then(iroha_core::governance::parliament::ParliamentBodyStateV1::public_finding_deadline_height),
+                no_result_kind,
+                no_result_height,
+            }
+        })
+        .collect();
+    Ok(JsonBody(ParliamentAttemptReadResponseV1 {
+        version: PARLIAMENT_API_VERSION_V1,
+        current_height: u64::try_from(view.height()).unwrap_or(u64::MAX),
+        attempt: attempt.attempt().clone(),
+        policy_version: attempt.policy_version(),
+        required_bodies,
+        body_states,
+        certificate: attempt.certificate().cloned(),
+        terminal_height: attempt.terminal_height(),
+        execution_failure_root: attempt.execution_failure_root(),
+        superseding_head: attempt.superseding_head(),
+        state_payload_hex: hex::encode(state_payload),
+    }))
+}
+
+fn project_parliament_tle_key_session_v1(
+    session: &iroha_core::tle_release::TleKeySessionPublicStateV1,
+) -> ParliamentTleKeySessionBindingV1 {
+    ParliamentTleKeySessionBindingV1 {
+        version: session.version,
+        key_session_id: session.key_session_id,
+        network_id: session.network_id,
+        roster_hash: session.roster_hash,
+        committee_size: session.committee_size,
+        threshold: session.threshold,
+        generator_h: session.generator_h,
+        generator_v: session.generator_v,
+        qualified_dealers: session.qualified_dealers.clone(),
+        qualified_dealer_commitments: session
+            .qualified_dealer_commitments
+            .iter()
+            .map(|dealer| ParliamentTleAdaptiveDealerCommitmentV1 {
+                dealer_index: dealer.dealer_index,
+                coefficient_commitments: dealer.coefficient_commitments.clone(),
+                constant_pok_commitment: dealer.constant_pok_commitment,
+                constant_pok_response: dealer.constant_pok_response,
+            })
+            .collect(),
+        dkg_event_hash: session.dkg_event_hash,
+        group_public_key: session.group_public_key,
+        public_shares: session
+            .public_shares
+            .iter()
+            .map(|share| ParliamentTleAdaptivePublicShareV1 {
+                index: share.index,
+                participant_hash: share.participant_hash,
+                public_key_share: share.public_key_share,
+            })
+            .collect(),
+        transcript_hash: session.transcript_hash,
+    }
+}
+
+fn project_parliament_timed_ovn_release_identity_v1(
+    identity: &iroha_core::governance::timed_ovn::TimedOvnReleaseIdentityPublicV1,
+) -> ParliamentTimedOvnReleaseIdentityProjectionV1 {
+    use iroha_data_model::governance::types::{
+        BallotAttemptId, BodyInstanceId, GovernanceAttemptId,
+    };
+
+    ParliamentTimedOvnReleaseIdentityProjectionV1 {
+        tle_key_session_id: identity.tle_key_session_id,
+        governance_attempt_id: GovernanceAttemptId::new(identity.governance_attempt_id),
+        body_instance_id: BodyInstanceId::new(identity.body_instance_id),
+        ballot_attempt_id: BallotAttemptId::new(identity.ballot_attempt_id),
+        survivor_corpus_root: identity.survivor_corpus_root,
+        no_recovery_root: identity.no_recovery_root,
+        target_finalized_height: identity.target_finalized_height,
+        parameter_hash: identity.parameter_hash,
+    }
+}
+
+/// GET `/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context`.
+///
+/// Core admits only the three pre-seal timed-OVN phases and replays the exact
+/// lifecycle and complete public TLE transcript before this projection is
+/// built. This node-local projection is diagnostic only and is never sufficient
+/// native-wallet or seed-unsealing input. Wallets consume the finality-bound
+/// casting-proof route, verify an externally pinned consensus chain, and replay
+/// its archive before touching secret material.
+///
+/// # Errors
+/// Returns a conversion error for a noncanonical identifier or unavailable,
+/// terminal, cross-bound, or replay-invalid committed state.
+pub fn handle_gov_parliament_timed_ovn_casting_context_read(
+    state: Arc<iroha_core::state::State>,
+    ballot_attempt_id: String,
+) -> Result<JsonBody<ParliamentTimedOvnCastingContextResponseV1>, crate::Error> {
+    use base64::Engine as _;
+    use iroha_core::tle_release::ParliamentTimedOvnCastingPhaseV1;
+    use iroha_data_model::governance::types::{
+        BallotAttemptId, BodyInstanceId, GovernanceAttemptId, ProposalContentId,
+    };
+
+    let ballot_attempt_id = ballot_attempt_id.parse::<BallotAttemptId>().map_err(|_| {
+        crate::routing::conversion_error(
+            "ballot_attempt_id must be exactly 64 lowercase hexadecimal characters".to_owned(),
+        )
+    })?;
+    if ballot_attempt_id.as_bytes().iter().all(|byte| *byte == 0) {
+        return Err(crate::routing::conversion_error(
+            "ballot_attempt_id must be non-zero".to_owned(),
+        ));
+    }
+
+    let view = state.query_view();
+    let context = iroha_core::tle_release::authorize_parliament_timed_ovn_casting_context_v1(
+        &view,
+        ballot_attempt_id,
+    )
+    .map_err(|error| {
+        crate::routing::conversion_error(format!(
+            "Parliament timed-OVN casting context is not authorized: {error}"
+        ))
+    })?;
+    let archive = context.archive_v1();
+    let archive_bytes = archive.to_canonical_bytes_v1().map_err(|error| {
+        crate::Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "authorized Parliament timed-OVN casting archive could not be framed: {error}"
+        )))
+    })?;
+    let session = context.session();
+    let phase = match context.phase() {
+        ParliamentTimedOvnCastingPhaseV1::Registered => {
+            ParliamentTimedOvnCastingPhaseProjectionV1::Registered
+        }
+        ParliamentTimedOvnCastingPhaseV1::RegistrationClosed => {
+            ParliamentTimedOvnCastingPhaseProjectionV1::RegistrationClosed
+        }
+        ParliamentTimedOvnCastingPhaseV1::SurvivorsFrozen => {
+            ParliamentTimedOvnCastingPhaseProjectionV1::SurvivorsFrozen
+        }
+    };
+    let response = ParliamentTimedOvnCastingContextResponseV1 {
+        version: PARLIAMENT_API_VERSION_V1,
+        current_height: context.finalized_height(),
+        phase,
+        session: ParliamentTimedOvnSessionProjectionV1 {
+            network_id: session.network_id,
+            proposal_content_id: ProposalContentId::new(session.proposal_content_id),
+            governance_attempt_id: GovernanceAttemptId::new(session.governance_attempt_id),
+            body_instance_id: BodyInstanceId::new(session.body_instance_id),
+            ballot_attempt_id: BallotAttemptId::new(session.ballot_attempt_id),
+            parameter_hash: session.parameter_hash,
+            tle_key_session_id: session.tle_key_session_id,
+            tle_key_transcript_hash: session.tle_key_transcript_hash,
+            tle_master_public_key: session.tle_master_public_key,
+        },
+        registration_opened_at_finalized_height: context.registration_opened_at_finalized_height(),
+        target_finalized_height: context.target_finalized_height(),
+        tle_key_session: project_parliament_tle_key_session_v1(
+            context.tle_key_session().public_state(),
+        ),
+        registration_records_hex: context
+            .registration_records()
+            .iter()
+            .map(hex::encode)
+            .collect(),
+        survivor_participant_hashes: context.survivor_participant_hashes().map(<[_]>::to_vec),
+        release_identity: context
+            .release_identity()
+            .map(project_parliament_timed_ovn_release_identity_v1),
+        archive_norito_base64: base64::engine::general_purpose::STANDARD.encode(archive_bytes),
+    };
+    response
+        .validate_for_ballot(ballot_attempt_id)
+        .map_err(|reason| {
+            crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
+                reason.into(),
+            ))
+        })?;
+    Ok(JsonBody(response))
+}
+
+/// POST `/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof`.
+///
+/// A bounded intermediate page carries only consecutive finality proofs for
+/// durable checkpoint promotion. The terminal page additionally carries the
+/// replay-validated public archive, its exact compact binding, membership in
+/// the per-block casting root, and the fixed ordinary-write witness.
+///
+/// # Errors
+/// Returns a conversion error for an invalid request/identifier and a stable
+/// service error when finalized proof material is unavailable or inconsistent.
+pub fn handle_gov_parliament_timed_ovn_casting_proof(
+    state: Arc<iroha_core::state::State>,
+    kura: Arc<Kura>,
+    ballot_attempt_id: String,
+    request: ParliamentTimedOvnCastingProofRequestV1,
+) -> Result<NoritoBody<ParliamentTimedOvnCastingProofResponseV1>, crate::Error> {
+    use iroha_data_model::governance::types::BallotAttemptId;
+
+    let inconsistent = |message: String| crate::Error::AppServiceUnavailable {
+        code: "parliament_timed_ovn_casting_proof_inconsistent",
+        message,
+    };
+    if request.version != PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1
+        || request.trusted_checkpoint_height == 0
+    {
+        return Err(crate::routing::conversion_error(
+            "Parliament casting proof version or checkpoint height is invalid".to_owned(),
+        ));
+    }
+    let ballot_attempt_id = ballot_attempt_id.parse::<BallotAttemptId>().map_err(|_| {
+        crate::routing::conversion_error(
+            "ballot_attempt_id must be exactly 64 lowercase hexadecimal characters".to_owned(),
+        )
+    })?;
+    if ballot_attempt_id.as_bytes().iter().all(|byte| *byte == 0) {
+        return Err(crate::routing::conversion_error(
+            "ballot_attempt_id must be non-zero".to_owned(),
+        ));
+    }
+
+    let state_view = state.query_view();
+    let observed_ledger_tip_height = u64::try_from(state_view.height()).map_err(|_| {
+        inconsistent("ledger height does not fit the Parliament casting proof".to_owned())
+    })?;
+    if request.trusted_checkpoint_height > observed_ledger_tip_height {
+        return Err(crate::routing::conversion_error(
+            "trusted checkpoint is newer than the observed ledger tip".to_owned(),
+        ));
+    }
+    let evaluated_height = parliament_timed_ovn_casting_proof_page_tip(
+        request.trusted_checkpoint_height,
+        observed_ledger_tip_height,
+    )
+    .ok_or_else(|| {
+        crate::routing::conversion_error(
+            "trusted checkpoint cannot begin a Parliament casting finality page".to_owned(),
+        )
+    })?;
+
+    let terminal_archive = if evaluated_height == observed_ledger_tip_height {
+        let authorized =
+            iroha_core::tle_release::authorize_parliament_timed_ovn_casting_context_v1(
+                &state_view,
+                ballot_attempt_id,
+            )
+            .map_err(|error| {
+                crate::routing::conversion_error(format!(
+                    "Parliament timed-OVN casting context is not authorized: {error}"
+                ))
+            })?;
+        let archive = authorized.archive_v1();
+        let archive_bytes = archive.to_canonical_bytes_v1().map_err(|error| {
+            inconsistent(format!(
+                "authorized Parliament casting archive could not be framed: {error}"
+            ))
+        })?;
+        Some((archive, archive_bytes))
+    } else {
+        None
+    };
+    drop(state_view);
+
+    let terminal_fields = if let Some((archive, archive_bytes)) = terminal_archive {
+        let proof = kura
+            .parliament_timed_ovn_finalized_casting_proof_v1(evaluated_height, ballot_attempt_id)
+            .map_err(|error| {
+                inconsistent(format!(
+                    "evaluated Parliament casting proof is invalid: {error}"
+                ))
+            })?
+            .ok_or_else(|| {
+                inconsistent(
+                    "authorized ballot has no retained finalized casting membership proof"
+                        .to_owned(),
+                )
+            })?;
+        let validated_archive = archive.validate_v1().map_err(|error| {
+            inconsistent(format!(
+                "authorized Parliament casting archive failed replay: {error}"
+            ))
+        })?;
+        if !validated_archive.matches_compact_binding_v1(&proof.binding) {
+            return Err(inconsistent(
+                "authorized casting archive differs from its finalized compact binding".to_owned(),
+            ));
+        }
+        (
+            Some(archive_bytes),
+            Some(proof.binding),
+            Some(proof.membership_proof),
+            Some(proof.snapshot_witness),
+        )
+    } else {
+        (None, None, None, None)
+    };
+
+    let proof_count = evaluated_height
+        .checked_sub(request.trusted_checkpoint_height)
+        .and_then(|gap| gap.checked_add(1))
+        .and_then(|count| usize::try_from(count).ok())
+        .ok_or_else(|| {
+            crate::routing::conversion_error(
+                "trusted checkpoint is newer than the evaluated casting block".to_owned(),
+            )
+        })?;
+    let mut finality_chain = Vec::with_capacity(proof_count);
+    for height in request.trusted_checkpoint_height..=evaluated_height {
+        finality_chain.push(
+            iroha_core::bridge::build_finality_proof(state.as_ref(), height).map_err(|error| {
+                inconsistent(format!(
+                    "Parliament casting finality proof at height {height} is unavailable: {error}"
+                ))
+            })?,
+        );
+    }
+    let finality_encoded_bytes =
+        norito::core::encoded_frame_len(&finality_chain).map_err(|error| {
+            inconsistent(format!(
+                "Parliament casting finality chain cannot be encoded: {error}"
+            ))
+        })?;
+    if finality_encoded_bytes > PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_FINALITY_CHAIN_BYTES_V1 {
+        return Err(crate::Error::AppConflict {
+            code: "parliament_timed_ovn_casting_finality_page_too_large",
+            message: "The bounded Parliament casting finality page exceeds its byte budget."
+                .to_owned(),
+        });
+    }
+    let evaluated = finality_chain
+        .last()
+        .ok_or_else(|| inconsistent("Parliament casting finality chain is empty".to_owned()))?;
+    let evaluated_context_id = evaluated.finality_artifact.context_id();
+    let evaluated_block_hash = evaluated.finality_artifact.block_hash;
+    let response = ParliamentTimedOvnCastingProofResponseV1 {
+        version: PARLIAMENT_TIMED_OVN_CASTING_PROOF_VERSION_V1,
+        casting_context_archive: terminal_fields.0,
+        casting_context_binding: terminal_fields.1,
+        context_membership_proof: terminal_fields.2,
+        casting_witness: terminal_fields.3,
+        finality_chain,
+        evaluated_context_id,
+        evaluated_block_height: evaluated_height,
+        evaluated_block_hash: hex::encode(evaluated_block_hash.as_ref()),
+        observed_ledger_tip_height,
+        more_available: evaluated_height < observed_ledger_tip_height,
+    };
+    let trusted = response
+        .finality_chain
+        .first()
+        .expect("constructed Parliament casting finality chain is non-empty");
+    response
+        .verify_consensus_page_against(
+            trusted.finality_artifact.height_context.network_id,
+            request.trusted_checkpoint_height,
+            *trusted.finality_artifact.context_id().0.as_ref(),
+            ballot_attempt_id,
+        )
+        .map_err(|error| inconsistent(format!("constructed casting proof failed: {error}")))?;
+    let response_encoded_bytes = norito::core::encoded_frame_len(&response).map_err(|error| {
+        inconsistent(format!(
+            "Parliament casting proof response cannot be encoded: {error}"
+        ))
+    })?;
+    if response_encoded_bytes > PARLIAMENT_TIMED_OVN_CASTING_PROOF_MAX_RESPONSE_BYTES_V1 {
+        return Err(crate::Error::AppConflict {
+            code: "parliament_timed_ovn_casting_proof_too_large",
+            message: "The Parliament casting proof exceeds its response byte budget.".to_owned(),
+        });
+    }
+    Ok(NoritoBody(response))
+}
+
+/// GET `/v1/gov/parliament/ballots/{ballot_attempt_id}/release-context`.
+///
+/// Core returns a context only for a replay-valid sealed timed-OVN corpus whose
+/// committed ballot is already `Opening`, whose release height has arrived,
+/// and whose inclusive opening deadline has not passed. The response contains
+/// public transcript and identity bindings only; it excludes every corpus,
+/// share, secret, and individual opening.
+///
+/// # Errors
+/// Returns a conversion error for a noncanonical identifier or when Core does
+/// not authorize release from the point-in-time committed query view.
+pub fn handle_gov_parliament_tle_release_context_read(
+    state: Arc<iroha_core::state::State>,
+    ballot_attempt_id: String,
+) -> Result<JsonBody<ParliamentTleReleaseContextResponseV1>, crate::Error> {
+    use iroha_data_model::governance::types::{
+        BallotAttemptId, BallotAttemptStatusV1, BodyInstanceId, GovernanceAttemptId,
+    };
+    use sha2::{Digest as _, Sha256};
+
+    let ballot_attempt_id = ballot_attempt_id.parse::<BallotAttemptId>().map_err(|_| {
+        crate::routing::conversion_error(
+            "ballot_attempt_id must be exactly 64 lowercase hexadecimal characters".to_owned(),
+        )
+    })?;
+    if ballot_attempt_id.as_bytes().iter().all(|byte| *byte == 0) {
+        return Err(crate::routing::conversion_error(
+            "ballot_attempt_id must be non-zero".to_owned(),
+        ));
+    }
+
+    let view = state.query_view();
+    let context =
+        iroha_core::tle_release::authorize_parliament_tle_release_v1(&view, ballot_attempt_id)
+            .map_err(|error| {
+                crate::routing::conversion_error(format!(
+                    "Parliament TLE release context is not authorized: {error}"
+                ))
+            })?;
+    let release_identity = context.public_release_identity();
+    let session = context.session().public_state();
+    let identity_payload = context.identity().payload_bytes();
+    let identity_digest: [u8; 32] =
+        Sha256::digest(context.identity().release_message().map_err(|error| {
+            crate::Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                "authorized Parliament TLE release message could not be framed: {error}"
+            )))
+        })?)
+        .into();
+
+    Ok(JsonBody(ParliamentTleReleaseContextResponseV1 {
+        version: PARLIAMENT_API_VERSION_V1,
+        current_height: context.finalized_height(),
+        ballot_attempt_id,
+        governance_attempt_id: GovernanceAttemptId::new(release_identity.governance_attempt_id),
+        body_instance_id: BodyInstanceId::new(release_identity.body_instance_id),
+        status: BallotAttemptStatusV1::Opening,
+        release_height: release_identity.target_finalized_height,
+        opening_deadline_height: context.opening_deadline_height(),
+        tle_key_session: project_parliament_tle_key_session_v1(session),
+        release_identity: project_parliament_timed_ovn_release_identity_v1(release_identity),
+        identity_digest,
+        identity_payload_hex: hex::encode(identity_payload),
     }))
 }
 /// Strict citizen registration draft request.
@@ -1160,15 +1634,27 @@ fn parse_canonical_authority_literal(
 }
 fn instruction_skeleton_for_propose(
     instr: &iroha_data_model::isi::governance::ProposeDeployContract,
-) -> Vec<TxInstr> {
+) -> [GovernanceProposalInstructionDraftV1; 1] {
     let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
-    vec![tx_instr_from_box(boxed)]
+    [governance_proposal_instruction_draft(boxed)]
 }
 fn instruction_skeleton_for_sccp_route_governance_propose(
     instr: &iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
-) -> Vec<TxInstr> {
+) -> [GovernanceProposalInstructionDraftV1; 1] {
     let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
-    vec![tx_instr_from_box(boxed)]
+    [governance_proposal_instruction_draft(boxed)]
+}
+fn governance_proposal_instruction_draft(
+    boxed: iroha_data_model::isi::InstructionBox,
+) -> GovernanceProposalInstructionDraftV1 {
+    let TxInstr {
+        wire_id,
+        payload_hex,
+    } = tx_instr_from_box(boxed);
+    GovernanceProposalInstructionDraftV1 {
+        wire_id,
+        payload_hex,
+    }
 }
 fn build_signable_transaction_b64(
     network_id: &iroha_data_model::NetworkId,
@@ -1183,94 +1669,26 @@ fn build_signable_transaction_b64(
     .with_instructions(instructions);
     base64::engine::general_purpose::STANDARD.encode(builder.encode_payload())
 }
-fn canonical_hex32(value: &str, field: &str) -> Result<(String, [u8; 32]), crate::Error> {
-    let without_scheme = if let Some((scheme, rest)) = value.split_once(':') {
-        if scheme.eq_ignore_ascii_case("blake2b32") {
-            rest
-        } else {
-            return Err(crate::Error::Query(
-                iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                        "unsupported {field} scheme"
-                    )),
-                ),
-            ));
-        }
-    } else {
-        value
-    };
-    let body = without_scheme
-        .strip_prefix("0x")
-        .or_else(|| without_scheme.strip_prefix("0X"))
-        .unwrap_or(without_scheme);
-    if body.len() != 64 || !body.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "{field} must be 32-byte hex"
-                )),
-            ),
-        ));
-    }
-    let canonical = body.to_ascii_lowercase();
-    let mut out = [0u8; 32];
-    if let Err(e) = hex::decode_to_slice(&canonical, &mut out) {
-        return Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "failed to decode {field}: {e}"
-                )),
-            ),
-        ));
-    }
-    Ok((canonical, out))
-}
-fn compute_proposal_id(
+fn deploy_contract_proposal_kind(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     code_hash: &[u8; 32],
     abi_hash: &[u8; 32],
-) -> [u8; 32] {
-    use iroha_crypto::blake2::{Blake2b512, digest::Digest};
-    let contract_address_literal = contract_address.as_ref();
-    let contract_address_len = contract_address_literal.len() as u32;
-    let mut input = Vec::with_capacity(
-        b"iroha:gov:proposal:v1|".len()
-            + core::mem::size_of::<u32>()
-            + contract_address_literal.len()
-            + code_hash.len()
-            + abi_hash.len(),
-    );
-    input.extend_from_slice(b"iroha:gov:proposal:v1|");
-    input.extend_from_slice(&contract_address_len.to_le_bytes());
-    input.extend_from_slice(contract_address_literal.as_bytes());
-    input.extend_from_slice(code_hash);
-    input.extend_from_slice(abi_hash);
-    let digest = Blake2b512::digest(&input);
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&digest[..32]);
-    out
+    manifest_provenance: Option<ManifestProvenance>,
+) -> ProposalKind {
+    ProposalKind::DeployContract(DeployContractProposal {
+        contract_address: contract_address.clone(),
+        code_hash: ContractCodeHash::new(*code_hash),
+        abi_hash: ContractAbiHash::new(*abi_hash),
+        abi_version: AbiVersion::new(1),
+        manifest_provenance,
+    })
 }
-fn compute_sccp_route_governance_proposal_id(
+fn sccp_route_governance_proposal_kind(
     anchor: &iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1,
-) -> Result<[u8; 32], crate::Error> {
-    let canonical = anchor.encode();
-    let action_len: u32 = canonical.len().try_into().map_err(|_| {
-        crate::routing::conversion_error(
-            "SCCP route governance action length exceeds 2^32 bytes".into(),
-        )
-    })?;
-    let mut input = Vec::with_capacity(
-        b"iroha:gov:sccp-route-governance:proposal:v1|".len()
-            + core::mem::size_of::<u32>()
-            + canonical.len(),
-    );
-    input.extend_from_slice(b"iroha:gov:sccp-route-governance:proposal:v1|");
-    input.extend_from_slice(&action_len.to_le_bytes());
-    input.extend_from_slice(&canonical);
-    let digest = Blake2b512::digest(&input);
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&digest[..32]);
-    Ok(out)
+) -> ProposalKind {
+    ProposalKind::SccpRouteGovernance(SccpRouteGovernanceProposal {
+        anchor: Box::new(anchor.clone()),
+    })
 }
 fn resolve_governance_contract_target(
     state: &iroha_core::state::State,
@@ -1382,6 +1800,8 @@ pub async fn handle_gov_get_locks(
 ) -> Result<JsonBody<LocksGetResponse>, crate::Error> {
     let ref_id = rid.0;
     require_exact_governance_path_token("referendum id", &ref_id)?;
+    reject_typed_proposal_ballot_selector(state.as_ref(), &ref_id)
+        .map_err(crate::routing::conversion_error)?;
     let world = state.world_view();
     let found = world.governance_locks().get(&ref_id).cloned();
     Ok(JsonBody(LocksGetResponse {
@@ -1401,6 +1821,8 @@ pub async fn handle_gov_get_referendum(
 ) -> Result<JsonBody<ReferendumGetResponse>, crate::Error> {
     let rid = id.0;
     require_exact_governance_path_token("referendum id", &rid)?;
+    reject_typed_proposal_ballot_selector(state.as_ref(), &rid)
+        .map_err(crate::routing::conversion_error)?;
     let world = state.world_view();
     let found = world.governance_referenda().get(&rid).copied();
     Ok(JsonBody(ReferendumGetResponse {
@@ -1413,36 +1835,17 @@ pub async fn handle_gov_get_referendum(
 /// # Errors
 /// Returns a conversion error if an exact quadratic weight or tally exceeds
 /// the fixed consensus tally domain, a PLAIN lock carries an invalid direction,
-/// or the referendum belongs to the validation-fee governance flow. Validation-fee
-/// callers must use the typed proposal-detail endpoint, which validates the frozen
-/// electorate and retained ballot rules. Missing referenda return `NotFound`.
+/// or the selector is the fingerprint of a stored typed proposal. Typed proposals
+/// use the authenticated Parliament attempt-read API. Missing referenda return `NotFound`.
 pub async fn handle_gov_get_tally(
     state: Arc<iroha_core::state::State>,
     id: axum::extract::Path<String>,
 ) -> Result<JsonBody<TallyGetResponse>, crate::Error> {
     let rid = id.0;
     require_exact_governance_path_token("referendum id", &rid)?;
+    reject_typed_proposal_ballot_selector(state.as_ref(), &rid)
+        .map_err(crate::routing::conversion_error)?;
     let world = state.world_view();
-    let mut proposal_id = [0_u8; 32];
-    let is_validation_fee_referendum = rid.len() == 64
-        && hex::decode_to_slice(&rid, &mut proposal_id).is_ok()
-        && world
-            .governance_proposals()
-            .get(&proposal_id)
-            .is_some_and(|proposal| {
-                matches!(
-                    &proposal.kind,
-                    iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
-                        | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_)
-                )
-            });
-    if is_validation_fee_referendum {
-        let typed_proposal_id = hex::encode(proposal_id);
-        return Err(crate::routing::conversion_error(format!(
-            "validation-fee referendum tally requires the typed \
-             /v1/validation-fee/proposals/{typed_proposal_id} endpoint"
-        )));
-    }
     let referendum = world
         .governance_referenda()
         .get(&rid)
@@ -1465,18 +1868,26 @@ pub async fn handle_gov_get_tally(
         }
     };
     let gov_cfg = state.gov.clone();
-    // Mirror FinalizeReferendum tally logic without mutating state.
+    // Project the current standalone referendum tally without mutating state.
     let now_h = state.committed_height() as u64;
     let mut approve: u128 = 0;
     let mut reject: u128 = 0;
     let mut abstain: u128 = 0;
     match referendum.mode {
         iroha_core::state::GovernanceReferendumMode::Plain => {
+            let tally_height = if referendum.status
+                == iroha_core::state::GovernanceReferendumStatus::Closed
+                || now_h > referendum.h_end
+            {
+                referendum.h_end
+            } else {
+                now_h
+            };
             if let Some(locks) = world.governance_locks().get(&rid) {
                 let step = gov_cfg.conviction_step_blocks.max(1);
                 let max_c = gov_cfg.max_conviction;
                 for (_owner, rec) in locks.locks.iter() {
-                    if rec.expiry_height < now_h {
+                    if rec.expiry_height < tally_height {
                         continue;
                     }
                     if rec.amount.scale() != 0 {
@@ -1515,6 +1926,7 @@ pub async fn handle_gov_get_tally(
                 if e.finalized && e.tally.len() >= 2 {
                     approve = e.tally[0] as u128;
                     reject = e.tally[1] as u128;
+                    abstain = e.tally.get(2).copied().map_or(0, u128::from);
                 }
             }
         }
@@ -1553,195 +1965,6 @@ fn integer_sqrt_u128(n: u128) -> u128 {
         x1 = u128::midpoint(x0, n / x0);
     }
     x0
-}
-#[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-#[norito(deny_unknown_fields)]
-/// Request body for finalizing a referendum
-pub struct FinalizeDto {
-    /// Referendum identifier
-    pub referendum_id: String,
-    /// Proposal id (hex 64)
-    pub proposal_id: String,
-}
-#[derive(Debug, JsonSerialize)]
-/// Response for finalize referendum draft transaction
-pub struct FinalizeResponse {
-    /// Whether the operation succeeded.
-    pub ok: bool,
-    /// Suggested transaction instructions for clients to sign.
-    pub tx_instructions: Vec<TxInstr>,
-}
-/// Handler for finalizing a referendum (draft transaction).
-///
-/// The request schema excludes private signing material; callers submit locally signed transactions.
-///
-/// # Errors
-/// Returns `crate::Error::Query` when the identifiers are noncanonical or do not match.
-pub async fn handle_gov_finalize(
-    NoritoJson(body): NoritoJson<FinalizeDto>,
-) -> Result<JsonBody<FinalizeResponse>, crate::Error> {
-    parse_exact_lower_hex32_path("referendum_id", &body.referendum_id)?;
-    let proposal_id = parse_exact_lower_hex32_path("proposal_id", &body.proposal_id)?;
-    if body.referendum_id != body.proposal_id {
-        return Err(crate::routing::conversion_error(
-            "referendum_id must equal proposal_id".into(),
-        ));
-    }
-    let instr = iroha_data_model::isi::governance::FinalizeReferendum {
-        referendum_id: body.referendum_id,
-        proposal_id,
-    };
-    let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
-    let tx_instructions = vec![tx_instr_from_box(boxed)];
-    Ok(JsonBody(FinalizeResponse {
-        ok: true,
-        tx_instructions,
-    }))
-}
-#[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-#[norito(deny_unknown_fields)]
-/// Request body for enacting an approved referendum.
-pub struct EnactDto {
-    /// Proposal id as exactly 64 lowercase hexadecimal digits.
-    pub proposal_id: String,
-}
-#[derive(Debug, JsonSerialize)]
-/// Response for enactment draft transaction.
-pub struct EnactResponse {
-    pub ok: bool,
-    /// Exact lowercase proposal fingerprint.
-    pub proposal_id: String,
-    /// Exact stored proposal kind whose fingerprint is bound into the instruction.
-    pub proposal_kind: iroha_data_model::governance::types::ProposalKind,
-    /// Exact retained referendum window.
-    pub referendum_window: iroha_data_model::governance::types::AtWindow,
-    pub tx_instructions: Vec<TxInstr>,
-}
-fn validate_validation_fee_policy_enactment_draft_height(
-    effective_from_height: u64,
-    current_tip: u64,
-) -> Result<u64, String> {
-    let target = effective_from_height
-        .checked_sub(
-            iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS,
-        )
-        .ok_or_else(|| {
-            "validation-fee policy effective height cannot encode the exact activation delay"
-                .to_owned()
-        })?;
-    let next_height = current_tip.checked_add(1).ok_or_else(|| {
-        "validation-fee policy enactment target exceeds the block-height domain".to_owned()
-    })?;
-    match next_height.cmp(&target) {
-        core::cmp::Ordering::Less => Err(format!(
-            "validation-fee policy enactment is not ready; submit for exact block height {target}"
-        )),
-        core::cmp::Ordering::Greater => Err(format!(
-            "validation-fee policy exact enactment height {target} was missed"
-        )),
-        core::cmp::Ordering::Equal => Ok(target),
-    }
-}
-/// Handler for building an enactment transaction (draft only).
-///
-/// # Errors
-/// Returns `crate::Error::Query` when the proposal is missing, not approved, or inconsistent.
-pub async fn handle_gov_enact(
-    state: Arc<iroha_core::state::State>,
-    NoritoJson(body): NoritoJson<EnactDto>,
-) -> Result<JsonBody<EnactResponse>, crate::Error> {
-    if body.proposal_id.len() != 64
-        || !body
-            .proposal_id
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(crate::routing::conversion_error(
-            "proposal_id must be exactly 64 lowercase hexadecimal digits".into(),
-        ));
-    }
-    let bytes = hex::decode(&body.proposal_id).map_err(|_| {
-        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "invalid proposal_id".into(),
-            ),
-        ))
-    })?;
-    if bytes.len() != 32 {
-        return Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid proposal_id length".into(),
-                ),
-            ),
-        ));
-    }
-    let mut pid = [0u8; 32];
-    pid.copy_from_slice(&bytes);
-    let current_tip = u64::try_from(state.committed_height()).map_err(|_| {
-        crate::routing::conversion_error(
-            "ledger height does not fit validation-fee enactment timing".into(),
-        )
-    })?;
-    let world = state.world_view();
-    let proposal = world.governance_proposals().get(&pid).ok_or_else(|| {
-        crate::routing::conversion_error("approved governance proposal was not found".into())
-    })?;
-    if !matches!(
-        proposal.status,
-        iroha_core::state::GovernanceProposalStatus::Approved
-            | iroha_core::state::GovernanceProposalStatus::Enacted
-    ) || !proposal
-        .finalization_evidence
-        .as_ref()
-        .is_some_and(|evidence| evidence.approved)
-    {
-        return Err(crate::routing::conversion_error(
-            "governance proposal has no approved finalization evidence".into(),
-        ));
-    }
-    let referendum = world
-        .governance_referenda()
-        .get(&body.proposal_id)
-        .copied()
-        .ok_or_else(|| {
-            crate::routing::conversion_error(
-                "governance proposal has no exact retained referendum".into(),
-            )
-        })?;
-    if referendum.status != iroha_core::state::GovernanceReferendumStatus::Closed {
-        return Err(crate::routing::conversion_error(
-            "governance referendum is not closed".into(),
-        ));
-    }
-    if let iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(payload) =
-        &proposal.kind
-    {
-        validate_validation_fee_policy_enactment_draft_height(
-            payload.policy.effective_from_height,
-            current_tip,
-        )
-        .map_err(|message| crate::routing::conversion_error(message.into()))?;
-    }
-    let proposal_kind = proposal.kind.clone();
-    let referendum_window = iroha_data_model::governance::types::AtWindow {
-        lower: referendum.h_start,
-        upper: referendum.h_end,
-    };
-    let instr = iroha_data_model::isi::governance::EnactReferendum {
-        referendum_id: pid,
-        preimage_hash: proposal_kind.fingerprint(),
-        at_window: referendum_window,
-    };
-    let boxed: iroha_data_model::isi::InstructionBox = instr.clone().into();
-    let tx_instructions = vec![tx_instr_from_box(boxed)];
-    Ok(JsonBody(EnactResponse {
-        ok: true,
-        proposal_id: body.proposal_id,
-        proposal_kind,
-        referendum_window,
-        tx_instructions,
-    }))
 }
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(deny_unknown_fields)]
@@ -2049,37 +2272,32 @@ pub async fn handle_gov_contract_get(
         public_entrypoints: Some(public_entrypoints),
     }))
 }
-/// POST /v1/gov/propose-deploy — build a proposal id and instruction skeleton.
+/// POST /v1/gov/proposals/deploy-contract — build a proposal id and instruction skeleton.
 ///
 /// Callers submit the returned instruction in a locally signed transaction.
 ///
 /// # Errors
-/// Returns `crate::Error::Query` when the contract target, hashes, ABI version, or request
-/// options fail validation (e.g., malformed hex or unsupported voting mode).
+/// Returns `crate::Error::Query` when the contract target, hashes, or ABI version fails
+/// validation.
 pub async fn handle_gov_propose_deploy(
     state: Arc<iroha_core::state::State>,
-    NoritoJson(body): NoritoJson<ProposeDeployContractDto>,
-) -> Result<JsonBody<ProposeDeployContractResponse>, crate::Error> {
+    NoritoJson(body): NoritoJson<DeployContractProposalDraftRequestV1>,
+) -> Result<JsonBody<DeployContractProposalDraftResponseV1>, crate::Error> {
     use iroha_data_model::isi::governance as gov;
     let contract_address = resolve_governance_contract_target(
         &state,
         body.contract_address.as_ref(),
         body.contract_alias.as_ref(),
     )?;
-    let (code_hash_hex, code_hash_bytes) = canonical_hex32(&body.code_hash, "code_hash")?;
-    let (abi_hash_hex, abi_hash_bytes) = canonical_hex32(&body.abi_hash, "abi_hash")?;
-    let expected_abi_hash = match body.abi_version.as_str() {
-        "1" => ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-        other => {
-            return Err(crate::Error::Query(
-                iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                        "unsupported abi_version: {other}"
-                    )),
-                ),
-            ));
-        }
-    };
+    if body.abi_version != AbiVersion::new(1) {
+        return Err(crate::routing::conversion_error(format!(
+            "unsupported abi_version: {}",
+            body.abi_version
+        )));
+    }
+    let code_hash_bytes = body.code_hash.into_bytes();
+    let abi_hash_bytes = body.abi_hash.into_bytes();
+    let expected_abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
     if abi_hash_bytes != expected_abi_hash {
         return Err(crate::Error::Query(
             iroha_data_model::ValidationFail::QueryFailed(
@@ -2090,36 +2308,23 @@ pub async fn handle_gov_propose_deploy(
             ),
         ));
     }
-    let mode = body.mode;
-    let window = body.window.map(|w| AtWindow {
-        lower: w.lower,
-        upper: w.upper,
-    });
-    if let Some(ref win) = window {
-        if win.upper < win.lower {
-            return Err(crate::Error::Query(
-                iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                        "window.upper must be >= window.lower".into(),
-                    ),
-                ),
-            ));
-        }
-    }
     let instr = gov::ProposeDeployContract {
         contract_address: contract_address.clone(),
-        code_hash_hex,
-        abi_hash_hex,
+        code_hash: body.code_hash,
+        abi_hash: body.abi_hash,
         abi_version: body.abi_version,
-        window,
-        mode,
         manifest_provenance: body.manifest_provenance.clone(),
     };
-    let proposal_id_bytes =
-        compute_proposal_id(&instr.contract_address, &code_hash_bytes, &abi_hash_bytes);
-    let proposal_id = hex::encode(proposal_id_bytes);
-    Ok(JsonBody(ProposeDeployContractResponse {
-        ok: true,
+    let proposal_id = ProposalContentId::new(
+        deploy_contract_proposal_kind(
+            &instr.contract_address,
+            &code_hash_bytes,
+            &abi_hash_bytes,
+            instr.manifest_provenance.clone(),
+        )
+        .fingerprint(),
+    );
+    Ok(JsonBody(DeployContractProposalDraftResponseV1 {
         proposal_id,
         tx_instructions: instruction_skeleton_for_propose(&instr),
     }))
@@ -2130,28 +2335,12 @@ pub async fn handle_gov_propose_deploy(
 /// signed transactions after building the draft instructions.
 ///
 /// # Errors
-/// Returns `crate::Error::Query` when the request options fail validation.
+/// Returns `crate::Error::Query` when the action fails static validation.
 pub async fn handle_gov_propose_sccp_route_governance(
     state: Arc<iroha_core::state::State>,
-    NoritoJson(body): NoritoJson<ProposeSccpRouteGovernanceDto>,
-) -> Result<JsonBody<ProposeSccpRouteGovernanceResponse>, crate::Error> {
+    NoritoJson(body): NoritoJson<SccpRouteGovernanceProposalDraftRequestV1>,
+) -> Result<JsonBody<SccpRouteGovernanceProposalDraftResponseV1>, crate::Error> {
     use iroha_data_model::isi::governance as gov;
-    let mode = body.mode;
-    let window = body.window.map(|w| AtWindow {
-        lower: w.lower,
-        upper: w.upper,
-    });
-    if let Some(ref win) = window {
-        if win.upper < win.lower {
-            return Err(crate::Error::Query(
-                iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                        "window.upper must be >= window.lower".into(),
-                    ),
-                ),
-            ));
-        }
-    }
     body.action.validate_static().map_err(|error| {
         crate::routing::conversion_error(format!("invalid SCCP route governance action: {error}"))
     })?;
@@ -2160,12 +2349,13 @@ pub async fn handle_gov_propose_sccp_route_governance(
             network_id: *state.network_id_ref(),
             action: body.action,
         },
-        window,
-        mode,
     };
-    let proposal_id = hex::encode(compute_sccp_route_governance_proposal_id(&instr.anchor)?);
-    Ok(JsonBody(ProposeSccpRouteGovernanceResponse {
-        ok: true,
+    let proposal_kind = sccp_route_governance_proposal_kind(&instr.anchor);
+    if let Some(reason) = proposal_kind.first_release_exact_json_u64_invariant_error() {
+        return Err(crate::routing::conversion_error(reason.to_owned()));
+    }
+    let proposal_id = ProposalContentId::new(proposal_kind.fingerprint());
+    Ok(JsonBody(SccpRouteGovernanceProposalDraftResponseV1 {
         proposal_id,
         tx_instructions: instruction_skeleton_for_sccp_route_governance_propose(&instr),
     }))
@@ -2283,6 +2473,8 @@ pub async fn handle_gov_ballot_plain_with_policy(
     ensure_authenticated_authority(authenticated_account, &authority_id)?;
     validate_governance_selector_v1("referendum_id", &body.referendum_id)
         .map_err(|message| crate::routing::conversion_error(message.into()))?;
+    reject_typed_proposal_ballot_selector(state.as_ref(), &body.referendum_id)
+        .map_err(|message| crate::routing::conversion_error(message.into()))?;
     // Basic shape validations
     if !(body.direction == "Aye" || body.direction == "Nay" || body.direction == "Abstain") {
         return Err(crate::routing::conversion_error("invalid direction".into()));
@@ -2312,41 +2504,6 @@ pub async fn handle_gov_ballot_plain_with_policy(
             "Nay" => 1,
             _ => 2,
         },
-    };
-    let tx_instructions = vec![tx_instr_from_box(instr.into())];
-    Ok(JsonBody(BallotSubmitResponse {
-        ok: true,
-        accepted: true,
-        reason: Some("build transaction skeleton".to_string()),
-        tx_instructions,
-    }))
-}
-/// POST /v1/gov/parliament/ballots — draft an equal Parliament stage ballot.
-///
-/// # Errors
-/// Returns `crate::Error::Query` when the authority, exact network, or proposal id is invalid.
-pub async fn handle_gov_parliament_ballot(
-    state: Arc<iroha_core::state::State>,
-    authenticated_account: &iroha_data_model::account::AccountId,
-    telemetry: MaybeTelemetry,
-    NoritoJson(body): NoritoJson<ParliamentBallotDto>,
-) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
-    ensure_network_id_matches(state.as_ref(), &body.network_id)?;
-    let authority_id = parse_account_literal_from_state(
-        state.as_ref(),
-        body.authority.as_str(),
-        &telemetry,
-        CONTEXT_GOV_PARLIAMENT_BALLOT_AUTHORITY,
-    )
-    .map_err(|err| {
-        crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
-    })?;
-    ensure_authenticated_authority(authenticated_account, &authority_id)?;
-    let (_proposal_hex, proposal_id) = canonical_hex32(&body.proposal_id, "proposal_id")?;
-    let instr = iroha_data_model::isi::governance::CastParliamentBallot {
-        body: body.body,
-        proposal_id,
-        decision: body.decision,
     };
     let tx_instructions = vec![tx_instr_from_box(instr.into())];
     Ok(JsonBody(BallotSubmitResponse {
@@ -2409,9 +2566,9 @@ mod tests {
         queue::{Queue, TransactionGuard},
         smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         state::{
-            CouncilState, GovernanceLockRecord, GovernanceLocksForReferendum, GovernancePipeline,
-            GovernanceProposalRecord, GovernanceProposalStatus, GovernanceReferendumMode,
-            GovernanceReferendumRecord, GovernanceReferendumStatus, GovernanceStageApprovals,
+            CouncilState, ElectionState, GovernanceLockCustody, GovernanceLockRecord,
+            GovernanceLocksForReferendum, GovernanceProposalRecord, GovernanceProposalStatus,
+            GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
             State, World,
         },
     };
@@ -2433,6 +2590,169 @@ mod tests {
     use std::sync::Arc;
     const ACCOUNT_AUTHORITY: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const ACCOUNT_OWNER_ALT: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+
+    #[test]
+    fn casting_context_route_holds_heavy_admission_through_blocking_replay() {
+        let route_source = include_str!("lib.rs");
+        let handler = route_source
+            .split("async fn handler_gov_parliament_timed_ovn_casting_context_read")
+            .nth(1)
+            .and_then(|tail| {
+                tail.split("async fn handler_gov_parliament_tle_release_context_read")
+                    .next()
+            })
+            .expect("casting-context route source");
+        let access = handler
+            .find("check_access(")
+            .expect("canonical access gate");
+        let admission = handler
+            .find("let replay_admission = acquire_query_admission(app.as_ref(), true).await?;")
+            .expect("heavy admission gate");
+        let blocking = handler
+            .find("tokio::task::spawn_blocking(move ||")
+            .expect("blocking replay isolation");
+        let retained = handler
+            .find("let _replay_admission = replay_admission;")
+            .expect("permit retained by physical replay task");
+        assert!(access < admission && admission < blocking && blocking < retained);
+    }
+
+    #[test]
+    fn release_context_route_holds_heavy_admission_through_blocking_replay() {
+        let route_source = include_str!("lib.rs");
+        let handler = route_source
+            .split("async fn handler_gov_parliament_tle_release_context_read")
+            .nth(1)
+            .and_then(|tail| {
+                tail.split("async fn handler_gov_parliament_tle_partial_release")
+                    .next()
+            })
+            .expect("release-context route source");
+        let access = handler
+            .find("check_access(")
+            .expect("canonical access gate");
+        let admission = handler
+            .find("let replay_admission = acquire_query_admission(app.as_ref(), true).await?;")
+            .expect("heavy admission gate");
+        let blocking = handler
+            .find("tokio::task::spawn_blocking(move ||")
+            .expect("blocking replay isolation");
+        let retained = handler
+            .find("let _replay_admission = replay_admission;")
+            .expect("permit retained by physical replay task");
+        assert!(access < admission && admission < blocking && blocking < retained);
+    }
+
+    fn generic_lock_custody(state: &State) -> GovernanceLockCustody {
+        GovernanceLockCustody {
+            escrowed: !state.gov.min_bond_amount.is_zero(),
+            asset_definition_id: state.gov.voting_asset_id.clone(),
+            bond_escrow_account: state.gov.bond_escrow_account.clone(),
+            slash_receiver_account: state.gov.slash_receiver_account.clone(),
+        }
+    }
+    #[test]
+    fn first_release_capabilities_expose_only_attempt_based_private_parliament() {
+        assert_eq!(
+            GOVERNANCE_APPROVAL_MODE_V1,
+            "PARLIAMENT_ATTEMPT_TIMED_OVN_V1"
+        );
+        let source = include_str!("gov.rs");
+        let retired_mode = ["LEGACY", "COUNCIL", "EPOCH"].join("_");
+        let retired_resolver = ["fn governance", "approval", "mode"].join("_");
+        assert!(!source.contains(&retired_mode));
+        assert!(!source.contains(&retired_resolver));
+        let capabilities_tail = &source[source
+            .find("supported_routes: vec![")
+            .expect("capability route projection")..];
+        let capabilities = &capabilities_tail[..capabilities_tail
+            .find("],\n    }))")
+            .expect("capability route projection end")];
+        assert!(capabilities.contains("/v1/gov/ballots/plain"));
+        assert!(capabilities.contains("/v1/gov/ballots/zk-v1"));
+        assert!(
+            capabilities.contains("/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof")
+        );
+        assert!(!capabilities.contains("\"/v1/gov/parliament/ballots\".to_owned()"));
+        assert!(!capabilities.contains("/v1/gov/finalize"));
+        assert!(!capabilities.contains("/v1/gov/enact"));
+        assert!(capabilities.contains("/v1/gov/parliament/attempts/draft"));
+        assert!(capabilities.contains("/v1/gov/parliament/transitions/draft"));
+    }
+    #[tokio::test]
+    async fn parliament_draft_handlers_frame_exact_native_instructions() {
+        use iroha_data_model::{
+            governance::types::{
+                AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
+                GovernanceAttemptId, ProposalKind,
+            },
+            isi::{
+                Instruction as _,
+                governance::{
+                    CreateParliamentGovernanceAttemptV1, ParliamentLifecycleTransitionV1,
+                    SubmitParliamentLifecycleTransitionV1,
+                },
+            },
+        };
+
+        let attempt_request = ParliamentAttemptDraftRequestV1 {
+            version: PARLIAMENT_API_VERSION_V1,
+            proposal: ProposalKind::DeployContract(DeployContractProposal {
+                contract_address: sample_contract_address(),
+                code_hash: ContractCodeHash::new([0x11; 32]),
+                abi_hash: ContractAbiHash::new([0x22; 32]),
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            attempt_sequence: 4,
+        };
+        let attempt_response = handle_gov_parliament_attempt_draft(NoritoJson(attempt_request))
+            .await
+            .expect("draft exact Parliament attempt")
+            .0;
+        assert_eq!(attempt_response.tx_instructions.len(), 1);
+        let attempt_draft = &attempt_response.tx_instructions[0];
+        let attempt_instruction = iroha_data_model::isi::decode_instruction_from_pair(
+            &attempt_draft.wire_id,
+            &hex::decode(&attempt_draft.payload_hex).expect("attempt payload hex"),
+        )
+        .expect("decode exact Parliament attempt instruction");
+        let attempt_instruction = attempt_instruction
+            .as_any()
+            .downcast_ref::<CreateParliamentGovernanceAttemptV1>()
+            .expect("exact attempt instruction type");
+        assert_eq!(
+            attempt_response.governance_attempt_id,
+            attempt_instruction.governance_attempt_id()
+        );
+
+        let transition_request = ParliamentTransitionDraftRequestV1 {
+            version: PARLIAMENT_API_VERSION_V1,
+            governance_attempt_id: GovernanceAttemptId::new([0x33; 32]),
+            transition: ParliamentLifecycleTransitionV1::CompleteQualification,
+        };
+        let expected_digest = transition_request.transition.digest_v1();
+        let transition_response =
+            handle_gov_parliament_transition_draft(NoritoJson(transition_request))
+                .await
+                .expect("draft exact Parliament transition")
+                .0;
+        assert_eq!(transition_response.transition_digest, expected_digest);
+        let transition_draft = &transition_response.tx_instructions[0];
+        let transition_instruction = iroha_data_model::isi::decode_instruction_from_pair(
+            &transition_draft.wire_id,
+            &hex::decode(&transition_draft.payload_hex).expect("transition payload hex"),
+        )
+        .expect("decode exact Parliament transition instruction");
+        let transition_instruction = transition_instruction
+            .as_any()
+            .downcast_ref::<SubmitParliamentLifecycleTransitionV1>()
+            .expect("exact transition instruction type");
+        assert_eq!(
+            transition_instruction.transition.digest_v1(),
+            expected_digest
+        );
+    }
     #[test]
     fn unlock_stats_handler_cannot_reintroduce_an_expiry_index_scan() {
         let source = include_str!("gov.rs");
@@ -2491,7 +2811,7 @@ mod tests {
         );
     }
     #[test]
-    fn canonical_hex32_accepts_only_declared_wire_forms() {
+    fn canonicalize_hex32_value_accepts_only_declared_wire_forms() {
         let uppercase = "AB".repeat(32);
         let expected = "ab".repeat(32);
         for literal in [
@@ -2500,9 +2820,6 @@ mod tests {
             format!("BlAkE2b32:{uppercase}"),
             format!("BLAKE2B32:0x{uppercase}"),
         ] {
-            let (canonical, bytes) = canonical_hex32(&literal, "hash").expect("declared form");
-            assert_eq!(canonical, expected);
-            assert_eq!(bytes, [0xAB; 32]);
             assert_eq!(canonicalize_hex32_value(&literal), Some(expected.clone()));
         }
         for literal in [
@@ -2512,10 +2829,6 @@ mod tests {
             format!("sha256:{uppercase}"),
             "ab".repeat(31),
         ] {
-            assert!(
-                canonical_hex32(&literal, "hash").is_err(),
-                "unexpectedly accepted {literal:?}"
-            );
             assert_eq!(canonicalize_hex32_value(&literal), None);
         }
     }
@@ -2584,6 +2897,36 @@ mod tests {
         );
         tx.apply();
         block.commit().expect("commit account alias for test");
+    }
+    fn seed_typed_proposal_fingerprint_for_ballot_test(
+        state: &Arc<State>,
+        proposer: &AccountId,
+    ) -> String {
+        let kind = deploy_contract_proposal_kind(
+            &sample_contract_address(),
+            &[0x71; 32],
+            &[0x72; 32],
+            None,
+        );
+        let proposal_id = kind.fingerprint();
+        let record = iroha_core::state::GovernanceProposalRecord {
+            proposer: proposer.clone(),
+            kind,
+            created_height: 1,
+            status: iroha_core::state::GovernanceProposalStatus::Proposed,
+        };
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        transaction
+            .world_mut_for_testing()
+            .governance_proposals_mut()
+            .insert(proposal_id, record);
+        transaction.apply();
+        block
+            .commit()
+            .expect("commit typed proposal ballot guard fixture");
+        hex::encode(proposal_id)
     }
     struct GovHarness {
         state: Arc<State>,
@@ -2676,7 +3019,6 @@ mod tests {
                 "CanSubmitGovernanceBallot".to_string(),
                 norito::json!({ "referendum_id": "any" }),
             );
-            let enact = Permission::new("CanEnactGovernance".to_string(), norito::json!({}));
             let register_contract: Permission =
                 iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
                     .into();
@@ -2684,7 +3026,6 @@ mod tests {
             let mut world_tx = world_block.transaction_without_telemetry(LaneConfig::default(), 0);
             let _ = world_tx.add_account_permission(&authority, propose);
             let _ = world_tx.add_account_permission(&authority, ballot);
-            let _ = world_tx.add_account_permission(&authority, enact);
             let _ = world_tx.add_account_permission(&authority, register_contract);
             world_tx.apply();
             world_block.commit();
@@ -2864,6 +3205,13 @@ seiyaku GovernedReadFixture {
             duplicates: Vec::new(),
         }
     }
+    fn decode_governance_proposal_instruction(
+        instr: &GovernanceProposalInstructionDraftV1,
+    ) -> iroha_data_model::isi::InstructionBox {
+        let bytes = hex::decode(&instr.payload_hex).expect("instruction payload hex");
+        iroha_data_model::isi::decode_instruction_from_pair(&instr.wire_id, &bytes)
+            .expect("instruction payload decode")
+    }
     fn decode_tx_instruction(instr: &TxInstr) -> iroha_data_model::isi::InstructionBox {
         let bytes = hex::decode(&instr.payload_hex).expect("instruction payload hex");
         iroha_data_model::isi::decode_instruction_from_pair(&instr.wire_id, &bytes)
@@ -2872,7 +3220,12 @@ seiyaku GovernedReadFixture {
     fn queue_instruction_skeleton(harness: &GovHarness, tx_instructions: &[TxInstr]) {
         let instructions = tx_instructions
             .iter()
-            .map(decode_tx_instruction)
+            .map(|instruction| {
+                let payload =
+                    hex::decode(&instruction.payload_hex).expect("instruction payload hex");
+                iroha_data_model::isi::decode_instruction_from_pair(&instruction.wire_id, &payload)
+                    .expect("instruction payload decode")
+            })
             .collect::<Vec<_>>();
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
             *harness.state.network_id_ref(),
@@ -2894,6 +3247,35 @@ seiyaku GovernedReadFixture {
             .queue
             .push(accepted, harness.state.view())
             .expect("push governance instruction skeleton");
+    }
+    fn queue_governance_proposal_instruction_skeleton(
+        harness: &GovHarness,
+        tx_instructions: &[GovernanceProposalInstructionDraftV1],
+    ) {
+        let instructions = tx_instructions
+            .iter()
+            .map(decode_governance_proposal_instruction)
+            .collect::<Vec<_>>();
+        let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
+            *harness.state.network_id_ref(),
+            harness.authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .sign(harness.authority_keypair.private_key());
+        let params = harness.state.view().world().parameters().clone();
+        let accepted = iroha_core::tx::AcceptedTransaction::accept(
+            tx,
+            harness.state.network_id_ref(),
+            params.sumeragi().max_clock_drift(),
+            params.transaction(),
+            harness.state.crypto().as_ref(),
+        )
+        .expect("accepted governance proposal instruction skeleton");
+        harness
+            .queue
+            .push(accepted, harness.state.view())
+            .expect("push governance proposal instruction skeleton");
     }
     fn apply_queued_block_allow_errors(
         state: &Arc<State>,
@@ -3070,25 +3452,21 @@ seiyaku GovernedReadFixture {
     #[test]
     fn serde_shapes_compile() {
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-        let req = ProposeDeployContractDto {
+        let req = DeployContractProposalDraftRequestV1 {
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
-            abi_version: "1".to_string(),
-            code_hash: "0x".to_string() + &"aa".repeat(32),
-            abi_hash: format!("0x{}", hex::encode(canonical_abi)),
-            window: Some(AtWindowDto { lower: 1, upper: 2 }),
-            mode: None,
+            abi_version: AbiVersion::new(1),
+            code_hash: ContractCodeHash::new([0xAA; 32]),
+            abi_hash: ContractAbiHash::new(canonical_abi),
             manifest_provenance: None,
         };
         let s = norito::json::to_json(&req).unwrap();
-        let _: ProposeDeployContractDto = norito::json::from_str(&s).unwrap();
-        let sccp = ProposeSccpRouteGovernanceDto {
+        let _: DeployContractProposalDraftRequestV1 = norito::json::from_str(&s).unwrap();
+        let sccp = SccpRouteGovernanceProposalDraftRequestV1 {
             action: sample_sccp_route_governance_action(),
-            window: Some(AtWindowDto { lower: 3, upper: 4 }),
-            mode: Some(iroha_data_model::isi::governance::VotingMode::Plain),
         };
         let json = norito::json::to_json(&sccp).expect("encode SCCP governance DTO");
-        let decoded: ProposeSccpRouteGovernanceDto =
+        let decoded: SccpRouteGovernanceProposalDraftRequestV1 =
             norito::json::from_str(&json).expect("decode SCCP governance DTO");
         assert_eq!(decoded.action, sccp.action);
     }
@@ -3174,109 +3552,57 @@ seiyaku GovernedReadFixture {
         assert_eq!(payload.instructions.instruction_count(), 1);
     }
     #[tokio::test]
-    async fn finalize_builds_instruction_skeleton() {
-        let (_state, _queue, _chain_id) = mk_basic_context();
-        let proposal_id = "aa".repeat(32);
-        let dto = FinalizeDto {
-            referendum_id: proposal_id.clone(),
-            proposal_id,
-        };
-        let res = handle_gov_finalize(NoritoJson(dto))
-            .await
-            .expect("handler ok");
-        let body = res.0;
-        assert!(body.ok);
-        assert_eq!(body.tx_instructions.len(), 1);
-        assert!(!body.tx_instructions[0].wire_id.is_empty());
-        assert!(!body.tx_instructions[0].payload_hex.is_empty());
-    }
-    #[tokio::test]
-    async fn finalize_rejects_noncanonical_or_mismatched_identifiers() {
-        for referendum_id in [
-            String::new(),
-            "ref-xyz".to_owned(),
-            "AA".repeat(32),
-            format!("0x{}", "aa".repeat(32)),
-            format!("{} ", "aa".repeat(32)),
-        ] {
-            let error = handle_gov_finalize(NoritoJson(FinalizeDto {
-                referendum_id,
-                proposal_id: "aa".repeat(32),
-            }))
-            .await
-            .expect_err("invalid referendum id must fail before drafting");
-            assert!(error.to_string().contains("referendum_id"));
-        }
-        for proposal_id in [
-            format!(":{}", "aa".repeat(32)),
-            format!("sha256:{}", "aa".repeat(32)),
-            format!("0x{}", "aa".repeat(32)),
-            "AA".repeat(32),
-            format!(" {}", "aa".repeat(32)),
-            format!("{} ", "aa".repeat(32)),
-        ] {
-            let error = handle_gov_finalize(NoritoJson(FinalizeDto {
-                referendum_id: "aa".repeat(32),
-                proposal_id,
-            }))
-            .await
-            .expect_err("undeclared proposal hash form must fail before drafting");
-            assert!(error.to_string().contains("proposal_id"));
-        }
-        let error = handle_gov_finalize(NoritoJson(FinalizeDto {
-            referendum_id: "aa".repeat(32),
-            proposal_id: "bb".repeat(32),
-        }))
-        .await
-        .expect_err("referendum and proposal ids must identify the same proposal");
-        assert!(
-            error
-                .to_string()
-                .contains("referendum_id must equal proposal_id")
-        );
-    }
-    #[tokio::test]
     async fn propose_deploy_builds_instruction_skeleton() {
         let (state, _queue, _chain_id) = mk_basic_context();
-        let code_hash_input = format!("blake2b32:0X{}", "11".repeat(32));
+        let code_hash_bytes = [0x11; 32];
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-        let abi_hash_input = format!("0x{}", hex::encode(canonical_abi));
-        let dto = ProposeDeployContractDto {
+        let provenance_key =
+            KeyPair::try_from_seed(b"proposal-id-provenance".to_vec(), Algorithm::Ed25519)
+                .expect("derive proposal provenance fixture key");
+        let provenance = mk_manifest_provenance(&provenance_key, [0x11; 32], canonical_abi);
+        let dto = DeployContractProposalDraftRequestV1 {
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
-            abi_version: "1".to_string(),
-            code_hash: code_hash_input.clone(),
-            abi_hash: abi_hash_input.clone(),
-            window: Some(AtWindowDto {
-                lower: 10,
-                upper: 20,
-            }),
-            mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
-            manifest_provenance: None,
+            abi_version: AbiVersion::new(1),
+            code_hash: ContractCodeHash::new(code_hash_bytes),
+            abi_hash: ContractAbiHash::new(canonical_abi),
+            manifest_provenance: Some(provenance.clone()),
         };
-        let (code_hex, code_bytes) = super::canonical_hex32(&code_hash_input, "code_hash").unwrap();
-        let (abi_hex, abi_bytes) = super::canonical_hex32(&abi_hash_input, "abi_hash").unwrap();
         let res = handle_gov_propose_deploy(state, NoritoJson(dto))
             .await
             .expect("handler ok");
         let body = res.0;
-        assert!(body.ok);
         assert_eq!(body.tx_instructions.len(), 1);
-        // Canonical hashing matches core logic
-        let expected_id =
-            super::compute_proposal_id(&sample_contract_address(), &code_bytes, &abi_bytes);
-        assert_eq!(body.proposal_id, hex::encode(expected_id));
-        assert_eq!(body.proposal_id.len(), 64);
-        assert!(body.proposal_id.chars().all(|ch| ch.is_ascii_hexdigit()));
-        // Payload decodes to sanitized ProposeDeployContract
-        let tx = &body.tx_instructions[0];
-        let payload = hex::decode(&tx.payload_hex).expect("payload hex");
-        let decoded: iroha_data_model::isi::governance::ProposeDeployContract =
-            norito::decode_from_bytes(&payload).expect("decode payload");
+        let expected_id = deploy_contract_proposal_kind(
+            &sample_contract_address(),
+            &code_hash_bytes,
+            &canonical_abi,
+            Some(provenance.clone()),
+        )
+        .fingerprint();
+        assert_eq!(body.proposal_id, ProposalContentId::new(expected_id));
+        assert_ne!(
+            expected_id,
+            deploy_contract_proposal_kind(
+                &sample_contract_address(),
+                &code_hash_bytes,
+                &canonical_abi,
+                None,
+            )
+            .fingerprint(),
+            "proposal id must bind the complete manifest provenance"
+        );
+        // Payload decodes to the exact certificate-only proposal instruction.
+        let instruction = decode_governance_proposal_instruction(&body.tx_instructions[0]);
+        let decoded = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::governance::ProposeDeployContract>()
+            .expect("exact deploy-contract proposal instruction");
         assert_eq!(decoded.contract_address, sample_contract_address());
-        assert_eq!(decoded.code_hash_hex, code_hex);
-        assert_eq!(decoded.abi_hash_hex, abi_hex);
-        assert_eq!(decoded.abi_version, "1");
+        assert_eq!(decoded.code_hash, ContractCodeHash::new(code_hash_bytes));
+        assert_eq!(decoded.abi_hash, ContractAbiHash::new(canonical_abi));
+        assert_eq!(decoded.abi_version, AbiVersion::new(1));
+        assert_eq!(decoded.manifest_provenance, Some(provenance));
     }
     #[tokio::test]
     async fn propose_sccp_route_governance_builds_exact_instruction_and_proposal_id() {
@@ -3286,41 +3612,24 @@ seiyaku GovernedReadFixture {
             network_id: *state.network_id_ref(),
             action: action.clone(),
         };
-        let expected_id = compute_sccp_route_governance_proposal_id(&anchor).expect("proposal id");
+        let expected_id = sccp_route_governance_proposal_kind(&anchor).fingerprint();
         let response = handle_gov_propose_sccp_route_governance(
             state,
-            NoritoJson(ProposeSccpRouteGovernanceDto {
+            NoritoJson(SccpRouteGovernanceProposalDraftRequestV1 {
                 action: action.clone(),
-                window: Some(AtWindowDto {
-                    lower: 10,
-                    upper: 20,
-                }),
-                mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
             }),
         )
         .await
         .expect("valid SCCP governance draft")
         .0;
-        assert!(response.ok);
-        assert_eq!(response.proposal_id, hex::encode(expected_id));
+        assert_eq!(response.proposal_id, ProposalContentId::new(expected_id));
         assert_eq!(response.tx_instructions.len(), 1);
-        let instruction = decode_tx_instruction(&response.tx_instructions[0]);
+        let instruction = decode_governance_proposal_instruction(&response.tx_instructions[0]);
         let decoded = instruction
             .as_any()
             .downcast_ref::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>()
             .expect("exact SCCP governance instruction");
         assert_eq!(decoded.anchor, anchor);
-        assert_eq!(
-            decoded.window,
-            Some(AtWindow {
-                lower: 10,
-                upper: 20
-            })
-        );
-        assert_eq!(
-            decoded.mode,
-            Some(iroha_data_model::isi::governance::VotingMode::Zk)
-        );
     }
     #[tokio::test]
     async fn propose_sccp_route_governance_rejects_invalid_action_before_drafting() {
@@ -3333,11 +3642,7 @@ seiyaku GovernedReadFixture {
         key.revision = 0;
         let error = handle_gov_propose_sccp_route_governance(
             state,
-            NoritoJson(ProposeSccpRouteGovernanceDto {
-                action,
-                window: None,
-                mode: None,
-            }),
+            NoritoJson(SccpRouteGovernanceProposalDraftRequestV1 { action }),
         )
         .await
         .expect_err("invalid SCCP action must fail before returning a skeleton");
@@ -3347,51 +3652,61 @@ seiyaku GovernedReadFixture {
         );
     }
     #[tokio::test]
-    async fn propose_sccp_route_governance_rejects_mode_aliases_and_reversed_window() {
+    async fn propose_sccp_route_governance_rejects_inexact_json_numbers_before_drafting() {
         let (state, _queue, _chain_id) = mk_basic_context();
-        let action = sample_sccp_route_governance_action();
-        let canonical = norito::json::to_json(&ProposeSccpRouteGovernanceDto {
-            action: action.clone(),
-            window: None,
-            mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
-        })
-        .expect("canonical SCCP governance DTO");
-        assert!(
-            canonical.contains("\"mode\":\"Zk\""),
-            "unexpected canonical DTO: {canonical}"
+        let iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(key) =
+            sample_sccp_route_governance_action()
+        else {
+            unreachable!("fixture is a remove action")
+        };
+        let action = iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::SetActivation(
+            iroha_data_model::isi::bridge::SccpSetRouteActivationV1 {
+                key,
+                expected_current: iroha_data_model::bridge::SccpRouteActivationV1::InboundOnly,
+                next: iroha_data_model::bridge::SccpRouteActivationV1::Retired,
+                inbound_finality_cutoff: Some(
+                    iroha_data_model::bridge::SccpInboundFinalityCutoffV1 {
+                        trust_anchor_hash: [0x91; 32],
+                        max_anchor_interval_height:
+                            iroha_data_model::parliament_types::FIRST_RELEASE_MAX_EXACT_JSON_U64 + 1,
+                    },
+                ),
+            },
         );
-        for mode in ["zk", "plain", "PLAIN", " Zk", "Zk ", "Quadratic"] {
-            let aliased = canonical.replace("\"mode\":\"Zk\"", &format!("\"mode\":\"{mode}\""));
-            let error = norito::json::from_str::<ProposeSccpRouteGovernanceDto>(&aliased)
-                .expect_err("noncanonical SCCP voting mode must reject during typed decoding");
-            assert!(
-                error.to_string().contains(mode.trim())
-                    || error.to_string().contains("VotingMode")
-                    || error.to_string().contains("unknown variant"),
-                "{mode}: {error}"
-            );
-        }
+        assert!(action.validate_static().is_ok());
         let error = handle_gov_propose_sccp_route_governance(
             state,
-            NoritoJson(ProposeSccpRouteGovernanceDto {
-                action,
-                window: Some(AtWindowDto {
-                    lower: 21,
-                    upper: 20,
-                }),
-                mode: None,
-            }),
+            NoritoJson(SccpRouteGovernanceProposalDraftRequestV1 { action }),
         )
         .await
-        .expect_err("reversed SCCP governance window must reject");
-        assert!(format!("{error:?}").contains("window.upper"));
+        .expect_err("inexact SCCP JSON numbers must fail before returning a skeleton");
+        assert!(
+            format!("{error:?}").contains("exact JSON integer maximum"),
+            "unexpected precision rejection: {error:?}"
+        );
+    }
+    #[test]
+    fn propose_sccp_route_governance_rejects_retired_lifecycle_controls() {
+        let canonical = norito::json::to_json(&SccpRouteGovernanceProposalDraftRequestV1 {
+            action: sample_sccp_route_governance_action(),
+        })
+        .expect("canonical SCCP governance DTO");
+        let body = canonical.strip_suffix('}').expect("DTO JSON is an object");
+        for (field, value) in [
+            ("mode", "\"Zk\""),
+            ("window", "{\"lower\":10,\"upper\":20}"),
+        ] {
+            let injected = format!("{body},\"{field}\":{value}}}");
+            let error =
+                norito::json::from_str::<SccpRouteGovernanceProposalDraftRequestV1>(&injected)
+                    .expect_err("retired SCCP lifecycle control must reject");
+            assert!(error.to_string().contains(field), "{field}: {error}");
+        }
     }
     #[test]
     fn sccp_route_governance_dto_rejects_retired_signing_and_unknown_fields() {
-        let dto = ProposeSccpRouteGovernanceDto {
+        let dto = SccpRouteGovernanceProposalDraftRequestV1 {
             action: sample_sccp_route_governance_action(),
-            window: None,
-            mode: None,
         };
         let canonical = norito::json::to_json(&dto).expect("canonical SCCP governance DTO");
         let body = canonical.strip_suffix('}').expect("DTO JSON is an object");
@@ -3399,11 +3714,14 @@ seiyaku GovernedReadFixture {
             ("authority", "\"sorau...\""),
             ("private_key", "\"secret\""),
             ("manifest", "null"),
+            ("window", "null"),
+            ("mode", "\"Zk\""),
             ("future_action_policy", "null"),
         ] {
             let injected = format!("{body},\"{field}\":{value}}}");
-            let error = norito::json::from_str::<ProposeSccpRouteGovernanceDto>(&injected)
-                .expect_err("retired or unknown SCCP draft field must reject");
+            let error =
+                norito::json::from_str::<SccpRouteGovernanceProposalDraftRequestV1>(&injected)
+                    .expect_err("retired or unknown SCCP draft field must reject");
             assert!(
                 error.to_string().contains(field) || error.to_string().contains("unknown field"),
                 "{field}: {error}"
@@ -3444,31 +3762,22 @@ seiyaku GovernedReadFixture {
         ] {
             assert_rejects_field!(
                 field;
-                ProposeDeployContractDto,
-                ProposeSccpRouteGovernanceDto,
+                DeployContractProposalDraftRequestV1,
+                SccpRouteGovernanceProposalDraftRequestV1,
                 MinistryAgendaProposalDraftDto,
                 PlainBallotDto,
-                ParliamentBallotDto,
                 ZkBallotV1Dto,
                 ZkBallotV1BallotProofDto,
-                FinalizeDto,
-                EnactDto,
                 ProtectedNamespacesDto,
             );
         }
         assert_rejects_field!(
             "authority";
-            ProposeDeployContractDto,
-            FinalizeDto,
+            DeployContractProposalDraftRequestV1,
         );
     }
     #[test]
     fn governance_nested_request_types_reject_unknown_fields() {
-        let error = norito::json::from_str::<AtWindowDto>(
-            r#"{"lower":1,"upper":2,"private_key":"secret"}"#,
-        )
-        .expect_err("governance window must be closed");
-        assert!(error.to_string().contains("private_key"));
         let ballot = iroha_data_model::isi::governance::BallotProof {
             backend: "halo2/ipa".into(),
             envelope_bytes: vec![1, 2, 3, 4],
@@ -3503,45 +3812,39 @@ seiyaku GovernedReadFixture {
         assert!(error.to_string().contains("privateKeyAlgorithm"));
     }
     #[test]
-    fn propose_deploy_rejects_noncanonical_mode_during_decode() {
+    fn propose_deploy_rejects_retired_lifecycle_controls_during_decode() {
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-        let dto = ProposeDeployContractDto {
+        let dto = DeployContractProposalDraftRequestV1 {
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
-            abi_version: "1".to_string(),
-            code_hash: format!("{}", "11".repeat(32)),
-            abi_hash: format!("{}", hex::encode(canonical_abi)),
-            window: None,
-            mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
+            abi_version: AbiVersion::new(1),
+            code_hash: ContractCodeHash::new([0x11; 32]),
+            abi_hash: ContractAbiHash::new(canonical_abi),
             manifest_provenance: None,
         };
         let canonical = norito::json::to_json(&dto).expect("canonical deploy request");
-        assert!(canonical.contains("\"mode\":\"Zk\""));
-        for mode in ["zk", "plain", "PLAIN", " Zk", "Zk ", "Quadratic"] {
-            let aliased = canonical.replace("\"mode\":\"Zk\"", &format!("\"mode\":\"{mode}\""));
-            let error = norito::json::from_str::<ProposeDeployContractDto>(&aliased)
-                .expect_err("noncanonical deploy voting mode must fail typed decoding");
-            assert!(
-                error.to_string().contains(mode.trim())
-                    || error.to_string().contains("VotingMode")
-                    || error.to_string().contains("unknown variant"),
-                "{mode}: {error}"
-            );
+        let body = canonical.strip_suffix('}').expect("DTO JSON is an object");
+        for (field, value) in [
+            ("mode", "\"Zk\""),
+            ("window", "{\"lower\":10,\"upper\":20}"),
+        ] {
+            let injected = format!("{body},\"{field}\":{value}}}");
+            let error = norito::json::from_str::<DeployContractProposalDraftRequestV1>(&injected)
+                .expect_err("retired deploy lifecycle control must fail typed decoding");
+            assert!(error.to_string().contains(field), "{field}: {error}");
         }
     }
     #[tokio::test]
     async fn propose_deploy_accepts_only_exact_abi_v1_label() {
         let (state, _queue, _chain_id) = mk_basic_context();
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-        for abi_version in ["", "01", " 1", "1 ", "2"] {
-            let dto = ProposeDeployContractDto {
+        for abi_version in [0, 2, u16::MAX] {
+            let dto = DeployContractProposalDraftRequestV1 {
                 contract_address: Some(sample_contract_address()),
                 contract_alias: None,
-                abi_version: abi_version.to_owned(),
-                code_hash: "11".repeat(32),
-                abi_hash: hex::encode(canonical_abi),
-                window: None,
-                mode: None,
+                abi_version: AbiVersion::new(abi_version),
+                code_hash: ContractCodeHash::new([0x11; 32]),
+                abi_hash: ContractAbiHash::new(canonical_abi),
                 manifest_provenance: None,
             };
             let error = handle_gov_propose_deploy(state.clone(), NoritoJson(dto))
@@ -3549,21 +3852,19 @@ seiyaku GovernedReadFixture {
                 .expect_err("only the exact first-release ABI label is accepted");
             assert!(
                 format!("{error:?}").contains("unsupported abi_version"),
-                "{abi_version:?}: {error:?}"
+                "{abi_version}: {error:?}"
             );
         }
     }
     #[tokio::test]
     async fn propose_deploy_rejects_mismatched_abi_hash() {
         let (state, _queue, _chain_id) = mk_basic_context();
-        let dto = ProposeDeployContractDto {
+        let dto = DeployContractProposalDraftRequestV1 {
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
-            abi_version: "1".to_string(),
-            code_hash: format!("{}", "11".repeat(32)),
-            abi_hash: format!("{}", "22".repeat(32)),
-            window: None,
-            mode: None,
+            abi_version: AbiVersion::new(1),
+            code_hash: ContractCodeHash::new([0x11; 32]),
+            abi_hash: ContractAbiHash::new([0x22; 32]),
             manifest_provenance: None,
         };
         let err = handle_gov_propose_deploy(state, NoritoJson(dto))
@@ -3756,6 +4057,36 @@ seiyaku GovernedReadFixture {
         assert!(body.tx_instructions.len() == 1);
     }
     #[tokio::test]
+    async fn standalone_plain_ballot_rejects_stored_typed_proposal_fingerprint() {
+        let (state, _queue, _chain_id) = mk_basic_context();
+        let authenticated = canonical_account(ACCOUNT_AUTHORITY);
+        let canonical = canonical_literal(ACCOUNT_AUTHORITY);
+        let proposal_id = seed_typed_proposal_fingerprint_for_ballot_test(&state, &authenticated);
+        let dto = PlainBallotDto {
+            authority: canonical.clone(),
+            network_id: *state.network_id_ref(),
+            referendum_id: proposal_id,
+            owner: canonical,
+            amount: 100_u64.into(),
+            duration_blocks: "600".to_owned(),
+            direction: "Aye".to_owned(),
+        };
+        let error = handle_gov_ballot_plain_with_policy(
+            state,
+            &authenticated,
+            NoritoJson(dto),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect_err("typed proposal must not enter the standalone plain ballot path");
+        assert!(
+            error
+                .to_string()
+                .contains("authenticated Parliament lifecycle"),
+            "unexpected error: {error:?}"
+        );
+    }
+    #[tokio::test]
     async fn ballot_plain_accepts_account_aliases() {
         let (state, _queue, _chain_id) = mk_basic_context();
         let authority = AccountId::parse_encoded(ACCOUNT_AUTHORITY)
@@ -3836,42 +4167,6 @@ seiyaku GovernedReadFixture {
         )
         .await
         .expect("raw public key literals should be accepted");
-    }
-    #[tokio::test]
-    async fn parliament_ballot_builds_instruction_skeleton() {
-        let (state, _queue, _chain_id) = mk_basic_context();
-        let authenticated = canonical_account(ACCOUNT_AUTHORITY);
-        let dto = ParliamentBallotDto {
-            authority: canonical_literal(ACCOUNT_AUTHORITY),
-            network_id: *state.network_id_ref(),
-            proposal_id: "11".repeat(32),
-            body: ParliamentBody::PolicyJury,
-            decision: ParliamentDecision::Approve,
-        };
-        let response = handle_gov_parliament_ballot(
-            state,
-            &authenticated,
-            MaybeTelemetry::disabled(),
-            NoritoJson(dto),
-        )
-        .await
-        .expect("valid Parliament ballot must draft")
-        .0;
-        assert!(response.ok);
-        assert!(response.accepted);
-        assert_eq!(
-            response.reason.as_deref(),
-            Some("build transaction skeleton")
-        );
-        assert_eq!(response.tx_instructions.len(), 1);
-        let instruction = decode_tx_instruction(&response.tx_instructions[0]);
-        let ballot = instruction
-            .as_any()
-            .downcast_ref::<iroha_data_model::isi::governance::CastParliamentBallot>()
-            .expect("exact Parliament ballot instruction");
-        assert_eq!(ballot.body, ParliamentBody::PolicyJury);
-        assert_eq!(ballot.proposal_id, [0x11; 32]);
-        assert_eq!(ballot.decision, ParliamentDecision::Approve);
     }
     include!("gov/network_id_tests.rs");
     #[test]
@@ -3967,6 +4262,7 @@ seiyaku GovernedReadFixture {
         cfg.conviction_step_blocks = 2;
         cfg.max_conviction = 4;
         state.set_gov(cfg);
+        let custody = generic_lock_custody(&state);
         let rid = "rid-tally-conviction".to_string();
         let header = BlockHeader::new(
             core::num::NonZeroU64::new(1).unwrap(),
@@ -3998,7 +4294,7 @@ seiyaku GovernedReadFixture {
                     expiry_height: 100,
                     direction: 0,
                     duration_blocks: 4,
-                    custody: None,
+                    custody,
                 },
             );
             stx.world.governance_locks_mut().insert(rid.clone(), locks);
@@ -4018,6 +4314,98 @@ seiyaku GovernedReadFixture {
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit())
         );
+    }
+    #[tokio::test]
+    async fn gov_get_tally_uses_referendum_end_for_closed_plain_view() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query);
+        let mut cfg = state.gov.clone();
+        cfg.conviction_step_blocks = 1;
+        cfg.max_conviction = 1;
+        state.set_gov(cfg);
+        let rid = "rid-tally-closed-lock".to_string();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let block_hash = iroha_crypto::HashOf::new(&header);
+        let custody = generic_lock_custody(&state);
+        {
+            let mut block = state.block(header);
+            let mut tx = block.transaction();
+            tx.world.governance_referenda_mut().insert(
+                rid.clone(),
+                GovernanceReferendumRecord {
+                    h_start: 0,
+                    h_end: 0,
+                    status: GovernanceReferendumStatus::Closed,
+                    mode: GovernanceReferendumMode::Plain,
+                },
+            );
+            let mut locks = GovernanceLocksForReferendum::default();
+            locks.locks.insert(
+                ALICE_ID.clone(),
+                GovernanceLockRecord {
+                    owner: ALICE_ID.clone(),
+                    amount: 9_u64.into(),
+                    slashed: Quantity::zero(),
+                    expiry_height: 0,
+                    direction: 0,
+                    duration_blocks: 0,
+                    custody,
+                },
+            );
+            tx.world.governance_locks_mut().insert(rid.clone(), locks);
+            tx.apply();
+            let iroha_core::state::StateBlock { world, .. } = block;
+            world.commit();
+        }
+        state.push_block_hash_for_testing(block_hash);
+
+        let response = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
+            .await
+            .expect("closed PLAIN tally");
+        assert_eq!(response.0.evaluated_block_height, 1);
+        assert_eq!(response.0.approve, 3);
+        assert_eq!(response.0.reject, 0);
+        assert_eq!(response.0.abstain, 0);
+    }
+    #[tokio::test]
+    async fn gov_get_tally_projects_zk_abstentions() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let rid = "rid-tally-zk-abstain".to_string();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        {
+            let mut block = state.block(header);
+            let mut tx = block.transaction();
+            tx.world.governance_referenda_mut().insert(
+                rid.clone(),
+                GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: 10,
+                    status: GovernanceReferendumStatus::Closed,
+                    mode: GovernanceReferendumMode::Zk,
+                },
+            );
+            tx.world.elections_mut().insert(
+                rid.clone(),
+                ElectionState {
+                    finalized: true,
+                    tally: vec![7, 3, 5],
+                    ..ElectionState::default()
+                },
+            );
+            tx.apply();
+            let iroha_core::state::StateBlock { world, .. } = block;
+            world.commit();
+        }
+
+        let response = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
+            .await
+            .expect("finalized ZK tally");
+        assert_eq!(response.0.approve, 7);
+        assert_eq!(response.0.reject, 3);
+        assert_eq!(response.0.abstain, 5);
     }
     #[tokio::test]
     async fn gov_get_tally_rejects_missing_referendum() {
@@ -4042,6 +4430,7 @@ seiyaku GovernedReadFixture {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
+        let custody = generic_lock_custody(&state);
         let rid = "rid-tally-invalid-direction".to_string();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         {
@@ -4066,7 +4455,7 @@ seiyaku GovernedReadFixture {
                     expiry_height: 100,
                     direction: 3,
                     duration_blocks: 4,
-                    custody: None,
+                    custody,
                 },
             );
             tx.world.governance_locks_mut().insert(rid.clone(), locks);
@@ -4084,20 +4473,20 @@ seiyaku GovernedReadFixture {
         );
     }
     #[tokio::test]
-    async fn gov_get_tally_directs_validation_fee_referenda_to_typed_endpoint() {
+    async fn legacy_referendum_reads_reject_stored_typed_proposal_fingerprints() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
-        let plain_electorate_rules = validation_fee_plain_electorate_rules(&state.gov);
         let kind = iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(
             iroha_data_model::governance::types::ValidationFeePolicyProposal {
+                proposal_operator: ALICE_ID.clone(),
                 policy: iroha_data_model::validation_fee::ValidationFeePolicyV1 {
                     schema_version:
                         iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_SCHEMA_VERSION,
                     network_id: *state.network_id_ref(),
                     policy_version: 1,
                     previous_policy_hash: None,
-                    ds_asset_id: plain_electorate_rules.voting_asset_id.clone(),
+                    ds_asset_id: state.gov.voting_asset_id.clone(),
                     ds_scale: iroha_data_model::validation_fee::VALIDATION_FEE_DS_SCALE,
                     fee: Quantity::zero(),
                     treasury_account_id: ALICE_ID.clone(),
@@ -4109,7 +4498,6 @@ seiyaku GovernedReadFixture {
                     treasury_payout_binding: None,
                 },
                 payout_lifecycle_proposal_id: None,
-                plain_electorate_rules,
             },
         );
         let proposal_id = kind.fingerprint();
@@ -4125,10 +4513,6 @@ seiyaku GovernedReadFixture {
                     kind,
                     created_height: 1,
                     status: GovernanceProposalStatus::Proposed,
-                    pipeline: GovernancePipeline::default(),
-                    parliament_snapshot: None,
-                    finalization_evidence: None,
-                    enacted_at_height: None,
                 },
             );
             tx.world.governance_referenda_mut().insert(
@@ -4144,14 +4528,24 @@ seiyaku GovernedReadFixture {
             let iroha_core::state::StateBlock { world, .. } = block;
             world.commit();
         }
-        let err = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid.clone()))
-            .await
-            .expect_err("generic tally must reject a validation-fee referendum");
-        let message = conversion_message(err);
-        assert!(
-            message.contains(&format!("/v1/validation-fee/proposals/{rid}")),
-            "unexpected tally error: {message}"
-        );
+        let state = Arc::new(state);
+        for err in [
+            handle_gov_get_tally(state.clone(), axum::extract::Path(rid.clone()))
+                .await
+                .expect_err("generic tally must reject a typed proposal fingerprint"),
+            handle_gov_get_referendum(state.clone(), axum::extract::Path(rid.clone()))
+                .await
+                .expect_err("generic referendum read must reject a typed proposal fingerprint"),
+            handle_gov_get_locks(state, axum::extract::Path(rid))
+                .await
+                .expect_err("generic lock read must reject a typed proposal fingerprint"),
+        ] {
+            let message = conversion_message(err);
+            assert!(
+                message.contains("authenticated Parliament lifecycle"),
+                "unexpected legacy read error: {message}"
+            );
+        }
     }
     #[tokio::test]
     async fn gov_get_tally_rejects_accumulator_overflow() {
@@ -4162,6 +4556,7 @@ seiyaku GovernedReadFixture {
         cfg.conviction_step_blocks = 1;
         cfg.max_conviction = u64::MAX;
         state.set_gov(cfg);
+        let custody = generic_lock_custody(&state);
         let rid = "rid-tally-overflow".to_string();
         let other = AccountId::parse_encoded(ACCOUNT_OWNER_ALT)
             .expect("alternate account id")
@@ -4190,7 +4585,7 @@ seiyaku GovernedReadFixture {
                         expiry_height: u64::MAX,
                         direction: 0,
                         duration_blocks: u64::MAX - 1,
-                        custody: None,
+                        custody: custody.clone(),
                     },
                 );
             }
@@ -4206,55 +4601,6 @@ seiyaku GovernedReadFixture {
         assert!(
             message.contains("governance tally arithmetic overflow"),
             "unexpected tally error: {message}"
-        );
-    }
-    #[tokio::test]
-    async fn enact_rejects_noncanonical_proposal_id() {
-        let (state, _queue, _chain_id) = mk_basic_context();
-        let dto = EnactDto {
-            proposal_id: format!("0x{}", "ab".repeat(32)),
-        };
-        let error = handle_gov_enact(state, NoritoJson(dto))
-            .await
-            .expect_err("0x-prefixed proposal id must be rejected");
-        assert!(error.to_string().contains("64 lowercase hexadecimal"));
-    }
-    #[test]
-    fn validation_fee_enactment_draft_is_available_for_one_exact_next_block() {
-        let activation_delay =
-            iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
-        let target = 3_604;
-        let effective = target + activation_delay;
-        let early = validate_validation_fee_policy_enactment_draft_height(effective, target - 2)
-            .expect_err("next block is still earlier than the exact target");
-        assert!(early.contains("not ready"));
-        assert!(early.contains("3604"));
-        assert_eq!(
-            validate_validation_fee_policy_enactment_draft_height(effective, target - 1)
-                .expect("the next committed block is the exact target"),
-            target
-        );
-        let missed = validate_validation_fee_policy_enactment_draft_height(effective, target)
-            .expect_err("the exact target cannot be recovered after it is missed");
-        assert!(missed.contains("was missed"));
-        assert!(missed.contains("3604"));
-    }
-    #[test]
-    fn validation_fee_enactment_draft_height_fails_closed_on_overflow() {
-        let activation_delay =
-            iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
-        assert!(
-            validate_validation_fee_policy_enactment_draft_height(
-                activation_delay.saturating_sub(1),
-                1,
-            )
-            .expect_err("effective height below activation delay is invalid")
-            .contains("cannot encode")
-        );
-        assert!(
-            validate_validation_fee_policy_enactment_draft_height(u64::MAX, u64::MAX)
-                .expect_err("next block height overflow must fail closed")
-                .contains("exceeds")
         );
     }
     #[test]
@@ -4426,249 +4772,28 @@ seiyaku GovernedReadFixture {
         assert!(error.to_string().contains("signed provenance"));
     }
     #[tokio::test]
-    async fn gov_flow_submits_and_applies() {
-        let harness = mk_governance_harness(true);
-        let authority_str = harness.authority.to_string();
-        let (artifact, manifest) = ivm::KotodamaCompiler::new()
-            .compile_source_with_manifest(
-                r#"
-seiyaku GovernanceFlowFixture {
-    view fn ready() -> bool { return true; }
-}
-"#,
-            )
-            .expect("compile governance flow contract fixture");
-        let verified =
-            ivm::verify_contract_artifact(&artifact).expect("verify governance flow contract");
-        let code_hash_bytes: [u8; 32] = verified.code_hash.into();
-        let abi_hash_bytes: [u8; 32] = verified.abi_hash.into();
-        let signed_manifest = manifest.signed(&harness.authority_keypair);
-        let manifest_provenance = signed_manifest
-            .provenance
-            .clone()
-            .expect("signed governance flow manifest provenance");
-        {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = harness.state.block(header);
-            let mut transaction = block.transaction();
-            let registered_hash =
-                register_code_bytes(&harness.authority, artifact, &mut transaction)
-                    .expect("register governance flow contract bytes");
-            assert_eq!(registered_hash, verified.code_hash);
-            register_manifest(&harness.authority, signed_manifest, &mut transaction)
-                .expect("register signed governance flow contract manifest");
-            transaction.apply();
-            block
-                .commit()
-                .expect("commit governance flow contract artifacts");
-        }
-        let contract_address = sample_contract_address();
-        let propose = ProposeDeployContractDto {
-            contract_address: Some(contract_address.clone()),
-            contract_alias: None,
-            abi_version: "1".to_string(),
-            code_hash: format!("0x{}", hex::encode(code_hash_bytes)),
-            abi_hash: format!("0x{}", hex::encode(abi_hash_bytes)),
-            window: None,
-            mode: Some(iroha_data_model::isi::governance::VotingMode::Plain),
-            manifest_provenance: Some(manifest_provenance),
-        };
-        let res = handle_gov_propose_deploy(harness.state.clone(), NoritoJson(propose))
-            .await
-            .expect("propose ok");
-        let proposal_id = res.0.proposal_id.clone();
-        queue_instruction_skeleton(&harness, &res.0.tx_instructions);
-        let mut height = 1_u64;
-        let applied = crate::test_utils::apply_queued_in_one_block(
-            &harness.state,
-            &harness.queue,
-            harness.chain_id.as_ref(),
-            height,
-        );
-        assert_eq!(applied, 1);
-        height += 1;
-        let pid_bytes = hex::decode(&proposal_id).expect("proposal id hex");
-        let mut pid_arr = [0u8; 32];
-        pid_arr.copy_from_slice(&pid_bytes);
-        {
-            let view = harness.state.view();
-            let proposal = view
-                .world()
-                .governance_proposals()
-                .get(&pid_arr)
-                .cloned()
-                .expect("proposal stored");
-            assert!(matches!(
-                proposal.status,
-                GovernanceProposalStatus::Proposed
-            ));
-            let referendum = view
-                .world()
-                .governance_referenda()
-                .get(&proposal_id)
-                .copied()
-                .expect("referendum stored");
-            assert!(matches!(referendum.mode, GovernanceReferendumMode::Plain));
-        }
-        let approvals_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let mut approvals_block = harness.state.block(approvals_header);
-        let mut approvals_tx = approvals_block.transaction();
-        let mut approvals = GovernanceStageApprovals::default();
-        for body in [
-            ParliamentBody::RulesCommittee,
-            ParliamentBody::AgendaCouncil,
-            ParliamentBody::InterestPanel,
-            ParliamentBody::ReviewPanel,
-            ParliamentBody::PolicyJury,
-            ParliamentBody::OversightCommittee,
-        ] {
-            approvals
-                .ensure_stage(body, 0, 1, approvals_tx.gov.parliament_quorum_bps)
-                .record(harness.authority.clone());
-        }
-        approvals_tx
-            .world
-            .governance_stage_approvals_mut()
-            .insert(proposal_id.clone(), approvals);
-        approvals_tx.apply();
-        approvals_block.commit().expect("commit approvals");
-        let ballot = PlainBallotDto {
-            authority: authority_str.clone(),
-            network_id: *harness.state.network_id_ref(),
-            referendum_id: proposal_id.clone(),
-            owner: authority_str.clone(),
-            amount: 100_u64.into(),
-            duration_blocks: "10".to_owned(),
-            direction: "Aye".to_string(),
-        };
-        let ballot = handle_gov_ballot_plain_with_policy(
-            harness.state.clone(),
-            &harness.authority,
-            NoritoJson(ballot),
-            MaybeTelemetry::disabled(),
-        )
-        .await
-        .expect("ballot ok");
-        queue_instruction_skeleton(&harness, &ballot.0.tx_instructions);
-        let applied = crate::test_utils::apply_queued_in_one_block(
-            &harness.state,
-            &harness.queue,
-            harness.chain_id.as_ref(),
-            height,
-        );
-        assert_eq!(applied, 1);
-        height += 1;
-        let locks = harness
-            .state
-            .view()
-            .world()
-            .governance_locks()
-            .get(&proposal_id)
-            .cloned()
-            .expect("locks stored");
-        let lock = locks.locks.get(&harness.authority).expect("authority lock");
-        assert_eq!(lock.amount, Quantity::from(100_u64));
-        assert_eq!(lock.direction, 0);
-        let mut lifecycle_height = height;
-        while lifecycle_height <= 11 {
-            let latest_block = harness.state.view().latest_block();
-            let leader = checked_governance_bls_keypair(
-                u8::try_from(lifecycle_height).expect("small fixture height"),
-            );
-            let new_block = BlockBuilder::new(Vec::new())
-                .chain(0, latest_block.as_deref())
-                .sign(leader.private_key())
-                .unpack(|_| {});
-            assert_eq!(
-                new_block.header().height().get(),
-                lifecycle_height,
-                "referendum lifecycle fixture must advance the canonical block chain"
-            );
-            let mut state_block = harness.state.block(new_block.header());
-            state_block.chain_id = harness.chain_id.as_ref().clone();
-            let valid_block = new_block
-                .validate_and_record_transactions(&mut state_block)
-                .unpack(|_| {});
-            let committed_block = valid_block.commit_unchecked().unpack(|_| {});
-            crate::test_utils::finalize_committed_block(
-                &harness.state,
-                state_block,
-                committed_block,
-            );
-            lifecycle_height += 1;
-        }
-        height = lifecycle_height;
-        let proposal = harness
-            .state
-            .view()
-            .world()
-            .governance_proposals()
-            .get(&pid_arr)
-            .cloned()
-            .expect("proposal present");
-        assert!(matches!(
-            proposal.status,
-            GovernanceProposalStatus::Approved
-        ));
-        let enact = EnactDto {
-            proposal_id: proposal_id.clone(),
-        };
-        let enact = handle_gov_enact(harness.state.clone(), NoritoJson(enact))
-            .await
-            .expect("enact ok");
-        queue_instruction_skeleton(&harness, &enact.0.tx_instructions);
-        let applied = crate::test_utils::apply_queued_in_one_block(
-            &harness.state,
-            &harness.queue,
-            harness.chain_id.as_ref(),
-            height,
-        );
-        assert_eq!(applied, 1);
-        let view = harness.state.view();
-        let code_hash = iroha_crypto::Hash::prehashed(code_hash_bytes);
-        let bound_hash = view
-            .world()
-            .contract_instances()
-            .get(&contract_address)
-            .copied()
-            .expect("instance bound");
-        assert_eq!(bound_hash, code_hash);
-        assert!(view.world().contract_manifests().get(&code_hash).is_some());
-        let proposal = view
-            .world()
-            .governance_proposals()
-            .get(&pid_arr)
-            .cloned()
-            .expect("proposal present");
-        assert!(matches!(proposal.status, GovernanceProposalStatus::Enacted));
-    }
-    #[tokio::test]
     async fn propose_deploy_rejected_without_permission() {
         let harness = mk_governance_harness(false);
         let code_hash_bytes = [0x22u8; 32];
         let abi_hash_bytes = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let manifest_provenance =
             mk_manifest_provenance(&harness.authority_keypair, code_hash_bytes, abi_hash_bytes);
-        let propose = ProposeDeployContractDto {
+        let propose = DeployContractProposalDraftRequestV1 {
             contract_address: Some(sample_contract_address()),
             contract_alias: None,
-            abi_version: "1".to_string(),
-            code_hash: format!("0x{}", hex::encode(code_hash_bytes)),
-            abi_hash: format!("0x{}", hex::encode(abi_hash_bytes)),
-            window: None,
-            mode: Some(iroha_data_model::isi::governance::VotingMode::Plain),
+            abi_version: AbiVersion::new(1),
+            code_hash: ContractCodeHash::new(code_hash_bytes),
+            abi_hash: ContractAbiHash::new(abi_hash_bytes),
             manifest_provenance: Some(manifest_provenance),
         };
         let res = handle_gov_propose_deploy(harness.state.clone(), NoritoJson(propose))
             .await
             .expect("handler ok");
         let proposal_id = res.0.proposal_id.clone();
-        queue_instruction_skeleton(&harness, &res.0.tx_instructions);
+        queue_governance_proposal_instruction_skeleton(&harness, &res.0.tx_instructions);
         let errors = apply_queued_block_allow_errors(&harness.state, &harness.queue, 1);
         assert_eq!(errors, vec![true]);
-        let pid_bytes = hex::decode(&proposal_id).expect("proposal id hex");
-        let mut pid_arr = [0u8; 32];
-        pid_arr.copy_from_slice(&pid_bytes);
+        let pid_arr = proposal_id.into_bytes();
         assert!(
             harness
                 .state
@@ -4741,6 +4866,47 @@ seiyaku GovernanceFlowFixture {
             v.get("tx_instructions")
                 .and_then(|x| x.as_array())
                 .is_some()
+        );
+    }
+    #[tokio::test]
+    async fn standalone_zk_ballot_rejects_stored_typed_proposal_fingerprint() {
+        let (state, _queue, _chain_id) = mk_basic_context();
+        let authenticated = canonical_account(ACCOUNT_AUTHORITY);
+        let proposal_id = seed_typed_proposal_fingerprint_for_ballot_test(&state, &authenticated);
+        let dto = super::ZkBallotV1Dto {
+            authority: ACCOUNT_AUTHORITY.to_string(),
+            network_id: *state.network_id_ref(),
+            election_id: proposal_id,
+            backend: "halo2/ipa".to_owned(),
+            envelope_b64: base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]),
+            root_hint: None,
+            owner: None,
+            amount: None,
+            duration_blocks: None,
+            direction: None,
+            nullifier: None,
+        };
+        let raw = norito::json::to_vec(&dto).expect("encode exact ZK ballot DTO");
+        let response = super::handle_gov_ballot_zk_v1(
+            state,
+            &authenticated,
+            MaybeTelemetry::disabled(),
+            crate::NoritoJsonWithBytes {
+                value: dto,
+                raw: raw.into(),
+            },
+        )
+        .await
+        .expect("typed-proposal collision is a deterministic ballot rejection")
+        .0;
+        assert!(!response.ok);
+        assert!(!response.accepted);
+        assert!(response.tx_instructions.is_empty());
+        assert!(
+            response
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("authenticated Parliament lifecycle"))
         );
     }
     #[tokio::test]

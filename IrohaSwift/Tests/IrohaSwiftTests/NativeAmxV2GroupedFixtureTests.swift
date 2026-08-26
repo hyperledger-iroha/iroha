@@ -9,7 +9,7 @@ private enum NativeAmxGroupedFixtureError: Error {
     case malformed(String)
 }
 
-private func requireNativeAmxABI22Bridge() throws {
+private func requireNativeAmxABI23Bridge() throws {
     #if canImport(NoritoBridge)
     let actualABI = connect_norito_bridge_abi_version()
     try requireNativeTestCapability(
@@ -23,7 +23,7 @@ private func requireNativeAmxABI22Bridge() throws {
     )
     #else
     try failRequiredNativeTestCapability(
-        "Native AMX V2 parity requires the ABI-22 NoritoBridge module"
+        "Native AMX V2 parity requires the ABI-23 NoritoBridge module"
     )
     #endif
 }
@@ -493,7 +493,7 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
     }
 
     func testRustOwnedGroupedNativeAmxV2GoldenFixture() throws {
-        try requireNativeAmxABI22Bridge()
+        try requireNativeAmxABI23Bridge()
         let document = try loadNativeAmxGroupedFixture()
         XCTAssertEqual(document["format"] as? String, "iroha-native-amx-v2-grouped")
         XCTAssertEqual(document["fixture_version"] as? Int, 1)
@@ -590,7 +590,7 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
     }
 
     func testParticipantProposalRequiresExplicitNullPayloadHint() throws {
-        try requireNativeAmxABI22Bridge()
+        try requireNativeAmxABI23Bridge()
         let canonical = try loadNativeAmxGroupedFixture()
         let proposalPath = [
             "golden", "expected_diagnostics", "lane_settlement_commitments", "0",
@@ -629,7 +629,7 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
     }
 
     func testRustOwnedGroupedNativeAmxV2EndpointSeparation() async throws {
-        try requireNativeAmxABI22Bridge()
+        try requireNativeAmxABI23Bridge()
         let document = try loadNativeAmxGroupedFixture()
         let golden = try XCTUnwrap(document["golden"] as? [String: Any])
         let diagnosticsObject = try XCTUnwrap(
@@ -774,7 +774,7 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
     }
 
     func testRustOwnedGroupedNativeAmxV2NegativeCorpus() throws {
-        try requireNativeAmxABI22Bridge()
+        try requireNativeAmxABI23Bridge()
         let canonical = try loadNativeAmxGroupedFixture()
         let controls = try XCTUnwrap(canonical["negative_controls"] as? [[String: Any]])
         let identifiers = Set(controls.compactMap { $0["id"] as? String })

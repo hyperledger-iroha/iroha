@@ -230,10 +230,6 @@ struct SnapshotRuntimeInstallFixture {
     validator_keys: Vec<iroha_crypto::KeyPair>,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "the fixture authenticates one complete four-validator genesis and snapshot projection"
-)]
 fn snapshot_runtime_install_fixture() -> SnapshotRuntimeInstallFixture {
     let mut fixture = offline_semantic_genesis_fixture([]);
     let signed = iroha_core::sumeragi::signed_genesis_validator_pops(&fixture.genesis)

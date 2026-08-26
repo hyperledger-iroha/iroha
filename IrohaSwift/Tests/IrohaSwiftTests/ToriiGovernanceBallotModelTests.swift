@@ -534,44 +534,6 @@ final class ToriiGovernanceBallotModelTests: XCTestCase {
         waitForExpectations(timeout: 1)
     }
 
-    func testSubmitGovernanceParliamentBallotUsesCanonicalPolicyJuryWireLabels() throws {
-        let expectation = expectation(description: "Parliament ballot")
-        let owner = try canonicalOwnerLiteral()
-        let proposalId = String(repeating: "a5", count: 32)
-        GovernanceBallotStubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/gov/parliament/ballots")
-            let body = self.bodyJSON(from: request)
-            XCTAssertEqual(body["authority"] as? String, owner)
-            XCTAssertEqual(body["network_id"] as? String, TestNetworkIds.canonical.literal)
-            XCTAssertNil(body["chain_id"])
-            XCTAssertEqual(body["proposal_id"] as? String, proposalId)
-            XCTAssertEqual(body["body"] as? String, "policy-jury")
-            XCTAssertEqual(body["decision"] as? String, "approve")
-            return (
-                HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
-                                headerFields: ["Content-Type": "application/json"])!,
-                Data("{\"ok\":true,\"accepted\":true,\"reason\":null,\"tx_instructions\":[]}".utf8)
-            )
-        }
-        let request = ToriiGovernanceParliamentBallotRequest(
-            authority: owner,
-            networkId: TestNetworkIds.canonical,
-            proposalId: "blake2b32:\(proposalId.uppercased())",
-            body: .policyJury,
-            decision: .approve
-        )
-        makeClient().submitGovernanceParliamentBallot(
-            request,
-            canonicalAuth: governanceAuth(accountId: owner)
-        ) { result in
-            if case .failure(let error) = result {
-                XCTFail("unexpected error: \(error)")
-            }
-            expectation.fulfill()
-        }
-        waitForExpectations(timeout: 1)
-    }
-
     func testGovernanceTypedRequestBodiesCannotEmitPrivateKeyAliases() throws {
         let owner = try canonicalOwnerLiteral()
         let publicInputs = GovernanceZkBallotPublicInputs(
@@ -582,8 +544,8 @@ final class ToriiGovernanceBallotModelTests: XCTestCase {
         let bodies = [
             try JSONEncoder().encode(ToriiGovernanceDeployContractProposalRequest(
                 contractAlias: "demo::universal",
-                codeHashHex: String(repeating: "11", count: 32),
-                abiHashHex: String(repeating: "22", count: 32),
+                codeHash: Data(repeating: 0x11, count: 32),
+                abiHash: Data(repeating: 0x22, count: 32),
                 manifestProvenance: .init(
                     signer: "ed25519:public",
                     signature: "ed25519:signature"
@@ -615,17 +577,6 @@ final class ToriiGovernanceBallotModelTests: XCTestCase {
                     envelopeBytesB64: "AQIDBA==",
                     publicInputs: publicInputs
                 )
-            )),
-            try JSONEncoder().encode(ToriiGovernanceParliamentBallotRequest(
-                authority: owner,
-                networkId: TestNetworkIds.canonical,
-                proposalId: String(repeating: "55", count: 32),
-                body: .policyJury,
-                decision: .approve
-            )),
-            try JSONEncoder().encode(ToriiGovernanceFinalizeRequest(
-                referendumId: String(repeating: "66", count: 32),
-                proposalId: String(repeating: "66", count: 32)
             )),
         ]
         let privateAliases = [

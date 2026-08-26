@@ -9,6 +9,15 @@ enum PendingWorkProducer {
     Output,
 }
 
+/// Closed result of servicing exactly one attested post-Apply direct Broadcast.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ProductionApplyTerminalDirectBroadcastSettlementV1 {
+    /// The exact output was accepted and its lifecycle row became terminal.
+    Completed,
+    /// The output source retained the occurrence and the same owner remains parked.
+    SourceRetained,
+}
+
 /// Exact signed-Proposal replay owner retained beside the ordinary body pipeline.
 ///
 /// The stage changes only after the corresponding runtime or body-store cut
@@ -325,6 +334,381 @@ impl<R: EffectRuntime> PreparedRecoveredDurableValidateRetryInstallV1<'_, R> {
     }
 }
 
+/// Inert exact Store owner retained while a direct lifecycle Store row is
+/// active and later nested as the predecessor of its published Validate row.
+///
+/// The opaque pending binding has no runtime ordinal and cannot execute. It
+/// proves that an exact durable Store stage is already lifecycle-owned,
+/// allowing a later compatible Store carrier to stutter before it can query a
+/// queued `BodyStored` terminal under a fresh lifecycle owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PublishedLifecycleStoreTerminalRetrySealV1 {
+    effect: AdapterEffect,
+    pending: PendingRuntimeEffectFingerprintV1,
+    /// Strongest same-body authority observed since the immutable Store row
+    /// crossed publication. The exact published statement remains sealed in
+    /// `pending` for Store-to-Validate reverse projection.
+    statement: RuntimeCandidateSemanticStatement,
+    durable_receipt: DurableBodyReceipt,
+}
+
+/// Fully preflighted disposition for one physical Store completion which may
+/// arrive after the same body stage crossed direct lifecycle publication.
+enum PublishedLifecycleStoreCompletionPlanV1 {
+    /// No direct lifecycle row owns this Store terminal.
+    NoPublishedMarker,
+    /// The active Store row absorbs the completion and commits this monotonic
+    /// comparison-only authority overlay.
+    ActiveStore(PublishedLifecycleStoreTerminalRetrySealV1),
+    /// The successor Validate row already owns the Store terminal. Its marker
+    /// is immutable, so successful preflight carries no replacement value.
+    PublishedValidate,
+}
+
+impl PublishedLifecycleStoreCompletionPlanV1 {
+    const fn coalesces_terminal(&self) -> bool {
+        !matches!(self, Self::NoPublishedMarker)
+    }
+}
+
+/// Comparison-only immutable publication identity for one executable
+/// lifecycle Store row.
+///
+/// Finalized rollover compares this value against the authenticated lifecycle
+/// registry before retiring all remaining rows. The monotonic in-process
+/// authority overlay is intentionally absent: only the exact published Store
+/// effect, its ordinal-free pending fingerprint, and durable receipt identify
+/// the registry owner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) struct PublishedLifecycleStoreRetryCensusEntryV1 {
+    effect: AdapterEffect,
+    pending: PendingRuntimeEffectFingerprintV1,
+    durable_receipt: DurableBodyReceipt,
+}
+
+impl PublishedLifecycleStoreTerminalRetrySealV1 {
+    fn seal_published_store(
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        durable_receipt: &DurableBodyReceipt,
+    ) -> Option<Self> {
+        let AdapterEffect::StoreBody {
+            tag,
+            round,
+            subject,
+        } = effect
+        else {
+            return None;
+        };
+        let statement = pending.candidate_statement()?;
+        let pending = pending.published_store_retry_fingerprint(effect)?;
+        if tag.height() != round.height
+            || durable_receipt.context_id() != round.context_id
+            || durable_receipt.round() != *round
+            || durable_receipt.subject() != *subject
+            || !pending.exactly_binds_adapter_effect(effect)
+            || statement.context_id() != round.context_id
+            || statement.proposal_round() != *round
+            || statement.subject() != Some(*subject)
+        {
+            return None;
+        }
+        Some(Self {
+            effect: effect.clone(),
+            pending,
+            statement,
+            durable_receipt: durable_receipt.clone(),
+        })
+    }
+
+    fn seal_exact(
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+        durable_receipt: &DurableBodyReceipt,
+    ) -> Option<Self> {
+        let AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } = validate_effect
+        else {
+            return None;
+        };
+        let effect = AdapterEffect::StoreBody {
+            tag: *tag,
+            round: *round,
+            subject: *subject,
+        };
+        let pending =
+            validate_pending.project_validate_store_predecessor(validate_effect, &effect)?;
+        if pending
+            .project_store_validate_successor(&effect, validate_effect)
+            .as_ref()
+                != Some(validate_pending)
+        {
+            return None;
+        }
+        Self::seal_published_store(&effect, &pending, durable_receipt)
+    }
+
+    fn validates(&self) -> bool {
+        let AdapterEffect::StoreBody {
+            tag,
+            round,
+            subject,
+        } = &self.effect
+        else {
+            return false;
+        };
+        tag.height() == round.height
+            && self.durable_receipt.context_id() == round.context_id
+            && self.durable_receipt.round() == *round
+            && self.durable_receipt.subject() == *subject
+            && self.pending.exactly_binds_adapter_effect(&self.effect)
+            && self.pending.candidate_statement().is_some_and(|published| {
+                matches!(
+                    published.body_stage_authority_relation_to(self.statement),
+                    Some(
+                        RuntimeFetchAuthorityRelation::Same
+                            | RuntimeFetchAuthorityRelation::Upgrade
+                    )
+                )
+            })
+    }
+
+    fn publication_census_entry(
+        &self,
+    ) -> Option<PublishedLifecycleStoreRetryCensusEntryV1> {
+        self.validates()
+            .then(|| PublishedLifecycleStoreRetryCensusEntryV1 {
+                effect: self.effect.clone(),
+                pending: self.pending.clone(),
+                durable_receipt: self.durable_receipt.clone(),
+            })
+    }
+
+    fn exactly_precedes_validate_marker(
+        &self,
+        validate_effect: &AdapterEffect,
+        validate_statement: RuntimeCandidateSemanticStatement,
+    ) -> bool {
+        let (
+            AdapterEffect::StoreBody {
+                tag: store_tag,
+                round: store_round,
+                subject: store_subject,
+            },
+            AdapterEffect::ValidateBody {
+                tag: validate_tag,
+                round: validate_round,
+                subject: validate_subject,
+            },
+        ) = (&self.effect, validate_effect)
+        else {
+            return false;
+        };
+        self.validates()
+            && store_tag.height() == validate_tag.height()
+            && (store_tag == validate_tag || validate_tag.strictly_advances(*store_tag))
+            && store_round == validate_round
+            && store_subject == validate_subject
+            && matches!(
+                self.statement
+                    .body_stage_authority_relation_to(validate_statement),
+                Some(RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Upgrade)
+            )
+    }
+
+    fn project_retry(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+        effect: &AdapterEffect,
+        incoming: &RuntimeEffectOwnership,
+    ) -> Result<RuntimeCandidateSemanticStatement, String> {
+        let (
+            AdapterEffect::StoreBody {
+                tag: incumbent_tag,
+                round: incumbent_round,
+                subject: incumbent_subject,
+            },
+            AdapterEffect::StoreBody {
+                tag: incoming_tag,
+                round: incoming_round,
+                subject: incoming_subject,
+            },
+        ) = (&self.effect, effect)
+        else {
+            return Err(
+                "published lifecycle Store terminal received another effect stage".to_owned(),
+            );
+        };
+        if !self.validates()
+            || self.durable_receipt != *durable_receipt
+            || incumbent_tag.height() != incoming_tag.height()
+            || (incoming_tag != incumbent_tag && !incoming_tag.strictly_advances(*incumbent_tag))
+            || incoming_round != incumbent_round
+            || incoming_subject != incumbent_subject
+        {
+            return Err(
+                "published lifecycle Store retry changed its durable body or regressed its tag"
+                    .to_owned(),
+            );
+        }
+        let pending = incoming
+            .exact_pending_adapter_effect_binding(effect)
+            .map_err(|_| {
+                "published lifecycle Store retry lost its exact runtime binding".to_owned()
+            })?;
+        let incoming_statement = pending.candidate_statement().ok_or_else(|| {
+            "published lifecycle Store retry omitted its candidate statement".to_owned()
+        })?;
+        self.statement
+            .body_stage_authority_relation_to(incoming_statement)
+            .ok_or_else(|| {
+                "published lifecycle Store retry changed its body or authority commitment"
+                    .to_owned()
+            })?;
+        Ok(incoming_statement)
+    }
+
+    fn project_active_store_retry(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+        effect: &AdapterEffect,
+        incoming: &RuntimeEffectOwnership,
+    ) -> Result<Self, String> {
+        let incoming_statement = self.project_retry(durable_receipt, effect, incoming)?;
+        let relation = self
+            .statement
+            .body_stage_authority_relation_to(incoming_statement)
+            .ok_or_else(|| {
+                "published lifecycle Store retry changed its body or authority commitment"
+                    .to_owned()
+            })?;
+        let statement = match relation {
+            RuntimeFetchAuthorityRelation::Upgrade => incoming_statement,
+            RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => {
+                self.statement
+            }
+        };
+        let projected = Self {
+            statement,
+            ..self.clone()
+        };
+        if !projected.validates() {
+            return Err(
+                "published lifecycle Store retry broke its immutable published binding"
+                    .to_owned(),
+            );
+        }
+        Ok(projected)
+    }
+
+    /// Compare an already-running physical Store task with a row published
+    /// while that task was in flight.
+    ///
+    /// Unlike live retry admission, a completion may carry an older tag. The
+    /// task must nevertheless be the exact immutable Store predecessor, and a
+    /// task newer than the published marker is rejected. This method returns
+    /// only an inert marker projection; it never rebinds the historical task
+    /// into an executable capability at the marker tag.
+    fn project_historical_store_completion(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+        effect: &AdapterEffect,
+        task: &RuntimeEffectOwnership,
+    ) -> Result<Self, String> {
+        let (
+            AdapterEffect::StoreBody {
+                tag: marker_tag,
+                round: marker_round,
+                subject: marker_subject,
+            },
+            AdapterEffect::StoreBody {
+                tag: task_tag,
+                round: task_round,
+                subject: task_subject,
+            },
+        ) = (&self.effect, effect)
+        else {
+            return Err(
+                "published lifecycle Store completion received another effect stage".to_owned(),
+            );
+        };
+        if !self.validates()
+            || self.durable_receipt != *durable_receipt
+            || marker_tag.height() != task_tag.height()
+            || (task_tag != marker_tag && !marker_tag.strictly_advances(*task_tag))
+            || task_round != marker_round
+            || task_subject != marker_subject
+        {
+            return Err(
+                "published lifecycle Store completion changed its durable body or outran its marker"
+                    .to_owned(),
+            );
+        }
+        let pending = task
+            .exact_pending_adapter_effect_binding(effect)
+            .map_err(|_| {
+                "published lifecycle Store completion lost its exact task binding".to_owned()
+            })?;
+        let task_statement = pending.candidate_statement().ok_or_else(|| {
+            "published lifecycle Store completion omitted its task statement".to_owned()
+        })?;
+        let relation = self
+            .statement
+            .body_stage_authority_relation_to(task_statement)
+            .ok_or_else(|| {
+                "published lifecycle Store completion changed its body or authority commitment"
+                    .to_owned()
+            })?;
+        let statement = match relation {
+            RuntimeFetchAuthorityRelation::Upgrade => task_statement,
+            RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => {
+                self.statement
+            }
+        };
+        let projected = Self {
+            statement,
+            ..self.clone()
+        };
+        if !projected.validates() {
+            return Err(
+                "published lifecycle Store completion broke its immutable published binding"
+                    .to_owned(),
+            );
+        }
+        Ok(projected)
+    }
+}
+
+impl PublishedLifecycleStoreRetryCensusEntryV1 {
+    /// Reconstruct the exact immutable publication identity from one
+    /// authenticated lifecycle registry Store row.
+    pub(in crate::sumeragi) fn from_exact_published_store(
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        durable_receipt: &DurableBodyReceipt,
+    ) -> Option<Self> {
+        PublishedLifecycleStoreTerminalRetrySealV1::seal_published_store(
+            effect,
+            pending,
+            durable_receipt,
+        )?
+        .publication_census_entry()
+    }
+
+    /// Return the unique body key fixed by the complete Store publication.
+    pub(in crate::sumeragi) fn key(
+        &self,
+    ) -> (wire::ConsensusRound, wire::BlockSubject) {
+        let AdapterEffect::StoreBody { round, subject, .. } = &self.effect else {
+            unreachable!("published Store census entries are StoreBody-only");
+        };
+        (*round, *subject)
+    }
+}
+
 /// Inert fingerprint for one Validate row published by the direct lifecycle
 /// Store-to-Validate transaction.
 ///
@@ -336,6 +720,7 @@ struct PublishedLifecycleValidateRetryMarkerV1 {
     effect: AdapterEffect,
     statement: RuntimeCandidateSemanticStatement,
     durable_receipt: DurableBodyReceipt,
+    store_terminal: PublishedLifecycleStoreTerminalRetrySealV1,
 }
 
 impl PublishedLifecycleValidateRetryMarkerV1 {
@@ -364,10 +749,68 @@ impl PublishedLifecycleValidateRetryMarkerV1 {
         {
             return None;
         }
+        let store_terminal = PublishedLifecycleStoreTerminalRetrySealV1::seal_exact(
+            effect,
+            pending,
+            durable_receipt,
+        )?;
         Some(Self {
             effect: effect.clone(),
             statement,
             durable_receipt: durable_receipt.clone(),
+            store_terminal,
+        })
+    }
+
+    fn prepare_from_published_store(
+        effect: &AdapterEffect,
+        durable_receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+        store_terminal: PublishedLifecycleStoreTerminalRetrySealV1,
+    ) -> Option<Self> {
+        let AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } = effect
+        else {
+            return None;
+        };
+        let published_statement = pending.candidate_statement()?;
+        let projected_store =
+            pending.project_validate_store_predecessor(effect, &store_terminal.effect)?;
+        let projected_store =
+            projected_store.published_store_retry_fingerprint(&store_terminal.effect)?;
+        if !pending.exactly_binds_adapter_effect(effect)
+            || tag.height() != round.height
+            || durable_receipt.context_id() != round.context_id
+            || durable_receipt.round() != *round
+            || durable_receipt.subject() != *subject
+            || published_statement.context_id() != round.context_id
+            || published_statement.proposal_round() != *round
+            || published_statement.subject() != Some(*subject)
+            || store_terminal.durable_receipt != *durable_receipt
+            || projected_store != store_terminal.pending
+        {
+            return None;
+        }
+        let relation = store_terminal
+            .statement
+            .body_stage_authority_relation_to(published_statement)?;
+        let statement = match relation {
+            RuntimeFetchAuthorityRelation::Upgrade => published_statement,
+            RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => {
+                store_terminal.statement
+            }
+        };
+        if !store_terminal.exactly_precedes_validate_marker(effect, statement) {
+            return None;
+        }
+        Some(Self {
+            effect: effect.clone(),
+            statement,
+            durable_receipt: durable_receipt.clone(),
+            store_terminal,
         })
     }
 
@@ -425,11 +868,111 @@ impl PublishedLifecycleValidateRetryMarkerV1 {
                 self.statement
             }
         };
+        if !self
+            .store_terminal
+            .exactly_precedes_validate_marker(effect, statement)
+        {
+            return Err(
+                "published lifecycle Validate retry lost its exact Store predecessor".to_owned(),
+            );
+        }
         Ok(Self {
             effect: effect.clone(),
             statement,
             durable_receipt: self.durable_receipt.clone(),
+            store_terminal: self.store_terminal.clone(),
         })
+    }
+
+    fn project_store_retry(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+        effect: &AdapterEffect,
+        incoming: &RuntimeEffectOwnership,
+    ) -> Result<(), String> {
+        if !self
+            .store_terminal
+            .exactly_precedes_validate_marker(&self.effect, self.statement)
+        {
+            return Err(
+                "published lifecycle Validate marker lost its exact Store predecessor".to_owned(),
+            );
+        }
+        let incoming_statement =
+            self.store_terminal
+                .project_retry(durable_receipt, effect, incoming)?;
+        if !matches!(
+            incoming_statement.body_stage_authority_relation_to(self.statement),
+            Some(RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Upgrade)
+        ) {
+            return Err(
+                "published lifecycle Store retry outran its published Validate authority"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Prove that an older physical Store completion is already represented
+    /// by this immutable published Validate successor.
+    fn project_historical_store_completion(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+        effect: &AdapterEffect,
+        task: &RuntimeEffectOwnership,
+    ) -> Result<(), String> {
+        if !self
+            .store_terminal
+            .exactly_precedes_validate_marker(&self.effect, self.statement)
+        {
+            return Err(
+                "published lifecycle Validate marker lost its exact Store predecessor".to_owned(),
+            );
+        }
+        let projected = self
+            .store_terminal
+            .project_historical_store_completion(durable_receipt, effect, task)?;
+        if !matches!(
+            projected
+                .statement
+                .body_stage_authority_relation_to(self.statement),
+            Some(RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Upgrade)
+        ) {
+            return Err(
+                "published lifecycle Store completion outran its published Validate authority"
+                    .to_owned(),
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Move-only preflight for installing one exact Store marker after a direct
+/// Fetch-to-Store transaction crosses durable publication.
+#[must_use = "the direct lifecycle Store marker has not crossed publication"]
+pub(in crate::sumeragi) struct PreparedPublishedLifecycleStoreRetryMarkerV1 {
+    durable_receipt: DurableBodyReceipt,
+    marker: Option<PublishedLifecycleStoreTerminalRetrySealV1>,
+}
+
+impl PreparedPublishedLifecycleStoreRetryMarkerV1 {
+    /// Bind the preflighted executor catalog slot to the exact Store child
+    /// sealed by the registry after the adapter preview.
+    pub(in crate::sumeragi) fn bind_store_successor(
+        mut self,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Result<Self, String> {
+        let marker = PublishedLifecycleStoreTerminalRetrySealV1::seal_published_store(
+            effect,
+            pending,
+            &self.durable_receipt,
+        )
+        .ok_or_else(|| {
+            "direct lifecycle Store marker changed its exact Fetch successor".to_owned()
+        })?;
+        self.marker = Some(marker);
+        Ok(self)
     }
 }
 
@@ -438,6 +981,7 @@ impl PublishedLifecycleValidateRetryMarkerV1 {
 #[must_use = "the direct lifecycle Validate marker has not crossed publication"]
 pub(in crate::sumeragi) struct PreparedPublishedLifecycleValidateRetryMarkerV1 {
     durable_receipt: DurableBodyReceipt,
+    store_terminal: PublishedLifecycleStoreTerminalRetrySealV1,
     marker: Option<PublishedLifecycleValidateRetryMarkerV1>,
 }
 
@@ -449,10 +993,11 @@ impl PreparedPublishedLifecycleValidateRetryMarkerV1 {
         effect: &AdapterEffect,
         pending: &PendingRuntimeEffectBinding,
     ) -> Result<Self, String> {
-        let marker = PublishedLifecycleValidateRetryMarkerV1::prepare(
+        let marker = PublishedLifecycleValidateRetryMarkerV1::prepare_from_published_store(
             effect,
             &self.durable_receipt,
             pending,
+            self.store_terminal.clone(),
         )
         .ok_or_else(|| {
             "direct lifecycle Validate marker changed its exact Store successor".to_owned()
@@ -491,13 +1036,113 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// sole decided body which may survive until this per-height executor is
     /// consumed at rollover.
     fn durable_validate_retry_seals_are_finalization_inert(&self) -> bool {
-        self.durable_validate_retry_seals
-            .keys()
-            .chain(self.published_lifecycle_validate_retry_markers.keys())
-            .all(|key| {
-                self.protected_decision
-                    .is_some_and(|(_, round, subject, _)| *key == (round, subject))
+        self.published_lifecycle_store_retry_markers
+            .iter()
+            .all(|(key, marker)| {
+                marker
+                    .publication_census_entry()
+                    .is_some_and(|entry| entry.key() == *key)
             })
+            && self
+                .durable_validate_retry_seals
+                .keys()
+                .chain(self.published_lifecycle_validate_retry_markers.keys())
+                .all(|key| {
+                    self.protected_decision
+                        .is_some_and(|(_, round, subject, _)| *key == (round, subject))
+                })
+    }
+
+    /// Project the complete immutable executor-side Store publication census.
+    ///
+    /// The lifecycle owner compares this map byte-for-byte with its
+    /// authenticated registry census immediately before all-row retirement.
+    pub(in crate::sumeragi) fn published_lifecycle_store_retry_census(
+        &self,
+    ) -> Result<
+        BTreeMap<
+            (wire::ConsensusRound, wire::BlockSubject),
+            PublishedLifecycleStoreRetryCensusEntryV1,
+        >,
+        String,
+    > {
+        let mut census = BTreeMap::new();
+        for (key, marker) in &self.published_lifecycle_store_retry_markers {
+            let entry = marker.publication_census_entry().ok_or_else(|| {
+                "executor published Store marker lost its immutable publication identity"
+                    .to_owned()
+            })?;
+            if entry.key() != *key || census.insert(*key, entry).is_some() {
+                return Err(
+                    "executor published Store marker changed or duplicated its body key"
+                        .to_owned(),
+                );
+            }
+        }
+        Ok(census)
+    }
+
+    /// Preflight one inert retry marker before the direct Fetch-to-Store
+    /// transaction takes the runtime borrow and publishes its Ledger row.
+    pub(in crate::sumeragi) fn prepare_published_lifecycle_store_retry_marker(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+    ) -> Result<PreparedPublishedLifecycleStoreRetryMarkerV1, EffectExecutorError> {
+        let key = (durable_receipt.round(), durable_receipt.subject());
+        let retained_body_is_exact =
+            self.recovered_bodies
+                .get(&key)
+                .is_some_and(|(manifest, retained)| {
+                    retained == durable_receipt
+                        && manifest.round == durable_receipt.round()
+                        && manifest.subject == durable_receipt.subject()
+                        && HashOf::new(manifest) == durable_receipt.manifest_hash()
+                });
+        if !retained_body_is_exact
+            || self.durable_bodies.get(&key) != Some(durable_receipt)
+            || self.pending_durable_validate_admissions.contains_key(&key)
+            || self.durable_validate_retry_seals.contains_key(&key)
+            || self
+                .published_lifecycle_store_retry_markers
+                .contains_key(&key)
+            || self
+                .published_lifecycle_validate_retry_markers
+                .contains_key(&key)
+        {
+            return Err(EffectExecutorError::Contract(
+                "direct lifecycle Store marker overlaps a foreign executor body owner".to_owned(),
+            ));
+        }
+        Ok(PreparedPublishedLifecycleStoreRetryMarkerV1 {
+            durable_receipt: durable_receipt.clone(),
+            marker: None,
+        })
+    }
+
+    /// Install the preflighted Store marker only after its exact lifecycle row
+    /// has crossed durable publication.
+    pub(in crate::sumeragi) fn commit_published_lifecycle_store_retry_marker(
+        &mut self,
+        prepared: PreparedPublishedLifecycleStoreRetryMarkerV1,
+    ) {
+        let marker = prepared
+            .marker
+            .expect("published direct lifecycle Store retains its sealed marker");
+        assert_eq!(marker.durable_receipt, prepared.durable_receipt);
+        let key = (
+            marker.durable_receipt.round(),
+            marker.durable_receipt.subject(),
+        );
+        assert_eq!(self.durable_bodies.get(&key), Some(&marker.durable_receipt));
+        assert!(!self.pending_durable_validate_admissions.contains_key(&key));
+        assert!(!self.durable_validate_retry_seals.contains_key(&key));
+        assert!(!self
+            .published_lifecycle_validate_retry_markers
+            .contains_key(&key));
+        let previous = self
+            .published_lifecycle_store_retry_markers
+            .insert(key, marker);
+        assert!(previous.is_none());
     }
 
     /// Preflight one inert retry marker before the direct Store-to-Validate
@@ -529,8 +1174,25 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     .to_owned(),
             ));
         }
+        let store_terminal = self
+            .published_lifecycle_store_retry_markers
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "direct lifecycle Validate marker omitted its published Store predecessor"
+                        .to_owned(),
+                )
+            })?;
+        if store_terminal.durable_receipt != *durable_receipt || !store_terminal.validates() {
+            return Err(EffectExecutorError::Contract(
+                "direct lifecycle Validate marker changed its published Store predecessor"
+                    .to_owned(),
+            ));
+        }
         Ok(PreparedPublishedLifecycleValidateRetryMarkerV1 {
             durable_receipt: durable_receipt.clone(),
+            store_terminal,
             marker: None,
         })
     }
@@ -552,6 +1214,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         assert_eq!(self.durable_bodies.get(&key), Some(&marker.durable_receipt));
         assert!(!self.pending_durable_validate_admissions.contains_key(&key));
         assert!(!self.durable_validate_retry_seals.contains_key(&key));
+        let store_terminal = self
+            .published_lifecycle_store_retry_markers
+            .remove(&key)
+            .expect("published Validate consumes its exact active Store marker");
+        assert_eq!(store_terminal, marker.store_terminal);
         let previous = self
             .published_lifecycle_validate_retry_markers
             .insert(key, marker);
@@ -573,11 +1240,70 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     .to_owned(),
             ));
         }
+        let key = (durable_receipt.round(), durable_receipt.subject());
+        let retained_body_is_exact =
+            self.recovered_bodies
+                .get(&key)
+                .is_some_and(|(manifest, retained)| {
+                    retained == durable_receipt
+                        && manifest.round == durable_receipt.round()
+                        && manifest.subject == durable_receipt.subject()
+                        && HashOf::new(manifest) == durable_receipt.manifest_hash()
+                });
+        if !retained_body_is_exact
+            || self.durable_bodies.get(&key) != Some(durable_receipt)
+            || self.pending_durable_validate_admissions.contains_key(&key)
+            || self.durable_validate_retry_seals.contains_key(&key)
+            || self
+                .published_lifecycle_store_retry_markers
+                .contains_key(&key)
+            || self
+                .published_lifecycle_validate_retry_markers
+                .contains_key(&key)
+        {
+            return Err(EffectExecutorError::Contract(
+                "recovered lifecycle Validate marker overlaps a foreign executor body owner"
+                    .to_owned(),
+            ));
+        }
+        let marker = PublishedLifecycleValidateRetryMarkerV1::prepare(
+            effect,
+            durable_receipt,
+            pending,
+        )
+        .ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "recovered lifecycle Validate marker changed its exact Store predecessor"
+                    .to_owned(),
+            )
+        })?;
+        let previous = self
+            .published_lifecycle_validate_retry_markers
+            .insert(key, marker);
+        debug_assert!(previous.is_none());
+        Ok(())
+    }
+
+    /// Reinstall the same inert Store marker from any authenticated recovered
+    /// durable Store row before live clocks are armed.
+    pub(in crate::sumeragi) fn install_recovered_published_lifecycle_store_retry_marker(
+        &mut self,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        durable_receipt: &DurableBodyReceipt,
+    ) -> Result<(), EffectExecutorError> {
+        self.ensure_open()?;
+        if self.runtime.lifecycle_live_clocks_are_armed() {
+            return Err(EffectExecutorError::Contract(
+                "recovered lifecycle Store marker installation followed live clock activation"
+                    .to_owned(),
+            ));
+        }
         let prepared = self
-            .prepare_published_lifecycle_validate_retry_marker(durable_receipt)?
-            .bind_validate_successor(effect, pending)
+            .prepare_published_lifecycle_store_retry_marker(durable_receipt)?
+            .bind_store_successor(effect, pending)
             .map_err(EffectExecutorError::Contract)?;
-        self.commit_published_lifecycle_validate_retry_marker(prepared);
+        self.commit_published_lifecycle_store_retry_marker(prepared);
         Ok(())
     }
 
@@ -683,6 +1409,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ) -> Result<(), EffectExecutorError> {
         if self.pending_durable_validate_admissions.contains_key(&key)
             || self.durable_validate_retry_seals.contains_key(&key)
+            || self
+                .published_lifecycle_store_retry_markers
+                .contains_key(&key)
             || self
                 .published_lifecycle_validate_retry_markers
                 .contains_key(&key)
@@ -825,6 +1554,114 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     /// Return whether a signed/diagnostic output is parked at the lifecycle cut.
     pub(in crate::sumeragi) fn has_pending_lifecycle_output_admissions(&self) -> bool {
         !self.pending_lifecycle_output_admissions.is_empty()
+    }
+
+    /// Install one exact pending output for a production-seam regression.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn install_pending_lifecycle_output_for_test(
+        &mut self,
+        pending: PendingLifecycleOutputAdmissionV1,
+    ) -> bool {
+        let key = pending.key();
+        match self.pending_lifecycle_output_admissions.entry(key) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(pending);
+                true
+            }
+            std::collections::btree_map::Entry::Occupied(_) => false,
+        }
+    }
+
+    /// Settle exactly one registry-attested direct Broadcast after Apply terminal settlement.
+    ///
+    /// Unlike the ordinary Runtime drain, this consumes only the pending-map key
+    /// sealed by the Ready `PendingAdapter` carrier. Later Broadcasts and all
+    /// diagnostic outputs remain untouched under the terminal-Apply fence.
+    pub(in crate::sumeragi) fn settle_apply_terminal_direct_broadcast<
+        S: V2EffectServices,
+    >(
+        &mut self,
+        owner: &mut ProductionLifecycleOwnerV1,
+        services: &mut S,
+        prepared: crate::sumeragi::v2_lifecycle_coordinator::PreparedApplyTerminalDirectBroadcastV1,
+    ) -> Result<ProductionApplyTerminalDirectBroadcastSettlementV1, EffectExecutorError> {
+        self.ensure_open()?;
+        let key = prepared.pending_key();
+        let Some(pending) = self.pending_lifecycle_output_admissions.remove(&key) else {
+            let error = EffectExecutorError::Contract(format!(
+                "post-Apply direct Broadcast ordinal {} lost its exact pending owner",
+                prepared.ordinal()
+            ));
+            return Err(self.close(error, services));
+        };
+        let settlement = owner.settle_apply_terminal_direct_broadcast(
+            prepared,
+            pending,
+            |effect, ownership| {
+                self.execute_lifecycle_output_service(effect, ownership, services)
+            },
+        );
+        match settlement {
+            ProductionLifecycleOutputAdmissionSettlementV1::Completed => {
+                Ok(ProductionApplyTerminalDirectBroadcastSettlementV1::Completed)
+            }
+            ProductionLifecycleOutputAdmissionSettlementV1::Deferred(pending) => {
+                if pending.key() != key
+                    || self
+                        .pending_lifecycle_output_admissions
+                        .insert(key, pending)
+                        .is_some()
+                {
+                    let error = EffectExecutorError::Contract(
+                        "post-Apply direct Broadcast retry changed or collided with its pending key"
+                            .to_owned(),
+                    );
+                    return Err(self.close(error, services));
+                }
+                Ok(ProductionApplyTerminalDirectBroadcastSettlementV1::SourceRetained)
+            }
+            ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted => {
+                let error = EffectExecutorError::Contract(
+                    "Ready post-Apply direct Broadcast unexpectedly terminal-stuttered".to_owned(),
+                );
+                Err(self.close(error, services))
+            }
+            ProductionLifecycleOutputAdmissionSettlementV1::Failed { failure, pending } => {
+                let pending_key = pending.key();
+                let collision = pending_key != key
+                    || self
+                        .pending_lifecycle_output_admissions
+                        .insert(key, pending)
+                        .is_some();
+                let error = if collision {
+                    EffectExecutorError::Contract(
+                        "failed post-Apply direct Broadcast changed or collided with its pending key"
+                            .to_owned(),
+                    )
+                } else {
+                    match failure {
+                        ProductionLifecycleOutputAdmissionFailureV1::Service(error) => error,
+                        ProductionLifecycleOutputAdmissionFailureV1::Projection(error) => {
+                            EffectExecutorError::Contract(format!(
+                                "post-Apply direct Broadcast projection failed: {error:?}"
+                            ))
+                        }
+                        ProductionLifecycleOutputAdmissionFailureV1::Registry(reason) => {
+                            EffectExecutorError::Contract(format!(
+                                "post-Apply direct Broadcast attestation failed: {reason:?}"
+                            ))
+                        }
+                        ProductionLifecycleOutputAdmissionFailureV1::Durability => {
+                            EffectExecutorError::Contract(
+                                "post-Apply direct Broadcast terminal publication failed"
+                                    .to_owned(),
+                            )
+                        }
+                    }
+                };
+                Err(self.close(error, services))
+            }
+        }
     }
 
     /// Settle each initially parked lifecycle output once in binding-key order.
@@ -2000,6 +2837,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     ));
                 }
                 let validate_ownership = ownership;
+                let store_terminal = DurableStoreTerminalRetrySealV1::seal_validate_predecessor(
+                    &effect,
+                    &validate_ownership,
+                    &receipt,
+                )
+                .ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "protected-lock ValidateBody could not seal its exact Store predecessor"
+                            .to_owned(),
+                    )
+                })?;
                 let prepared = PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_lock_validate(
                     effect.clone(),
                     validate_ownership.clone(),
@@ -2018,7 +2866,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     &effect,
                     &validate_ownership,
                     prepared.into_pending_durable_validate_admission(),
-                    None,
+                    Some(store_terminal),
                 )?;
                 return Ok(None);
             }

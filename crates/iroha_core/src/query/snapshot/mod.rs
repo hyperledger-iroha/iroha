@@ -593,9 +593,10 @@ mod tests {
             payload,
         );
         let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
-        iroha_data_model::query::QueryRequest::Start(iroha_data_model::query::QueryWithParams::new(
-            &qbox, params,
-        ))
+        iroha_data_model::query::QueryRequest::Start(
+            iroha_data_model::query::QueryWithParams::new(&qbox, params)
+                .expect("domain query type has a canonical mapping"),
+        )
     }
     fn find_permissions_start(
         account: AccountId,
@@ -610,9 +611,10 @@ mod tests {
             payload,
         );
         let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
-        iroha_data_model::query::QueryRequest::Start(iroha_data_model::query::QueryWithParams::new(
-            &qbox, params,
-        ))
+        iroha_data_model::query::QueryRequest::Start(
+            iroha_data_model::query::QueryWithParams::new(&qbox, params)
+                .expect("permission query type has a canonical mapping"),
+        )
     }
     fn domain_ids_from_batch(
         batch: iroha_data_model::query::QueryOutputBatchBoxTuple,
@@ -649,7 +651,8 @@ mod tests {
         );
         let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
         let qreq = iroha_data_model::query::QueryRequest::Start(
-            iroha_data_model::query::QueryWithParams::new(&qbox, params),
+            iroha_data_model::query::QueryWithParams::new(&qbox, params)
+                .expect("domain query type has a canonical mapping"),
         );
         let resp = run_on_snapshot(&state, &store, &ALICE_ID, qreq, QueryLimits::default())
             .expect("query ok");
@@ -718,7 +721,8 @@ mod tests {
         );
         let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
         let qreq = iroha_data_model::query::QueryRequest::Start(
-            iroha_data_model::query::QueryWithParams::new(&qbox, params),
+            iroha_data_model::query::QueryWithParams::new(&qbox, params)
+                .expect("asset-definition query type has a canonical mapping"),
         );
         let resp = run_on_snapshot(&state, &store, &ALICE_ID, qreq, QueryLimits::default())
             .expect("query ok");
@@ -793,7 +797,8 @@ mod tests {
         );
         let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
         let qreq = iroha_data_model::query::QueryRequest::Start(
-            iroha_data_model::query::QueryWithParams::new(&qbox, params),
+            iroha_data_model::query::QueryWithParams::new(&qbox, params)
+                .expect("asset-definition query type has a canonical mapping"),
         );
         let resp = run_on_snapshot_with_mode(
             &state,
@@ -862,7 +867,8 @@ mod tests {
         );
         let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
         let req = iroha_data_model::query::QueryRequest::Start(
-            iroha_data_model::query::QueryWithParams::new(&qbox, params),
+            iroha_data_model::query::QueryWithParams::new(&qbox, params)
+                .expect("domain query type has a canonical mapping"),
         );
         let snapshot_ids: std::collections::BTreeSet<_> = state
             .view()
@@ -952,7 +958,8 @@ mod tests {
         );
         let qbox: iroha_data_model::query::QueryBox<_> = Box::new(erased);
         let req = iroha_data_model::query::QueryRequest::Start(
-            iroha_data_model::query::QueryWithParams::new(&qbox, params),
+            iroha_data_model::query::QueryWithParams::new(&qbox, params)
+                .expect("domain query type has a canonical mapping"),
         );
         let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
         let iroha_data_model::query::QueryResponse::Iterable(first) =

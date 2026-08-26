@@ -173,7 +173,7 @@ public enum PrivacyCompiledProfileCatalogBridgeError: Error, Equatable, Sendable
     case invalidFixtureBundle
 }
 
-/// Stable ABI22 result of validating one typed local compiled-profile catalog.
+/// Stable ABI23 result of validating one typed local compiled-profile catalog.
 public enum PrivacyCompiledProfileCatalogValidationStatusV1: Int32, CaseIterable, Sendable {
     case valid = 0
     case nullPointer = 1
@@ -186,7 +186,7 @@ public enum PrivacyCompiledProfileCatalogValidationStatusV1: Int32, CaseIterable
     case invalidCatalog = 8
 }
 
-/// Stable ABI22 result of validating the Rust-derived exact-12 fixture bundle.
+/// Stable ABI23 result of validating the Rust-derived exact-12 fixture bundle.
 public enum PrivacyExact12FixtureValidationStatusV1: Int32, CaseIterable, Sendable {
     case valid = 0
     case nullPointer = 1
@@ -206,7 +206,7 @@ public enum PrivacyExact12FixtureValidationStatusV1: Int32, CaseIterable, Sendab
 /// establishes network activation or readiness. Fetch a fresh authoritative
 /// `PrivacyExact12CapabilityManifestV1` from live Torii before submitting a privacy proof.
 public enum PrivacyNativeBridge {
-    public static let requiredBridgeABIVersion: UInt32 = 22
+    public static let requiredBridgeABIVersion: UInt32 = 23
     public static let compiledProfileCatalogArchiveMaximumBytes = 256 * 1024
     public static let exact12CapabilityManifestArchiveMaximumBytes = 256 * 1024
     public static let exact12FixtureBundleMaximumBytes = 2 * 1024 * 1024
@@ -253,9 +253,9 @@ public enum PrivacyNativeBridge {
     }
 
     /// Validate Torii's canonical Exact12 manifest and bind every committed
-    /// compiled-profile tuple to this exact ABI22 binary.
+    /// compiled-profile tuple to this exact ABI23 binary.
     ///
-    /// ABI22 intentionally exposes no local capability-manifest getter: local
+    /// ABI23 intentionally exposes no local capability-manifest getter: local
     /// build metadata cannot manufacture committed governance state. Swift
     /// therefore performs the complete bounded canonical/semantic decode of
     /// the exact Torii bytes, while the existing native getter and validator

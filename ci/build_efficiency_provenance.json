@@ -189,30 +189,6 @@
       }
     },
     {
-      "donor": {
-        "blob": "5e647ef677e78cf874b5355ccd0f9b2d9d675d3d",
-        "mode": "100755"
-      },
-      "origin": "donor",
-      "path": "scripts/profile_build.py",
-      "protected_integration": {
-        "blob": "ed109951d2f875d3be31a944f4c1980550050e86",
-        "mode": "100755"
-      }
-    },
-    {
-      "donor": {
-        "blob": "972d109e32c319162fdc033e0ec74b4cf5360961",
-        "mode": "100755"
-      },
-      "origin": "donor",
-      "path": "scripts/profile_build.sh",
-      "protected_integration": {
-        "blob": "972d109e32c319162fdc033e0ec74b4cf5360961",
-        "mode": "100755"
-      }
-    },
-    {
       "donor": null,
       "origin": "protected_integration",
       "path": "scripts/profile_cargo_build.py",
@@ -251,18 +227,6 @@
       "path": "scripts/tests/check_source_file_budget_test.py",
       "protected_integration": {
         "blob": "5b98c11af1775a01efd89432e097d6ac80804ab6",
-        "mode": "100644"
-      }
-    },
-    {
-      "donor": {
-        "blob": "acd521a8f2d538ada6656b19dbf6b4fb63da509b",
-        "mode": "100644"
-      },
-      "origin": "donor",
-      "path": "scripts/tests/profile_build_test.py",
-      "protected_integration": {
-        "blob": "4213a162cc70f7d405c7f8b96fd66d5dfee811c6",
         "mode": "100644"
       }
     },

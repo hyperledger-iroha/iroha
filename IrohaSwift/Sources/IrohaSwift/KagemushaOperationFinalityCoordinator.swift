@@ -605,8 +605,8 @@ public struct KagemushaOperationFinalityResolution<State> {
 ///
 /// Callers retain ownership of durable state through the persistence closures.
 /// A submission is permitted only after the canonical status resource returns
-/// an authoritative HTTP 404, readiness has been revalidated, and the exact
-/// operation's attempt marker has been persisted. Ambiguous POST responses are
+/// an authoritative HTTP 404, command prerequisites have been revalidated, and
+/// the exact operation's attempt marker has been persisted. Ambiguous POST responses are
 /// resolved exclusively through the status resource.
 public enum KagemushaOperationFinalityCoordinator {
     typealias Sleeper = (_ nanoseconds: UInt64) async throws -> Void

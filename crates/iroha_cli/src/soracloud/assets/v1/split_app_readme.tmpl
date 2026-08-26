@@ -9,8 +9,8 @@ This template provides:
 - `dev.sh` to boot the frontend plus both local API processes
 - `build-and-sync.sh` to rebuild every artifact and refresh manifest hashes
 - `doctor.sh` to rebuild every artifact and fail-close on the split-app release contract
-- `release.sh` to rebuild, validate, and then deploy-or-upgrade the full app
-- `deploy.sh` as a compatibility wrapper around `release.sh`
+- `release.sh` to rebuild, validate, and submit the full app release
+- `deploy.sh` to rebuild and submit the exact create-deployment flow
 - `upgrade.sh` to rebuild, resync, and submit the app-wide upgrade flow
 
 ## Local dev
@@ -104,10 +104,10 @@ bytecode, refreshes every manifest hash with `sync-manifests --app-manifest`,
 and then runs `iroha soracloud app doctor`.
 
 `release.sh` runs `doctor.sh` first and then executes
-`iroha soracloud app release` with deploy-or-upgrade semantics so one
-documented command handles the full mixed-app upsert path without manual pin
-registration or SSH-only steps. `deploy.sh` is kept as the compatibility
-wrapper for operators that already call `./deploy.sh`. The manifest-driven
+`iroha soracloud app release` as the validated release flow without manual pin
+registration or SSH-only steps. `deploy.sh` runs `build-and-sync.sh` and then
+executes the distinct `iroha soracloud app deploy` create-deployment operation.
+The manifest-driven
 Each service entry in the app manifest carries a `bundle_file`, so the sync
 step refreshes both `container.bundle_hash` and the referenced service
 container hash before deploy.

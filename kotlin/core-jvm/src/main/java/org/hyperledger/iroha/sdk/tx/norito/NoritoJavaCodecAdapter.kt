@@ -53,11 +53,7 @@ class NoritoJavaCodecAdapter @JvmOverloads constructor(
         @JvmStatic
         @Throws(NoritoException::class)
         fun validateCanonicalTransactionPayload(encoded: ByteArray) {
-            try {
-                TransactionPayloadAdapter.validateCanonicalPayloadBytes(encoded)
-            } catch (ex: Exception) {
-                throw NoritoException("Invalid canonical Norito transaction payload", ex)
-            }
+            decodeCanonicalTransactionPayload(encoded)
         }
 
         /** Reject non-canonical payloads and payloads with a different admission intent. */
@@ -67,11 +63,25 @@ class NoritoJavaCodecAdapter @JvmOverloads constructor(
             encoded: ByteArray,
             expectedAdmissionIntent: TransactionAdmissionIntent,
         ) {
+            decodeCanonicalTransactionPayload(encoded, expectedAdmissionIntent)
+        }
+
+        /** Decode one exact canonical payload so callers can verify signature-bound fields. */
+        @JvmStatic
+        @JvmOverloads
+        @Throws(NoritoException::class)
+        fun decodeCanonicalTransactionPayload(
+            encoded: ByteArray,
+            expectedAdmissionIntent: TransactionAdmissionIntent? = null,
+        ): TransactionPayload {
             try {
                 val payload = TransactionPayloadAdapter.validateCanonicalPayloadBytes(encoded)
-                require(payload.admissionIntent == expectedAdmissionIntent) {
-                    "transaction payload admission intent must be $expectedAdmissionIntent"
+                if (expectedAdmissionIntent != null) {
+                    require(payload.admissionIntent == expectedAdmissionIntent) {
+                        "transaction payload admission intent must be $expectedAdmissionIntent"
+                    }
                 }
+                return payload
             } catch (ex: Exception) {
                 throw NoritoException("Invalid canonical Norito transaction payload", ex)
             }

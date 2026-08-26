@@ -61,9 +61,9 @@ fn creator_typestate_has_no_borrowed_replay_or_raw_digest_surface() {
     let verifier = include_str!("../../direct_common_a_v1.rs");
     assert!(verifier.contains("pub(super) fn begin("));
     assert!(verifier.contains("capability: &super::VerifiedPersistentWitnessDirectRelationUseV1"));
-    assert!(verifier.contains("#[cfg(test)]\npub(super) fn mint_rkg_round_one_selector_v1("));
+    assert!(!verifier.contains("fn mint_rkg_round_one_selector_v1("));
     let facade = include_str!("../../../active_exact_binding.rs");
-    assert!(facade.contains("#[cfg(test)]\npub(super) fn mint_rkg_round_one_selector_v1("));
+    assert!(!facade.contains("fn mint_rkg_round_one_selector_v1("));
 }
 
 #[test]

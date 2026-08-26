@@ -15,12 +15,13 @@ use crate::{
         soracloud::{
             AcknowledgeSoracloudAgentMessage, AdvanceSoracloudRollout, AdvertiseSoracloudInrouHost,
             AdvertiseSoracloudModelHost, AllowSoracloudAgentAutonomyArtifact,
-            ApproveSoracloudAgentWalletSpend, CheckpointSoracloudTrainingJob,
-            ClearSoracloudInrouReplicaRuntimeState, DeleteSoracloudServiceConfig,
-            DeleteSoracloudServiceSecret, DeploySoracloudAgentApartment, DeploySoracloudService,
-            EnqueueSoracloudAgentMessage, FinalizeSoracloudUploadedModelBundle,
-            HeartbeatSoracloudModelHost, JoinSoracloudHfSharedLease, LeaveSoracloudHfSharedLease,
-            MutateSoracloudState, PromoteSoracloudModelWeight, ReconcileSoracloudInrouPlacements,
+            ApplySoracloudOrderedMailboxResult, ApproveSoracloudAgentWalletSpend,
+            CheckpointSoracloudTrainingJob, ClearSoracloudInrouReplicaRuntimeState,
+            DeleteSoracloudServiceConfig, DeleteSoracloudServiceSecret,
+            DeploySoracloudAgentApartment, DeploySoracloudService, EnqueueSoracloudAgentMessage,
+            FinalizeSoracloudUploadedModelBundle, HeartbeatSoracloudModelHost,
+            JoinSoracloudHfSharedLease, LeaveSoracloudHfSharedLease, MutateSoracloudState,
+            PromoteSoracloudModelWeight, ReconcileSoracloudInrouPlacements,
             RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
             RecordSoracloudMailboxMessage, RecordSoracloudPrivateUploadedModelExecutionReceipt,
             RecordSoracloudRuntimeReceipt, RegisterSoracloudFhePolicy,
@@ -95,16 +96,6 @@ fn visit_core_setup_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &Instru
         .downcast_ref::<crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
     {
         visitor.visit_compare_and_set_primary_account_alias(v);
-    } else if let Some(v) = isi
-        .as_any()
-        .downcast_ref::<crate::isi::account_alias_lease::AcquireAccountAliasLease>()
-    {
-        visitor.visit_acquire_account_alias_lease(v);
-    } else if let Some(v) = isi
-        .as_any()
-        .downcast_ref::<crate::isi::domain_link::SetAccountAliasBinding>()
-    {
-        visitor.visit_set_account_alias_binding(v);
     } else {
         return false;
     }
@@ -566,6 +557,11 @@ fn visit_soracloud_training_instruction<V: Visit + ?Sized>(
         visitor.visit_record_soracloud_runtime_receipt(v);
     } else if let Some(v) = isi
         .as_any()
+        .downcast_ref::<ApplySoracloudOrderedMailboxResult>()
+    {
+        visitor.visit_apply_soracloud_ordered_mailbox_result(v);
+    } else if let Some(v) = isi
+        .as_any()
         .downcast_ref::<RecordSoracloudPrivateUploadedModelExecutionReceipt>()
     {
         visitor.visit_record_soracloud_private_uploaded_model_execution_receipt(v);
@@ -722,8 +718,6 @@ macro_rules! instruction_visitors {
             visit_configure_alias_auto_renew(&$crate::isi::alias_setup::ConfigureAliasAutoRenew),
             visit_rebind_account_alias(&$crate::isi::alias_setup::RebindAccountAlias),
             visit_compare_and_set_primary_account_alias(&$crate::isi::alias_setup::CompareAndSetPrimaryAccountAlias),
-            visit_acquire_account_alias_lease(&$crate::isi::account_alias_lease::AcquireAccountAliasLease),
-            visit_set_account_alias_binding(&$crate::isi::domain_link::SetAccountAliasBinding),
             visit_log(&Log),
             visit_custom_instruction(&CustomInstruction),
             visit_register_privacy_protocol_activation_v1(
@@ -883,6 +877,7 @@ macro_rules! instruction_visitors {
             visit_report_soracloud_service_lease_usage(&ReportSoracloudServiceLeaseUsage),
             visit_record_soracloud_mailbox_message(&RecordSoracloudMailboxMessage),
             visit_record_soracloud_runtime_receipt(&RecordSoracloudRuntimeReceipt),
+            visit_apply_soracloud_ordered_mailbox_result(&ApplySoracloudOrderedMailboxResult),
             visit_record_soracloud_private_uploaded_model_execution_receipt(
                 &RecordSoracloudPrivateUploadedModelExecutionReceipt
             ),

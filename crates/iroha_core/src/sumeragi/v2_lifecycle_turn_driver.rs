@@ -18,6 +18,7 @@ use crate::sumeragi::v2_runner::ordinary_ingress_consumer::{
     ProductionPreparedCertifiedServeV1, ProductionPreparedOrdinaryIngressConsumptionV1,
     consume_prepared_dequeued_v2_ingress, prepare_current_certified_serve_pre_admission,
 };
+use crate::sumeragi::v2_runtime::PreTimeoutLockedPrepareQcCutV1;
 
 /// Closed result of servicing one recovered Sign completion.
 ///
@@ -147,6 +148,10 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
             ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
         >,
     ),
+    /// One exact direct Broadcast was accepted and durably terminalized after Apply.
+    ApplyTerminalDirectBroadcastCompleted,
+    /// The exact post-Apply direct Broadcast retained its source for retry.
+    ApplyTerminalDirectBroadcastDeferred,
     /// An exact lifecycle completion was selected but its service owner changed.
     RestartRequired,
 }
@@ -174,6 +179,8 @@ impl ProductionLifecycleCompletionSelectionV1 {
             | Self::LifecycleDecisionApplyRequeued
             | Self::LifecycleDecisionApplyApplied
             | Self::LifecycleDecisionApplyCompletionDeferred
+            | Self::ApplyTerminalDirectBroadcastCompleted
+            | Self::ApplyTerminalDirectBroadcastDeferred
             | Self::LifecycleValidatePublished { .. }
             | Self::LifecycleValidateDeferred
             | Self::LifecycleValidateSidecarWaiting
@@ -210,6 +217,44 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionTurnV1<'cursor> {
 #[must_use = "a physically empty Completion turn must be dispatched or returned"]
 pub(in crate::sumeragi) struct ProductionLifecycleReadyCompletionTurnV1<'cursor> {
     runner: LifecycleCurrentRunnerTurn<'cursor>,
+}
+
+/// Closed Ready-work class permitted after the exact Apply terminal.
+///
+/// General Completion I/O passes through to the terminal Runtime fence. Only an authenticated
+/// recovered Broadcast may mutate the lifecycle owner, while an invalid census requires restart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ProductionApplyTerminalReadyWorkV1 {
+    /// No post-Apply output handoff owns this Completion cursor.
+    PassThrough,
+    /// One retained direct Broadcast must use its exact pending-output owner.
+    RetainedDirectOutput,
+    /// One authenticated recovered Broadcast may enter its exact-output wait.
+    RecoveredLifecycleBroadcast,
+    /// The Ready census is invalid and the lifecycle must restart.
+    RestartRequired,
+}
+
+/// Narrow the complete Ready census to work legal after Apply terminal settlement.
+pub(super) const fn classify_apply_terminal_ready_work(
+    ready_work: super::super::ProductionCompletionReadyWorkV1,
+) -> ProductionApplyTerminalReadyWorkV1 {
+    match ready_work {
+        super::super::ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast => {
+            ProductionApplyTerminalReadyWorkV1::RecoveredLifecycleBroadcast
+        }
+        super::super::ProductionCompletionReadyWorkV1::RetainedDirectOutput => {
+            ProductionApplyTerminalReadyWorkV1::RetainedDirectOutput
+        }
+        super::super::ProductionCompletionReadyWorkV1::Invalid => {
+            ProductionApplyTerminalReadyWorkV1::RestartRequired
+        }
+        super::super::ProductionCompletionReadyWorkV1::None
+        | super::super::ProductionCompletionReadyWorkV1::PassThrough
+        | super::super::ProductionCompletionReadyWorkV1::CompletionIo => {
+            ProductionApplyTerminalReadyWorkV1::PassThrough
+        }
+    }
 }
 
 /// Result of classifying only parked and physical Completion owners.
@@ -360,6 +405,19 @@ pub(in crate::sumeragi) enum ProductionLifecycleIngressTurnV1<'cursor> {
     Selected(ProductionLifecycleIngressSelectionV1),
 }
 
+/// Closed fair-ingress result under one runtime-frozen pre-timeout cut.
+#[must_use = "the fixed-cut pre-timeout ingress result must be consumed"]
+pub(in crate::sumeragi) enum ProductionPreTimeoutLockedPrepareQcIngressTurnV1 {
+    /// No pre-cut exact target or ordinary obsolete predecessor is selectable.
+    Empty,
+    /// One WAL-obsolete pre-cut predecessor crossed the ordinary dequeue tail.
+    ObsoletePredecessor(ProductionPreparedOrdinaryIngressTurnV1),
+    /// The exact deeply-previewed PrepareQC crossed the ordinary dequeue tail.
+    ExactPrepareQc(ProductionPreparedOrdinaryIngressTurnV1),
+    /// Queue ownership or exact dequeue authority failed closed.
+    RestartRequired,
+}
+
 fn lifecycle_context_for_ingress(
     context: &iroha_data_model::block::consensus_v2::HeightContext,
 ) -> super::super::schema::LifecycleContext {
@@ -411,6 +469,33 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
     runner: LifecycleCurrentRunnerTurn<'cursor>,
     terminal_subject: Option<iroha_data_model::block::consensus_v2::BlockSubject>,
 ) -> ProductionLifecycleIngressTurnV1<'cursor> {
+    let cut = match cut.fence_producer_publication_retaining() {
+        Ok(cut) => cut,
+        Err((FairIngressQueueCutError::QueueCutChanged, retained)) => {
+            iroha_logger::debug!(
+                "Certified-Serve fair-ingress ownership changed before authentication; retrying"
+            );
+            drop(retained);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::CertifiedServeRetry,
+            );
+        }
+        Err((error, retained)) => {
+            iroha_logger::error!(
+                ?error,
+                "Certified-Serve fair-ingress publication fence failed closed"
+            );
+            services
+                .lifecycle_output_guard()
+                .close_admission_for_restart();
+            drop(retained);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        }
+    };
     let classified = prepare_current_certified_serve_pre_admission(
         cut.selected_occurrence().inbound(),
         executor.context().height,
@@ -504,7 +589,7 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
             );
         }
     };
-    let selector = match executor.capture_lifecycle_ingress_selector(lifecycle_cut) {
+    let selector = match executor.capture_fenced_certified_serve_ingress_selector(lifecycle_cut) {
         Ok(selector) => selector,
         Err(LifecycleIngressSelectorError::QueueCutChanged) => {
             iroha_logger::debug!(
@@ -530,32 +615,31 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
             );
         }
     };
-    let (dequeue, target) =
-        match selector.into_locked_certified_serve_dequeue(receiver, &authenticated) {
-            Ok(prepared) => prepared,
-            Err(CertifiedServeExactDequeueErrorV1::Queue(
-                FairIngressQueueCutError::QueueCutChanged,
-            )) => {
-                iroha_logger::debug!(
-                    "Certified-Serve fair-ingress census changed before exact dequeue; retrying"
-                );
-                drop(runner);
-                return ProductionLifecycleIngressTurnV1::Selected(
-                    ProductionLifecycleIngressSelectionV1::CertifiedServeRetry,
-                );
-            }
-            Err(error) => {
-                let reason = error.detail();
-                iroha_logger::error!(reason, "Certified-Serve exact dequeue failed closed");
-                services
-                    .lifecycle_output_guard()
-                    .close_admission_for_restart();
-                drop(runner);
-                return ProductionLifecycleIngressTurnV1::Selected(
-                    ProductionLifecycleIngressSelectionV1::RestartRequired,
-                );
-            }
-        };
+    let (dequeue, target) = match selector.into_locked_certified_serve_dequeue(&authenticated) {
+        Ok(prepared) => prepared,
+        Err(CertifiedServeExactDequeueErrorV1::Queue(
+            FairIngressQueueCutError::QueueCutChanged,
+        )) => {
+            iroha_logger::debug!(
+                "Certified-Serve fair-ingress census changed before exact dequeue; retrying"
+            );
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::CertifiedServeRetry,
+            );
+        }
+        Err(error) => {
+            let reason = error.detail();
+            iroha_logger::error!(reason, "Certified-Serve exact dequeue failed closed");
+            services
+                .lifecycle_output_guard()
+                .close_admission_for_restart();
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        }
+    };
     let ready_ledger = match LifecycleLedgerV1::from_coordinator(&owner.coordinator) {
         Ok(ledger) => ledger,
         Err(error) => {
@@ -859,21 +943,22 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
     )
 }
 
-fn dequeue_prepared_ordinary_ingress<'cursor>(
+enum PreparedOrdinaryIngressDequeueV1 {
+    Prepared(ProductionPreparedOrdinaryIngressTurnV1),
+    RestartRequired,
+}
+
+fn prepare_ordinary_ingress_dequeue(
     receiver: &std::sync::Arc<FairV2Ingress>,
     cut: FairIngressTurnCut<'_>,
-    runner: LifecycleCurrentRunnerTurn<'cursor>,
     prepared_serve: Option<ProductionPreparedCertifiedServeV1>,
     terminal_subject: Option<iroha_data_model::block::consensus_v2::BlockSubject>,
     services: &ProductionV2Services,
-) -> ProductionLifecycleIngressTurnV1<'cursor> {
+) -> PreparedOrdinaryIngressDequeueV1 {
     let output_guard = services.lifecycle_output_guard();
     let Some(operation) = output_guard.begin_fail_stop_operation() else {
         drop(cut);
-        drop(runner);
-        return ProductionLifecycleIngressTurnV1::Selected(
-            ProductionLifecycleIngressSelectionV1::RestartRequired,
-        );
+        return PreparedOrdinaryIngressDequeueV1::RestartRequired;
     };
     match cut.dequeue_exact_retaining() {
         Ok((inbound, disposition)) => {
@@ -886,8 +971,7 @@ fn dequeue_prepared_ordinary_ingress<'cursor>(
                 std::sync::Arc::clone(&output_guard),
             );
             operation.complete();
-            drop(runner);
-            ProductionLifecycleIngressTurnV1::Ordinary(turn)
+            PreparedOrdinaryIngressDequeueV1::Prepared(turn)
         }
         Err((error, retained)) => {
             iroha_logger::error!(
@@ -896,7 +980,27 @@ fn dequeue_prepared_ordinary_ingress<'cursor>(
             );
             drop(operation);
             drop(retained);
-            drop(runner);
+            PreparedOrdinaryIngressDequeueV1::RestartRequired
+        }
+    }
+}
+
+fn dequeue_prepared_ordinary_ingress<'cursor>(
+    receiver: &std::sync::Arc<FairV2Ingress>,
+    cut: FairIngressTurnCut<'_>,
+    runner: LifecycleCurrentRunnerTurn<'cursor>,
+    prepared_serve: Option<ProductionPreparedCertifiedServeV1>,
+    terminal_subject: Option<iroha_data_model::block::consensus_v2::BlockSubject>,
+    services: &ProductionV2Services,
+) -> ProductionLifecycleIngressTurnV1<'cursor> {
+    let prepared =
+        prepare_ordinary_ingress_dequeue(receiver, cut, prepared_serve, terminal_subject, services);
+    drop(runner);
+    match prepared {
+        PreparedOrdinaryIngressDequeueV1::Prepared(turn) => {
+            ProductionLifecycleIngressTurnV1::Ordinary(turn)
+        }
+        PreparedOrdinaryIngressDequeueV1::RestartRequired => {
             ProductionLifecycleIngressTurnV1::Selected(
                 ProductionLifecycleIngressSelectionV1::RestartRequired,
             )
@@ -1181,7 +1285,6 @@ impl LaunchedProductionLifecycleV1 {
     /// Classification precedes cursor consumption. Ordinary work returns the
     /// same borrow-bound turn, while a recovered class is dispatched, drained,
     /// or settled internally without exposing mutually exclusive methods.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::sumeragi) fn drive_completion_pre_gate<'cursor>(
         &mut self,
         runner: LifecycleCurrentRunnerTurn<'cursor>,
@@ -1391,6 +1494,93 @@ impl LaunchedProductionLifecycleV1 {
         })
     }
 
+    /// Park only an authenticated recovered Broadcast after exact Apply settlement.
+    ///
+    /// Completion I/O is deliberately returned without dispatch so the opaque cursor advances to
+    /// the active-height driver's terminal Runtime fence. Invalid census state closes output and
+    /// requires restart.
+    pub(in crate::sumeragi) fn drive_apply_terminal_ready_broadcast_turn<'cursor>(
+        &mut self,
+        ready: ProductionLifecycleReadyCompletionTurnV1<'cursor>,
+        _permit: crate::sumeragi::v2_runner::LifecycleApplyTerminalReadyBroadcastPermitV1,
+    ) -> ProductionLifecycleCompletionTurnV1<'cursor> {
+        let ProductionLifecycleReadyCompletionTurnV1 { runner } = ready;
+        let fence = self.executor.lifecycle_reducer_fence_observation();
+        let selected = match classify_apply_terminal_ready_work(
+            self.owner.classify_completion_ready_work(fence),
+        ) {
+            ProductionApplyTerminalReadyWorkV1::PassThrough => {
+                return ProductionLifecycleCompletionTurnV1::PassThrough(runner);
+            }
+            ProductionApplyTerminalReadyWorkV1::RestartRequired => {
+                iroha_logger::error!(
+                    "Sumeragi v2 post-Apply recovered-Broadcast Ready census failed closed"
+                );
+                self.close_output_for_restart();
+                ProductionLifecycleCompletionSelectionV1::RestartRequired
+            }
+            ProductionApplyTerminalReadyWorkV1::RetainedDirectOutput => {
+                let prepared = self.owner.prepare_apply_terminal_direct_broadcast();
+                let Some(prepared) = prepared else {
+                    iroha_logger::error!(
+                        "Sumeragi v2 post-Apply direct Broadcast lost its exact Ready attestation"
+                    );
+                    self.close_output_for_restart();
+                    return ProductionLifecycleCompletionTurnV1::Selected(
+                        ProductionLifecycleCompletionSelectionV1::RestartRequired,
+                    );
+                };
+                let result = {
+                    let Self {
+                        owner,
+                        executor,
+                        services,
+                        ..
+                    } = self;
+                    executor.settle_apply_terminal_direct_broadcast(owner, services, prepared)
+                };
+                match result {
+                    Ok(
+                        crate::sumeragi::v2_effects::ProductionApplyTerminalDirectBroadcastSettlementV1::Completed,
+                    ) => ProductionLifecycleCompletionSelectionV1::ApplyTerminalDirectBroadcastCompleted,
+                    Ok(
+                        crate::sumeragi::v2_effects::ProductionApplyTerminalDirectBroadcastSettlementV1::SourceRetained,
+                    ) => ProductionLifecycleCompletionSelectionV1::ApplyTerminalDirectBroadcastDeferred,
+                    Err(error) => {
+                        iroha_logger::error!(
+                            %error,
+                            "Sumeragi v2 post-Apply direct Broadcast settlement failed closed"
+                        );
+                        self.close_output_for_restart();
+                        ProductionLifecycleCompletionSelectionV1::RestartRequired
+                    }
+                }
+            }
+            ProductionApplyTerminalReadyWorkV1::RecoveredLifecycleBroadcast => {
+                let result = {
+                    let Self {
+                        owner, services, ..
+                    } = self;
+                    owner.refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(
+                        services,
+                        runner.debt(),
+                    )
+                };
+                if let Err(error) = &result {
+                    iroha_logger::error!(
+                        ?error,
+                        "Sumeragi v2 post-Apply recovered Broadcast refanout failed closed"
+                    );
+                    self.close_output_for_restart();
+                }
+                ProductionLifecycleCompletionSelectionV1::RecoveredLifecycleBroadcastRefanout(
+                    result,
+                )
+            }
+        };
+        ProductionLifecycleCompletionTurnV1::Selected(selected)
+    }
+
     /// Dispatch fresh Ready work only after the caller proves Producer claims are eligible.
     pub(in crate::sumeragi) fn drive_ready_completion_turn<'cursor>(
         &mut self,
@@ -1418,7 +1608,8 @@ impl LaunchedProductionLifecycleV1 {
         let fence = self.executor.lifecycle_reducer_fence_observation();
         let selected = match self.owner.classify_completion_ready_work(fence) {
             super::super::ProductionCompletionReadyWorkV1::None
-            | super::super::ProductionCompletionReadyWorkV1::PassThrough => {
+            | super::super::ProductionCompletionReadyWorkV1::PassThrough
+            | super::super::ProductionCompletionReadyWorkV1::RetainedDirectOutput => {
                 return ProductionLifecycleCompletionTurnV1::PassThrough(runner);
             }
             super::super::ProductionCompletionReadyWorkV1::Invalid => {
@@ -1482,13 +1673,12 @@ impl LaunchedProductionLifecycleV1 {
         ProductionLifecycleCompletionTurnV1::Selected(selected)
     }
 
-    /// Service one exact outer Completion turn through the lifecycle owner.
+    /// Compose the split Completion pre-gate and Ready dispatcher for tests.
     ///
-    /// Direct callers retain the historical full turn. The active-height
-    /// driver uses the pre-gate and Ready dispatcher separately so an existing
-    /// non-Producer lease cannot reach this fresh-claim branch.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(in crate::sumeragi) fn drive_completion_turn<'cursor>(
+    /// Production callers must consume the sealed split API so an existing
+    /// non-Producer lease cannot reach the fresh-claim branch.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn drive_completion_turn_for_test<'cursor>(
         &mut self,
         runner: LifecycleCurrentRunnerTurn<'cursor>,
         lane_work: &mut V2LaneWorkAdapter,
@@ -1502,6 +1692,82 @@ impl LaunchedProductionLifecycleV1 {
             }
             ProductionLifecycleCompletionPreGateV1::Ready(ready) => {
                 self.drive_ready_completion_turn(ready)
+            }
+        }
+    }
+
+    /// Move at most one fair-ingress row under an already-frozen timeout cut.
+    ///
+    /// The exact PrepareQC predicate is a read-only runtime preview. Ordinary
+    /// obsolete retirement remains enabled only to release a durable
+    /// leader-wire predecessor; every non-obsolete row must match the exact
+    /// preview, and the queue's Blocked verdict is never bypassed.
+    pub(in crate::sumeragi) fn prepare_pre_timeout_locked_prepare_qc_ingress_turn(
+        &mut self,
+        cut: &PreTimeoutLockedPrepareQcCutV1,
+    ) -> ProductionPreTimeoutLockedPrepareQcIngressTurnV1 {
+        let terminal_subject = match self.executor.lifecycle_terminal_subject() {
+            Ok(subject) => subject,
+            Err(error) => {
+                iroha_logger::error!(
+                    %error,
+                    "pre-timeout PrepareQC terminal-subject projection failed closed"
+                );
+                self.close_output_for_restart();
+                return ProductionPreTimeoutLockedPrepareQcIngressTurnV1::RestartRequired;
+            }
+        };
+        let ingress = std::sync::Arc::clone(&self.leader_wire_ingress_binding.ingress);
+        let captured = {
+            let executor = &self.executor;
+            ingress.capture_next_ingress_turn_cut_before_with_obsolete_retirement(
+                cut.physical_cut(),
+                |occurrence| {
+                    let crate::sumeragi::message::BlockMessage::V2(message) =
+                        occurrence.inbound().message()
+                    else {
+                        return false;
+                    };
+                    matches!(
+                        &message.payload,
+                        iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::QuorumCertificate(_)
+                    ) && executor.wire_previews_pre_timeout_locked_prepare_qc(
+                        cut,
+                        &message.payload,
+                    )
+                },
+            )
+        };
+        let Some(captured) = (match captured {
+            Ok(captured) => captured,
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    "pre-timeout PrepareQC fair-ingress cut failed closed"
+                );
+                self.close_output_for_restart();
+                return ProductionPreTimeoutLockedPrepareQcIngressTurnV1::RestartRequired;
+            }
+        }) else {
+            return ProductionPreTimeoutLockedPrepareQcIngressTurnV1::Empty;
+        };
+        let obsolete =
+            captured.selected_disposition() == FairV2IngressDequeueDisposition::RetireObsolete;
+        match prepare_ordinary_ingress_dequeue(
+            &ingress,
+            captured,
+            None,
+            terminal_subject,
+            &self.services,
+        ) {
+            PreparedOrdinaryIngressDequeueV1::Prepared(turn) if obsolete => {
+                ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ObsoletePredecessor(turn)
+            }
+            PreparedOrdinaryIngressDequeueV1::Prepared(turn) => {
+                ProductionPreTimeoutLockedPrepareQcIngressTurnV1::ExactPrepareQc(turn)
+            }
+            PreparedOrdinaryIngressDequeueV1::RestartRequired => {
+                ProductionPreTimeoutLockedPrepareQcIngressTurnV1::RestartRequired
             }
         }
     }
@@ -2098,6 +2364,88 @@ impl LaunchedProductionLifecycleV1 {
 }
 
 impl ActivatedProductionLifecycleV1 {
+    /// Reconcile only current-height Serve owners retained across a terminal barrier.
+    ///
+    /// A capacity-blocked Serve has not committed its fair-ingress dequeue, so the direct
+    /// decided-lane recovery driver remains its sole consumer after this handoff. This includes
+    /// repair of a terminal-ready executor whose process-local claim returned to `Eligible`.
+    /// A completed Serve, by contrast, must publish its lifecycle terminal before finalization.
+    /// No ordinary Completion, Runtime, Ingress, or Fetch owner is admitted by this transition.
+    pub(in crate::sumeragi) fn reconcile_decided_lane_certified_serve(
+        &mut self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+        _permit: crate::sumeragi::v2_runner::LifecycleDecidedLaneRecoveryPermitV1,
+    ) -> Result<bool, String> {
+        let completion = match self
+            .launched
+            .services
+            .drain_lifecycle_certified_serve_completion()
+        {
+            Ok(completion) => completion.into_completion(),
+            Err(error) => {
+                self.launched
+                    .services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
+                return Err(error);
+            }
+        };
+        let mut progressed = false;
+        if let Some(completion) = completion {
+            if completion
+                .settle_deliver_and_acknowledge(&mut self.launched.owner, &self.launched.services)
+                .is_err()
+            {
+                self.launched
+                    .services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
+                return Err(
+                    "terminal-barrier Certified-Serve settlement requires restart".to_owned(),
+                );
+            }
+            progressed = true;
+        }
+
+        let Some(pending) = self.launched.pending_ingress_capacity.take() else {
+            return Ok(progressed);
+        };
+        match pending {
+            PendingIngressCapacityV1::CertifiedServe(wait) => match wait.status(&self.launched.services) {
+                crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::SamePending
+                | crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::Released => {
+                    // The lifecycle dequeue was never committed. Dropping only its same-service
+                    // capacity observation transfers the still-queued request to the sealed
+                    // decided-lane CurrentServe path.
+                    drop(wait);
+                    Ok(true)
+                }
+                crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::GenerationExhausted
+                | crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::ForeignOrDisconnected => {
+                    self.launched.pending_ingress_capacity =
+                        Some(PendingIngressCapacityV1::CertifiedServe(wait));
+                    self.launched
+                        .services
+                        .lifecycle_output_guard()
+                        .close_admission_for_restart();
+                    Err(
+                        "terminal-barrier Certified-Serve capacity owner lost its exact service"
+                            .to_owned(),
+                    )
+                }
+            },
+            pending @ (PendingIngressCapacityV1::CertifiedFetch(_)
+            | PendingIngressCapacityV1::RecoveredDecisionFetch(_)) => {
+                self.launched.pending_ingress_capacity = Some(pending);
+                self.launched
+                    .services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
+                Err("terminal barrier retained a non-Serve ingress-capacity owner".to_owned())
+            }
+        }
+    }
+
     /// Claim the oldest lifecycle-owned ProducerTurn at the exact bounded
     /// local-proposal point held by the serialized runner.
     pub(in crate::sumeragi) fn claim_producer_turn_for_local_proposal(
@@ -2123,14 +2471,15 @@ impl ActivatedProductionLifecycleV1 {
         self.launched.owner.settle_producer_turn_advanced(attempted)
     }
 
-    /// Forward one Completion turn without exposing the launched stack.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(in crate::sumeragi) fn drive_completion_turn<'cursor>(
+    /// Compose the split Completion API without exposing the launched stack in tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn drive_completion_turn_for_test<'cursor>(
         &mut self,
         runner: LifecycleCurrentRunnerTurn<'cursor>,
         lane_work: &mut V2LaneWorkAdapter,
     ) -> ProductionLifecycleCompletionTurnV1<'cursor> {
-        self.launched.drive_completion_turn(runner, lane_work)
+        self.launched
+            .drive_completion_turn_for_test(runner, lane_work)
     }
 
     /// Classify parked and physical Completion owners without claiming fresh Ready work.
@@ -2148,6 +2497,16 @@ impl ActivatedProductionLifecycleV1 {
         ready: ProductionLifecycleReadyCompletionTurnV1<'cursor>,
     ) -> ProductionLifecycleCompletionTurnV1<'cursor> {
         self.launched.drive_ready_completion_turn(ready)
+    }
+
+    /// Consume a physically empty Completion cursor through the sealed post-Apply Broadcast path.
+    pub(in crate::sumeragi) fn drive_apply_terminal_ready_broadcast_turn<'cursor>(
+        &mut self,
+        ready: ProductionLifecycleReadyCompletionTurnV1<'cursor>,
+        permit: crate::sumeragi::v2_runner::LifecycleApplyTerminalReadyBroadcastPermitV1,
+    ) -> ProductionLifecycleCompletionTurnV1<'cursor> {
+        self.launched
+            .drive_apply_terminal_ready_broadcast_turn(ready, permit)
     }
 
     /// Consume a physically empty Completion cursor only when the full
@@ -2168,6 +2527,16 @@ impl ActivatedProductionLifecycleV1 {
         runner: LifecycleCurrentRunnerTurn<'cursor>,
     ) -> ProductionLifecycleIngressTurnV1<'cursor> {
         self.launched.drive_ingress_turn(runner)
+    }
+
+    /// Forward one fixed-cut pre-timeout ingress preparation without exposing
+    /// the launched executor or queue owner.
+    pub(in crate::sumeragi) fn prepare_pre_timeout_locked_prepare_qc_ingress_turn(
+        &mut self,
+        cut: &PreTimeoutLockedPrepareQcCutV1,
+    ) -> ProductionPreTimeoutLockedPrepareQcIngressTurnV1 {
+        self.launched
+            .prepare_pre_timeout_locked_prepare_qc_ingress_turn(cut)
     }
 
     /// Emit a read-only, rate-limited ownership census when a non-empty fair
@@ -2359,6 +2728,7 @@ impl ActivatedProductionLifecycleV1 {
             iroha_crypto::HashOf<iroha_data_model::block::consensus_v2::CommitCertificateRequest>,
         >,
         npos_vrf: &mut crate::sumeragi::v2_npos::V2NposVrfLifecycle,
+        npos_beacon: &mut crate::sumeragi::v2_beacon::V2GlobalBeaconLifecycle,
     ) -> Result<
         ProductionPreparedOrdinaryIngressConsumptionV1,
         crate::sumeragi::v2_runner::V2RunnerError,
@@ -2387,6 +2757,7 @@ impl ActivatedProductionLifecycleV1 {
             block_sync,
             block_sync_request,
             npos_vrf,
+            npos_beacon,
         )
     }
 

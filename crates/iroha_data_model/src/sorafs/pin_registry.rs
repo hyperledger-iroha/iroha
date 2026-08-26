@@ -344,6 +344,7 @@ impl Default for PinPolicy {
 )]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(tag = "type", content = "value"))]
+#[norito(deny_unknown_fields)]
 pub enum StorageClass {
     /// Low-latency replicas servicing developer workflows.
     #[default]
@@ -800,6 +801,21 @@ impl ReplicationOrderId {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+}
+
+/// Derive the unique automatic replication-order identifier for a manifest.
+///
+/// Manifest digests are unique registry keys, so binding the automatic order solely to the
+/// digest makes its identity available before pin registration while preserving one canonical
+/// automatic order per manifest.
+#[must_use]
+pub fn derive_sorafs_auto_replication_order_id_v1(
+    manifest_digest: &ManifestDigest,
+) -> ReplicationOrderId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"sorafs:auto-replication-order:v1");
+    hasher.update(manifest_digest.as_bytes());
+    ReplicationOrderId::new(*hasher.finalize().as_bytes())
 }
 /// Governance identity of the exact provider-ingest completion signer policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]

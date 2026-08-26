@@ -129,9 +129,13 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::governance::ProposeDeployContract);
         $macro!(iroha_data_model::isi::governance::CastZkBallot);
         $macro!(iroha_data_model::isi::governance::CastPlainBallot);
-        $macro!(iroha_data_model::isi::governance::EnactReferendum);
-        $macro!(iroha_data_model::isi::governance::FinalizeReferendum);
         $macro!(iroha_data_model::isi::governance::PersistCouncilForEpoch);
+        $macro!(
+            iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1
+        );
+        $macro!(
+            iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1
+        );
         $macro!(iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade);
         $macro!(iroha_data_model::isi::runtime_upgrade::ActivateRuntimeUpgrade);
         $macro!(iroha_data_model::isi::runtime_upgrade::CancelRuntimeUpgrade);
@@ -887,6 +891,30 @@ mod tests {
             110,
             "first-release generated instruction count"
         );
+        let governance_specs = specs
+            .iter()
+            .filter(|spec| spec.type_name.contains("::isi::governance::"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            governance_specs.len(),
+            6,
+            "first-release generated governance instruction count"
+        );
+        for expected in [
+            std::any::type_name::<
+                iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1,
+            >(),
+            std::any::type_name::<
+                iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
+            >(),
+        ] {
+            assert!(
+                governance_specs
+                    .iter()
+                    .any(|spec| spec.type_name == expected),
+                "missing first-release Parliament lifecycle instruction `{expected}`"
+            );
+        }
         let retired = [
             ("zk", ["Sh", "ield"].concat()),
             ("zk", ["Zk", "Transfer"].concat()),

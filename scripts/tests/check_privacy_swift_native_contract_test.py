@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze the authenticated, no-skip ABI-22 Swift privacy lane."""
+"""Freeze the authenticated, no-skip ABI-23 Swift privacy lane."""
 
 from __future__ import annotations
 
@@ -158,7 +158,7 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
             '"MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT"',
             "configuredArtifactDirectory == nil",
             "must be outside the reviewed Iroha source tree",
-            "requiredBridgeAbiVersion = 22",
+            "requiredBridgeAbiVersion = 23",
             '"NoritoBridge.artifacts.json"',
             'manifest["native_bridge_abi_version"]',
             "validateBridgeArtifact(at: bridgeAbsolutePath)",

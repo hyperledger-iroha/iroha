@@ -21,7 +21,7 @@ use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
 #[cfg(test)]
-use zeroize::Zeroize;
+use zeroize::Zeroize as _;
 
 use super::{
     OFFLINE_CASH_EXACT_COMPONENT_RAW_SESSION_BYTES_V2,

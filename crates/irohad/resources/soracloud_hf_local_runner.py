@@ -30,47 +30,6 @@ def error(code: str, message: str) -> int:
     return emit({"ok": False, "error": {"code": code, "message": message}})
 
 
-def load_json(path: Path) -> dict | None:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-    except Exception:
-        return None
-
-
-def maybe_run_fixture(source_files_dir: Path, request_body: object, request: dict) -> dict | None:
-    config = load_json(source_files_dir / "config.json") or {}
-    fixture = config.get("_soracloud_fixture")
-    if not isinstance(fixture, dict):
-        return None
-
-    mode = fixture.get("mode", "echo")
-    if mode != "echo":
-        raise RuntimeError(f"unsupported _soracloud_fixture mode: {mode}")
-
-    if isinstance(request_body, dict):
-        inputs = request_body.get("inputs")
-        parameters = request_body.get("parameters")
-    else:
-        inputs = request_body
-        parameters = None
-
-    prefix = fixture.get("prefix", "")
-    return {
-        "backend": "local_fixture",
-        "repo_id": request.get("repo_id"),
-        "model_name": request.get("model_name"),
-        "pipeline_tag": request.get("pipeline_tag"),
-        "worker_instance_id": WORKER_INSTANCE_ID,
-        "worker_pid": os.getpid(),
-        "inputs": inputs,
-        "parameters": parameters,
-        "request_query": request.get("request_query"),
-        "text": f"{prefix}{inputs}",
-    }
-
-
 def build_transformers_pipeline(source_files_dir: Path, pipeline_tag: str):
     cache_key = (str(source_files_dir), pipeline_tag)
     cached = PIPELINE_CACHE.get(cache_key)
@@ -153,18 +112,6 @@ def run_transformers(request: dict, request_body: object) -> dict:
 
 
 def run_probe(request: dict, source_files_dir: Path) -> dict:
-    fixture_response = maybe_run_fixture(source_files_dir, {}, request)
-    if fixture_response is not None:
-        return {
-            "backend": fixture_response.get("backend", "local_fixture"),
-            "repo_id": request.get("repo_id"),
-            "model_name": request.get("model_name"),
-            "pipeline_tag": request.get("pipeline_tag"),
-            "worker_instance_id": WORKER_INSTANCE_ID,
-            "worker_pid": os.getpid(),
-            "probe": "ready",
-        }
-
     pipeline_tag = request.get("pipeline_tag")
     if not isinstance(pipeline_tag, str) or not pipeline_tag.strip():
         raise RuntimeError("generated HF source does not expose a usable pipeline_tag")
@@ -218,11 +165,7 @@ def handle_request(request: dict) -> dict:
         if probe_only:
             response = run_probe(request, source_files_dir)
         else:
-            fixture_response = maybe_run_fixture(source_files_dir, request_body, request)
-            if fixture_response is not None:
-                response = fixture_response
-            else:
-                response = run_transformers(request, request_body)
+            response = run_transformers(request, request_body)
     except Exception as exc:
         return {
             "ok": False,

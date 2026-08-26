@@ -690,33 +690,30 @@ fn capabilities_payload_includes_toolset_version() {
     );
 }
 #[test]
-fn sanitize_tool_input_schema_flattens_top_level_alias_combinators() {
+fn sanitize_tool_input_schema_flattens_top_level_combinators() {
     let schema = norito::json!({
         "type": "object",
         "additionalProperties": false,
         "anyOf": [
             {
                 "properties": {
-                    "sid": { "type": "string" }
+                    "alpha": { "type": "string" }
                 },
-                "required": ["sid"]
+                "required": ["alpha"]
             },
             {
                 "properties": {
-                    "session_id": {
-                        "type": "string",
-                        "description": "Alias for `sid`."
-                    }
+                    "beta": { "type": "string" }
                 },
-                "required": ["session_id"]
+                "required": ["beta"]
             }
         ],
         "properties": {
             "path": {
                 "type": "object",
                 "properties": {
-                    "sid": { "type": "string" },
-                    "session_id": { "type": "string" }
+                    "alpha": { "type": "string" },
+                    "beta": { "type": "string" }
                 }
             }
         }
@@ -736,8 +733,8 @@ fn sanitize_tool_input_schema_flattens_top_level_alias_combinators() {
         .get("properties")
         .and_then(Value::as_object)
         .expect("properties object");
-    assert!(properties.contains_key("sid"));
-    assert!(properties.contains_key("session_id"));
+    assert!(properties.contains_key("alpha"));
+    assert!(properties.contains_key("beta"));
     assert!(properties.contains_key("path"));
     let path_schema = properties
         .get("path")
@@ -871,7 +868,7 @@ fn sanitize_tool_input_schema_preserves_closed_typed_bodies() {
     );
 }
 #[test]
-fn descriptor_publishes_openai_compatible_input_schema() {
+fn descriptor_publishes_canonical_connect_sid_schema() {
     let tool = ToolSpec {
         name: "iroha.connect.session.delete".to_owned(),
         effect: ToolEffect::Write,
@@ -881,20 +878,13 @@ fn descriptor_publishes_openai_compatible_input_schema() {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "oneOf": [
-                {
-                    "properties": {
-                        "sid": { "type": "string" }
-                    },
-                    "required": ["sid"]
-                },
-                {
-                    "properties": {
-                        "session_id": { "type": "string" }
-                    },
-                    "required": ["session_id"]
+            "properties": {
+                "sid": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{43}$"
                 }
-            ]
+            },
+            "required": ["sid"]
         }),
     };
     let descriptor = tool.descriptor();
@@ -910,7 +900,15 @@ fn descriptor_publishes_openai_compatible_input_schema() {
         .and_then(Value::as_object)
         .expect("properties object");
     assert!(properties.contains_key("sid"));
-    assert!(properties.contains_key("session_id"));
+    assert!(!properties.contains_key("session_id"));
+    assert_eq!(
+        schema
+            .get("required")
+            .and_then(Value::as_array)
+            .and_then(|required| required.first())
+            .and_then(Value::as_str),
+        Some("sid")
+    );
 }
 #[test]
 fn jsonrpc_error_response_adds_stable_error_code() {
@@ -1107,7 +1105,6 @@ fn operator_sumeragi_snapshot_tools_are_absent_from_mcp() {
         "iroha.sumeragi.checkpoints",
         "iroha.sumeragi.consensus_keys",
         "iroha.sumeragi.bls_keys",
-        "iroha.sumeragi.key_lifecycle",
         "iroha.sumeragi.telemetry",
         "iroha.sumeragi.commit_qc.get",
         "iroha.sumeragi.evidence.count",

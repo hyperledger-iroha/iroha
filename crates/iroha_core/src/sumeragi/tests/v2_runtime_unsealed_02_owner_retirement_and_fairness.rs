@@ -1365,19 +1365,36 @@ fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
     let original = signed_runtime_proposal(&context, &keys, 1);
     let second = signed_runtime_proposal(&context, &keys, 2);
     let third = signed_runtime_proposal(&context, &keys, 3);
+    let authenticated_peer = super::super::authenticated_peer_for_test();
+    let enqueue_network = |runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
+                           message: wire::ConsensusMessageV2| {
+        let ownership = fair_runtime_ownership(
+            &message,
+            authenticated_peer.clone(),
+            authenticated_peer.clone(),
+        );
+        runtime.enqueue_network_with_ingress_ownership(message, ownership)
+    };
+    let can_admit_network = |runtime: &SerializedV2Runtime<SumeragiV2Adapter>,
+                             message: &wire::ConsensusMessageV2| {
+        let ownership = fair_runtime_ownership(
+            message,
+            authenticated_peer.clone(),
+            authenticated_peer.clone(),
+        );
+        runtime.can_admit_network_message_with_ingress_ownership(message, &ownership)
+    };
     let transport = match &original.payload {
         wire::ConsensusMessageV2Payload::Proposal(proposal) => wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::PayloadManifest(proposal.manifest.clone()),
         ),
         _ => unreachable!("fixture is a proposal"),
     };
-    let owner_tag = runtime
-        .enqueue_network(original.clone())
+    let owner_tag = enqueue_network(&mut runtime, original.clone())
         .expect("first authenticated proposal owns one normal slot");
     assert_eq!(runtime.queued_commands(), 1);
     assert_eq!(
-        runtime
-            .enqueue_network(original.clone())
+        enqueue_network(&mut runtime, original.clone())
             .expect("exact duplicate coalesces below the normal boundary"),
         owner_tag
     );
@@ -1388,22 +1405,20 @@ fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
     };
     proposal.signature[0] ^= 0x80;
     assert!(matches!(
-        runtime.enqueue_network(invalid),
+        enqueue_network(&mut runtime, invalid),
         Err(NetworkIngressError::Authentication(_))
     ));
     assert_eq!(runtime.queued_commands(), 1);
-    runtime
-        .enqueue_network(second.clone())
+    enqueue_network(&mut runtime, second.clone())
         .expect("non-identical authenticated proposal uses ordinary capacity");
     assert_eq!(runtime.queued_commands(), 2);
     assert_eq!(
-        runtime
-            .enqueue_network(original.clone())
+        enqueue_network(&mut runtime, original.clone())
             .expect("exact duplicate coalesces at reserved capacity"),
         owner_tag
     );
     assert!(matches!(
-        runtime.enqueue_network(third.clone()),
+        enqueue_network(&mut runtime, third.clone()),
         Err(NetworkIngressError::Backpressure(
             EnqueueError::ReservedCapacity
         ))
@@ -1426,11 +1441,10 @@ fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
         AdapterCommand::SignatureCompleted(vec![5]),
     );
     assert_eq!(runtime.queued_commands(), 4);
-    assert!(runtime.can_admit_network_message(&original));
-    assert!(!runtime.can_admit_network_message(&third));
+    assert!(can_admit_network(&runtime, &original));
+    assert!(!can_admit_network(&runtime, &third));
     assert_eq!(
-        runtime
-            .enqueue_network(original.clone())
+        enqueue_network(&mut runtime, original.clone())
             .expect("exact authenticated duplicate coalesces at full ordinary capacity"),
         owner_tag
     );
@@ -1447,21 +1461,21 @@ fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
         tags_before
     );
     assert!(matches!(
-        runtime.enqueue_network(third),
+        enqueue_network(&mut runtime, third),
         Err(NetworkIngressError::Backpressure(EnqueueError::Full))
     ));
     runtime.fail_closed = true;
     assert!(matches!(
-        runtime.enqueue_network(original.clone()),
+        enqueue_network(&mut runtime, original.clone()),
         Err(NetworkIngressError::FailClosed)
     ));
     assert!(matches!(
-        runtime.enqueue_network(transport.clone()),
+        enqueue_network(&mut runtime, transport.clone()),
         Err(NetworkIngressError::FailClosed)
     ));
     runtime.fail_closed = false;
     assert!(matches!(
-        runtime.enqueue_network(transport),
+        enqueue_network(&mut runtime, transport),
         Err(NetworkIngressError::TransportPayload)
     ));
 }
@@ -1649,6 +1663,7 @@ fn retiring_the_sole_certificate_does_not_fake_completion_headroom() {
         .pop_pacemaker_progress_with_ownership(
             |_| true,
             |command| command.is_certified_fence_escape(),
+            None,
         )
         .expect("the certified priority seam remains exact")
         .expect("the retained CommitQC is selectable");

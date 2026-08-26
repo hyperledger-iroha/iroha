@@ -51,15 +51,6 @@ impl SoracloudRuntime for CountingSoracloudRuntime {
                 health_status: SoraServiceHealthStatusV1::Healthy,
                 load_factor_bps: 111,
                 materialized_bundle_hash: request.bundle.container.bundle_hash,
-                rollout_handle: request
-                    .deployment
-                    .active_rollout
-                    .as_ref()
-                    .map(|rollout| rollout.rollout_handle.clone()),
-                pending_mailbox_message_count: request
-                    .authoritative_pending_mailbox_messages
-                    .saturating_sub(1),
-                last_receipt_id: None,
             }),
             runtime_receipt: SoraRuntimeReceiptV1 {
                 schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
@@ -83,13 +74,13 @@ impl SoracloudRuntime for CountingSoracloudRuntime {
                     format!("test-result:{}", request.mailbox_message.message_id).as_bytes(),
                 ),
                 certified_by: SoraCertifiedResponsePolicyV1::None,
-                emitted_sequence: request.execution_sequence,
+                // Ordered-mailbox receipts are submitted with an unassigned sequence; the
+                // ledger assigns the authoritative Soracloud sequence atomically on apply.
+                emitted_sequence: 0,
                 mailbox_message_id: Some(request.mailbox_message.message_id),
                 journal_artifact_hash: None,
                 checkpoint_artifact_hash: None,
-                placement_id: None,
-                selected_validator_account_id: None,
-                selected_peer_id: None,
+                execution_host: None,
             },
         })
     }
@@ -221,28 +212,31 @@ fn seed_soracloud_mailbox_fixture(
             health_status: SoraServiceHealthStatusV1::Healthy,
             load_factor_bps: 77,
             materialized_bundle_hash: bundle_hash,
-            rollout_handle: None,
-            pending_mailbox_message_count: 1,
-            last_receipt_id: None,
         },
     );
-    let message_id = Hash::new(b"portal-mailbox-message");
-    world.soracloud_mailbox_messages_mut_for_testing().insert(
-        message_id,
-        SoraServiceMailboxMessageV1 {
-            schema_version: iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
-            message_id,
-            from_service: service_name.clone(),
-            from_handler: "update".parse().expect("valid from handler"),
-            to_service: service_name.clone(),
-            to_handler: "update".parse().expect("valid to handler"),
-            payload_bytes: b"portal-mailbox-payload".to_vec(),
-            payload_commitment: Hash::new(b"portal-mailbox-payload"),
-            enqueue_sequence: 1,
-            available_after_sequence: 1,
-            expires_at_sequence: Some(16),
-        },
-    );
+    let mut message = SoraServiceMailboxMessageV1 {
+        schema_version: iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+        message_id: Hash::prehashed([0; Hash::LENGTH]),
+        from_service: service_name.clone(),
+        from_service_version: "1.0.0".to_string(),
+        from_handler: "update".parse().expect("valid from handler"),
+        to_service: service_name.clone(),
+        to_service_version: "1.0.0".to_string(),
+        to_handler: "update".parse().expect("valid to handler"),
+        payload_bytes: b"portal-mailbox-payload".to_vec(),
+        payload_commitment: Hash::new(b"portal-mailbox-payload"),
+        delivery_delay_blocks: 0,
+        enqueue_sequence: 1,
+        enqueue_height: 1,
+        available_after_height: 1,
+        expires_at_height: 16,
+    };
+    message.message_id =
+        iroha_data_model::soracloud::derive_soracloud_mailbox_message_id_v1(&message);
+    let message_id = message.message_id;
+    world
+        .soracloud_mailbox_messages_mut_for_testing()
+        .insert(message_id, message);
     (service_name, message_id)
 }
 #[test]
@@ -827,8 +821,7 @@ fn validate_and_record_transactions_executes_soracloud_mailbox_runtime_once() {
             .map(|(_receipt_id, receipt)| receipt.clone())
             .expect("runtime receipt recorded");
         assert_eq!(runtime.ordered_mailbox_call_count(), 1);
-        assert_eq!(runtime_state.pending_mailbox_message_count, 0);
-        assert_eq!(runtime_state.last_receipt_id, Some(receipt.receipt_id));
+        assert_eq!(runtime_state.load_factor_bps, 111);
         assert_eq!(receipt.mailbox_message_id, Some(message_id));
     }
     let follow_up_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -908,8 +901,7 @@ fn validate_and_record_transactions_persists_soracloud_mailbox_state_mutations()
             ))
             .expect("mailbox-driven service state entry");
         assert_eq!(runtime.ordered_mailbox_call_count(), 1);
-        assert_eq!(runtime_state.pending_mailbox_message_count, 0);
-        assert_eq!(runtime_state.last_receipt_id, Some(receipt.receipt_id));
+        assert_eq!(runtime_state.load_factor_bps, 111);
         assert_eq!(receipt.mailbox_message_id, Some(message_id));
         assert_eq!(entry.encryption, SoraStateEncryptionV1::Plaintext);
         assert_eq!(entry.payload_bytes.get(), 28);
@@ -928,7 +920,8 @@ fn validate_and_record_transactions_persists_soracloud_mailbox_state_mutations()
     assert_eq!(
         crate::smartcontracts::isi::soracloud::next_soracloud_audit_sequence(
             &follow_up_transaction
-        ),
+        )
+        .expect("runtime receipt must leave an available Soracloud audit sequence"),
         receipt.emitted_sequence.saturating_add(1),
         "runtime receipts must advance the shared Soracloud execution sequence"
     );

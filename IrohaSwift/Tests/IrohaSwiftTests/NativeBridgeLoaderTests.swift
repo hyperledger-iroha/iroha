@@ -4,23 +4,120 @@ import XCTest
 @testable import IrohaSwift
 
 final class NativeBridgeLoaderTests: XCTestCase {
-    func testExpectedBridgeAbiVersionIsTwentyTwoForPackagedArtifacts() {
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64_x86_64"), 22)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 22)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 22)
+    func testExpectedBridgeAbiVersionIsTwentyThreeForPackagedArtifacts() {
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64_x86_64"), 23)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 23)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 23)
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(20, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(18, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(19, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(nil, for: "macos-arm64_x86_64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(21, for: "macos-arm64_x86_64"))
-        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(22, for: "macos-arm64_x86_64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(22, for: "macos-arm64_x86_64"))
+        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(23, for: "macos-arm64_x86_64"))
         XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
             "connect_norito_kagemusha_recursive_spend_artifact_begin_v4"
         ))
         XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
             "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4"
         ))
+        XCTAssertEqual(
+            NoritoBridgeLoader.parliamentTimedOvnWalletRequiredSymbols,
+            [
+                "connect_norito_parliament_timed_ovn_verify_casting_proof_v1",
+                "connect_norito_parliament_timed_ovn_registration_from_proof_v1",
+                "connect_norito_parliament_timed_ovn_ballot_from_proof_v1"
+            ]
+        )
     }
+
+    func testParliamentTimedOvnWalletUsesClosedChoiceAndErrorSets() {
+        XCTAssertEqual(ParliamentTimedOvnBallotChoiceV1.aye.rawValue, 0)
+        XCTAssertEqual(ParliamentTimedOvnBallotChoiceV1.nay.rawValue, 1)
+        XCTAssertEqual(ParliamentTimedOvnBallotChoiceV1.abstain.rawValue, 2)
+        XCTAssertEqual(NativeBridgeError.fromStatus(-505), .parliamentTimedOvnWallet)
+    }
+
+    func testParliamentTimedOvnTrustAnchorSnapshotsInputsAndArchiveOnlySurfaceIsGone() throws {
+        var network = Data(repeating: 1, count: 32)
+        var context = Data(repeating: 3, count: 32)
+        var ballot = Data(repeating: 5, count: 32)
+        let anchor = try ParliamentTimedOvnCastingTrustAnchorV1(
+            networkID: network,
+            trustedCheckpointHeight: 7,
+            trustedCheckpointContextID: context,
+            expectedBallotAttemptID: ballot
+        )
+        network.resetBytes(in: network.startIndex..<network.endIndex)
+        context.resetBytes(in: context.startIndex..<context.endIndex)
+        ballot.resetBytes(in: ballot.startIndex..<ballot.endIndex)
+        XCTAssertEqual(
+            anchor,
+            try ParliamentTimedOvnCastingTrustAnchorV1(
+                networkID: Data(repeating: 1, count: 32),
+                trustedCheckpointHeight: 7,
+                trustedCheckpointContextID: Data(repeating: 3, count: 32),
+                expectedBallotAttemptID: Data(repeating: 5, count: 32)
+            )
+        )
+        XCTAssertThrowsError(
+            try ParliamentTimedOvnCastingTrustAnchorV1(
+                networkID: Data(repeating: 1, count: 31),
+                trustedCheckpointHeight: 7,
+                trustedCheckpointContextID: Data(repeating: 3, count: 32),
+                expectedBallotAttemptID: Data(repeating: 5, count: 32)
+            )
+        )
+
+        var packageRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<3 { packageRoot.deleteLastPathComponent() }
+        let source = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/IrohaSwift/NativeBridge.swift"),
+            encoding: .utf8
+        )
+        XCTAssertFalse(source.contains("registration_from_seed_v1"))
+        XCTAssertFalse(source.contains("ballot_from_seed_v1"))
+        let proofGate = try XCTUnwrap(source.range(of: "let verifyStatus ="))
+        let seedBorrow = try XCTUnwrap(source.range(of: "return try seedHandle.withUnsafeSeedBytes"))
+        XCTAssertLessThan(proofGate.lowerBound, seedBorrow.lowerBound)
+    }
+
+    #if canImport(Darwin)
+    func testParliamentTimedOvnWalletFailsClosedWhenBridgeIsDisabled() throws {
+        struct SeedHandle: ParliamentTimedOvnSeedHandle {
+            let seed: [UInt8]
+
+            func withUnsafeSeedBytes(
+                _ body: (UnsafeRawBufferPointer) throws -> Data
+            ) throws -> Data {
+                try seed.withUnsafeBytes(body)
+            }
+        }
+
+        NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(false)
+        defer { NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil) }
+        let handle = SeedHandle(seed: [UInt8](repeating: 7, count: 32))
+        let trustAnchor = try ParliamentTimedOvnCastingTrustAnchorV1(
+            networkID: Data(repeating: 1, count: 32),
+            trustedCheckpointHeight: 7,
+            trustedCheckpointContextID: Data(repeating: 3, count: 32),
+            expectedBallotAttemptID: Data(repeating: 5, count: 32)
+        )
+        XCTAssertThrowsError(
+            try NoritoNativeBridge.shared.parliamentTimedOvnRegistrationFromProofV1(
+                castingProofResponseNorito: Data([1]),
+                trustAnchor: trustAnchor,
+                authority: "ed0120" + String(repeating: "00", count: 32),
+                seedHandle: handle
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? ParliamentTimedOvnNativeWalletError,
+                .bridgeUnavailable
+            )
+        }
+    }
+    #endif
 
     #if os(macOS)
     func testMacOSLoaderSelectsTheUniversalSlice() {
@@ -168,7 +265,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let manifest = """
         {
           "version": "\(NoritoBridgeLoader.expectedVersion)",
-          "native_bridge_abi_version": 22,
+          "native_bridge_abi_version": 23,
           "hashes": {
             "\(original.identifier)": "\(hashHex)"
           }
@@ -210,7 +307,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         )
         XCTAssertEqual(
             status,
-            .abiMismatch(path: bridgeURL.path, expected: 22, actual: 19)
+            .abiMismatch(path: bridgeURL.path, expected: 23, actual: 19)
         )
     }
 
@@ -238,7 +335,7 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let manifest = """
         {
           "version": "\(NoritoBridgeLoader.expectedVersion)",
-          "native_bridge_abi_version": 22,
+          "native_bridge_abi_version": 23,
           "hashes": {
             "\(original.identifier)": "\(hashHex)"
           }

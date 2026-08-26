@@ -376,39 +376,6 @@ pub(crate) fn current_axt_slot_for_state(state: &(impl StateReadOnly + ?Sized)) 
         .authenticated_query_ledger_time_ms()
         .map(|ledger_time_ms| ledger_time_ms / slot_length.get())
 }
-fn dataspace_id_for_alias_segment(
-    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    dataspace_alias: &str,
-) -> Option<DataSpaceId> {
-    if dataspace_alias.eq_ignore_ascii_case("universal") {
-        return Some(DataSpaceId::UNIVERSAL);
-    }
-    catalog.by_alias(dataspace_alias).map(|entry| entry.id)
-}
-fn legacy_transfer_v1_source_scope_for_world<W: WorldReadOnly>(
-    world: &W,
-    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-    definition_id: &AssetDefinitionId,
-) -> Result<AssetBalanceScope, ivm::VMError> {
-    let definition = world
-        .asset_definition(definition_id)
-        .map_err(|_| ivm::VMError::DecodeError)?;
-    if definition.balance_scope_policy() == AssetBalancePolicy::Global {
-        return Ok(AssetBalanceScope::Global);
-    }
-    let dataspace_alias = definition
-        .owning_domain()
-        .as_ref()
-        .map(|domain| domain.dataspace().as_ref().to_owned());
-    let Some(dataspace_alias) = dataspace_alias else {
-        return Err(ivm::VMError::PermissionDenied);
-    };
-    let Some(dataspace) = dataspace_id_for_alias_segment(dataspace_catalog, &dataspace_alias)
-    else {
-        return Err(ivm::VMError::PermissionDenied);
-    };
-    Ok(AssetBalanceScope::Dataspace(dataspace))
-}
 /// Convert a registered definition policy and exact AXT intent dataspace into
 /// the public balance scope that the remote proof is claiming.
 pub(crate) const fn remote_spend_asset_scope_from_policy(
@@ -1294,16 +1261,6 @@ pub trait QueryStateRefOps {
         &self,
         definition_id: &AssetDefinitionId,
     ) -> Result<AxtAssetIncarnationV1, ivm::VMError>;
-    /// Resolve the source balance scope for a legacy transfer-v1 syscall.
-    ///
-    /// # Errors
-    ///
-    /// Returns an [`ivm::VMError`] if the asset definition is missing or a
-    /// dataspace-restricted definition cannot be mapped to its home dataspace.
-    fn legacy_transfer_v1_source_scope(
-        &self,
-        definition_id: &AssetDefinitionId,
-    ) -> Result<AssetBalanceScope, ivm::VMError>;
     /// Load a named parameter from the current parameter set.
     ///
     /// # Errors
@@ -1878,33 +1835,6 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             return Err(ivm::VMError::PermissionDenied);
         }
         Ok(current)
-    }
-    fn legacy_transfer_v1_source_scope(
-        &self,
-        definition_id: &AssetDefinitionId,
-    ) -> Result<AssetBalanceScope, ivm::VMError> {
-        match *self {
-            QueryStateRef::View(view) => legacy_transfer_v1_source_scope_for_world(
-                view.world(),
-                &view.nexus.dataspace_catalog,
-                definition_id,
-            ),
-            QueryStateRef::QueryView(view) => legacy_transfer_v1_source_scope_for_world(
-                view.world(),
-                &view.nexus.dataspace_catalog,
-                definition_id,
-            ),
-            QueryStateRef::Block(block) => legacy_transfer_v1_source_scope_for_world(
-                block.world(),
-                &block.nexus.dataspace_catalog,
-                definition_id,
-            ),
-            QueryStateRef::Transaction(tx) => legacy_transfer_v1_source_scope_for_world(
-                tx.world(),
-                &tx.nexus.dataspace_catalog,
-                definition_id,
-            ),
-        }
     }
     fn parameter_by_name(&self, name: &Name) -> Result<Parameter, ivm::VMError> {
         match *self {
@@ -2896,7 +2826,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         host.set_durable_state_snapshot_from_world(view.world());
         host.set_output_limits_from_parameters(view.world().parameters().smart_contract());
         host.set_public_inputs_from_parameters(view.world().parameters());
-        host.set_vrf_epoch_seeds_from_world(view.world());
+        host.set_vrf_epoch_seeds_from_state(&view);
         host.set_bound_contract_records_by_subject_snapshot(
             crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(&view),
         );
@@ -4222,19 +4152,76 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         Ok(roots)
     }
-    /// Hydrate VRF epoch seed snapshots from world storage.
-    pub fn set_vrf_epoch_seeds_from_world(&mut self, world: &impl WorldReadOnly) {
-        self.vrf_epoch_seeds = world
-            .vrf_epochs()
-            .iter()
-            .map(|(epoch, record)| (*epoch, record.seed))
-            .collect();
+    /// Hydrate the ABI-V1 `VRF_EPOCH_SEED` projection from finalized global pulses.
+    ///
+    /// The syscall name and response layout remain stable, but consensus
+    /// commit/reveal records are retired. Only pulses at the exact configured
+    /// epoch boundary are projected, after full public-session/signature and
+    /// canonical block-anchor verification. Missing or conflicting evidence
+    /// leaves that epoch absent so the syscall fails closed with `found=false`.
+    pub fn set_vrf_epoch_seeds_from_state(&mut self, state: &impl StateReadOnly) {
+        let Some(epoch_length) = state
+            .world()
+            .sumeragi_npos_parameters()
+            .map(|params| params.epoch_length_blocks().get())
+        else {
+            self.vrf_epoch_seeds.clear();
+            return;
+        };
+        let maximum_height = u64::try_from(state.height()).unwrap_or(u64::MAX);
+        let mut projected = BTreeMap::new();
+        let mut conflicted = BTreeSet::new();
+        for (_, candidate) in state.world().global_beacon_pulses().iter() {
+            let Some(boundary_height) = candidate.height.checked_add(1) else {
+                continue;
+            };
+            if candidate.height > maximum_height
+                || boundary_height % epoch_length != 0
+                || candidate.finalized_chain_anchor.height.checked_add(1) != Some(candidate.height)
+            {
+                continue;
+            }
+            let Some(anchor_index) = candidate
+                .finalized_chain_anchor
+                .height
+                .checked_sub(1)
+                .and_then(|height| usize::try_from(height).ok())
+            else {
+                continue;
+            };
+            if state.block_hashes().get(anchor_index)
+                != Some(&candidate.finalized_chain_anchor.block_hash)
+            {
+                continue;
+            }
+            let Ok(pulse) = crate::beacon::verified_persisted_global_threshold_beacon_pulse_v1(
+                state.world(),
+                state.network_id(),
+                *candidate,
+            ) else {
+                continue;
+            };
+            let successor_epoch = boundary_height / epoch_length;
+            let seed = crate::beacon::global_threshold_beacon_npos_successor_seed_v1(
+                &pulse,
+                boundary_height,
+                successor_epoch,
+            );
+            if projected.insert(successor_epoch, seed).is_some() {
+                conflicted.insert(successor_epoch);
+            }
+        }
+        for epoch in conflicted {
+            projected.remove(&epoch);
+        }
+        self.vrf_epoch_seeds = projected;
     }
     /// Hydrate ZK snapshots (roots, elections, verifying keys) from a world view.
     ///
     /// # Errors
-    /// Returns an error if an election shape, confidential tree, or verifying key
-    /// registry entry is inconsistent.
+    /// Returns an error if an election selector or shape, confidential tree, or
+    /// verifying key registry entry is inconsistent. Validation completes before
+    /// any existing ZK snapshot is replaced.
     pub(crate) fn set_zk_snapshots_from_world(
         &mut self,
         world: &impl WorldReadOnly,
@@ -4246,6 +4233,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 .map_err(|_| ivm::VMError::NoritoInvalid)?;
             elections.insert(id.clone(), (st.options, st.finalized, st.tally.clone()));
         }
+        // Validate selector syntax as well as tally shape before replacing any
+        // reusable host snapshot. `set_zk_elections_snapshot` performs this
+        // complete validation too, but calling it after the other setters would
+        // otherwise allow an invalid selector to return with partially replaced
+        // verifying-key and tree snapshots.
+        Self::validate_zk_elections_snapshot(&elections)?;
         let roots = Self::validated_zk_roots_snapshot(
             world
                 .zk_assets()
@@ -4253,14 +4246,22 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 .map(|(asset_id, state)| (asset_id.clone(), state.clone()))
                 .collect(),
         )?;
+        let native_kagemusha_v4_ids =
+            crate::smartcontracts::isi::offline::exact_kagemusha_v4_native_verifier_ids_for_hydration(
+                world,
+            )
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
         let mut vks = BTreeMap::new();
         for (id, rec) in world.verifying_keys().iter() {
+            if native_kagemusha_v4_ids.contains(id) {
+                continue;
+            }
             vks.insert(id.clone(), rec.clone());
         }
         self.set_verifying_keys(vks)?;
         self.set_zk_tree_roots_history_len(zk_cfg.tree_roots_history_len);
         self.zk_roots = roots;
-        self.set_zk_elections_snapshot(elections)?;
+        self.zk_elections = elections;
         Ok(())
     }
     /// Snapshot durable smart-contract state from the provided world view.
@@ -4699,7 +4700,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// # Errors
     ///
     /// Returns [`ivm::VMError::NoritoInvalid`] without replacing the current snapshot when an
-    /// election has an out-of-range option count or a mismatched tally length.
+    /// election has a non-canonical selector, an out-of-range option count, or a mismatched tally
+    /// length.
     pub fn set_zk_elections_snapshot(
         &mut self,
         map: BTreeMap<String, (u32, bool, Vec<u64>)>,
@@ -6376,6 +6378,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 Some(dsid),
                 Some(policy.target_lane),
                 "empty proof payload",
+            );
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof.payload) {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(dsid),
+                Some(policy.target_lane),
+                format!(
+                    "proof payload exceeds the {}-byte decode limit",
+                    fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                ),
             );
             return Err(ivm::VMError::NoritoInvalid);
         }
@@ -9013,19 +9027,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         Ok(gas)
     }
-    fn queue_legacy_transfer_v1(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
-        let (from, to, asset_def, amount) = Self::decode_transfer_v1_args(vm)?;
-        let source_scope = {
-            let state_ref = self
-                .query_state
-                .get()
-                .ok_or(ivm::VMError::PermissionDenied)?;
-            state_ref.legacy_transfer_v1_source_scope(&asset_def)?
-        };
-        let asset_id = AssetId::with_scope(asset_def, from, source_scope);
-        let isi = Transfer::asset_quantity(asset_id, amount, to);
-        Ok(self.queue_instruction(InstructionBox::from(TransferBox::from(isi))))
-    }
     fn finish_fastpq_batch(&mut self) -> Result<u64, ivm::VMError> {
         let Some(entries) = self.fastpq_batch_entries.take() else {
             return Err(ivm::VMError::metered(
@@ -9631,6 +9632,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         target_lane: LaneId,
         proof: Option<&ProofBlob>,
     ) -> Result<axt::ResolvedHandleAmount, ivm::VMError> {
+        if proof.is_some_and(|proof| {
+            crate::fastpq::axt_proof_payload_exceeds_decode_limit(&proof.payload)
+        }) {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(intent.asset_dsid),
+                Some(target_lane),
+                format!(
+                    "proof payload exceeds the {}-byte decode limit",
+                    fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                ),
+            );
+            return Err(ivm::VMError::NoritoInvalid);
+        }
         axt::resolve_handle_amount(intent, proof).map_err(|err| {
             let (reason, detail) = match err {
                 axt::HandleAmountResolutionError::MissingAmount => (
@@ -9864,6 +9879,18 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             consumed_by_proof.consume(proof_group_index, commitment);
         }
         for group in consumed_by_proof.into_groups() {
+            if crate::fastpq::axt_proof_payload_exceeds_decode_limit(&group.proof.payload) {
+                self.record_axt_reject(
+                    AxtRejectReason::Proof,
+                    None,
+                    None,
+                    format!(
+                        "final FASTPQ proof exceeds the {}-byte decode limit",
+                        fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
+                    ),
+                );
+                return Err(ivm::VMError::NoritoInvalid);
+            }
             let envelope = decode_canonical_norito::<ModelAxtProofEnvelope>(&group.proof.payload)
                 .map_err(|_| {
                 self.record_axt_reject(
@@ -11134,7 +11161,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     if self.fastpq_batch_entries.is_some() {
                         return self.push_fastpq_batch_entry(vm);
                     }
-                    self.queue_legacy_transfer_v1(vm)
+                    Err(ivm::VMError::PermissionDenied)
                 }
                 ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
                     if self.fastpq_batch_entries.is_some() {
@@ -13883,6 +13910,30 @@ seiyaku PrivilegedBinding {
                 .detail
                 .contains("authoritative finalized source-state anchor")
         );
+    }
+
+    #[test]
+    fn axt_proof_validation_rejects_oversized_payload_before_decode() {
+        crate::test_alias::ensure();
+        let dsid = DataSpaceId::new(104);
+        let manifest_root = [0xA4; 32];
+        let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
+        let mut host = CoreHost::new(ALICE_ID.clone())
+            .with_axt_policy_snapshot(&snapshot)
+            .expect("canonical policy snapshot");
+        let policy = host.policy_entry_for(dsid).expect("policy entry");
+        let proof = ProofBlob {
+            payload: vec![0u8; fastpq_prover::MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES + 1],
+            expiry_slot: Some(20),
+        };
+
+        assert_eq!(
+            host.validate_axt_proof(dsid, &proof, policy, AxtProofAdmission::AuthenticatedHandle,),
+            Err(VMError::NoritoInvalid)
+        );
+        let reject = host.take_axt_reject_for_tests().expect("reject context");
+        assert_eq!(reject.reason, AxtRejectReason::Proof);
+        assert!(reject.detail.contains("decode limit"));
     }
 
     #[test]
@@ -19615,7 +19666,7 @@ seiyaku OpaqueInstructionSubmission {
         assert_eq!(host.queued, vec![expected]);
     }
     #[test]
-    fn legacy_transfer_v1_syscall_queues_global_source_for_global_definition() {
+    fn transfer_v1_syscall_rejects_outside_an_active_batch() {
         let authority: AccountId = fixture_account("alice");
         let destination: AccountId = fixture_account("bob");
         let asset_def =
@@ -19641,55 +19692,11 @@ seiyaku OpaqueInstructionSubmission {
             &amount,
             DataSpaceId::new(7),
         );
-        host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
-            .expect("legacy global transfer should enqueue");
-        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
-            AssetId::of(asset_def, authority),
-            amount,
-            destination,
-        )));
-        assert_eq!(host.queued, vec![expected]);
-    }
-    #[test]
-    fn legacy_transfer_v1_syscall_uses_definition_home_dataspace_for_restricted_definition() {
-        let authority: AccountId = fixture_account("alice");
-        let destination: AccountId = fixture_account("bob");
-        let (paynet, catalog) = retail_dataspace_catalog();
-        let owning_domain = DomainId::try_new("wonderland", "paynet").unwrap();
-        let asset_def = AssetDefinitionId::derive_from_components(
-            owning_domain.clone(),
-            "rose".parse().unwrap(),
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm),
+            Err(ivm::VMError::PermissionDenied)
         );
-        let state = scoped_transfer_state(
-            &authority,
-            &destination,
-            asset_def.clone(),
-            "rose",
-            AssetBalancePolicy::DataspaceRestricted,
-            Some(owning_domain),
-        );
-        state.nexus.write().dataspace_catalog = catalog;
-        let view = state.view();
-        let mut host = CoreHostImpl::new(authority.clone());
-        host.set_query_state(&view);
-        let mut vm = IVM::new(1_000);
-        let amount = Quantity::from(5_u32);
-        prepare_scoped_transfer_syscall(
-            &mut vm,
-            &authority,
-            &destination,
-            &asset_def,
-            &amount,
-            DataSpaceId::new(7),
-        );
-        host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
-            .expect("legacy restricted transfer should infer definition home dataspace");
-        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
-            AssetId::with_scope(asset_def, authority, AssetBalanceScope::Dataspace(paynet)),
-            amount,
-            destination,
-        )));
-        assert_eq!(host.queued, vec![expected]);
+        assert!(host.queued.is_empty());
     }
     #[test]
     fn transfer_asset_scoped_syscall_queues_dataspace_source_for_restricted_definition() {
@@ -23528,6 +23535,270 @@ seiyaku DurableOwner {
             .expect("keyless record should use the registry backend label");
     }
     #[test]
+    fn zk_snapshot_hydration_separates_exact_native_kagemusha_v4_pairs_from_open_verify() {
+        crate::test_alias::ensure();
+        for cancelled in [false, true] {
+            let (world, native_ids, generic_id, generic_commitment) =
+                world_with_native_kagemusha_v4_pair_and_generic_vk(cancelled);
+            {
+                let verifying_keys = world.verifying_keys.view();
+                for id in &native_ids {
+                    let record = verifying_keys.get(id).expect("native verifier fixture");
+                    if cancelled {
+                        assert_eq!(
+                            record.status,
+                            iroha_data_model::confidential::ConfidentialStatus::Withdrawn
+                        );
+                        assert_eq!(record.activation_height, None);
+                        assert_eq!(record.withdraw_height, Some(19));
+                        assert!(record.key.is_none());
+                        assert_eq!(record.vk_len, 0);
+                    } else {
+                        assert_eq!(
+                            record.status,
+                            iroha_data_model::confidential::ConfidentialStatus::Active
+                        );
+                        assert_eq!(record.activation_height, Some(20));
+                        assert_eq!(record.withdraw_height, None);
+                        assert!(record.key.is_some());
+                        assert!(record.vk_len > 0);
+                    }
+                }
+            }
+            let state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let view = state.view();
+            let mut host = CoreHost::new(fixture_account("alice"));
+            host.set_zk_snapshots_from_world(view.world(), &view.zk)
+                .expect("native Kagemusha and generic OpenVerify snapshots must coexist");
+            assert!(host.verifying_keys.contains_key(&generic_id));
+            assert!(
+                host.prepared_verifying_keys
+                    .contains_key(&generic_commitment)
+            );
+            for id in &native_ids {
+                assert!(!host.verifying_keys.contains_key(id));
+                let record = view
+                    .world()
+                    .verifying_keys()
+                    .get(id)
+                    .expect("native verifier remains in world storage");
+                assert!(
+                    !host
+                        .prepared_verifying_keys
+                        .contains_key(&record.commitment)
+                );
+            }
+
+            let direct_map = native_ids
+                .iter()
+                .map(|id| {
+                    (
+                        id.clone(),
+                        view.world()
+                            .verifying_keys()
+                            .get(id)
+                            .expect("native verifier remains stored")
+                            .clone(),
+                    )
+                })
+                .collect();
+            let mut direct_host = CoreHost::new(fixture_account("alice"));
+            assert_eq!(
+                direct_host.set_verifying_keys(direct_map),
+                Err(ivm::VMError::NoritoInvalid),
+                "direct generic hydration must not admit native Kagemusha records"
+            );
+            assert!(direct_host.verifying_keys.is_empty());
+            assert!(direct_host.prepared_verifying_keys.is_empty());
+        }
+    }
+    #[test]
+    fn zk_snapshot_hydration_rejects_malformed_kagemusha_v4_near_matches() {
+        crate::test_alias::ensure();
+        for corruption in ["metadata", "missing_ep", "misindexed"] {
+            let (mut world, native_ids, generic_id, _) =
+                world_with_native_kagemusha_v4_pair_and_generic_vk(false);
+            match corruption {
+                "metadata" => {
+                    let mut record = world
+                        .verifying_keys
+                        .view()
+                        .get(&native_ids[0])
+                        .expect("Eq verifier fixture")
+                        .clone();
+                    record.namespace = "offline_kagemusha_near_match".to_owned();
+                    world.verifying_keys.insert(native_ids[0].clone(), record);
+                }
+                "missing_ep" => {
+                    let record = {
+                        let mut block = world.verifying_keys.block();
+                        let record = block
+                            .remove(native_ids[1].clone())
+                            .expect("remove Ep verifier fixture");
+                        block.commit();
+                        record
+                    };
+                    let mut block = world.verifying_keys_by_circuit.block();
+                    block.remove((record.circuit_id, record.version));
+                    block.commit();
+                }
+                "misindexed" => {
+                    let record = world
+                        .verifying_keys
+                        .view()
+                        .get(&native_ids[0])
+                        .expect("Eq verifier fixture")
+                        .clone();
+                    world
+                        .verifying_keys_by_circuit
+                        .insert((record.circuit_id, record.version), native_ids[1].clone());
+                }
+                _ => unreachable!("fixed corruption fixture"),
+            }
+            let state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let view = state.view();
+            let mut host = CoreHost::new(fixture_account("alice"));
+            assert_eq!(
+                host.set_zk_snapshots_from_world(view.world(), &view.zk),
+                Err(ivm::VMError::NoritoInvalid),
+                "{corruption} native verifier corruption must fail closed"
+            );
+            assert!(!host.verifying_keys.contains_key(&generic_id));
+            assert!(host.verifying_keys.is_empty());
+            assert!(host.prepared_verifying_keys.is_empty());
+        }
+    }
+    #[test]
+    fn zk_snapshot_hydration_does_not_exempt_allowed_same_backend_lookalike() {
+        crate::test_alias::ensure();
+        let backend = iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4;
+        let lookalike_id = VerifyingKeyId::new(
+            backend,
+            format!(
+                "v5-{}-not-a-release-digest",
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
+            ),
+        );
+        let mut record = active_vk_record(
+            [0x81; 32],
+            [0x82; 32],
+            backend,
+            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+            "core",
+            Vec::new(),
+        );
+        record.key = None;
+        let mut world = World::new();
+        world.verifying_keys_by_circuit.insert(
+            (record.circuit_id.clone(), record.version),
+            lookalike_id.clone(),
+        );
+        world.verifying_keys.insert(lookalike_id, record);
+
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        let excluded = crate::smartcontracts::isi::offline::exact_kagemusha_v4_native_verifier_ids_for_hydration(
+            view.world(),
+        )
+        .expect("a malformed-digest lookalike is outside the V4 ownership boundary");
+        assert!(excluded.is_empty());
+
+        let mut host = CoreHost::new(fixture_account("alice"));
+        assert_eq!(
+            host.set_zk_snapshots_from_world(view.world(), &view.zk),
+            Err(ivm::VMError::NoritoInvalid),
+            "the allowed WSV lookalike must reach, and be rejected by, generic OpenVerify hydration"
+        );
+        assert!(host.verifying_keys.is_empty());
+        assert!(host.prepared_verifying_keys.is_empty());
+    }
+    #[test]
+    fn zk_snapshot_hydration_rejects_v5_release_records_before_generic_hydration() {
+        crate::test_alias::ensure();
+        let manifest_sha256 = [0xB5; 32];
+        let owner =
+            iroha_data_model::offline::kagemusha_recursive_spend_verifier_owner_manifest_id_v5(
+                manifest_sha256,
+            );
+        let mut world = World::new();
+        for (parity, circuit_id, curve, key_byte) in [
+            (
+                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V4,
+                0x91,
+            ),
+            (
+                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V4,
+                0x92,
+            ),
+        ] {
+            let id = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v5(
+                parity,
+                manifest_sha256,
+            );
+            let key = VerifyingKeyBox::new(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+                    .to_owned(),
+                vec![key_byte; 32],
+            );
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                8,
+                circuit_id,
+                Some(owner.clone()),
+                iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE,
+                BackendTag::Halo2IpaPasta,
+                curve,
+                [key_byte.wrapping_add(1); 32],
+                crate::zk::hash_vk(&key),
+            );
+            record.vk_len = u32::try_from(key.bytes.len()).expect("bounded V5 fixture");
+            record.max_proof_bytes = 65_536;
+            record.activation_height = Some(20);
+            record.key = Some(key);
+            record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+            world
+                .verifying_keys_by_circuit
+                .insert((record.circuit_id.clone(), record.version), id.clone());
+            world.verifying_keys.insert(id, record);
+        }
+
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+        let error = crate::smartcontracts::isi::offline::exact_kagemusha_v4_native_verifier_ids_for_hydration(
+            view.world(),
+        )
+        .expect_err("V5 is protocol-owned but has no production native hydration path");
+        assert!(error.contains("Kagemusha V5 release verifier"));
+
+        let mut host = CoreHost::new(fixture_account("alice"));
+        assert_eq!(
+            host.set_zk_snapshots_from_world(view.world(), &view.zk),
+            Err(ivm::VMError::NoritoInvalid),
+            "exact V5 records must fail before generic OpenVerify hydration"
+        );
+        assert!(host.verifying_keys.is_empty());
+        assert!(host.prepared_verifying_keys.is_empty());
+    }
+    #[test]
     fn load_vk_record_any_namespace_uses_keyless_registry_backend() {
         crate::test_alias::ensure();
         let mut host = CoreHost::new(fixture_account("alice"));
@@ -24385,7 +24656,7 @@ seiyaku DurableOwner {
         .expect("QueuePlan admission marker key");
         let authority: AccountId = fixture_account("alice");
         let contract = ContractAddress::derive(
-            &"0000000000000000000000000000000000000000000000000000000000000001"
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
                 .expect("canonical test network id"),
             &authority,
@@ -26322,7 +26593,7 @@ seiyaku DurableOwner {
         );
     }
     #[test]
-    fn vrf_epoch_seed_syscall_reads_world_snapshot() {
+    fn vrf_epoch_seed_syscall_ignores_retired_commit_reveal_snapshot() {
         crate::test_alias::ensure();
         let mut world = World::new();
         world.vrf_epochs.insert(
@@ -26395,9 +26666,9 @@ seiyaku DurableOwner {
         assert!(gas <= quote);
         let resp: ivm::vrf::VrfEpochSeedResponse =
             norito::decode_from_bytes(tlv.payload).expect("decode response");
-        assert!(resp.found);
+        assert!(!resp.found);
         assert_eq!(resp.epoch, 7);
-        assert_eq!(resp.seed, [0x11; 32]);
+        assert_eq!(resp.seed, [0; 32]);
         let fallback_req = ivm::vrf::VrfEpochSeedRequest {
             epoch: 99,
             fallback_to_latest: true,
@@ -26425,9 +26696,9 @@ seiyaku DurableOwner {
         assert!(gas <= quote);
         let resp: ivm::vrf::VrfEpochSeedResponse =
             norito::decode_from_bytes(tlv.payload).expect("decode fallback response");
-        assert!(resp.found);
-        assert_eq!(resp.epoch, 9);
-        assert_eq!(resp.seed, [0x22; 32]);
+        assert!(!resp.found);
+        assert_eq!(resp.epoch, 99);
+        assert_eq!(resp.seed, [0; 32]);
     }
     #[test]
     fn vrf_epoch_seed_syscall_reports_missing_without_fallback() {
@@ -26653,6 +26924,81 @@ seiyaku DurableOwner {
                 "response rejection must not truncate the stored tally"
             );
         }
+    }
+    #[test]
+    fn zk_snapshot_hydration_rejects_invalid_election_selector_without_partial_replacement() {
+        crate::test_alias::ensure();
+        let mut host = CoreHost::new(fixture_account("alice"));
+
+        let prior_asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("priorzk", "universal").expect("prior domain"),
+            "asset".parse().expect("prior asset name"),
+        );
+        let mut prior_zk_state = ZkAssetState::default();
+        prior_zk_state
+            .push_commitments(
+                &[[0x11; 32], [0x12; 32]],
+                NonZeroUsize::new(8).expect("non-zero root history cap"),
+            )
+            .expect("canonical prior confidential tree roots");
+        host.set_zk_roots_snapshot(BTreeMap::from([(prior_asset, prior_zk_state)]))
+            .expect("seed prior root snapshot");
+
+        host.set_zk_elections_snapshot(BTreeMap::from([(
+            "prior-election".to_owned(),
+            (1, true, vec![9]),
+        )]))
+        .expect("seed prior election snapshot");
+
+        let mut prior_vk = active_vk_record(
+            [0x71; 32],
+            [0x72; 32],
+            "halo2/ipa",
+            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+            "core",
+            Vec::new(),
+        );
+        prior_vk.key = None;
+        host.set_verifying_keys(BTreeMap::from([(
+            VerifyingKeyId::new("halo2/ipa", "prior-snapshot-vk"),
+            prior_vk,
+        )]))
+        .expect("seed prior verifying-key snapshot");
+        host.set_zk_tree_roots_history_len(
+            NonZeroUsize::new(7).expect("non-zero prior root history limit"),
+        );
+
+        let roots_before = host.zk_roots.clone();
+        let elections_before = host.zk_elections.clone();
+        let verifying_keys_before = host.verifying_keys.clone();
+        let prepared_verifying_keys_before = host.prepared_verifying_keys.clone();
+        let roots_history_len_before = host.zk_tree_roots_history_len;
+
+        let mut world = World::new();
+        world.elections.insert(
+            "invalid/election".to_owned(),
+            ElectionState {
+                options: 1,
+                tally: vec![0],
+                ..ElectionState::default()
+            },
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let view = state.view();
+
+        assert_eq!(
+            host.set_zk_snapshots_from_world(view.world(), &view.zk),
+            Err(ivm::VMError::NoritoInvalid)
+        );
+        assert_eq!(host.zk_roots, roots_before);
+        assert_eq!(host.zk_elections, elections_before);
+        assert_eq!(host.verifying_keys, verifying_keys_before);
+        assert_eq!(host.prepared_verifying_keys, prepared_verifying_keys_before);
+        assert_eq!(host.zk_tree_roots_history_len, roots_history_len_before);
     }
     #[test]
     fn zk_snapshot_hydration_enforces_v1_election_boundaries() {
@@ -27074,6 +27420,94 @@ seiyaku DurableOwner {
         rec.vk_len = u32::try_from(vk_bytes.len()).expect("test verifying key length fits u32");
         rec.key = Some(VerifyingKeyBox::new(backend.into(), vk_bytes));
         rec
+    }
+    fn world_with_native_kagemusha_v4_pair_and_generic_vk(
+        cancelled: bool,
+    ) -> (World, [VerifyingKeyId; 2], VerifyingKeyId, [u8; 32]) {
+        let manifest_sha256 = [0xA5; 32];
+        let owner =
+            iroha_data_model::offline::kagemusha_recursive_spend_verifier_owner_manifest_id_v4(
+                manifest_sha256,
+            );
+        let mut world = World::new();
+        let mut native_ids = Vec::with_capacity(2);
+        for (parity, circuit_id, curve, key_byte, schema_byte) in [
+            (
+                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V4,
+                0x41,
+                0x51,
+            ),
+            (
+                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V4,
+                0x42,
+                0x52,
+            ),
+        ] {
+            let id = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+                parity,
+                manifest_sha256,
+            );
+            let key = VerifyingKeyBox::new(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+                    .to_owned(),
+                vec![key_byte; 32],
+            );
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                7,
+                circuit_id,
+                Some(owner.clone()),
+                iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE,
+                BackendTag::Halo2IpaPasta,
+                curve,
+                [schema_byte; 32],
+                crate::zk::hash_vk(&key),
+            );
+            record.vk_len = u32::try_from(key.bytes.len()).expect("bounded verifier fixture");
+            record.max_proof_bytes = 65_536;
+            if cancelled {
+                record.activation_height = None;
+                record.withdraw_height = Some(19);
+                record.key = None;
+                record.vk_len = 0;
+                record.status = iroha_data_model::confidential::ConfidentialStatus::Withdrawn;
+            } else {
+                record.activation_height = Some(20);
+                record.key = Some(key);
+                record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+            }
+            world
+                .verifying_keys_by_circuit
+                .insert((record.circuit_id.clone(), record.version), id.clone());
+            world.verifying_keys.insert(id.clone(), record);
+            native_ids.push(id);
+        }
+        let native_ids: [VerifyingKeyId; 2] = native_ids
+            .try_into()
+            .expect("fixture installs one Eq/Ep pair");
+
+        let generic_commitment = [0x77; 32];
+        let generic_id = VerifyingKeyId::new("halo2/ipa", "ivm-execution-keyless-hydration");
+        let mut generic_record = active_vk_record(
+            generic_commitment,
+            [0x78; 32],
+            "halo2/ipa",
+            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+            "core",
+            Vec::new(),
+        );
+        generic_record.key = None;
+        world.verifying_keys_by_circuit.insert(
+            (generic_record.circuit_id.clone(), generic_record.version),
+            generic_id.clone(),
+        );
+        world
+            .verifying_keys
+            .insert(generic_id.clone(), generic_record);
+        (world, native_ids, generic_id, generic_commitment)
     }
     #[cfg(feature = "zk-halo2-ipa")]
     fn enable_halo2_batch_verifier(host: &mut CoreHost, verifier_max_batch: u32, max_k: u32) {

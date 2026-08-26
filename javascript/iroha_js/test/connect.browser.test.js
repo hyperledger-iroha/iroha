@@ -834,7 +834,9 @@ test("createConnectAppSession handles approval and sign success", async () => {
   );
   assert.equal(session.approvedAccountId, account.accountId);
 
-  const nexusApproval = await new NexusAppClient().awaitApproval({
+  const nexusApproval = await new NexusAppClient({
+    chainDiscriminant: 753,
+  }).awaitApproval({
     sid: preview.sidBase64Url,
     appSession: session,
   });

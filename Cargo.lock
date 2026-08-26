@@ -5015,6 +5015,7 @@ dependencies = [
  "base64 0.22.1",
  "blake2",
  "blake3",
+ "blst",
  "blstrs",
  "chacha20poly1305 0.11.0-rc.3",
  "criterion",
@@ -5898,6 +5899,7 @@ dependencies = [
 name = "irohad"
 version = "2.0.0-rc.2.0"
 dependencies = [
+ "aes-gcm",
  "assertables",
  "blake3",
  "build-support",
@@ -5906,6 +5908,7 @@ dependencies = [
  "eyre",
  "fastpq_prover",
  "hex",
+ "hkdf",
  "iroha_config",
  "iroha_config_base",
  "iroha_core",
@@ -5942,6 +5945,7 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -10291,7 +10295,6 @@ name = "sora-vpn-helper"
 version = "0.0.0"
 dependencies = [
  "blake3",
- "clap",
  "hex",
  "iroha_crypto",
  "iroha_data_model",

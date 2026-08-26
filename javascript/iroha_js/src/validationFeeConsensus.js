@@ -1,7 +1,11 @@
 import { Buffer } from "node:buffer";
 
+import { AccountAddress } from "./address.js";
 import { getNativeBinding } from "./native.js";
 import { networkIdBytes } from "./networkId.js";
+import { ensureCanonicalAccountId } from "./normalizers.js";
+import { normalizeParliamentGovernanceCertificateV1 } from "./parliamentApiV1.js";
+import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 
 export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA =
   "cbsi.mobile-validation-fee-ledger-binding.v1";
@@ -10,7 +14,7 @@ export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA =
 export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH =
   "/v1/validation-fee/policy/current/proof";
 export const VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
-export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION = 22;
+export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION = 23;
 
 const LOWER_HEX_32 = /^[0-9a-f]{64}$/u;
 const BINDING_KEYS = Object.freeze([
@@ -55,54 +59,14 @@ const PARLIAMENT_KEYS = Object.freeze([
   "validationFeePolicy",
 ]);
 const PARLIAMENT_PROPOSAL_KEYS = Object.freeze([
-  "enactment_window",
-  "finalization",
-  "parliament_roster_root",
+  "certified_at_height",
+  "enacted_at_height",
+  "governance_certificate",
+  "governance_certificate_id",
   "payload_hash",
-  "plainElectorateRules",
-  "plainElectorateSnapshot",
   "proposal_id",
   "proposal_kind",
-]);
-const PLAIN_ELECTORATE_RULE_KEYS = Object.freeze([
-  "approval_threshold_denominator",
-  "approval_threshold_numerator",
-  "ballot_amount",
-  "ballot_duration_blocks",
-  "bond_escrow_account",
-  "citizenship_amount",
-  "conviction_step_blocks",
-  "eligibility_rule",
-  "max_conviction",
-  "max_members",
-  "min_turnout",
-  "slash_receiver_account",
-  "voting_asset_id",
-]);
-const PLAIN_ELIGIBILITY_RULE_KEYS = Object.freeze(["rule", "value"]);
-const PLAIN_ELECTORATE_SNAPSHOT_KEYS = Object.freeze([
-  "approvalGateHeight",
-  "capturedAtHeight",
-  "memberCount",
-  "rosterRoot",
-]);
-const ENACTMENT_WINDOW_KEYS = Object.freeze([
-  "closes_at_height",
-  "enacted_at_height",
-  "opens_at_height",
-]);
-const FINALIZATION_KEYS = Object.freeze([
-  "abstain",
-  "approval_threshold_denominator",
-  "approval_threshold_numerator",
-  "approve",
-  "approved",
-  "finalized_at_height",
-  "min_turnout",
-  "mode",
-  "proposal_id",
-  "referendum_id",
-  "reject",
+  "proposal_operator",
 ]);
 const PAYOUT_KEYS = Object.freeze([
   "batchDsMinorUnits",
@@ -126,9 +90,6 @@ const CANONICAL_UNSIGNED_DECIMAL = /^(?:0|[1-9][0-9]*)$/u;
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U128 = (1n << 128n) - 1n;
 const VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS = 120_960n;
-const VALIDATION_FEE_PLAIN_BALLOT_AMOUNT = 150n;
-const VALIDATION_FEE_PLAIN_BALLOT_DURATION_BLOCKS = 3_600n;
-const VALIDATION_FEE_PLAIN_MAX_MEMBERS = 256n;
 const VALIDATION_FEE_PAYOUT_RECIPIENT_COUNT = 4;
 const VALIDATION_FEE_PAYOUT_RECIPIENT_SHARE_BASIS_POINTS = 2_500;
 
@@ -137,7 +98,10 @@ function record(value, label) {
     value === null ||
     typeof value !== "object" ||
     Array.isArray(value) ||
-    Object.getPrototypeOf(value) !== Object.prototype
+    (
+      Object.getPrototypeOf(value) !== Object.prototype &&
+      Object.getPrototypeOf(value) !== null
+    )
   ) {
     throw new TypeError(`${label} must be a plain object`);
   }
@@ -245,190 +209,13 @@ function requireEqual(left, right, label) {
   }
 }
 
-function validatePlainElectorateRules(value, label) {
-  const rules = record(value, label);
-  exactKeys(rules, PLAIN_ELECTORATE_RULE_KEYS, label);
-  canonicalText(rules.voting_asset_id, `${label}.voting_asset_id`);
-  canonicalText(rules.bond_escrow_account, `${label}.bond_escrow_account`);
-  canonicalText(rules.slash_receiver_account, `${label}.slash_receiver_account`);
-  const ballotAmount = u128String(rules.ballot_amount, `${label}.ballot_amount`, true);
-  const ballotDuration = u64String(
-    rules.ballot_duration_blocks,
-    `${label}.ballot_duration_blocks`,
-    true,
-  );
-  const citizenshipAmount = u128String(
-    rules.citizenship_amount,
-    `${label}.citizenship_amount`,
-    true,
-  );
-  const maxMembers = u64String(rules.max_members, `${label}.max_members`, true);
-  const convictionStep = u64String(
-    rules.conviction_step_blocks,
-    `${label}.conviction_step_blocks`,
-    true,
-  );
-  const maxConviction = u64String(
-    rules.max_conviction,
-    `${label}.max_conviction`,
-    true,
-  );
-  const minTurnout = u128String(rules.min_turnout, `${label}.min_turnout`, true);
-  const approvalNumerator = u64String(
-    rules.approval_threshold_numerator,
-    `${label}.approval_threshold_numerator`,
-    true,
-  );
-  const approvalDenominator = u64String(
-    rules.approval_threshold_denominator,
-    `${label}.approval_threshold_denominator`,
-    true,
-  );
-  if (
-    ballotAmount !== VALIDATION_FEE_PLAIN_BALLOT_AMOUNT ||
-    ballotDuration !== VALIDATION_FEE_PLAIN_BALLOT_DURATION_BLOCKS ||
-    maxMembers > VALIDATION_FEE_PLAIN_MAX_MEMBERS ||
-    approvalNumerator > approvalDenominator
-  ) {
-    throw new TypeError(`${label} violates the bounded PLAIN electorate invariants`);
+function canonicalAccountId(value, label) {
+  const canonical = ensureCanonicalAccountId(value, label);
+  if (canonical !== value) {
+    throw new TypeError(`${label} must use the exact canonical account literal`);
   }
-  const eligibility = record(rules.eligibility_rule, `${label}.eligibility_rule`);
-  exactKeys(
-    eligibility,
-    PLAIN_ELIGIBILITY_RULE_KEYS,
-    `${label}.eligibility_rule`,
-  );
-  if (
-    eligibility.rule !==
-      "proposal_operator_at_or_before_gate_others_after_gate" ||
-    eligibility.value !== null
-  ) {
-    throw new TypeError(`${label}.eligibility_rule is not the closed V1 rule`);
-  }
-  return {
-    approvalDenominator,
-    approvalNumerator,
-    ballotAmount,
-    ballotDuration,
-    citizenshipAmount,
-    convictionStep,
-    maxConviction,
-    maxMembers,
-    minTurnout,
-    rules,
-  };
-}
-
-function validatePlainElectorateSnapshot(value, label) {
-  const snapshot = record(value, label);
-  exactKeys(snapshot, PLAIN_ELECTORATE_SNAPSHOT_KEYS, label);
-  lowerHex32(snapshot.rosterRoot, `${label}.rosterRoot`);
-  return {
-    approvalGateHeight: u64String(
-      snapshot.approvalGateHeight,
-      `${label}.approvalGateHeight`,
-    ),
-    capturedAtHeight: u64String(
-      snapshot.capturedAtHeight,
-      `${label}.capturedAtHeight`,
-      true,
-    ),
-    memberCount: u64String(snapshot.memberCount, `${label}.memberCount`, true),
-  };
-}
-
-function validateEnactmentWindow(value, label) {
-  const window = record(value, label);
-  exactKeys(window, ENACTMENT_WINDOW_KEYS, label);
-  return {
-    closesAtHeight: u64String(
-      window.closes_at_height,
-      `${label}.closes_at_height`,
-      true,
-    ),
-    enactedAtHeight: u64String(
-      window.enacted_at_height,
-      `${label}.enacted_at_height`,
-      true,
-    ),
-    opensAtHeight: u64String(
-      window.opens_at_height,
-      `${label}.opens_at_height`,
-      true,
-    ),
-  };
-}
-
-function validateFinalization(value, proposalId, rules, label) {
-  const finalization = record(value, label);
-  exactKeys(finalization, FINALIZATION_KEYS, label);
-  const finalizationProposalId = lowerHex32(
-    finalization.proposal_id,
-    `${label}.proposal_id`,
-  );
-  const referendumId = lowerHex32(
-    finalization.referendum_id,
-    `${label}.referendum_id`,
-  );
-  requireEqual(finalizationProposalId, proposalId, `${label}.proposal_id`);
-  requireEqual(referendumId, proposalId, `${label}.referendum_id`);
-  const finalizedAtHeight = u64String(
-    finalization.finalized_at_height,
-    `${label}.finalized_at_height`,
-    true,
-  );
-  if (finalization.mode !== "PLAIN") {
-    throw new TypeError(`${label}.mode must be PLAIN`);
-  }
-  const approve = u128String(finalization.approve, `${label}.approve`);
-  const reject = u128String(finalization.reject, `${label}.reject`);
-  const abstain = u128String(finalization.abstain, `${label}.abstain`);
-  const minTurnout = u128String(
-    finalization.min_turnout,
-    `${label}.min_turnout`,
-    true,
-  );
-  const approvalNumerator = u64String(
-    finalization.approval_threshold_numerator,
-    `${label}.approval_threshold_numerator`,
-    true,
-  );
-  const approvalDenominator = u64String(
-    finalization.approval_threshold_denominator,
-    `${label}.approval_threshold_denominator`,
-    true,
-  );
-  requireEqual(minTurnout, rules.minTurnout, `${label}.min_turnout`);
-  requireEqual(
-    approvalNumerator,
-    rules.approvalNumerator,
-    `${label}.approval_threshold_numerator`,
-  );
-  requireEqual(
-    approvalDenominator,
-    rules.approvalDenominator,
-    `${label}.approval_threshold_denominator`,
-  );
-  if (
-    typeof finalization.approved !== "boolean" ||
-    !finalization.approved ||
-    approvalNumerator > approvalDenominator
-  ) {
-    throw new TypeError(`${label} must contain an approved PLAIN decision`);
-  }
-  const turnout = approve + reject + abstain;
-  const weightedApprove = approve * approvalDenominator;
-  const requiredApprove = turnout * approvalNumerator;
-  if (
-    turnout > MAX_U128 ||
-    weightedApprove > MAX_U128 ||
-    requiredApprove > MAX_U128 ||
-    turnout < minTurnout ||
-    weightedApprove < requiredApprove
-  ) {
-    throw new TypeError(`${label} does not recompute to an approved PLAIN decision`);
-  }
-  return { finalizedAtHeight };
+  AccountAddress.parseEncoded(value);
+  return value;
 }
 
 function validateParliamentProposal(value, expectedKind, label) {
@@ -437,50 +224,38 @@ function validateParliamentProposal(value, expectedKind, label) {
   if (proposal.proposal_kind !== expectedKind) {
     throw new TypeError(`${label}.proposal_kind must be ${expectedKind}`);
   }
+  const proposalOperator = canonicalAccountId(
+    proposal.proposal_operator,
+    `${label}.proposal_operator`,
+  );
   const proposalId = lowerHex32(proposal.proposal_id, `${label}.proposal_id`);
   const payloadHash = lowerHex32(proposal.payload_hash, `${label}.payload_hash`);
   requireEqual(payloadHash, proposalId, `${label}.payload_hash`);
-  lowerHex32(proposal.parliament_roster_root, `${label}.parliament_roster_root`);
-  const rules = validatePlainElectorateRules(
-    proposal.plainElectorateRules,
-    `${label}.plainElectorateRules`,
+  lowerHex32(
+    proposal.governance_certificate_id,
+    `${label}.governance_certificate_id`,
   );
-  const snapshot = validatePlainElectorateSnapshot(
-    proposal.plainElectorateSnapshot,
-    `${label}.plainElectorateSnapshot`,
+  const certifiedAtHeight = u64String(
+    proposal.certified_at_height,
+    `${label}.certified_at_height`,
+    true,
   );
-  const window = validateEnactmentWindow(
-    proposal.enactment_window,
-    `${label}.enactment_window`,
+  const enactedAtHeight = u64String(
+    proposal.enacted_at_height,
+    `${label}.enacted_at_height`,
+    true,
   );
-  const finalization = validateFinalization(
-    proposal.finalization,
-    proposalId,
-    rules,
-    `${label}.finalization`,
+  const certificate = normalizeParliamentGovernanceCertificateV1(
+    proposal.governance_certificate,
   );
   if (
-    snapshot.memberCount > rules.maxMembers ||
-    snapshot.capturedAtHeight !== window.opensAtHeight ||
-    snapshot.approvalGateHeight >= snapshot.capturedAtHeight ||
-    window.closesAtHeight < window.opensAtHeight ||
-    window.closesAtHeight - window.opensAtHeight + 1n !== rules.ballotDuration ||
-    finalization.finalizedAtHeight !== window.closesAtHeight ||
-    window.enactedAtHeight <= finalization.finalizedAtHeight
+    certificate.proposal_content_id !== proposalId ||
+    BigInt(certificate.certified_at_height) !== certifiedAtHeight ||
+    BigInt(certificate.enact_at_height) !== enactedAtHeight
   ) {
-    throw new TypeError(`${label} violates its frozen electorate or enactment anchors`);
+    throw new TypeError(`${label} differs from its retained governance certificate`);
   }
-  return { proposalId, rules, window };
-}
-
-function equalPlainElectorateRules(left, right) {
-  return PLAIN_ELECTORATE_RULE_KEYS.every((key) => {
-    if (key !== "eligibility_rule") return left[key] === right[key];
-    return (
-      left.eligibility_rule.rule === right.eligibility_rule.rule &&
-      left.eligibility_rule.value === right.eligibility_rule.value
-    );
-  });
+  return { certificate, enactedAtHeight, proposalId, proposalOperator };
 }
 
 function validateParliament(value, label) {
@@ -500,13 +275,8 @@ function validateParliament(value, label) {
     parliament.payoutLifecycleSealHash,
     `${label}.payoutLifecycleSealHash`,
   );
-  if (
-    policy.proposalId === payout.proposalId ||
-    !equalPlainElectorateRules(policy.rules.rules, payout.rules.rules)
-  ) {
-    throw new TypeError(
-      `${label} must bind distinct proposals to identical PLAIN electorate rules`,
-    );
+  if (policy.proposalId === payout.proposalId) {
+    throw new TypeError(`${label} must bind distinct Parliament proposals`);
   }
   return { payout, policy };
 }
@@ -623,11 +393,7 @@ function validateCurrentPolicy(value, label) {
   if (
     policy.feeAssetDefinitionId !== policy.payout.dsAssetDefinitionId ||
     feeScale !== payout.dsScale ||
-    parliament.policy.rules.rules.voting_asset_id !==
-      policy.payout.xorAssetDefinitionId ||
-    parliament.payout.rules.rules.voting_asset_id !==
-      policy.payout.xorAssetDefinitionId ||
-    parliament.policy.window.enactedAtHeight +
+    parliament.policy.enactedAtHeight +
       VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS !==
       effectiveFromHeight
   ) {
@@ -749,7 +515,10 @@ export function verifyValidationFeeCurrentPolicyProofV1(
   if (typeof json !== "string" || json.length === 0) {
     throw new Error("native validation-fee verifier returned no projection");
   }
-  const projection = record(JSON.parse(json), "validation-fee verified projection");
+  const projection = record(
+    parseStrictLosslessIntegerJson(json, "validation-fee verified projection"),
+    "validation-fee verified projection",
+  );
   exactKeys(
     projection,
     PROJECTION_KEYS,

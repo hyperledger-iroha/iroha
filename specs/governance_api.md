@@ -2,15 +2,25 @@
 title: Governance App API — Endpoints
 ---
 
-Status: first-release current contract. Determinism and RBAC policy are
-normative constraints; Torii returns unsigned instruction skeletons for
-governance transaction-producing flows. Request schemas exclude private
-signing material and reject unknown fields before constructing a request
-object. Clients sign locally and submit via `/v1/pipeline/transactions`.
+Status: first-release canonical contract, not release-qualified.
+Determinism and RBAC policy are normative constraints; Torii returns unsigned
+instruction skeletons for governance transaction-producing flows. Request
+schemas exclude private signing material and reject unknown fields before
+constructing a request object. Clients sign locally and submit via
+`/v1/pipeline/transactions`.
 
-Important: we do not ship a standing council or “default” governance roster.
-Until governance persists a roster, the current-council endpoint returns the
-constant empty state; a read never scans assets or derives a hidden fallback.
+Important: the attempt reducer does not use a standing council, default roster,
+or roster derived at proposal creation. Each body election freezes the complete
+eligible-citizen snapshot in its `SortitionRequestV1`; that request is committed
+before a strictly future finalized threshold-beacon pulse. The first consumed
+pulse covers all initially required bodies as one simultaneous draw batch.
+Roster sealing follows authenticated invitation responses. Reads never derive a
+missing roster from assets, epoch council state, module names, or another
+attempt. The independently maintained epoch-council projection is not an input
+to Parliament certification.
+Every governance lock likewise carries its immutable asset, escrow, and slash
+custody binding; missing-custody JSON/Norito records are rejected and runtime
+configuration is never used to reconstruct retained lock custody.
 A citizen is an account that posted the configured minimum bond; the bond is
 an anti-Sybil/collateral floor and does not increase Parliament draw odds or
 vote weight above the minimum. There is no baked-in multisig, secret key, or
@@ -39,31 +49,23 @@ Overview
 - This boundary covers the ZK roots, Merkle-path and vote-tally reads; active ABI,
   runtime-metrics, node/privacy-capability and projection-checkpoint reads; the
   Ministry draft/read routes; governance proposal, capability, citizen, lock,
-  referendum, tally, protected-namespace, unlock, governed-contract, enactment,
-  and council reads/drafts; and all typed validation-fee proof/proposal routes.
+  referendum, tally, protected-namespace, unlock, governed-contract, and epoch-
+  council reads/drafts; and all typed validation-fee proof/proposal routes.
   The Ministry agenda `authority`, citizenship-draft `owner`, and validation-fee
-  PLAIN-ballot-draft `owner` must equal the verified account before state access.
+  proposal-draft `proposal_operator` must equal the verified account before
+  state access.
   Operator and protocol-handshake routes retain their stronger dedicated
-  boundaries. Only the fixed ABI-v1 hash calculator and the state-independent
-  referendum-finalize instruction calculator remain public in this audited
-  route family.
-- SDK coverage:
-- Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, and `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`.
-- Python lightweight client (`iroha_torii_client`): `ToriiClient.finalize_referendum` and `ToriiClient.enact_proposal` return typed `GovernanceInstructionDraft` bundles (wrapping the Torii skeleton `tx_instructions`), avoiding manual JSON parsing when scripts compose Finalize/Enact flows.
-- JavaScript (`@iroha/iroha-js`): `ToriiClient` surfaces typed helpers for
-  proposals, referenda, tallies, locks, unlock stats, and the current council
-  projection (`getGovernanceCouncilCurrent`).
-  `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` mirror
-  the Python helpers by always returning a structured draft (synthesising the
-  empty skeleton when Torii responds with `204 No Content`), which keeps
-  automation from branching on `null` before queueing transactions or
-  triggers.
-- Rust (`iroha::client::Client`):
-  `post_validation_fee_plain_ballot_draft` accepts the typed
-  `ValidationFeePlainBallotDraftRequestV1`, calls the proposal-bound route, and
-  rejects a response unless its canonical framed `CastPlainBallot` exactly
-  matches the requested proposal id, owner, and direction together with the
-  returned immutable amount and duration.
+  boundaries. The fixed ABI-v1 hash calculator remains public in this
+  authenticated route family.
+- Proposal-backed governance has one client contract: typed proposal drafts,
+  Parliament attempt creation, closed lifecycle-transition drafts, complete
+  attempt reads, and consensus-owned certificate execution. The retired
+  finalize/enact helpers and proposal-backed public Parliament ballot are not
+  registered and have no compatibility aliases. Standalone referendum reads
+  and ballots are a separate election product and cannot authorize a typed
+  proposal. Validation-fee summary responses carry certificate identity and
+  heights; the independent-validation response retains the complete canonical
+  Parliament certificate.
 
 ## SoraFS Governance DAG read authority
 
@@ -92,14 +94,17 @@ Endpoints
 - GET `/v1/gov/capabilities`
   - Exact-network account-authenticated readiness projection. Returns schema
     `iroha.governance.capabilities.v1`, version `1`, one mandatory typed
-    `network_id`, current height, ABI/data-model versions, configured PLAIN voting
-    and turnout/window parameters, all seven configured Parliament body
-    targets, supported proposal kinds, and supported routes.
-  - Configured body sizes are targets, not a minimum citizen count. Each
-    proposal-time JIT roster is independently capped at the number of eligible
-    bonded citizens. A non-empty one-citizen registry therefore produces one
-    immutable member in every body and quorum `1`; zero eligible citizens fails
-    proposal creation.
+    `network_id`, current height, ABI/data-model versions, standalone
+    referendum settings, configured body targets, supported proposal kinds, and
+    supported routes.
+  - Configured body sizes are targets, not a minimum citizen count. Each actual
+    draw is capped by its frozen eligible-citizen snapshot. A nonempty
+    undersubscribed snapshot can therefore seal a smaller roster while keeping
+    its immutable original-seat quorum denominator; an empty snapshot rejects
+    the sortition request.
+  - Capability metadata is descriptive only. Its standalone referendum fields
+    do not configure or select a Parliament body, private ballot, certificate,
+    or alternate proposal authorization path.
   - Every governance integer other than the fixed response `version: 1` is a
     canonical unsigned decimal JSON string. This includes heights, windows,
     thresholds, body targets, and quorum/count fields; clients must parse the
@@ -121,81 +126,321 @@ Endpoints
     request the next page; an incomplete, skipped, reordered, rollback, or
     equivocal chain is not deployable evidence.
   - Clients verify locally with the immutable chain id, genesis hash,
-    policy-chain genesis hash, checkpoint height, and checkpoint context id.
+  policy-chain genesis hash, checkpoint height, and checkpoint context id.
     The resulting verified projection includes, for both the policy and payout
-    lifecycle proposals, `plainElectorateRules` and
-    `plainElectorateSnapshot.{rosterRoot,memberCount,capturedAtHeight,approvalGateHeight}`.
-    Verification also requires PLAIN finalization, matching rules and snapshot
-    anchors, and the exact
+    lifecycle proposals, the canonical `proposal_operator`, exact proposal
+    fingerprint, canonical `governance_certificate_id`, complete
+    `governance_certificate`, certification height, and certified enactment-due
+    height. Verification requires the certificate content id to equal the exact
+    operator-bound proposal fingerprint, the certificate id to equal the
+    canonical hash of the retained certificate, enactment to occur at the
+    certificate's due height, and the exact
     `effective_from_height = enacted_at_height + 120,960` relation.
 - GET `/v1/validation-fee/proposals`
   - Lists only typed native validation-fee policy and payout-lifecycle
-    proposals. Each record carries `plain_electorate_snapshot`: it is `null`
-    before referendum opening and the complete frozen citizen roster
-    thereafter.
-- GET `/v1/validation-fee/proposals/{proposal_id}?account_id=<i105-account-id>`
-  - Returns the exact proposal/referendum, proposal-time Parliament snapshot,
-    frozen PLAIN electorate snapshot, current height, per-body members,
-    alternates, quorum and decision counts for all seven bodies, optional
-    current-account decisions, the live or finalized citizen tally, the
-    ordered proposal pipeline, and current retained voter locks. The electorate
-    snapshot contains the proposal/operator binding, capture and approval-gate
-    heights, exact member count, canonical member records, and roster root. All
-    integer fields in this projection are canonical unsigned decimal strings.
+    proposals. Records retain the exact typed operator-bound payload and ordered
+    pipeline. Certified records expose the canonical certificate id,
+    certification height, enactment-due height, and enacted height as a bounded
+    summary; they do not duplicate the full certificate.
+- GET `/v1/validation-fee/proposals/{proposal_id}`
+  - Returns the exact proposal summary, current committed height, and the full
+    canonical Parliament certificate when the proposal has been certified and
+    retained in the protected registry. This is the independent-validation
+    endpoint: clients must validate the certificate before trusting its id or
+    outcome. All projected height fields are canonical unsigned decimal strings.
 - POST `/v1/validation-fee/proposals/draft`
-  - Builds exactly one native PLAIN validation-fee proposal instruction for
-    local signing. The strict request requires `plain_electorate_rules`; those
-    exact rules are included in the native proposal fingerprint and retained
-    for the voting asset, bond escrow, slash receiver, ballot eligibility,
-    amount, duration, conviction, turnout, and approval checks. Legacy
-    signed-policy, governance-keyset, detached-signature, and ZK compatibility
-    shapes are not accepted.
-  - The supplied rules and inclusive referendum span must exactly match active
-    governance configuration. Taira fixes the span at 3,600 blocks
-    (`h_end = h_start + 3,599`); the draft route rejects any other span or
-    rule set.
-- POST `/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft`
-  - Strict request:
-    `{ "version": 1, "owner": "<i105-account-id>", "direction": "AYE" | "NAY" | "ABSTAIN" }`.
-  - Returns exactly one canonical framed `CastPlainBallot` instruction for
-    local signing. The response repeats the exact proposal id, owner,
-    direction, proposal-bound amount, and proposal-bound duration.
-  - The route fails closed unless the referendum is PLAIN and open at the next
-    possible inclusion height, all seven retained Parliament bodies still
-    satisfy the proposal snapshot, the owner belongs to the electorate frozen
-    at `h_start`, and the account has not already cast an effective ballot.
-    Membership is never recomputed from the live citizen registry. Callers
-    cannot override amount or duration.
-  - Accepted locks retain the proposal-bound voting asset, bond escrow, and
-    slash receiver. Later governance configuration changes cannot redirect
-    locking, release, slashing, or restitution; missing or mismatched custody
-    evidence fails closed without deleting the lock.
+  - Builds exactly one native validation-fee proposal instruction for
+    local signing. The authenticated strict request requires
+    `proposal_operator` to equal its canonical request signer. That account is
+    embedded in the exact native policy or payout-lifecycle proposal preimage,
+    so changing the signer changes the proposal fingerprint. The request does
+    not accept a public referendum mode, window, electorate, or finalization
+    shape; those are not validation-fee authorization inputs.
+  - `/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft` is retired
+    and is not registered. Requests to that path fail at routing. Validation-fee
+    authorization is produced only by the canonical timed-private Parliament
+    lifecycle and its complete certificate; Torii does not translate a public
+    ballot into that protocol.
+
+## Attempt-based Parliament native surface
+
+The canonical proposal-backed protocol is submitted through the ordinary
+locally signed transaction pipeline using two closed Norito instructions:
+
+- `iroha.governance.parliament.attempt.create.v1` carries only the exact typed
+  `ProposalKind` and the zero-based end-to-end attempt sequence. Core derives
+  the proposal-content id, attempt id, risk tier, required-body pipeline, policy
+  version, effect hash, and expected compare-and-set head.
+- `iroha.governance.parliament.transition.submit.v1` carries the attempt id and
+  one `ParliamentLifecycleTransitionV1`. Containing-block height and order are
+  never caller fields. Invitation response, attempt absence, public-finding
+  endorsement, timed-OVN registration, and dropout are authority-bound to the
+  affected seated assignment. Deterministic ballot checkpoint, release,
+  failure, and aggregate-finalization variants are permissionless triggers but
+  cannot select their consensus result: Core accepts them only when the exact
+  persisted height, corpus, pulse, proof, and state bindings match. Remaining
+  management transitions require the exact unit `CanManageParliament`
+  permission.
+
+Sortition requests must carry `request_height` equal to the containing block,
+the complete Core-derived eligible-citizen snapshot, and a strictly later pulse
+height for the network's canonical logical beacon. That logical Parliament
+identifier is independent of the threshold key session that will be active at
+the requested height, so a valid key rotation cannot strand an already
+committed request. Initial pulse consumption is a complete, strictly ordered
+batch for all initially required bodies. A Confirmation Jury, when added by a
+narrow Policy Jury approval, uses a later request and excludes every Policy
+Jury member.
+
+The public threshold-key lifecycle instruction carries an exact-roster
+`2f + 1` certificate over the network, ordered roster, threshold, complete
+public transcript, containing height, action, and `expected_active_session_id`.
+Core compare-and-sets that predecessor before applying the action. For the
+global beacon, an install or retirement included in block `H` is effective at
+`H + 1`; the session active at pulse height `H`, rather than the singleton
+successor pointer after transaction execution, verifies and persists a pulse
+authorized from `H`'s parent state. This prevents a same-block rotation from
+invalidating or reinterpreting either an optional Parliament pulse or a
+consensus-required NPoS pulse. TLE cutover remains immediate and separately
+retains predecessor public state for ballots already bound to it.
+
+`RecordAttemptAbsence` names one assignment but no member account: Core requires
+the signed transaction authority to own that exact seated assignment. The
+record is attempt-local, immutable, allowed only before endorsements or
+balloting, and never reduces `original_seats` or its quorum. For a public,
+nonbinding body, `EndorsePublicFinding` carries only the body id and proposed
+result root. Each nonexcluded seated authority may bind exactly one immutable
+root. Core, rather than a manager-supplied finalization payload, approves the
+body only when one root reaches `ceil(2 * original_seats / 3)` and commits the
+strictly ordered `endorsing_assignments` list, its recomputed endorsement root,
+actual endorsement count, and immutable quorum into
+`ParliamentPublicFindingCertificateBindingV1`. Context-free validation rejects
+zero or non-increasing assignment ids and requires
+`endorsing_assignments.len == endorsements == quorum`.
+After a self-absence or endorsement, Core derives `eligible = original roster
+- authenticated absences` and `remaining = eligible - immutable endorsements`.
+If the strongest existing root plus every remaining seat is below quorum, Core
+sets the body to `NoResult` and rejects the governance attempt. Entry into
+Reflection freezes an inclusive deadline using
+`parliament_public_finding_phase_blocks` (default 3,600). Endorsements after it
+are rejected, as are new absence declarations after Reflection has opened.
+Once the current height is greater than that deadline, any submitter may
+trigger payload-minimal `FailPublicFindingNoResult`; Core derives
+`DeadlineExpired`, sets the body to `NoResult`, and rejects the attempt. No
+manager may select a winner, though progress assumes an eligible transaction
+eventually submits the permissionless deadline trigger.
+
+Private jury ballot transitions carry exact canonical timed-OVN registration
+or dropout records only from the exact seated authority named by the record.
+The registration-close and survivor-freeze transitions carry no caller-selected
+registration corpus or survivor subset: Core derives those ordered collections
+and their roots from accepted authority-bound records. `FreezeTimedOvnCorpus`
+still carries the complete survivor-ordered masked-ballot batch; Core requires
+exactly one proof-valid record for every frozen survivor. Because that batch can
+contain 1,000 attacker-controlled proofs, the freeze requires exact
+`CanManageParliament` authorization before parsing or cryptographic validation.
+The manager still cannot forge, omit, reorder, or alter a survivor's ballot.
+Core enforces record widths, the frozen maximum of 1,000 entries, exact coverage,
+and immutable roots. Before registration close, survivor freeze, or corpus
+freeze replays a proof corpus, Core checks the reducer-owned active ballot,
+exact phase, body binding, predecessor checkpoint, and containing height using
+bounded scalar state. Wrong-height and replayed checkpoint traffic therefore
+fails before proof work; exact-height calls still perform the complete replay.
+The frozen schedule also fixes an inclusive opening deadline as
+`release_height + opening_phase_blocks` (default 600 blocks).
+Release consumes the exact finalized pulse and a public threshold-BLS final
+release bound to the dedicated TLE identity, and both release consumption and
+result finalization reject after that deadline. Aggregate finalization first
+checks the fixed-size public TLE/session/release binding and final threshold
+signature, before replaying either corpus, and retains the complete replay and
+second signature verification before mutation. Only the aggregate tally is
+opened; there is no instruction variant for a plaintext ballot, individual
+opening, manual release, or fallback electorate.
+
+`FailBallotNoResult` carries only the ballot attempt id. Core derives the
+eligible failure class and evidence commitment from persisted phase state and
+current height; the caller cannot select either. In particular, Core derives
+release-pulse availability from the authoritative committed
+network/session/height pulse lookup. An absent pulse can produce
+`ReleasePulseUnavailable` only after its release height and no later than the
+inclusive opening deadline, while a ballot still awaiting release or opening
+after that deadline produces
+`OpeningDeadlineExpired`. A retry must use the exact next sequence and fresh
+TLE session and cannot exceed the frozen retry limit (default three retries
+after the initial attempt; protocol cap 16). `NoResult` on the final permitted
+sequence rejects the governance attempt, so an exhausted attempt cannot remain
+active without a legal retry.
+
+Core constructs the certificate automatically when the final required result
+is accepted and derives `enact_at_height` as the containing block height plus
+`gov.min_enactment_delay`. There is no certificate-construction variant in the
+public lifecycle transition enum.
+At that exact due height, Core's automatic block-start step revalidates the
+retained certificate, proposal fingerprint, effect hash, and current
+compare-and-set head. Head drift produces `Superseded` without effect. With an
+equal head, Core applies the typed effect in a rollback-isolated transaction and
+records `Enacted`. If the effect rejects, Core drops that transaction and uses a
+fresh transaction to record `ExecutionFailed` with a deterministic failure root
+derived from the certificate and due height.
+
+Certificate construction and all three terminal outcomes are consensus-owned;
+none is a manager action or a variant accepted by
+`POST /v1/gov/parliament/transitions/draft`. Core represents the terminal result
+with the separate, non-submit-able `ParliamentAutomaticExecutionOutcomeV1`
+audit payload (`Enacted`, `Superseded`, or `ExecutionFailed`) and its own
+domain-separated digest. The authenticated
+`GET /v1/gov/parliament/attempts/{governance_attempt_id}` projection exposes
+`terminal_height`, `superseding_head`, and `execution_failure_root` alongside
+the exact reducer payload so clients can distinguish and independently audit
+all three outcomes.
+
+`GovernanceParliamentLifecycleTransitionApplied` carries the closed transition
+kind, an optional `no_result_kind`, and an optional typed
+`automatic_outcome`. The seven-variant `ParliamentNoResultKindV1` distinguishes
+public-finding quorum impossibility/deadline expiry from the five private-ballot
+failure classes. Core sets it only when the accepted transition actually
+terminalizes a body without a result; its transition digest binds the submitted
+transition while that separate field records the Core-derived classification.
+Consensus-owned enactment,
+supersession, and execution failure instead set `automatic_outcome` and bind
+its complete evidence with the automatic-outcome digest. Every other event has
+both options unset. Telemetry projects only the bounded kind and failure class
+from the committed event and does not turn identifiers or digests into labels.
+
+The public evidence codec contains no threshold secret share. It does not make
+network metadata anonymous and does not establish receipt freeness or coercion
+resistance. In particular, it does not implement or analyze the anamorphic-
+encryption voting construction published at ACM SACMAT in July 2026, so that
+research does not transfer a coercion-resistance claim to timed OVN. The
+threshold-BLS profile has no proactive share refresh and must be
+rotated before cumulative exposure exceeds `f` distinct shares. The official
+publication manifest validator is a release-tooling gate, not a runtime feature
+switch; no independent audit report or evidence archive is bundled or claimed.
+The authenticated
+`GET /v1/gov/parliament/ballots/{ballot_attempt_id}/release-context` endpoint
+returns Core's exact opening authorization as public data, including the full
+proof-revalidated DKG transcript needed to verify partials independently. The
+app-signed, rate-limited
+`POST /v1/gov/parliament/ballots/{ballot_attempt_id}/partial-release` endpoint
+accepts no body or caller-selected identity, height, transcript, or participant
+seat. It asks the injected runtime signer only after Core authorizes committed
+state, discards signer diagnostics, and independently verifies the returned
+proof before exposing it. The in-process coordinator canonicalizes a supplied
+partial set, combines and final-verifies it, and builds the existing
+`FinalizeOpenedBallot` transition for submission through the ordinary
+authenticated transaction path; there is no parallel release-mutation route.
+The operator CLI adds the bounded network corridor: it accepts at most 31
+distinct signer-peer root URLs, permits HTTP only on loopback, and rejects
+credentials, paths, queries, and fragments. It validates the primary full
+public transcript and identity, requires every peer context to match that
+immutable release statement, independently verifies and de-duplicates shares,
+rejects conflicting valid shares for one participant, and combines the lowest
+canonical threshold. After peer collection it re-fetches the primary context,
+requires the statement to remain identical and finalized height not to regress,
+revalidates the `Opening` inclusive height window, and final-verifies the
+aggregate against that refreshed projection immediately before ordinary
+operator-signed submission. Peer failures may be tolerated only while an exact
+valid threshold remains; there is no plaintext or manual-release fallback.
+
+Software deployments may inject the non-enumerable multi-session custody
+registry. It validates imported zeroizing scalar components against the exact
+committed public transcript, selects only the context's key session, and drops
+retired shares only after the session is no longer consensus-selectable and the
+committed height is strictly past the maximum opening deadline across every
+referencing ballot and retry. Consensus stores one active TLE key-session
+pointer: installing a validated public session atomically selects it for new
+ballots, while replacement or explicit retirement makes the predecessor
+ineligible but retains its public transcript for already committed ballots. An opaque Core
+authorization can produce one bounded Norito broker projection containing the
+complete public transcript and exact fixed release payload, digest, and height
+bindings. The broker revalidates those bindings into a nonserializable projected
+signer input, but that public projection does not prove committed-state origin;
+an operational transport must authenticate and scope the daemon, and the daemon
+must independently verify the returned share. This is not an OS, HSM,
+secure-erasure, or operational-availability guarantee. A qualified authenticated
+broker transport/HSM, restart evidence, and four-peer execution of the
+source-implemented canonical multi-peer collection and operator transaction
+signing remain release gates. Aggregate opening is therefore not yet an operationally
+automatic four-peer runtime path, and the intended V1 corridor remains
+operator-coordinated rather than a daemon signing with account keys.
+
+The app-signed
+`GET /v1/gov/parliament/ballots/{ballot_attempt_id}/casting-context` source path
+calls Core's one-view authorization for the pre-seal `Registered`,
+`RegistrationClosed`, or `SurvivorsFrozen` lifecycle only. It returns public
+session/schedule/TLE transcript/registration material and, only after survivor
+freeze, the public survivor hashes and release identity. Core accepts the read
+only when its finalized height `H` lies in the exact reducer window:
+`registered_at <= H < registration_close`,
+`registration_close <= H < survivor_freeze`, or
+`survivor_freeze <= H < commitment_close`, respectively. A persisted schedule
+that is not strictly increasing through the release height is rejected. The response also
+carries the sole padded-standard-base64 encoding of the canonical
+`ParliamentTimedOvnCastingContextArchiveV1`, whose complete header-framed Norito
+encoding is bounded at 4,194,304 bytes. The archive's public validator replays
+the TLE transcript, exact timed-OVN session, registration proofs, phase/option
+coherence, and frozen prepared attempt. It contains no registration secret,
+keystore seed, dropout set, masked ballot, release share, or opening. This
+source surface does not make the archive a ledger authorization and is not yet
+workspace-qualified. Deadlines are not duplicated into the V1 archive, so its
+independent validator proves the recorded point-in-time snapshot rather than
+freshness at a later height. A client must refresh an aged archive; every ledger
+mutation independently rechecks current lifecycle and height. The public archive
+is therefore diagnostic material, not wallet authorization. Wallets instead use
+the app-signed
+`/v1/gov/parliament/ballots/{ballot_attempt_id}/casting-proof` response and exact
+ABI 23 proof-only native entry points. Every call supplies an immutable trust
+anchor containing a raw 32-byte network ID, nonzero trusted checkpoint height,
+exact 32-byte checkpoint height-context ID, and exact expected ballot-attempt ID;
+there are no defaults or process-global network values. Before caller-keystore
+seed access, the native verifier canonical-decodes a terminal proof response,
+rejects intermediate pages, verifies the finality chain, fixed casting witness,
+and membership proof against the anchor, replay-validates the embedded Core
+archive, rederives its compact binding, and requires exact binding equality.
+Archive-only C and JNI wallet exports have been removed so an untrusted public
+archive cannot remain a callable authorization path. The builders then derive
+purpose-, session-, participant-, survivor-, release-, and choice-separated
+randomness from the exact 32-byte caller-keystore seed, regenerate and compare
+the committed registration, and return only public registration or masked-ballot
+bytes.
+
+The Swift, Android Kotlin, and delegating Java Android APIs snapshot all mutable
+anchor and proof inputs and require the immutable trust anchor explicitly.
+Android Kotlin keeps the seed behind a generation-bound opaque handle, persists
+only an AES-GCM envelope protected by a non-exportable AndroidKeyStore key,
+rejects stale handles after delete/recreate under the per-alias lock, zeroes each
+borrowed seed after one JNI operation, and returns only fixed-width public
+records. Focused Kotlin, isolated Java, JavaScript, static native-contract, and
+Swift parse checks cover legitimate proofs plus malformed, fake-chain,
+wrong-network, wrong-context, wrong-ballot, intermediate-page, and archive-binding
+tampering. These checks are not native artifact execution: native Cargo
+qualification and a rebuilt same-source ABI-23 XCFramework remain required. The
+packaged ABI-21 XCFramework is intentionally not relabeled. Four-peer end-to-end
+evidence also remains a release gate. No OS/HSM-backed erasure of caller or
+cryptographic-library temporaries is claimed.
 
 - POST `/v1/gov/proposals/deploy-contract`
   - Request (JSON):
     {
       "contract_alias": "router::universal"?,
       "contract_address": "irohac1..."?,
-      "code_hash": "blake2b32:0x…" | "0x…" | "…64hex",
-      "abi_hash": "blake2b32:0x…" | "0x…" | "…64hex",
-      "abi_version": "1",
-      "window": { "lower": 12345, "upper": 12400 },
-      "mode": "Zk" | "Plain",
+      "code_hash": "…64-lowercase-hex",
+      "abi_hash": "…64-lowercase-hex",
+      "abi_version": 1,
       "manifest_provenance": { "signer": "ed0120…", "signature": "…" }?
     }
   - Response (JSON):
-    { "ok": true, "proposal_id": "…64hex", "tx_instructions": [{ "wire_id": "…", "payload_hex": "…" }] }
+    { "proposal_id": "…64-lowercase-hex", "tx_instructions": [{ "wire_id": "…", "payload_hex": "…" }] }
   - Validation:
     - exactly one of `contract_address` or `contract_alias` must be provided;
     - aliases resolve to the current active canonical contract address before the proposal id is derived;
-    - `code_hash` and `abi_hash` accept only a 64-digit hexadecimal body,
-      optionally preceded by the case-insensitive `blake2b32:` scheme and/or
-      `0x` prefix, and are canonicalised to unprefixed lowercase hex;
-    - only the exact string `abi_version = "1"` is accepted, and `abi_hash`
+    - `code_hash` and `abi_hash` are exact typed Blake2b-32 values encoded as
+      64 lowercase hexadecimal digits without a scheme or `0x` prefix;
+    - only the numeric value `abi_version = 1` is accepted, and `abi_hash`
       must equal the canonical ABI hash for that version
-      (`hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`);
-    - `window.upper` must be `>= window.lower`; and
-    - `mode`, when supplied, must be the exact canonical label `Zk` or `Plain`.
+      (`hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`).
+      Referendum windows and voting modes are not request fields; the certificate
+      lifecycle and enactment height are consensus-derived.
   - Submission model: this endpoint is draft-only. Its strict request schema
     contains neither authority nor private-key material; clients consume
     `tx_instructions`, sign locally, and submit via
@@ -238,14 +483,14 @@ Code Size Cap
 - POST `/v1/gov/ballots/plain`
   - Request: { "authority": "<i105-account-id>", "network_id": "hash:<64-uppercase-hex>#<CRC16>", "referendum_id": "r1", "owner": "<i105-account-id>", "amount": "1000", "duration_blocks": "6000", "direction": "Aye|Nay|Abstain" }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Scope: standalone referenda only. This route builds
+    `CastPlainBallot`; it does not cast a Parliament body ballot and its tally
+    cannot authorize a typed proposal or be embedded in
+    `GovernanceCertificateV1`.
   - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing
     lock’s amount or expiry. The `owner` must equal the transaction authority.
     Minimum duration is `conviction_step_blocks`, and the resulting lock must
     remain active through the referendum's inclusive `h_end`.
-    Proposal-backed PLAIN voting cannot open a referendum: every required
-    proposal-time Parliament body must first reach its exact snapshot quorum,
-    after which consensus opens the referendum. Standalone PLAIN referenda
-    retain their explicit non-proposal behavior.
     Context identifiers use the canonical first-release governance selector
     grammar: 1–128 RFC 3986 unreserved ASCII bytes without a leading dot.
     `amount` uses the same
@@ -253,40 +498,32 @@ Code Size Cap
     `duration_blocks` is a canonical decimal string in `0..=u64::MAX`.
     Torii verifies a canonical exact-network account signature over the bounded
     raw body before JSON decoding, requires its account to equal `authority`,
-    and rejects redirects/replays. `chain_id` and `genesis_hash` are retired.
+    and rejects redirects/replays. The first-release request has no alternate
+    chain-selector fields.
 
-- POST `/v1/gov/finalize`
-  - Strict request: { "referendum_id": "…64hex", "proposal_id": "…same 64hex" }
-  - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
-  - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
-  - Notes:
-    - `referendum_id` and `proposal_id` must be the same exact 64-character
-      lowercase hexadecimal proposal fingerprint. Prefixes, uppercase forms,
-      whitespace, and distinct selector aliases are rejected before a draft
-      instruction is constructed.
-    - For ZK elections, contract paths must call `ZK_VOTE_VERIFY_TALLY` prior to executing `FinalizeElection`; hosts enforce a one-shot latch. `FinalizeReferendum` rejects ZK referenda until the election tally is finalized.
-    - `h_end` is inclusive. PLAIN referenda close and tally at the start of
-      `h_end + 1`, while finalization evidence remains anchored to `h_end`.
-      Manual PLAIN finalization at or before `h_end` is rejected. ZK referenda
-      still require a finalized election tally.
-    - Turnout is `approve + reject + abstain`; abstentions count toward turnout
-      and the configured approval denominator.
-
-- POST `/v1/gov/enact`
-  - Strict request: `{ "proposal_id": "…64-lowercase-hex" }`.
-  - Response:
-    `{ "ok": true, "proposal_id": "…", "proposal_kind": {…}, "referendum_window": {"lower": H1, "upper": H2}, "tx_instructions": [{…}] }`.
-  - Notes: Torii reads an approved proposal and its exact closed referendum,
-    derives the instruction preimage fingerprint and retained window from
-    ledger state, and returns a skeleton for local signing. Caller-supplied
-    preimages, windows, authorities, private keys, and server-side submission
-    are rejected by the strict request shape. On-chain enactment must occur
-    after the approved close and rechecks both bindings.
+- POST `/v1/gov/finalize` and POST `/v1/gov/enact` are absent and are not
+  registered. Parliament derives its terminal result, constructs its
+  certificate, and executes the bound proposal at the exact due block height;
+  no client-supplied finalization or enactment instruction exists.
 
 - GET `/v1/gov/proposals/{id}`
   - Path `{id}`: exact lowercase proposal id hex (64 chars); `0x`, uppercase,
     whitespace, and control-character aliases are rejected before lookup.
-  - Response: { "found": bool, "proposal": { … }? }
+  - Response: `{ "found": bool, "proposal": { "proposer": "<i105-account-id>",
+    "kind": { "kind": "<ProposalKind>", "payload": { … } },
+    "created_height": <u64>, "status": "<ProposalStatus>" }? }`.
+  - The stored proposal record has exactly those four fields. The closed
+    first-release statuses are `Proposed`, `Rejected`, `Enacted`, `Superseded`,
+    and `ExecutionFailed`; `Approved` is not a status. `ProposalKind` is closed
+    over `DeployContract`, `RuntimeUpgrade`, `SccpRouteGovernance`,
+    `ValidationFeePolicy`, `ValidationFeePayoutLifecycle`,
+    `MusubiRegistryGovernance`, and `SorafsProviderGovernance`. Unknown fields,
+    unknown tags, externally tagged legacy kinds, and retired proposal
+    pipeline/snapshot/finalization fields are rejected rather than projected.
+    Every proposal-owned `u64` emitted as a JSON number, plus
+    `created_height`, is bounded by `9,007,199,254,740,991` at draft,
+    admission, storage, and restore. Fields whose canonical JSON layout is a
+    decimal string retain the full `u64` range.
 
 - GET `/v1/gov/locks/{rid}`
   - Path `{rid}`: exact non-empty referendum token; whitespace and control
@@ -296,19 +533,22 @@ Code Size Cap
 - GET `/v1/gov/referenda/{id}` and GET `/v1/gov/tally/{id}`
   - Path `{id}` follows the same exact non-empty referendum-token grammar as
     the locks endpoint. Noncanonical variants fail before state lookup.
+  - These are standalone referendum projections. A finalized tally is projected
+    from its retained finalization evidence, so later lock expiry cannot change
+    the result. Live/post-window PLAIN tallies use the same inclusive `h_end`
+    eligibility boundary as consensus, and finalized ZK projections include
+    the optional abstain slot. None is a Parliament certificate projection.
 
 - GET `/v1/gov/council/current`
   - Response: { "epoch": N, "members": [{ "account_id": "…" }, …] }
-  - Notes: Returns the latest persisted council through the ordered council
+  - Notes: Returns the latest persisted independent epoch council through the ordered council
     index. When none exists, returns the constant empty state; it never derives
-    a roster by scanning account assets.
+    a roster by scanning account assets, and the attempt reducer never consults
+    this response.
 
-- POST `/v1/gov/parliament/ballots`
-  - Request: { "authority": "<i105-account-id>", "network_id": "hash:<64-uppercase-hex>#<CRC16>", "proposal_id": "<hex32>", "body": "policy-jury", "decision": "approve|reject|abstain" }
-  - `body` uses the exact canonical kebab-case Parliament body label.
-  - `decision` uses those exact lowercase spellings; capitalized aliases and
-    surrounding whitespace are rejected.
-  - Behavior: Builds a `CastParliamentBallot` instruction skeleton. The transaction authority must be the seated body member; alternates cannot vote until promoted into the roster.
+- POST `/v1/gov/parliament/ballots` is retired and is not registered. Parliament
+  jury participation uses only the authority-bound timed-OVN lifecycle above;
+  Torii does not translate an equal public stage ballot into that protocol.
 
 ### Governance defaults (iroha_config `gov.*`)
 
@@ -317,6 +557,13 @@ make the current-council read endpoint derive an implicit roster:
 
 ```toml
 [gov]
+  min_enactment_delay = 20
+  parliament_invitation_phase_blocks = 3600
+  parliament_public_finding_phase_blocks = 3600
+  citizenship_asset_id = "79jULkZVMgnbzxBe6NvqeDxVEeEk"
+  citizenship_bond_amount = "10000"
+
+  # Standalone referendum settings; not Parliament ballot inputs.
   vk_ballot.backend = "halo2/ipa"
   vk_ballot.name    = "ballot_v1"
   vk_tally.backend  = "halo2/ipa"
@@ -335,8 +582,15 @@ make the current-council read endpoint derive an implicit roster:
   slash_invalid_proof_bps = 0          # percentage (basis points) to slash on invalid ballot proofs
   slash_ineligible_proof_bps = 0       # percentage (basis points) to slash on stale/invalid eligibility proofs
   parliament_term_blocks = 43200
-  citizenship_asset_id = "79jULkZVMgnbzxBe6NvqeDxVEeEk"
-  citizenship_bond_amount = "10000"    # exact Quantity of citizenship_asset_id
+
+[gov.parliament_timed_ovn]
+  registration_phase_blocks = 3600
+  survivor_freeze_phase_blocks = 300
+  commitment_phase_blocks = 3600
+  release_delay_blocks = 600
+  opening_phase_blocks = 600
+  max_ballot_retries = 3
+  max_corpus_entries = 1000
 ```
 
 Governance monetary parameters are canonical non-negative `Quantity` values. TOML
@@ -344,40 +598,66 @@ uses their exact decimal string form (for example `"150"` or `"0.5"`), so the
 configured asset precision is explicit and no host integer width or implicit
 "smallest unit" convention is involved.
 
-Sora Nexus default: ballots lock `min_bond_amount` of `voting_asset_id` into the
-configured escrow account. Locks are created or extended when ballots land and
-released on expiry; bond lifecycle is emitted via `governance_bond_events_total`
-telemetry (lock_created|lock_extended|lock_unlocked|lock_slashed|lock_restituted).
+Standalone referendum ballots lock `min_bond_amount` of `voting_asset_id` into
+the configured escrow account. Locks are created or extended when those ballots
+land and released on expiry; their bond lifecycle is emitted via
+`governance_bond_events_total` telemetry. Timed-OVN Parliament ballots instead
+use the sealed body roster and immutable original-seat quorum denominator; they
+do not derive weight from a public conviction lock.
 
-`parliament_term_blocks` defines the epoch length used by explicit governance
-selection and persistence workflows (`epoch = floor(height / term_blocks)`).
-Bonded-citizen eligibility is consulted only when such a workflow performs a
-selection; `GET /v1/gov/council/current` never uses it as an implicit fallback.
-Extra bond above `citizenship_bond_amount` does not add draw tickets or vote
-weight.
+`parliament_term_blocks` defines the epoch length for independent council
+persistence. Attempt sortition freezes its own complete eligible-citizen
+snapshot and a future pulse; it does not reuse that epoch council.
+`parliament_invitation_phase_blocks` fixes the response window;
+`parliament_public_finding_phase_blocks` independently fixes the endorsement
+window from entry into Reflection. Both are nonzero and have no environment
+override. The five timed-OVN height spans plus retry/corpus limits in
+`parliament_timed_ovn` fields are frozen into every ballot attempt and validated
+again after persistence restore. Every duration is nonzero, the retry limit is
+at most 16, and the corpus limit is in `1..=1000`. Extra bond above
+`citizenship_bond_amount` adds neither draw tickets nor vote weight.
 
-Governance VK verification has no bypass: ballot verification always requires an `Active` verifying key with inline bytes, and environments must not rely on test-only toggles to skip verification.
+Standalone referendum VK verification has no bypass: those ZK ballots require an
+`Active` inline verifying key. Parliament timed-OVN proof verification likewise
+has no runtime bypass or environment-variable feature switch, but uses its
+fixed intrinsic proof profile rather than `vk_ballot`/`vk_tally`.
 
 RBAC
 - On-chain execution requires permissions:
-  - Proposals: `CanProposeContractDeployment{ contract_address }`
-  - Runtime-upgrade proposals: `CanProposeRuntimeUpgrade{ abi_version, abi_hash }`
-  - Ballots: `CanSubmitGovernanceBallot{ referendum_id }`
-  - Enactment: `CanEnactGovernance`
-  - Slashing/appeals: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`
-  - Citizen service outcomes: `CanRecordCitizenService{ owner }`
-  - Council management: `CanManageParliament`
+  - Attempt creation and management lifecycle transitions: exact unit
+    `CanManageParliament`.
+  - Invitation response: the authenticated authority must be the exact invited
+    primary or alternate; member and assignment ids are Core-derived.
+  - Attempt absence and public-finding endorsement: the authenticated authority
+    must own the exact seated assignment affected by the transition.
+  - Timed-OVN registration: the authenticated authority must be the exact
+    seated member whose attempt-bound participant hash is in the record.
+  - Dropout: the authenticated authority must be the exact registered seated
+    member being removed, and only before survivor freeze.
+  - Registration close, survivor/corpus freeze, release-pulse consumption,
+    objective ballot failure, and aggregate finalization are permissionless
+    liveness triggers. Core accepts them only when their exact persisted height,
+    corpus, pulse, proof, and state bindings match.
+  - The containing finalized block supplies transition height/order. Manager
+    authority does not let a caller select roots, results, failure classes,
+    execution height, or a compare-and-set head.
+  - Certificate-only proposal creation and standalone governance operations:
+    - Proposals: `CanProposeContractDeployment{ contract_address }`
+    - Runtime-upgrade proposals: `CanProposeRuntimeUpgrade{ abi_version, abi_hash }`
+    - SCCP proposals: a registered citizen or `CanProposeSccpRouteGovernance`
+    - Standalone ballots: `CanSubmitGovernanceBallot{ referendum_id }`
+    - Slashing/appeals: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`
+    - Citizen service outcomes: `CanRecordCitizenService{ owner }`
+    - Council management: `CanManageParliament`
 - Scoped governance capabilities are bootstrapped by genesis and thereafter
   delegable only by an existing holder of the exact same scope. In particular,
   direct native ISIs require the exact encoded target (not only the permission
-  name), and `CanEnactGovernance` is not a grant root for runtime-upgrade
-  proposal scopes.
-- Enactment requires the exact unit token `CanEnactGovernance` before any
-  proposal lookup or state mutation; a same-name permission with a non-unit
-  payload is not equivalent. `FinalizeReferendum` is deliberately
-  permissionless because it only derives a deterministic result from existing
-  authenticated proposal, referendum, ballot, and Parliament records. It does
-  not confer enactment authority.
+  name). `CanEnactGovernance`, where required by separately governed contract
+  or privacy operations, is not a grant root for proposal scopes and cannot
+  submit or accelerate a Parliament terminal outcome.
+- Automatic certificate execution carries no caller authority or enactment
+  permission. Core validates the complete retained certificate, exact due
+  height, proposal effect, and compare-and-set head before applying it.
 - The fail-safe Initial executor admits the public native proposal, ballot,
   slashing, restitution, and citizen-service instructions only because Core
   enforces those exact scopes before mutation. The lower-level
@@ -434,7 +714,8 @@ CLI Helpers
 - `iroha app gov deploy meta --contract-address irohac1... [--approver <i105-account-id> --approver <i105-account-id>]`
   - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including `gov_contract_address` and optional `gov_manifest_approvers` for satisfying manifest quorum rules.
 - `iroha app gov vote --mode zk --referendum-id <id> --backend <tag> --envelope-b64 <b64> [--owner <i105-account-id> --nullifier <32-byte-hex> --amount <Quantity> --duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
-  - Submits the canonical flat ZK V1 envelope request. It validates canonical
+  - Submits the canonical flat ZK V1 envelope for a standalone
+    referendum. It does not submit a Parliament timed-OVN ballot. It validates canonical
     I105 account ids, canonicalizes 32-byte nullifier hints, and merges the
     closed optional hint set from `--public <path>` into the request.
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, exact `network_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
@@ -442,7 +723,9 @@ CLI Helpers
   - CLI responses annotate `tx_instructions[]` with `payload_fingerprint_hex` plus decoded fields so downstream tooling can verify the skeleton without reimplementing Norito decoding.
   - When any lock hint is provided, ZK ballots must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required. Direction remains optional and is treated as a hint only.
 - `iroha app gov vote --mode plain --referendum-id <id> --owner <i105-account-id> --amount <Quantity> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - `--owner` accepts canonical I105 literals; Pass domain context through the surrounding scoped interface when required.
+  - Standalone referendum helper only. `--owner` accepts canonical I105
+    literals; pass domain context through the surrounding scoped interface when
+    required.
   - Summary output mirrors `vote --mode zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`), providing quick confirmation before signing the skeleton.
 
 Governed Contract Lookup
@@ -454,6 +737,8 @@ Unlock Sweep (Operator/Audit)
   - Response: { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
   - Notes: `height_current` is the committed ledger height captured atomically with the persisted audit cells; `last_sweep_height` is the most recent successful non-empty due-lock sweep, while the bounded count fields are the persisted result of the most recent attempted due-lock sweep (or zero before any attempt), and this endpoint never scans lock history.
 - POST `/v1/gov/ballots/zk-v1`
+  - Scope: standalone ZK referendum ballot; not a Parliament timed-OVN
+    ballot or certificate input.
   - Request (v1-style DTO):
     {
       "authority": "<i105-account-id>",
@@ -475,15 +760,16 @@ Unlock Sweep (Operator/Audit)
       whitespace/control variants are rejected rather than trimmed.
       `envelope_b64` must be canonical, non-empty standard base64.
     - The bounded raw request is exact-network account-authenticated before DTO
-      decoding; the authenticated account must equal `authority`. Legacy
-      `chain_id`/`genesis_hash` keys and label-based signatures are rejected.
+      decoding; the authenticated account must equal `authority`. The request
+      has no alternate chain selectors or label-based signature format.
     - `amount` is an exact canonical non-negative Kotodama V1 `Quantity`
       string. Fractional values through scale 28 are supported; JSON numbers,
       signed/trimmed spellings, leading zeroes, and redundant fractional zeroes
       are rejected. `duration_blocks` spans the complete `u64` domain.
     - When any lock hint is provided, the ballot must supply `owner`,
       `amount`, and `duration_blocks`; partial hints are rejected. Unknown
-      fields and private-key aliases fail before a draft is constructed.
+      fields and private-key aliases fail before a draft is constructed. A
+      supplied owner must be the same canonical account as `authority`.
     - ZK re-votes are monotonic: attempts to shrink amount or expiry are
       rejected with `BallotRejected` diagnostics.
     - Contract execution must call `ZK_VOTE_VERIFY_BALLOT` before enqueuing
@@ -519,11 +805,13 @@ Unlock Sweep (Operator/Audit)
   - Notes:
     - The strict request has no private-key field; Torii returns only an
       unsigned instruction skeleton for local signing.
+    - A supplied ballot owner must equal the authenticated request authority;
+      Torii rejects mismatches before returning a skeleton.
     - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
     - The envelope bytes are re-encoded as base64 for the instruction payload.
     - This endpoint is part of every V1 app API build.
 
-CastZkBallot Verification Path
+Standalone `CastZkBallot` Verification Path
 - `CastZkBallot` decodes the supplied base64 proof and rejects empty or malformed payloads (`BallotRejected` with `invalid or empty proof`).
 - If `public_inputs_json` is supplied, it must be a JSON object; non-object payloads are rejected.
 - The host resolves the ballot verifying key from the referendum (`vk_ballot`) or governance defaults and requires the record to exist, be `Active`, and carry inline bytes.
@@ -593,6 +881,15 @@ Any script that rotates <i105-account-id>s or applies slashing **must not** atte
 ## Telemetry surfaces
 
 - Prometheus metrics export governance activity:
+  - `governance_parliament_transitions_total{transition}` counts accepted
+    Parliament transitions using the closed transition-kind vocabulary.
+  - `governance_parliament_no_result_total{class}` counts the seven bounded
+    public-finding/private-ballot `ParliamentNoResultKindV1` classes only.
+  - `governance_parliament_attempts_by_status{status}` and
+    `governance_parliament_attempts_by_stage{stage}` are recomputed from
+    committed state at startup and after accepted attempt mutations. These
+    families have no identifier, root, account, registration, ballot, share,
+    or opening labels.
   - `governance_proposals_status{status}` (gauge) tracks proposal counts by status.
   - `governance_protected_namespace_total{outcome}` (counter) increments when protected namespace admission allows or rejects a deploy.
   - `governance_manifest_activations_total{event}` (counter) records manifest insertions (`event="manifest_inserted"`) and namespace bindings (`event="instance_bound"`).

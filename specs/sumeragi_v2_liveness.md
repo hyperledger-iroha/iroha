@@ -519,25 +519,27 @@ work. Those are explicit premises; the finite evidence promotes no
 proof-ledger obligation.
 
 The adapter's deferred Progress reserve is partitioned by consumer ownership:
-one locked-Commit slot and one independent TimeoutVote slot per frozen
-validator, plus one slot for each PrepareQC, CommitQC, and TC class. Its exact
-capacity is therefore `2 * roster_len + 3`. Exact retransmissions coalesce
-before this capacity check. Vote ownership is signer-injective: the one
-TimeoutVote slot is shared by the current and adjacent-future rounds, so a
-distinct Commit or TimeoutVote from the same signer cannot consume a second
-slot or displace the admitted owner and becomes admissible only after that
-owner's slot is serviced. Once a progress item is admitted, later equal- or
-higher-ranked traffic cannot displace it; a full class rejects the new item
-while preserving the already admitted vote, reconstruction, or certificate
-owner.
+one locked-Commit slot, one exact current-view locked-reproposal Prepare slot,
+and one independent TimeoutVote slot per frozen validator, plus one slot for
+each PrepareQC, CommitQC, and TC class. Its exact capacity is therefore
+`3 * roster_len + 3`. Exact retransmissions coalesce before this capacity
+check. Vote ownership is signer-injective within each partition: the one
+TimeoutVote slot is shared by the current and adjacent-future rounds, while a
+generic Prepare remains Normal and cannot borrow the locked-reproposal
+partition. A distinct same-owner item cannot consume a second slot or displace
+the admitted owner and becomes admissible only after that owner's slot is
+serviced. Once a progress item is admitted, later equal- or higher-ranked
+traffic cannot displace it; a full class rejects the new item while preserving
+the already admitted vote, reconstruction, or certificate owner.
 
 The semantic-admission table applies the same partition before the reducer is
 called. A full ordinary-history budget cannot reject a TimeoutVote in the
 bounded current/adjacent-future window: at most two keys per frozen signer
 bypass that budget, remain available for equivocation/delivery checks while
 their rounds are in the window, and are retired when they fall behind it. The
-exact live semantic bound is therefore `1024 + 3 * roster_len`: ordinary
-history, one locked-Commit set, and two TimeoutVote sets. On TC installation,
+exact live semantic bound is therefore `1024 + 4 * roster_len`: ordinary
+history, one locked-Commit set, one current locked-reproposal Prepare set, and
+two TimeoutVote sets. On TC installation,
 authenticated shares and retained local TimeoutVote control are filtered
 against the newly installed current/adjacent window, so an early adjacent
 share becomes immediately useful instead of being discarded. Thus the single
@@ -1338,7 +1340,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`a7364ee89cfab31a3a48d13e7f74b6e353bc34871619da907200b84cdf482a07`.
+`331123d12b08027a9ac0ed0157ed84007eac5a8659b1995bf4c77c3eedb231c2`.
 Nine of those legs execute the separate 522-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 523 TSV lines and has SHA-256
 `e83efb1bd375226d379831d9f6e11c4bd4726fda3293849f0d12349f4b7565ea`.
@@ -1634,7 +1636,7 @@ and its exact deterministic seed. The single permitted startup attempt passed
 retaining the exact view-9 locked Commit intent; the regression then observed
 genesis applied on every validator and a common awaiting-proposal successor
 height. All four peers exited with status 0, and libtest completed in 1192.57
-seconds including the cold re-entrant network binary build. The temporary log
+seconds including cold network binary preparation. The temporary log
 is `/tmp/iroha-root-genesis.1T17yY/run.log`, and the temporary localnet is
 `/tmp/iroha-root-genesis.1T17yY/irohad_test_network_FbEl6A`. This mutable-source
 diagnostic is not a clean signed or checkout-manifest-bound source-attested
@@ -1812,13 +1814,13 @@ physical acquisition and exact latest-consumer rebind across unavailable-body
 recovery. The authoritative ingress leg pins `5N+3H` count potential, the
 certified-fence-escape, TimeoutVote, and TransportCompletion byte reserves, frozen-layout wire-size
 activation, cross-validator isolation, and fair service; the
-adapter/runtime legs pin the independent `2N+3` Busy-deferred partitions and
+adapter/runtime legs pin the independent `3N+3` Busy-deferred partitions and
 runtime Progress admission. They also pin the four-effect maximum flattened
 persistence macro-step below the eight-effect bound, exactly one serviceable
 deferred adapter step per runtime turn, and refusal of terminal readiness while
 any deferred Completion, Progress input, or ordinary input remains. The adapter
 leg also realizes the complete
-`1024 + 3N` semantic-admission bound, retains current/adjacent-future signer
+`1024 + 4N` semantic-admission bound, retains current/adjacent-future signer
 keys, retires out-of-window TimeoutVote delivery records, and exercises
 non-poisoning same-owner retry across TC installation. The block-sync leg pins
 reducer-enqueue ownership, strictly sequential context catch-up, and canonical

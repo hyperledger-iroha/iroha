@@ -126,7 +126,7 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
 
 ## Transactions
 
-- `Executable`: `Instructions(ConstVec<InstructionBox>)`, `ContractCall(ContractInvocation)`, `Ivm(IvmBytecode)`, `IvmProved(IvmProved)`, or a flat ordered `Batch(ConstVec<ExecutableBatchItem>)`. The append-only mixed variant is introduced by `DATA_MODEL_VERSION = 3`: `Executable::Batch` uses tag `4`, while its item tags are `0` for `Instruction(InstructionBox)` and `1` for `ContractCall(ContractInvocation)`. Existing executable tags `0..=3` and their canonical bytes remain unchanged. Raw IVM bytecode and nested batches are excluded from batch items. `IvmBytecode` serializes as base64 (transparent newtype over `Vec<u8>`).
+- `Executable`: `Instructions(ConstVec<InstructionBox>)`, `ContractCall(ContractInvocation)`, `Ivm(IvmBytecode)`, `IvmProved(IvmProved)`, or a flat ordered `Batch(ConstVec<ExecutableBatchItem>)`. In the sole first-release layout, `Executable::Batch` uses tag `4`, while its item tags are `0` for `Instruction(InstructionBox)` and `1` for `ContractCall(ContractInvocation)`. Raw IVM bytecode and nested batches are excluded from batch items. `IvmBytecode` serializes as base64 (transparent newtype over `Vec<u8>`).
 - `TransactionBuilder`: constructs the ten-field first-release transaction
   payload with `domain`, `authority`, `creation_time_ms`, `instructions`,
   `time_to_live_ms`, `nonce`, `fee_payment`, the signature-bound
@@ -145,44 +145,33 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
   - `TransactionResult` = `Result<DataTriggerSequence, TransactionRejectionReason>` with hashing helpers.
   - `ExecutionStep(ConstVec<InstructionBox>)`: a single ordered batch of instructions in a transaction.
 
-The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
-Version 3 remains the historical introduction point for the append-only mixed
-batch above. Version 4 changes canonical validation-fee governance bytes by
-requiring exact `plain_electorate_rules` in policy and payout-lifecycle
-proposal instructions, retaining those rules in enacted registry entries, and
-binding finalized authorization to a frozen PLAIN electorate. SDKs must reject
-a node advertising any other data-model version before submission.
+The only supported SDK/node compatibility handshake is
+`DATA_MODEL_VERSION = 4`. SDKs must reject any other value before submission;
+the first release does not decode superseded data-model layouts.
 
-### Validation-fee PLAIN governance
+### Validation-fee Parliament governance
 
-- `ValidationFeePlainElectorateRulesV1` is part of each native proposal
-  fingerprint. It fixes the voting asset, bond-escrow account, slash-receiver
-  account, ballot amount and duration, citizenship amount, member cap,
-  conviction parameters, turnout and approval threshold, and the closed
-  proposal-operator eligibility rule. The first-release cap is 256 members;
-  Taira retains an exact 150-XOR bond, 3,600-block inclusive referendum window,
-  and PLAIN-only finalization.
-- `ValidationFeePlainElectorateSnapshotV1` freezes the electorate at the
-  referendum's `h_start` boundary after the seven-body approval gate. Its
-  canonical, duplicate-free members retain account id, uninterrupted
-  `bonded_height`, and exact `bonded_amount`; the snapshot also binds the
-  proposal id/operator, capture and gate heights, member count, and a
-  domain-separated `roster_root`. The proposal operator must have bonded at or
-  before the gate; every other member must have bonded strictly after the gate
-  and before capture.
-- `ValidationFeeParliamentAuthorizationV1` retains the snapshot root, count,
-  capture height, and approval-gate height alongside the proposal fingerprint,
-  Parliament roster root, referendum window, PLAIN finalization, and enactment
-  height. Registry validation requires these anchors and thresholds to match
-  the retained rules, and requires
+- `ValidationFeePolicyProposal` and `ValidationFeePayoutLifecycleProposal`
+  bind the canonical transaction authority as `proposal_operator`; Core derives
+  it from execution and different operators produce different fingerprints.
+  Policy proposals additionally bind the exact previously enacted payout
+  lifecycle when they carry a treasury payout binding.
+- `ValidationFeeParliamentAuthorizationV1` retains the proposal operator,
+  proposal fingerprint, canonical certificate id, complete
+  `GovernanceCertificateV1`, and enacted height. Registry validation derives
+  the certificate id, verifies the complete certificate, requires its proposal
+  content id to equal the native proposal fingerprint, and requires its due
+  height to equal the enacted height. Enabled policies additionally require
   `effective_from_height = enacted_at_height + 120,960` exactly.
-- Every new validation-fee lock retains the proposal-bound asset, escrow, and
-  slash receiver. Lock, release, slash, and restitution move the exact numeric
-  balance atomically through those retained identities; missing or mismatched
-  custody evidence, or a failed release, retains the lock and fails closed.
-  Referenced accounts, asset definitions, and their containing domains cannot
-  be unregistered while an active lock or a proposed/approved validation-fee
-  proposal still depends on them.
+- There is no validation-fee-specific electorate, snapshot, referendum window,
+  or finalization-evidence path. The complete Parliament attempt and its
+  certificate are the single authorization source.
+- The V1 policy registry, its payout-lifecycle references, and lifecycle-scoped
+  credit leaves are append-only. Draining a lifecycle retains its canonical zero
+  balance and immutable asset binding. Physical retirement would require a new
+  consensus transition that derives both lifecycle inactivity and an exact zero
+  reference count from the same frozen state; no caller-supplied approximation is
+  accepted.
 
 ## Blocks
 

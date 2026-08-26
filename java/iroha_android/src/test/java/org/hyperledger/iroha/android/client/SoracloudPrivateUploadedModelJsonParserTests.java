@@ -1,49 +1,241 @@
 package org.hyperledger.iroha.android.client;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
+import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.address.PublicKeyCodec;
+import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
+import org.hyperledger.iroha.android.util.HashLiteral;
 
 public final class SoracloudPrivateUploadedModelJsonParserTests {
 
   private SoracloudPrivateUploadedModelJsonParserTests() {}
 
   public static void main(final String[] args) {
-    parsesPrivateExecuteResponseAndReceiptInstruction();
+    parsesSubmittedPrivateExecuteResponseAndDurableReceipt();
+    modelsDefensivelyCopyManifestDigests();
+    modelsDeeplySnapshotStatus();
+    parsesCommittedReplayWithExplicitNullTransactionHash();
     parsesPrivateReceiptListPaginationMetadata();
-    rejectsMissingOrMalformedReceiptInstruction();
-    boundedReceiptListLeavesTotalAbsent();
+    boundedReceiptListAcceptsRequiredNullMetadata();
+    rejectsReceiptListMissingRequiredNullableFields();
+    rejectsNonCanonicalOrContradictoryReceiptCountMetadata();
+    rejectsContradictoryReceiptPaginationRelationships();
+    rejectsRetiredInstructionSurfaceAndInvalidSubmissionState();
+    rejectsMalformedStatusEnvelope();
+    rejectsMissingProductionReceiptEvidence();
+    rejectsNonCanonicalReceiptNetworkIdentity();
+    rejectsMalformedValidatorAndOutputRecipient();
+    rejectsLeadingOrTrailingWhitespaceWithoutNormalization();
+    enforcesExactServiceName();
+    rejectsMismatchedResponseOutputArtifact();
     rejectsNegativeReceiptPaginationMetadata();
-    rejectsNegativeReceiptArtifactAndSequenceFields();
+    rejectsReceiptPaginationMetadataAboveU32();
+    rejectsInvalidReceiptArtifactAndSequenceFields();
+    parsesFullUnsignedReceiptCoordinates();
+    rejectsInvalidManifestDigests();
+    rejectsNonCanonicalHashFieldsAndFingerprintMismatch();
     rejectsBlankReceiptIdentityFields();
+    rejectsReceiptListEntriesWithoutPositiveLedgerCoordinates();
+    rejectsNonCanonicalReceiptListOrderAndDuplicates();
+    directConstructorsEnforceCanonicalContract();
     System.out.println("[IrohaAndroid] SoracloudPrivateUploadedModelJsonParserTests passed.");
   }
 
-  private static void parsesPrivateExecuteResponseAndReceiptInstruction() {
+  private static void parsesSubmittedPrivateExecuteResponseAndDurableReceipt() {
     final SoracloudPrivateUploadedModelExecuteResponse response =
         SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(bytes(executeResponseJson()));
 
     assert response.schemaVersion() == 1L : "schema version";
-    assert "finalized".equals(response.status().get("status")) : "status";
-    assert "receipt-1".equals(response.receipt().receiptId()) : "receipt id";
+    assert Long.valueOf(1L).equals(response.status().get("schema_version"))
+        : "status schema";
+    assert "portal".equals(
+        ((Map<?, ?>) response.status().get("bundle")).get("service_name")) : "status bundle";
+    assert "submitted".equals(response.submissionStatus()) : "submission status";
+    assert TRANSACTION_HASH.equals(response.transactionHash()) : "transaction hash";
+    assert NETWORK_ID.equals(response.receipt().networkId()) : "network id";
+    assert RECEIPT_ID.equals(response.receipt().receiptId()) : "receipt id";
     assert "portal".equals(response.receipt().serviceName()) : "service";
+    assert "2026.1".equals(response.receipt().serviceVersion()) : "service version";
+    assert "decrypt-upload-1".equals(response.receipt().decryptionRequestId())
+        : "decryption request";
+    assert response.receipt().attestingValidator().laneId() == 0L : "validator lane";
+    assert VALIDATOR_ACCOUNT_ID.equals(
+        response.receipt().attestingValidator().validatorAccountId()) : "validator account";
+    assert VALIDATOR_PEER_ID.equals(response.receipt().attestingValidator().peerId())
+        : "validator peer";
     assert "input".equals(response.receipt().inputArtifact().artifactRole()) : "input role";
     assert "output".equals(response.receipt().outputArtifact().artifactRole()) : "output role";
-    assert response.receipt().emittedSequence() == 17L : "sequence";
-    assert SoracloudPrivateUploadedModelJsonParser.PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID
-        .equals(response.receiptInstruction().wireId()) : "receipt instruction wire id";
-    assert "0a0b0c".equals(response.receiptInstruction().payloadHex()) : "receipt payload";
+    assert response.receipt().inputArtifact().sorafsRootCid().size() == 36 : "root CID width";
+    assert response.receipt().inputArtifact().sorafsRootCid().subList(0, 4)
+        .equals(Arrays.asList(1, 113, 31, 32)) : "root CID framing";
+    assert Arrays.equals(
+        filledDigest(0x11), response.receipt().modelManifestDigest()) : "model manifest digest";
+    assert Arrays.equals(
+        filledDigest(0x33), response.outputArtifact().sorafsManifestDigest())
+        : "response output";
+    assert "recipient-key".equals(response.receipt().outputRecipient().keyId()) : "recipient";
+    assert response.receipt().outputRecipient().publicKeyBytes().length == 32 : "recipient key";
+    assert BigInteger.ZERO.equals(response.receipt().emittedSequence())
+        : "submission sequence sentinel";
+    assert BigInteger.ZERO.equals(response.receipt().emittedBlockHeight())
+        : "submission height sentinel";
+  }
+
+  private static void modelsDefensivelyCopyManifestDigests() {
+    final SoracloudPrivateUploadedModelExecuteResponse response =
+        SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(bytes(executeResponseJson()));
+
+    final byte[] artifactSource = filledDigest(0x44);
+    final SoracloudPrivateModelArtifactRef artifact =
+        artifactWithManifestDigest(response.outputArtifact(), artifactSource);
+    artifactSource[0] = 0;
+    assert artifact.sorafsManifestDigest()[0] == (byte) 0x44
+        : "artifact constructor must copy manifest digest";
+    final byte[] artifactView = artifact.sorafsManifestDigest();
+    artifactView[1] = 0;
+    assert artifact.sorafsManifestDigest()[1] == (byte) 0x44
+        : "artifact getter must copy manifest digest";
+
+    final byte[] receiptSource = filledDigest(0x55);
+    final SoracloudPrivateUploadedModelExecutionReceipt receipt =
+        receiptWithManifestDigest(response.receipt(), receiptSource);
+    receiptSource[0] = 0;
+    assert receipt.modelManifestDigest()[0] == (byte) 0x55
+        : "receipt constructor must copy manifest digest";
+    final byte[] receiptView = receipt.modelManifestDigest();
+    receiptView[1] = 0;
+    assert receipt.modelManifestDigest()[1] == (byte) 0x55
+        : "receipt getter must copy manifest digest";
+
+    assertThrows(
+        () -> artifactWithManifestDigest(response.outputArtifact(), new byte[31]),
+        "expected short artifact manifest digest rejection");
+    assertThrows(
+        () -> artifactWithManifestDigest(response.outputArtifact(), null),
+        "expected null artifact manifest digest rejection");
+    assertThrows(
+        () -> receiptWithManifestDigest(response.receipt(), new byte[33]),
+        "expected long receipt manifest digest rejection");
+    assertThrows(
+        () -> receiptWithManifestDigest(response.receipt(), null),
+        "expected null receipt manifest digest rejection");
+  }
+
+  @SuppressWarnings("unchecked")
+  private static void modelsDeeplySnapshotStatus() {
+    final SoracloudPrivateUploadedModelExecuteResponse parsed =
+        SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(bytes(executeResponseJson()));
+    final List<Object> modalities = new ArrayList<>();
+    modalities.add("text");
+    final Map<String, Object> bundle = new LinkedHashMap<>();
+    bundle.put("modalities", modalities);
+    final Map<String, Object> status = new LinkedHashMap<>();
+    status.put("schema_version", Long.valueOf(1L));
+    status.put("bundle", bundle);
+    status.put("artifact", null);
+
+    final SoracloudPrivateUploadedModelExecuteResponse response =
+        new SoracloudPrivateUploadedModelExecuteResponse(
+            1L,
+            status,
+            parsed.submissionStatus(),
+            parsed.transactionHash(),
+            parsed.receipt(),
+            parsed.outputArtifact());
+    modalities.add("image");
+    bundle.put("service_name", "mutated");
+    status.put("legacy", Boolean.TRUE);
+
+    final Map<?, ?> snapshotBundle = (Map<?, ?>) response.status().get("bundle");
+    assert !snapshotBundle.containsKey("service_name") : "status object snapshot";
+    assert ((List<?>) snapshotBundle.get("modalities")).size() == 1 : "status list snapshot";
+    assertThrows(
+        () -> response.status().put("legacy", Boolean.TRUE),
+        "expected immutable status map");
+    assertThrows(
+        () -> ((Map<String, Object>) response.status().get("bundle")).put("legacy", true),
+        "expected immutable nested status map");
+    assertThrows(
+        () -> ((List<Object>) snapshotBundle.get("modalities")).add("image"),
+        "expected immutable nested status list");
+
+    final Map<String, Object> cyclicBundle = new LinkedHashMap<>();
+    cyclicBundle.put("self", cyclicBundle);
+    final Map<String, Object> cyclicStatus = new LinkedHashMap<>();
+    cyclicStatus.put("schema_version", Long.valueOf(1L));
+    cyclicStatus.put("bundle", cyclicBundle);
+    cyclicStatus.put("artifact", null);
+    assertThrows(
+        () -> new SoracloudPrivateUploadedModelExecuteResponse(
+            1L,
+            cyclicStatus,
+            parsed.submissionStatus(),
+            parsed.transactionHash(),
+            parsed.receipt(),
+            parsed.outputArtifact()),
+        "expected cyclic status rejection");
+
+    final Map<String, Object> nonfiniteBundle = new LinkedHashMap<>();
+    nonfiniteBundle.put("score", Double.NaN);
+    final Map<String, Object> nonfiniteStatus = new LinkedHashMap<>();
+    nonfiniteStatus.put("schema_version", Long.valueOf(1L));
+    nonfiniteStatus.put("bundle", nonfiniteBundle);
+    nonfiniteStatus.put("artifact", null);
+    assertThrows(
+        () -> new SoracloudPrivateUploadedModelExecuteResponse(
+            1L,
+            nonfiniteStatus,
+            parsed.submissionStatus(),
+            parsed.transactionHash(),
+            parsed.receipt(),
+            parsed.outputArtifact()),
+        "expected non-finite status number rejection");
+  }
+
+  private static void parsesCommittedReplayWithExplicitNullTransactionHash() {
+    final SoracloudPrivateUploadedModelExecuteResponse response =
+        SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(
+                executeResponseJson()
+                    .replace("\"submission_status\":\"submitted\"", "\"submission_status\":\"committed\"")
+                    .replace(
+                        "\"transaction_hash\":\"" + TRANSACTION_HASH + "\"",
+                        "\"transaction_hash\":null")
+                    .replace("\"emitted_sequence\":0", "\"emitted_sequence\":17")
+                    .replace("\"emitted_block_height\":0", "\"emitted_block_height\":501")));
+
+    assert "committed".equals(response.submissionStatus()) : "committed replay";
+    assert response.transactionHash() == null : "committed transaction hash";
+    assert BigInteger.valueOf(17L).equals(response.receipt().emittedSequence())
+        : "committed sequence";
+    assert BigInteger.valueOf(501L).equals(response.receipt().emittedBlockHeight())
+        : "committed height";
   }
 
   private static void parsesPrivateReceiptListPaginationMetadata() {
     final String json = "{"
         + "\"schema_version\":1,"
-        + "\"receipts\":[" + receiptJson() + "],"
+        + "\"receipts\":["
+        + receiptJson()
+            .replace("\"emitted_sequence\":0", "\"emitted_sequence\":17")
+            .replace("\"emitted_block_height\":0", "\"emitted_block_height\":501")
+        + "],"
         + "\"total\":3,"
         + "\"returned_items\":1,"
         + "\"remaining_items\":2,"
         + "\"has_more\":true,"
         + "\"count_mode\":\"exact\","
-        + "\"continue_cursor\":null"
+        + "\"continue_cursor\":\"" + RECEIPT_CURSOR + "\""
         + "}";
     final SoracloudPrivateUploadedModelReceiptListResponse response =
         SoracloudPrivateUploadedModelJsonParser.parseReceiptList(bytes(json));
@@ -53,36 +245,322 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
     assert response.returnedItems() == 1L : "returned";
     assert response.remainingItems() == 2L : "remaining";
     assert "exact".equals(response.countMode()) : "count mode";
-    assert response.continueCursor() == null : "continue cursor";
+    assert RECEIPT_CURSOR.equals(response.continueCursor()) : "continue cursor";
+    assert "2026.1".equals(response.receipts().get(0).serviceVersion())
+        : "list receipt service version";
   }
 
-  private static void rejectsMissingOrMalformedReceiptInstruction() {
-    assertThrows(
-        () -> SoracloudPrivateUploadedModelJsonParser.privateUploadedModelReceiptInstruction(
-            Collections.singletonList(new SoracloudTxInstruction("other", "0a"))),
-        "expected missing receipt instruction rejection");
-    assertThrows(
-        () -> SoracloudPrivateUploadedModelJsonParser.privateUploadedModelReceiptInstruction(
-            Collections.singletonList(new SoracloudTxInstruction(
-                SoracloudPrivateUploadedModelJsonParser.PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID,
-                "zz"))),
-        "expected malformed receipt instruction rejection");
-  }
-
-  private static void boundedReceiptListLeavesTotalAbsent() {
+  private static void boundedReceiptListAcceptsRequiredNullMetadata() {
     final SoracloudPrivateUploadedModelReceiptListResponse response =
         SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
             bytes("{"
                 + "\"schema_version\":1,"
                 + "\"receipts\":[],"
+                + "\"total\":null,"
                 + "\"returned_items\":0,"
-                + "\"remaining_items\":0,"
+                + "\"remaining_items\":null,"
                 + "\"has_more\":false,"
-                + "\"count_mode\":\"bounded\""
+                + "\"count_mode\":\"bounded\","
+                + "\"continue_cursor\":null"
                 + "}"));
 
-    assert response.total() == null : "bounded total absent";
+    assert response.total() == null : "bounded total null";
+    assert response.remainingItems() == null : "bounded remaining count null";
     assert !response.hasMore() : "has more";
+    assert response.continueCursor() == null : "continue cursor null";
+  }
+
+  private static void rejectsReceiptListMissingRequiredNullableFields() {
+    final String canonical = "{"
+        + "\"schema_version\":1,"
+        + "\"receipts\":[],"
+        + "\"total\":null,"
+        + "\"returned_items\":0,"
+        + "\"remaining_items\":null,"
+        + "\"has_more\":false,"
+        + "\"count_mode\":\"bounded\","
+        + "\"continue_cursor\":null"
+        + "}";
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(canonical.replace("\"total\":null,", ""))),
+        "expected missing total key rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(canonical.replace(",\"continue_cursor\":null", ""))),
+        "expected missing continue_cursor key rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(canonical.replace("\"remaining_items\":null,", ""))),
+        "expected missing remaining_items key rejection");
+  }
+
+  private static void rejectsNonCanonicalOrContradictoryReceiptCountMetadata() {
+    final String exact = receiptListJson("0", "0", "0");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(exact.replace("\"count_mode\":\"exact\"", "\"count_mode\":\"EXACT\""))),
+        "expected uppercase count mode alias rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(exact.replace("\"count_mode\":\"exact\"", "\"count_mode\":\"full\""))),
+        "expected unknown count mode rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(receiptListJson("null", "0", "0"))),
+        "expected exact count mode with null total rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(exact.replace("\"count_mode\":\"exact\"", "\"count_mode\":\"bounded\""))),
+        "expected bounded count mode with non-null total rejection");
+  }
+
+  private static void rejectsContradictoryReceiptPaginationRelationships() {
+    assertThrows(
+        () ->
+            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+                bytes(receiptListJson("1", "1", "0"))),
+        "expected returned_items/receipts mismatch rejection");
+    assertThrows(
+        () ->
+            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+                bytes(
+                    withMore(receiptListJson("1", "1", "1"))
+                        .replace(
+                            "\"receipts\":[]",
+                            "\"receipts\":[" + committedReceiptJson(RECEIPT_ID, 1L, 1L) + "]"))),
+        "expected exact total below current suffix rejection");
+    assertThrows(
+        () ->
+            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+                bytes(receiptListJson("1", "0", "1"))),
+        "expected false has_more with remaining items rejection");
+    assertThrows(
+        () ->
+            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+                bytes(
+                    withMore(receiptListJson("0", "0", "0")))),
+        "expected true has_more without remaining items rejection");
+
+    final SoracloudPrivateUploadedModelReceiptListResponse saturated =
+        SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(
+                withMore(receiptListJson("4294967295", "0", "4294967295"))));
+    assert saturated.total().longValue() == 4_294_967_295L : "saturated total";
+  }
+
+  private static void rejectsRetiredInstructionSurfaceAndInvalidSubmissionState() {
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"output_artifact\":", "\"tx_instructions\":[],\"output_artifact\":"))),
+        "expected retired tx_instructions rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"submission_status\":\"submitted\"", "\"submission_status\":\"pending\""))),
+        "expected unknown submission status rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                "\"transaction_hash\":\"" + TRANSACTION_HASH + "\"",
+                "\"transaction_hash\":null"))),
+        "expected submitted response hash rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"submission_status\":\"submitted\"", "\"submission_status\":\"committed\""))),
+        "expected committed response non-null hash rejection");
+  }
+
+  private static void rejectsMalformedStatusEnvelope() {
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                "\"artifact\":null}", "\"artifact\":null,\"legacy\":true}"))),
+        "expected unknown status field rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                "\"bundle\":{\"service_name\":\"portal\",\"modalities\":[\"text\"]},",
+                ""))),
+        "expected missing status bundle rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(statusJson(), statusJson().replace(
+                "\"schema_version\":1", "\"schema_version\":2")))),
+        "expected invalid status schema rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                "\"artifact\":null}", "\"artifact\":\"legacy\"}"))),
+        "expected non-object status artifact rejection");
+  }
+
+  private static void rejectsMissingProductionReceiptEvidence() {
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"network_id\":\"" + NETWORK_ID + "\",", ""))),
+        "expected missing network_id rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"service_version\":\"2026.1\",", ""))),
+        "expected missing service_version rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"decryption_request_id\":\"decrypt-upload-1\",", ""))),
+        "expected missing decryption_request_id rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(attestingValidatorField(), ""))),
+        "expected missing attesting_validator rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(outputRecipientField(), ""))),
+        "expected missing output_recipient rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(",\"emitted_block_height\":0", ""))),
+        "expected missing emitted_block_height rejection");
+  }
+
+  private static void rejectsNonCanonicalReceiptNetworkIdentity() {
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                "\"network_id\":\"" + NETWORK_ID + "\"", "\"network_id\":7"))),
+        "expected non-string network_id rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                NETWORK_ID, NETWORK_ID.toLowerCase(java.util.Locale.ROOT)))),
+        "expected non-canonical network_id spelling rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(NETWORK_ID, NETWORK_ID.replace("#A2F0", "#A2F1")))),
+        "expected invalid network_id checksum rejection");
+  }
+
+  private static void rejectsMalformedValidatorAndOutputRecipient() {
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"lane_id\":0", "\"lane_id\":-1"))),
+        "expected invalid lane rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(VALIDATOR_ACCOUNT_ID, "validator@public"))),
+        "expected non-I105 validator account rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                VALIDATOR_PEER_ID, "ed25519:" + VALIDATOR_PEER_ID))),
+        "expected prefixed peer alias rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(VALIDATOR_PEER_ID, OTHER_VALIDATOR_PEER_ID))),
+        "expected validator account and peer mismatch rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                VALIDATOR_ACCOUNT_ID, MULTISIG_VALIDATOR_ACCOUNT_ID))),
+        "expected multisig validator account rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(PUBLIC_KEY_BASE64, "not-base64"))),
+        "expected malformed recipient key rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(PUBLIC_KEY_BASE64, ZERO_X25519_KEY_BASE64))),
+        "expected low-order recipient key rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("X25519HkdfSha256", "UnknownKem"))),
+        "expected unsupported KEM rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"value\":null", "\"value\":{}"))),
+        "expected non-unit suite value rejection");
+  }
+
+  private static void rejectsLeadingOrTrailingWhitespaceWithoutNormalization() {
+    final String[][] paddedFields = {
+        {"\"submission_status\":\"submitted\"", "\"submission_status\":\"submitted \""},
+        {"\"service_version\":\"2026.1\"", "\"service_version\":\" 2026.1\""},
+        {
+          "\"validator_account_id\":\"" + VALIDATOR_ACCOUNT_ID + "\"",
+          "\"validator_account_id\":\" " + VALIDATOR_ACCOUNT_ID + "\""
+        },
+        {
+          "\"peer_id\":\"" + VALIDATOR_PEER_ID + "\"",
+          "\"peer_id\":\"" + VALIDATOR_PEER_ID + " \""
+        }
+    };
+    for (final String[] paddedField : paddedFields) {
+      assertThrows(
+          () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+              bytes(executeResponseJson().replace(paddedField[0], paddedField[1]))),
+          "expected padded canonical string rejection");
+    }
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(receiptListJson("0", "0", "0")
+                .replace("\"count_mode\":\"exact\"", "\"count_mode\":\" exact\""))),
+        "expected padded count mode rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(receiptListJson("0", "0", "0")
+                .replace("\"continue_cursor\":null", "\"continue_cursor\":\" next\""))),
+        "expected padded cursor rejection");
+    assertThrows(
+        () ->
+            SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+                bytes(
+                    executeResponseJson()
+                        .replace(
+                            "\"service_version\":\"2026.1\"",
+                            "\"service_version\":\"2026\\n1\""))),
+        "expected embedded control character rejection");
+  }
+
+  private static void enforcesExactServiceName() {
+    final String composedServiceName = "caf\u00e9";
+    final String decomposedServiceName = "cafe\u0301";
+    final SoracloudPrivateUploadedModelExecuteResponse composed =
+        SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(
+                executeResponseJson()
+                    .replace(
+                        "\"service_name\":\"portal\"",
+                        "\"service_name\":\"" + composedServiceName + "\"")));
+    assert composedServiceName.equals(composed.receipt().serviceName())
+        : "canonical NFC service name";
+    assertThrows(
+        () ->
+            SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+                bytes(
+                    executeResponseJson()
+                        .replace(
+                            "\"service_name\":\"portal\"",
+                            "\"service_name\":\"" + decomposedServiceName + "\""))),
+        "expected non-NFC service name rejection");
+    assertThrows(
+        () ->
+            SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+                bytes(
+                    executeResponseJson()
+                        .replace(
+                            "\"service_name\":\"portal\"",
+                            "\"service_name\":\"portal#alias\""))),
+        "expected forbidden Iroha Name character rejection");
+  }
+
+  private static void rejectsMismatchedResponseOutputArtifact() {
+    final String canonical = executeResponseJson();
+    final String target = fixedBytesJson(0x33, 32);
+    final int responseOutput = canonical.lastIndexOf(target);
+    final String mismatched = canonical.substring(0, responseOutput)
+        + fixedBytesJson(0x34, 32)
+        + canonical.substring(responseOutput + target.length());
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(bytes(mismatched)),
+        "expected response/receipt output mismatch rejection");
   }
 
   private static void rejectsNegativeReceiptPaginationMetadata() {
@@ -100,26 +578,341 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
         "expected negative remaining_items rejection");
   }
 
-  private static void rejectsNegativeReceiptArtifactAndSequenceFields() {
+  private static void rejectsReceiptPaginationMetadataAboveU32() {
+    final String u32MaxPlusOne = "4294967296";
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(receiptListJson(u32MaxPlusOne, "0", "0"))),
+        "expected total above u32 rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(receiptListJson("0", u32MaxPlusOne, "0"))),
+        "expected returned_items above u32 rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(receiptListJson("0", "0", u32MaxPlusOne))),
+        "expected remaining_items above u32 rejection");
+  }
+
+  private static void rejectsInvalidReceiptArtifactAndSequenceFields() {
     assertThrows(
         () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
-            bytes(executeResponseJson().replace("\"ciphertext_bytes\":64", "\"ciphertext_bytes\":-1"))),
-        "expected negative ciphertext_bytes rejection");
+            bytes(executeResponseJson().replace(
+                "\"sorafs_root_cid\":" + ROOT_CID_JSON + ",", ""))),
+        "expected missing sorafs_root_cid rejection");
     assertThrows(
         () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
-            bytes(executeResponseJson().replace("\"emitted_sequence\":17", "\"emitted_sequence\":-1"))),
+            bytes(executeResponseJson().replace(ROOT_CID_JSON, "[1,113,31,32,1]"))),
+        "expected short sorafs_root_cid rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                ROOT_CID_JSON, ROOT_CID_JSON.replaceFirst("\\[1,113", "[2,113")))),
+        "expected malformed sorafs_root_cid prefix rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(ROOT_CID_JSON, ZERO_DIGEST_ROOT_CID_JSON))),
+        "expected zero sorafs_root_cid digest rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                ROOT_CID_JSON, ROOT_CID_JSON.replaceFirst(",1,2", ",1.0,2")))),
+        "expected non-integer sorafs_root_cid byte rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"ciphertext_bytes\":64", "\"ciphertext_bytes\":0"))),
+        "expected zero ciphertext_bytes rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                "\"ciphertext_bytes\":64", "\"ciphertext_bytes\":75497473"))),
+        "expected ciphertext_bytes above 72 MiB rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"emitted_sequence\":0", "\"emitted_sequence\":-1"))),
         "expected negative emitted_sequence rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"emitted_block_height\":0", "\"emitted_block_height\":-1"))),
+        "expected negative emitted_block_height rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"emitted_sequence\":0", "\"emitted_sequence\":1"))),
+        "expected mixed zero and positive ledger coordinates rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                "\"emitted_sequence\":0", "\"emitted_sequence\":18446744073709551616"))),
+        "expected emitted_sequence above u64 rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                "\"emitted_sequence\":0", "\"emitted_sequence\":1.0"))),
+        "expected non-integer emitted_sequence rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace("\"artifact_role\":\"input\"", "\"artifact_role\":\"output\""))),
+        "expected swapped artifact role rejection");
+  }
+
+  private static void parsesFullUnsignedReceiptCoordinates() {
+    final String u64Max = SoracloudPrivateModelValidation.U64_MAX.toString();
+    final SoracloudPrivateUploadedModelExecuteResponse response =
+        SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(
+                executeResponseJson()
+                    .replace(
+                        "\"submission_status\":\"submitted\"",
+                        "\"submission_status\":\"committed\"")
+                    .replace(
+                        "\"transaction_hash\":\"" + TRANSACTION_HASH + "\"",
+                        "\"transaction_hash\":null")
+                    .replace("\"emitted_sequence\":0", "\"emitted_sequence\":" + u64Max)
+                    .replace(
+                        "\"emitted_block_height\":0",
+                        "\"emitted_block_height\":" + u64Max)));
+
+    assert SoracloudPrivateModelValidation.U64_MAX.equals(
+        response.receipt().emittedSequence()) : "maximum u64 sequence";
+    assert SoracloudPrivateModelValidation.U64_MAX.equals(
+        response.receipt().emittedBlockHeight()) : "maximum u64 height";
+  }
+
+  private static void rejectsInvalidManifestDigests() {
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                fixedBytesJson(0x11, 32), fixedBytesJson(0x11, 31)))),
+        "expected short model manifest digest rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                fixedBytesJson(0x22, 32), fixedBytesJson(0x22, 33)))),
+        "expected long artifact manifest digest rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                fixedBytesJson(0x33, 32), fixedBytesJson(256, 32)))),
+        "expected out-of-range manifest digest byte rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                fixedBytesJson(0x11, 32), "\"model-manifest\""))),
+        "expected string manifest digest rejection");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(executeResponseJson().replace(
+                fixedBytesJson(0x11, 32), fixedBytesJson(0x11, 32).replaceFirst("17", "17.0")))),
+        "expected non-integer manifest digest byte rejection");
+  }
+
+  private static void rejectsNonCanonicalHashFieldsAndFingerprintMismatch() {
+    final String[][] hashFields = {
+        {"transaction_hash", TRANSACTION_HASH},
+        {"receipt_id", RECEIPT_ID},
+        {"model_bundle_root", MODEL_BUNDLE_ROOT},
+        {"artifact_hash", INPUT_ARTIFACT_HASH},
+        {"artifact_hash", OUTPUT_ARTIFACT_HASH},
+        {"input_commitment", INPUT_COMMITMENT},
+        {"output_commitment", OUTPUT_COMMITMENT},
+        {"request_commitment", REQUEST_COMMITMENT},
+        {"result_commitment", RESULT_COMMITMENT},
+        {"public_key_fingerprint", PUBLIC_KEY_FINGERPRINT}
+    };
+    for (final String[] hashField : hashFields) {
+      assertHashFieldRejected(
+          hashField[0],
+          hashField[1],
+          "not-a-hash",
+          "expected non-canonical " + hashField[0] + " rejection");
+    }
+    assertHashFieldRejected(
+        "receipt_id",
+        RECEIPT_ID,
+        RECEIPT_ID.toLowerCase(java.util.Locale.ROOT),
+        "expected lowercase receipt_id alias rejection");
+    assertHashFieldRejected(
+        "receipt_id",
+        RECEIPT_ID,
+        tamperChecksum(RECEIPT_ID),
+        "expected receipt_id checksum rejection");
+    assertHashFieldRejected(
+        "receipt_id",
+        RECEIPT_ID,
+        UNMARKED_HASH_LITERAL,
+        "expected unmarked receipt_id rejection");
+    assertHashFieldRejected(
+        "receipt_id",
+        RECEIPT_ID,
+        ZERO_PREHASH_SENTINEL,
+        "expected zero-prehash receipt_id rejection");
+    assertHashFieldRejected(
+        "public_key_fingerprint",
+        PUBLIC_KEY_FINGERPRINT,
+        RESULT_COMMITMENT,
+        "expected public key fingerprint mismatch rejection");
   }
 
   private static void rejectsBlankReceiptIdentityFields() {
     assertThrows(
         () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
-            bytes(executeResponseJson().replace("\"receipt_id\":\"receipt-1\"", "\"receipt_id\":\"   \""))),
+            bytes(executeResponseJson().replace(
+                "\"receipt_id\":\"" + RECEIPT_ID + "\"", "\"receipt_id\":\"   \""))),
         "expected blank receipt_id rejection");
     assertThrows(
         () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
             bytes(executeResponseJson().replace("\"policy_id\":\"policy-1\"", "\"policy_id\":\"\""))),
         "expected blank policy_id rejection");
+  }
+
+  private static void rejectsReceiptListEntriesWithoutPositiveLedgerCoordinates() {
+    final String zeroCoordinates = receiptJson();
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(receiptListJson("1", "1", "0")
+                .replace("\"receipts\":[]", "\"receipts\":[" + zeroCoordinates + "]"))),
+        "expected zero-coordinate receipt-list entry rejection");
+
+    final String positiveSequenceOnly =
+        receiptJson().replace("\"emitted_sequence\":0", "\"emitted_sequence\":1");
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+            bytes(receiptListJson("1", "1", "0")
+                .replace(
+                    "\"receipts\":[]", "\"receipts\":[" + positiveSequenceOnly + "]"))),
+        "expected mixed-coordinate receipt-list entry rejection");
+  }
+
+  private static void rejectsNonCanonicalReceiptListOrderAndDuplicates() {
+    final String first = committedReceiptJson(RECEIPT_ID, 1L, 101L);
+    final String second = committedReceiptJson(MODEL_BUNDLE_ROOT, 2L, 102L);
+    assertThrows(
+        () ->
+            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+                bytes(
+                    receiptListJson("2", "2", "0")
+                        .replace("\"receipts\":[]", "\"receipts\":[" + second + "," + first + "]"))),
+        "expected descending receipt sequence rejection");
+    assertThrows(
+        () ->
+            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+                bytes(
+                    receiptListJson("2", "2", "0")
+                        .replace("\"receipts\":[]", "\"receipts\":[" + first + "," + first + "]"))),
+        "expected duplicate receipt rejection");
+
+    final String higherId = committedReceiptJson(MODEL_BUNDLE_ROOT, 1L, 101L);
+    assertThrows(
+        () ->
+            SoracloudPrivateUploadedModelJsonParser.parseReceiptList(
+                bytes(
+                    receiptListJson("2", "2", "0")
+                        .replace("\"receipts\":[]", "\"receipts\":[" + higherId + "," + first + "]"))),
+        "expected descending same-sequence receipt_id rejection");
+  }
+
+  private static void directConstructorsEnforceCanonicalContract() {
+    final SoracloudPrivateUploadedModelExecuteResponse parsed =
+        SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(bytes(executeResponseJson()));
+    final SoracloudPrivateUploadedModelExecutionReceipt receipt = parsed.receipt();
+    final SoracloudPrivateModelArtifactRef output = parsed.outputArtifact();
+
+    assertThrows(
+        () -> new SoracloudPrivateModelArtifactRef(
+            2L,
+            output.sorafsManifestDigest(),
+            output.sorafsRootCid(),
+            output.artifactHash(),
+            output.ciphertextBytes(),
+            output.artifactRole()),
+        "expected direct artifact schema rejection");
+    assertThrows(
+        () -> new SoracloudPrivateModelArtifactRef(
+            1L,
+            output.sorafsManifestDigest(),
+            output.sorafsRootCid(),
+            output.artifactHash(),
+            75_497_473L,
+            output.artifactRole()),
+        "expected direct artifact size rejection");
+    assertThrows(
+        () ->
+            new SoracloudPrivateModelArtifactRef(
+                1L,
+                output.sorafsManifestDigest(),
+                output.sorafsRootCid(),
+                output.artifactHash(),
+                output.ciphertextBytes(),
+                "plaintext"),
+        "expected direct artifact role rejection");
+    assertThrows(
+        () ->
+            new SoracloudPrivateModelArtifactRef(
+                1L,
+                output.sorafsManifestDigest(),
+                output.sorafsRootCid(),
+                ZERO_PREHASH_SENTINEL,
+                output.ciphertextBytes(),
+                output.artifactRole()),
+        "expected direct zero-prehash artifact hash rejection");
+    assertThrows(
+        () -> new SoracloudRuntimeDeterministicValidatorHost(
+            0L, VALIDATOR_ACCOUNT_ID, OTHER_VALIDATOR_PEER_ID),
+        "expected direct validator identity mismatch rejection");
+    assertThrows(
+        () -> new SoracloudUploadedModelEncryptionRecipient(
+            1L,
+            "recipient-key",
+            1L,
+            "X25519HkdfSha256",
+            "Aes256Gcm",
+            PUBLIC_KEY_BASE64,
+            RESULT_COMMITMENT),
+        "expected direct recipient fingerprint mismatch rejection");
+    assertThrows(
+        () -> receiptWithCoordinates(receipt, BigInteger.ONE, BigInteger.ZERO),
+        "expected direct receipt mixed coordinates rejection");
+    assertThrows(
+        () -> receiptWithCoordinates(
+            receipt,
+            SoracloudPrivateModelValidation.U64_MAX.add(BigInteger.ONE),
+            SoracloudPrivateModelValidation.U64_MAX),
+        "expected direct receipt coordinate above u64 rejection");
+    assertThrows(
+        () -> receiptWithServiceName(receipt, " portal"),
+        "expected direct receipt padded string rejection");
+    assertThrows(
+        () -> receiptWithServiceName(receipt, "cafe\u0301"),
+        "expected direct receipt non-NFC service name rejection");
+    assertThrows(
+        () -> receiptWithSelectors(receipt, receipt.serviceVersion(), "model id", "v1"),
+        "expected direct receipt noncanonical model id rejection");
+    assertThrows(
+        () -> receiptWithSelectors(receipt, receipt.serviceVersion(), "model-id", "v/1"),
+        "expected direct receipt noncanonical weight version rejection");
+    assertThrows(
+        () -> receiptWithSelectors(receipt, repeated('v', 257), "model-id", "v1"),
+        "expected direct receipt oversized service version rejection");
+    assertThrows(
+        () -> new SoracloudPrivateUploadedModelExecuteResponse(
+            1L,
+            parsed.status(),
+            "submitted",
+            null,
+            receipt,
+            output),
+        "expected direct submitted response without transaction hash rejection");
+    assertThrows(
+        () -> new SoracloudPrivateUploadedModelReceiptListResponse(
+            1L,
+            Collections.emptyList(),
+            null,
+            0L,
+            0L,
+            false,
+            "exact",
+            null),
+        "expected direct exact list without total rejection");
   }
 
   private static String receiptListJson(
@@ -131,59 +924,236 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
         + "\"returned_items\":" + returnedItems + ","
         + "\"remaining_items\":" + remainingItems + ","
         + "\"has_more\":false,"
-        + "\"count_mode\":\"exact\""
+        + "\"count_mode\":\"exact\","
+        + "\"continue_cursor\":null"
         + "}";
+  }
+
+  private static String withMore(final String json) {
+    return json
+        .replace("\"has_more\":false", "\"has_more\":true")
+        .replace("\"continue_cursor\":null", "\"continue_cursor\":\"" + RECEIPT_CURSOR + "\"");
+  }
+
+  private static String committedReceiptJson(
+      final String receiptId, final long emittedSequence, final long emittedBlockHeight) {
+    return receiptJson()
+        .replace("\"receipt_id\":\"" + RECEIPT_ID + "\"", "\"receipt_id\":\"" + receiptId + "\"")
+        .replace("\"emitted_sequence\":0", "\"emitted_sequence\":" + emittedSequence)
+        .replace(
+            "\"emitted_block_height\":0",
+            "\"emitted_block_height\":" + emittedBlockHeight);
   }
 
   private static String executeResponseJson() {
     return "{"
         + "\"schema_version\":1,"
-        + "\"status\":{\"status\":\"finalized\",\"service_name\":\"portal\"},"
+        + "\"status\":" + statusJson() + ","
+        + "\"submission_status\":\"submitted\","
+        + "\"transaction_hash\":\"" + TRANSACTION_HASH + "\","
         + "\"receipt\":" + receiptJson() + ","
-        + "\"tx_instructions\":[{"
-        + "\"wire_id\":\""
-        + SoracloudPrivateUploadedModelJsonParser.PRIVATE_UPLOADED_MODEL_RECEIPT_WIRE_ID
-        + "\","
-        + "\"payload_hex\":\"0a0b0c\""
-        + "}]"
+        + "\"output_artifact\":" + outputArtifactJson()
+        + "}";
+  }
+
+  private static String statusJson() {
+    return "{"
+        + "\"schema_version\":1,"
+        + "\"bundle\":{\"service_name\":\"portal\",\"modalities\":[\"text\"]},"
+        + "\"artifact\":null"
         + "}";
   }
 
   private static String receiptJson() {
     return "{"
         + "\"schema_version\":1,"
-        + "\"receipt_id\":\"receipt-1\","
+        + "\"network_id\":\"" + NETWORK_ID + "\","
+        + "\"receipt_id\":\"" + RECEIPT_ID + "\","
         + "\"service_name\":\"portal\","
+        + "\"service_version\":\"2026.1\","
         + "\"model_id\":\"upload-1\","
         + "\"weight_version\":\"v1\","
-        + "\"runtime_version\":\"soracloud.private.quantized_cpu.v1\","
-        + "\"model_manifest_digest\":\"model-manifest\","
-        + "\"model_bundle_root\":\"bundle-root\","
+        + "\"runtime_version\":\"soracloud.quantized-cpu.v1\","
+        + "\"model_manifest_digest\":" + fixedBytesJson(0x11, 32) + ","
+        + "\"model_bundle_root\":\"" + MODEL_BUNDLE_ROOT + "\","
         + "\"policy_id\":\"policy-1\","
+        + "\"decryption_request_id\":\"decrypt-upload-1\","
+        + attestingValidatorField()
         + "\"input_artifact\":{"
         + "\"schema_version\":1,"
-        + "\"sorafs_manifest_digest\":\"input-manifest\","
-        + "\"artifact_hash\":\"input-artifact\","
+        + "\"sorafs_manifest_digest\":" + fixedBytesJson(0x22, 32) + ","
+        + "\"sorafs_root_cid\":" + ROOT_CID_JSON + ","
+        + "\"artifact_hash\":\"" + INPUT_ARTIFACT_HASH + "\","
         + "\"ciphertext_bytes\":64,"
         + "\"artifact_role\":\"input\""
         + "},"
-        + "\"output_artifact\":{"
+        + "\"output_artifact\":" + outputArtifactJson() + ","
+        + "\"input_commitment\":\"" + INPUT_COMMITMENT + "\","
+        + "\"output_commitment\":\"" + OUTPUT_COMMITMENT + "\","
+        + outputRecipientField()
+        + "\"request_commitment\":\"" + REQUEST_COMMITMENT + "\","
+        + "\"result_commitment\":\"" + RESULT_COMMITMENT + "\","
+        + "\"emitted_sequence\":0,"
+        + "\"emitted_block_height\":0"
+        + "}";
+  }
+
+  private static String attestingValidatorField() {
+    return "\"attesting_validator\":{"
+        + "\"lane_id\":0,"
+        + "\"validator_account_id\":\"" + VALIDATOR_ACCOUNT_ID + "\","
+        + "\"peer_id\":\"" + VALIDATOR_PEER_ID + "\""
+        + "},";
+  }
+
+  private static String outputRecipientField() {
+    return "\"output_recipient\":{"
         + "\"schema_version\":1,"
-        + "\"sorafs_manifest_digest\":\"output-manifest\","
-        + "\"artifact_hash\":\"output-artifact\","
+        + "\"key_id\":\"recipient-key\","
+        + "\"key_version\":1,"
+        + "\"kem\":{\"kem\":\"X25519HkdfSha256\",\"value\":null},"
+        + "\"aead\":{\"aead\":\"Aes256Gcm\",\"value\":null},"
+        + "\"public_key_bytes\":\"" + PUBLIC_KEY_BASE64 + "\","
+        + "\"public_key_fingerprint\":\"" + PUBLIC_KEY_FINGERPRINT + "\""
+        + "},";
+  }
+
+  private static String outputArtifactJson() {
+    return "{"
+        + "\"schema_version\":1,"
+        + "\"sorafs_manifest_digest\":" + fixedBytesJson(0x33, 32) + ","
+        + "\"sorafs_root_cid\":" + ROOT_CID_JSON + ","
+        + "\"artifact_hash\":\"" + OUTPUT_ARTIFACT_HASH + "\","
         + "\"ciphertext_bytes\":96,"
         + "\"artifact_role\":\"output\""
-        + "},"
-        + "\"input_commitment\":\"input-commitment\","
-        + "\"output_commitment\":\"output-commitment\","
-        + "\"request_commitment\":\"request-commitment\","
-        + "\"result_commitment\":\"result-commitment\","
-        + "\"emitted_sequence\":17"
         + "}";
   }
 
   private static byte[] bytes(final String json) {
     return json.getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static byte[] filledDigest(final int value) {
+    final byte[] digest = new byte[32];
+    Arrays.fill(digest, (byte) value);
+    return digest;
+  }
+
+  private static String fixedBytesJson(final int value, final int size) {
+    final StringBuilder json = new StringBuilder(size * 4 + 2).append('[');
+    for (int index = 0; index < size; index++) {
+      if (index != 0) {
+        json.append(',');
+      }
+      json.append(value);
+    }
+    return json.append(']').toString();
+  }
+
+  private static SoracloudPrivateModelArtifactRef artifactWithManifestDigest(
+      final SoracloudPrivateModelArtifactRef template, final byte[] manifestDigest) {
+    return new SoracloudPrivateModelArtifactRef(
+        template.schemaVersion(),
+        manifestDigest,
+        template.sorafsRootCid(),
+        template.artifactHash(),
+        template.ciphertextBytes(),
+        template.artifactRole());
+  }
+
+  private static SoracloudPrivateUploadedModelExecutionReceipt receiptWithManifestDigest(
+      final SoracloudPrivateUploadedModelExecutionReceipt template,
+      final byte[] manifestDigest) {
+    return copyReceipt(
+        template,
+        manifestDigest,
+        template.serviceName(),
+        template.emittedSequence(),
+        template.emittedBlockHeight());
+  }
+
+  private static SoracloudPrivateUploadedModelExecutionReceipt receiptWithCoordinates(
+      final SoracloudPrivateUploadedModelExecutionReceipt template,
+      final BigInteger emittedSequence,
+      final BigInteger emittedBlockHeight) {
+    return copyReceipt(
+        template,
+        template.modelManifestDigest(),
+        template.serviceName(),
+        emittedSequence,
+        emittedBlockHeight);
+  }
+
+  private static SoracloudPrivateUploadedModelExecutionReceipt receiptWithServiceName(
+      final SoracloudPrivateUploadedModelExecutionReceipt template,
+      final String serviceName) {
+    return copyReceipt(
+        template,
+        template.modelManifestDigest(),
+        serviceName,
+        template.emittedSequence(),
+        template.emittedBlockHeight());
+  }
+
+  private static SoracloudPrivateUploadedModelExecutionReceipt receiptWithSelectors(
+      final SoracloudPrivateUploadedModelExecutionReceipt template,
+      final String serviceVersion,
+      final String modelId,
+      final String weightVersion) {
+    return new SoracloudPrivateUploadedModelExecutionReceipt(
+        template.schemaVersion(),
+        template.networkId(),
+        template.receiptId(),
+        template.serviceName(),
+        serviceVersion,
+        modelId,
+        weightVersion,
+        template.runtimeVersion(),
+        template.modelManifestDigest(),
+        template.modelBundleRoot(),
+        template.policyId(),
+        template.decryptionRequestId(),
+        template.attestingValidator(),
+        template.inputArtifact(),
+        template.outputArtifact(),
+        template.inputCommitment(),
+        template.outputCommitment(),
+        template.outputRecipient(),
+        template.requestCommitment(),
+        template.resultCommitment(),
+        template.emittedSequence(),
+        template.emittedBlockHeight());
+  }
+
+  private static SoracloudPrivateUploadedModelExecutionReceipt copyReceipt(
+      final SoracloudPrivateUploadedModelExecutionReceipt template,
+      final byte[] manifestDigest,
+      final String serviceName,
+      final BigInteger emittedSequence,
+      final BigInteger emittedBlockHeight) {
+    return new SoracloudPrivateUploadedModelExecutionReceipt(
+        template.schemaVersion(),
+        template.networkId(),
+        template.receiptId(),
+        serviceName,
+        template.serviceVersion(),
+        template.modelId(),
+        template.weightVersion(),
+        template.runtimeVersion(),
+        manifestDigest,
+        template.modelBundleRoot(),
+        template.policyId(),
+        template.decryptionRequestId(),
+        template.attestingValidator(),
+        template.inputArtifact(),
+        template.outputArtifact(),
+        template.inputCommitment(),
+        template.outputCommitment(),
+        template.outputRecipient(),
+        template.requestCommitment(),
+        template.resultCommitment(),
+        emittedSequence,
+        emittedBlockHeight);
   }
 
   private static void assertThrows(final Runnable runnable, final String message) {
@@ -194,4 +1164,108 @@ public final class SoracloudPrivateUploadedModelJsonParserTests {
     }
     throw new AssertionError(message);
   }
+
+  private static String repeated(final char value, final int count) {
+    final char[] chars = new char[count];
+    Arrays.fill(chars, value);
+    return new String(chars);
+  }
+
+  private static void assertHashFieldRejected(
+      final String field,
+      final String canonicalHash,
+      final String invalidHash,
+      final String message) {
+    final String canonicalField = "\"" + field + "\":\"" + canonicalHash + "\"";
+    final String response = executeResponseJson();
+    if (!response.contains(canonicalField)) {
+      throw new AssertionError("missing canonical fixture field " + field);
+    }
+    assertThrows(
+        () -> SoracloudPrivateUploadedModelJsonParser.parseExecuteResponse(
+            bytes(response.replace(
+                canonicalField, "\"" + field + "\":\"" + invalidHash + "\""))),
+        message);
+  }
+
+  private static String tamperChecksum(final String literal) {
+    final char last = literal.charAt(literal.length() - 1);
+    return literal.substring(0, literal.length() - 1) + (last == '0' ? '1' : '0');
+  }
+
+  private static String validatorAccountId(final byte[] publicKey) {
+    try {
+      return AccountAddress.fromAccount(publicKey, "ed25519")
+          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final AccountAddress.AccountAddressException error) {
+      throw new ExceptionInInitializerError(error);
+    }
+  }
+
+  private static String multisigValidatorAccountId(final byte[] publicKey) {
+    try {
+      return AccountAddress.fromMultisigPolicy(
+              AccountAddress.MultisigPolicyPayload.of(
+                  1,
+                  1,
+                  Collections.singletonList(
+                      AccountAddress.MultisigMemberPayload.of(0x01, 1, publicKey))))
+          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final AccountAddress.AccountAddressException error) {
+      throw new ExceptionInInitializerError(error);
+    }
+  }
+
+  private static byte[] x25519PublicKey() {
+    final byte[] privateKey = new byte[32];
+    for (int index = 0; index < privateKey.length; index++) {
+      privateKey[index] = (byte) (index + 1);
+    }
+    return new X25519PrivateKeyParameters(privateKey, 0).generatePublicKey().getEncoded();
+  }
+
+  private static final byte[] VALIDATOR_PUBLIC_KEY = TestEd25519Keys.publicKey(0x30);
+  private static final String VALIDATOR_ACCOUNT_ID = validatorAccountId(VALIDATOR_PUBLIC_KEY);
+  private static final String VALIDATOR_PEER_ID =
+      PublicKeyCodec.encodePublicKeyMultihash(0x01, VALIDATOR_PUBLIC_KEY);
+  private static final String OTHER_VALIDATOR_PEER_ID =
+      PublicKeyCodec.encodePublicKeyMultihash(0x01, TestEd25519Keys.publicKey(0x31));
+  private static final String MULTISIG_VALIDATOR_ACCOUNT_ID =
+      multisigValidatorAccountId(VALIDATOR_PUBLIC_KEY);
+  private static final byte[] PUBLIC_KEY_BYTES = x25519PublicKey();
+  private static final String PUBLIC_KEY_BASE64 =
+      Base64.getEncoder().encodeToString(PUBLIC_KEY_BYTES);
+  private static final String ZERO_X25519_KEY_BASE64 =
+      Base64.getEncoder().encodeToString(new byte[32]);
+  private static final String ZERO_PREHASH_SENTINEL =
+      "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";
+  private static final String TRANSACTION_HASH =
+      "hash:4141414141414141414141414141414141414141414141414141414141414141#7023";
+  private static final String RECEIPT_ID =
+      "hash:4343434343434343434343434343434343434343434343434343434343434343#AAA5";
+  private static final String MODEL_BUNDLE_ROOT =
+      "hash:4545454545454545454545454545454545454545454545454545454545454545#D50E";
+  private static final String INPUT_ARTIFACT_HASH =
+      "hash:4747474747474747474747474747474747474747474747474747474747474747#0F88";
+  private static final String OUTPUT_ARTIFACT_HASH =
+      "hash:4949494949494949494949494949494949494949494949494949494949494949#2A58";
+  private static final String INPUT_COMMITMENT =
+      "hash:4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B4B#F947";
+  private static final String OUTPUT_COMMITMENT =
+      "hash:4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D4D#86EC";
+  private static final String REQUEST_COMMITMENT =
+      "hash:4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F4F#5C6A";
+  private static final String RESULT_COMMITMENT =
+      "hash:5151515151515151515151515151515151515151515151515151515151515151#8E28";
+  private static final String PUBLIC_KEY_FINGERPRINT =
+      HashLiteral.canonicalize(IrohaHash.prehash(PUBLIC_KEY_BYTES));
+  private static final String RECEIPT_CURSOR = repeated('A', 114);
+  private static final String UNMARKED_HASH_LITERAL =
+      "hash:0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A0A#86CD";
+  private static final String NETWORK_ID =
+      "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+  private static final String ROOT_CID_JSON =
+      "[1,113,31,32,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32]";
+  private static final String ZERO_DIGEST_ROOT_CID_JSON =
+      "[1,113,31,32,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]";
 }

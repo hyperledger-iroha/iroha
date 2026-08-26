@@ -948,7 +948,11 @@ class HttpClientTransportTest {
 
     @Test
     fun prepareContractCallPostsSecretFreeSelectorPayloadAndParsesDraft() {
-        val transactionPayload = sampleTransaction(7).encodedPayload()
+        val transactionPayload = sampleTransaction(
+            seed = 7,
+            creationTimeMs = 1_712_345_678_901L,
+            gasLimit = 5_000L,
+        ).encodedPayload()
         val transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload)
         val signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload))
         val executor = StubResponseExecutor(
@@ -1077,7 +1081,11 @@ class HttpClientTransportTest {
         val instructionBytes = byteArrayOf(1, 2, 3, 4)
         val proposalId = "aa".repeat(32)
         val multisigAccountId = testMultisigAccountId()
-        val transactionPayload = sampleTransaction(8).encodedPayload()
+        val creationTimeMs = 1_700_000_000_008L
+        val transactionPayload = sampleTransaction(
+            seed = 8,
+            creationTimeMs = creationTimeMs,
+        ).encodedPayload()
         val transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload)
         val signingMessageB64 = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionPayload))
         val executor = StubResponseExecutor(
@@ -1091,7 +1099,11 @@ class HttpClientTransportTest {
                   "instructions_hash": "$proposalId",
                   "tx_hash_hex": null,
                   "executed_tx_hash_hex": null,
-                  "creation_time_ms": 123,
+                  "creation_time_ms": $creationTimeMs,
+                  "fee_payment": {
+                    "payer": "authority",
+                    "value": {"charge_limits": [], "gas_limit": null}
+                  },
                   "transaction_payload_b64": "$transactionPayloadB64",
                   "signing_message_b64": "$signingMessageB64"
                 }
@@ -1108,7 +1120,7 @@ class HttpClientTransportTest {
                 signerAccountId = "alice",
                 instructions = listOf(instructionBytes),
                 publicKeyHex = "0X${validEd25519PublicKeyHex.uppercase()}",
-                creationTimeMs = 123,
+                creationTimeMs = creationTimeMs,
                 memo = "QR invoice 42",
                 validationFeePolicyVersion = 7,
                 validationFeePolicyHash = "AB".repeat(32),
@@ -1121,6 +1133,8 @@ class HttpClientTransportTest {
         assertEquals(multisigAccountId, response.resolvedMultisigAccountId)
         assertEquals(false, response.submitted)
         assertEquals(proposalId, response.instructionsHash)
+        assertEquals(testFeePayment(), response.feePayment)
+        assertEquals(creationTimeMs, response.creationTimeMs)
         assertEquals(transactionPayloadB64, response.transactionPayloadB64)
         assertEquals(signingMessageB64, response.signingMessageB64)
 
@@ -1138,7 +1152,7 @@ class HttpClientTransportTest {
         val feePayment = payload["fee_payment"] as Map<String, Any?>
         assertEquals("authority", feePayment["payer"])
         assertEquals("QR invoice 42", payload["memo"])
-        assertEquals(123L, (payload["creation_time_ms"] as Number).toLong())
+        assertEquals(creationTimeMs, (payload["creation_time_ms"] as Number).toLong())
         assertEquals("7", payload["validation_fee_policy_version"])
         assertEquals("ab".repeat(32), payload["validation_fee_policy_hash"])
         assertEquals("1", payload["validation_fee_instruction_index"])
@@ -1426,6 +1440,61 @@ class HttpClientTransportTest {
                     }
                 """.trimIndent().toByteArray(StandardCharsets.UTF_8)
             )
+        }
+    }
+
+    @Test
+    fun multisigResponseParserBindsAbi22DraftFields() {
+        val multisigAccountId = testMultisigAccountId()
+        val creationTimeMs = 1_700_000_000_009L
+        val transactionPayload = sampleTransaction(
+            seed = 9,
+            creationTimeMs = creationTimeMs,
+        ).encodedPayload()
+        val transactionPayloadB64 = Base64.getEncoder().encodeToString(transactionPayload)
+        val signingMessageB64 = Base64.getEncoder().encodeToString(
+            IrohaHash.prehash(transactionPayload),
+        )
+        val valid = """
+            {
+              "ok": true,
+              "resolved_multisig_account_id": "$multisigAccountId",
+              "submitted": false,
+              "tx_hash_hex": null,
+              "executed_tx_hash_hex": null,
+              "creation_time_ms": $creationTimeMs,
+              "fee_payment": {
+                "payer": "authority",
+                "value": {"charge_limits": [], "gas_limit": null}
+              },
+              "transaction_payload_b64": "$transactionPayloadB64",
+              "signing_message_b64": "$signingMessageB64"
+            }
+        """.trimIndent()
+
+        val parsed = ContractJsonParser.parseMultisigResponse(
+            valid.toByteArray(StandardCharsets.UTF_8),
+        )
+        assertEquals(testFeePayment(), parsed.feePayment)
+        assertEquals(creationTimeMs, parsed.creationTimeMs)
+
+        for (tampered in listOf(
+            valid.replace("\"gas_limit\": null", "\"gas_limit\": 1"),
+            valid.replace(
+                "\"creation_time_ms\": $creationTimeMs",
+                "\"creation_time_ms\": ${creationTimeMs + 1}",
+            ),
+            valid.replace(
+                "\"executed_tx_hash_hex\": null",
+                "\"executed_tx_hash_hex\": \"${"ab".repeat(32)}\"",
+            ),
+            valid.replace("\"fee_payment\"", "\"retired_fee_payment\""),
+        )) {
+            assertFailsWith<RuntimeException> {
+                ContractJsonParser.parseMultisigResponse(
+                    tampered.toByteArray(StandardCharsets.UTF_8),
+                )
+            }
         }
     }
 
@@ -1838,6 +1907,18 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun vpnSessionIdNormalizerAccepts16BytesAndRejects32Bytes() {
+        val sessionId = "ab".repeat(16)
+        assertEquals(
+            sessionId,
+            HttpClientTransport.normalizeHex16("0X${sessionId.uppercase()}", "sessionId"),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.normalizeHex16("ab".repeat(32), "sessionId")
+        }
+    }
+
+    @Test
     fun quoteFeesSignsExactUnsignedPayloadAndPreservesPayer() {
         val executor = StubResponseExecutor(
             statusCode = 200,
@@ -2129,16 +2210,21 @@ class HttpClientTransportTest {
 
     @Test
     fun vpnSessionAndReceiptMethodsUseNativeLeaseDtos() {
-        val sessionId = "33".repeat(32)
+        val sessionId = "33".repeat(16)
+        val quoteId = "34".repeat(32)
+        val leaseId = "35".repeat(32)
         val paymentTxHash = "44".repeat(32)
         val meteringKey = validEd25519PublicKeyHex
-        val receiptJson = vpnReceiptJson(sessionId, paymentTxHash, settled = true)
+        val receiptJson = vpnReceiptJson(sessionId, quoteId, leaseId, paymentTxHash, settled = true)
+        val pendingReceiptJson = receiptJson.replace(
+            "\"status\": \"settled\"",
+            "\"status\": \"settlement_pending\"",
+        )
         val executor = QueueResponseExecutor(
             listOf(
-                201 to vpnSessionJson(sessionId, paymentTxHash),
-                200 to vpnSessionJson(sessionId, paymentTxHash),
-                200 to vpnReceiptJson(sessionId, paymentTxHash, settled = false),
-                201 to receiptJson,
+                201 to vpnSessionJson(sessionId, quoteId, paymentTxHash),
+                200 to vpnSessionJson(sessionId, quoteId, paymentTxHash),
+                201 to pendingReceiptJson,
                 200 to """{"items":[$receiptJson],"total":1}""",
             )
         )
@@ -2150,37 +2236,34 @@ class HttpClientTransportTest {
         )
 
         val session = transport.createVpnSession(
-            VpnSessionCreateRequest("standard", sessionId, "0x$paymentTxHash", meteringKey),
+            VpnSessionCreateRequest("standard", quoteId, "0x$paymentTxHash", meteringKey),
             auth,
         ).join()
         val fetched = transport.getVpnSession(sessionId, auth).join()
-        val deleted = transport.deleteVpnSession("0x$sessionId", auth).join()
         val submitted = transport.submitVpnReceipt(
-            VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x$sessionId"),
+            VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x$leaseId"),
             auth,
         ).join()
         val receipts = transport.listVpnReceipts(auth).join()
 
         assertEquals(sessionId, session.sessionId)
         assertEquals(vpnHelperTicketHex(), session.helperTicketHex)
-        assertEquals(1_392, session.helperTicketHex.length)
+        assertEquals(1_576, session.helperTicketHex.length)
         assertTrue(fetched.isPresent)
-        assertEquals(sessionId, fetched.get().quoteId)
-        assertTrue(deleted.isPresent)
-        assertEquals("disconnected", deleted.get().status)
-        assertEquals("settled", submitted.status)
+        assertEquals(quoteId, fetched.get().quoteId)
+        assertEquals("settlement_pending", submitted.status)
         assertEquals("750000.125", submitted.earnedFee)
         assertEquals("250000.125", submitted.refundedFee)
         assertEquals("iroha_data_model::isi::vpn::SettleVpnLease", submitted.settleLeaseInstruction?.wireId)
         assertEquals(1L, receipts.total)
-        assertEquals(sessionId, receipts.items.first().leaseIdHex)
+        assertEquals(leaseId, receipts.items.first().leaseIdHex)
+        assertEquals("settled", receipts.items.first().status)
 
-        assertEquals("""{"exit_class":"standard","metering_public_key_hex":"$meteringKey","payment_tx_hash":"$paymentTxHash","quote_id":"$sessionId"}""", readBody(executor.requests[0]))
+        assertEquals("""{"exit_class":"standard","metering_public_key_hex":"$meteringKey","payment_tx_hash":"$paymentTxHash","quote_id":"$quoteId"}""", readBody(executor.requests[0]))
         assertEquals("GET", executor.requests[1].method)
         assertEquals("https://torii.example/v1/vpn/sessions/$sessionId", executor.requests[1].uri.toString())
-        assertEquals("DELETE", executor.requests[2].method)
-        assertEquals("""{"client_voucher_hex":"beef","lease_id_hex":"$sessionId","relay_receipt_hex":"cafe"}""", readBody(executor.requests[3]))
-        assertEquals("https://torii.example/v1/vpn/receipts", executor.requests[4].uri.toString())
+        assertEquals("""{"client_voucher_hex":"beef","lease_id_hex":"$leaseId","relay_receipt_hex":"cafe"}""", readBody(executor.requests[2]))
+        assertEquals("https://torii.example/v1/vpn/receipts", executor.requests[3].uri.toString())
     }
 
     @Test
@@ -3513,9 +3596,9 @@ class HttpClientTransportTest {
             }
         """.trimIndent()
 
-    private fun vpnHelperTicketHex(): String = "5356504e48543100" + "00".repeat(688)
+    private fun vpnHelperTicketHex(): String = "5356504e48543100" + "00".repeat(780)
 
-    private fun vpnSessionJson(sessionId: String, paymentTxHash: String): String =
+    private fun vpnSessionJson(sessionId: String, quoteId: String, paymentTxHash: String): String =
         """
             {
               "session_id": "$sessionId",
@@ -3526,8 +3609,8 @@ class HttpClientTransportTest {
               "expires_at_ms": 1700000600000,
               "connected_at_ms": 1700000000000,
               "meter_family": "soranet.vpn.standard",
-              "quote_id": "$sessionId",
-              "payment_reference": "$sessionId",
+              "quote_id": "$quoteId",
+              "payment_reference": "$quoteId",
               "payment_tx_hash": "$paymentTxHash",
               "fee_asset_id": "xor#universal.universal",
               "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -3553,7 +3636,13 @@ class HttpClientTransportTest {
             }
         """.trimIndent()
 
-    private fun vpnReceiptJson(sessionId: String, paymentTxHash: String, settled: Boolean): String {
+    private fun vpnReceiptJson(
+        sessionId: String,
+        quoteId: String,
+        leaseId: String,
+        paymentTxHash: String,
+        settled: Boolean,
+    ): String {
         val status = if (settled) "settled" else "disconnected"
         val source = if (settled) "relay" else "torii"
         val earned = if (settled) "750000.125" else "0"
@@ -3582,7 +3671,7 @@ class HttpClientTransportTest {
               "bytes_out": 2048,
               "status": "$status",
               "receipt_source": "$source",
-              "quote_id": "$sessionId",
+              "quote_id": "$quoteId",
               "payment_tx_hash": "$paymentTxHash",
               "fee_asset_id": "xor#universal.universal",
               "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
@@ -3590,7 +3679,7 @@ class HttpClientTransportTest {
               "lease_fee": "1000000.25",
               "earned_fee": "$earned",
               "refunded_fee": "$refunded",
-              "lease_id_hex": "$sessionId"$settle
+              "lease_id_hex": "$leaseId"$settle
             }
         """.trimIndent()
     }
@@ -3727,18 +3816,22 @@ class HttpClientTransportTest {
         return out
     }
 
-    private fun sampleTransaction(seed: Int): SignedTransaction {
+    private fun sampleTransaction(
+        seed: Int,
+        creationTimeMs: Long = 1_700_000_000_000L + seed,
+        gasLimit: Long? = null,
+    ): SignedTransaction {
         val codec = NoritoJavaCodecAdapter(org.hyperledger.iroha.sdk.address.AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val encoded = codec.encodeTransaction(
             TransactionPayload(
                 networkId = TestNetworkIds.fromSeed(seed.toLong()),
                 authority = testMultisigAccountId(),
-                creationTimeMs = 1_700_000_000_000L + seed,
+                creationTimeMs = creationTimeMs,
                 executable = Executable.instructions(emptyList()),
                 timeToLiveMs = 5_000L,
                 nonce = seed.toLong() + 1L,
-                feePayment = testFeePayment(),
-                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+                feePayment = testFeePayment(gasLimit),
+                admissionIntent = TransactionAdmissionIntent.ORDINARY,
                 metadata = mapOf("note" to JsonValue.string("tx-$seed")),
             ),
         )

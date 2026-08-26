@@ -2498,10 +2498,14 @@ impl MusubiPublicationPrivateServiceV1 {
             &decoded.value.publisher,
             current_time_ms,
         )?;
-        decoded.value.validate().map_err(|_| {
+        // Authentication above binds the exact canonical request before receipt telemetry is
+        // possible. Validate the receipt's bounded shape (including its approval-count ceiling)
+        // before any controller signature work, then check aggregate request bindings below.
+        decoded.value.staging_receipt.validate().map_err(|_| {
             MusubiPublicationServiceErrorV1::permanent(
                 MusubiPublicationServiceErrorCodeV1::RequestInvalid,
             )
+            .ingest_deadletter(MusubiIngestDeadletterReasonV1::ReceiptInvalid)
         })?;
         let receipt_binding = &decoded.value.staging_receipt.payload.binding;
         if receipt_binding.ingress_broker != self.config.ingress_broker
@@ -2535,6 +2539,11 @@ impl MusubiPublicationPrivateServiceV1 {
             )
             .ingest_deadletter(MusubiIngestDeadletterReasonV1::ReceiptInvalid));
         }
+        decoded.value.validate().map_err(|_| {
+            MusubiPublicationServiceErrorV1::permanent(
+                MusubiPublicationServiceErrorCodeV1::RequestInvalid,
+            )
+        })?;
         let attempt = journal_attempt(
             MusubiPublicationRuntimeOperationV1::StorageCoordination,
             decoded.value.operation_id,

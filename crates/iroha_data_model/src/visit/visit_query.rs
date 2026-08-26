@@ -890,6 +890,7 @@ mod tests {
         query: &QueryBox<query_mod::QueryOutputBatchBox>,
     ) -> QueryWithParams {
         QueryWithParams::new(query, QueryParams::default())
+            .expect("visitor fixtures use canonically mapped query types")
     }
     #[test]
     fn visit_find_parameters_dispatches() {

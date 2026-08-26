@@ -1,0 +1,95 @@
+groups:
+  - name: sora-parliament
+    interval: 1m
+    rules:
+      - alert: SoraParliamentActiveAttemptStalled
+        expr: >-
+          sum(governance_parliament_attempts_by_status{
+            status="active"
+          } offset 30m) > 0
+          and
+          min_over_time((sum(governance_parliament_attempts_by_status{
+            status="active"
+          }))[30m:1m]) > 0
+          and
+          sum(increase(governance_parliament_transitions_total[30m])) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Active SORA Parliament attempts are not progressing"
+          description: |
+            At least one committed Parliament attempt is active, but no accepted
+            lifecycle transition was observed for 45 minutes. Check finalized
+            height progress, phase-deadline trigger availability, threshold-beacon
+            production, and timed-release share transport. Metrics intentionally
+            omit attempt, proposal, account, and ballot identifiers.
+      - alert: SoraParliamentCertifiedAttemptStalled
+        expr: >-
+          sum(governance_parliament_attempts_by_status{
+            status="certified"
+          } offset 30m) > 0
+          and
+          min_over_time((sum(governance_parliament_attempts_by_status{
+            status="certified"
+          }))[30m:1m]) > 0
+          and
+          sum(increase(governance_parliament_transitions_total{
+            transition=~"mark_enacted|mark_superseded|mark_execution_failed"
+          }[30m])) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Certified SORA Parliament attempts are not terminalizing"
+          description: |
+            At least one committed Parliament attempt remains certified, but no
+            exact-height enactment, supersession, or isolated execution-failure
+            outcome was observed for 45 minutes. Verify finalized block progress
+            and the block-start automatic-enactment sweep.
+      - alert: SoraParliamentDeadlineMiss
+        expr: >-
+          sum(increase(governance_parliament_no_result_total{
+            class=~"public_finding_deadline_expired|ballot_.*_deadline_expired"
+          }[15m])) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SORA Parliament phase deadline was missed"
+          description: |
+            A committed public-finding or private-ballot phase ended through its
+            deterministic deadline-expiry class in the last 15 minutes. Inspect
+            aggregate stage gauges and transition counters, then verify that
+            permissionless phase triggers and release coordinators are available.
+      - alert: SoraParliamentReleasePulseUnavailable
+        expr: >-
+          sum(increase(governance_parliament_no_result_total{
+            class="ballot_release_pulse_unavailable"
+          }[15m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SORA Parliament release pulse was unavailable"
+          description: |
+            A committed private ballot exhausted its release slot without the
+            required finalized threshold-beacon pulse. Check active DKG-session
+            bindings, validator signer custody, authenticated partial transport,
+            aggregation, and persisted pulse verification before new ballots reach
+            their release height.
+      - alert: SoraParliamentExecutionFailed
+        expr: >-
+          sum(increase(governance_parliament_transitions_total{
+            transition="mark_execution_failed"
+          }[15m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SORA Parliament certified effect failed during enactment"
+          description: |
+            At least one consensus-owned enactment ran at its exact due height and
+            recorded an isolated execution failure in the last 15 minutes. Review
+            the bounded committed failure class and certificate/effect bindings;
+            do not replay or bypass the compare-and-set enactment path.

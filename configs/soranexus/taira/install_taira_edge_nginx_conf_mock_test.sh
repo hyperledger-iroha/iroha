@@ -15,6 +15,12 @@ cleanup() {
 
 trap cleanup EXIT
 
+canonical_test_root() {
+  local path
+  path="$(mktemp -d)"
+  (cd -P -- "$path" && pwd -P)
+}
+
 make_fake_repo() {
   local root="$1"
   mkdir -p \
@@ -65,14 +71,6 @@ server {
   }
 }
 
-server {
-  listen 443 ssl;
-  server_name mon.taira.sora.net;
-  location ~ ^/soradns/solswap\\-indexer\\.sora(?<soradns_rest>/.*)?$ {
-    proxy_pass http://soracloud_solswap_indexer_sora_upstream$soradns_rest$is_args$args;
-    proxy_set_header Host solswap-indexer.sora;
-  }
-}
 """
 
 invalid_block = ""
@@ -146,6 +144,11 @@ if [[ -z "$config_path" && $live_test -eq 1 && "${MOCK_LIVE_NGINX_TEST_FAIL:-0}"
   exit 1
 fi
 
+if [[ "$*" == "-s reload" && "${MOCK_NGINX_RELOAD_FAIL:-0}" == "1" ]]; then
+  echo "nginx: reload failed" >&2
+  exit 1
+fi
+
 if [[ -n "$config_path" ]]; then
   include_path="$(awk '/include .*rendered\.conf;/ { print $2; exit }' "$config_path")"
   include_path="${include_path%;}"
@@ -193,7 +196,7 @@ assert_contains() {
 
 test_dry_run_renders_and_checks_required_alias() {
   local root
-  root="$(mktemp -d)"
+  root="$(canonical_test_root)"
   cleanup_paths+=("$root")
   make_fake_repo "$root"
 
@@ -220,7 +223,7 @@ test_dry_run_renders_and_checks_required_alias() {
 
 test_dry_run_rejects_invalid_rendered_nginx() {
   local root
-  root="$(mktemp -d)"
+  root="$(canonical_test_root)"
   cleanup_paths+=("$root")
   make_fake_repo "$root"
 
@@ -245,7 +248,7 @@ test_dry_run_rejects_invalid_rendered_nginx() {
 
 test_install_reload_copies_and_reloads() {
   local root
-  root="$(mktemp -d)"
+  root="$(canonical_test_root)"
   cleanup_paths+=("$root")
   make_fake_repo "$root"
   mkdir -p "${root}/nginx/servers"
@@ -271,7 +274,7 @@ test_install_reload_copies_and_reloads() {
 
 test_install_validation_failure_restores_existing_target() {
   local root
-  root="$(mktemp -d)"
+  root="$(canonical_test_root)"
   cleanup_paths+=("$root")
   make_fake_repo "$root"
   mkdir -p "${root}/nginx/servers"
@@ -296,7 +299,7 @@ test_install_validation_failure_restores_existing_target() {
 
 test_install_validation_failure_removes_new_target() {
   local root
-  root="$(mktemp -d)"
+  root="$(canonical_test_root)"
   cleanup_paths+=("$root")
   make_fake_repo "$root"
   mkdir -p "${root}/nginx/servers"
@@ -323,7 +326,7 @@ test_install_validation_failure_removes_new_target() {
 
 test_missing_required_alias_fails() {
   local root
-  root="$(mktemp -d)"
+  root="$(canonical_test_root)"
   cleanup_paths+=("$root")
   make_fake_repo "$root"
 
@@ -331,7 +334,6 @@ test_missing_required_alias_fails() {
     --output "${root}/dist/taira-edge/taira.sora.org.conf" \
     --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
     --require-alias solswap-indexer.sora \
-    --skip-nginx-test \
     >"${root}/state/stdout" 2>"${root}/state/stderr"; then
     echo "missing required alias unexpectedly passed" >&2
     exit 1
@@ -341,7 +343,7 @@ test_missing_required_alias_fails() {
 
 test_backup_confs_fail_before_install() {
   local root
-  root="$(mktemp -d)"
+  root="$(canonical_test_root)"
   cleanup_paths+=("$root")
   make_fake_repo "$root"
   mkdir -p "${root}/nginx/servers"
@@ -353,7 +355,6 @@ test_backup_confs_fail_before_install() {
     --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 \
     --require-alias solswap-indexer.sora \
     --install \
-    --skip-nginx-test \
     >"${root}/state/stdout" 2>"${root}/state/stderr"; then
     echo "backup conf guard unexpectedly passed" >&2
     exit 1
@@ -365,6 +366,112 @@ test_backup_confs_fail_before_install() {
   }
 }
 
+test_reload_failure_restores_existing_target() {
+  local root
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  mkdir -p "${root}/nginx/servers"
+  printf '# previous live config\n' >"${root}/nginx/servers/taira.sora.org.conf"
+
+  if MOCK_NGINX_RELOAD_FAIL=1 run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 \
+    --require-alias solswap-indexer.sora \
+    --nginx-bin nginx \
+    --install \
+    --reload \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "install unexpectedly passed after nginx reload failed" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "reload failed after installing candidate"
+  assert_contains "${root}/state/stderr" "restored previous nginx config"
+  assert_contains "${root}/nginx/servers/taira.sora.org.conf" "# previous live config"
+}
+
+test_install_rejects_symlink_and_hardlinked_targets() {
+  local root
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  mkdir -p "${root}/nginx/servers"
+  printf '# foreign config\n' >"${root}/state/foreign.conf"
+  ln -s "${root}/state/foreign.conf" "${root}/nginx/servers/taira.sora.org.conf"
+
+  if run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --nginx-bin nginx \
+    --install \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "symlinked nginx target unexpectedly passed" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "direct regular file"
+  assert_contains "${root}/state/foreign.conf" "# foreign config"
+
+  rm "${root}/nginx/servers/taira.sora.org.conf"
+  printf '# hardlinked config\n' >"${root}/nginx/servers/taira.sora.org.conf"
+  ln "${root}/nginx/servers/taira.sora.org.conf" "${root}/state/hardlink.conf"
+  if run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --nginx-bin nginx \
+    --install \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "hardlinked nginx target unexpectedly passed" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "exactly one hard link"
+  assert_contains "${root}/state/hardlink.conf" "# hardlinked config"
+
+  ln -s "${root}/nginx/servers" "${root}/nginx/linked-servers"
+  if run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/linked-servers/second.conf" \
+    --nginx-bin nginx \
+    --install \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "symlinked nginx target directory unexpectedly passed" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "include directory must be direct"
+  [[ ! -e "${root}/nginx/servers/second.conf" ]] || {
+    echo "symlinked target directory received an installed config" >&2
+    exit 1
+  }
+}
+
+test_validation_bypass_option_is_retired() {
+  local root
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+
+  if run_fake_script "$root" --skip-nginx-test \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "retired nginx validation bypass unexpectedly passed" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "unknown argument: --skip-nginx-test"
+}
+
+test_backup_conf_bypass_option_is_retired() {
+  local root
+  root="$(canonical_test_root)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+
+  if run_fake_script "$root" --allow-backup-confs \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "retired backup-conf bypass unexpectedly passed" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "unknown argument: --allow-backup-confs"
+}
+
 test_dry_run_renders_and_checks_required_alias
 test_dry_run_rejects_invalid_rendered_nginx
 test_install_reload_copies_and_reloads
@@ -372,5 +479,9 @@ test_install_validation_failure_restores_existing_target
 test_install_validation_failure_removes_new_target
 test_missing_required_alias_fails
 test_backup_confs_fail_before_install
+test_reload_failure_restores_existing_target
+test_install_rejects_symlink_and_hardlinked_targets
+test_validation_bypass_option_is_retired
+test_backup_conf_bypass_option_is_retired
 
 echo "install_taira_edge_nginx_conf mock tests passed"

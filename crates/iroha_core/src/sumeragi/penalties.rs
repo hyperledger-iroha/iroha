@@ -1,16 +1,19 @@
 //! Penalty enforcement for `NPoS`: VRF non-participation and consensus evidence slashing.
+#[cfg(test)]
+use crate::state::WorldTransaction;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
 use crate::{
     smartcontracts::isi::staking::{apply_slash_to_validator, max_slash_amount},
-    state::{
-        State, StateTransaction, WorldReadOnly, WorldTransaction,
-        public_lane_validator_record_matches_key,
-    },
+    state::{State, StateTransaction, WorldReadOnly, public_lane_validator_record_matches_key},
     sumeragi::consensus::ValidatorIndex,
 };
 use eyre::{Result, WrapErr, eyre};
 use iroha_crypto::{Hash, PublicKey};
+#[cfg(test)]
+use iroha_data_model::consensus::{NposMarkVrfPenaltiesAppliedAction, NposVrfJailAction};
+#[cfg(test)]
+use iroha_data_model::nexus::PublicLaneValidatorStatus;
 use iroha_data_model::{
     block::{
         consensus::{Evidence, EvidenceRecord},
@@ -18,9 +21,9 @@ use iroha_data_model::{
     },
     consensus::{
         NposConsensusEffects, NposConsensusSlashAction, NposMarkConsensusEvidenceAppliedAction,
-        NposMarkVrfPenaltiesAppliedAction, NposPenaltyAction, NposVrfJailAction, VrfEpochRecord,
+        NposPenaltyAction, VrfEpochRecord,
     },
-    nexus::{LaneId, PublicLaneValidatorStatus},
+    nexus::LaneId,
     prelude::{AccountId, PeerId},
 };
 use iroha_primitives::numeric::Quantity;
@@ -30,6 +33,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct PenaltyOutcome {
     pub applied: u64,
     pub slashed: u64,
+    #[cfg(test)]
     pub jailed: u64,
 }
 #[derive(Clone)]
@@ -111,8 +115,16 @@ impl<'a> PenaltyApplier<'a> {
         current_height: u64,
         vrf_epoch_seals: impl IntoIterator<Item = VrfEpochRecord>,
     ) -> Result<NposConsensusEffects> {
+        let vrf_epoch_seals = vrf_epoch_seals.into_iter().collect::<Vec<_>>();
+        #[cfg(not(test))]
+        if !vrf_epoch_seals.is_empty() {
+            return Err(eyre!(
+                "legacy NPoS VRF effect assembly is retired; threshold-beacon pulses are authoritative"
+            ));
+        }
         let mut effects = NposConsensusEffects {
-            vrf_epoch_seals: vrf_epoch_seals.into_iter().collect(),
+            finalized_global_beacon_pulse: None,
+            vrf_epoch_seals,
             v2_evidence_admissions: super::evidence::pending_v2_evidence_admissions(
                 self.state,
                 current_height,
@@ -134,6 +146,11 @@ impl<'a> PenaltyApplier<'a> {
         actions.dedup();
         Ok(actions)
     }
+    #[cfg(not(test))]
+    fn derive_vrf_penalty_actions(&self, _current_height: u64) -> Result<Vec<NposPenaltyAction>> {
+        Ok(Vec::new())
+    }
+    #[cfg(test)]
     fn derive_vrf_penalty_actions(&self, current_height: u64) -> Result<Vec<NposPenaltyAction>> {
         let view = self.state.world.vrf_epochs.view();
         let mut due_records: Vec<VrfEpochRecord> = Vec::new();
@@ -346,12 +363,63 @@ impl<'a> PenaltyApplier<'a> {
 pub(crate) fn apply_npos_consensus_effects_to_transaction(
     tx: &mut StateTransaction<'_, '_>,
     effects: &NposConsensusEffects,
+    expected_beacon_anchor: Option<iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1>,
     current_height: u64,
     current_view: u64,
     now_ms: u64,
-    #[cfg(feature = "telemetry")] telemetry: Option<&StateTelemetry>,
+    #[cfg(all(feature = "telemetry", test))] telemetry: Option<&StateTelemetry>,
+    #[cfg(all(feature = "telemetry", not(test)))] _telemetry: Option<&StateTelemetry>,
 ) -> Result<PenaltyOutcome> {
     let mut outcome = PenaltyOutcome::default();
+    if let Some(pulse) = effects.finalized_global_beacon_pulse {
+        if pulse.network_id != tx.network_id
+            || pulse.height != current_height
+            || pulse.round != crate::beacon::GLOBAL_THRESHOLD_BEACON_PULSE_ROUND_V1
+        {
+            return Err(eyre!(
+                "finalized global beacon pulse differs from the applying block"
+            ));
+        }
+        let expected_anchor = expected_beacon_anchor
+            .ok_or_else(|| eyre!("finalized global beacon pulse has no parent anchor"))?;
+        if expected_anchor.height.checked_add(1) != Some(current_height) {
+            return Err(eyre!(
+                "finalized global beacon pulse parent anchor has the wrong height"
+            ));
+        }
+        let key_record = tx
+            .world
+            .global_beacon_key_sessions
+            .get(&pulse.session_id)
+            .cloned()
+            .ok_or_else(|| eyre!("global beacon pulse key session is absent"))?;
+        if !key_record.is_active_at(current_height) {
+            return Err(eyre!(
+                "global beacon pulse key session is not active at the pulse height"
+            ));
+        }
+        let binding = crate::beacon::GlobalThresholdBeaconSessionBindingV1 {
+            network_id: tx.network_id,
+            session_id: pulse.session_id,
+            roster_hash: key_record.session.roster_hash,
+            transcript_hash: key_record.session.transcript_hash,
+        };
+        let session = crate::beacon::validate_global_threshold_beacon_session_v1(
+            key_record.session,
+            &binding,
+        )
+        .wrap_err("pulse-height global beacon public DKG session failed validation")?;
+        tx.world
+            .verify_and_advance_global_beacon_pulse(&session, pulse, expected_anchor)
+            .wrap_err("failed to persist finalized global beacon pulse")?;
+    }
+    #[cfg(not(test))]
+    if !effects.vrf_epoch_seals.is_empty() {
+        return Err(eyre!(
+            "legacy NPoS VRF epoch persistence is retired; threshold-beacon pulses are authoritative"
+        ));
+    }
+    #[cfg(test)]
     for record in &effects.vrf_epoch_seals {
         tx.world.vrf_epochs.insert(record.epoch, record.clone());
     }
@@ -386,24 +454,34 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
     for action in &effects.penalty_actions {
         match action {
             NposPenaltyAction::VrfJail(action) => {
-                if !tx.is_lane_active_for_authority(action.lane_id) {
-                    continue;
+                #[cfg(not(test))]
+                {
+                    let _ = action;
+                    return Err(eyre!(
+                        "legacy NPoS VRF penalty actions are retired with commit/reveal entropy"
+                    ));
                 }
-                let locator = ValidatorLocator {
-                    lane_id: action.lane_id,
-                    validator: action.validator.clone(),
-                };
-                if jail_in_transaction(
-                    &mut tx.world,
-                    &locator,
-                    &action.reason,
-                    #[cfg(feature = "telemetry")]
-                    telemetry,
-                    #[cfg(not(feature = "telemetry"))]
-                    None,
-                ) {
-                    outcome.applied = outcome.applied.saturating_add(1);
-                    outcome.jailed = outcome.jailed.saturating_add(1);
+                #[cfg(test)]
+                {
+                    if !tx.is_lane_active_for_authority(action.lane_id) {
+                        continue;
+                    }
+                    let locator = ValidatorLocator {
+                        lane_id: action.lane_id,
+                        validator: action.validator.clone(),
+                    };
+                    if jail_in_transaction(
+                        &mut tx.world,
+                        &locator,
+                        &action.reason,
+                        #[cfg(feature = "telemetry")]
+                        telemetry,
+                        #[cfg(not(feature = "telemetry"))]
+                        None,
+                    ) {
+                        outcome.applied = outcome.applied.saturating_add(1);
+                        outcome.jailed = outcome.jailed.saturating_add(1);
+                    }
                 }
             }
             NposPenaltyAction::ConsensusSlash(action) => {
@@ -422,11 +500,21 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
                 outcome.slashed = outcome.slashed.saturating_add(1);
             }
             NposPenaltyAction::MarkVrfPenaltiesApplied(action) => {
-                let mut record = tx.world.vrf_epochs.get(&action.epoch).cloned();
-                if let Some(record) = record.as_mut() {
-                    record.penalties_applied = true;
-                    record.penalties_applied_at_height = Some(action.height);
-                    tx.world.vrf_epochs.insert(action.epoch, record.clone());
+                #[cfg(not(test))]
+                {
+                    let _ = action;
+                    return Err(eyre!(
+                        "legacy NPoS VRF penalty bookkeeping is retired with commit/reveal entropy"
+                    ));
+                }
+                #[cfg(test)]
+                {
+                    let mut record = tx.world.vrf_epochs.get(&action.epoch).cloned();
+                    if let Some(record) = record.as_mut() {
+                        record.penalties_applied = true;
+                        record.penalties_applied_at_height = Some(action.height);
+                        tx.world.vrf_epochs.insert(action.epoch, record.clone());
+                    }
                 }
             }
             NposPenaltyAction::MarkConsensusEvidenceApplied(action) => {
@@ -544,6 +632,7 @@ fn max_slash_amount_for_validator_from_state(
     }
     Ok(Some(amount))
 }
+#[cfg(test)]
 fn jail_in_transaction(
     tx: &mut WorldTransaction<'_, '_>,
     locator: &ValidatorLocator,

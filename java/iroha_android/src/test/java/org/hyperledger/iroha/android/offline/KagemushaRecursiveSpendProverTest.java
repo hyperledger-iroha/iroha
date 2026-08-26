@@ -36,7 +36,7 @@ import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.SchemaHash;
 
-/** Source-level checks for the ABI-22 bridge carrying the Kagemusha ABI-21/V4 lifecycle. */
+/** Source-level checks for the ABI-23 bridge carrying the Kagemusha ABI-21/V4 lifecycle. */
 public final class KagemushaRecursiveSpendProverTest {
   public static void main(final String[] args) {
     heavyProofPermitIsReentrantButRejectsAnotherThreadWithoutWaiting();
@@ -55,7 +55,6 @@ public final class KagemushaRecursiveSpendProverTest {
     preparationConstructorFailuresDestroyStagedOpenings();
     artifactRoleInventoryRejectsCountsDuplicatesAndReordering();
     releaseAuthenticationIsMandatoryAndBounded();
-    readinessPreservesExactReleaseCapabilitiesIndependently();
     canonicalPeerCodecsAreTypedAndDefensive();
     lifecycleArchivesAreTypedDefensiveAndFailClosed();
     branchRestoreRejectsMissingHeightAndLocalChangeOpeningsBeforeNativeDispatch();
@@ -66,7 +65,7 @@ public final class KagemushaRecursiveSpendProverTest {
     qrNfcAndNearbyGoldenVectorsAreExact();
     nfcV4StreamsBeyondLegacyLimitAndRejectsDowngrade();
     toriiLifecycleRoutesAndHeadersAreExact();
-    offlineCapabilityRejectsBackendReadinessClaims();
+    offlineCapabilityRejectsRetiredReadinessClaims();
     publicSurfaceIsKagemushaOnly();
   }
 
@@ -81,8 +80,13 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   @org.junit.Test
-  public void offlineCapabilityRejectsBackendReadinessClaimsUnderJUnit() {
-    offlineCapabilityRejectsBackendReadinessClaims();
+  public void offlineCapabilityRejectsRetiredReadinessClaimsUnderJUnit() {
+    offlineCapabilityRejectsRetiredReadinessClaims();
+  }
+
+  @org.junit.Test
+  public void publicSurfaceIsKagemushaOnlyUnderJUnit() {
+    publicSurfaceIsKagemushaOnly();
   }
 
   @org.junit.Test
@@ -154,14 +158,14 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void exactAbiIsRequired() {
-    assert KagemushaRecursiveSpendProver.isExactBridgeAbi(22);
-    assert !KagemushaRecursiveSpendProver.isExactBridgeAbi(20);
+    assert KagemushaRecursiveSpendProver.isExactBridgeAbi(23);
+    assert !KagemushaRecursiveSpendProver.isExactBridgeAbi(22);
     assert KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> {}, () -> 22, () -> true);
+        () -> {}, () -> 23, () -> true);
     assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> {}, () -> 22, () -> false);
+        () -> {}, () -> 23, () -> false);
     assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> { throw new UnsatisfiedLinkError("missing"); }, () -> 22, () -> true);
+        () -> { throw new UnsatisfiedLinkError("missing"); }, () -> 23, () -> true);
     assert KagemushaRecursiveSpendProver.detectProductionProofBackendCompilation(
         () -> { throw new IllegalArgumentException("production artifact validation"); });
     assert !KagemushaRecursiveSpendProver.detectProductionProofBackendCompilation(
@@ -220,7 +224,7 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void artifactContractIsFixed() {
-    assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 22;
+    assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 23;
     assert KagemushaRecursiveSpendProver.ARTIFACT_COUNT == 8;
     assert KagemushaRecursiveSpendProver.MAX_ARTIFACT_CHUNK_BYTES == 1024 * 1024;
     try {
@@ -315,6 +319,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert Arrays.equals(
         installNative.getParameterTypes(),
         new Class<?>[] {
+          byte[].class,
           byte[].class,
           byte[].class,
           byte[].class,
@@ -904,26 +909,38 @@ public final class KagemushaRecursiveSpendProverTest {
 
   private static void releaseAuthenticationIsMandatoryAndBounded() {
     final byte[] one = new byte[] {1};
-    new KagemushaRecursiveSpendProver.ReleaseAuthentication(one, one, one, one, one);
+    new KagemushaRecursiveSpendProver.ReleaseAuthentication(one, one, one, one, one, one);
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
-            new byte[0], one, one, one, one));
+            new byte[0], one, one, one, one, one));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
-            one, new byte[0], one, one, one));
+            one, new byte[0], one, one, one, one));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
-            one, one, new byte[0], one, one));
+            one, one, new byte[0], one, one, one));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
-            one, one, one, new byte[0], one));
+            one, one, one, new byte[0], one, one));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
-            one, one, one, one, new byte[0]));
+            one, one, one, one, new byte[0], one));
+    assertThrowsIllegalArgument(() ->
+        new KagemushaRecursiveSpendProver.ReleaseAuthentication(
+            one, one, one, one, one, new byte[0]));
     assertThrowsIllegalArgument(() ->
         new KagemushaRecursiveSpendProver.ReleaseAuthentication(
             new byte[KagemushaRecursiveSpendProver.MAX_TRUSTED_RELEASE_POLICY_BYTES + 1],
             one,
+            one,
+            one,
+            one,
+            one));
+    assertThrowsIllegalArgument(() ->
+        new KagemushaRecursiveSpendProver.ReleaseAuthentication(
+            one,
+            one,
+            new byte[KagemushaRecursiveSpendProver.MAX_INTERNAL_VALIDATION_RECEIPT_BYTES + 1],
             one,
             one,
             one));
@@ -933,165 +950,16 @@ public final class KagemushaRecursiveSpendProverTest {
             one,
             one,
             one,
-            new byte[KagemushaRecursiveSpendProver.MAX_PROMOTION_RECORD_BYTES + 1]));
-  }
-
-  private static void readinessPreservesExactReleaseCapabilitiesIndependently() {
-    final KagemushaRecursiveSpendProver.ActiveVerifier transfer = readinessVerifier(
-        "confidential_transfer_v2_verifier_record",
-        "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-        1,
-        null);
-    final KagemushaRecursiveSpendProver.ActiveVerifier unshield = readinessVerifier(
-        "confidential_unshield_v3_verifier_record",
-        "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-        3,
-        null);
-    final KagemushaRecursiveSpendProver.ActiveVerifier stepEq = readinessVerifier(
-        "kagemusha_recursive_step_eq_v4_verifier_record",
-        "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-        4,
-        30L);
-    final KagemushaRecursiveSpendProver.AuthenticatedArtifactSet artifactSet =
-        authenticatedArtifactSet();
-    final KagemushaRecursiveSpendProver.ReadinessProjection readiness = readinessProjection(
-        transfer,
-        unshield,
-        stepEq,
-        artifactSet,
-        true);
-
-    assert readiness.allVerifiersActive();
-    assert readiness.chainArtifactSetReady();
-    assert !readiness.offlineReady();
-    assert !readinessProjection(null, unshield, stepEq, artifactSet, true)
-        .allVerifiersActive();
-    assert readinessProjection(null, unshield, stepEq, artifactSet, true)
-        .chainArtifactSetReady();
-    assert !readinessProjection(
-            transfer,
-            readinessVerifier(
-                "confidential_unshield_v3_verifier_record",
-                "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-                3,
-                20L),
-            stepEq,
-            artifactSet,
-            true)
-        .allVerifiersActive();
-    assert !readinessProjection(
-            transfer,
-            unshield,
-            readinessVerifier(
-                "kagemusha_recursive_step_eq_v4_verifier_record",
-                "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-                4,
-                20L),
-            artifactSet,
-            true)
-        .chainArtifactSetReady();
-    assert !readinessProjection(transfer, unshield, stepEq, null, true)
-        .chainArtifactSetReady();
-    assert !readinessProjection(transfer, unshield, stepEq, artifactSet, false)
-        .chainArtifactSetReady();
-    assertThrowsIllegalArgument(() -> readinessProjection(
-        "cash_handoff_v2", transfer, unshield, stepEq, artifactSet, true));
-    assertThrowsIllegalArgument(() -> readinessProjection(
-        null, transfer, unshield, stepEq, artifactSet, true));
-
-    final byte[] exposedManifestDigest = artifactSet.manifestSha256();
-    Arrays.fill(exposedManifestDigest, (byte) 0);
-    assert artifactSet.manifestSha256()[0] == (byte) 0x31;
+            new byte[KagemushaRecursiveSpendProver.MAX_CRYPTOGRAPHIC_REVIEW_BYTES + 1],
+            one));
     assertThrowsIllegalArgument(() ->
-        new KagemushaRecursiveSpendProver.AuthenticatedArtifactSet(
-            "release-v4",
-            filled(0x31),
-            filled(0x31),
-            filled(0x33),
-            10,
-            30,
-            12 * 1024,
-            9));
-  }
-
-  private static KagemushaRecursiveSpendProver.ActiveVerifier readinessVerifier(
-      final String name,
-      final String circuitId,
-      final int seed,
-      final Long withdrawalHeight) {
-    return new KagemushaRecursiveSpendProver.ActiveVerifier(
-        "halo2/ipa",
-        name,
-        1,
-        circuitId,
-        filled(seed),
-        filled(seed + 16),
-        12 * 1024,
-        10,
-        withdrawalHeight);
-  }
-
-  private static KagemushaRecursiveSpendProver.AuthenticatedArtifactSet
-      authenticatedArtifactSet() {
-    return new KagemushaRecursiveSpendProver.AuthenticatedArtifactSet(
-        "release-v4",
-        filled(0x31),
-        filled(0x32),
-        filled(0x33),
-        10,
-        30,
-        12 * 1024,
-        9);
-  }
-
-  private static KagemushaRecursiveSpendProver.ReadinessProjection readinessProjection(
-      final KagemushaRecursiveSpendProver.ActiveVerifier transfer,
-      final KagemushaRecursiveSpendProver.ActiveVerifier unshield,
-      final KagemushaRecursiveSpendProver.ActiveVerifier stepEq,
-      final KagemushaRecursiveSpendProver.AuthenticatedArtifactSet artifactSet,
-      final boolean proofBackendAvailable) {
-    return readinessProjection(
-        KagemushaRecursiveSpendProver.CASH_HANDOFF_CAPABILITY_V1,
-        transfer,
-        unshield,
-        stepEq,
-        artifactSet,
-        proofBackendAvailable);
-  }
-
-  private static KagemushaRecursiveSpendProver.ReadinessProjection readinessProjection(
-      final String cashHandoffCapability,
-      final KagemushaRecursiveSpendProver.ActiveVerifier transfer,
-      final KagemushaRecursiveSpendProver.ActiveVerifier unshield,
-      final KagemushaRecursiveSpendProver.ActiveVerifier stepEq,
-      final KagemushaRecursiveSpendProver.AuthenticatedArtifactSet artifactSet,
-      final boolean proofBackendAvailable) {
-    return new KagemushaRecursiveSpendProver.ReadinessProjection(
-        cashHandoffCapability,
-        21,
-        8,
-        "xor#sora",
-        9,
-        20,
-        filled(0x41),
-        proofBackendAvailable,
-        true,
-        true,
-        transfer,
-        readinessVerifier(
-            "kagemusha_topup_shield_v2_verifier_record",
-            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-            2,
-            null),
-        unshield,
-        stepEq,
-        readinessVerifier(
-            "kagemusha_recursive_step_ep_v4_verifier_record",
-            "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-            5,
-            30L),
-        artifactSet,
-        Collections.emptyList());
+        new KagemushaRecursiveSpendProver.ReleaseAuthentication(
+            one,
+            one,
+            one,
+            one,
+            one,
+            new byte[KagemushaRecursiveSpendProver.MAX_PROMOTION_RECORD_BYTES + 1]));
   }
 
   private static void appendJoinRejectsZeroAndThreeInputsBeforeNativeDispatch() {
@@ -1477,7 +1345,7 @@ public final class KagemushaRecursiveSpendProverTest {
   private static void requireNativeArtifactStreaming() {
     if (!KagemushaRecursiveSpendProver.isArtifactStreamingAvailable()) {
       throw new AssertionError(
-          "A freshly built connect_norito_bridge ABI 22 artifact-streaming library is required");
+          "A freshly built connect_norito_bridge ABI 23 artifact-streaming library is required");
     }
   }
 
@@ -1656,13 +1524,10 @@ public final class KagemushaRecursiveSpendProverTest {
     assert Arrays.stream(KagemushaRecursiveSpendProver.ToriiClient.class.getDeclaredMethods())
         .noneMatch(method -> method.getName().equals("getReadiness"))
         : "selector-taking offline readiness alias must remain absent";
-    assert !status.mandatory();
     assert status.cashHandoffCapability().equals("cash_handoff_v1");
-    assert status.requiredBridgeAbiVersion() == 22;
+    assert status.requiredBridgeAbiVersion() == 23;
     assert status.maximumHops() == 8;
     assert status.ready();
-    assert status.assets().isEmpty();
-    assert status.blockers().isEmpty();
     assert captured.get().uri().toString()
         .equals("https://torii.example/api/v1/offline/readiness");
     assert captured.get().headers().get("Accept").equals(Arrays.asList("application/json"));
@@ -1766,25 +1631,24 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static String universalOfflineCapabilityJson() {
-    return "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\","
-        + "\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,"
-        + "\"assets\":[],\"blockers\":[]}";
+    return "{\"cash_handoff_capability\":\"cash_handoff_v1\","
+        + "\"required_bridge_abi_version\":23,\"max_hops\":8,\"ready\":true}";
   }
 
   private static String unexpectedToriiRoute(final TransportRequest request) {
     throw new AssertionError("unexpected Torii route " + request.uri());
   }
 
-  private static void offlineCapabilityRejectsBackendReadinessClaims() {
+  private static void offlineCapabilityRejectsRetiredReadinessClaims() {
     final List<String> invalidPayloads = Arrays.asList(
-        "{\"mandatory\":true,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
-        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v2\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
-        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":21,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
-        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":9,\"ready\":true,\"assets\":[],\"blockers\":[]}",
-        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":false,\"assets\":[],\"blockers\":[]}",
-        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[{}],\"blockers\":[]}",
-        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[{\"code\":\"unexpected\",\"message\":\"unexpected\"}]}",
-        "{\"mandatory\":false,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[],\"future\":true}");
+        "{\"mandatory\":true,\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":23,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[]}",
+        "{\"cash_handoff_capability\":\"cash_handoff_v2\",\"required_bridge_abi_version\":23,\"max_hops\":8,\"ready\":true}",
+        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":22,\"max_hops\":8,\"ready\":true}",
+        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":23,\"max_hops\":9,\"ready\":true}",
+        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":23,\"max_hops\":8,\"ready\":false}",
+        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":23,\"max_hops\":8,\"ready\":true,\"assets\":[{}],\"blockers\":[]}",
+        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":23,\"max_hops\":8,\"ready\":true,\"assets\":[],\"blockers\":[{\"code\":\"unexpected\",\"message\":\"unexpected\"}]}",
+        "{\"cash_handoff_capability\":\"cash_handoff_v1\",\"required_bridge_abi_version\":23,\"max_hops\":8,\"ready\":true,\"future\":true}");
     for (final String payload : invalidPayloads) {
       final KagemushaRecursiveSpendProver.ToriiClient client =
           KagemushaRecursiveSpendProver.newToriiClient(
@@ -1837,7 +1701,6 @@ public final class KagemushaRecursiveSpendProverTest {
             "decodeNoteOpening",
             "decodeOutputMembershipFrontierV4",
             "decodePeerPayment",
-            "decodeReadiness",
             "decodeRedeemRequestV4",
             "decodeReceiverAcknowledgement",
             "decodeRecipientPaymentRequest",
@@ -1877,7 +1740,6 @@ public final class KagemushaRecursiveSpendProverTest {
             "projectRecipientPaymentRequest",
             "projectRecipientReceiveOfferV2",
             "projectRedeemBuildResultV4",
-            "projectReadiness",
             "projectSplitResultV4",
             "projectVerifyResultV4",
             "restoreInitBranchV4",
@@ -1905,7 +1767,12 @@ public final class KagemushaRecursiveSpendProverTest {
         "buildRedeemRequest",
         "buildVerifyRequest",
         "nativeProjectInitResultV2",
-        "nativeRestoreSpendableBranchV2")) {
+        "nativeRestoreSpendableBranchV2",
+        "decodeReadiness",
+        "projectReadiness",
+        "nativeProjectReadinessV4",
+        "nativeProjectAuthenticatedArtifactSetV4",
+        "nativeProjectActiveVerifierV2")) {
       assert !declaredNames.contains(retired) : retired;
     }
     Method appendBuilder = null;

@@ -1,9 +1,9 @@
 //! Nexus helpers (lane governance reports and public-lane snapshots).
+use crate::{Run, RunContext};
 use eyre::{Result, eyre};
 use iroha::data_model::nexus::LaneId;
 use norito::json::{Map, Value};
 use std::{convert::TryFrom, fmt::Write};
-use crate::{Run, RunContext};
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Show governance manifest status per lane

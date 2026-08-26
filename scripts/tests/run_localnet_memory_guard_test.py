@@ -159,7 +159,7 @@ def test_write_report_records_limit_last_sample_and_phase(tmp_path):
                 peer_index=0,
                 status_url="http://127.0.0.1:48080/status",
                 ok=True,
-                fields={"queue_size": 0, "rbc_store_bytes": 12},
+                fields={"queue_size": 0, "queue_retained_bytes": 12},
             )
         ],
         diagnostic_artifacts=[
@@ -198,7 +198,7 @@ def test_write_report_records_limit_last_sample_and_phase(tmp_path):
     assert payload["samples"][0]["phase"] == "load"
     assert payload["samples"][0]["run_index"] == 1
     assert payload["samples"][1]["phase"] == "post_load"
-    assert payload["status_snapshots"][0]["fields"]["rbc_store_bytes"] == 12
+    assert payload["status_snapshots"][0]["fields"]["queue_retained_bytes"] == 12
     assert payload["diagnostic_artifacts"][0]["kind"] == "vmmap-summary"
     assert payload["diagnostic_artifacts"][0]["ok"] is True
 
@@ -221,15 +221,6 @@ def test_extract_status_fields_reads_root_and_sumeragi_counters():
                 "tx_queue_saturated": True,
                 "tx_queue_saturated_by_count": False,
                 "tx_queue_saturated_by_bytes": True,
-                "rbc_store_sessions": 29,
-                "rbc_store_bytes": 31,
-                "rbc_store_pressure_level": 1,
-                "rbc_store_evictions_total": 37,
-                "pending_rbc": {
-                    "sessions": 2,
-                    "chunks": 3,
-                    "bytes": 41,
-                },
                 "tx_gossip": {
                     "queued": 43,
                     "evicted_total": 47,
@@ -241,8 +232,7 @@ def test_extract_status_fields_reads_root_and_sumeragi_counters():
     assert fields["queue_retained_bytes"] == 19
     assert fields["queue_saturated"] is True
     assert fields["queue_saturated_by_bytes"] is True
-    assert fields["rbc_store_bytes"] == 31
-    assert fields["pending_rbc_bytes"] == 41
+    assert fields["queue_max_retained_bytes"] == 23
     assert fields["tx_gossip_queued"] == 43
 
 

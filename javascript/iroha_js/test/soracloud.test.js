@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { computeHashLiteralCrc } from "../src/hashLiteralCrc.js";
+
 import {
   assembleSoracloudAppInfraRequest,
   assembleSoracloudHfDeployRequest,
@@ -9,19 +11,51 @@ import {
   buildSoracloudPrivateUploadedModelExecuteRequest,
   buildSoracloudPrivateUploadedModelReceiptQuery,
   deploySoracloudAppInfraInstruction,
-  privateUploadedModelReceiptInstruction,
   upgradeSoracloudAppInfraInstruction,
 } from "../src/index.js";
 
 const CANONICAL_XOR_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc";
-const PRIVATE_RECEIPT_WIRE_ID =
-  "iroha_data_model::isi::soracloud::RecordSoracloudPrivateUploadedModelExecutionReceipt";
+const HF_COMMIT_OID = "0123456789abcdef0123456789abcdef01234567";
+const SORAFS_MANIFEST_DIGEST = Object.freeze(
+  Array.from({ length: 32 }, (_, index) => index + 1),
+);
+const SORAFS_ROOT_CID = Object.freeze([
+  1,
+  0x71,
+  0x1f,
+  32,
+  ...Array.from({ length: 32 }, (_, index) => index + 1),
+]);
+const PRIVATE_INPUT_ARTIFACT_HASH =
+  "hash:EC5DA24E45DC3C5BEA0CBF476CFAB65090E350A5DEBB42655903315354B3C6AB#29EC";
+const PRIVATE_BUNDLE_ROOT =
+  "hash:C1333192F0B27FAA9F181BE020162911E4E9CCF70001E0802195427B76D04ABB#26C6";
+const PRIVATE_RECEIPT_ID =
+  "hash:F4043B977ED431CD60C92AF4B957085CA4D764544C54DD3017CCE8FCB56F7735#E4AA";
+const PRIVATE_OUTPUT_KEY_FINGERPRINT =
+  "hash:915A1442833BC2DF4DD5DA1C9616C015E1AA397D81BF30A01D8206051FCBC399#96C3";
+const PRIVATE_UNMARKED_HASH_BODY = `${"00".repeat(31)}02`;
+const PRIVATE_UNMARKED_HASH =
+  `hash:${PRIVATE_UNMARKED_HASH_BODY}#${computeHashLiteralCrc(
+    "hash",
+    PRIVATE_UNMARKED_HASH_BODY,
+  )}`;
+const PRIVATE_ZERO_PREHASH_BODY = `${"00".repeat(31)}01`;
+const PRIVATE_ZERO_PREHASH_HASH =
+  `hash:${PRIVATE_ZERO_PREHASH_BODY}#${computeHashLiteralCrc(
+    "hash",
+    PRIVATE_ZERO_PREHASH_BODY,
+  )}`;
+const PRIVATE_MAX_CIPHERTEXT_BYTES = 72 * 1024 * 1024;
+const U32_MAX = 0xffff_ffff;
 
 function validHfDeployInput(overrides = {}) {
   return {
     repoId: "sentence-transformers/all-MiniLM-L6-v2",
+    revision: HF_COMMIT_OID,
     modelName: "all-MiniLM-L6-v2",
     serviceName: "all_minilm_l6_v2",
+    apartmentName: null,
     storageClass: "warm",
     leaseTermMs: "3600000",
     leaseAssetDefinitionId: CANONICAL_XOR_ASSET_DEFINITION_ID,
@@ -33,8 +67,9 @@ function validHfDeployInput(overrides = {}) {
 function validPrivateArtifact(role, overrides = {}) {
   return {
     schemaVersion: 1,
-    sorafsManifestDigest: `${role}-manifest-digest`,
-    artifactHash: `${role}-artifact-hash`,
+    sorafsManifestDigest: [...SORAFS_MANIFEST_DIGEST],
+    sorafsRootCid: [...SORAFS_ROOT_CID],
+    artifactHash: PRIVATE_INPUT_ARTIFACT_HASH,
     ciphertextBytes: 64,
     artifactRole: role,
     ...overrides,
@@ -44,22 +79,48 @@ function validPrivateArtifact(role, overrides = {}) {
 function validPrivateExecuteInput(overrides = {}) {
   return {
     serviceName: "portal",
+    serviceVersion: "1.0.0",
     weightVersion: "v1",
     modelId: "upload-1",
-    policyId: "policy-1",
-    model: {
-      inputLen: 2,
-      outputLen: 1,
-      weightsI8: [3, -2],
-      biasI32: [1],
-      outputShift: 1,
-      outputMin: -16,
-      outputMax: 16,
-    },
-    plaintextInputI32: [5, -3],
+    modelName: null,
+    bundleRoot: null,
+    decryptionRequestId: "decrypt-upload-input",
     inputArtifact: validPrivateArtifact("input"),
-    outputArtifact: validPrivateArtifact("output"),
-    emittedSequence: 17,
+    outputRecipient: {
+      schemaVersion: 1,
+      keyId: "client-output-key",
+      keyVersion: 1,
+      kem: "X25519HkdfSha256",
+      aead: "Aes256Gcm",
+      publicKeyBytes: "CQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      publicKeyFingerprint: PRIVATE_OUTPUT_KEY_FINGERPRINT,
+    },
+    ...overrides,
+  };
+}
+
+function validAppServiceInput(overrides = {}) {
+  return {
+    name: "portal",
+    serviceVersion: "v1",
+    serviceManifestHash: "hash-service",
+    containerManifestHash: "hash-container",
+    runtime: "Inrou",
+    executionPlane: "HttpService",
+    routes: [],
+    leaseVolumes: [],
+    shards: null,
+    ...overrides,
+  };
+}
+
+function validAppInfraInput(overrides = {}) {
+  return {
+    appName: "portal_app",
+    appVersion: "v1",
+    publicUrl: "https://portal.sora.example",
+    staticSite: null,
+    services: [validAppServiceInput()],
     ...overrides,
   };
 }
@@ -67,7 +128,7 @@ function validPrivateExecuteInput(overrides = {}) {
 test("buildSoracloudHfDeployDraft returns unsigned payloads", () => {
   const draft = buildSoracloudHfDeployDraft({
     repoId: "sentence-transformers/all-MiniLM-L6-v2",
-    revision: "main",
+    revision: HF_COMMIT_OID,
     modelName: "all-MiniLM-L6-v2",
     serviceName: "all_minilm_l6_v2",
     apartmentName: "all_minilm_agent",
@@ -95,11 +156,80 @@ test("buildSoracloudHfDeployDraft returns unsigned payloads", () => {
   );
 });
 
+test("buildSoracloudHfDeployDraft requires an immutable canonical commit OID", () => {
+  for (const revision of [
+    undefined,
+    "main",
+    "0123456789abcdef",
+    "0123456789ABCDEF0123456789ABCDEF01234567",
+    ` ${HF_COMMIT_OID}`,
+  ]) {
+    assert.throws(
+      () => buildSoracloudHfDeployDraft(validHfDeployInput({ revision })),
+      /revision.*(?:non-empty|required|40-character lowercase hexadecimal commit OID)/,
+    );
+  }
+});
+
+test("buildSoracloudHfDeployDraft uses one exact input shape and explicit null apartment fields", () => {
+  const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
+  assert.equal(draft.payload.apartment_name, null);
+  assert.equal(draft.provenancePayloads.generatedApartment, null);
+
+  const omittedApartment = validHfDeployInput();
+  delete omittedApartment.apartmentName;
+  assert.throws(
+    () => buildSoracloudHfDeployDraft(omittedApartment),
+    /input\.apartmentName is required/,
+  );
+
+  for (const alias of [
+    "repo_id",
+    "model_name",
+    "service_name",
+    "apartment_name",
+    "storage_class",
+    "lease_term_ms",
+    "lease_asset_definition_id",
+    "base_fee_nanos",
+  ]) {
+    assert.throws(
+      () => buildSoracloudHfDeployDraft({ ...validHfDeployInput(), [alias]: "alias" }),
+      new RegExp(`input\\.${alias} is not accepted`),
+    );
+  }
+
+  const inherited = Object.create({ retiredField: true });
+  Object.assign(inherited, validHfDeployInput());
+  assert.throws(
+    () => buildSoracloudHfDeployDraft(inherited),
+    /input inherited properties are not accepted/,
+  );
+
+  const nonEnumerable = validHfDeployInput();
+  Object.defineProperty(nonEnumerable, "apartmentName", {
+    value: null,
+    enumerable: false,
+  });
+  assert.throws(
+    () => buildSoracloudHfDeployDraft(nonEnumerable),
+    /input\.apartmentName must be enumerable/,
+  );
+
+  assert.throws(
+    () =>
+      buildSoracloudHfDeployDraft({
+        ...validHfDeployInput(),
+        [Symbol.for("retiredField")]: true,
+      }),
+    /input symbols are not accepted/,
+  );
+});
+
 test("buildSoracloudAppInfraDraft expands sharded decentralized app services", () => {
   const draft = buildSoracloudAppInfraDraft({
     appName: "hayahi",
     appVersion: "2026.05.20",
-    metadata: { purpose: "owned-data-plane" },
     services: [
       {
         name: "hayahi_live",
@@ -108,7 +238,11 @@ test("buildSoracloudAppInfraDraft expands sharded decentralized app services", (
         containerManifestHash: "hash-live-container",
         runtime: "Inrou",
         executionPlane: "HttpService",
-        routes: [{ path: "/api/v1", publicHost: "hayahi.sora" }],
+        routes: [
+          { path: "/api/v1", publicHost: "hayahi.sora", internalUrl: null },
+        ],
+        leaseVolumes: [],
+        shards: null,
       },
       {
         name: "hayahi_data",
@@ -117,6 +251,7 @@ test("buildSoracloudAppInfraDraft expands sharded decentralized app services", (
         containerManifestHash: "hash-data-container",
         runtime: "Inrou",
         executionPlane: "HttpService",
+        routes: [],
         leaseVolumes: [
           {
             name: "owned_data",
@@ -125,6 +260,7 @@ test("buildSoracloudAppInfraDraft expands sharded decentralized app services", (
             temperature: "hot",
           },
         ],
+        shards: null,
       },
       {
         name: "hayahi_crawler",
@@ -133,6 +269,8 @@ test("buildSoracloudAppInfraDraft expands sharded decentralized app services", (
         containerManifestHash: "hash-crawler-container",
         runtime: "Inrou",
         executionPlane: "HttpService",
+        routes: [],
+        leaseVolumes: [],
         shards: {
           count: 8,
           shardIdEnv: "HAYAHI_CRAWLER_SHARD_ID",
@@ -144,6 +282,7 @@ test("buildSoracloudAppInfraDraft expands sharded decentralized app services", (
     staticSite: {
       publicUrl: "https://hayahi.sora.org",
       contentCid: "bafyhayahi",
+      manifestDigestHex: null,
       mountPath: "/",
       apiBasePath: "/api",
     },
@@ -152,14 +291,195 @@ test("buildSoracloudAppInfraDraft expands sharded decentralized app services", (
   assert.equal(draft.payload.app_name, "hayahi");
   assert.equal(draft.payload.public_url, "https://hayahi.sora.org");
   assert.equal(draft.payload.static_site.content_cid, "bafyhayahi");
+  assert.equal(draft.payload.static_site.manifest_digest_hex, null);
   assert.equal(draft.payload.services.length, 10);
   assert.equal(draft.payload.services[2].service_name, "hayahi_crawler_00");
   assert.equal(draft.payload.services[9].service_name, "hayahi_crawler_07");
   assert.equal(draft.payload.services[9].shard, "HAYAHI_CRAWLER_SHARD_ID=7;HAYAHI_CRAWLER_SHARD_COUNT=8");
   assert.equal(draft.payload.services[1].lease_volumes[0], "owned_data");
+  assert.deepEqual(draft.payload.services[1].routes, []);
+  assert.equal(draft.payload.services[0].shard, null);
   assert.equal(draft.payload.services[0].routes[0].path_prefix, "/api/v1");
+  assert.equal(draft.payload.services[0].routes[0].internal_url, null);
   assert.equal(draft.provenancePayloads.deploy.schema, "soracloud.app.infra.provenance.v1");
   assert.equal(draft.provenancePayloads.services.length, 10);
+});
+
+test("buildSoracloudAppInfraDraft rejects aliases, omissions, and inferred V1 values", () => {
+  const canonical = buildSoracloudAppInfraDraft(validAppInfraInput());
+  assert.equal(canonical.payload.static_site, null);
+  assert.deepEqual(canonical.payload.services[0].routes, []);
+  assert.deepEqual(canonical.payload.services[0].lease_volumes, []);
+  assert.equal(canonical.payload.services[0].shard, null);
+
+  for (const field of ["appVersion", "staticSite"]) {
+    const input = validAppInfraInput();
+    delete input[field];
+    assert.throws(
+      () => buildSoracloudAppInfraDraft(input),
+      new RegExp(`input\\.${field} is required`),
+    );
+  }
+
+  for (const field of ["runtime", "executionPlane", "routes", "leaseVolumes", "shards"]) {
+    const service = validAppServiceInput();
+    delete service[field];
+    assert.throws(
+      () => buildSoracloudAppInfraDraft(validAppInfraInput({ services: [service] })),
+      new RegExp(`services\\[0\\]\\.${field} is required`),
+    );
+  }
+
+  assert.throws(
+    () =>
+      buildSoracloudAppInfraDraft(
+        validAppInfraInput({
+          services: [validAppServiceInput({ executionPlane: "Ivm" })],
+        }),
+      ),
+    /executionPlane must be HttpService or DeterministicService/,
+  );
+
+  for (const [scope, input] of [
+    ["input.static_site", { ...validAppInfraInput(), static_site: null }],
+    [
+      "services[0].service_version",
+      validAppInfraInput({
+        services: [
+          { ...validAppServiceInput(), service_version: "v1" },
+        ],
+      }),
+    ],
+    [
+      "services[0].execution_plane",
+      validAppInfraInput({
+        services: [
+          { ...validAppServiceInput(), execution_plane: "HttpService" },
+        ],
+      }),
+    ],
+    [
+      "services[0].lease_volumes",
+      validAppInfraInput({
+        services: [
+          { ...validAppServiceInput(), lease_volumes: [] },
+        ],
+      }),
+    ],
+  ]) {
+    assert.throws(
+      () => buildSoracloudAppInfraDraft(input),
+      new RegExp(`${scope.replaceAll("[", "\\[").replaceAll("]", "\\]")} is not accepted`),
+    );
+  }
+
+  const route = { path: "/api", publicHost: null, internalUrl: null };
+  const routeDraft = buildSoracloudAppInfraDraft(
+    validAppInfraInput({
+      services: [validAppServiceInput({ routes: [route] })],
+    }),
+  );
+  assert.equal(routeDraft.payload.services[0].routes[0].public_host, null);
+  assert.equal(routeDraft.payload.services[0].routes[0].internal_url, null);
+  for (const field of ["publicHost", "internalUrl"]) {
+    const missing = { ...route };
+    delete missing[field];
+    assert.throws(
+      () =>
+        buildSoracloudAppInfraDraft(
+          validAppInfraInput({
+            services: [validAppServiceInput({ routes: [missing] })],
+          }),
+        ),
+      new RegExp(`routes\\[0\\]\\.${field} is required`),
+    );
+  }
+  assert.throws(
+    () =>
+      buildSoracloudAppInfraDraft(
+        validAppInfraInput({
+          services: [
+            validAppServiceInput({
+              routes: [{ ...route, public_host: "alias" }],
+            }),
+          ],
+        }),
+      ),
+    /routes\[0\]\.public_host is not accepted/,
+  );
+
+  const staticSite = {
+    publicUrl: "https://portal.sora.example",
+    contentCid: null,
+    manifestDigestHex: null,
+    mountPath: "/",
+    apiBasePath: null,
+  };
+  const staticDraft = buildSoracloudAppInfraDraft(
+    validAppInfraInput({ staticSite }),
+  );
+  assert.equal(staticDraft.payload.static_site.content_cid, null);
+  assert.equal(staticDraft.payload.static_site.manifest_digest_hex, null);
+  assert.equal(staticDraft.payload.static_site.api_base_path, null);
+  for (const field of ["contentCid", "manifestDigestHex", "mountPath", "apiBasePath"]) {
+    const missing = { ...staticSite };
+    delete missing[field];
+    assert.throws(
+      () => buildSoracloudAppInfraDraft(validAppInfraInput({ staticSite: missing })),
+      new RegExp(`staticSite\\.${field} is required`),
+    );
+  }
+
+  const volume = {
+    name: "owned_data",
+    mountPath: "/data",
+    maxTotalBytes: 1024,
+    temperature: "hot",
+  };
+  for (const field of ["mountPath", "maxTotalBytes", "temperature"]) {
+    const missing = { ...volume };
+    delete missing[field];
+    assert.throws(
+      () =>
+        buildSoracloudAppInfraDraft(
+          validAppInfraInput({
+            services: [validAppServiceInput({ leaseVolumes: [missing] })],
+          }),
+        ),
+      new RegExp(`leaseVolumes\\[0\\]\\.${field} is required`),
+    );
+  }
+
+  const shards = { count: 2, shardIdEnv: "SHARD_ID", shardCountEnv: "SHARD_COUNT" };
+  for (const field of ["shardIdEnv", "shardCountEnv"]) {
+    const missing = { ...shards };
+    delete missing[field];
+    assert.throws(
+      () =>
+        buildSoracloudAppInfraDraft(
+          validAppInfraInput({
+            services: [validAppServiceInput({ shards: missing })],
+          }),
+        ),
+      new RegExp(`shards\\.${field} is required`),
+    );
+  }
+
+  const inherited = Object.create({ retiredField: true });
+  Object.assign(inherited, validAppInfraInput());
+  assert.throws(
+    () => buildSoracloudAppInfraDraft(inherited),
+    /input inherited properties are not accepted/,
+  );
+  const nonEnumerable = validAppInfraInput();
+  Object.defineProperty(nonEnumerable, "staticSite", {
+    value: null,
+    enumerable: false,
+  });
+  assert.throws(
+    () => buildSoracloudAppInfraDraft(nonEnumerable),
+    /input\.staticSite must be enumerable/,
+  );
 });
 
 test("buildSoracloudAppInfraDraft rejects nested signing secrets", () => {
@@ -167,14 +487,27 @@ test("buildSoracloudAppInfraDraft rejects nested signing secrets", () => {
     () =>
       buildSoracloudAppInfraDraft({
         appName: "bad",
+        appVersion: "v1",
         publicUrl: "https://bad.example",
+        staticSite: null,
         services: [
           {
             name: "bad_worker",
             serviceVersion: "v1",
             serviceManifestHash: "hash-service",
             containerManifestHash: "hash-container",
-            routes: [{ path: "/api", privateKeyHex: "00" }],
+            runtime: "Inrou",
+            executionPlane: "HttpService",
+            routes: [
+              {
+                path: "/api",
+                publicHost: null,
+                internalUrl: null,
+                privateKeyHex: "00",
+              },
+            ],
+            leaseVolumes: [],
+            shards: null,
           },
         ],
       }),
@@ -187,18 +520,27 @@ test("assembleSoracloudAppInfraRequest and instruction helpers use canonical man
     appName: "hayahi",
     appVersion: "2026.05.20",
     publicUrl: "https://hayahi.sora.org",
+    staticSite: null,
     services: [
       {
         name: "hayahi_live",
         serviceVersion: "2026.05.20",
         serviceManifestHash: "hash-live-service",
         containerManifestHash: "hash-live-container",
-        routes: [{ path: "/api" }],
+        runtime: "Inrou",
+        executionPlane: "HttpService",
+        routes: [{ path: "/api", publicHost: null, internalUrl: null }],
+        leaseVolumes: [],
+        shards: null,
       },
     ],
   });
   const provenance = { signer: "signer", signature: "ABCD" };
-  const request = assembleSoracloudAppInfraRequest(draft, { deploy: provenance });
+  const request = assembleSoracloudAppInfraRequest(
+    draft,
+    { deploy: provenance },
+    { deployServices: [], upgradeServices: [] },
+  );
 
   assert.deepEqual(request.provenance, provenance);
   assert.equal(request.manifest.app_name, "hayahi");
@@ -213,25 +555,86 @@ test("assembleSoracloudAppInfraRequest and instruction helpers use canonical man
   );
 });
 
+test("assembleSoracloudAppInfraRequest requires exact explicit service collections", () => {
+  const draft = buildSoracloudAppInfraDraft(validAppInfraInput());
+  const provenances = { deploy: { signer: "signer", signature: "ABCD" } };
+  assert.throws(
+    () => assembleSoracloudAppInfraRequest(draft, provenances),
+    /options must be an object/,
+  );
+  assert.throws(
+    () =>
+      assembleSoracloudAppInfraRequest(draft, provenances, {
+        deployServices: [],
+      }),
+    /options\.upgradeServices is required/,
+  );
+  assert.throws(
+    () =>
+      assembleSoracloudAppInfraRequest(draft, provenances, {
+        deployServices: [],
+        upgradeServices: [],
+        deploy_services: [],
+      }),
+    /options\.deploy_services is not accepted/,
+  );
+});
+
 test("assembleSoracloudHfDeployRequest uses external provenances", () => {
   const draft = buildSoracloudHfDeployDraft({
     repoId: "sentence-transformers/all-MiniLM-L6-v2",
+    revision: HF_COMMIT_OID,
     modelName: "all-MiniLM-L6-v2",
     serviceName: "all_minilm_l6_v2",
+    apartmentName: null,
     storageClass: "warm",
     leaseTermMs: "3600000",
     leaseAssetDefinitionId: CANONICAL_XOR_ASSET_DEFINITION_ID,
     baseFeeNanos: "1",
   });
 
-  const request = assembleSoracloudHfDeployRequest(draft, {
+  const provenances = {
     deploy: { signer: "signer", signature: "ABCD" },
     generatedService: { signer: "signer", signature: "CDEF" },
-  });
+    generatedApartment: null,
+  };
+  const request = assembleSoracloudHfDeployRequest(draft, provenances);
 
   assert.equal(request.provenance.signature, "ABCD");
   assert.equal(request.generated_service_provenance.signature, "CDEF");
-  assert.equal(Object.hasOwn(request, "generated_apartment_provenance"), false);
+  assert.equal(request.generated_apartment_provenance, null);
+
+  const { generatedApartment: _generatedApartment, ...omittedApartment } = provenances;
+  assert.throws(
+    () => assembleSoracloudHfDeployRequest(draft, omittedApartment),
+    /generatedApartment provenance is required/,
+  );
+});
+
+test("assembleSoracloudHfDeployRequest rejects unknown and non-enumerable provenance keys", () => {
+  const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(draft, {
+        deploy: { signer: "signer", signature: "ABCD", note: "alias" },
+        generatedService: { signer: "signer", signature: "CDEF" },
+      }),
+    /deploy provenance\.note is not accepted/,
+  );
+
+  const deploy = { signer: "signer", signature: "ABCD" };
+  Object.defineProperty(deploy, "signature", {
+    value: "ABCD",
+    enumerable: false,
+  });
+  assert.throws(
+    () =>
+      assembleSoracloudHfDeployRequest(draft, {
+        deploy,
+        generatedService: { signer: "signer", signature: "CDEF" },
+      }),
+    /deploy provenance\.signature must be enumerable/,
+  );
 });
 
 test("buildSoracloudHfDeployDraft rejects raw private keys", () => {
@@ -524,7 +927,11 @@ test("assembleSoracloudHfDeployRequest rejects inherited signing payload interna
 });
 
 test("assembleSoracloudHfDeployRequest rejects incomplete hand-built drafts with signing payloads", () => {
-  const payload = { repo_id: "repo", service_name: "service" };
+  const payload = {
+    repo_id: "repo",
+    revision: HF_COMMIT_OID,
+    service_name: "service",
+  };
   const draft = {
     payload,
     provenancePayloads: {
@@ -539,7 +946,7 @@ test("assembleSoracloudHfDeployRequest rejects incomplete hand-built drafts with
         payload: {
           service_name: "service",
           repo_id: "repo",
-          revision: null,
+          revision: HF_COMMIT_OID,
         },
       },
     },
@@ -717,48 +1124,268 @@ test("assembleSoracloudHfDeployRequest rejects unknown draft payload fields", ()
   );
 });
 
-test("buildSoracloudPrivateUploadedModelExecuteRequest normalizes deterministic CPU requests", () => {
-  const request = buildSoracloudPrivateUploadedModelExecuteRequest(
-    validPrivateExecuteInput({ bundleRoot: "bundle-root" }),
+test("buildSoracloudPrivateUploadedModelExecuteRequest normalizes encrypted execution requests", () => {
+  const input = validPrivateExecuteInput({ bundleRoot: PRIVATE_BUNDLE_ROOT });
+  const request = buildSoracloudPrivateUploadedModelExecuteRequest(input);
+
+  assert.deepEqual(request, {
+    service_name: "portal",
+    service_version: "1.0.0",
+    weight_version: "v1",
+    model_id: "upload-1",
+    model_name: null,
+    bundle_root: PRIVATE_BUNDLE_ROOT,
+    decryption_request_id: "decrypt-upload-input",
+    input_artifact: {
+      schema_version: 1,
+      sorafs_manifest_digest: [...SORAFS_MANIFEST_DIGEST],
+      sorafs_root_cid: [...SORAFS_ROOT_CID],
+      artifact_hash: PRIVATE_INPUT_ARTIFACT_HASH,
+      ciphertext_bytes: 64,
+      artifact_role: "input",
+    },
+    output_recipient: {
+      schema_version: 1,
+      key_id: "client-output-key",
+      key_version: 1,
+      kem: { kem: "X25519HkdfSha256", value: null },
+      aead: { aead: "Aes256Gcm", value: null },
+      public_key_bytes: "CQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      public_key_fingerprint: PRIVATE_OUTPUT_KEY_FINGERPRINT,
+    },
+  });
+
+  input.inputArtifact.sorafsManifestDigest[0] = 0xff;
+  input.inputArtifact.sorafsRootCid[4] = 0xff;
+  assert.equal(request.input_artifact.sorafs_manifest_digest[0], 1);
+  assert.equal(request.input_artifact.sorafs_root_cid[4], 1);
+  assert.equal(Object.hasOwn(request, "private_key"), false);
+});
+
+test("buildSoracloudPrivateUploadedModelExecuteRequest requires dense byte arrays", () => {
+  class ExoticByteArray extends Array {}
+  const subclassedDigest = new ExoticByteArray(...SORAFS_MANIFEST_DIGEST);
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          inputArtifact: validPrivateArtifact("input", {
+            sorafsManifestDigest: subclassedDigest,
+          }),
+        }),
+      ),
+    /inputArtifact\.sorafsManifestDigest must be a plain array/,
   );
 
-  assert.equal(request.service_name, "portal");
-  assert.equal(request.model_id, "upload-1");
-  assert.equal(request.weight_version, "v1");
-  assert.equal(request.bundle_root, "bundle-root");
-  assert.deepEqual(request.model, {
-    input_len: 2,
-    output_len: 1,
-    weights_i8: [3, -2],
-    bias_i32: [1],
-    output_shift: 1,
-    output_min: -16,
-    output_max: 16,
+  const sparseDigest = [...SORAFS_MANIFEST_DIGEST];
+  delete sparseDigest[7];
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          inputArtifact: validPrivateArtifact("input", {
+            sorafsManifestDigest: sparseDigest,
+          }),
+        }),
+      ),
+    /inputArtifact\.sorafsManifestDigest\[7\] is required/,
+  );
+
+  const digestWithAlias = [...SORAFS_MANIFEST_DIGEST];
+  digestWithAlias.byteLength = digestWithAlias.length;
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          inputArtifact: validPrivateArtifact("input", {
+            sorafsManifestDigest: digestWithAlias,
+          }),
+        }),
+      ),
+    /inputArtifact\.sorafsManifestDigest\.byteLength is not accepted/,
+  );
+
+  let accessorRead = false;
+  const accessorDigest = [...SORAFS_MANIFEST_DIGEST];
+  Object.defineProperty(accessorDigest, "7", {
+    configurable: true,
+    enumerable: true,
+    get() {
+      accessorRead = true;
+      return 8;
+    },
   });
-  assert.deepEqual(request.plaintext_input_i32, [5, -3]);
-  assert.deepEqual(request.input_artifact, {
-    schema_version: 1,
-    sorafs_manifest_digest: "input-manifest-digest",
-    artifact_hash: "input-artifact-hash",
-    ciphertext_bytes: 64,
-    artifact_role: "input",
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          inputArtifact: validPrivateArtifact("input", {
+            sorafsManifestDigest: accessorDigest,
+          }),
+        }),
+      ),
+    /inputArtifact\.sorafsManifestDigest\[7\] must be an enumerable data property/,
+  );
+  assert.equal(accessorRead, false, "byte-array accessors must be rejected before invocation");
+
+  const hiddenDigest = [...SORAFS_MANIFEST_DIGEST];
+  Object.defineProperty(hiddenDigest, "7", {
+    configurable: true,
+    enumerable: false,
+    value: 8,
+    writable: true,
   });
-  assert.equal(Object.hasOwn(request, "private_key"), false);
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          inputArtifact: validPrivateArtifact("input", {
+            sorafsManifestDigest: hiddenDigest,
+          }),
+        }),
+      ),
+    /inputArtifact\.sorafsManifestDigest\[7\] must be an enumerable data property/,
+  );
+});
+
+test("buildSoracloudPrivateUploadedModelExecuteRequest rejects aliases, omissions, and exotic keys", () => {
+  for (const field of [
+    "serviceName",
+    "serviceVersion",
+    "weightVersion",
+    "modelId",
+    "modelName",
+    "bundleRoot",
+    "decryptionRequestId",
+    "inputArtifact",
+    "outputRecipient",
+  ]) {
+    const input = validPrivateExecuteInput();
+    delete input[field];
+    assert.throws(
+      () => buildSoracloudPrivateUploadedModelExecuteRequest(input),
+      new RegExp(`input\\.${field} is required`),
+    );
+  }
+
+  for (const alias of [
+    "service_name",
+    "service_version",
+    "weight_version",
+    "model_id",
+    "model_name",
+    "bundle_root",
+    "policy_id",
+    "decryption_request_id",
+    "plaintext_input_i32",
+    "input_artifact",
+    "output_artifact",
+    "output_recipient",
+    "emitted_sequence",
+  ]) {
+    assert.throws(
+      () =>
+        buildSoracloudPrivateUploadedModelExecuteRequest({
+          ...validPrivateExecuteInput(),
+          [alias]: "alias",
+        }),
+      new RegExp(`input\\.${alias} is not accepted`),
+    );
+  }
+
+  for (const retiredField of [
+    "policyId",
+    "model",
+    "plaintextInputI32",
+    "outputArtifact",
+    "emittedSequence",
+  ]) {
+    assert.throws(
+      () =>
+        buildSoracloudPrivateUploadedModelExecuteRequest({
+          ...validPrivateExecuteInput(),
+          [retiredField]: true,
+        }),
+      new RegExp(`input\\.${retiredField} is not accepted`),
+    );
+  }
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest({
+        ...validPrivateExecuteInput(),
+        inputArtifact: {
+          ...validPrivateArtifact("input"),
+          artifact_hash: "alias",
+        },
+      }),
+    /inputArtifact\.artifact_hash is not accepted/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest({
+        ...validPrivateExecuteInput(),
+        inputArtifact: {
+          ...validPrivateArtifact("input"),
+          sorafs_root_cid: SORAFS_ROOT_CID,
+        },
+      }),
+    /inputArtifact\.sorafs_root_cid is not accepted/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest({
+        ...validPrivateExecuteInput(),
+        outputRecipient: {
+          ...validPrivateExecuteInput().outputRecipient,
+          public_key_fingerprint: PRIVATE_OUTPUT_KEY_FINGERPRINT,
+        },
+      }),
+    /outputRecipient\.public_key_fingerprint is not accepted/,
+  );
+
+  const outputRecipientWithoutFingerprint = {
+    ...validPrivateExecuteInput().outputRecipient,
+  };
+  delete outputRecipientWithoutFingerprint.publicKeyFingerprint;
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest({
+        ...validPrivateExecuteInput(),
+        outputRecipient: outputRecipientWithoutFingerprint,
+      }),
+    /outputRecipient\.publicKeyFingerprint is required/,
+  );
+
+  const inherited = Object.create({ retiredField: true });
+  Object.assign(inherited, validPrivateExecuteInput());
+  assert.throws(
+    () => buildSoracloudPrivateUploadedModelExecuteRequest(inherited),
+    /input inherited properties are not accepted/,
+  );
+  const nonEnumerable = validPrivateExecuteInput();
+  Object.defineProperty(nonEnumerable, "bundleRoot", {
+    value: null,
+    enumerable: false,
+  });
+  assert.throws(
+    () => buildSoracloudPrivateUploadedModelExecuteRequest(nonEnumerable),
+    /input\.bundleRoot must be enumerable/,
+  );
 });
 
 test("buildSoracloudPrivateUploadedModelExecuteRequest accepts modelName selector", () => {
   const request = buildSoracloudPrivateUploadedModelExecuteRequest(
     validPrivateExecuteInput({
-      modelId: undefined,
+      modelId: null,
       modelName: "vision",
     }),
   );
 
   assert.equal(request.model_name, "vision");
-  assert.equal(Object.hasOwn(request, "model_id"), false);
+  assert.equal(request.model_id, null);
 });
 
-test("buildSoracloudPrivateUploadedModelExecuteRequest rejects malformed deterministic CPU requests", () => {
+test("buildSoracloudPrivateUploadedModelExecuteRequest rejects invalid selectors, release ids, artifacts, and secrets", () => {
   assert.throws(
     () =>
       buildSoracloudPrivateUploadedModelExecuteRequest(
@@ -769,14 +1396,16 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest rejects malformed determi
   assert.throws(
     () =>
       buildSoracloudPrivateUploadedModelExecuteRequest(
-        validPrivateExecuteInput({
-          model: {
-            ...validPrivateExecuteInput().model,
-            weightsI8: [1],
-          },
-        }),
+        validPrivateExecuteInput({ modelId: null }),
       ),
-    /model\.weightsI8 length must equal inputLen \* outputLen/,
+    /exactly one of modelId or modelName/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({ decryptionRequestId: null }),
+      ),
+    /decryptionRequestId must be a non-empty string/,
   );
   assert.throws(
     () =>
@@ -794,23 +1423,335 @@ test("buildSoracloudPrivateUploadedModelExecuteRequest rejects malformed determi
       ),
     /privateKeyHex is not accepted/,
   );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          outputRecipient: {
+            ...validPrivateExecuteInput().outputRecipient,
+            publicKeyBytes: "not base64",
+          },
+        }),
+      ),
+    /publicKeyBytes must be canonical padded base64/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          outputRecipient: {
+            ...validPrivateExecuteInput().outputRecipient,
+            kem: "RsaOaep",
+          },
+        }),
+      ),
+    /outputRecipient\.kem must be X25519HkdfSha256/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          inputArtifact: validPrivateArtifact("input", { schemaVersion: 2 }),
+        }),
+      ),
+    /inputArtifact\.schemaVersion must be 1/,
+  );
+  const missingRootCid = validPrivateArtifact("input");
+  delete missingRootCid.sorafsRootCid;
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({ inputArtifact: missingRootCid }),
+      ),
+    /inputArtifact\.sorafsRootCid is required/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          inputArtifact: validPrivateArtifact("input", {
+            sorafsRootCid: [1, 0x71, 0x1f, 32, 1],
+          }),
+        }),
+      ),
+    /inputArtifact\.sorafsRootCid must contain exactly 36 bytes/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          inputArtifact: validPrivateArtifact("input", {
+            sorafsManifestDigest: SORAFS_MANIFEST_DIGEST.slice(0, 31),
+          }),
+        }),
+      ),
+    /inputArtifact\.sorafsManifestDigest must contain exactly 32 bytes/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          inputArtifact: validPrivateArtifact("input", {
+            sorafsManifestDigest: [
+              ...SORAFS_MANIFEST_DIGEST.slice(0, 31),
+              256,
+            ],
+          }),
+        }),
+      ),
+    /inputArtifact\.sorafsManifestDigest\[31\] must be an unsigned byte/,
+  );
+  for (const [sorafsRootCid, expectedError] of [
+    [[2, 0x71, 0x1f, 32, ...SORAFS_ROOT_CID.slice(4)], /canonical CIDv1/],
+    [[1, 0x71, 0x1f, 32, ...Array(32).fill(0)], /digest must not be all zero/],
+    [[1, 0x71, 0x1f, 32, 1.5, ...SORAFS_ROOT_CID.slice(5)], /must be an unsigned byte/],
+  ]) {
+    assert.throws(
+      () =>
+        buildSoracloudPrivateUploadedModelExecuteRequest(
+          validPrivateExecuteInput({
+            inputArtifact: validPrivateArtifact("input", { sorafsRootCid }),
+          }),
+        ),
+      expectedError,
+    );
+  }
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          outputRecipient: {
+            ...validPrivateExecuteInput().outputRecipient,
+            keyVersion: 0x1_0000_0000,
+          },
+        }),
+      ),
+    /outputRecipient\.keyVersion must fit in an unsigned 32-bit integer/,
+  );
+  for (const artifactHash of [
+    "input-artifact-hash",
+    PRIVATE_INPUT_ARTIFACT_HASH.toLowerCase(),
+    ` ${PRIVATE_INPUT_ARTIFACT_HASH}`,
+    PRIVATE_INPUT_ARTIFACT_HASH.replace(/.$/u, "0"),
+    PRIVATE_UNMARKED_HASH,
+    PRIVATE_ZERO_PREHASH_HASH,
+  ]) {
+    assert.throws(
+      () =>
+        buildSoracloudPrivateUploadedModelExecuteRequest(
+          validPrivateExecuteInput({
+            inputArtifact: validPrivateArtifact("input", { artifactHash }),
+          }),
+        ),
+      /inputArtifact\.artifactHash (?:must be .*hash.* literal|has invalid checksum|must not be the zero prehash sentinel)/i,
+    );
+  }
+  for (const bundleRoot of [
+    "bundle-root",
+    PRIVATE_BUNDLE_ROOT.toLowerCase(),
+    ` ${PRIVATE_BUNDLE_ROOT}`,
+    PRIVATE_BUNDLE_ROOT.replace(/.$/u, "0"),
+    PRIVATE_UNMARKED_HASH,
+    PRIVATE_ZERO_PREHASH_HASH,
+  ]) {
+    assert.throws(
+      () =>
+        buildSoracloudPrivateUploadedModelExecuteRequest(
+          validPrivateExecuteInput({ bundleRoot }),
+        ),
+      /bundleRoot (?:must be .*hash.* literal|has invalid checksum|must not be the zero prehash sentinel)/i,
+    );
+  }
+});
+
+test("buildSoracloudPrivateUploadedModelExecuteRequest rejects string normalization", () => {
+  for (const [input, expectedError] of [
+    [validPrivateExecuteInput({ serviceName: " portal" }), /serviceName.*surrounding whitespace/],
+    [validPrivateExecuteInput({ serviceName: "por tal" }), /serviceName.*canonical Iroha Name/],
+    [validPrivateExecuteInput({ serviceName: "e\u0301" }), /serviceName.*NFC-normalized/],
+    [validPrivateExecuteInput({ serviceName: "portal\uD800" }), /serviceName.*unpaired UTF-16/],
+    [validPrivateExecuteInput({ serviceVersion: "1.0.0 " }), /serviceVersion.*surrounding whitespace/],
+    [validPrivateExecuteInput({ serviceVersion: "1.0.0\uDFFF" }), /serviceVersion.*unpaired UTF-16/],
+    [validPrivateExecuteInput({ weightVersion: "v 1" }), /weightVersion.*ASCII letters/],
+    [validPrivateExecuteInput({ modelId: " upload-1" }), /modelId.*surrounding whitespace/],
+    [
+      validPrivateExecuteInput({ modelId: null, modelName: "vision " }),
+      /modelName.*surrounding whitespace/,
+    ],
+    [
+      validPrivateExecuteInput({ decryptionRequestId: "decrypt\nrequest" }),
+      /decryptionRequestId.*control characters/,
+    ],
+    [
+      validPrivateExecuteInput({ decryptionRequestId: "decrypt\uD800" }),
+      /decryptionRequestId.*unpaired UTF-16/,
+    ],
+    [
+      validPrivateExecuteInput({
+        outputRecipient: {
+          ...validPrivateExecuteInput().outputRecipient,
+          keyId: " client-output-key",
+        },
+      }),
+      /outputRecipient\.keyId.*surrounding whitespace/,
+    ],
+    [
+      validPrivateExecuteInput({
+        outputRecipient: {
+          ...validPrivateExecuteInput().outputRecipient,
+          keyId: "client-output-key\uDFFF",
+        },
+      }),
+      /outputRecipient\.keyId.*unpaired UTF-16/,
+    ],
+    [
+      validPrivateExecuteInput({
+        outputRecipient: {
+          ...validPrivateExecuteInput().outputRecipient,
+          keyVersion: "01",
+        },
+      }),
+      /outputRecipient\.keyVersion.*canonical positive decimal integer/,
+    ],
+    [
+      validPrivateExecuteInput({
+        outputRecipient: {
+          ...validPrivateExecuteInput().outputRecipient,
+          publicKeyBytes: " CQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        },
+      }),
+      /outputRecipient\.publicKeyBytes.*surrounding whitespace/,
+    ],
+  ]) {
+    assert.throws(
+      () => buildSoracloudPrivateUploadedModelExecuteRequest(input),
+      expectedError,
+    );
+  }
+
+  const scalarRequest = buildSoracloudPrivateUploadedModelExecuteRequest(
+    validPrivateExecuteInput({
+      serviceVersion: "release-\u{1F680}",
+      decryptionRequestId: "decrypt-\u{1F680}",
+      outputRecipient: {
+        ...validPrivateExecuteInput().outputRecipient,
+        keyId: "client-output-key-\u{1F680}",
+      },
+    }),
+  );
+  assert.equal(scalarRequest.service_version, "release-\u{1F680}");
+  assert.equal(scalarRequest.decryption_request_id, "decrypt-\u{1F680}");
+  assert.equal(scalarRequest.output_recipient.key_id, "client-output-key-\u{1F680}");
+});
+
+test("buildSoracloudPrivateUploadedModelExecuteRequest validates recipient key binding", () => {
+  for (const publicKeyFingerprint of [
+    PRIVATE_OUTPUT_KEY_FINGERPRINT.toLowerCase(),
+    ` ${PRIVATE_OUTPUT_KEY_FINGERPRINT}`,
+    PRIVATE_OUTPUT_KEY_FINGERPRINT.replace(/.$/u, "0"),
+    PRIVATE_UNMARKED_HASH,
+    PRIVATE_ZERO_PREHASH_HASH,
+  ]) {
+    assert.throws(
+      () =>
+        buildSoracloudPrivateUploadedModelExecuteRequest(
+          validPrivateExecuteInput({
+            outputRecipient: {
+              ...validPrivateExecuteInput().outputRecipient,
+              publicKeyFingerprint,
+            },
+          }),
+        ),
+      /outputRecipient\.publicKeyFingerprint (?:must be .*hash.* literal|has invalid checksum|must not be the zero prehash sentinel)/i,
+    );
+  }
+
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          outputRecipient: {
+            ...validPrivateExecuteInput().outputRecipient,
+            publicKeyFingerprint: PRIVATE_INPUT_ARTIFACT_HASH,
+          },
+        }),
+      ),
+    /publicKeyFingerprint must equal the Iroha Blake2b-256 prehash/,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          outputRecipient: {
+            ...validPrivateExecuteInput().outputRecipient,
+            publicKeyBytes: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          },
+        }),
+      ),
+    /must not encode a low-order X25519 public key/,
+  );
+});
+
+test("buildSoracloudPrivateUploadedModelExecuteRequest caps encrypted artifacts at 72 MiB", () => {
+  const request = buildSoracloudPrivateUploadedModelExecuteRequest(
+    validPrivateExecuteInput({
+      inputArtifact: validPrivateArtifact("input", {
+        ciphertextBytes: PRIVATE_MAX_CIPHERTEXT_BYTES,
+      }),
+    }),
+  );
+  assert.equal(
+    request.input_artifact.ciphertext_bytes,
+    PRIVATE_MAX_CIPHERTEXT_BYTES,
+  );
+  assert.throws(
+    () =>
+      buildSoracloudPrivateUploadedModelExecuteRequest(
+        validPrivateExecuteInput({
+          inputArtifact: validPrivateArtifact("input", {
+            ciphertextBytes: "064",
+          }),
+        }),
+      ),
+    /inputArtifact\.ciphertextBytes.*canonical positive decimal integer/,
+  );
+
+  for (const ciphertextBytes of [
+    0,
+    PRIVATE_MAX_CIPHERTEXT_BYTES + 1,
+    BigInt(PRIVATE_MAX_CIPHERTEXT_BYTES + 1),
+    String(PRIVATE_MAX_CIPHERTEXT_BYTES + 1),
+  ]) {
+    assert.throws(
+      () =>
+        buildSoracloudPrivateUploadedModelExecuteRequest(
+          validPrivateExecuteInput({
+            inputArtifact: validPrivateArtifact("input", { ciphertextBytes }),
+          }),
+        ),
+      /inputArtifact\.ciphertextBytes must (?:be greater than zero|be between 1 and 75497472)/,
+    );
+  }
 });
 
 test("buildSoracloudPrivateUploadedModelReceiptQuery normalizes filters", () => {
+  const cursor = "A".repeat(114);
   const query = buildSoracloudPrivateUploadedModelReceiptQuery({
-    receiptId: "receipt",
+    receiptId: PRIVATE_RECEIPT_ID,
     serviceName: "portal",
     modelId: "upload-1",
     weightVersion: "v1",
+    cursor,
     limit: "25",
     countMode: "exact",
   });
 
   assert.deepEqual(query, {
-    receipt_id: "receipt",
+    receipt_id: PRIVATE_RECEIPT_ID,
     service_name: "portal",
     model_id: "upload-1",
     weight_version: "v1",
+    cursor,
     limit: "25",
     count_mode: "exact",
   });
@@ -823,41 +1764,80 @@ test("buildSoracloudPrivateUploadedModelReceiptQuery rejects unknown count mode"
   );
 });
 
-test("privateUploadedModelReceiptInstruction extracts receipt transaction skeleton", () => {
-  const instruction = privateUploadedModelReceiptInstruction({
-    receipt: { receipt_id: "receipt" },
-    tx_instructions: [
-      {
-        wire_id: PRIVATE_RECEIPT_WIRE_ID,
-        payload_hex: "0a0b0c",
-      },
-    ],
-  });
-
-  assert.deepEqual(instruction, {
-    wire_id: PRIVATE_RECEIPT_WIRE_ID,
-    payload_hex: "0a0b0c",
-  });
+test("buildSoracloudPrivateUploadedModelReceiptQuery rejects normalized filters", () => {
+  for (const [query, expectedError] of [
+    [{ serviceName: " portal" }, /serviceName.*surrounding whitespace/],
+    [{ serviceName: "e\u0301" }, /serviceName.*NFC-normalized/],
+    [{ modelId: "upload 1" }, /modelId.*ASCII letters/],
+    [{ weightVersion: "v1 " }, /weightVersion.*surrounding whitespace/],
+    [{ countMode: " exact" }, /countMode.*surrounding whitespace/],
+    [{ cursor: "short" }, /cursor must be an exact canonical V1 receipt cursor/],
+    [{ cursor: `${"A".repeat(113)}=` }, /cursor must be an exact canonical V1 receipt cursor/],
+    [{ limit: "025" }, /limit.*canonical positive decimal integer/],
+  ]) {
+    assert.throws(
+      () => buildSoracloudPrivateUploadedModelReceiptQuery(query),
+      expectedError,
+    );
+  }
 });
 
-test("privateUploadedModelReceiptInstruction rejects unrelated instruction skeletons", () => {
-  assert.throws(
-    () =>
-      privateUploadedModelReceiptInstruction({
-        tx_instructions: [{ wire_id: "other", payload_hex: "0a" }],
-      }),
-    /RecordSoracloudPrivateUploadedModelExecutionReceipt/,
+test("buildSoracloudPrivateUploadedModelReceiptQuery enforces canonical hashes and the route limit", () => {
+  assert.equal(
+    buildSoracloudPrivateUploadedModelReceiptQuery({ limit: 500 }).limit,
+    "500",
   );
   assert.throws(
-    () =>
-      privateUploadedModelReceiptInstruction({
-        tx_instructions: [{ wire_id: PRIVATE_RECEIPT_WIRE_ID, payload_hex: "zz" }],
-      }),
-    /payload_hex must be non-empty hex/,
+    () => buildSoracloudPrivateUploadedModelReceiptQuery({ limit: 0 }),
+    /limit must be greater than zero/,
+  );
+  assert.throws(
+    () => buildSoracloudPrivateUploadedModelReceiptQuery({ limit: 501 }),
+    /limit must be between 1 and 500/,
+  );
+  for (const receiptId of [
+    "receipt",
+    PRIVATE_RECEIPT_ID.toLowerCase(),
+    ` ${PRIVATE_RECEIPT_ID}`,
+    PRIVATE_RECEIPT_ID.replace(/.$/u, "0"),
+    PRIVATE_UNMARKED_HASH,
+    PRIVATE_ZERO_PREHASH_HASH,
+  ]) {
+    assert.throws(
+      () => buildSoracloudPrivateUploadedModelReceiptQuery({ receiptId }),
+      /receiptId (?:must be .*hash.* literal|has invalid checksum|must not be the zero prehash sentinel)/i,
+    );
+  }
+});
+
+test("buildSoracloudPrivateUploadedModelReceiptQuery preserves genuine option omission only", () => {
+  assert.deepEqual(buildSoracloudPrivateUploadedModelReceiptQuery({}), {});
+  for (const field of [
+    "receiptId",
+    "serviceName",
+    "modelId",
+    "weightVersion",
+    "cursor",
+    "limit",
+    "countMode",
+  ]) {
+    assert.throws(
+      () => buildSoracloudPrivateUploadedModelReceiptQuery({ [field]: null }),
+      new RegExp(field),
+    );
+  }
+  assert.throws(
+    () => buildSoracloudPrivateUploadedModelReceiptQuery({ model_id: "alias" }),
+    /input\.model_id is not accepted/,
+  );
+  const inherited = Object.create({ modelId: "upload-1" });
+  assert.throws(
+    () => buildSoracloudPrivateUploadedModelReceiptQuery(inherited),
+    /input inherited properties are not accepted/,
   );
 });
 
-test("assembleSoracloudHfDeployRequest rejects inherited required draft fields", () => {
+test("assembleSoracloudHfDeployRequest rejects inherited model and lease draft fields", () => {
   const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
   const inheritedPayload = Object.create({
     model_name: draft.payload.model_name,
@@ -904,12 +1884,16 @@ test("assembleSoracloudHfDeployRequest rejects inherited required draft fields",
   );
 });
 
-test("assembleSoracloudHfDeployRequest rejects inherited optional draft fields", () => {
+test("assembleSoracloudHfDeployRequest rejects inherited revision and non-enumerable draft fields", () => {
   const draft = buildSoracloudHfDeployDraft(validHfDeployInput());
   const inheritedPayload = Object.create({
-    revision: "prototype-revision",
+    revision: HF_COMMIT_OID,
   });
-  Object.assign(inheritedPayload, draft.payload);
+  for (const [field, value] of Object.entries(draft.payload)) {
+    if (field !== "revision") {
+      inheritedPayload[field] = value;
+    }
+  }
 
   assert.throws(
     () =>
@@ -986,7 +1970,7 @@ test("assembleSoracloudHfDeployRequest rejects inherited provenance entries", ()
 
   assert.throws(
     () => assembleSoracloudHfDeployRequest(draft, provenances),
-    /deploy provenance must include signer and signature/,
+    /provenances inherited properties are not accepted/,
   );
 });
 
@@ -998,7 +1982,7 @@ test("assembleSoracloudHfDeployRequest rejects array-like provenances", () => {
 
   assert.throws(
     () => assembleSoracloudHfDeployRequest(draft, provenances),
-    /deploy provenance must include signer and signature/,
+    /provenances must be an object/,
   );
 });
 
@@ -1057,7 +2041,7 @@ test("buildSoracloudHfDeployDraft rejects non-canonical lease asset aliases", ()
     () =>
       buildSoracloudHfDeployDraft({
         repoId: "sentence-transformers/all-MiniLM-L6-v2",
-        revision: "main",
+        revision: HF_COMMIT_OID,
         modelName: "all-MiniLM-L6-v2",
         serviceName: "all_minilm_l6_v2",
         apartmentName: "all_minilm_agent",

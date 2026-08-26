@@ -25,3 +25,15 @@ crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     recovered_next_wal_vote_completion_stays_closed_and_attests_its_ready_pair
 );
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    live_validate_wal_pre_admissions_are_closed_and_scheduler_owned
+);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    direct_signed_replay_legacy_wrapper_is_absent
+);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    selected_certified_response_priority_is_closed_and_exactly_routed
+);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    pending_kura_validation_marker_is_move_only_and_commits_exact_apply_child
+);

@@ -12337,18 +12337,40 @@ impl V2LaneWorkAdapter {
             {
                 continue;
             }
-            let Some(vote) = self.sign_lane_vote(&proposal, CertPhase::Prepare) else {
-                continue;
+            let vote = match self.sign_lane_vote(&proposal, CertPhase::Prepare) {
+                Ok(Some(vote)) => vote,
+                Ok(None) => continue,
+                Err(error) => {
+                    iroha_logger::error!(
+                        %error,
+                        height = self.context.height,
+                        lane = %proposal.descriptor.lane_id.as_u32(),
+                        lane_block_height = proposal.descriptor.lane_block_height,
+                        "durably authorized local lane Prepare vote failed closed"
+                    );
+                    self.output_guard.close_admission_for_restart();
+                    return;
+                }
             };
-            if self
+            match self
                 .lane_sessions
                 .insert_vote(vote.clone(), Some(&self.local_peer))
-                .is_ok()
             {
-                self.fanout_lane_message(
+                Ok(_) => self.fanout_lane_message(
                     BlockMessage::LaneBlockVote(vote),
                     &proposal.descriptor.validator_set,
-                );
+                ),
+                Err(error) => {
+                    iroha_logger::error!(
+                        %error,
+                        height = self.context.height,
+                        lane = %proposal.descriptor.lane_id.as_u32(),
+                        lane_block_height = proposal.descriptor.lane_block_height,
+                        "locally constructed lane Prepare vote was rejected"
+                    );
+                    self.output_guard.close_admission_for_restart();
+                    return;
+                }
             }
         }
         let commit_requests = self
@@ -12379,18 +12401,40 @@ impl V2LaneWorkAdapter {
                 self.output_guard.close_admission_for_restart();
                 return;
             }
-            let Some(vote) = self.sign_lane_vote(&request.proposal, CertPhase::Commit) else {
-                continue;
+            let vote = match self.sign_lane_vote(&request.proposal, CertPhase::Commit) {
+                Ok(Some(vote)) => vote,
+                Ok(None) => continue,
+                Err(error) => {
+                    iroha_logger::error!(
+                        %error,
+                        height = self.context.height,
+                        lane = %request.proposal.descriptor.lane_id.as_u32(),
+                        lane_block_height = request.proposal.descriptor.lane_block_height,
+                        "durably authorized local lane Commit vote failed closed"
+                    );
+                    self.output_guard.close_admission_for_restart();
+                    return;
+                }
             };
-            if self
+            match self
                 .lane_sessions
                 .insert_vote(vote.clone(), Some(&self.local_peer))
-                .is_ok()
             {
-                self.fanout_lane_message(
+                Ok(_) => self.fanout_lane_message(
                     BlockMessage::LaneBlockVote(vote),
                     &request.proposal.descriptor.validator_set,
-                );
+                ),
+                Err(error) => {
+                    iroha_logger::error!(
+                        %error,
+                        height = self.context.height,
+                        lane = %request.proposal.descriptor.lane_id.as_u32(),
+                        lane_block_height = request.proposal.descriptor.lane_block_height,
+                        "locally constructed lane Commit vote was rejected"
+                    );
+                    self.output_guard.close_admission_for_restart();
+                    return;
+                }
             }
         }
         let admissible_qcs = self
@@ -12428,12 +12472,12 @@ impl V2LaneWorkAdapter {
         &mut self,
         proposal: &LaneBlockProposalV1,
         phase: CertPhase,
-    ) -> Option<LaneBlockVoteV1> {
+    ) -> Result<Option<LaneBlockVoteV1>, V2LaneWorkError> {
         if !self.proposal_predecessor_is_ready_for_progress(proposal)
             || !self.voting_enabled
             || self.local_peer.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal)
         {
-            return None;
+            return Ok(None);
         }
         let body = proposal.vote_body(phase);
         let payload_availability_vote = if phase == CertPhase::Prepare {
@@ -12452,7 +12496,7 @@ impl V2LaneWorkAdapter {
                             proposal.descriptor.proposal_height,
                         )
                     {
-                        return None;
+                        return Ok(None);
                     }
                     let height_context_id = historical
                         .map_or_else(|| self.context.id(), |record| record.historical_context_id);
@@ -12471,11 +12515,32 @@ impl V2LaneWorkAdapter {
                                     proposal.descriptor.proposal_height,
                                 )
                             })
-                            .collect::<Option<Vec<_>>>()?
+                            .collect::<Option<Vec<_>>>()
+                            .ok_or_else(|| {
+                                V2LaneWorkError::SigningGuard(
+                                    "autonomous READY committee is missing an active BLS proof of possession"
+                                        .to_owned(),
+                                )
+                            })?
                     };
-                    let authorization = self
+                    let authorization = match self
                         .lane_ready_authorizations
-                        .remove(&Self::lane_ready_session_key(proposal))?;
+                        .remove(&Self::lane_ready_session_key(proposal))
+                    {
+                        Some(authorization) => authorization,
+                        None if !self
+                            .lane_sessions
+                            .local_prepare_vote_needed_for(proposal, &self.local_peer) =>
+                        {
+                            return Ok(None);
+                        }
+                        None => {
+                            return Err(V2LaneWorkError::SigningGuard(
+                                "autonomous READY session lost its durable one-shot authorization"
+                                    .to_owned(),
+                            ));
+                        }
+                    };
                     Some(
                         LanePayloadAvailabilityVoteV1::new_signed_with_authorization(
                             authorization,
@@ -12486,10 +12551,14 @@ impl V2LaneWorkAdapter {
                             self.key_pair.private_key(),
                             height_context_id,
                         )
-                        .ok()?,
+                        .map_err(|error| {
+                            V2LaneWorkError::SigningGuard(format!(
+                                "failed to construct durably authorized autonomous READY vote: {error}"
+                            ))
+                        })?,
                     )
                 }
-                None if self.autonomous_payload_is_expected_for(proposal) => return None,
+                None if self.autonomous_payload_is_expected_for(proposal) => return Ok(None),
                 None => None,
             }
         } else {
@@ -12497,7 +12566,9 @@ impl V2LaneWorkAdapter {
         };
         let output_guard = Arc::clone(&self.output_guard);
         let commit_signing_operation = if phase == CertPhase::Commit {
-            let operation = output_guard.begin_fail_stop_operation()?;
+            let Some(operation) = output_guard.begin_fail_stop_operation() else {
+                return Ok(None);
+            };
             let Some(signing_guard) = self.lane_drain_signing_guard.as_ref() else {
                 iroha_logger::error!(
                     height = self.context.height,
@@ -12505,7 +12576,7 @@ impl V2LaneWorkAdapter {
                     lane_block_height = body.lane_block_height,
                     "lane Commit validator has no durable drain/commit signing guard"
                 );
-                return None;
+                return Ok(None);
             };
             if let Err(error) = signing_guard.authorize_commit_vote(&body) {
                 iroha_logger::error!(
@@ -12515,26 +12586,18 @@ impl V2LaneWorkAdapter {
                     %error,
                     "durable lane drain/commit signing guard rejected a Commit vote"
                 );
-                return None;
+                return Ok(None);
             }
             Some(operation)
         } else {
             None
         };
-        let signature =
-            match Signature::try_new(self.key_pair.private_key(), &body.signature_preimage()) {
-                Ok(signature) => signature,
-                Err(error) => {
-                    iroha_logger::error!(
-                        height = self.context.height,
-                        lane = %body.lane_id.as_u32(),
-                        lane_block_height = body.lane_block_height,
-                        %error,
-                        "failed to create a lane vote signature"
-                    );
-                    return None;
-                }
-            };
+        let signature = Signature::try_new(self.key_pair.private_key(), &body.signature_preimage())
+            .map_err(|error| {
+                V2LaneWorkError::SigningGuard(format!(
+                    "failed to create a lane vote signature: {error}"
+                ))
+            })?;
         let vote = LaneBlockVoteV1 {
             body,
             payload_availability_vote,
@@ -12544,7 +12607,7 @@ impl V2LaneWorkAdapter {
         if let Some(operation) = commit_signing_operation {
             operation.complete();
         }
-        Some(vote)
+        Ok(Some(vote))
     }
     fn outbound_lane_message_predecessor_is_ready(&self, message: &BlockMessage) -> bool {
         let proposal = match message {
@@ -17660,10 +17723,9 @@ pub(super) mod tests {
                 },
             )]),
         )));
-        let powers = match mode {
-            wire::ConsensusMode::Permissioned => [1, 1, 1, 1],
-            wire::ConsensusMode::Npos => [4, 3, 2, 1],
-        };
+        // NPoS stake selects the epoch committee; consensus remains one vote
+        // per finalized committee member, just like permissioned mode.
+        let powers = [1, 1, 1, 1];
         let roster = keys
             .iter()
             .zip(powers)
@@ -17851,7 +17913,12 @@ pub(super) mod tests {
         ));
         let mut validators = adapter
             .state
-            .authoritative_lane_peer_ids_at_height(lane_id, adapter.context.height);
+            .resolve_lane_committee_at_height(
+                crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id),
+                adapter.context.height,
+            )
+            .expect("multi-lane fixture authority must resolve")
+            .into_validators();
         validators.sort();
         validators.dedup();
         assert_eq!(validators.len(), keys.len());
@@ -17873,7 +17940,7 @@ pub(super) mod tests {
         stmt_row! { adapter.context.execution_policy_hash = super::super::v2_recovery::committed_execution_policy_hash(adapter.state.as_ref()).expect("derive single custom-lane test execution policy"); }
         stmt_row! { assert!(!proposal_lookahead_enabled(&adapter.state.nexus_snapshot(), adapter.context.height,), "one custom route must retain the narrow proposal scan"); }
         stmt_row! { assert_eq!(adapter.state.consensus_lane_routes_at_height(adapter.context.height).into_keys().collect::<Vec<_>>(), vec![(lane_id, dataspace_id)], "fixture must expose exactly one enabled custom route"); }
-        stmt_row! { assert_eq!(adapter.state.authoritative_lane_peer_ids_at_height(lane_id, adapter.context.height), validators, "narrowing routing must preserve the custom lane authority"); }
+        stmt_row! { assert_eq!(adapter.state.resolve_lane_committee_at_height(crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id), adapter.context.height).expect("single custom-lane authority must resolve").into_validators(), validators, "narrowing routing must preserve the custom lane authority"); }
         validators
     }
     #[test]
@@ -18108,6 +18175,7 @@ pub(super) mod tests {
         );
         commit_first
             .sign_lane_vote(&proposal, CertPhase::Commit)
+            .expect("first Commit signing should not fail")
             .expect("first Commit crosses the durable signing fence");
         let drain_body = drain_body_for(&commit_first, &proposal);
         let committee = proposal.descriptor.validator_set.clone();
@@ -18145,6 +18213,7 @@ pub(super) mod tests {
         assert!(
             drain_first
                 .sign_lane_vote(&proposal, CertPhase::Commit)
+                .expect("drain-conflicting Commit check should not fail")
                 .is_none(),
             "a later Commit must not coexist with a durable drain decision"
         );

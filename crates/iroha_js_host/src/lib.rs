@@ -51,7 +51,7 @@ use iroha_core::privacy_profiles::{
     compiled_privacy_profile_catalog_v1, validate_local_privacy_compiled_profile_catalog_archive_v1,
 };
 use iroha_core::soracloud_runtime::{
-    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
+    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_BLOCKS,
     build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
 };
 use iroha_core::zk::confidential_v2::{
@@ -83,7 +83,8 @@ use iroha_data_model::{
     escrow::EscrowId,
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     governance::types::{
-        ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+        AbiVersion, ContractAbiHash, ContractCodeHash, ProposalKind,
+        ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
     },
     isi::{
         Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, ExecuteTrigger, Grant, GrantBox,
@@ -95,9 +96,8 @@ use iroha_data_model::{
         asset_transfer_control::SetAssetTransferAvailability,
         escrow::CancelAssetLock,
         governance::{
-            CastPlainBallot, CastZkBallot, EnactReferendum, FinalizeReferendum,
-            PersistCouncilForEpoch, ProposeDeployContract, ProposeValidationFeePolicy,
-            RegisterCitizen, VotingMode,
+            CastPlainBallot, CastZkBallot, PersistCouncilForEpoch, ProposeDeployContract,
+            ProposeValidationFeePolicy, RegisterCitizen,
         },
         ministry::SubmitAgendaProposal,
         rwa::{
@@ -148,9 +148,9 @@ use iroha_data_model::{
         manifest::{ContractManifest, ManifestProvenance},
     },
     soracloud::{
-        SORACLOUD_XOR_SCALE, SecretEnvelopeV1, encode_agent_deploy_provenance_payload,
-        encode_bundle_with_materials_provenance_payload,
-        encode_hf_shared_lease_join_provenance_payload,
+        SORACLOUD_XOR_SCALE, SecretEnvelopeV1, SoraServiceMutationPreconditionV1,
+        encode_agent_deploy_provenance_payload, encode_bundle_with_materials_provenance_payload,
+        encode_hf_shared_lease_join_provenance_payload, is_canonical_hf_commit_oid_v1,
     },
     sorafs::{
         orderbook_submission::{
@@ -171,10 +171,7 @@ use iroha_data_model::{
         Trigger, TriggerId,
         action::{Action, Repeats},
     },
-    validation_fee::{
-        ValidationFeePlainElectorateRulesV1, ValidationFeePolicyV1,
-        ValidationFeeTreasuryPayoutBindingV1,
-    },
+    validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
 };
 use std::{
     collections::{BTreeMap, HashSet},
@@ -1032,7 +1029,7 @@ fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Halo2Scalar]]) {
         return;
     }
     let mut payload =
-        Vec::with_capacity(8 + rows * columns.len() * std::mem::size_of::<Halo2Scalar>());
+        Vec::with_capacity(8 + rows * columns.len() * core::mem::size_of::<Halo2Scalar>());
     payload
         .extend_from_slice(&usize_to_u32_len(columns.len(), "zk1 instance columns").to_le_bytes());
     payload.extend_from_slice(&usize_to_u32_len(rows, "zk1 instance rows").to_le_bytes());
@@ -1430,7 +1427,7 @@ fn soracloud_source_hash(repo_id: &str, resolved_revision: &str) -> napi::Result
 #[napi]
 pub fn soracloud_build_hf_deploy_request_json(
     repo_id: String,
-    revision: Option<String>,
+    revision: String,
     model_name: String,
     service_name: String,
     apartment_name: Option<String>,
@@ -1441,10 +1438,13 @@ pub fn soracloud_build_hf_deploy_request_json(
     private_key_hex: String,
 ) -> napi::Result<String> {
     let repo_id = repo_id.trim().to_owned();
-    let revision = revision
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
-    let resolved_revision = revision.clone().unwrap_or_else(|| "main".to_owned());
+    if !is_canonical_hf_commit_oid_v1(&revision) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "revision must be the full 40-character lowercase hexadecimal commit OID",
+        ));
+    }
+    let resolved_revision = revision;
     let model_name = model_name.trim().to_owned();
     let service_name = service_name
         .trim()
@@ -1529,9 +1529,13 @@ pub fn soracloud_build_hf_deploy_request_json(
     );
     let configs: BTreeMap<String, Json> = BTreeMap::new();
     let secrets: BTreeMap<String, SecretEnvelopeV1> = BTreeMap::new();
-    let service_provenance_payload =
-        encode_bundle_with_materials_provenance_payload(&generated_bundle, &configs, &secrets)
-            .map_err(norito_to_napi)?;
+    let service_provenance_payload = encode_bundle_with_materials_provenance_payload(
+        &generated_bundle,
+        &configs,
+        &secrets,
+        &SoraServiceMutationPreconditionV1::ServiceAbsent,
+    )
+    .map_err(norito_to_napi)?;
     let generated_service_provenance =
         sign_soracloud_payload(&keypair, &service_provenance_payload)?;
     let generated_apartment_provenance = apartment_name
@@ -1547,7 +1551,7 @@ pub fn soracloud_build_hf_deploy_request_json(
                 build_soracloud_hf_generated_agent_manifest(apartment_name, &generated_bundle);
             let payload = encode_agent_deploy_provenance_payload(
                 manifest,
-                HF_GENERATED_AGENT_LEASE_TICKS,
+                HF_GENERATED_AGENT_LEASE_BLOCKS,
                 Some(HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS),
             )
             .map_err(norito_to_napi)?;
@@ -1559,12 +1563,10 @@ pub fn soracloud_build_hf_deploy_request_json(
         "repo_id".to_owned(),
         json::to_value(&repo_id).map_err(norito_to_napi)?,
     );
-    if let Some(revision) = &revision {
-        payload.insert(
-            "revision".to_owned(),
-            json::to_value(revision).map_err(norito_to_napi)?,
-        );
-    }
+    payload.insert(
+        "revision".to_owned(),
+        json::to_value(&resolved_revision).map_err(norito_to_napi)?,
+    );
     payload.insert(
         "model_name".to_owned(),
         json::to_value(&model_name).map_err(norito_to_napi)?,
@@ -1944,22 +1946,21 @@ pub fn norito_decode_instruction(bytes: Uint8Array) -> napi::Result<String> {
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn validation_fee_policy_proposal_fingerprint_v1(
+    proposal_operator: String,
     policy_json: String,
     payout_lifecycle_proposal_id: Option<Uint8Array>,
-    plain_electorate_rules_json: String,
 ) -> napi::Result<Buffer> {
+    let proposal_operator = validation_fee_proposal_operator(&proposal_operator)?;
     let policy_value: json::Value = json::from_json(&policy_json).map_err(norito_to_napi)?;
     let policy = validation_fee_policy_from_json_value(policy_value)?;
     let payout_lifecycle_proposal_id = payout_lifecycle_proposal_id
         .map(|value| validation_fee_fixed_hash(&value, "payout lifecycle proposal id"))
         .transpose()?;
-    let plain_electorate_rules =
-        validation_fee_plain_electorate_rules_from_json(&plain_electorate_rules_json)?;
     validate_validation_fee_policy_proposal(&policy, payout_lifecycle_proposal_id.as_ref())?;
     let fingerprint = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+        proposal_operator,
         policy,
         payout_lifecycle_proposal_id,
-        plain_electorate_rules,
     })
     .fingerprint();
     Ok(Buffer::from(fingerprint.to_vec()))
@@ -1968,20 +1969,19 @@ pub fn validation_fee_policy_proposal_fingerprint_v1(
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn validation_fee_payout_lifecycle_proposal_fingerprint_v1(
+    proposal_operator: String,
     payout_binding_json: String,
-    plain_electorate_rules_json: String,
 ) -> napi::Result<Buffer> {
+    let proposal_operator = validation_fee_proposal_operator(&proposal_operator)?;
     let payout_binding_value: json::Value =
         json::from_json(&payout_binding_json).map_err(norito_to_napi)?;
     let payout_binding =
         validation_fee_payout_binding_from_json_value(payout_binding_value, "payout binding")?;
     validate_validation_fee_payout_binding(&payout_binding)?;
-    let plain_electorate_rules =
-        validation_fee_plain_electorate_rules_from_json(&plain_electorate_rules_json)?;
     let fingerprint =
         ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+            proposal_operator,
             payout_binding,
-            plain_electorate_rules,
         })
         .fingerprint();
     Ok(Buffer::from(fingerprint.to_vec()))
@@ -7258,37 +7258,6 @@ fn parse_canonical_quantity_value(value: json::Value, context: &str) -> napi::Re
     };
     parse_canonical_quantity_text(&source, context)
 }
-fn parse_optional_voting_mode(
-    value: Option<json::Value>,
-    context: &str,
-) -> napi::Result<Option<VotingMode>> {
-    match value {
-        None | Some(json::Value::Null) => Ok(None),
-        Some(json::Value::String(label)) => {
-            let mode = match label.trim() {
-                "Zk" | "zk" | "ZK" => VotingMode::Zk,
-                "Plain" | "plain" | "PLAIN" => VotingMode::Plain,
-                other => {
-                    return Err(napi::Error::new(
-                        napi::Status::InvalidArg,
-                        format!("{context}.mode must be one of: Zk, Plain (found {other})"),
-                    ));
-                }
-            };
-            Ok(Some(mode))
-        }
-        Some(other) => Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context}.mode must be a string (found {other:?})"),
-        )),
-    }
-}
-fn voting_mode_to_json(mode: VotingMode) -> &'static str {
-    match mode {
-        VotingMode::Zk => "Zk",
-        VotingMode::Plain => "Plain",
-    }
-}
 fn require_exact_json_fields(
     fields: &json::Map,
     expected: &[&str],
@@ -7457,58 +7426,28 @@ fn validate_validation_fee_payout_binding(
     }
     Ok(())
 }
-fn validation_fee_plain_electorate_rules_from_json(
-    payload: &str,
-) -> napi::Result<ValidationFeePlainElectorateRulesV1> {
-    let value: json::Value = json::from_json(payload).map_err(norito_to_napi)?;
-    validation_fee_plain_electorate_rules_from_json_value(value)
-}
-fn validation_fee_plain_electorate_rules_from_json_value(
-    value: json::Value,
-) -> napi::Result<ValidationFeePlainElectorateRulesV1> {
-    const RULES_FIELDS: &[&str] = &[
-        "voting_asset_id",
-        "bond_escrow_account",
-        "slash_receiver_account",
-        "ballot_amount",
-        "ballot_duration_blocks",
-        "citizenship_amount",
-        "max_members",
-        "conviction_step_blocks",
-        "max_conviction",
-        "min_turnout",
-        "approval_threshold_numerator",
-        "approval_threshold_denominator",
-        "eligibility_rule",
-    ];
-    const ELIGIBILITY_RULE_FIELDS: &[&str] = &["rule", "value"];
-    let json::Value::Object(fields) = &value else {
+fn validation_fee_proposal_operator(value: &str) -> napi::Result<AccountId> {
+    if value.is_empty() || value.trim() != value {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
-            "plain electorate rules must be an object",
-        ));
-    };
-    require_exact_json_fields(fields, RULES_FIELDS, "plain electorate rules")?;
-    let Some(json::Value::Object(eligibility_rule)) = fields.get("eligibility_rule") else {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "plain electorate rules.eligibility_rule must be an object",
-        ));
-    };
-    require_exact_json_fields(
-        eligibility_rule,
-        ELIGIBILITY_RULE_FIELDS,
-        "plain electorate rules.eligibility_rule",
-    )?;
-    let rules: ValidationFeePlainElectorateRulesV1 =
-        json::from_value(value).map_err(norito_to_napi)?;
-    if let Some(reason) = rules.invariant_error() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid plain electorate rules: {reason}"),
+            "proposal operator must be one canonical domainless AccountId",
         ));
     }
-    Ok(rules)
+    let account = AccountId::parse_encoded(value)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|error| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid proposal operator: {error}"),
+            )
+        })?;
+    if account.to_string() != value {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "proposal operator must use canonical AccountId form",
+        ));
+    }
+    Ok(account)
 }
 fn validate_validation_fee_policy_proposal(
     policy: &ValidationFeePolicyV1,
@@ -7537,13 +7476,7 @@ fn validate_validation_fee_policy_proposal(
     }
 }
 fn validation_fee_policy_instruction_from_json(value: json::Value) -> napi::Result<InstructionBox> {
-    const INSTRUCTION_FIELDS: &[&str] = &[
-        "policy",
-        "payout_lifecycle_proposal_id",
-        "plain_electorate_rules",
-        "referendum_window",
-        "mode",
-    ];
+    const INSTRUCTION_FIELDS: &[&str] = &["policy", "payout_lifecycle_proposal_id"];
     let json::Value::Object(mut fields) = value else {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -7564,54 +7497,10 @@ fn validation_fee_policy_instruction_from_json(value: json::Value) -> napi::Resu
         json::Value::Null => None,
         value => Some(json::from_value::<[u8; 32]>(value).map_err(norito_to_napi)?),
     };
-    let plain_electorate_rules =
-        validation_fee_plain_electorate_rules_from_json_value(required_value(
-            &mut fields,
-            "plain_electorate_rules",
-            "ProposeValidationFeePolicy",
-        )?)?;
-    let referendum_window = match required_value(
-        &mut fields,
-        "referendum_window",
-        "ProposeValidationFeePolicy",
-    )? {
-        json::Value::Null => None,
-        json::Value::Object(window) => {
-            require_exact_json_fields(
-                &window,
-                &["lower", "upper"],
-                "ProposeValidationFeePolicy.referendum_window",
-            )?;
-            Some(json::from_value(json::Value::Object(window)).map_err(norito_to_napi)?)
-        }
-        other => {
-            return Err(napi::Error::new(
-                napi::Status::InvalidArg,
-                format!(
-                    "ProposeValidationFeePolicy.referendum_window must be an object or null (found {other:?})"
-                ),
-            ));
-        }
-    };
-    let mode = match required_value(&mut fields, "mode", "ProposeValidationFeePolicy")? {
-        json::Value::String(mode) if mode == "Plain" => Some(VotingMode::Plain),
-        json::Value::Null => None,
-        other => {
-            return Err(napi::Error::new(
-                napi::Status::InvalidArg,
-                format!(
-                    "ProposeValidationFeePolicy.mode must be exactly \"Plain\" or null (found {other:?})"
-                ),
-            ));
-        }
-    };
     validate_validation_fee_policy_proposal(&policy, payout_lifecycle_proposal_id.as_ref())?;
     Ok(ProposeValidationFeePolicy {
         policy,
         payout_lifecycle_proposal_id,
-        plain_electorate_rules,
-        referendum_window,
-        mode,
     }
     .into())
 }
@@ -7922,7 +7811,6 @@ fn validate_governance_instruction_selectors(value: &json::Value) -> napi::Resul
     for (variant, field) in [
         ("CastZkBallot", "election_id"),
         ("CastPlainBallot", "referendum_id"),
-        ("FinalizeReferendum", "referendum_id"),
     ] {
         validate_governance_selector_payload(instruction.get(variant), field, variant)?;
     }
@@ -9278,35 +9166,42 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             ),
                         )
                     })?;
-                let code_hash_hex = parse_string_value(
-                    required_value(&mut fields, "code_hash_hex", "ProposeDeployContract")?,
-                    "ProposeDeployContract.code_hash_hex",
-                )?;
-                let abi_hash_hex = parse_string_value(
-                    required_value(&mut fields, "abi_hash_hex", "ProposeDeployContract")?,
-                    "ProposeDeployContract.abi_hash_hex",
-                )?;
-                let abi_version = parse_string_value(
-                    required_value(&mut fields, "abi_version", "ProposeDeployContract")?,
-                    "ProposeDeployContract.abi_version",
-                )?;
-                let window = match fields.remove("window") {
-                    None | Some(json::Value::Null) => None,
-                    Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
-                };
-                let mode =
-                    parse_optional_voting_mode(fields.remove("mode"), "ProposeDeployContract")?;
+                let code_hash: ContractCodeHash = json::from_value(required_value(
+                    &mut fields,
+                    "code_hash",
+                    "ProposeDeployContract",
+                )?)
+                .map_err(norito_to_napi)?;
+                let abi_hash: ContractAbiHash = json::from_value(required_value(
+                    &mut fields,
+                    "abi_hash",
+                    "ProposeDeployContract",
+                )?)
+                .map_err(norito_to_napi)?;
+                let abi_version: AbiVersion = json::from_value(required_value(
+                    &mut fields,
+                    "abi_version",
+                    "ProposeDeployContract",
+                )?)
+                .map_err(norito_to_napi)?;
                 let manifest_provenance = match fields.remove("manifest_provenance") {
                     None | Some(json::Value::Null) => None,
                     Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
                 };
+                if !fields.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "ProposeDeployContract contains unexpected field(s): {}",
+                            fields.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
                 let instruction = ProposeDeployContract {
                     contract_address,
-                    code_hash_hex,
-                    abi_hash_hex,
+                    code_hash,
+                    abi_hash,
                     abi_version,
-                    window,
-                    mode,
                     manifest_provenance,
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
@@ -9372,16 +9267,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 )?;
                 let instruction = RegisterCitizen { owner, amount };
                 return Ok(Box::new(instruction).into_instruction_box());
-            }
-            if let Some(enact_value) = map.remove("EnactReferendum") {
-                let enact: EnactReferendum =
-                    json::from_value(enact_value).map_err(norito_to_napi)?;
-                return Ok(Box::new(enact).into_instruction_box());
-            }
-            if let Some(finalize_value) = map.remove("FinalizeReferendum") {
-                let finalize: FinalizeReferendum =
-                    json::from_value(finalize_value).map_err(norito_to_napi)?;
-                return Ok(Box::new(finalize).into_instruction_box());
             }
             if let Some(json::Value::Object(mut fields)) = map.remove("PersistCouncilForEpoch") {
                 let epoch = parse_u64_value(
@@ -10544,20 +10429,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             "payout_lifecycle_proposal_id".to_owned(),
             json::to_value(&propose.payout_lifecycle_proposal_id).map_err(norito_to_napi)?,
         );
-        inner.insert(
-            "plain_electorate_rules".to_owned(),
-            json::to_value(&propose.plain_electorate_rules).map_err(norito_to_napi)?,
-        );
-        inner.insert(
-            "referendum_window".to_owned(),
-            json::to_value(&propose.referendum_window).map_err(norito_to_napi)?,
-        );
-        inner.insert(
-            "mode".to_owned(),
-            propose.mode.map_or(json::Value::Null, |mode| {
-                json::Value::String(voting_mode_to_json(mode).to_owned())
-            }),
-        );
         let mut outer = json::Map::new();
         outer.insert(
             "ProposeValidationFeePolicy".to_owned(),
@@ -10575,27 +10446,21 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             json::Value::String(propose.contract_address.to_string()),
         );
         inner.insert(
-            "code_hash_hex".to_owned(),
-            json::Value::String(propose.code_hash_hex.clone()),
+            "code_hash".to_owned(),
+            json::to_value(&propose.code_hash).map_err(norito_to_napi)?,
         );
         inner.insert(
-            "abi_hash_hex".to_owned(),
-            json::Value::String(propose.abi_hash_hex.clone()),
+            "abi_hash".to_owned(),
+            json::to_value(&propose.abi_hash).map_err(norito_to_napi)?,
         );
         inner.insert(
             "abi_version".to_owned(),
-            json::Value::String(propose.abi_version.clone()),
+            json::to_value(&propose.abi_version).map_err(norito_to_napi)?,
         );
-        if let Some(window) = &propose.window {
+        if let Some(manifest_provenance) = &propose.manifest_provenance {
             inner.insert(
-                "window".to_owned(),
-                json::to_value(window).map_err(norito_to_napi)?,
-            );
-        }
-        if let Some(mode) = propose.mode {
-            inner.insert(
-                "mode".to_owned(),
-                json::Value::String(voting_mode_to_json(mode).to_owned()),
+                "manifest_provenance".to_owned(),
+                json::to_value(manifest_provenance).map_err(norito_to_napi)?,
             );
         }
         let mut outer = json::Map::new();
@@ -10704,25 +10569,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             "FinalizeElection",
             json::to_value(finalize).map_err(norito_to_napi)?,
         ));
-    }
-    if let Some(enact) = instruction_ref.as_any().downcast_ref::<EnactReferendum>() {
-        let mut outer = json::Map::new();
-        outer.insert(
-            "EnactReferendum".to_owned(),
-            json::to_value(enact).map_err(norito_to_napi)?,
-        );
-        return Ok(json::Value::Object(outer));
-    }
-    if let Some(finalize) = instruction_ref
-        .as_any()
-        .downcast_ref::<FinalizeReferendum>()
-    {
-        let mut outer = json::Map::new();
-        outer.insert(
-            "FinalizeReferendum".to_owned(),
-            json::to_value(finalize).map_err(norito_to_napi)?,
-        );
-        return Ok(json::Value::Object(outer));
     }
     if let Some(persist) = instruction_ref
         .as_any()
@@ -11113,86 +10959,36 @@ fn zk_json_value(tag: &str, payload: json::Value) -> json::Value {
     outer.insert("zk".to_owned(), json::Value::Object(variant));
     json::Value::Object(outer)
 }
-fn try_decode_signed_transaction_adaptive_with_flags(
-    payload: &[u8],
-    flags: u8,
-) -> Result<SignedTransaction, String> {
-    let attempt = catch_unwind(AssertUnwindSafe(|| {
-        let _guard = norito_core::DecodeFlagsGuard::enter_with_hint(flags, flags);
-        norito::codec::decode_adaptive::<SignedTransaction>(payload)
-    }));
-    match attempt {
-        Ok(Ok(tx)) => Ok(tx),
-        Ok(Err(err)) => Err(err.to_string()),
-        Err(_) => Err("panic".to_owned()),
-    }
+fn encode_canonical_signed_transaction_v1(
+    transaction: &SignedTransaction,
+) -> napi::Result<Vec<u8>> {
+    transaction.encode_wire_v1().map_err(norito_to_napi)
 }
-fn try_decode_signed_transaction_versioned(bytes: &[u8]) -> Result<SignedTransaction, String> {
-    use norito_core::DecodeFromSlice as _;
-    if let Ok(tx) =
-        <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(bytes)
-    {
-        return Ok(tx);
+fn decode_canonical_signed_transaction_v1(bytes: &[u8]) -> napi::Result<SignedTransaction> {
+    use iroha_version::codec::DecodeVersioned as _;
+
+    if bytes.first() != Some(&1) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "signed transaction must be canonical VersionedSignedTransaction V1 bytes",
+        ));
     }
-    let Some((&version, payload)) = bytes.split_first() else {
-        return Err("empty payload".to_owned());
-    };
-    if version != 1 {
-        return Err(format!("unsupported version byte {version}"));
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let transaction = SignedTransaction::decode_all_versioned(bytes).map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid canonical VersionedSignedTransaction V1: {error}"),
+        )
+    })?;
+    let canonical = encode_canonical_signed_transaction_v1(&transaction)?;
+    if canonical.as_slice() != bytes {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "signed transaction is not the exact canonical VersionedSignedTransaction V1 encoding",
+        ));
     }
-    let (decoded, used) =
-        SignedTransaction::decode_from_slice(payload).map_err(|err| err.to_string())?;
-    if used != payload.len() {
-        return Err(format!("trailing bytes ({used} of {} used)", payload.len()));
-    }
-    Ok(decoded)
-}
-fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
-    use norito_core::DecodeFromSlice as _;
-    let mut attempts = Vec::new();
-    match try_decode_signed_transaction_versioned(bytes) {
-        Ok(decoded) => return Ok(decoded),
-        Err(err) => attempts.push(format!("versioned: {err}")),
-    }
-    match SignedTransaction::decode_from_slice(bytes) {
-        Ok((decoded, used)) if used == bytes.len() => return Ok(decoded),
-        Ok((_, used)) => attempts.push(format!(
-            "bare adaptive: trailing bytes ({used} of {} used)",
-            bytes.len()
-        )),
-        Err(err) => attempts.push(format!("bare adaptive: {err}")),
-    }
-    match norito::decode_from_bytes::<SignedTransaction>(bytes) {
-        Ok(decoded) => return Ok(decoded),
-        Err(err) => attempts.push(format!("framed norito: {err}")),
-    }
-    if let Ok(view) = norito_core::from_bytes_view(bytes) {
-        let payload = view.as_bytes();
-        let packed = norito_core::header_flags::PACKED_STRUCT;
-        for (label, flags) in [
-            ("framed payload flags", view.flags() | view.flags_hint()),
-            ("framed payload no flags", 0),
-            ("framed payload packed-struct", packed),
-        ] {
-            match try_decode_signed_transaction_adaptive_with_flags(payload, flags) {
-                Ok(decoded) => return Ok(decoded),
-                Err(err) => attempts.push(format!("{label}: {err}")),
-            }
-        }
-    }
-    match try_decode_signed_transaction_adaptive_with_flags(bytes, 0) {
-        Ok(decoded) => Ok(decoded),
-        Err(err) => {
-            attempts.push(format!("headerless adaptive fallback: {err}"));
-            Err(napi::Error::new(
-                napi::Status::GenericFailure,
-                format!(
-                    "failed to decode signed transaction; attempts: {}",
-                    attempts.join("; ")
-                ),
-            ))
-        }
-    }
+    Ok(transaction)
 }
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
 fn configure_transaction_builder(
@@ -11273,7 +11069,7 @@ fn assemble_executable_transaction(
     let algorithm = parse_crypto_algorithm(algorithm.as_deref())?;
     let private_key = PrivateKey::from_bytes(algorithm, secret).map_err(norito_to_napi)?;
     let signed = sign_js_transaction(builder, &private_key, "JavaScript host assembled")?;
-    let signed_bytes = Encode::encode(&signed);
+    let signed_bytes = encode_canonical_signed_transaction_v1(&signed)?;
     let hash = Buffer::from(signed.hash().as_ref().to_vec());
     Ok(JsSignedTransaction {
         signed_transaction: Buffer::from(signed_bytes),
@@ -11332,11 +11128,11 @@ fn checked_batch_executable(
     }
     Ok(executable)
 }
-/// Compute the canonical pipeline hash for a Norito-serialized signed transaction.
+/// Compute the canonical pipeline hash for an exact `VersionedSignedTransaction` V1 wire.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
 pub fn hash_signed_transaction(bytes: Uint8Array) -> napi::Result<Buffer> {
-    let tx = decode_signed_transaction(bytes.as_ref())?;
+    let tx = decode_canonical_signed_transaction_v1(bytes.as_ref())?;
     let hash = tx.hash();
     Ok(Buffer::from(hash.as_ref().to_vec()))
 }
@@ -11345,7 +11141,7 @@ pub fn hash_signed_transaction(bytes: Uint8Array) -> napi::Result<Buffer> {
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
 pub fn hash_signed_transaction_payload(bytes: Uint8Array) -> napi::Result<Buffer> {
-    let tx = decode_signed_transaction(bytes.as_ref())?;
+    let tx = decode_canonical_signed_transaction_v1(bytes.as_ref())?;
     let hash = iroha_crypto::HashOf::new(tx.payload());
     Ok(Buffer::from(hash.as_ref().to_vec()))
 }
@@ -11357,12 +11153,11 @@ pub fn hash_instruction_batch(instructions_json: Vec<String>) -> napi::Result<Bu
     let hash = iroha_crypto::HashOf::new(&instructions);
     Ok(Buffer::from(hash.as_ref().to_vec()))
 }
-/// Decode a Norito-serialized signed transaction into its JSON representation.
+/// Decode an exact canonical `VersionedSignedTransaction` V1 wire into JSON.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
 pub fn decode_signed_transaction_json(bytes: Uint8Array) -> napi::Result<String> {
-    ensure_packed_struct_disabled();
-    let tx = decode_signed_transaction(bytes.as_ref())?;
+    let tx = decode_canonical_signed_transaction_v1(bytes.as_ref())?;
     json::to_json(&tx).map_err(norito_to_napi)
 }
 /// Encode one JSON contract-call payload with the exact Kotodama entrypoint
@@ -11381,30 +11176,12 @@ pub fn encode_contract_argument_record_json(
         iroha_core::encode_argument_record_from_json(&schema, &payload).map_err(norito_to_napi)?;
     Ok(Buffer::from(record))
 }
-/// Convert a versioned signed transaction payload into Norito bytes.
-///
-/// This is used by Torii deployments that expose legacy `/transaction` submit
-/// endpoints expecting `application/x-norito`.
-#[napi]
-#[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
-pub fn encode_signed_transaction_norito(bytes: Uint8Array) -> napi::Result<Buffer> {
-    ensure_packed_struct_disabled();
-    let tx = decode_signed_transaction(bytes.as_ref())?;
-    let encoded = norito::to_bytes(&tx).map_err(norito_to_napi)?;
-    Ok(Buffer::from(encoded))
-}
-/// Convert a signed transaction payload into versioned adaptive Norito bytes.
-///
-/// This is the public `/transaction` payload shape accepted by Torii routes
-/// that decode `SignedTransaction::decode_all_versioned`.
+/// Validate and return the exact canonical `VersionedSignedTransaction` V1 wire.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
 pub fn encode_signed_transaction_versioned(bytes: Uint8Array) -> napi::Result<Buffer> {
-    ensure_packed_struct_disabled();
-    let tx = decode_signed_transaction(bytes.as_ref())?;
-    let encoded =
-        <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&tx);
-    Ok(Buffer::from(encoded))
+    let tx = decode_canonical_signed_transaction_v1(bytes.as_ref())?;
+    Ok(Buffer::from(encode_canonical_signed_transaction_v1(&tx)?))
 }
 /// Encode a `/v1/pipeline/transactions/batch` payload as a framed Norito
 /// `Vec<Vec<u8>>`, where every item is a versioned signed transaction payload.
@@ -11425,7 +11202,7 @@ pub fn encode_transaction_payload_batch(payloads: Vec<Buffer>) -> napi::Result<B
     let encoded = norito::to_bytes(&payloads).map_err(norito_to_napi)?;
     Ok(Buffer::from(encoded))
 }
-/// Re-sign a Norito-serialized transaction with the provided Ed25519 private key
+/// Re-sign an exact canonical `VersionedSignedTransaction` V1 wire with the provided Ed25519 private key
 /// and return the updated signed transaction bytes.
 ///
 /// The caller must provide the exact expected genesis-derived network identity;
@@ -11438,7 +11215,7 @@ pub fn sign_transaction(
     secret: Uint8Array,
 ) -> napi::Result<Buffer> {
     let expected_network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
-    let tx = decode_signed_transaction(bytes.as_ref())?;
+    let tx = decode_canonical_signed_transaction_v1(bytes.as_ref())?;
     require_expected_transaction_network_id(
         tx.network_id(),
         &expected_network_id,
@@ -11448,7 +11225,9 @@ pub fn sign_transaction(
     let private_key =
         PrivateKey::from_bytes(Algorithm::Ed25519, secret.as_ref()).map_err(norito_to_napi)?;
     let signed = sign_js_transaction(builder, &private_key, "JavaScript host re-signed")?;
-    Ok(Buffer::from(Encode::encode(&signed)))
+    Ok(Buffer::from(encode_canonical_signed_transaction_v1(
+        &signed,
+    )?))
 }
 fn privacy_compiled_profile_catalog() -> napi::Result<PrivacyCompiledProfileCatalogV1> {
     let catalog = compiled_privacy_profile_catalog_v1().map_err(|error| {
@@ -11616,7 +11395,7 @@ pub fn privacy_require_exact12_capability_tuple_v1(
 /// Result of signing a transaction via the native helper.
 #[napi(object)]
 pub struct JsSignedTransaction {
-    /// Norito-encoded signed transaction bytes.
+    /// Exact canonical `VersionedSignedTransaction` V1 bytes.
     pub signed_transaction: Buffer,
     /// Canonical pipeline hash for the signed transaction.
     pub hash: Buffer,
@@ -12150,8 +11929,7 @@ pub fn finalize_signed_transaction(
         }
     }
     tx.verify_signature().map_err(norito_to_napi)?;
-    let signed_transaction =
-        <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&tx);
+    let signed_transaction = encode_canonical_signed_transaction_v1(&tx)?;
     Ok(JsSignedTransaction {
         signed_transaction: Buffer::from(signed_transaction),
         hash: Buffer::from(tx.hash().as_ref().to_vec()),
@@ -12397,7 +12175,7 @@ pub fn sign_quoted_transaction_payload(
     let algorithm = parse_crypto_algorithm(private_key_algorithm.as_deref())?;
     let private_key = PrivateKey::from_bytes(algorithm, secret.as_ref()).map_err(norito_to_napi)?;
     let signed = sign_js_transaction(builder, &private_key, "quoted JavaScript payload")?;
-    let signed_bytes = Encode::encode(&signed);
+    let signed_bytes = encode_canonical_signed_transaction_v1(&signed)?;
     Ok(JsSignedTransaction {
         signed_transaction: Buffer::from(signed_bytes),
         hash: Buffer::from(signed.hash().as_ref().to_vec()),
@@ -12457,7 +12235,7 @@ pub fn sign_quoted_ivm_proved_transaction_payload(
         &private_key,
         "quoted proved-IVM JavaScript payload",
     )?;
-    let signed_bytes = Encode::encode(&signed);
+    let signed_bytes = encode_canonical_signed_transaction_v1(&signed)?;
     Ok(JsSignedTransaction {
         signed_transaction: Buffer::from(signed_bytes),
         hash: Buffer::from(signed.hash().as_ref().to_vec()),
@@ -13345,9 +13123,8 @@ mod tests {
             Mint, MintBox, RecordKaigiUsage, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
             SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
             governance::{
-                AtWindow, CastPlainBallot, CastZkBallot, EnactReferendum, FinalizeReferendum,
-                PersistCouncilForEpoch, ProposeDeployContract, ProposeValidationFeePolicy,
-                RegisterCitizen, VotingMode,
+                CastPlainBallot, CastZkBallot, PersistCouncilForEpoch, ProposeDeployContract,
+                ProposeValidationFeePolicy, RegisterCitizen,
             },
             smart_contract_code::{
                 ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -13380,7 +13157,6 @@ mod tests {
         validation_fee::{
             VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
             VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
-            ValidationFeePlainElectorateEligibilityRuleV1, ValidationFeePlainElectorateRulesV1,
             ValidationFeeTreasuryPayoutBindingV1, ValidationFeeTreasuryPayoutRecipientV1,
             initial_validation_fee_amount, validation_fee_payout_batch_ds,
             validation_fee_payout_max_xor, validation_fee_payout_min_xor,
@@ -13604,7 +13380,7 @@ mod tests {
     fn soracloud_hf_deploy_request_uses_current_quantity_contract() {
         let request_json = soracloud_build_hf_deploy_request_json(
             "openai/demo-model".to_owned(),
-            Some("main".to_owned()),
+            "0123456789abcdef0123456789abcdef01234567".to_owned(),
             "demo-model".to_owned(),
             "demo_model_service".to_owned(),
             Some("demo_agent".to_owned()),
@@ -13627,10 +13403,32 @@ mod tests {
         assert!(!payload.contains_key("base_fee_nanos"));
     }
     #[test]
+    fn soracloud_hf_deploy_request_rejects_mutable_or_noncanonical_revision() {
+        for revision in [
+            "main",
+            "0123456789abcdef",
+            "0123456789ABCDEF0123456789ABCDEF01234567",
+        ] {
+            soracloud_build_hf_deploy_request_json(
+                "openai/demo-model".to_owned(),
+                revision.to_owned(),
+                "demo-model".to_owned(),
+                "demo_model_service".to_owned(),
+                None,
+                "warm".to_owned(),
+                "86400000".to_owned(),
+                "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_owned(),
+                "10000".to_owned(),
+                "12".repeat(32),
+            )
+            .expect_err("HF deploy must require an immutable canonical commit OID");
+        }
+    }
+    #[test]
     fn soracloud_hf_draft_instruction_json_roundtrips() {
         let request_json = soracloud_build_hf_deploy_request_json(
             "openai/demo-model".to_owned(),
-            Some("main".to_owned()),
+            "0123456789abcdef0123456789abcdef01234567".to_owned(),
             "demo-model".to_owned(),
             "demo_model_service".to_owned(),
             None,
@@ -13651,7 +13449,7 @@ mod tests {
         .expect("decode deploy provenance");
         let instruction = iroha_data_model::isi::soracloud::JoinSoracloudHfSharedLease {
             repo_id: "openai/demo-model".to_owned(),
-            resolved_revision: "main".to_owned(),
+            resolved_revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
             model_name: "demo-model".to_owned(),
             service_name: "demo_model_service".parse().expect("service name"),
             apartment_name: None,
@@ -14522,9 +14320,6 @@ seiyaku Privacy {
             }),
             "CastPlainBallot" => norito_json!({
                 "CastPlainBallot": norito_json!({ "referendum_id": selector })
-            }),
-            "FinalizeReferendum" => norito_json!({
-                "FinalizeReferendum": norito_json!({ "referendum_id": selector })
             }),
             "CreateElection" => norito_json!({
                 "zk": norito_json!({
@@ -16570,14 +16365,9 @@ seiyaku Privacy {
             contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
                 .parse()
                 .expect("contract address"),
-            code_hash_hex: "aa".repeat(32),
-            abi_hash_hex: "bb".repeat(32),
-            abi_version: "1".to_owned(),
-            window: Some(AtWindow {
-                lower: 10,
-                upper: 20,
-            }),
-            mode: Some(VotingMode::Plain),
+            code_hash: ContractCodeHash::new([0xaa; 32]),
+            abi_hash: ContractAbiHash::new([0xbb; 32]),
+            abi_version: AbiVersion::new(1),
             manifest_provenance: None,
         })
         .into_instruction_box();
@@ -16588,6 +16378,44 @@ seiyaku Privacy {
                 .as_object()
                 .and_then(|map| map.get("ProposeDeployContract"))
                 .is_some()
+        );
+        let fields = json_value
+            .as_object()
+            .and_then(|map| map.get("ProposeDeployContract"))
+            .and_then(json::Value::as_object)
+            .expect("typed deploy proposal fields");
+        assert!(fields.contains_key("code_hash"));
+        assert!(fields.contains_key("abi_hash"));
+        assert_eq!(fields.get("abi_version"), Some(&json::Value::from(1_u64)));
+        for retired in ["code_hash_hex", "abi_hash_hex", "window", "mode"] {
+            let mut legacy = json_value.clone();
+            legacy
+                .as_object_mut()
+                .and_then(|map| map.get_mut("ProposeDeployContract"))
+                .and_then(json::Value::as_object_mut)
+                .expect("legacy deploy proposal fields")
+                .insert(retired.to_owned(), json::Value::Null);
+            let error = value_to_instruction(legacy)
+                .expect_err("retired deploy proposal field must fail closed");
+            assert!(
+                error.reason.contains(retired),
+                "{retired}: {}",
+                error.reason
+            );
+        }
+        let mut string_abi = json_value.clone();
+        string_abi
+            .as_object_mut()
+            .and_then(|map| map.get_mut("ProposeDeployContract"))
+            .and_then(json::Value::as_object_mut)
+            .expect("string ABI deploy proposal fields")
+            .insert(
+                "abi_version".to_owned(),
+                json::Value::String("1".to_owned()),
+            );
+        assert!(
+            value_to_instruction(string_abi).is_err(),
+            "string ABI version must fail closed"
         );
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize governance instruction");
@@ -16655,10 +16483,9 @@ seiyaku Privacy {
     }
     #[test]
     fn governance_selectors_are_canonical_at_instruction_construction() {
-        const VARIANTS: [&str; 6] = [
+        const VARIANTS: [&str; 5] = [
             "CastZkBallot",
             "CastPlainBallot",
-            "FinalizeReferendum",
             "CreateElection",
             "SubmitBallot",
             "FinalizeElection",
@@ -17104,47 +16931,6 @@ seiyaku Privacy {
         }
     }
     #[test]
-    fn governance_enact_referendum_instruction_json_roundtrip() {
-        let instruction: InstructionBox = Box::new(EnactReferendum {
-            referendum_id: sample_hash(0x11),
-            preimage_hash: sample_hash(0x22),
-            at_window: AtWindow {
-                lower: 0,
-                upper: 100,
-            },
-        })
-        .into_instruction_box();
-        let json_value =
-            instruction_to_json_value(&instruction).expect("serialize EnactReferendum");
-        assert!(
-            json_value
-                .as_object()
-                .and_then(|map| map.get("EnactReferendum"))
-                .is_some()
-        );
-        let reconstructed = value_to_instruction(json_value).expect("deserialize EnactReferendum");
-        assert_eq!(reconstructed, instruction);
-    }
-    #[test]
-    fn governance_finalize_referendum_instruction_json_roundtrip() {
-        let instruction: InstructionBox = Box::new(FinalizeReferendum {
-            referendum_id: "ref-final".to_owned(),
-            proposal_id: sample_hash(0x33),
-        })
-        .into_instruction_box();
-        let json_value =
-            instruction_to_json_value(&instruction).expect("serialize FinalizeReferendum");
-        assert!(
-            json_value
-                .as_object()
-                .and_then(|map| map.get("FinalizeReferendum"))
-                .is_some()
-        );
-        let reconstructed =
-            value_to_instruction(json_value).expect("deserialize FinalizeReferendum");
-        assert_eq!(reconstructed, instruction);
-    }
-    #[test]
     fn governance_persist_council_instruction_json_roundtrip() {
         let member = sample_account("wonderland");
         let instruction: InstructionBox = Box::new(PersistCouncilForEpoch {
@@ -17281,7 +17067,7 @@ seiyaku Privacy {
         assert_eq!(reconstructed, instruction);
     }
     #[test]
-    fn decode_signed_transaction_accepts_supported_norito_rpc_fixture_subset() {
+    fn canonical_signed_transaction_decoder_rejects_framed_rpc_fixture() {
         let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/norito_rpc/transaction_fixtures.manifest.json");
         let manifest_bytes = fs::read(&manifest_path)
@@ -17316,8 +17102,11 @@ seiyaku Privacy {
                 signed_base64,
                 "fixture {name} signed_base64 must be canonical"
             );
-            decode_signed_transaction(&signed_bytes)
-                .unwrap_or_else(|err| panic!("failed to decode fixture {name}: {err}"));
+            assert_eq!(&signed_bytes[..4], b"NRT0");
+            let error = decode_canonical_signed_transaction_v1(&signed_bytes)
+                .expect_err("framed signed-transaction fixtures are not the V1 submission wire");
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert!(error.reason.contains("VersionedSignedTransaction V1"));
         }
     }
     #[test]
@@ -17406,7 +17195,7 @@ seiyaku Privacy {
             Some("ed25519".to_owned()),
         )
         .expect("sign quoted payload");
-        let signed = decode_signed_transaction(result.signed_transaction.as_ref())
+        let signed = decode_canonical_signed_transaction_v1(result.signed_transaction.as_ref())
             .expect("decode signed transaction");
         expected.fee_payment = quoted_intent;
         assert_eq!(signed.payload(), &expected);
@@ -17530,17 +17319,16 @@ seiyaku Privacy {
             authority: Some(authority_i105),
         })
         .expect("finalize externally signed transaction");
-        let transaction = decode_signed_transaction(finalized.signed_transaction.as_ref())
-            .expect("finalized versioned transaction must decode");
+        let transaction =
+            decode_canonical_signed_transaction_v1(finalized.signed_transaction.as_ref())
+                .expect("finalized versioned transaction must decode");
         transaction
             .verify_signature()
             .expect("finalized transaction signature must verify");
         assert_eq!(transaction.authority(), &authority);
         assert_eq!(
             finalized.signed_transaction.as_ref(),
-            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
-                &transaction
-            )
+            transaction.encode_wire_v1().expect("canonical V1 wire")
         );
         assert_eq!(finalized.hash.as_ref(), transaction.hash().as_ref());
     }
@@ -17723,7 +17511,7 @@ seiyaku Privacy {
         assert!(finalize_signed_transaction(valid_input()).is_ok());
     }
     #[test]
-    fn decode_signed_transaction_accepts_versioned_bytes() {
+    fn signed_transaction_codec_accepts_only_exact_canonical_v1_bytes() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let network_id = test_network_id(b"versioned-transaction");
@@ -17734,11 +17522,61 @@ seiyaku Privacy {
         );
         builder.set_creation_time(Duration::from_millis(1));
         let signed = builder.sign(keypair.private_key());
-        let mut versioned = vec![1];
-        versioned.extend(norito::codec::encode_adaptive(&signed));
-        let decoded = decode_signed_transaction(&versioned)
-            .expect("versioned signed transaction must decode");
+        let versioned = encode_canonical_signed_transaction_v1(&signed)
+            .expect("canonical signed transaction must encode");
+        let decoded = decode_canonical_signed_transaction_v1(&versioned)
+            .expect("canonical V1 signed transaction must decode");
         assert_eq!(decoded, signed);
+        assert_eq!(
+            encode_signed_transaction_versioned(Uint8Array::from(versioned.clone()))
+                .expect("public canonical V1 validator must accept exact bytes")
+                .as_ref(),
+            versioned.as_slice()
+        );
+
+        let bare = Encode::encode(&signed);
+        let framed = norito::to_bytes(&signed).expect("framed signed transaction");
+        let headerless = versioned[1..].to_vec();
+        let alternate_layout = {
+            let alternate_flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate_flags = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            let mut bytes = vec![1];
+            norito::core::serialize_to_buffer(&signed, &mut bytes)
+                .expect("alternate-layout signed transaction");
+            bytes
+        };
+        assert_ne!(alternate_layout, versioned);
+        let packed_struct = {
+            let packed_flags =
+                norito::core::default_encode_flags() | norito::core::header_flags::PACKED_STRUCT;
+            let _packed_flags = norito::core::DecodeFlagsGuard::enter(packed_flags);
+            let mut bytes = vec![1];
+            norito::core::serialize_to_buffer(&signed, &mut bytes)
+                .expect("packed-struct signed transaction");
+            bytes
+        };
+        assert_ne!(packed_struct, versioned);
+        let mut unsupported = versioned.clone();
+        unsupported[0] = 2;
+        let mut trailing = versioned.clone();
+        trailing.push(0);
+        for (label, rejected) in [
+            ("bare", bare),
+            ("framed", framed),
+            ("headerless", headerless),
+            ("alternate-layout", alternate_layout),
+            ("packed-struct", packed_struct),
+            ("unsupported", unsupported),
+            ("trailing", trailing),
+        ] {
+            let error = decode_canonical_signed_transaction_v1(&rejected)
+                .expect_err("noncanonical signed transaction must fail closed");
+            assert_eq!(error.status, napi::Status::InvalidArg, "{label}");
+            let public_error = encode_signed_transaction_versioned(Uint8Array::from(rejected))
+                .expect_err("public canonical V1 validator must reject noncanonical bytes");
+            assert_eq!(public_error.status, napi::Status::InvalidArg, "{label}");
+        }
     }
     #[test]
     fn sign_js_transaction_checked_signing_verifies() {
@@ -17791,12 +17629,15 @@ seiyaku Privacy {
         let (_, secret) = keypair.private_key().to_bytes();
         let resigned = sign_transaction(
             Uint8Array::from(network_id.as_bytes().to_vec()),
-            Uint8Array::from(Encode::encode(&original)),
+            Uint8Array::from(
+                encode_canonical_signed_transaction_v1(&original)
+                    .expect("canonical original transaction"),
+            ),
             Uint8Array::from(secret),
         )
         .expect("re-sign transaction");
-        let decoded =
-            decode_signed_transaction(resigned.as_ref()).expect("decode re-signed transaction");
+        let decoded = decode_canonical_signed_transaction_v1(resigned.as_ref())
+            .expect("decode re-signed transaction");
         assert_eq!(decoded.fee_payment_intent(), &intent);
         decoded
             .verify_signature()
@@ -17821,7 +17662,10 @@ seiyaku Privacy {
         let (_, secret) = keypair.private_key().to_bytes();
         let foreign_error = sign_transaction(
             Uint8Array::from(network_id.as_bytes().to_vec()),
-            Uint8Array::from(Encode::encode(&foreign)),
+            Uint8Array::from(
+                encode_canonical_signed_transaction_v1(&foreign)
+                    .expect("canonical foreign transaction"),
+            ),
             Uint8Array::from(secret.clone()),
         )
         .err()
@@ -17830,7 +17674,10 @@ seiyaku Privacy {
         assert!(foreign_error.reason.contains("does not match"));
         let error = sign_transaction(
             Uint8Array::from(network_id.as_bytes().to_vec()),
-            Uint8Array::from(Encode::encode(&transaction)),
+            Uint8Array::from(
+                encode_canonical_signed_transaction_v1(&transaction)
+                    .expect("canonical genesis transaction"),
+            ),
             Uint8Array::from(secret),
         )
         .err()
@@ -18004,7 +17851,8 @@ seiyaku Privacy {
             },
         ))
         .sign(keypair.private_key());
-        let bytes = norito::to_bytes(&transaction).expect("encode signed transaction");
+        let bytes = encode_canonical_signed_transaction_v1(&transaction)
+            .expect("encode canonical signed transaction V1");
         let decoded = decode_signed_transaction_json(Uint8Array::from(bytes))
             .expect("decode signed transaction JSON");
         let value: json::Value = json::from_str(&decoded).expect("parse decoder JSON");
@@ -18052,7 +17900,8 @@ seiyaku Privacy {
             None,
         )
         .expect("transaction built");
-        let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
+        let tx = decode_canonical_signed_transaction_v1(result.signed_transaction.as_ref())
+            .expect("decode");
         assert_eq!(tx.authority(), &authority);
         assert_eq!(tx.network_id(), Some(&network_id));
         tx.verify_signature()
@@ -18113,7 +17962,8 @@ seiyaku Privacy {
             Some("ed25519".to_owned()),
         )
         .expect("mixed batch transaction");
-        let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
+        let tx = decode_canonical_signed_transaction_v1(result.signed_transaction.as_ref())
+            .expect("decode");
         assert_eq!(&tx.instructions().encode()[..4], &4_u32.to_le_bytes());
         let Executable::Batch(entries) = tx.instructions() else {
             panic!("expected batch executable")
@@ -18242,7 +18092,8 @@ seiyaku Privacy {
         )
         .expect("quoted transaction signed");
         let quoted_tx =
-            decode_signed_transaction(quoted_result.signed_transaction.as_ref()).expect("decode");
+            decode_canonical_signed_transaction_v1(quoted_result.signed_transaction.as_ref())
+                .expect("decode");
         assert_eq!(quoted_tx.fee_payment_intent(), &quoted);
         assert_eq!(
             quoted_tx.attachments(),
@@ -18268,7 +18119,8 @@ seiyaku Privacy {
             None,
         )
         .expect("transaction built");
-        let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
+        let tx = decode_canonical_signed_transaction_v1(result.signed_transaction.as_ref())
+            .expect("decode");
         assert_eq!(tx.authority(), &authority);
         assert_eq!(tx.network_id(), Some(&network_id));
         match tx.instructions() {

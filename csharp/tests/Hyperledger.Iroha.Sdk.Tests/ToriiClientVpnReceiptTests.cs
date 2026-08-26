@@ -6,11 +6,26 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed partial class ToriiClientTests
 {
+    [Theory]
+    [InlineData("disconnected")]
+    [InlineData("expired")]
+    [InlineData("replaced")]
+    [InlineData("settlement_pending")]
+    [InlineData("settled")]
+    public void VpnReceiptStatusValidatorRetainsExactLifecycleValues(string status)
+    {
+        var receipt = Assert.IsType<ToriiVpnReceipt>(DeserializeRawVpnResponse(
+            "receipt",
+            VpnReceiptRawResponseJson("status", status)));
+
+        Assert.Equal(status, receipt.Status);
+    }
+
     [Fact]
     public async Task SubmitVpnReceiptAsyncPostsEvidenceAndDeserializesSettlementInstruction()
     {
         const string quoteId = "1111111111111111111111111111111111111111111111111111111111111111";
-        const string sessionId = "8989898989898989898989898989898989898989898989898989898989898989";
+        const string sessionId = "89898989898989898989898989898989";
 
         using var handler = new RecordingHandler(request =>
         {
@@ -35,7 +50,7 @@ public sealed partial class ToriiClientTests
                       "duration_ms": 600000,
                       "bytes_in": 123,
                       "bytes_out": 456,
-                      "status": "settled",
+                      "status": "settlement_pending",
                       "receipt_source": "relay",
                       "quote_id": "{{quoteId}}",
                       "payment_tx_hash": "2222222222222222222222222222222222222222222222222222222222222222",
@@ -67,7 +82,7 @@ public sealed partial class ToriiClientTests
         Assert.Equal(VpnAccountId, receipt.AccountId);
         Assert.Equal(VpnEscrowAccountId, receipt.EscrowAccountId);
         Assert.Equal(VpnOperatorAccountId, receipt.OperatorAccountId);
-        Assert.Equal("settled", receipt.Status);
+        Assert.Equal("settlement_pending", receipt.Status);
         Assert.Equal("SettleVpnLease", receipt.SettleLeaseInstruction?.WireId);
         Assert.Equal("500000.125", receipt.EarnedFee);
     }
@@ -122,7 +137,7 @@ public sealed partial class ToriiClientTests
     public async Task ListVpnReceiptsAsyncDeserializesNativeSettlementItems()
     {
         const string quoteId = "3333333333333333333333333333333333333333333333333333333333333333";
-        const string sessionId = "4545454545454545454545454545454545454545454545454545454545454545";
+        const string sessionId = "45454545454545454545454545454545";
 
         using var handler = new RecordingHandler(request =>
         {
@@ -176,7 +191,7 @@ public sealed partial class ToriiClientTests
         Assert.Equal(sessionId, items[0].SessionId);
         Assert.Equal(VpnAccountId, items[0].AccountId);
         Assert.Equal(quoteId, items[0].LeaseIdHex);
-        items[0] = ValidVpnReceipt() with { SessionId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" };
+        items[0] = ValidVpnReceipt() with { SessionId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" };
         Assert.Equal(sessionId, receipts.Items[0].SessionId);
         Assert.Equal("SettleVpnLease", receipts.Items[0].SettleLeaseInstruction?.WireId);
     }

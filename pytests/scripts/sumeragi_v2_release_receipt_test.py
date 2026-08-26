@@ -1427,8 +1427,10 @@ def make_scaling_evidence(
                     "lanes": lane_ids,
                     "workload_seed": seed,
                     "inputs": {
-                        "status_file": lifecycle.name,
+                        "lifecycle_file": lifecycle.name,
                         "metrics_file": metrics.name,
+                        "telemetry_file": None,
+                        "alias_migrations": [],
                     },
                 },
             )
@@ -3179,7 +3181,6 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                     "IROHA_TEST_REQUIRE_NETWORK=1 "
                     "IROHA_TEST_NETWORK_START_ATTEMPTS=1 "
                     "IROHA_TEST_SKIP_BUILD=1 "
-                    "IROHA_TEST_ALLOW_REENTRANT_BUILD=0 "
                     "IROHA_TEST_BUILD_PROFILE=release "
                     "PROFILE=release "
                     "IROHA_TEST_BUILD_TIMEOUT_MS=3600 "
@@ -3241,7 +3242,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 "test accelerated_100_000_block_chaos_preserves_chain_prefix ... ok",
                 "",
                 "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
-                "9 filtered out; finished in 0.01s",
+                "11 filtered out; finished in 0.01s",
             )
         )
         + "\n",

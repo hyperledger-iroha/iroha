@@ -4,141 +4,21 @@ using System.Text.Json.Serialization;
 namespace Hyperledger.Iroha.Torii;
 
 /// <summary>
-/// One machine-readable reason why an asset is not ready for Kagemusha issuance.
+/// Asset-neutral first-release offline protocol capability.
 /// </summary>
-public sealed record class ToriiKagemushaReadinessBlocker
+public sealed record class ToriiOfflineStatus
 {
-    [JsonPropertyName("code")]
-    public string Code { get; init; } = string.Empty;
+    [JsonPropertyName("cash_handoff_capability")]
+    public string CashHandoffCapability { get; init; } = string.Empty;
 
-    [JsonPropertyName("message")]
-    public string Message { get; init; } = string.Empty;
-}
-
-/// <summary>
-/// Registry identity of a verifier selected at a readiness snapshot.
-/// </summary>
-public sealed record class ToriiKagemushaVerifierId
-{
-    [JsonPropertyName("backend")]
-    public string Backend { get; init; } = string.Empty;
-
-    [JsonPropertyName("name")]
-    public string Name { get; init; } = string.Empty;
-}
-
-/// <summary>
-/// Key-material-free verifier record returned by Torii.
-/// </summary>
-public sealed record class ToriiKagemushaActiveVerifier
-{
-    [JsonPropertyName("id")]
-    public ToriiKagemushaVerifierId Id { get; init; } = new();
-
-    [JsonPropertyName("version")]
-    public uint Version { get; init; }
-
-    [JsonPropertyName("circuit_id")]
-    public string CircuitId { get; init; } = string.Empty;
-
-    [JsonPropertyName("commitment")]
-    public string Commitment { get; init; } = string.Empty;
-
-    [JsonPropertyName("public_inputs_schema_hash")]
-    public string PublicInputsSchemaHash { get; init; } = string.Empty;
-
-    [JsonPropertyName("max_proof_bytes")]
-    public uint MaxProofBytes { get; init; }
-
-    [JsonPropertyName("activation_height")]
-    public ulong ActivationHeight { get; init; }
-
-    [JsonPropertyName("withdrawal_height")]
-    public ulong? WithdrawalHeight { get; init; }
-}
-
-/// <summary>
-/// Authenticated ABI-21/manifest-V4 release selected by Torii.
-/// </summary>
-public sealed record class ToriiKagemushaAuthenticatedArtifactSetV4
-{
-    [JsonPropertyName("generation")]
-    public string Generation { get; init; } = string.Empty;
-
-    [JsonPropertyName("manifest_sha256")]
-    public string ManifestSha256 { get; init; } = string.Empty;
-
-    [JsonPropertyName("release_policy_sha256")]
-    public string ReleasePolicySha256 { get; init; } = string.Empty;
-
-    [JsonPropertyName("release_attestation_sha256")]
-    public string ReleaseAttestationSha256 { get; init; } = string.Empty;
-
-    [JsonPropertyName("activation_height")]
-    public ulong ActivationHeight { get; init; }
-
-    [JsonPropertyName("withdrawal_height")]
-    public ulong WithdrawalHeight { get; init; }
-
-    [JsonPropertyName("max_proof_bytes")]
-    public uint MaxProofBytes { get; init; }
-
-    [JsonPropertyName("asset_scale")]
-    public uint AssetScale { get; init; }
-}
-
-/// <summary>
-/// Snapshot-bound ABI-21/V4 Kagemusha readiness projection.
-/// </summary>
-public sealed record class ToriiKagemushaReadinessV4
-{
     [JsonPropertyName("required_bridge_abi_version")]
     public uint RequiredBridgeAbiVersion { get; init; }
 
     [JsonPropertyName("max_hops")]
     public uint MaxHops { get; init; }
 
-    [JsonPropertyName("asset_definition_id")]
-    public string AssetDefinitionId { get; init; } = string.Empty;
-
-    [JsonPropertyName("asset_scale")]
-    public uint? AssetScale { get; init; }
-
-    [JsonPropertyName("evaluated_block_height")]
-    public ulong EvaluatedBlockHeight { get; init; }
-
-    [JsonPropertyName("evaluated_block_hash")]
-    public string EvaluatedBlockHash { get; init; } = string.Empty;
-
-    [JsonPropertyName("active_transfer_verifier")]
-    public ToriiKagemushaActiveVerifier? ActiveTransferVerifier { get; init; }
-
-    [JsonPropertyName("active_topup_shield_verifier")]
-    public ToriiKagemushaActiveVerifier? ActiveTopUpShieldVerifier { get; init; }
-
-    [JsonPropertyName("active_unshield_verifier")]
-    public ToriiKagemushaActiveVerifier? ActiveUnshieldVerifier { get; init; }
-
-    [JsonPropertyName("active_recursive_step_eq_verifier")]
-    public ToriiKagemushaActiveVerifier? ActiveRecursiveStepEqVerifier { get; init; }
-
-    [JsonPropertyName("active_recursive_step_ep_verifier")]
-    public ToriiKagemushaActiveVerifier? ActiveRecursiveStepEpVerifier { get; init; }
-
-    [JsonPropertyName("artifact_set")]
-    public ToriiKagemushaAuthenticatedArtifactSetV4? ArtifactSet { get; init; }
-
-    [JsonPropertyName("proof_backend_available")]
-    public bool ProofBackendAvailable { get; init; }
-
-    [JsonPropertyName("recursive_lineage_supported")]
-    public bool RecursiveLineageSupported { get; init; }
-
     [JsonPropertyName("ready")]
     public bool Ready { get; init; }
-
-    [JsonPropertyName("blockers")]
-    public ToriiKagemushaReadinessBlocker[] Blockers { get; init; } = [];
 }
 
 /// <summary>
@@ -283,7 +163,7 @@ public sealed record class ToriiKagemushaOperationStatus
 
 internal static class ToriiKagemushaTransport
 {
-    internal const int BridgeAbiVersion = 22;
+    internal const int BridgeAbiVersion = 23;
     internal const int ManifestVersion = 4;
     internal const int MaxHops = 8;
     internal const int MaxTopUpNoritoRequestBytes = 512 * 1024;

@@ -20,8 +20,11 @@ from iroha_torii_client import (  # noqa: E402
     canonical_network_request_signature_message,
 )
 
-CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
-CANONICAL_OWNER_HEADER = "0x02000120" + "00" * 32
+CANONICAL_OWNER = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
+CANONICAL_OWNER_HEADER = (
+    "0x02000120"
+    "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+)
 
 
 def _canonical_hash(seed: int) -> str:

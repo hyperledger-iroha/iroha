@@ -91,7 +91,8 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
             Sorting::default(),
             FetchSize::new(Some(nonzero!(1_u64))),
         ),
-    );
+    )
+    .expect("block-header query type has a canonical mapping");
     let (first_batch, remaining, cursor) = client.start_query(qwp)?;
     let v = match first_batch.into_iter().next().expect("slice") {
         QueryOutputBatchBox::BlockHeader(v) => v,

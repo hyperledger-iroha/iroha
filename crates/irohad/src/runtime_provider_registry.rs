@@ -160,10 +160,14 @@ pub enum IrohaRuntimeProviderSlotV1 {
     MusubiProviderAttestationApprovalSigner = 58,
     /// Authenticated coordinator inventory for Musubi provider attestations.
     MusubiProviderAttestationAuthenticatedInventory = 59,
+    /// Runtime-only adaptive global threshold-beacon partial signer.
+    GlobalBeaconPartialSigner = 60,
+    /// Runtime-only adaptive Parliament TLE partial-release signer.
+    ParliamentTlePartialReleaseSigner = 61,
 }
 impl IrohaRuntimeProviderSlotV1 {
     /// Every first-release runtime-provider slot in wire-ID order.
-    pub const ALL: [Self; 59] = [
+    pub const ALL: [Self; 61] = [
         Self::ModerationQuarantineKeyWrapper,
         Self::PrivacyCyclePrfProvider,
         Self::PrivacyReleaseAnchor,
@@ -223,6 +227,8 @@ impl IrohaRuntimeProviderSlotV1 {
         Self::MusubiProviderAttestationClockSeal,
         Self::MusubiProviderAttestationApprovalSigner,
         Self::MusubiProviderAttestationAuthenticatedInventory,
+        Self::GlobalBeaconPartialSigner,
+        Self::ParliamentTlePartialReleaseSigner,
     ];
     /// Return the stable first-release broker protocol identifier for this role.
     #[must_use]
@@ -292,6 +298,8 @@ impl IrohaRuntimeProviderSlotV1 {
             57 => Some(Self::MusubiProviderAttestationClockSeal),
             58 => Some(Self::MusubiProviderAttestationApprovalSigner),
             59 => Some(Self::MusubiProviderAttestationAuthenticatedInventory),
+            60 => Some(Self::GlobalBeaconPartialSigner),
+            61 => Some(Self::ParliamentTlePartialReleaseSigner),
             _ => None,
         }
     }
@@ -3760,7 +3768,7 @@ mod tests {
     }
     #[test]
     fn runtime_provider_slot_wire_ids_are_stable_and_ordered() {
-        let mut seen = [false; 60];
+        let mut seen = [false; 62];
         for (index, slot) in IrohaRuntimeProviderSlotV1::ALL.into_iter().enumerate() {
             let wire_id = slot.wire_id();
             assert_eq!(
@@ -3782,7 +3790,7 @@ mod tests {
             seen[1..].iter().all(|present| *present),
             "the V1 slot inventory must not omit a wire ID"
         );
-        for unknown in [0, 60, u16::MAX] {
+        for unknown in [0, 62, u16::MAX] {
             assert_eq!(
                 IrohaRuntimeProviderSlotV1::from_wire_id(unknown),
                 None,
@@ -3885,6 +3893,8 @@ mod tests {
             crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1,
         > {
             crate::soracloud_hf_credential::SoracloudHfAuthenticatedInferenceResponseV1::try_new(
+                request.repo_id(),
+                request.resolved_revision(),
                 200,
                 Some("application/json".to_owned()),
                 None,

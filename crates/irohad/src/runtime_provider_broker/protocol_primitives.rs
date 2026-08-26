@@ -113,6 +113,8 @@ pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_AUTHENTICATE_V1: u16 = 121;
 pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1: u16 = 122;
 pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1: u16 = 123;
 pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1: u16 = 124;
+pub(super) const OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1: u16 = 125;
+pub(super) const OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1: u16 = 126;
 // A real payload byte avoids relying on zero-sized archive reconstruction;
 // the authenticated slot and operation provide the request-domain binding.
 pub(super) const CHECKPOINT_LOAD_REQUEST_VERSION_V1: u8 = 1;
@@ -134,6 +136,20 @@ impl_broker_debug_fields!(VariableSignatureResultWireV1 as value {
 } => finish_non_exhaustive);
 define_broker_wire_struct!(copy pub(super) PopIssuerSignRequestWireV1 { pub(super) purpose: u8, pub(super) digest: [u8; 32], });
 define_broker_wire_struct!(copy pub(super) PopIssuerSignResultWireV1 { pub(super) signature: [u8; 64], });
+define_broker_wire_struct!(owned pub(super) GlobalBeaconPartialSignRequestWireV1 {
+    pub(super) session: iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1,
+    pub(super) height: u64,
+    pub(super) finalized_chain_anchor: iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1,
+});
+define_broker_wire_struct!(copy pub(super) GlobalBeaconPartialSignResultWireV1 {
+    pub(super) partial: iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1,
+});
+define_broker_wire_struct!(owned pub(super) ParliamentTlePartialReleaseSignRequestWireV1 {
+    pub(super) projection: iroha_core::tle_release::AuthorizedTleReleaseProjectionV1,
+});
+define_broker_wire_struct!(owned pub(super) ParliamentTlePartialReleaseSignResultWireV1 {
+    pub(super) partial: iroha_core::tle_release::TlePartialReleaseShareV1,
+});
 pub(super) fn governance_signing_purpose_from_wire(
     value: u8,
 ) -> Result<sorafs_node::GovernanceDagSigningPurposeV1, BrokerError> {

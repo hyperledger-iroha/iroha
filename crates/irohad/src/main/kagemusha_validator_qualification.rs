@@ -10,7 +10,7 @@ use iroha_genesis::GenesisBlock;
 
 /// Same-read startup sources which may be consumed only inside the daemon.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct KagemushaStartupQualificationSourcesV1 {
+pub struct KagemushaStartupQualificationSourcesV1 {
     snapshot_bootstrap: bool,
     flattened_toml_config_source: Option<Vec<u8>>,
     signed_genesis_source: Option<Vec<u8>>,
@@ -43,7 +43,7 @@ impl KagemushaStartupQualificationSourcesV1 {
 
 /// Same-read controller reservation plus independently pinned receipt authority.
 #[derive(Clone, Copy)]
-pub(super) struct KagemushaTrustedPromotionInputsV1<'a> {
+pub struct KagemushaTrustedPromotionInputsV1<'a> {
     pinned_controller: &'a PublicKey,
     exact_reservation_bytes: &'a [u8],
     catalog_revalidation_receipt_json: &'a [u8],
@@ -72,7 +72,7 @@ impl<'a> KagemushaTrustedPromotionInputsV1<'a> {
 
 /// Explicit reason why this process did not create a validator seal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum KagemushaValidatorQualificationUnavailableV1 {
+pub enum KagemushaValidatorQualificationUnavailableV1 {
     /// Snapshot bootstrap has no ordinary signed-genesis source in this corridor.
     SnapshotBootstrap,
     /// The protected promotion controller supplied no trusted reservation.
@@ -95,7 +95,7 @@ pub(super) enum KagemushaValidatorQualificationUnavailableV1 {
     variant_size_differences,
     reason = "the boxed signed seal and tiny explicit-unavailable result are intentionally asymmetric; boxing the unavailable reason would add a pointless allocation"
 )]
-pub(super) enum KagemushaValidatorQualificationOutcomeV1 {
+pub enum KagemushaValidatorQualificationOutcomeV1 {
     /// Qualification was deliberately unavailable and no signature was made.
     Unavailable(KagemushaValidatorQualificationUnavailableV1),
     /// One locally signed validator seal, not published or submitted.
@@ -106,10 +106,9 @@ pub(super) enum KagemushaValidatorQualificationOutcomeV1 {
 ///
 /// Returns an explicit unavailable outcome for every absent trust input and an
 /// error only when all inputs exist but fail closed validation or signing.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn try_build_kagemusha_validator_qualification_v1(
+pub fn try_build_kagemusha_validator_qualification_v1(
     sources: &KagemushaStartupQualificationSourcesV1,
-    promotion: Option<KagemushaTrustedPromotionInputsV1<'_>>,
+    promotion: Option<&KagemushaTrustedPromotionInputsV1<'_>>,
     catalog_capture: Option<&KagemushaValidatorQualificationCatalogCaptureV1>,
     genesis: Option<&GenesisBlock>,
     runtime_effective_config: Option<&VerifiedKagemushaV4RuntimeEffectiveConfigV1>,
@@ -172,7 +171,7 @@ pub(super) fn try_build_kagemusha_validator_qualification_v1(
 
 /// Exercise the fail-closed seam for the stock launcher, which has no trusted
 /// promotion reservation or same-load catalog capture and therefore cannot sign.
-pub(super) fn evaluate_stock_launcher_unavailable_v1(
+pub fn evaluate_stock_launcher_unavailable_v1(
     sources: &KagemushaStartupQualificationSourcesV1,
     genesis: Option<&GenesisBlock>,
     validator_id: &PeerId,
@@ -212,34 +211,30 @@ fn require_expected_stock_launcher_unavailable_reason_v1(
 }
 
 #[cfg(test)]
-pub(super) mod tests {
-    use super::*;
+pub fn reservation_fixture(
+    controller: &KeyPair,
+) -> iroha_data_model::offline::KagemushaV4PromotionReservationV1 {
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{
+        NetworkId,
+        offline::{
+            KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION, KAGEMUSHA_V4_PROMOTION_RESERVATION_BODY_SCHEMA,
+            KagemushaExactBytesDigestV1, KagemushaV4GitHubPromotionRunV1,
+            KagemushaV4PromotionReservationBodyV1, KagemushaV4PromotionReservationV1,
+        },
+    };
 
-    pub(in super::super) fn reservation_fixture(
-        controller: &KeyPair,
-    ) -> iroha_data_model::offline::KagemushaV4PromotionReservationV1 {
-        use iroha_crypto::{Hash, HashOf};
-        use iroha_data_model::{
-            NetworkId,
-            offline::{
-                KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
-                KAGEMUSHA_V4_PROMOTION_RESERVATION_BODY_SCHEMA, KagemushaExactBytesDigestV1,
-                KagemushaV4GitHubPromotionRunV1, KagemushaV4PromotionReservationBodyV1,
-                KagemushaV4PromotionReservationV1,
-            },
-        };
-
-        let github_run = KagemushaV4GitHubPromotionRunV1 {
-            repository: "hyperledger/iroha".to_owned(),
-            workflow_ref: ".github/workflows/kagemusha.yml@refs/heads/main".to_owned(),
-            workflow_sha: [0x41; 20],
-            run_id: 41,
-            run_attempt: 1,
-        };
-        let exact = |bytes: &[u8]| {
-            KagemushaExactBytesDigestV1::from_bytes(bytes).expect("nonempty exact fixture")
-        };
-        let policy = iroha_core::smartcontracts::isi::offline::isi::production_offline_device_attestation_policy_v1(
+    let github_run = KagemushaV4GitHubPromotionRunV1 {
+        repository: "hyperledger/iroha".to_owned(),
+        workflow_ref: ".github/workflows/kagemusha.yml@refs/heads/main".to_owned(),
+        workflow_sha: [0x41; 20],
+        run_id: 41,
+        run_attempt: 1,
+    };
+    let exact = |bytes: &[u8]| {
+        KagemushaExactBytesDigestV1::from_bytes(bytes).expect("nonempty exact fixture")
+    };
+    let policy = iroha_core::smartcontracts::isi::offline::isi::production_offline_device_attestation_policy_v1(
             "TEAMID1234".to_owned(),
             "io.soramitsu.pk".to_owned(),
             vec![4],
@@ -257,32 +252,36 @@ pub(super) mod tests {
             1_800_000_000_000,
         )
         .expect("production device policy fixture");
-        let body = KagemushaV4PromotionReservationBodyV1 {
-            schema: KAGEMUSHA_V4_PROMOTION_RESERVATION_BODY_SCHEMA.to_owned(),
-            version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
-            promotion_controller: controller.public_key().clone(),
-            promotion_id: github_run.promotion_id(),
-            github_run,
-            network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
-                b"reservation fixture network",
-            ))),
-            reviewed_source_closure_descriptor: exact(b"source descriptor"),
-            manifest_sha256: [0x42; 32],
-            release_record_sha256: [0x43; 32],
-            promotion_record_norito: exact(b"promotion record"),
-            release_policy_source: exact(b"release policy"),
-            signed_genesis: exact(b"signed genesis"),
-            catalog_revalidation_receipt_json: exact(b"catalog receipt"),
-            catalog_revalidation_catalog_sha256: [0x45; 32],
-            catalog_consensus_policy_digest: [0x44; 32],
-            execution_policy_hash: Hash::new(b"execution policy"),
-            device_attestation_policy: policy,
-            policy_evaluation_time_ms: 1_800_000_000_000,
-            validator_qualification_expires_at_unix_ms: 1_800_000_300_000,
-        };
-        KagemushaV4PromotionReservationV1::try_sign(body, controller)
-            .expect("signed promotion reservation fixture")
-    }
+    let body = KagemushaV4PromotionReservationBodyV1 {
+        schema: KAGEMUSHA_V4_PROMOTION_RESERVATION_BODY_SCHEMA.to_owned(),
+        version: KAGEMUSHA_V4_PROMOTION_RECEIPT_VERSION,
+        promotion_controller: controller.public_key().clone(),
+        promotion_id: github_run.promotion_id(),
+        github_run,
+        network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"reservation fixture network",
+        ))),
+        reviewed_source_closure_descriptor: exact(b"source descriptor"),
+        manifest_sha256: [0x42; 32],
+        release_record_sha256: [0x43; 32],
+        promotion_record_norito: exact(b"promotion record"),
+        release_policy_source: exact(b"release policy"),
+        signed_genesis: exact(b"signed genesis"),
+        catalog_revalidation_receipt_json: exact(b"catalog receipt"),
+        catalog_revalidation_catalog_sha256: [0x45; 32],
+        catalog_consensus_policy_digest: [0x44; 32],
+        execution_policy_hash: Hash::new(b"execution policy"),
+        device_attestation_policy: policy,
+        policy_evaluation_time_ms: 1_800_000_000_000,
+        validator_qualification_expires_at_unix_ms: 1_800_000_300_000,
+    };
+    KagemushaV4PromotionReservationV1::try_sign(body, controller)
+        .expect("signed promotion reservation fixture")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
 
     #[test]
     fn unavailable_reasons_are_explicit_and_snapshot_fails_first() {
@@ -394,7 +393,7 @@ pub(super) mod tests {
         assert!(matches!(
             try_build_kagemusha_validator_qualification_v1(
                 &missing_config,
-                Some(promotion),
+                Some(&promotion),
                 None,
                 None,
                 None,
@@ -413,7 +412,7 @@ pub(super) mod tests {
         assert!(matches!(
             try_build_kagemusha_validator_qualification_v1(
                 &missing_genesis,
-                Some(promotion),
+                Some(&promotion),
                 None,
                 None,
                 None,
@@ -442,7 +441,7 @@ pub(super) mod tests {
         assert!(matches!(
             try_build_kagemusha_validator_qualification_v1(
                 &complete_sources,
-                Some(promotion),
+                Some(&promotion),
                 None,
                 Some(&genesis),
                 None,
@@ -456,7 +455,7 @@ pub(super) mod tests {
         assert!(matches!(
             try_build_kagemusha_validator_qualification_v1(
                 &complete_sources,
-                Some(promotion),
+                Some(&promotion),
                 None,
                 Some(&genesis),
                 None,

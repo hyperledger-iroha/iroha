@@ -30,6 +30,25 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
             .registry
             .validator_id(0)
             .expect("local fixture validator");
+        let timeout_shares = (0_u32..3)
+            .map(|index| {
+                reducer::SignatureShare::new(
+                    adapter
+                        .registry
+                        .validator_id(index)
+                        .expect("fixture timeout validator"),
+                    reducer::OpaqueSignature::new(vec![
+                        marker,
+                        u8::try_from(index).expect("small fixture validator index"),
+                    ]),
+                )
+            })
+            .collect::<Vec<_>>();
+        let timeout = reducer::TimeoutCertificate::new(
+            core_context.id(),
+            prepare.round(),
+            vec![reducer::TimeoutSignatureGroup::new(None, timeout_shares)],
+        );
         let vote = reducer::Vote::new(
             core_context.id(),
             prepare.round(),
@@ -41,13 +60,40 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
             core_context,
             Some(local_validator),
             reducer::Generation::new(u64::from(marker)),
-            [reducer::WalEntry::new(
-                reducer::PersistenceId::new(1),
-                reducer::WalRecord::LockAndCommit { prepare, vote },
-            )],
+            [
+                reducer::WalEntry::new(
+                    reducer::PersistenceId::new(1),
+                    reducer::WalRecord::LockAndCommit { prepare, vote },
+                ),
+                reducer::WalEntry::new(
+                    reducer::PersistenceId::new(2),
+                    reducer::WalRecord::InstallTimeout(timeout),
+                ),
+            ],
         )
         .expect("recover durable lock fixture");
-        (wire_round, locked_subject, locked_execution_commitment)
+        let current_tag = adapter.current_tag();
+        assert!(current_tag.view() > wire_round.view);
+        let current_round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: current_tag.height(),
+            view: current_tag.view(),
+        };
+        let core_subject = reducer::Subject::new(Hash::new(locked_subject.encode()).into());
+        adapter
+            .registry
+            .register_execution_commitment(
+                reducer::Round::new(current_tag.height(), current_tag.view()),
+                core_subject,
+                locked_execution_commitment,
+            )
+            .expect("bind the current locked reproposal before remote admission");
+        (
+            wire_round,
+            current_round,
+            locked_subject,
+            locked_execution_commitment,
+        )
     };
     let admit_locked_roster =
         |adapter: &mut SumeragiV2Adapter,
@@ -81,6 +127,39 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
                 adapter.record_ingress_delivery(admission);
             }
         };
+    let admit_locked_reproposal_prepare_roster =
+        |adapter: &mut SumeragiV2Adapter,
+         current_round: wire::ConsensusRound,
+         locked_subject: wire::BlockSubject,
+         locked_execution_commitment: wire::ExecutionCommitment| {
+            let roster_len = adapter.wire_context.roster.len();
+            for signer in 0..roster_len {
+                let signer = u32::try_from(signer).expect("fixture signer index fits u32");
+                let payload = wire::ConsensusMessageV2Payload::Vote(wire::Vote {
+                    round: current_round,
+                    proposal_round: current_round,
+                    phase: wire::GlobalPhase::Prepare,
+                    subject: locked_subject,
+                    execution_commitment: locked_execution_commitment,
+                    signer,
+                    signature: vec![0xD0 ^ u8::try_from(signer).expect("small fixture signer")],
+                });
+                let (outcome, admission) = adapter
+                    .admit_authenticated_payload(&payload)
+                    .expect("exact current locked reproposal bypasses ordinary capacity");
+                assert!(outcome.is_none());
+                let admission =
+                    admission.expect("locked reproposal Prepare owns a capacity-bypass record");
+                assert!(
+                    adapter
+                        .ingress_equivocations
+                        .get(&admission.key)
+                        .expect("inserted locked reproposal Prepare admission")
+                        .capacity_bypass
+                );
+                adapter.record_ingress_delivery(admission);
+            }
+        };
     let admit_timeout_roster = |adapter: &mut SumeragiV2Adapter,
                                 wire_round: wire::ConsensusRound| {
         let roster_len = adapter.wire_context.roster.len();
@@ -108,7 +187,7 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
         }
     };
     let first_lock = install_lock(&mut adapter, 0xDB);
-    let ordinary_round = first_lock.0;
+    let ordinary_round = first_lock.1;
     let ingress_context = adapter.wire_context.clone();
     for index in 0..MAX_INGRESS_SEMANTIC_KEYS {
         let proposer = u32::try_from(index).expect("semantic table bound fits u32");
@@ -131,18 +210,19 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
             },
         );
     }
-    admit_locked_roster(&mut adapter, first_lock.0, first_lock.1, first_lock.2);
+    admit_locked_roster(&mut adapter, first_lock.0, first_lock.2, first_lock.3);
+    admit_locked_reproposal_prepare_roster(&mut adapter, first_lock.1, first_lock.2, first_lock.3);
     let roster_len = adapter.wire_context.roster.len();
-    admit_timeout_roster(&mut adapter, first_lock.0);
+    admit_timeout_roster(&mut adapter, first_lock.1);
     let adjacent_timeout_round = wire::ConsensusRound {
-        view: first_lock.0.view + reducer::FUTURE_TIMEOUT_VOTE_LOOKAHEAD,
-        ..first_lock.0
+        view: first_lock.1.view + reducer::FUTURE_TIMEOUT_VOTE_LOOKAHEAD,
+        ..first_lock.1
     };
     admit_timeout_roster(&mut adapter, adjacent_timeout_round);
     assert_eq!(
         adapter.ingress_equivocations.len(),
         semantic_ingress_capacity(roster_len),
-        "ordinary, exact-lock, and bounded TimeoutVote owners realize the complete live semantic bound"
+        "ordinary, exact-lock, locked-reproposal Prepare, and bounded TimeoutVote owners realize the complete live semantic bound"
     );
     let ingress = adapter
         .adapter_queue_statuses()
@@ -163,7 +243,7 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
             .values()
             .filter(|record| record.capacity_bypass)
             .count(),
-        roster_len * 3
+        roster_len * 4
     );
     let same_view_equivocations = adapter.ingress_equivocations.clone();
     let same_view_deliveries = adapter.ingress_deliveries.clone();
@@ -181,7 +261,7 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
         .retain(|key, _| !matches!(key, IngressSemanticKey::TimeoutVote { .. }));
     assert_eq!(
         adapter.ingress_equivocations.len(),
-        MAX_INGRESS_SEMANTIC_KEYS + roster_len
+        MAX_INGRESS_SEMANTIC_KEYS + roster_len * 2
     );
     let second_lock = install_lock(&mut adapter, 0xDC);
     adapter.prune_ingress_records();
@@ -196,10 +276,16 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
             .all(|record| !record.capacity_bypass)
     );
     assert!(adapter.ingress_deliveries.is_empty());
-    admit_locked_roster(&mut adapter, second_lock.0, second_lock.1, second_lock.2);
+    admit_locked_roster(&mut adapter, second_lock.0, second_lock.2, second_lock.3);
+    admit_locked_reproposal_prepare_roster(
+        &mut adapter,
+        second_lock.1,
+        second_lock.2,
+        second_lock.3,
+    );
     assert_eq!(
         adapter.ingress_equivocations.len(),
-        MAX_INGRESS_SEMANTIC_KEYS + roster_len,
+        MAX_INGRESS_SEMANTIC_KEYS + roster_len * 2,
         "capacity-bypass records from successive locks cannot accumulate"
     );
     assert_eq!(
@@ -208,7 +294,7 @@ fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
             .values()
             .filter(|record| record.capacity_bypass)
             .count(),
-        roster_len
+        roster_len * 2
     );
     let ingress = adapter
         .adapter_queue_statuses()

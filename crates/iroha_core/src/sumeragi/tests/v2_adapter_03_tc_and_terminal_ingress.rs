@@ -1867,8 +1867,8 @@ fn unowned_busy_exact_locked_vote_rolls_back_and_remains_retryable() {
 #[test]
 fn deferred_progress_capacity_matches_partition_geometry() {
     assert_eq!(deferred_progress_capacity(0), 3);
-    assert_eq!(deferred_progress_capacity(1), 5);
-    assert_eq!(deferred_progress_capacity(4), 11);
+    assert_eq!(deferred_progress_capacity(1), 6);
+    assert_eq!(deferred_progress_capacity(4), 15);
     assert_eq!(
         deferred_progress_capacity(wire::MAX_VALIDATORS_PER_HEIGHT),
         MAX_DEFERRED_PROGRESS_INPUTS
@@ -1879,7 +1879,7 @@ fn deferred_progress_capacity_matches_partition_geometry() {
         "invalid oversized rosters cannot expand the static adapter bound"
     );
     assert_eq!(semantic_ingress_capacity(0), MAX_INGRESS_SEMANTIC_KEYS);
-    assert_eq!(semantic_ingress_capacity(4), MAX_INGRESS_SEMANTIC_KEYS + 12);
+    assert_eq!(semantic_ingress_capacity(4), MAX_INGRESS_SEMANTIC_KEYS + 16);
     assert_eq!(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE, 11);
     assert_eq!(
         BTreeSet::from(ServicedCandidateStage::ALL.map(|stage| stage as u8)).len(),
@@ -1889,9 +1889,9 @@ fn deferred_progress_capacity_matches_partition_geometry() {
     assert_eq!(
         serviced_candidate_capacity(4),
         (MAX_INGRESS_SEMANTIC_KEYS
-            + 12
+            + 16
             + MAX_DEFERRED_INPUTS * 2
-            + 11
+            + 15
             + MAX_DEFERRED_INPUTS * 4
             + MAX_DEFERRED_INPUTS
             + CANDIDATE_LIFECYCLE_DURABLE_REPLAY_CAPACITY
@@ -1964,6 +1964,7 @@ fn deferred_progress_partition_owns_every_vote_and_certificate_class() {
             generation: tag.generation(),
             inserted_equivocation: false,
             locked_commit_progress: true,
+            locked_reproposal_prepare_progress: false,
         };
         assert!(
             adapter
@@ -1976,6 +1977,44 @@ fn deferred_progress_partition_owns_every_vote_and_certificate_class() {
                     Some(vote_wire_identity),
                 )
                 .expect("admit one locked Commit owner per frozen validator")
+                .is_some()
+        );
+        let mut wire_prepare_vote = wire_vote;
+        wire_prepare_vote.phase = wire::GlobalPhase::Prepare;
+        wire_prepare_vote.signature = vec![marker ^ 0x33];
+        let prepare_wire_identity = authenticated_wire_identity(
+            wire::ConsensusMessageV2Payload::Vote(wire_prepare_vote.clone()),
+        );
+        let prepare_vote = adapter
+            .registry
+            .vote_to_core(&wire_prepare_vote, &adapter.wire_context)
+            .expect("convert locked-reproposal Prepare capacity fixture");
+        let prepare_admission = IngressAdmission {
+            key: IngressSemanticKey::Vote {
+                round: wire_round,
+                phase: wire::GlobalPhase::Prepare,
+                signer,
+            },
+            fingerprint: IngressFingerprint::Vote(wire_round, locked_subject, locked_commitment),
+            generation: tag.generation(),
+            inserted_equivocation: false,
+            locked_commit_progress: false,
+            locked_reproposal_prepare_progress: true,
+        };
+        assert!(
+            adapter
+                .enqueue_deferred(
+                    reducer::Event::VoteReceived {
+                        tag,
+                        vote: prepare_vote,
+                    },
+                    true,
+                    DeferredPriority::Progress,
+                    Some(prepare_admission),
+                    None,
+                    Some(prepare_wire_identity),
+                )
+                .expect("admit one locked-reproposal Prepare owner per frozen validator")
                 .is_some()
         );
         let wire_timeout = wire::TimeoutVote {
@@ -2143,6 +2182,10 @@ fn deferred_progress_partition_owns_every_vote_and_certificate_class() {
     );
     for (class, expected) in [
         (DeferredProgressClass::LockedCommitVote, roster_len),
+        (
+            DeferredProgressClass::LockedReproposalPrepareVote,
+            roster_len,
+        ),
         (DeferredProgressClass::TimeoutVote, roster_len),
         (DeferredProgressClass::PrepareCertificate, 1),
         (DeferredProgressClass::CommitCertificate, 1),
@@ -2315,6 +2358,7 @@ fn protected_locked_vote_uses_reserved_capacity_without_evicting_certificate_own
         generation: tag.generation(),
         inserted_equivocation: false,
         locked_commit_progress: true,
+        locked_reproposal_prepare_progress: false,
     };
     let protected_event = reducer::Event::VoteReceived { tag, vote };
     assert_eq!(progress_rank(&protected_event), 0);

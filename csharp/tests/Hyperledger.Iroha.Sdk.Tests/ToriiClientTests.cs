@@ -77,7 +77,7 @@ public sealed partial class ToriiClientTests
         "hash:DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#F071";
     private static readonly string ToriiTransactionHashHex = new('c', 64);
     private static readonly string VpnQuoteIdHex = new('1', 64);
-    private static readonly string VpnSessionIdHex = new('5', 64);
+    private static readonly string VpnSessionIdHex = new('5', 32);
     private static readonly string VpnQuoteSessionIdHex = new('6', 32);
     private static readonly string VpnPaymentTransactionHashHex = new('2', 64);
     private static readonly string VpnMeteringPublicKeyHex = new('3', 64);
@@ -87,7 +87,7 @@ public sealed partial class ToriiClientTests
     private static readonly string VpnDescriptorCommitHex = string.Concat(Enumerable.Repeat("cd", 32));
     private static readonly string VpnRelayCertificateSha256Hex = string.Concat(Enumerable.Repeat("ef", 32));
     private static readonly string VpnDirectorySnapshotDigestHex = string.Concat(Enumerable.Repeat("42", 32));
-    private static readonly string VpnHelperTicketHex = "5356504e48543100" + new string('0', (696 - 8) * 2);
+    private static readonly string VpnHelperTicketHex = "5356504e48543100" + new string('0', (788 - 8) * 2);
     private static readonly string SoraFsManifestDigestHex = new('d', 64);
     private static readonly string SoraFsManifestIdHex = new('e', 64);
     private static readonly string ExplorerBlockHashHex = new('8', 64);
@@ -6727,7 +6727,6 @@ public sealed partial class ToriiClientTests
     [InlineData("session-get")]
     [InlineData("receipt-submit")]
     [InlineData("receipt-list")]
-    [InlineData("receipt-delete")]
     public async Task SignedVpnRoutesRequireCanonicalCredentialsBeforeDispatch(string operation)
     {
         using var handler = new RecordingHandler(_ =>
@@ -6748,7 +6747,6 @@ public sealed partial class ToriiClientTests
     [InlineData("session-get")]
     [InlineData("receipt-submit")]
     [InlineData("receipt-list")]
-    [InlineData("receipt-delete")]
     public async Task VpnRoutesRequireHttpsBeforeDispatch(string operation)
     {
         using var handler = new RecordingHandler(_ =>
@@ -6778,7 +6776,6 @@ public sealed partial class ToriiClientTests
     [InlineData("session-get", 201)]
     [InlineData("receipt-submit", 200)]
     [InlineData("receipt-list", 201)]
-    [InlineData("receipt-delete", 204)]
     public async Task VpnRoutesRejectUndocumentedSuccessStatuses(
         string operation,
         int unexpectedStatusCode)
@@ -6927,12 +6924,12 @@ public sealed partial class ToriiClientTests
             Total = 1,
         };
 
-        receiptItems[0] = ValidVpnReceipt() with { SessionId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" };
+        receiptItems[0] = ValidVpnReceipt() with { SessionId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" };
 
         AssertDetachedObjectList(
             () => receiptList.Items,
             receipt,
-            ValidVpnReceipt() with { SessionId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" });
+            ValidVpnReceipt() with { SessionId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" });
 
         var nullReceiptItemError = Assert.Throws<ArgumentException>(() => new ToriiVpnReceiptListResponse
         {
@@ -7066,7 +7063,7 @@ public sealed partial class ToriiClientTests
     public async Task CreateVpnSessionAsyncPostsQuotePaymentAndDeserializesSession()
     {
         const string quoteId = "abababababababababababababababababababababababababababababababab";
-        const string sessionId = "5656565656565656565656565656565656565656565656565656565656565656";
+        const string sessionId = "56565656565656565656565656565656";
         const string paymentTxHash = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
         const string meteringPublicKeyHex = "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef";
 
@@ -7140,7 +7137,7 @@ public sealed partial class ToriiClientTests
         Assert.Equal(paymentTxHash, session.PaymentTransactionHash);
         Assert.Equal("1000000.25", session.LeaseFee);
         Assert.Equal(VpnHelperTicketHex, session.HelperTicketHex);
-        Assert.Equal(1392, session.HelperTicketHex.Length);
+        Assert.Equal(1576, session.HelperTicketHex.Length);
     }
 
     public static IEnumerable<object[]> InvalidVpnSessionCreateRequests()
@@ -7194,8 +7191,8 @@ public sealed partial class ToriiClientTests
     public async Task GetVpnSessionAsyncReturnsNullOnNotFoundAndDeserializesActiveSession()
     {
         const string quoteId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        var missingSessionId = new string('4', 64);
-        var sessionId = new string('1', 64);
+        var missingSessionId = new string('4', 32);
+        var sessionId = new string('1', 32);
 
         var calls = 0;
         using var handler = new RecordingHandler(request =>
@@ -7260,77 +7257,6 @@ public sealed partial class ToriiClientTests
         Assert.Equal(quoteId, active.QuoteId);
     }
 
-    [Fact]
-    public async Task DeleteVpnSessionAsyncReturnsNullForNotFound()
-    {
-        var missingSessionId = new string('4', 64);
-        using var handler = new RecordingHandler(request =>
-        {
-            Assert.Equal(HttpMethod.Delete, request.Method);
-            Assert.Equal($"/v1/vpn/sessions/{missingSessionId}", request.RequestUri!.AbsolutePath);
-
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        });
-
-        using var client = CreateSignedVpnClient(handler);
-        var response = await client.DeleteVpnSessionAsync(missingSessionId, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Null(response);
-    }
-
-    [Fact]
-    public async Task DeleteVpnSessionAsyncDeserializesDisconnectedReceipt()
-    {
-        var quoteId = new string('6', 64);
-        var sessionId = new string('8', 64);
-        using var handler = new RecordingHandler(request =>
-        {
-            Assert.Equal(HttpMethod.Delete, request.Method);
-            Assert.Equal($"/v1/vpn/sessions/{sessionId}", request.RequestUri!.AbsolutePath);
-
-            return JsonResponse("""
-                {
-                  "session_id": "{{sessionId}}",
-                  "account_id": "{{VpnAccountId}}",
-                  "exit_class": "standard",
-                  "relay_endpoint": "/dns4/vpn.sora.org/tcp/443/wss",
-                  "meter_family": "vpn-standard",
-                  "connected_at_ms": 1700000000000,
-                  "disconnected_at_ms": 1700000000500,
-                  "duration_ms": 500,
-                  "bytes_in": 10,
-                  "bytes_out": 20,
-                  "status": "disconnected",
-                  "receipt_source": "torii",
-                  "quote_id": "{{quoteId}}",
-                  "payment_tx_hash": "7777777777777777777777777777777777777777777777777777777777777777",
-                  "fee_asset_id": "xor#universal.universal",
-                  "escrow_account_id": "{{VpnEscrowAccountId}}",
-                  "operator_account_id": "{{VpnOperatorAccountId}}",
-                  "lease_fee": "1000000.25",
-                  "earned_fee": "0",
-                  "refunded_fee": "1000000.25",
-                  "lease_id_hex": "{{quoteId}}",
-                  "settle_lease_instruction": null
-                }
-                """
-                .Replace("{{quoteId}}", quoteId)
-                .Replace("{{sessionId}}", sessionId)
-                .Replace("{{VpnAccountId}}", VpnAccountId)
-                .Replace("{{VpnEscrowAccountId}}", VpnEscrowAccountId)
-                .Replace("{{VpnOperatorAccountId}}", VpnOperatorAccountId));
-        });
-
-        using var client = CreateSignedVpnClient(handler);
-        var response = await client.DeleteVpnSessionAsync(sessionId, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.NotNull(response);
-        Assert.Equal(sessionId, response.SessionId);
-        Assert.Equal(VpnAccountId, response.AccountId);
-        Assert.Equal("disconnected", response.Status);
-        Assert.Equal("1000000.25", response.RefundedFee);
-    }
-
     public static IEnumerable<object[]> InvalidVpnResponses()
     {
         yield return new object[] { "profile", "relay_tls_spki_sha256_hex", " " + VpnSpkiSha256Hex, "surrounding whitespace" };
@@ -7342,12 +7268,15 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "quote", "metering_public_key_hex", new string('g', 64), "32-byte hex string" };
         yield return new object[] { "quote", "open_lease_instruction.payload_hex", "0xcafe", "even-length hex string" };
         yield return new object[] { "quote", "open_lease_instruction.payload_hex", "CAFE", "lowercase" };
-        yield return new object[] { "session-create", "session_id", "session-1", "32-byte hex string" };
+        yield return new object[] { "session-create", "session_id", "session-1", "16-byte hex string" };
+        yield return new object[] { "session-create", "session_id", new string('a', 64), "16-byte hex string" };
+        yield return new object[] { "receipt-submit", "session_id", new string('b', 64), "16-byte hex string" };
         yield return new object[] { "session-create", "helper_ticket_hex", string.Empty, "non-empty string" };
-        yield return new object[] { "session-create", "helper_ticket_hex", "0x" + VpnHelperTicketHex, "696-byte hex string" };
-        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex.ToUpperInvariant(), "lowercase 696-byte hex string" };
-        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex[..^1], "696-byte hex string" };
-        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex[..^2], "696-byte hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", "0x" + VpnHelperTicketHex, "788-byte hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex.ToUpperInvariant(), "lowercase 788-byte hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex[..1456], "788-byte hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex[..^1], "788-byte hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex[..^2], "788-byte hex string" };
         yield return new object[] { "session-get", "payment_tx_hash", VpnPaymentTransactionHashHex[..32] + " " + VpnPaymentTransactionHashHex[32..], "whitespace" };
         yield return new object[] { "session-get", "payment_tx_hash", new string('A', 64), "lowercase" };
         yield return new object[] { "session-get", "relay_tls_spki_sha256_hex", "0x" + VpnSpkiSha256Hex, "32-byte hex string" };
@@ -7356,7 +7285,6 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "receipt-list", "items[0].payment_tx_hash", new string('z', 64), "32-byte hex string" };
         yield return new object[] { "receipt-list", "items[0].payment_tx_hash", new string('A', 64), "lowercase" };
         yield return new object[] { "receipt-list", "settle_lease_instruction.payload_hex", "ca fe", "whitespace" };
-        yield return new object[] { "receipt-delete", "settle_lease_instruction.payload_hex", "caf", "even-length hex string" };
     }
 
     [Theory]
@@ -7775,10 +7703,11 @@ public sealed partial class ToriiClientTests
         yield return new object[] { "session", "bytes_out", RemoveTopLevelJsonField(VpnSessionRawResponseJson("bytes_out", 456), "bytes_out"), "must not be null" };
         yield return new object[] { "session", "helper_ticket_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex), "helper_ticket_hex"), "must not be null" };
         yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", null), "must not be null" };
-        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", "0x" + VpnHelperTicketHex), "696-byte hex string" };
-        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex.ToUpperInvariant()), "lowercase 696-byte hex string" };
-        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex[..^1]), "696-byte hex string" };
-        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex[..^2]), "696-byte hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", "0x" + VpnHelperTicketHex), "788-byte hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex.ToUpperInvariant()), "lowercase 788-byte hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex[..1456]), "788-byte hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex[..^1]), "788-byte hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex[..^2]), "788-byte hex string" };
         yield return new object[] { "session", "status", VpnSessionRawResponseJson("status", null), "must not be null" };
         yield return new object[] { "receipt", "vpn receipt.audit", VpnReceiptUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "receipt", "vpn receipt.settle_lease_instruction.audit", VpnReceiptSettleInstructionUnknownExtensionDuplicateJson(), "not allowed" };
@@ -8055,13 +7984,16 @@ public sealed partial class ToriiClientTests
         yield return new object?[] { "quote", "MeteringPublicKeyHex", new string('g', 64) };
         yield return new object?[] { "quote", "OpenLeaseInstruction.PayloadHex", "CAFE" };
         yield return new object?[] { "session", "SessionId", "session-1" };
+        yield return new object?[] { "session", "SessionId", new string('a', 64) };
         yield return new object?[] { "session", "ConnectedAtMilliseconds", 0UL };
         yield return new object?[] { "session", "RoutePushes[0]", "10.0.0.0 /8" };
         yield return new object?[] { "session", "HelperTicketHex", "0x" + VpnHelperTicketHex };
         yield return new object?[] { "session", "HelperTicketHex", VpnHelperTicketHex.ToUpperInvariant() };
+        yield return new object?[] { "session", "HelperTicketHex", VpnHelperTicketHex[..1456] };
         yield return new object?[] { "session", "HelperTicketHex", VpnHelperTicketHex[..^1] };
         yield return new object?[] { "session", "HelperTicketHex", VpnHelperTicketHex[..^2] };
         yield return new object?[] { "receipt", "DisconnectedAtMilliseconds", 0UL };
+        yield return new object?[] { "receipt", "SessionId", new string('b', 64) };
         yield return new object?[] { "receipt", "LeaseIdHex", string.Empty };
         yield return new object?[] { "receipt", "LeaseIdHex", "0x" + VpnQuoteIdHex };
         yield return new object?[] { "receipt", "SettleLeaseInstruction.PayloadHex", "CAFE" };
@@ -9202,7 +9134,6 @@ public sealed partial class ToriiClientTests
         var operations = new (string Operation, string ParamName)[]
         {
             ("vpn-get", "sessionId"),
-            ("vpn-delete", "sessionId"),
             ("sorafs-cid-lookup", "cid"),
             ("sorafs-open-content", "cid"),
             ("sorafs-get-content", "cid"),
@@ -9227,15 +9158,15 @@ public sealed partial class ToriiClientTests
         var hexRouteOperations = new (string Operation, string ParamName)[]
         {
             ("vpn-get", "sessionId"),
-            ("vpn-delete", "sessionId"),
         };
         var invalidSessionIds = new (string Value, string ExpectedMessage)[]
         {
             ("value with-space", "whitespace"),
             ("value\u00A0with-nbsp", "whitespace"),
-            ("session-1", "32-byte hex string"),
-            (new string('g', 64), "32-byte hex string"),
-            (new string('a', 63), "32-byte hex string"),
+            ("session-1", "16-byte hex string"),
+            (new string('g', 32), "16-byte hex string"),
+            (new string('a', 31), "16-byte hex string"),
+            (new string('a', 64), "16-byte hex string"),
         };
         foreach (var (operation, paramName) in hexRouteOperations)
         {
@@ -21376,7 +21307,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return operation switch
         {
             "vpn-get" => client.GetVpnSessionAsync(value!),
-            "vpn-delete" => client.DeleteVpnSessionAsync(value!),
             "sorafs-cid-lookup" => client.GetSoraFsCidLookupAsync(value!),
             "sorafs-open-content" => client.OpenSoraFsCidContentAsync(value!),
             "sorafs-get-content" => client.GetSoraFsCidContentAsync(value!),
@@ -21422,7 +21352,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 LeaseIdHex = VpnQuoteIdHex,
             }),
             "receipt-list" => client.ListVpnReceiptsAsync(),
-            "receipt-delete" => client.DeleteVpnSessionAsync(VpnSessionIdHex),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown VPN response operation."),
         };
     }
@@ -21432,7 +21361,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return operation switch
         {
             "quote" or "session-create" or "receipt-submit" => HttpStatusCode.Created,
-            "profile" or "session-get" or "receipt-list" or "receipt-delete" => HttpStatusCode.OK,
+            "profile" or "session-get" or "receipt-list" => HttpStatusCode.OK,
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown VPN response operation."),
         };
     }
@@ -21545,6 +21474,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ("receipt", "DisconnectedAtMilliseconds") => ValidVpnReceipt() with
             {
                 DisconnectedAtMilliseconds = RequiredUInt64Value(value),
+            },
+            ("receipt", "SessionId") => ValidVpnReceipt() with
+            {
+                SessionId = RequiredStringValue(value),
             },
             ("receipt", "LeaseIdHex") => ValidVpnReceipt() with
             {
@@ -28280,19 +28213,16 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             case ("session-create", "session_id"):
             case ("session-get", "session_id"):
             case ("receipt-submit", "session_id"):
-            case ("receipt-delete", "session_id"):
                 sessionId = value;
                 break;
             case ("session-create", "quote_id"):
             case ("session-get", "quote_id"):
             case ("receipt-submit", "quote_id"):
-            case ("receipt-delete", "quote_id"):
                 quoteId = value;
                 break;
             case ("session-create", "payment_tx_hash"):
             case ("session-get", "payment_tx_hash"):
             case ("receipt-submit", "payment_tx_hash"):
-            case ("receipt-delete", "payment_tx_hash"):
             case ("receipt-list", "items[0].payment_tx_hash"):
                 paymentTxHash = value;
                 break;
@@ -28301,12 +28231,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 helperTicketHex = value;
                 break;
             case ("receipt-submit", "lease_id_hex"):
-            case ("receipt-delete", "lease_id_hex"):
             case ("receipt-list", "lease_id_hex"):
                 receiptLeaseIdHex = value;
                 break;
             case ("receipt-submit", "settle_lease_instruction.payload_hex"):
-            case ("receipt-delete", "settle_lease_instruction.payload_hex"):
             case ("receipt-list", "settle_lease_instruction.payload_hex"):
                 settleLeasePayloadHex = value;
                 break;
@@ -28355,7 +28283,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 paymentTxHash,
                 relayTlsSpkiSha256Hex,
                 helperTicketHex),
-            "receipt-submit" or "receipt-delete" => VpnReceiptResponseJson(
+            "receipt-submit" => VpnReceiptResponseJson(
                 sessionId,
                 quoteId,
                 paymentTxHash,

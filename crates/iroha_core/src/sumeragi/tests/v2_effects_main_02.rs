@@ -257,6 +257,11 @@ fn retained_effect_debt_admits_only_pacemaker_progress_leader_wires() {
         fixture.manifest.subject,
         fixture_execution_commitment(),
     ));
+    executor.runtime.protected_prepare = Some((
+        fixture.manifest.round,
+        fixture.manifest.subject,
+        fixture_execution_commitment(),
+    ));
 
     let sender = fixture.context.roster[0].validator.clone();
     let can_drain = |executor: &V2EffectExecutor<FakeRuntime>,
@@ -287,6 +292,13 @@ fn retained_effect_debt_admits_only_pacemaker_progress_leader_wires() {
     prepare_vote.signature = vec![0x73];
     let prepare_vote =
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(prepare_vote));
+    let mut mismatched_prepare_vote = vote(&fixture);
+    mismatched_prepare_vote.subject.block_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"effects retained-debt mismatched Prepare"));
+    mismatched_prepare_vote.signature = vec![0x76];
+    let mismatched_prepare_vote = wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::Vote(mismatched_prepare_vote),
+    );
     let mut exact_commit_vote = vote(&fixture);
     exact_commit_vote.phase = wire::GlobalPhase::Commit;
     exact_commit_vote.signature = vec![0x74];
@@ -319,12 +331,16 @@ fn retained_effect_debt_admits_only_pacemaker_progress_leader_wires() {
             "the exact active-lock CommitVote reaches Progress across {debt} debt"
         );
         assert!(
+            can_drain(executor, &prepare_vote),
+            "the exact current locked-reproposal PrepareVote reaches Progress across {debt} debt"
+        );
+        assert!(
             !can_drain(executor, &proposal),
             "Proposal remains behind {debt} reducer-effect order"
         );
         assert!(
-            !can_drain(executor, &prepare_vote),
-            "PrepareVote remains ordinary ingress across {debt} debt"
+            !can_drain(executor, &mismatched_prepare_vote),
+            "an unrelated PrepareVote remains ordinary ingress across {debt} debt"
         );
         assert!(
             !can_drain(executor, &mismatched_commit_vote),

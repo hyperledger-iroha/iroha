@@ -98,7 +98,6 @@ fn bench_batch_verify(c: &mut Criterion) {
                     black_box(&message_refs),
                     black_box(&signature_refs),
                     black_box(&parsed_public_keys),
-                    [0u8; 32],
                     black_box(&mut scratch),
                 )
                 .unwrap();

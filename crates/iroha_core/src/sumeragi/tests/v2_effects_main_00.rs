@@ -172,6 +172,11 @@ struct FakeRuntime {
         wire::BlockSubject,
         wire::ExecutionCommitment,
     )>,
+    protected_prepare: Option<(
+        wire::ConsensusRound,
+        wire::BlockSubject,
+        wire::ExecutionCommitment,
+    )>,
     fail_enqueue: bool,
     fail_enqueue_hits: usize,
     panic_step: bool,
@@ -193,6 +198,7 @@ struct FakeRuntime {
     terminal_body_candidate_commits: usize,
     external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
     external_lifecycle_owner_capacity: Option<usize>,
+    live_clocks_armed: bool,
     active_view_producer_retained: bool,
     completed_proposal_fanouts: Vec<(wire::ConsensusRound, RuntimeEffectOwnership)>,
     leader_wire_terminal_batches: VecDeque<Vec<LeaderWireRuntimeTerminal>>,
@@ -326,6 +332,10 @@ impl FakeRuntime {
     }
 }
 impl EffectRuntime for FakeRuntime {
+    fn lifecycle_live_clocks_are_armed(&self) -> bool {
+        self.live_clocks_armed
+    }
+
     fn can_admit_network_message_with_ingress_ownership(
         &self,
         message: &wire::ConsensusMessageV2,
@@ -358,6 +368,16 @@ impl EffectRuntime for FakeRuntime {
                 wire::ConsensusMessageV2Payload::Vote(vote),
                 Some((round, subject, execution_commitment)),
             ) if vote.phase == wire::GlobalPhase::Commit
+                && vote.round == *round
+                && vote.proposal_round == *round
+                && vote.subject == *subject
+                && vote.execution_commitment == *execution_commitment
+        ) || matches!(
+            (payload, self.protected_prepare.as_ref()),
+            (
+                wire::ConsensusMessageV2Payload::Vote(vote),
+                Some((round, subject, execution_commitment)),
+            ) if vote.phase == wire::GlobalPhase::Prepare
                 && vote.round == *round
                 && vote.proposal_round == *round
                 && vote.subject == *subject
@@ -1090,6 +1110,7 @@ struct FakeServices {
     )>,
     apply_tasks: Vec<ApplyTask>,
     entered_views: Vec<EventTag>,
+    entered_view_locks: Vec<Option<(wire::ConsensusRound, wire::BlockSubject)>>,
     equivocations: Vec<wire::SumeragiV2Equivocation>,
     invalid_bodies: Vec<wire::BlockSubject>,
     statuses: Vec<EffectExecutorStatus>,
@@ -1301,9 +1322,11 @@ impl V2EffectServices for FakeServices {
         &mut self,
         tag: EventTag,
         _certificate: wire::TimeoutCertificate,
+        protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     ) -> Result<(), Self::Error> {
         self.check("view")?;
         self.entered_views.push(tag);
+        self.entered_view_locks.push(protected_lock);
         Ok(())
     }
     fn report_equivocation(

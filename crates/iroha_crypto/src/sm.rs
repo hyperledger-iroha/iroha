@@ -20,10 +20,7 @@ use signature::Signer;
 use sm2::{
     PublicKey as Sm2EcPublicKey, SecretKey,
     dsa::{Signature as Sm2RawSignature, SigningKey, VerifyingKey},
-    elliptic_curve::{
-        rand_core::{CryptoRng, RngCore},
-        sec1::{Coordinates, ToEncodedPoint},
-    },
+    elliptic_curve::sec1::{Coordinates, ToEncodedPoint},
     pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey},
 };
 use sm3::digest::Digest as _;
@@ -470,18 +467,6 @@ impl Sm2PrivateKey {
     pub fn try_random_from_os(distid: impl Into<String>) -> Result<Self, ParseError> {
         let mut rng = rand::rngs::OsRng;
         Self::try_random(distid, &mut rng)
-    }
-    /// Generate a random SM2 private key using an infallible compatibility RNG.
-    ///
-    /// # Errors
-    /// Returns [`ParseError`] when the distinguishing identifier is invalid.
-    pub fn random<R>(distid: impl Into<String>, rng: &mut R) -> Result<Self, ParseError>
-    where
-        R: CryptoRng + RngCore,
-    {
-        let distid = distid.into();
-        let secret = SecretKey::random(rng);
-        Self::from_secret_key(distid, &secret)
     }
     /// Deterministically derive an SM2 private key from an arbitrary seed.
     ///
@@ -2786,12 +2771,9 @@ pub mod openssl_sm {
 mod tests {
     use super::{sm_accel, *};
     use hex::decode as hex_decode;
-    use rand_core::{TryCryptoRng, TryRngCore};
+    use rand_core::{OsRng, TryCryptoRng, TryRngCore};
     use signature::hazmat::PrehashVerifier;
-    use sm2::elliptic_curve::{
-        rand_core::OsRng,
-        sec1::{Coordinates, ToEncodedPoint},
-    };
+    use sm2::elliptic_curve::sec1::{Coordinates, ToEncodedPoint};
     use sm3::Sm3;
     use std::str::FromStr;
     const ANNEX_SIG_HEX: &str = "40F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D16FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7";
@@ -3040,7 +3022,7 @@ mod tests {
     #[test]
     fn sm2_public_key_pem_roundtrip() {
         let mut rng = OsRng;
-        let private = Sm2PrivateKey::random("custom-distid", &mut rng).expect("valid distid");
+        let private = Sm2PrivateKey::try_random("custom-distid", &mut rng).expect("valid distid");
         let public = private.public_key();
         let pem = public
             .to_public_key_pem()
@@ -3088,7 +3070,7 @@ mod tests {
     fn sm2_compute_z_aligns_with_signing_key() {
         let mut rng = OsRng;
         let distid = "device:alpha";
-        let private = Sm2PrivateKey::random(distid, &mut rng).expect("valid distid");
+        let private = Sm2PrivateKey::try_random(distid, &mut rng).expect("valid distid");
         let public = private.public_key();
         let za = public.compute_z(distid).expect("compute ZA");
         let message = b"za alignment check";
@@ -3334,8 +3316,8 @@ mod tests {
     #[test]
     fn sm2_random_private_key_roundtrip() {
         let mut rng = OsRng;
-        let private =
-            Sm2PrivateKey::random(Sm2PublicKey::DEFAULT_DISTID, &mut rng).expect("valid distid");
+        let private = Sm2PrivateKey::try_random(Sm2PublicKey::DEFAULT_DISTID, &mut rng)
+            .expect("valid distid");
         let message = b"random sm2";
         let signature = private.sign(message);
         let public = private.public_key();
@@ -3502,10 +3484,10 @@ mod tests {
         );
     }
     #[test]
-    fn sm2_random_rejects_invalid_distid() {
+    fn sm2_try_random_rejects_invalid_distid() {
         let mut rng = OsRng;
         let distid = "a".repeat(8192);
-        assert!(Sm2PrivateKey::random(distid, &mut rng).is_err());
+        assert!(Sm2PrivateKey::try_random(distid, &mut rng).is_err());
     }
     #[cfg(not(feature = "ffi_import"))]
     #[test]
@@ -3559,7 +3541,8 @@ mod tests {
     fn sm2_signature_der_handles_high_bit_components() {
         let mut rng = OsRng;
         for attempt in 0..1024usize {
-            let private = Sm2PrivateKey::random("interop-highbit", &mut rng).expect("valid distid");
+            let private =
+                Sm2PrivateKey::try_random("interop-highbit", &mut rng).expect("valid distid");
             let message = format!("attempt-{attempt}").into_bytes();
             let signature = private.sign(&message);
             if signature.r[0] & 0x80 != 0 || signature.s[0] & 0x80 != 0 {

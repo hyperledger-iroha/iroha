@@ -41,9 +41,9 @@ the full RFC is authored.
   re-exports those helpers so runtime components, fixture generation, and SDK tests share
   one implementation.
 - `iroha_p2p` drives its outbound and inbound QUIC/TCP handshakes through the same
-  module (`build_client_hello`, `process_client_hello`, `client_handle_relay_hello`,
-  `relay_finalize_handshake`), so the transport derives the exact transcript hash,
-  ML-KEM shared secret, and telemetry payloads published in the fixtures.
+  module (`build_client_hello`, `process_client_hello`, and
+  `client_handle_relay_hello`), so the transport derives the exact transcript
+  hash, ML-KEM shared secret, and telemetry payloads published in the fixtures.
 ## Handshake Message Flow
 
 ### Transcript Hashing (Draft)
@@ -636,7 +636,7 @@ The complete encoded vector is limited to 4,096 bytes.
 | 0x0101     | `snnet.pqkem`        | `kem_id:u8` `flags:u8`                                                         | `flags & 0x01` marks the KEM as *required* for the advertising side. |
 | 0x0102     | `snnet.pqsig`        | `sig_id:u8` `flags:u8`                                                         | V1 accepts only Dilithium3 (`sig_id = 0x01`), so a successful vector contains exactly one entry. |
 | 0x0103     | `snnet.transcript_commit` | `sha256` digest (32 bytes) of the descriptor-advertised capabilities.       | Binds directory metadata into the session. |
-| 0x0104     | `snnet.suite_list`   | `ordered:u8[]` handshake suite identifiers (first byte MSB marks *required*) | Values: `0x04` = `nk2.hybrid.v1`, `0x05` = `nk3.pq_forward_secure.v1`; old pre-release identifiers `0x02`/`0x03` are rejected as unsupported. Other unknown identifiers are ignored for negotiation. Clients list suites in preference order; relays intersect and select the client's highest-ranked common entry. Negotiation aborts when the TLV is missing or no overlap exists. |
+| 0x0104     | `snnet.suite_list`   | `ordered:u8[]` handshake suite identifiers (first byte MSB marks *required*) | Values: `0x04` = `nk2.hybrid.v1`, `0x05` = `nk3.pq_forward_secure.v1`. The list must be non-empty and contain each identifier at most once; every other identifier, including the retired pre-release `0x02`/`0x03` values, rejects the entire capability. Clients list suites in preference order; relays intersect and select the client's highest-ranked common entry. Negotiation aborts when the TLV is missing or no overlap exists. |
 | 0x0201     | `snnet.role`         | `role_bits:u8` (`0x01` guard, `0x02` middle, `0x04` exit)                      | Relays MUST emit exactly one entry; clients omit. |
 | 0x0202     | `snnet.padding`      | `u16` padded cell size (little-endian)                                         | Used to negotiate circuit padding buckets. |
 | 0x0203     | `snnet.constant_rate` | Exactly four bytes: `version:u8` `flags:u8` `cell_bytes:u16` (little-endian) | Advertises SNNet-17A pacing support; v1 requires `cell_bytes = 1024`, and `flags & 0x01` requires strict constant-rate transport. |
@@ -660,7 +660,8 @@ automatically. Negotiation proceeds as follows:
 > (and the client-side `sorafs.rollout_phase`) according to that playbook so
 > the SNNet-16G promotion progresses in lock-step across relays and SDKs.
 
-1. Parse both vectors, discard duplicates, and ignore unknown suite identifiers while preserving order.
+1. Parse both vectors, reject unknown, retired, or duplicate suite identifiers,
+   and preserve the declared preference order.
 2. Identify the first suite in the client list that also appears in the relay
    list; that suite is selected.
 3. Emit downgrade telemetry if the chosen suite differs from either party’s
@@ -681,17 +682,19 @@ Supported suite identifiers are:
 | 0x04 | `nk2.hybrid.v1`          | Two-message hybrid handshake that carries classical and ML-KEM material in the first flight. |
 | 0x05 | `nk3.pq_forward_secure.v1` | Forward-secure variant with dual ML-KEM commitments and post-handshake rekey. |
 
-This first-release tree does not accept the pre-release suite identifiers
-`0x02` or `0x03`, and it does not derive legacy transcript/session material.
+The first-release suite registry contains only `0x04` and `0x05`. Parsers reject
+every other identifier, including the retired pre-release `0x02` and `0x03`
+values, and reject duplicate entries rather than deriving alternate transcript
+or session material.
 
 `NK2` and `NK3` now ship on the runtime path. When either suite is negotiated
 the relay responds with the new hybrid/PQFS frames and the client derives the
-session key immediately—no `ClientFinish` frame is exchanged. The helper APIs
-(`build_client_hello`, `process_client_hello`, `client_handle_relay_hello`, and
-`relay_finalize_handshake`) still return an optional finish payload, but it is
-always `None` for the current suites. Deterministic unit tests exercise each
-path and assert that both peers produce identical transcript hashes and
-session keys for NK2 and NK3 handshakes.【crates/iroha_crypto/src/soranet/handshake.rs:4720】【crates/iroha_crypto/src/soranet/handshake.rs:5290】
+session key immediately. `process_client_hello` returns the relay response and
+the relay's completed session, while `client_handle_relay_hello` returns the
+client's completed session. There is no finish payload, relay-finish API, or
+third-flight state in V1. Deterministic unit tests exercise each path and assert
+that both peers produce identical transcript hashes and session keys for NK2
+and NK3 handshakes.
 
 ##### NK2 hybrid (`nk2.hybrid.v1`) state machine
 
@@ -709,9 +712,10 @@ sequenceDiagram
     Note over C,R: ee = DH(e_c,e_r), es = DH(e_c,s_r), se = DH(s_c,e_r); reject any all-zero output<br/>HKDF salt = transcript_hash<br/>session info = "soranet.handshake.nk2.session.v1"<br/>confirm info = "soranet.handshake.nk2.confirm.v1"<br/>IKM order = X25519 domain, ee, es, se, primary_shared, transcript_hash (all LP64)
 ```
 
-- Relay-only confirmation lets the client detect tampering without
-  re-transmitting `ClientFinish`. Runtime coverage ensures the relay skips the
-  third flight and that negotiated warnings stay empty when suite lists align.
+- Relay-only confirmation lets the client detect tampering and complete the
+  session from the relay response. Runtime coverage compares the two peers'
+  completed session material and ensures negotiated warnings stay empty when
+  suite lists align.
 
 ##### NK3 forward-secure (`nk3.pq_forward_secure.v1`) state machine
 
@@ -828,8 +832,10 @@ diverge across suites even when the same nonces circulate.
 `HybridClientInit` and `PqfsClientCommit` carry key agreement and negotiation
 material only; they contain no inert signature bytes. Each relay response ends
 with the exact directory Ed25519 identity and a 64-byte Ed25519 signature. The
-signature covers length-delimited domain, version, and suite identifiers; the
-complete client frame; the complete relay response body preceding
+identity has one V1 encoding: `algorithm_tag:u8 || public_key_payload`. For
+Ed25519 this is `0x00 || 32-byte public key`; the untagged 32-byte form is
+rejected. The signature covers length-delimited domain, version, and suite
+identifiers; the complete client frame; the complete relay response body preceding
 authentication; the transcript hash; the relay identity; the QUIC ALPN; and the
 TLS server name. Clients compare the embedded identity with the
 directory-selected public key and verify the signature before accepting the

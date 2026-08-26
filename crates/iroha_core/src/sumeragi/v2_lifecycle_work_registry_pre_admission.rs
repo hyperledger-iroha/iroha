@@ -223,6 +223,12 @@ impl PreparedLifecycleOutputExecutionV1 {
         execute(&self.effect, &self.ownership)
     }
 
+    /// Whether the serialized runtime authorized a fresh physical periodic resend.
+    pub(super) fn is_periodic_retransmit_broadcast(&self) -> bool {
+        self.ownership
+            .exactly_binds_periodic_retransmit_broadcast(&self.effect)
+    }
+
     /// Restore the exact bounded handoff when lifecycle ordering defers I/O.
     pub(super) fn into_pending(self) -> PendingLifecycleOutputAdmissionV1 {
         let pending = self.exact_pending_binding();
@@ -1158,6 +1164,48 @@ impl DurableStoreTerminalRetrySealV1 {
             durable_receipt: durable_receipt.clone(),
             ownership: ownership.clone(),
         })
+    }
+
+    /// Recover the inert Store predecessor already carried by one exact
+    /// reducer-produced Validate owner.
+    ///
+    /// This inverse is deliberately closed over the reviewed Store-to-Validate
+    /// projection: rebuilding the Store binding and projecting it forward must
+    /// reproduce the byte-identical Validate binding. The returned value owns
+    /// no executable row or replay evidence; it can only authenticate a later
+    /// same-body Store retry against the physical lifecycle root which emitted
+    /// `BodyStored`.
+    pub(in crate::sumeragi) fn seal_validate_predecessor(
+        validate_effect: &AdapterEffect,
+        validate_ownership: &RuntimeEffectOwnership,
+        durable_receipt: &DurableBodyReceipt,
+    ) -> Option<Self> {
+        let AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } = validate_effect
+        else {
+            return None;
+        };
+        let store_effect = AdapterEffect::StoreBody {
+            tag: *tag,
+            round: *round,
+            subject: *subject,
+        };
+        let validate_pending = validate_ownership
+            .exact_pending_adapter_effect_binding(validate_effect)
+            .ok()?;
+        let projected_store_pending = validate_pending
+            .project_validate_store_predecessor(validate_effect, &store_effect)?;
+        let store_ownership = validate_ownership
+            .rebind_as_inherited_adapter_effect(&store_effect)
+            .ok()?;
+        let store_pending = store_ownership
+            .exact_pending_adapter_effect_binding(&store_effect)
+            .ok()?;
+        (store_pending == projected_store_pending).then_some(())?;
+        Self::seal_exact(&store_effect, &store_ownership, durable_receipt)
     }
 
     fn validates(&self) -> bool {
@@ -2857,6 +2905,18 @@ impl PreparedDurableValidateAdmissionV1 {
                     durable_receipt,
                     expected_manifest_hash,
                     replay_evidence: DurableValidateReplayEvidenceV1::RecoveredStandalone(
+                        replay_evidence,
+                    ),
+                })
+            }
+            DurableValidateReplayEvidenceV1::RecoveredDecision(replay_evidence) => {
+                Err(DurableValidateBody {
+                    address,
+                    effect,
+                    pending,
+                    durable_receipt,
+                    expected_manifest_hash,
+                    replay_evidence: DurableValidateReplayEvidenceV1::RecoveredDecision(
                         replay_evidence,
                     ),
                 })

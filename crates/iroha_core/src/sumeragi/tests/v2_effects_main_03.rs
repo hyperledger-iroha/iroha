@@ -131,16 +131,19 @@ fn retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it() {
         .expect("stage one view-independent locked-body cache");
     assert_eq!(executor.ready_body_bytes, body_len * 2);
     assert!(executor.body_pipeline_owners.is_empty());
+    let next_tag = EventTag::new(1, 1, Generation::new(41));
+    executor.runtime.round_tag = Some(next_tag);
     executor
         .consume_effects(
             vec![AdapterEffect::EnterView {
-                tag: EventTag::new(1, 1, Generation::new(41)),
+                tag: next_tag,
                 certificate: timeout_at_view(&fixture, 0),
                 protected_lock: Some(protected_lock.clone()),
             }],
             &mut services,
         )
         .expect("an omitted TC high preserves the effective local lock cache");
+    assert_eq!(services.entered_view_locks.last(), Some(&Some(protected)));
     assert_eq!(executor.ready_body_bytes, body_len * 2);
     assert!(executor.retained_locked_body.is_some());
     assert_eq!(executor.ready_bodies.len(), 1);
@@ -151,8 +154,8 @@ fn retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it() {
                 round: fixture.manifest.round,
                 subject: fixture.manifest.subject,
                 manifest: Some(fixture.manifest.clone()),
-                certified_sources: Vec::new(),
-                certificate: None,
+                certified_sources: certified_sources(&fixture, &protected_lock),
+                certificate: Some(protected_lock.clone()),
             }],
             &mut services,
         )
@@ -164,16 +167,19 @@ fn retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it() {
             if *completion_tag == EventTag::new(1, 1, Generation::new(41))
                 && manifest == &fixture.manifest
     ));
+    let following_tag = EventTag::new(1, 2, Generation::new(42));
+    executor.runtime.round_tag = Some(following_tag);
     executor
         .consume_effects(
             vec![AdapterEffect::EnterView {
-                tag: EventTag::new(1, 2, Generation::new(42)),
+                tag: following_tag,
                 certificate: timeout_at_view(&fixture, 1),
                 protected_lock: Some(protected_lock),
             }],
             &mut services,
         )
         .expect("the queued completion rebinds on repeated same-lock churn");
+    assert_eq!(services.entered_view_locks.last(), Some(&Some(protected)));
     assert!(matches!(
         executor.runtime.completions.as_slice(),
         [RuntimeCompletion::BodyAvailable(completion_tag, manifest)]

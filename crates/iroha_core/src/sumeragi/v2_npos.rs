@@ -1,28 +1,39 @@
-//! Authenticated, bounded NPoS VRF lifecycle for the authoritative v2 runner.
+//! Retired NPoS commit/reveal VRF boundary and historical test fixtures.
 //!
-//! VRF observations are height-local proposal inputs. They never mutate the
-//! world state directly: the only persistence path is a
-//! [`VrfEpochRecord`] carried by a finalized block's
-//! [`NposConsensusEffects`](iroha_data_model::consensus::NposConsensusEffects).
+//! Every non-test node build retains only a tombstone ingress boundary that
+//! rejects the old wire messages and rejects nonempty legacy consensus effects.
+//! The former producer, aggregator, record validator, and entropy construction
+//! are compiled only for historical regression fixtures. Finalized global
+//! threshold-beacon pulses are the sole live consensus randomness source.
+#[cfg(test)]
 use super::consensus::{NPOS_TAG, v2_vrf_commit_preimage, v2_vrf_reveal_preimage};
 use crate::state::{State, WorldReadOnly};
-use iroha_crypto::{Hash, KeyPair, PrivateKey, Signature};
+use iroha_crypto::KeyPair;
+#[cfg(test)]
+use iroha_crypto::{Hash, PrivateKey, Signature};
+#[cfg(test)]
+use iroha_data_model::consensus::{
+    VrfCommitProof, VrfLateRevealRecord, VrfParticipantRecord, VrfRevealProof,
+};
 use iroha_data_model::{
     block::consensus_v2 as wire,
-    consensus::{
-        NposConsensusEffects, VrfCommitProof, VrfEpochRecord, VrfLateRevealRecord,
-        VrfParticipantRecord, VrfRevealProof,
-    },
+    consensus::{NposConsensusEffects, VrfEpochRecord},
     peer::PeerId,
 };
+#[cfg(test)]
 use mv::storage::StorageReadOnly;
+#[cfg(test)]
 use norito::codec::{Decode, Encode};
+#[cfg(test)]
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 use wire::{VrfCommit, VrfReveal};
+#[cfg(test)]
 use zeroize::Zeroizing;
 /// Domain separator for deterministic NPoS VRF input derivation.
+#[cfg(test)]
 const VRF_INPUT_DOMAIN: &[u8] = b"iroha:npos:vrf:input:v1";
+#[cfg(test)]
 fn derive_vrf_material_from_key(
     network_id: &iroha_data_model::NetworkId,
     private_key: &PrivateKey,
@@ -47,6 +58,7 @@ fn derive_vrf_material_from_key(
     let commitment: [u8; 32] = Hash::new(reveal).into();
     Ok((reveal, commitment, proof.encode()))
 }
+#[cfg(test)]
 fn vrf_input(
     network_id: &iroha_data_model::NetworkId,
     epoch: u64,
@@ -65,10 +77,13 @@ fn vrf_input(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum V2VrfIngressOutcome {
     /// A new in-window commitment or reveal was retained.
+    #[cfg(test)]
     Accepted,
     /// A valid reveal after the reveal deadline was retained for penalty relief.
+    #[cfg(test)]
     AcceptedLate,
     /// The exact already-retained observation was received again.
+    #[cfg(test)]
     Duplicate,
     /// The message failed a frozen-context, cryptographic, or window check.
     Rejected(V2VrfRejection),
@@ -77,30 +92,42 @@ pub(crate) enum V2VrfIngressOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum V2VrfRejection {
     /// Network ingress did not identify the outer sender.
+    #[cfg(test)]
     MissingSender,
     /// The outer sender is not the peer at the claimed frozen roster index.
+    #[cfg(test)]
     SenderMismatch,
     /// The claimed signer index is outside the frozen roster.
+    #[cfg(test)]
     SignerOutOfRange,
     /// The message belongs to another epoch.
+    #[cfg(test)]
     EpochMismatch,
     /// The message is not valid in the active commit/reveal window.
     OutOfWindow,
     /// Signature bytes did not pass the checked wire constructor.
+    #[cfg(test)]
     MalformedSignature,
     /// The signature does not verify under the frozen roster key.
+    #[cfg(test)]
     InvalidSignature,
     /// The reveal is not the unique VRF output for the frozen key and epoch input.
+    #[cfg(test)]
     InvalidVrfProof,
     /// A reveal has no retained commitment from the same signer.
+    #[cfg(test)]
     MissingCommitment,
     /// A reveal does not hash to the retained commitment.
+    #[cfg(test)]
     CommitmentMismatch,
     /// A signer supplied a second, different commitment.
+    #[cfg(test)]
     ConflictingCommitment,
     /// A signer supplied a second, different reveal.
+    #[cfg(test)]
     ConflictingReveal,
     /// The explicit per-height observation bound was exhausted.
+    #[cfg(test)]
     Capacity,
 }
 /// Fatal construction or local-emission failure.
@@ -116,38 +143,48 @@ pub(crate) enum V2NposError {
     #[error("authoritative v2 NPoS requires committed sumeragi_npos_parameters")]
     MissingCommittedParameters,
     /// The frozen roster cannot be represented by the record wire type.
+    #[cfg(test)]
     #[error("frozen NPoS roster exceeds the VRF record index range")]
     RosterTooLarge,
     /// A persisted record conflicts with the active frozen epoch.
+    #[cfg(test)]
     #[error("persisted NPoS VRF epoch record conflicts with the frozen height context")]
     PersistedRecordConflict,
     /// Local validator index or key is inconsistent with the frozen roster.
+    #[cfg(test)]
     #[error("local NPoS validator identity conflicts with the frozen roster")]
     LocalIdentityMismatch,
     /// Deterministic local VRF material could not be derived.
+    #[cfg(test)]
     #[error("failed to derive local NPoS VRF material: {0}")]
     LocalMaterial(String),
     /// Local VRF metadata could not be signed.
+    #[cfg(test)]
     #[error("failed to sign local NPoS VRF metadata: {0}")]
     LocalSignature(String),
     /// Persisted local commitment differs from deterministic crash-recovery material.
+    #[cfg(test)]
     #[error("persisted local NPoS commitment differs from deterministic key material")]
     LocalCommitmentMismatch,
     /// A proposed record bundle violates the authoritative v2 epoch contract.
     #[error("invalid authoritative v2 NPoS VRF epoch record: {0}")]
     InvalidRecord(&'static str),
     /// The epoch-boundary candidate omitted its mandatory finalized seal.
+    #[cfg(test)]
     #[error("authoritative v2 NPoS epoch boundary requires exactly one current-epoch seal")]
     MissingBoundarySeal,
     /// The first mutable candidate of an epoch omitted the schedule snapshot
     /// that freezes commit and reveal windows for every later height in that
     /// epoch. For the genesis epoch, height two is the first mutable candidate.
+    #[cfg(test)]
     #[error("authoritative v2 NPoS epoch start requires exactly one current-epoch record")]
     MissingEpochStartRecord,
     /// A freshly signed local message failed the same boundary used for remote ingress.
+    #[cfg(test)]
     #[error("fresh local NPoS VRF message failed authenticated ingress: {0:?}")]
     LocalAdmission(V2VrfIngressOutcome),
 }
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct EpochSchedule {
     length: u64,
@@ -155,6 +192,7 @@ struct EpochSchedule {
     reveal_end: u64,
     position: u64,
 }
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct VrfRecordValidationContext<'a> {
     network_id: &'a iroha_data_model::NetworkId,
@@ -164,6 +202,7 @@ struct VrfRecordValidationContext<'a> {
     leader_seed: [u8; 32],
     roster: &'a [wire::ValidatorPower],
 }
+#[cfg(test)]
 impl<'a> From<&'a wire::HeightContext> for VrfRecordValidationContext<'a> {
     fn from(context: &'a wire::HeightContext) -> Self {
         Self {
@@ -179,7 +218,9 @@ impl<'a> From<&'a wire::HeightContext> for VrfRecordValidationContext<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NposEpochParams {
     pub(crate) epoch_length_blocks: u64,
+    #[cfg(test)]
     pub(crate) commit_deadline_offset: u64,
+    #[cfg(test)]
     pub(crate) reveal_deadline_offset: u64,
 }
 pub(crate) fn committed_epoch_params(
@@ -189,25 +230,34 @@ pub(crate) fn committed_epoch_params(
         .sumeragi_npos_parameters()
         .ok_or(V2NposError::MissingCommittedParameters)?;
     let epoch_length_blocks = params.epoch_length_blocks().get();
-    let commit_deadline_offset = params.vrf_commit_window_blocks();
-    let reveal_window_blocks = params.vrf_reveal_window_blocks();
-    if epoch_length_blocks == 0
-        || commit_deadline_offset == 0
-        || reveal_window_blocks == 0
-        || commit_deadline_offset > epoch_length_blocks
-    {
+    if epoch_length_blocks == 0 {
         return Err(V2NposError::InvalidSchedule);
     }
-    let reveal_deadline_offset = commit_deadline_offset
-        .checked_add(reveal_window_blocks)
-        .filter(|deadline| *deadline < epoch_length_blocks)
-        .ok_or(V2NposError::InvalidSchedule)?;
+    #[cfg(test)]
+    let (commit_deadline_offset, reveal_deadline_offset) = {
+        let commit_deadline_offset = params.vrf_commit_window_blocks();
+        let reveal_window_blocks = params.vrf_reveal_window_blocks();
+        if commit_deadline_offset == 0
+            || reveal_window_blocks == 0
+            || commit_deadline_offset > epoch_length_blocks
+        {
+            return Err(V2NposError::InvalidSchedule);
+        }
+        let reveal_deadline_offset = commit_deadline_offset
+            .checked_add(reveal_window_blocks)
+            .filter(|deadline| *deadline < epoch_length_blocks)
+            .ok_or(V2NposError::InvalidSchedule)?;
+        (commit_deadline_offset, reveal_deadline_offset)
+    };
     Ok(NposEpochParams {
         epoch_length_blocks,
+        #[cfg(test)]
         commit_deadline_offset,
+        #[cfg(test)]
         reveal_deadline_offset,
     })
 }
+#[cfg(test)]
 #[derive(Debug)]
 struct ActiveVrfLifecycle {
     context: wire::HeightContext,
@@ -227,11 +277,28 @@ struct ActiveVrfLifecycle {
 /// Per-height NPoS VRF state owned exclusively by the serialized v2 runner.
 #[derive(Debug, Default)]
 pub(crate) struct V2NposVrfLifecycle {
+    #[cfg(test)]
     active: Option<ActiveVrfLifecycle>,
 }
 impl V2NposVrfLifecycle {
+    /// Reject legacy commit/reveal production in release builds.
+    ///
+    /// Finalized global threshold-beacon pulses are the sole live randomness
+    /// producer. The legacy implementation below is compiled only for its
+    /// historical accountability fixtures.
+    #[cfg(not(test))]
+    pub(crate) fn open(
+        context: &wire::HeightContext,
+        _state: &State,
+        _local_validator: Option<wire::ValidatorIndex>,
+        _key_pair: &KeyPair,
+    ) -> Result<Self, V2NposError> {
+        context.validate()?;
+        Ok(Self::default())
+    }
     /// Restore the active epoch from finalized WSV and stage deterministic
     /// local emission for the current frozen window.
+    #[cfg(test)]
     pub(crate) fn open(
         context: &wire::HeightContext,
         state: &State,
@@ -289,6 +356,7 @@ impl V2NposVrfLifecycle {
             context.roster.len(),
         )
     }
+    #[cfg(test)]
     fn from_parts(
         context: wire::HeightContext,
         schedule: EpochSchedule,
@@ -352,6 +420,16 @@ impl V2NposVrfLifecycle {
         })
     }
     /// Authenticate and retain an inbound commitment without mutating WSV.
+    #[cfg(not(test))]
+    pub(crate) fn accept_commit(
+        &mut self,
+        _commit: VrfCommit,
+        _sender: Option<&PeerId>,
+    ) -> V2VrfIngressOutcome {
+        V2VrfIngressOutcome::Rejected(V2VrfRejection::OutOfWindow)
+    }
+    /// Authenticate and retain an inbound commitment in legacy tests.
+    #[cfg(test)]
     pub(crate) fn accept_commit(
         &mut self,
         commit: VrfCommit,
@@ -363,6 +441,16 @@ impl V2NposVrfLifecycle {
         )
     }
     /// Authenticate and retain an inbound reveal without mutating WSV.
+    #[cfg(not(test))]
+    pub(crate) fn accept_reveal(
+        &mut self,
+        _reveal: VrfReveal,
+        _sender: Option<&PeerId>,
+    ) -> V2VrfIngressOutcome {
+        V2VrfIngressOutcome::Rejected(V2VrfRejection::OutOfWindow)
+    }
+    /// Authenticate and retain an inbound reveal in legacy tests.
+    #[cfg(test)]
     pub(crate) fn accept_reveal(
         &mut self,
         reveal: VrfReveal,
@@ -375,6 +463,12 @@ impl V2NposVrfLifecycle {
     }
     /// Drain locally generated messages for one bounded broadcast to the
     /// frozen voter set.
+    #[cfg(not(test))]
+    pub(crate) fn take_outbound(&mut self) -> Vec<wire::ConsensusMessageV2> {
+        Vec::new()
+    }
+    /// Drain legacy locally generated messages in accountability tests.
+    #[cfg(test)]
     pub(crate) fn take_outbound(&mut self) -> Vec<wire::ConsensusMessageV2> {
         self.active
             .as_mut()
@@ -382,6 +476,12 @@ impl V2NposVrfLifecycle {
     }
     /// Clone the single locally authenticated message for bounded periodic
     /// retransmission while this height remains active.
+    #[cfg(not(test))]
+    pub(crate) fn retransmission(&self) -> Vec<wire::ConsensusMessageV2> {
+        Vec::new()
+    }
+    /// Clone a legacy message for accountability/recovery tests.
+    #[cfg(test)]
     pub(crate) fn retransmission(&self) -> Vec<wire::ConsensusMessageV2> {
         self.active
             .as_ref()
@@ -390,6 +490,12 @@ impl V2NposVrfLifecycle {
             .collect()
     }
     /// Return the current proposal record when it extends finalized WSV.
+    #[cfg(not(test))]
+    pub(crate) fn pending_records(&self) -> Vec<VrfEpochRecord> {
+        Vec::new()
+    }
+    /// Return a legacy proposal record in accountability tests.
+    #[cfg(test)]
     pub(crate) fn pending_records(&self) -> Vec<VrfEpochRecord> {
         self.active
             .as_ref()
@@ -404,6 +510,23 @@ impl V2NposVrfLifecycle {
 /// before application.  It does not trust unauthenticated participant summary
 /// fields: each entropy-bearing entry must contain the exact signed message
 /// and must verify against the immutable roster and chain domain in `context`.
+#[cfg(not(test))]
+pub(crate) fn validate_candidate_records(
+    context: &wire::HeightContext,
+    _state: &State,
+    effects: Option<&NposConsensusEffects>,
+) -> Result<(), V2NposError> {
+    context.validate()?;
+    if effects.is_some_and(|effects| !effects.vrf_epoch_seals.is_empty()) {
+        return Err(V2NposError::InvalidRecord(
+            "legacy VRF epoch effects are retired; finalized threshold-beacon pulses are authoritative",
+        ));
+    }
+    Ok(())
+}
+
+/// Validate historical VRF fixtures without enabling the release runtime path.
+#[cfg(test)]
 pub(crate) fn validate_candidate_records(
     context: &wire::HeightContext,
     state: &State,
@@ -482,6 +605,7 @@ pub(crate) fn validate_candidate_records(
 /// artifact.  Keeping this check separate from candidate validation lets the
 /// next block derive non-reveal accountability from immutable, quorum-certified
 /// state rather than from the boundary proposer's transient observations.
+#[cfg(test)]
 pub(crate) fn validate_finalized_epoch_record(
     context: &wire::HeightContext,
     record: &VrfEpochRecord,
@@ -512,13 +636,15 @@ pub(crate) fn validate_finalized_epoch_record(
         true,
     )
 }
-/// Authenticate the exact pre-boundary record and derive the immediate
-/// successor epoch seed from its canonically ordered, in-window reveals.
+/// Authenticate the retired VRF successor-seed construction for regression
+/// tests only.
 ///
-/// The reveal window is required to close before the boundary height. This
-/// makes the record part of finalized pre-state before the boundary context is
-/// frozen; late or boundary-height observations cannot influence the seed.
-pub(crate) fn authenticated_successor_seed(
+/// Production successor contexts consume the finalized global threshold
+/// beacon in `v2_context`; retaining this helper only lets the remaining VRF
+/// accountability tests prove which legacy reveal observations used to affect
+/// entropy while that record lifecycle is retired separately.
+#[cfg(test)]
+fn authenticated_legacy_vrf_successor_seed(
     network_id: &iroha_data_model::NetworkId,
     epoch: u64,
     epoch_end_height: u64,
@@ -548,6 +674,7 @@ pub(crate) fn authenticated_successor_seed(
     validate_authenticated_record(context, schedule, record, roster_len, false)?;
     Ok(super::next_epoch_seed_from_record(record))
 }
+#[cfg(test)]
 impl EpochSchedule {
     fn for_context(
         context: VrfRecordValidationContext<'_>,
@@ -577,6 +704,7 @@ impl EpochSchedule {
         })
     }
 }
+#[cfg(test)]
 impl ActiveVrfLifecycle {
     fn accept_commit(&mut self, commit: VrfCommit, sender: Option<&PeerId>) -> V2VrfIngressOutcome {
         let signer = match self.authenticate_commit(&commit, sender) {
@@ -934,8 +1062,11 @@ impl ActiveVrfLifecycle {
         (self.committed_record.as_ref() != Some(&record)).then_some(record)
     }
 }
+#[cfg(test)]
 const MAX_VRF_SIGNATURE_BYTES: usize = 512;
+#[cfg(test)]
 const MAX_VRF_PROOF_BYTES: usize = 128;
+#[cfg(test)]
 fn verify_vrf_reveal_for_chain(
     network_id: &iroha_data_model::NetworkId,
     peer: &PeerId,
@@ -966,9 +1097,11 @@ fn verify_vrf_reveal_for_chain(
     )
     .is_some_and(|output| output.0 == reveal.reveal)
 }
+#[cfg(test)]
 fn verify_vrf_reveal(context: &wire::HeightContext, peer: &PeerId, reveal: &VrfReveal) -> bool {
     verify_vrf_reveal_for_chain(&context.network_id, peer, reveal)
 }
+#[cfg(test)]
 fn validate_extension_at_candidate_height(
     context: &wire::HeightContext,
     schedule: EpochSchedule,
@@ -1056,6 +1189,7 @@ fn validate_extension_at_candidate_height(
     }
     Ok(())
 }
+#[cfg(test)]
 fn old_commitment_without_reveal(
     participants: &BTreeMap<u32, &VrfParticipantRecord>,
     signer: u32,
@@ -1067,6 +1201,7 @@ fn old_commitment_without_reveal(
     })
 }
 #[allow(clippy::too_many_lines)]
+#[cfg(test)]
 fn validate_authenticated_record(
     context: VrfRecordValidationContext<'_>,
     schedule: EpochSchedule,
@@ -1279,6 +1414,7 @@ fn validate_authenticated_record(
     }
     Ok(())
 }
+#[cfg(test)]
 fn window_position(
     context: VrfRecordValidationContext<'_>,
     schedule: EpochSchedule,
@@ -1293,6 +1429,7 @@ fn window_position(
         .checked_add(1)
         .filter(|position| *position <= schedule.length)
 }
+#[cfg(test)]
 fn verify_commit_proof(
     context: VrfRecordValidationContext<'_>,
     proof: &VrfCommitProof,
@@ -1325,6 +1462,7 @@ fn verify_commit_proof(
         )
         .map_err(|_| V2NposError::InvalidRecord("commit signature verification failed"))
 }
+#[cfg(test)]
 fn verify_reveal_proof(
     context: VrfRecordValidationContext<'_>,
     proof: &VrfRevealProof,
@@ -1364,6 +1502,7 @@ fn verify_reveal_proof(
     }
     Ok(())
 }
+#[cfg(test)]
 fn validate_persisted_record(
     context: VrfRecordValidationContext<'_>,
     schedule: EpochSchedule,
@@ -1387,6 +1526,7 @@ fn validate_persisted_record(
     validate_authenticated_record(context, schedule, record, roster_len, false)
         .map_err(|_| V2NposError::PersistedRecordConflict)
 }
+#[cfg(test)]
 fn record_extends(base: &VrfEpochRecord, candidate: &VrfEpochRecord) -> bool {
     if base.epoch != candidate.epoch
         || base.seed != candidate.seed
@@ -1448,6 +1588,162 @@ fn record_extends(base: &VrfEpochRecord, candidate: &VrfEpochRecord) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn daemon_test_feature_closure_cannot_reenable_legacy_consensus_vrf() {
+        fn assert_declaration_is_test_only(source: &str, declaration: &str) {
+            let offset = source
+                .find(declaration)
+                .unwrap_or_else(|| panic!("missing source-contract declaration `{declaration}`"));
+            let prefix = source[..offset]
+                .lines()
+                .rev()
+                .take(6)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                prefix.contains("#[cfg(test)]"),
+                "`{declaration}` must remain unavailable to feature-unified node builds"
+            );
+        }
+
+        fn assert_source_tree_is_feature_invariant(path: &std::path::Path, forbidden: &str) {
+            for entry in std::fs::read_dir(path).expect("read Sumeragi source tree") {
+                let path = entry.expect("read Sumeragi source entry").path();
+                if path.is_dir() {
+                    assert_source_tree_is_feature_invariant(&path, forbidden);
+                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                    let source = std::fs::read_to_string(&path).expect("read Sumeragi source");
+                    assert!(
+                        !source.contains(forbidden),
+                        "{} must not select consensus behavior through the daemon-enabled test feature",
+                        path.display()
+                    );
+                }
+            }
+        }
+
+        fn assert_consensus_slice_is_feature_invariant(
+            source: &str,
+            start: &str,
+            end: &str,
+            forbidden: &str,
+        ) {
+            let start_offset = source
+                .find(start)
+                .unwrap_or_else(|| panic!("missing source-contract start `{start}`"));
+            let end_offset = source[start_offset..]
+                .find(end)
+                .map(|offset| start_offset + offset)
+                .unwrap_or_else(|| panic!("missing source-contract end `{end}`"));
+            let slice = &source[start_offset..end_offset];
+            assert!(
+                !slice.contains(forbidden),
+                "consensus-critical `{start}` must not select behavior through iroha-core-tests"
+            );
+        }
+
+        let forbidden = ["feature = ", "\"iroha-core-tests\""].concat();
+        let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/sumeragi");
+        assert_source_tree_is_feature_invariant(&source_root, &forbidden);
+        let daemon_manifest = include_str!("../../../irohad/Cargo.toml");
+        assert!(
+            daemon_manifest.contains(
+                "features = [\"runtime\", \"iroha-core-tests\", \"sumeragi-main-loop-tests\"]"
+            ),
+            "regression must exercise the daemon test/integration feature closure"
+        );
+        let state_source = include_str!("../state.rs");
+        for declaration in [
+            "pub trait StakeSnapshot",
+            "fn npos_epoch_selection_seed",
+            "pub(crate) fn epoch_validator_peer_ids_from_world",
+            "impl StakeSnapshot for StateView",
+            "pub fn epoch_validator_peer_ids_fast",
+            "pub fn vrf_epochs_mut",
+            "const LANE_RELAY_SEED_DOMAIN",
+        ] {
+            assert_declaration_is_test_only(state_source, declaration);
+        }
+        for retired_mutator in [
+            "fn put_global_beacon_dkg_snapshot",
+            "fn initialize_global_beacon_origin",
+        ] {
+            assert!(
+                !state_source.contains(retired_mutator),
+                "unused beacon state mutator `{retired_mutator}` must not return"
+            );
+        }
+        let fixture_mutator = "pub fn vrf_epochs_mut_for_testing";
+        let fixture_mutator_offset = state_source
+            .find(fixture_mutator)
+            .unwrap_or_else(|| panic!("missing source-contract declaration `{fixture_mutator}`"));
+        let fixture_mutator_prefix = state_source[..fixture_mutator_offset]
+            .lines()
+            .rev()
+            .take(6)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            fixture_mutator_prefix.contains("feature = \"iroha-core-tests\"")
+                && !fixture_mutator_prefix.contains("feature = \"app_api\""),
+            "legacy VRF storage mutation must remain fixture-only and absent from the stock app-api dependency"
+        );
+        assert_consensus_slice_is_feature_invariant(
+            state_source,
+            "fn lane_relay_committee_seed_from_sources",
+            "fn lane_relay_committee_from_pool",
+            &forbidden,
+        );
+
+        let block_source = include_str!("../block.rs");
+        assert_consensus_slice_is_feature_invariant(
+            block_source,
+            "fn validate_npos_effects_with_state",
+            "fn validate_global_beacon_pulse_effect",
+            &forbidden,
+        );
+        for declaration in [
+            "fn vrf_epoch_record_extends_existing",
+            "fn vrf_participants_extend_existing",
+            "fn vrf_late_reveals_extend_existing",
+        ] {
+            assert_declaration_is_test_only(block_source, declaration);
+        }
+        let source = include_str!("v2_npos.rs");
+        for declaration in [
+            "const VRF_INPUT_DOMAIN",
+            "fn derive_vrf_material_from_key",
+            "fn vrf_input",
+            "struct EpochSchedule",
+            "struct VrfRecordValidationContext",
+            "struct ActiveVrfLifecycle",
+            "fn from_parts",
+            "pub(crate) fn validate_finalized_epoch_record",
+            "fn authenticated_legacy_vrf_successor_seed",
+            "impl EpochSchedule",
+            "impl ActiveVrfLifecycle",
+            "fn verify_vrf_reveal_for_chain",
+            "fn validate_extension_at_candidate_height",
+            "fn old_commitment_without_reveal",
+            "fn validate_authenticated_record",
+            "fn window_position",
+            "fn verify_commit_proof",
+            "fn verify_reveal_proof",
+            "fn validate_persisted_record",
+            "fn record_extends",
+        ] {
+            assert_declaration_is_test_only(source, declaration);
+        }
+        assert_declaration_is_test_only(
+            source,
+            "let (commit_deadline_offset, reveal_deadline_offset)",
+        );
+        let penalties_source = include_str!("penalties.rs");
+        for declaration in ["pub jailed: u64", "fn jail_in_transaction"] {
+            assert_declaration_is_test_only(penalties_source, declaration);
+        }
+    }
     use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
@@ -1583,6 +1879,7 @@ mod tests {
     }
     fn effects(record: VrfEpochRecord) -> NposConsensusEffects {
         NposConsensusEffects {
+            finalized_global_beacon_pulse: None,
             vrf_epoch_seals: vec![record],
             v2_evidence_admissions: Vec::new(),
             penalty_actions: Vec::new(),
@@ -1800,7 +2097,7 @@ mod tests {
             .pending_records()
             .pop()
             .expect("two authenticated reveals");
-        let seed_with_one = authenticated_successor_seed(
+        let seed_with_one = authenticated_legacy_vrf_successor_seed(
             &reveal_context.network_id,
             reveal_context.epoch,
             reveal_context.epoch_end_height,
@@ -1810,7 +2107,7 @@ mod tests {
             &one_reveal,
         )
         .expect("one-reveal successor seed");
-        let seed_with_two = authenticated_successor_seed(
+        let seed_with_two = authenticated_legacy_vrf_successor_seed(
             &reveal_context.network_id,
             reveal_context.epoch,
             reveal_context.epoch_end_height,
@@ -1824,7 +2121,7 @@ mod tests {
         let mut mismatched_params = epoch_params();
         mismatched_params.reveal_deadline_offset -= 1;
         assert!(
-            authenticated_successor_seed(
+            authenticated_legacy_vrf_successor_seed(
                 &reveal_context.network_id,
                 reveal_context.epoch,
                 reveal_context.epoch_end_height,
@@ -1839,7 +2136,7 @@ mod tests {
         let mut reordered = two_reveals.clone();
         reordered.participants.reverse();
         assert!(
-            authenticated_successor_seed(
+            authenticated_legacy_vrf_successor_seed(
                 &reveal_context.network_id,
                 reveal_context.epoch,
                 reveal_context.epoch_end_height,
@@ -1856,7 +2153,7 @@ mod tests {
             .as_mut()
             .expect("authenticated reveal")[0] ^= 1;
         assert!(
-            authenticated_successor_seed(
+            authenticated_legacy_vrf_successor_seed(
                 &reveal_context.network_id,
                 reveal_context.epoch,
                 reveal_context.epoch_end_height,
@@ -1880,7 +2177,7 @@ mod tests {
             .pending_records()
             .pop()
             .expect("authenticated late reveal");
-        let late_seed = authenticated_successor_seed(
+        let late_seed = authenticated_legacy_vrf_successor_seed(
             &late_context.network_id,
             late_context.epoch,
             late_context.epoch_end_height,
@@ -1890,7 +2187,7 @@ mod tests {
             &late,
         )
         .expect("late reveal record remains authenticated");
-        let no_reveal_seed = authenticated_successor_seed(
+        let no_reveal_seed = authenticated_legacy_vrf_successor_seed(
             &late_context.network_id,
             late_context.epoch,
             late_context.epoch_end_height,
@@ -2671,6 +2968,7 @@ mod tests {
             Err(V2NposError::MissingBoundarySeal)
         ));
         let duplicate = NposConsensusEffects {
+            finalized_global_beacon_pulse: None,
             vrf_epoch_seals: vec![seal.clone(), seal.clone()],
             v2_evidence_admissions: Vec::new(),
             penalty_actions: Vec::new(),

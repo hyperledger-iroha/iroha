@@ -47,6 +47,107 @@ fn take_len_prefixed_slice<'a>(
     *offset = end;
     Ok(field)
 }
+
+/// Split the two fields shared by proof and verifier-key byte boxes without allocating.
+///
+/// These boxes use a bounded custom decoder, so they must parse every advertised struct
+/// layout themselves instead of assuming the length-prefixed AoS layout. The returned byte
+/// field includes its sequence-length header, allowing callers to reject oversized payloads
+/// before `Vec<u8>` allocates.
+fn take_byte_box_fields<'a>(
+    bytes: &'a [u8],
+    max_byte_field_len: usize,
+    max_payload_len: Option<usize>,
+) -> Result<(&'a [u8], &'a [u8], usize), ncore::Error> {
+    if !ncore::use_packed_struct() {
+        let mut offset = 0usize;
+        let backend = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
+        let byte_field = take_len_prefixed_slice(bytes, &mut offset, max_byte_field_len)?;
+        return Ok((backend, byte_field, offset));
+    }
+
+    if ncore::use_field_bitset() {
+        // `Ident` needs an explicit size while the raw-byte sequence is self-delimiting.
+        if bytes.first() != Some(&0b0000_0001) {
+            return Err(ncore::Error::NonCanonicalEncoding);
+        }
+        let mut offset = 1usize;
+        let backend = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
+        let byte_tail = bytes.get(offset..).ok_or(ncore::Error::LengthMismatch)?;
+        let (byte_len, header_len) = ncore::inspect_seq_len_slice(byte_tail)?;
+        if max_payload_len.is_some_and(|maximum| byte_len > maximum) {
+            return Err(ncore::Error::LengthMismatch);
+        }
+        let byte_field_len = header_len
+            .checked_add(byte_len)
+            .ok_or(ncore::Error::LengthMismatch)?;
+        if byte_field_len > max_byte_field_len {
+            return Err(ncore::Error::LengthMismatch);
+        }
+        let byte_field = byte_tail
+            .get(..byte_field_len)
+            .ok_or(ncore::Error::LengthMismatch)?;
+        offset = offset
+            .checked_add(byte_field_len)
+            .ok_or(ncore::Error::LengthMismatch)?;
+        return Ok((backend, byte_field, offset));
+    }
+
+    let (offsets, header_len, data_len, tail_len) = ncore::decode_packed_offsets_slice(bytes, 2)?;
+    let data_end = header_len
+        .checked_add(data_len)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let data = bytes
+        .get(header_len..data_end)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let backend = data
+        .get(offsets[0]..offsets[1])
+        .ok_or(ncore::Error::LengthMismatch)?;
+    if backend.len() > MAX_BACKEND_FIELD_BYTES {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    let byte_field = data
+        .get(offsets[1]..offsets[2])
+        .ok_or(ncore::Error::LengthMismatch)?;
+    if byte_field.len() > max_byte_field_len {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    let used = data_end
+        .checked_add(tail_len)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    Ok((backend, byte_field, used))
+}
+
+fn decode_byte_box_fields(
+    bytes: &[u8],
+    max_byte_field_len: usize,
+    max_payload_len: Option<usize>,
+    max_canonical_box_len: Option<usize>,
+) -> Result<(Ident, Vec<u8>, usize), ncore::Error> {
+    let (backend_bytes, byte_field, used) =
+        take_byte_box_fields(bytes, max_byte_field_len, max_payload_len)?;
+    let (backend, backend_used) =
+        <Ident as ncore::DecodeFromSlice>::decode_from_slice(backend_bytes)?;
+    if backend_used != backend_bytes.len() {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    let (declared_len, _) = ncore::inspect_seq_len_slice(byte_field)?;
+    if max_payload_len.is_some_and(|maximum| declared_len > maximum) {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    if max_canonical_box_len.is_some_and(|maximum| {
+        proof_box_canonical_encoded_len_for_lengths_v1(backend.as_str().len(), declared_len)
+            .is_none_or(|actual| actual > maximum)
+    }) {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    let (payload, payload_used) =
+        <Vec<u8> as ncore::DecodeFromSlice>::decode_from_slice(byte_field)?;
+    if payload_used != byte_field.len() {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    Ok((backend, payload, used))
+}
 /// Opaque zero-knowledge proof bytes tagged with a backend identifier.
 ///
 /// - `backend`: schema identifier for the proof backend (e.g., "halo2/ipa",
@@ -60,6 +161,7 @@ fn take_len_prefixed_slice<'a>(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ProofBox {
     /// Identifier of the proof backend/format.
     pub backend: iroha_schema::Ident,
@@ -153,36 +255,29 @@ impl<'de> norito::NoritoDeserialize<'de> for ProofBox {
 }
 impl<'a> ncore::DecodeFromSlice<'a> for ProofBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let mut offset = 0usize;
-        let backend_bytes = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
-        let (backend, used) = <Ident as ncore::DecodeFromSlice>::decode_from_slice(backend_bytes)?;
-        if used != backend_bytes.len() {
-            return Err(ncore::Error::LengthMismatch);
-        }
-        let proof_bytes_slice =
-            take_len_prefixed_slice(bytes, &mut offset, MAX_LEN_PREFIXED_FIELD_BYTES)?;
+        let (backend, proof_bytes, used) = decode_byte_box_fields(
+            bytes,
+            MAX_LEN_PREFIXED_FIELD_BYTES,
+            None,
+            Some(PROOF_BOX_MAX_ENCODED_BYTES_V1),
+        )?;
         if norito::debug_trace_enabled() {
             let mut head = [0u8; 8];
-            let preview = &proof_bytes_slice[..proof_bytes_slice.len().min(8)];
+            let preview = &proof_bytes[..proof_bytes.len().min(8)];
             head[..preview.len()].copy_from_slice(preview);
             eprintln!(
                 "ProofBox::decode_from_slice backend_len={} proof_len={} vec_head_le={}",
-                backend_bytes.len(),
-                proof_bytes_slice.len(),
+                backend.as_str().len(),
+                proof_bytes.len(),
                 u64::from_le_bytes(head)
             );
-        }
-        let (proof_bytes, used) =
-            <Vec<u8> as ncore::DecodeFromSlice>::decode_from_slice(proof_bytes_slice)?;
-        if used != proof_bytes_slice.len() {
-            return Err(ncore::Error::LengthMismatch);
         }
         Ok((
             Self {
                 backend,
                 bytes: proof_bytes,
             },
-            offset,
+            used,
         ))
     }
 }
@@ -228,29 +323,18 @@ impl<'de> norito::NoritoDeserialize<'de> for VerifyingKeyBox {
 }
 impl<'a> ncore::DecodeFromSlice<'a> for VerifyingKeyBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let mut offset = 0usize;
-        let backend_bytes = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
-        let (backend, used) = <Ident as ncore::DecodeFromSlice>::decode_from_slice(backend_bytes)?;
-        if used != backend_bytes.len() {
-            return Err(ncore::Error::LengthMismatch);
-        }
-        let vk_bytes_slice =
-            take_len_prefixed_slice(bytes, &mut offset, VERIFYING_KEY_BOX_MAX_FIELD_BYTES_V1)?;
-        let (declared_vk_len, _) = ncore::inspect_seq_len_slice(vk_bytes_slice)?;
-        if declared_vk_len > VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1 {
-            return Err(ncore::Error::LengthMismatch);
-        }
-        let (vk_bytes, used) =
-            <Vec<u8> as ncore::DecodeFromSlice>::decode_from_slice(vk_bytes_slice)?;
-        if used != vk_bytes_slice.len() {
-            return Err(ncore::Error::LengthMismatch);
-        }
+        let (backend, vk_bytes, used) = decode_byte_box_fields(
+            bytes,
+            VERIFYING_KEY_BOX_MAX_FIELD_BYTES_V1,
+            Some(VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1),
+            None,
+        )?;
         Ok((
             Self {
                 backend,
                 bytes: vk_bytes,
             },
-            offset,
+            used,
         ))
     }
 }
@@ -261,6 +345,7 @@ impl<'a> ncore::DecodeFromSlice<'a> for VerifyingKeyBox {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct VerifyingKeyId {
     /// Identifier of the proof backend/format.
     pub backend: iroha_schema::Ident,
@@ -444,6 +529,7 @@ impl VerifyingKeyRecord {
 /// Proof attachments carry only a registry reference to the verifying key.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
 #[norito(reuse_archived)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
 pub struct ProofAttachment {
     /// Identifier of the proof backend/format.
@@ -461,8 +547,7 @@ pub struct ProofAttachment {
             bounded_with = "crate::json_helpers::fixed_bytes::option::serialize_bounded"
         )
     )]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
-    #[norito(default)]
+    #[norito(required)]
     pub vk_commitment: Option<[u8; 32]>,
     /// Optional hash of the verify envelope payload passed via pointer‑ABI TLV (e.g.,
     /// NoritoBytes(OpenVerifyEnvelope)). When present, it is used to bind the verification inputs
@@ -474,12 +559,10 @@ pub struct ProofAttachment {
             bounded_with = "crate::json_helpers::fixed_bytes::option::serialize_bounded"
         )
     )]
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
-    #[norito(default)]
+    #[norito(required)]
     pub envelope_hash: Option<[u8; 32]>,
     /// Optional lane privacy proof tying this attachment to a Nexus commitment.
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
-    #[norito(default)]
+    #[norito(required)]
     pub lane_privacy: Option<crate::nexus::LanePrivacyProof>,
 }
 impl ProofAttachment {
@@ -823,11 +906,13 @@ fn proof_attachment_json_value_preflight<const MAX_PROOF_BYTES: usize>(
         )?;
     }
     for field in ["vk_commitment", "envelope_hash"] {
-        if let Some(value) = attachment.get(field) {
+        let value = proof_attachment_json_value_required(attachment, field)?;
+        if !value.is_null() {
             proof_attachment_json_value_byte_array(value, field, Some(32), 32)?;
         }
     }
-    if let Some(lane_privacy) = attachment.get("lane_privacy") {
+    let lane_privacy = proof_attachment_json_value_required(attachment, "lane_privacy")?;
+    if !lane_privacy.is_null() {
         proof_attachment_json_value_preflight_lane(lane_privacy)?;
     }
     Ok(())
@@ -1491,22 +1576,37 @@ impl norito::json::JsonDeserialize for ProofAttachment {
                 }
                 "vk_commitment" => {
                     proof_attachment_json_mark_field(&mut seen, VK_COMMITMENT, "vk_commitment")?;
-                    // Optional means absent-or-present; an explicit null is not
-                    // a canonical first-release spelling for a present field.
-                    vk_commitment = Some(object.parse_value::<ProofAttachmentJsonBytes32V1>()?.0);
+                    vk_commitment = object
+                        .parse_value::<Option<ProofAttachmentJsonBytes32V1>>()?
+                        .map(|value| value.0);
                 }
                 "envelope_hash" => {
                     proof_attachment_json_mark_field(&mut seen, ENVELOPE_HASH, "envelope_hash")?;
-                    envelope_hash = Some(object.parse_value::<ProofAttachmentJsonBytes32V1>()?.0);
+                    envelope_hash = object
+                        .parse_value::<Option<ProofAttachmentJsonBytes32V1>>()?
+                        .map(|value| value.0);
                 }
                 "lane_privacy" => {
                     proof_attachment_json_mark_field(&mut seen, LANE_PRIVACY, "lane_privacy")?;
-                    lane_privacy = Some(object.parse_value::<ProofAttachmentJsonLanePrivacyV1>()?);
+                    lane_privacy =
+                        object.parse_value::<Option<ProofAttachmentJsonLanePrivacyV1>>()?;
                 }
                 field => return Err(proof_attachment_json_unknown_field(field, "")),
             }
         }
         object.finish()?;
+        for (field_bit, field) in [
+            (BACKEND, "backend"),
+            (PROOF, "proof"),
+            (VK_REF, "vk_ref"),
+            (VK_COMMITMENT, "vk_commitment"),
+            (ENVELOPE_HASH, "envelope_hash"),
+            (LANE_PRIVACY, "lane_privacy"),
+        ] {
+            if seen & field_bit == 0 {
+                return Err(norito::json::Error::missing_field(field));
+            }
+        }
         let backend = backend.ok_or_else(|| norito::json::Error::missing_field("backend"))?;
         let proof = proof.ok_or_else(|| norito::json::Error::missing_field("proof"))?;
         let vk_ref = vk_ref.ok_or_else(|| norito::json::Error::missing_field("vk_ref"))?;
@@ -2462,6 +2562,15 @@ impl ProofedCommittedTransaction {
 mod tests {
     use super::*;
     use iroha_crypto::{Hash, HashOf, LaneCommitmentId, MerkleProof};
+    fn encode_payload_with_flags(value: &impl norito::NoritoSerialize, flags: u8) -> Vec<u8> {
+        let _flags = ncore::DecodeFlagsGuard::enter(flags);
+        let mut payload = Vec::new();
+        let mut encoder = ncore::Encoder::for_buffer(&mut payload);
+        value
+            .serialize(&mut encoder)
+            .expect("encode payload with explicit layout flags");
+        payload
+    }
     fn write_test_field<T: norito::NoritoSerialize>(encoded: &mut Vec<u8>, value: &T) {
         let mut field = Vec::new();
         ncore::serialize_to_buffer(value, &mut field).expect("serialize test field");
@@ -2836,6 +2945,100 @@ mod tests {
         let dec: ProofBox = norito::core::NoritoDeserialize::deserialize(arch);
         assert_eq!(dec.backend, "halo2/ipa".to_owned());
         assert_eq!(dec.bytes, bytes);
+    }
+    #[test]
+    fn bounded_byte_boxes_decode_every_packed_struct_layout() {
+        let proof = ProofBox::new("halo2/ipa".into(), vec![1, 2, 3, 5, 8]);
+        let verifying_key = VerifyingKeyBox::new("halo2/ipa".into(), vec![13, 21, 34]);
+        for flags in [
+            ncore::default_encode_flags() | ncore::header_flags::PACKED_STRUCT,
+            ncore::default_encode_flags()
+                | ncore::header_flags::PACKED_STRUCT
+                | ncore::header_flags::FIELD_BITSET,
+        ] {
+            let proof_payload = encode_payload_with_flags(&proof, flags);
+            let key_payload = encode_payload_with_flags(&verifying_key, flags);
+            let _flags = ncore::DecodeFlagsGuard::enter(flags);
+            let (decoded_proof, proof_used) =
+                <ProofBox as ncore::DecodeFromSlice>::decode_from_slice(&proof_payload)
+                    .expect("decode bounded proof byte box");
+            let (decoded_key, key_used) =
+                <VerifyingKeyBox as ncore::DecodeFromSlice>::decode_from_slice(&key_payload)
+                    .expect("decode bounded verifier-key byte box");
+            assert_eq!(decoded_proof, proof);
+            assert_eq!(proof_used, proof_payload.len());
+            assert_eq!(decoded_key, verifying_key);
+            assert_eq!(key_used, key_payload.len());
+
+            let key_byte_field_start = {
+                let (_, byte_field, _) = take_byte_box_fields(
+                    &key_payload,
+                    VERIFYING_KEY_BOX_MAX_FIELD_BYTES_V1,
+                    Some(VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1),
+                )
+                .expect("locate encoded verifier-key byte field");
+                (byte_field.as_ptr() as usize).saturating_sub(key_payload.as_ptr() as usize)
+            };
+            let mut oversized = key_payload;
+            oversized[key_byte_field_start..key_byte_field_start + 8].copy_from_slice(
+                &u64::try_from(VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1 + 1)
+                    .expect("verifier-key cap fits u64")
+                    .to_le_bytes(),
+            );
+            assert!(matches!(
+                <VerifyingKeyBox as ncore::DecodeFromSlice>::decode_from_slice(&oversized),
+                Err(ncore::Error::LengthMismatch)
+            ));
+        }
+    }
+    #[test]
+    fn proof_box_decode_enforces_complete_canonical_cap_in_every_layout() {
+        let backend: iroha_schema::Ident = "halo2/ipa".into();
+        let maximum_payload = proof_box_max_proof_bytes_v1(backend.as_str())
+            .expect("bounded backend leaves room for proof bytes");
+        let proof = ProofBox::new(backend, vec![0xA5; maximum_payload]);
+        assert_eq!(
+            proof.canonical_encoded_len_v1(),
+            Some(PROOF_BOX_MAX_ENCODED_BYTES_V1)
+        );
+
+        for flags in [
+            ncore::default_encode_flags(),
+            ncore::default_encode_flags() | ncore::header_flags::PACKED_STRUCT,
+            ncore::default_encode_flags()
+                | ncore::header_flags::PACKED_STRUCT
+                | ncore::header_flags::FIELD_BITSET,
+        ] {
+            let mut payload = encode_payload_with_flags(&proof, flags);
+            let _flags = ncore::DecodeFlagsGuard::enter(flags);
+            let (decoded, used) = <ProofBox as ncore::DecodeFromSlice>::decode_from_slice(&payload)
+                .expect("decode exact-cap proof box");
+            assert_eq!(decoded, proof);
+            assert_eq!(used, payload.len());
+            drop(decoded);
+
+            let byte_field_start = {
+                let (_, byte_field, _) =
+                    take_byte_box_fields(&payload, MAX_LEN_PREFIXED_FIELD_BYTES, None)
+                        .expect("locate exact-cap proof byte field");
+                (byte_field.as_ptr() as usize).saturating_sub(payload.as_ptr() as usize)
+            };
+            payload[byte_field_start..byte_field_start + 8].copy_from_slice(
+                &u64::try_from(maximum_payload + 1)
+                    .expect("proof limit fits u64")
+                    .to_le_bytes(),
+            );
+            if flags & ncore::header_flags::FIELD_BITSET != 0 {
+                // Hybrid layout derives the raw-byte span from the inner sequence length.
+                // Supply the claimed final byte so rejection reaches the canonical-total
+                // preflight rather than stopping at truncation.
+                payload.push(0xA5);
+            }
+            assert!(matches!(
+                <ProofBox as ncore::DecodeFromSlice>::decode_from_slice(&payload),
+                Err(ncore::Error::LengthMismatch)
+            ));
+        }
     }
     #[test]
     fn verifying_key_roundtrip() {
@@ -3651,12 +3854,35 @@ mod tests {
     }
     #[cfg(feature = "json")]
     #[test]
+    fn proof_primitives_json_reject_unknown_first_release_fields() {
+        let proof = r#"{
+            "backend": "halo2/ipa",
+            "bytes": [1, 2, 3],
+            "future_proof_metadata": true
+        }"#;
+        let error = norito::json::from_str::<ProofBox>(proof)
+            .expect_err("ProofBox must reject unknown first-release fields");
+        assert!(error.to_string().contains("unknown"));
+
+        let verifying_key = r#"{
+            "backend": "halo2/ipa",
+            "name": "vk_1",
+            "future_registry_metadata": true
+        }"#;
+        let error = norito::json::from_str::<VerifyingKeyId>(verifying_key)
+            .expect_err("VerifyingKeyId must reject unknown first-release fields");
+        assert!(error.to_string().contains("unknown"));
+    }
+    #[cfg(feature = "json")]
+    #[test]
     fn proof_attachment_json_accepts_reference_only_payload() {
         let json = r#"{
             "backend": "halo2/ipa",
             "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
             "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
-            "vk_commitment": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7]
+            "vk_commitment": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7],
+            "envelope_hash": null,
+            "lane_privacy": null
         }"#;
         let attachment: ProofAttachment = norito::json::from_str(json).expect("reference JSON");
         assert_eq!(attachment.backend.as_str(), "halo2/ipa");
@@ -3678,16 +3904,19 @@ mod tests {
         let json = r#"{
             "backend": "halo2/ipa",
             "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
-            "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
+            "vk_commitment": null,
+            "envelope_hash": null,
+            "lane_privacy": null
         }"#;
         let attachment: ProofAttachment = norito::json::from_str(json).expect("canonical JSON");
         assert_eq!(attachment.proof.bytes, vec![1, 2, 3]);
         let canonical = norito::json::to_json(&attachment).expect("serialize canonical JSON");
         assert!(canonical.contains("\"bytes\":[1,2,3]"));
         assert!(!canonical.contains("bytes_b64"));
-        assert!(!canonical.contains("vk_commitment"));
-        assert!(!canonical.contains("envelope_hash"));
-        assert!(!canonical.contains("lane_privacy"));
+        assert!(canonical.contains("\"vk_commitment\":null"));
+        assert!(canonical.contains("\"envelope_hash\":null"));
+        assert!(canonical.contains("\"lane_privacy\":null"));
         let roundtrip: ProofAttachment =
             norito::json::from_str(&canonical).expect("canonical roundtrip JSON");
         assert_eq!(roundtrip, attachment);
@@ -3701,9 +3930,12 @@ mod tests {
     #[test]
     fn proof_attachment_json_streaming_decoder_is_field_order_independent() {
         let json = r#"{
+            "lane_privacy": null,
             "vk_ref": { "name": "vk_1", "backend": "halo2/ipa" },
+            "envelope_hash": null,
             "proof": { "bytes": [1, 2, 3], "backend": "halo2/ipa" },
-            "backend": "halo2/ipa"
+            "backend": "halo2/ipa",
+            "vk_commitment": null
         }"#;
         let attachment: ProofAttachment =
             norito::json::from_str(json).expect("reordered canonical attachment JSON");
@@ -3767,52 +3999,77 @@ mod tests {
     }
     #[cfg(feature = "json")]
     #[test]
-    fn proof_attachment_json_rejects_present_null_fields() {
+    fn proof_attachment_json_requires_explicit_nullable_fields() {
+        let canonical = r#"{
+            "backend": "halo2/ipa",
+            "proof": { "backend": "halo2/ipa", "bytes": [1] },
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
+            "vk_commitment": null,
+            "envelope_hash": null,
+            "lane_privacy": null
+        }"#;
+        let attachment = norito::json::from_str::<ProofAttachment>(canonical)
+            .expect("explicit null is the canonical spelling for an empty nullable field");
+        assert!(attachment.vk_commitment.is_none());
+        assert!(attachment.envelope_hash.is_none());
+        assert!(attachment.lane_privacy.is_none());
+        let value = norito::json::parse_value(canonical).expect("canonical generic JSON fixture");
+        let from_value =
+            <ProofAttachment as norito::json::JsonDeserialize>::json_from_value(&value)
+                .expect("json_from_value accepts the same explicit-null shape");
+        assert_eq!(from_value, attachment);
+
         for json in [
             r#"{
                 "backend": null,
                 "proof": { "backend": "halo2/ipa", "bytes": [1] },
-                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
+                "vk_commitment": null,
+                "envelope_hash": null,
+                "lane_privacy": null
             }"#,
             r#"{
                 "backend": "halo2/ipa",
                 "proof": null,
-                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
-            }"#,
-            r#"{
-                "backend": "halo2/ipa",
-                "proof": { "backend": "halo2/ipa", "bytes": [1] },
-                "vk_ref": null
-            }"#,
-            r#"{
-                "backend": "halo2/ipa",
-                "proof": { "backend": "halo2/ipa", "bytes": [1] },
                 "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
-                "vk_commitment": null
+                "vk_commitment": null,
+                "envelope_hash": null,
+                "lane_privacy": null
             }"#,
             r#"{
                 "backend": "halo2/ipa",
                 "proof": { "backend": "halo2/ipa", "bytes": [1] },
-                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
-                "envelope_hash": null
-            }"#,
-            r#"{
-                "backend": "halo2/ipa",
-                "proof": { "backend": "halo2/ipa", "bytes": [1] },
-                "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
+                "vk_ref": null,
+                "vk_commitment": null,
+                "envelope_hash": null,
                 "lane_privacy": null
             }"#,
         ] {
             assert!(
                 norito::json::from_str::<ProofAttachment>(json).is_err(),
-                "present null must not alias an absent first-release field: {json}"
+                "non-nullable field must reject null: {json}"
             );
             let value = norito::json::parse_value(json).expect("valid generic JSON fixture");
             assert!(
                 <ProofAttachment as norito::json::JsonDeserialize>::json_from_value(&value)
                     .is_err(),
-                "json_from_value must enforce the same present-null rule: {json}"
+                "json_from_value must enforce the same non-nullable rule: {json}"
             );
+        }
+
+        for missing_field in ["vk_commitment", "envelope_hash", "lane_privacy"] {
+            let mut value = norito::json::parse_value(canonical).expect("canonical JSON fixture");
+            value
+                .as_object_mut()
+                .expect("attachment object")
+                .remove(missing_field);
+            let json = norito::json::to_json(&value).expect("serialize missing-field fixture");
+            let error = norito::json::from_str::<ProofAttachment>(&json)
+                .expect_err("omitted nullable field must reject in first-release JSON");
+            assert!(error.to_string().contains(missing_field));
+            let error = <ProofAttachment as norito::json::JsonDeserialize>::json_from_value(&value)
+                .expect_err("Value path must reject the same omitted nullable field");
+            assert!(error.to_string().contains(missing_field));
         }
     }
     #[cfg(feature = "json")]
@@ -3948,7 +4205,9 @@ mod tests {
                 "backend": "halo2/ipa",
                 "proof": {{ "backend": "halo2/ipa", "bytes": [1, 2, 3] }},
                 "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_1" }},
-                "envelope_hash": {envelope_hash_json}
+                "vk_commitment": null,
+                "envelope_hash": {envelope_hash_json},
+                "lane_privacy": null
             }}"#
         );
         let attachment: ProofAttachment =
@@ -4138,7 +4397,10 @@ mod tests {
         let proof_backend_json = r#"{
             "backend": "halo2/ipa",
             "proof": { "backend": "stark/fri", "bytes": [1, 2, 3] },
-            "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+            "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
+            "vk_commitment": null,
+            "envelope_hash": null,
+            "lane_privacy": null
         }"#;
         let err = norito::json::from_str::<ProofAttachment>(proof_backend_json)
             .expect_err("proof backend mismatch must be rejected");
@@ -4146,7 +4408,10 @@ mod tests {
         let vk_backend_json = r#"{
             "backend": "halo2/ipa",
             "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
-            "vk_ref": { "backend": "stark/fri", "name": "vk_1" }
+            "vk_ref": { "backend": "stark/fri", "name": "vk_1" },
+            "vk_commitment": null,
+            "envelope_hash": null,
+            "lane_privacy": null
         }"#;
         let err = norito::json::from_str::<ProofAttachment>(vk_backend_json)
             .expect_err("vk_ref backend mismatch must be rejected");
@@ -4178,7 +4443,10 @@ mod tests {
         let json = r#"{
             "backend": "halo2/ipa",
             "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
-            "vk_ref": { "backend": "halo2/ipa", "name": "   " }
+            "vk_ref": { "backend": "halo2/ipa", "name": "   " },
+            "vk_commitment": null,
+            "envelope_hash": null,
+            "lane_privacy": null
         }"#;
         let err = norito::json::from_str::<ProofAttachment>(json)
             .expect_err("blank verifying key names must be rejected");
@@ -4192,7 +4460,10 @@ mod tests {
                 r#"{
                     "backend": "   ",
                     "proof": { "backend": "   ", "bytes": [1, 2, 3] },
-                    "vk_ref": { "backend": "   ", "name": "vk_1" }
+                    "vk_ref": { "backend": "   ", "name": "vk_1" },
+                    "vk_commitment": null,
+                    "envelope_hash": null,
+                    "lane_privacy": null
                 }"#,
                 "backend",
             ),
@@ -4200,7 +4471,10 @@ mod tests {
                 r#"{
                     "backend": "halo2/ipa",
                     "proof": { "backend": "   ", "bytes": [1, 2, 3] },
-                    "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+                    "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
+                    "vk_commitment": null,
+                    "envelope_hash": null,
+                    "lane_privacy": null
                 }"#,
                 "proof.backend",
             ),
@@ -4208,7 +4482,10 @@ mod tests {
                 r#"{
                     "backend": "halo2/ipa",
                     "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
-                    "vk_ref": { "backend": "   ", "name": "vk_1" }
+                    "vk_ref": { "backend": "   ", "name": "vk_1" },
+                    "vk_commitment": null,
+                    "envelope_hash": null,
+                    "lane_privacy": null
                 }"#,
                 "vk_ref.backend",
             ),
@@ -4234,7 +4511,10 @@ mod tests {
                 r#"{
                     "backend": "Halo2/ipa",
                     "proof": { "backend": "Halo2/ipa", "bytes": [1, 2, 3] },
-                    "vk_ref": { "backend": "Halo2/ipa", "name": "vk_1" }
+                    "vk_ref": { "backend": "Halo2/ipa", "name": "vk_1" },
+                    "vk_commitment": null,
+                    "envelope_hash": null,
+                    "lane_privacy": null
                 }"#
                 .to_owned(),
                 "vk_ref",
@@ -4243,7 +4523,10 @@ mod tests {
                 r#"{
                     "backend": "halo2/ipa",
                     "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
-                    "vk_ref": { "backend": "halo2/ipa", "name": "Vk_1" }
+                    "vk_ref": { "backend": "halo2/ipa", "name": "Vk_1" },
+                    "vk_commitment": null,
+                    "envelope_hash": null,
+                    "lane_privacy": null
                 }"#
                 .to_owned(),
                 "vk_ref",
@@ -4252,7 +4535,10 @@ mod tests {
                 r#"{
                     "backend": "halo2/ipa",
                     "proof": { "backend": "halo2/ipa", "bytes": [] },
-                    "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" }
+                    "vk_ref": { "backend": "halo2/ipa", "name": "vk_1" },
+                    "vk_commitment": null,
+                    "envelope_hash": null,
+                    "lane_privacy": null
                 }"#
                 .to_owned(),
                 "proof.bytes",
@@ -4263,7 +4549,9 @@ mod tests {
                         "backend": "halo2/ipa",
                         "proof": {{ "backend": "halo2/ipa", "bytes": [1, 2, 3] }},
                         "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_1" }},
-                        "vk_commitment": {zero_hash}
+                        "vk_commitment": {zero_hash},
+                        "envelope_hash": null,
+                        "lane_privacy": null
                     }}"#
                 ),
                 "vk_commitment",
@@ -4274,7 +4562,9 @@ mod tests {
                         "backend": "halo2/ipa",
                         "proof": {{ "backend": "halo2/ipa", "bytes": [1, 2, 3] }},
                         "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_1" }},
-                        "envelope_hash": {zero_hash}
+                        "vk_commitment": null,
+                        "envelope_hash": {zero_hash},
+                        "lane_privacy": null
                     }}"#
                 ),
                 "envelope_hash",
@@ -4285,7 +4575,9 @@ mod tests {
                         "backend": "halo2/ipa",
                         "proof": {{ "backend": "halo2/ipa", "bytes": [1, 2, 3] }},
                         "vk_ref": {{ "backend": "halo2/ipa", "name": "vk_1" }},
-                        "envelope_hash": {forged_hash}
+                        "vk_commitment": null,
+                        "envelope_hash": {forged_hash},
+                        "lane_privacy": null
                     }}"#
                 ),
                 "envelope_hash",

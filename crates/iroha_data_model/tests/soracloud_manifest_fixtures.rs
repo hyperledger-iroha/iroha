@@ -1835,18 +1835,8 @@ fn fhe_execution_policy_fixture_rejects_adversarial_bootstrap_digest_drift() {
             .is_some(),
         "fixture should declare bootstrap proof digest before the omission check"
     );
-    let decoded_missing_digest: FheExecutionPolicyV1 =
-        json::from_value(missing_digest).expect("defaulted digest omission must still decode");
-    let error = decoded_missing_digest
-        .validate()
-        .expect_err("bootstrap-capable decoded fixture must reject missing proof digest");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "bootstrap_key_zero_refresh_proof_statement_digest",
-            ..
-        }
-    ));
+    json::from_value::<FheExecutionPolicyV1>(missing_digest)
+        .expect_err("canonical V1 JSON must reject an omitted bootstrap proof digest key");
     let mut stale_digest = expected_fhe_execution_policy();
     stale_digest.max_bootstrap_count = 0;
     let error = stale_digest
@@ -1868,17 +1858,15 @@ fn fhe_execution_policy_fixture_rejects_adversarial_bootstrap_digest_drift() {
         "max_bootstrap_count".to_string(),
         json::Value::Number(0_u64.into()),
     );
-    assert!(
-        object
-            .remove("bootstrap_key_zero_refresh_proof_statement_digest")
-            .is_some(),
-        "fixture should declare bootstrap proof digest before the zero-budget check"
+    object.insert(
+        "bootstrap_key_zero_refresh_proof_statement_digest".to_string(),
+        json::Value::Null,
     );
     let decoded_non_bootstrap: FheExecutionPolicyV1 =
-        json::from_value(non_bootstrap_json).expect("non-bootstrap omitted digest must decode");
+        json::from_value(non_bootstrap_json).expect("explicit null digest must decode");
     decoded_non_bootstrap
         .validate()
-        .expect("zero-bootstrap decoded fixture may omit the proof digest");
+        .expect("zero-bootstrap decoded fixture may set the proof digest to null");
 }
 #[test]
 fn fhe_execution_policy_norito_rejects_adversarial_bootstrap_digest_drift_after_decode() {
@@ -1954,19 +1942,8 @@ fn fhe_governance_bundle_fixture_rejects_adversarial_policy_digest_drift() {
             .is_some(),
         "bundle fixture should declare public-key proof digest before the omission check"
     );
-    let decoded_missing_public_key_digest: FheGovernanceBundleV1 =
-        json::from_value(missing_public_key_digest)
-            .expect("defaulted nested public-key digest omission must decode");
-    let error = decoded_missing_public_key_digest
-        .validate_for_admission()
-        .expect_err("production governance bundles must reject missing public-key proof digest");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "public_key_proof_statement_digest",
-            ..
-        }
-    ));
+    json::from_value::<FheGovernanceBundleV1>(missing_public_key_digest)
+        .expect_err("canonical V1 JSON must reject an omitted nested public-key digest key");
     let mut missing_digest: json::Value =
         json::from_str(FHE_GOVERNANCE_BUNDLE_FIXTURE).expect("fixture must decode as JSON value");
     let execution_policy = missing_digest
@@ -1982,18 +1959,8 @@ fn fhe_governance_bundle_fixture_rejects_adversarial_policy_digest_drift() {
             .is_some(),
         "bundle fixture should declare bootstrap proof digest before the omission check"
     );
-    let decoded_missing_digest: FheGovernanceBundleV1 =
-        json::from_value(missing_digest).expect("defaulted nested digest omission must decode");
-    let error = decoded_missing_digest
-        .validate_for_admission()
-        .expect_err("bootstrap-capable nested policy must reject missing proof digest");
-    assert!(matches!(
-        error,
-        SoracloudManifestError::InvalidField {
-            field: "bootstrap_key_zero_refresh_proof_statement_digest",
-            ..
-        }
-    ));
+    json::from_value::<FheGovernanceBundleV1>(missing_digest)
+        .expect_err("canonical V1 JSON must reject an omitted nested bootstrap digest key");
     let mut stale_digest = expected_fhe_governance_bundle();
     stale_digest.execution_policy.max_bootstrap_count = 0;
     let error = stale_digest
@@ -2019,17 +1986,15 @@ fn fhe_governance_bundle_fixture_rejects_adversarial_policy_digest_drift() {
         "max_bootstrap_count".to_string(),
         json::Value::Number(0_u64.into()),
     );
-    assert!(
-        execution_policy
-            .remove("bootstrap_key_zero_refresh_proof_statement_digest")
-            .is_some(),
-        "bundle fixture should declare bootstrap proof digest before the zero-budget check"
+    execution_policy.insert(
+        "bootstrap_key_zero_refresh_proof_statement_digest".to_string(),
+        json::Value::Null,
     );
     let decoded_non_bootstrap: FheGovernanceBundleV1 =
-        json::from_value(non_bootstrap_json).expect("non-bootstrap omitted digest must decode");
+        json::from_value(non_bootstrap_json).expect("explicit null nested digest must decode");
     decoded_non_bootstrap
         .validate_for_admission()
-        .expect("zero-bootstrap nested policy may omit the proof digest");
+        .expect("zero-bootstrap nested policy may set the proof digest to null");
 }
 #[test]
 fn fhe_governance_bundle_norito_rejects_adversarial_policy_digest_drift_after_decode() {

@@ -123,7 +123,10 @@ impl V2EffectServices for ProductionV2Services {
             | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
             | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
             | wire::ConsensusMessageV2Payload::VrfCommit(_)
-            | wire::ConsensusMessageV2Payload::VrfReveal(_) => self.remote_voters(),
+            | wire::ConsensusMessageV2Payload::VrfReveal(_)
+            | wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(_) => {
+                self.remote_voters()
+            }
         };
         if let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload {
             let manifest_hash = HashOf::new(&proposal.manifest);
@@ -467,9 +470,13 @@ impl V2EffectServices for ProductionV2Services {
             let session = fetch.chunks.as_mut().ok_or_else(|| {
                 "manifest-less certified body fetch cannot accept chunks".to_owned()
             })?;
-            session
+            let admission = session
                 .admit(chunk.chunk())
                 .map_err(|error| error.to_string())?;
+            if admission == crate::sumeragi::v2_chunks::ChunkAdmission::Duplicate {
+                operation.complete();
+                return Ok(AuthenticatedChunkDisposition::Accepted);
+            }
             session.reconstruct()
         };
         let body = match reconstruction {
@@ -553,6 +560,7 @@ impl V2EffectServices for ProductionV2Services {
         &mut self,
         tag: EventTag,
         certificate: wire::TimeoutCertificate,
+        protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     ) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
         let _permit = output_guard
@@ -570,7 +578,7 @@ impl V2EffectServices for ProductionV2Services {
         }
         let next_recovery_authority = self
             .leader_wire_recovery_authority
-            .advance_view(tag.view())?;
+            .advance_view(tag.view(), protected_lock)?;
         self.leader_wire_ingress
             .advance_leader_wire_recovery_cut(next_recovery_authority)?;
         self.leader_wire_recovery_authority = next_recovery_authority;
@@ -741,6 +749,9 @@ fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRou
         | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
         | wire::ConsensusMessageV2Payload::VrfCommit(_)
         | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
+        wire::ConsensusMessageV2Payload::GlobalBeaconPartialSignature(partial) => {
+            Some(partial.round)
+        }
     }
 }
 impl PendingExactFanout {

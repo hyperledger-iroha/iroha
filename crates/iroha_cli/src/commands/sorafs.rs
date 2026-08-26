@@ -17840,12 +17840,13 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
         let mut artifacts = args
             .issue_with_rng(&mut ctx, &mut rng, default_now)
             .expect("issue token");
-        let verifier = AdmissionTokenVerifier::new(
+        let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
             Duration::from_secs(900),
             Duration::from_secs(5),
-        );
+        )
+        .expect("generated verifier key must match ML-DSA-44");
         let verify_now = SystemTime::UNIX_EPOCH
             + Duration::from_secs(artifacts.token.issued_at().saturating_add(1));
         verifier
@@ -17874,16 +17875,17 @@ json_response_fixture!(StatusCode::OK, &norito::json!({
             fs::metadata(&output_path).expect("token metadata").mode() & 0o077,
             0
         );
-        let overwrite_error = HandshakeTokenIssueArgs::emit(
+        let error = HandshakeTokenIssueArgs::emit(
             &mut ctx,
             &artifacts,
             &output_path,
             TokenOutputFormat::Base64,
         )
         .expect_err("existing bearer output must not be overwritten");
+        let rendered = format!("{error:#}");
         assert!(
-            format!("{overwrite_error:#}")
-                .contains("failed to create new owner-private token output")
+            rendered.contains("failed to create new owner-private token output"),
+            "unexpected overwrite error: {rendered}"
         );
         artifacts.zeroize_encoded_token();
         assert!(artifacts.token_bytes.is_empty());

@@ -7,8 +7,11 @@ import hashlib
 from typing import Any, Dict, Optional
 from urllib.parse import quote
 
-CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
-CANONICAL_OWNER_HEADER = "0x02000120" + "00" * 32
+CANONICAL_OWNER = "sorauﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP"
+CANONICAL_OWNER_HEADER = (
+    "0x02000120"
+    "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+)
 
 
 def authority_fee_payment(gas_limit: Optional[int] = None) -> Dict[str, Any]:

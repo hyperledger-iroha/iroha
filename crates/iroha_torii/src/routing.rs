@@ -327,7 +327,6 @@ pub(crate) struct PipelinePreflightBlock {
 }
 ( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 pub(crate) struct PipelinePreflightPipeline {
-    pub signature_batch_max: u64,
     pub signature_batch_max_ed25519: u64,
     pub signature_batch_max_secp256k1: u64,
     pub signature_batch_max_pqc: u64,
@@ -7986,21 +7985,6 @@ pub(crate) async fn handle_v1_sccp_messages_recent(
     })
     .await
 }
-/// GET /v1/sumeragi/key-lifecycle — Bounded history of consensus key records (newest first)
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_key_lifecycle(
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    let records = sumeragi::status::consensus_key_history();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        return Ok(crate::NoritoBody(records).into_response());
-    }
-    pretty_json_response(&records)
-}
 /// Maximum voting-roster identities returned by the BLS-key operator snapshot.
 const BLS_KEY_RESPONSE_CAP: usize =
     iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT;
@@ -8145,7 +8129,6 @@ pub(crate) fn build_pipeline_preflight_response(
             max_transactions: block_params.max_transactions().get(),
         },
         pipeline: PipelinePreflightPipeline {
-            signature_batch_max: usize_to_u64(pipeline.signature_batch_max),
             signature_batch_max_ed25519: usize_to_u64(pipeline.signature_batch_max_ed25519),
             signature_batch_max_secp256k1: usize_to_u64(pipeline.signature_batch_max_secp256k1),
             signature_batch_max_pqc: usize_to_u64(pipeline.signature_batch_max_pqc),
@@ -11112,6 +11095,66 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan_strict_dur
             );
         })
 }
+pub(crate) fn push_accepted_ordinary_kagemusha_lifecycle_for_ingress_strict_durable_claim(
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
+    routing_plan: RoutingPlan,
+    expected_binding: &iroha_core::torii_proxy::OrdinaryKagemushaLifecycleAdmissionBindingV1,
+) -> Result<iroha_core::queue::QueuePlanDurableAdmissionV2> {
+    let pressure = {
+        let block_time = state.sumeragi_block_cadence();
+        queue.refresh_pressure_budget_from_block_time(block_time)
+    };
+    if pressure.saturated_by_age {
+        iroha_logger::debug!(
+            tx_hash = %accepted_tx.hash(),
+            queued = pressure.queued_tx_count,
+            tracked = pressure.tracked_tx_count,
+            capacity = pressure.capacity.get(),
+            oldest_queued_tx_age_ms = pressure.oldest_queued_tx_age_ms,
+            "local queue is latency-saturated; keeping ordinary lifecycle durable ingress open until capacity is exhausted"
+        );
+    }
+    queue
+        .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+            accepted_tx,
+            state.as_ref(),
+            routing_plan,
+            &expected_binding.admission_context,
+        )
+        .map_err(|queue::Failure { tx, err }| {
+            if matches!(err, queue::Error::Full) {
+                iroha_logger::debug!(
+                    tx_hash = %tx.as_ref().hash(),
+                    "queue rejected ordinary lifecycle durable transaction due to backpressure"
+                );
+            } else {
+                iroha_logger::warn!(
+                    tx_hash = %tx.as_ref().hash(),
+                    ?err,
+                    "failed to durably admit an ordinary lifecycle transaction"
+                );
+            }
+            drop(tx);
+            (err, queue.current_backpressure())
+        })
+        .map_err(|(err, backpressure)| Error::PushIntoQueue {
+            source: Box::new(err),
+            backpressure,
+        })
+        .inspect(|claim| {
+            let route = claim.routing_plan.coordinator_route();
+            iroha_logger::debug!(
+                lane = route.lane_id.as_u32(),
+                dataspace = route.dataspace_id.as_u64(),
+                authority_height = claim.context.authority_height,
+                proposal_height = claim.context.proposal_height,
+                globally_bound = claim.global_admission_identity.is_some(),
+                "ordinary lifecycle transaction enqueued with a durable unbound journal claim"
+            );
+        })
+}
 enum IngressRouting {
     Derived,
     Planned(RoutingPlan),
@@ -11227,17 +11270,11 @@ pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
     if accepted.is_empty() {
         return Ok(0);
     }
-    if accepted.iter().any(|(transaction, _)| {
-        transaction.entrypoint().admission_intent()
-            == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-    }) {
-        return Err(Error::PushIntoQueue {
-            source: Box::new(iroha_core::queue::Error::UnresolvedRoute {
-                reason: "QueuePlanSynced transaction batch requires per-entry globally certified admission"
-                    .to_owned(),
-            }),
-            backpressure: queue.current_backpressure(),
-        });
+    for (transaction, _) in &accepted {
+        ensure_generic_transaction_batch_entrypoint_allowed(
+            queue.as_ref(),
+            transaction.entrypoint(),
+        )?;
     }
     let pressure = {
         let block_time = state.sumeragi_block_cadence();
@@ -11275,6 +11312,58 @@ pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
                 "transaction batch enqueued successfully"
             );
         })
+}
+
+const GENERIC_BATCH_ORDINARY_KAGEMUSHA_LIFECYCLE_REASON: &str = "ordinary Kagemusha lifecycle transaction batch entries require the dedicated authenticated durable submission route";
+const GENERIC_BATCH_QUEUE_PLAN_SYNCED_REASON: &str =
+    "QueuePlanSynced transaction batch requires per-entry globally certified admission";
+
+fn generic_transaction_batch_unresolved_route(queue: &Queue, reason: &str) -> Error {
+    Error::PushIntoQueue {
+        source: Box::new(iroha_core::queue::Error::UnresolvedRoute {
+            reason: reason.to_owned(),
+        }),
+        backpressure: queue.current_backpressure(),
+    }
+}
+
+pub(crate) fn ensure_generic_transaction_batch_not_ordinary_kagemusha_lifecycle(
+    queue: &Queue,
+    transaction: &SignedTransaction,
+) -> Result<()> {
+    if iroha_core::torii_proxy::validate_ordinary_kagemusha_lifecycle_signed_transaction(
+        transaction,
+    )
+    .is_ok()
+    {
+        return Err(generic_transaction_batch_unresolved_route(
+            queue,
+            GENERIC_BATCH_ORDINARY_KAGEMUSHA_LIFECYCLE_REASON,
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_generic_transaction_batch_entrypoint_allowed(
+    queue: &Queue,
+    entrypoint: &TransactionEntrypoint,
+) -> Result<()> {
+    if iroha_core::torii_proxy::validate_ordinary_kagemusha_lifecycle_entrypoint(entrypoint).is_ok()
+    {
+        return Err(generic_transaction_batch_unresolved_route(
+            queue,
+            GENERIC_BATCH_ORDINARY_KAGEMUSHA_LIFECYCLE_REASON,
+        ));
+    }
+    if entrypoint.admission_intent()
+        == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    {
+        return Err(generic_transaction_batch_unresolved_route(
+            queue,
+            GENERIC_BATCH_QUEUE_PLAN_SYNCED_REASON,
+        ));
+    }
+    Ok(())
 }
 fn handle_transaction_inner_sync(
     queue: Arc<Queue>,
@@ -18730,7 +18819,7 @@ fn execute_contract_view(
             vm_diagnostic: None,
         })?;
     host.set_public_inputs_from_parameters(query_view.world.parameters());
-    host.set_vrf_epoch_seeds_from_world(&query_view.world);
+    host.set_vrf_epoch_seeds_from_state(&query_view);
     host.set_query_state(&query_view);
     host.set_prepared_contract_cache(program.prepared_contract_cache());
     vm.set_gas_limit(gas_limit);
@@ -18938,7 +19027,7 @@ fn execute_contract_call_simulation(
             queued_instructions: Vec::new(),
         })?;
     host.set_public_inputs_from_parameters(query_view.world.parameters());
-    host.set_vrf_epoch_seeds_from_world(&query_view.world);
+    host.set_vrf_epoch_seeds_from_state(&query_view);
     host.set_query_state(&query_view);
     host.set_prepared_contract_cache(program.prepared_contract_cache());
     vm.set_gas_limit(gas_limit);
@@ -41632,11 +41721,25 @@ fn governance_stream_payloads(event_box: &EventBox) -> Vec<Value> {
             proposal_id = Some(id.clone());
             referendum_id = Some(id);
         }
-        GovernanceEvent::ParliamentBallotRecorded(payload) => {
-            let id = hex::encode(payload.proposal_id);
-            proposal_id = Some(id.clone());
-            referendum_id = Some(id);
+        GovernanceEvent::ParliamentAttemptCreated(payload) => {
+            proposal_id = Some(payload.proposal_content_id.to_hex());
         }
+        GovernanceEvent::ParliamentLifecycleTransitionApplied(payload) => {
+            proposal_id = Some(payload.proposal_content_id.to_hex());
+        }
+        GovernanceEvent::ParliamentAttemptTransitioned(payload) => {
+            proposal_id = Some(payload.proposal_content_id.to_hex());
+        }
+        GovernanceEvent::ParliamentAggregateFinalized(payload) => {
+            proposal_id = Some(payload.proposal_content_id.to_hex());
+        }
+        GovernanceEvent::ParliamentCertificateIssued(payload) => {
+            proposal_id = Some(payload.proposal_content_id.to_hex());
+        }
+        GovernanceEvent::ParliamentBodyTransitioned(_)
+        | GovernanceEvent::ParliamentBallotTransitioned(_)
+        | GovernanceEvent::ParliamentConcentrationWarning(_)
+        | GovernanceEvent::ThresholdKeyLifecycleApplied(_) => {}
         GovernanceEvent::CouncilPersisted(_) | GovernanceEvent::ParliamentSelected(_) => {
             council_updated = true;
         }
@@ -43023,146 +43126,6 @@ pub fn handle_v1_sumeragi_status_sse(
     );
     Sse::new(stream)
 }
-/// GET /v1/sumeragi/vrf/penalties/{epoch} — epoch VRF penalties snapshot
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_vrf_penalties(
-    epoch: axum::extract::Path<String>,
-) -> Result<impl IntoResponse> {
-    // Parse epoch string as u64 (accept decimal or hex with 0x prefix)
-    let ep_str = epoch.0;
-    let ep = if let Some(rest) = ep_str.strip_prefix("0x") {
-        u64::from_str_radix(rest, 16).map_err(|_| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid epoch".into(),
-                ),
-            ))
-        })?
-    } else {
-        ep_str.parse::<u64>().map_err(|_| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid epoch".into(),
-                ),
-            ))
-        })?
-    };
-    let (penalty_epoch, committed_total, no_participation_total, late_reveals_total) =
-        status::vrf_penalty_snapshot();
-    if let Some(r) = iroha_core::sumeragi::epoch_report::get(ep) {
-        let payload = crate::json_object(vec![
-            json_entry("epoch", r.epoch),
-            json_entry("roster_len", r.roster_len),
-            json_entry("committed_no_reveal", r.committed_no_reveal),
-            json_entry("no_participation", r.no_participation),
-            json_entry("vrf_penalty_epoch", penalty_epoch),
-            json_entry("vrf_committed_no_reveal_total", committed_total),
-            json_entry("vrf_no_participation_total", no_participation_total),
-            json_entry("vrf_late_reveals_total", late_reveals_total),
-        ]);
-        let body = norito::json::to_json_pretty(&payload).map_err(|e| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(e.to_string()),
-            ))
-        })?;
-        Ok(application_json_response(body))
-    } else {
-        // 404-like empty JSON (stable shape)
-        let payload = crate::json_object(vec![
-            json_entry("epoch", ep),
-            json_entry("roster_len", 0u64),
-            json_entry("committed_no_reveal", Vec::<u32>::new()),
-            json_entry("no_participation", Vec::<u32>::new()),
-            json_entry("vrf_penalty_epoch", penalty_epoch),
-            json_entry("vrf_committed_no_reveal_total", committed_total),
-            json_entry("vrf_no_participation_total", no_participation_total),
-            json_entry("vrf_late_reveals_total", late_reveals_total),
-        ]);
-        let body = norito::json::to_json_pretty(&payload).map_err(|e| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(e.to_string()),
-            ))
-        })?;
-        Ok(application_json_response(body))
-    }
-}
-/// GET /v1/sumeragi/vrf/epoch/{epoch} — persisted VRF epoch snapshot
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_vrf_epoch(
-    state: Arc<CoreState>,
-    epoch: u64,
-) -> Result<impl IntoResponse> {
-    let world = state.world_view();
-    let record_opt = world
-        .vrf_epochs()
-        .iter()
-        .find(|entry| *entry.0 == epoch)
-        .map(|(_, rec)| rec.clone());
-    let payload = if let Some(record) = record_opt {
-        let late_reveals_total = u64::try_from(record.late_reveals.len()).unwrap_or(0);
-        let late_reveals: Vec<Value> = record
-            .late_reveals
-            .iter()
-            .map(|entry| {
-                json_object(vec![
-                    json_entry("signer", entry.signer),
-                    json_entry("noted_at_height", entry.noted_at_height),
-                ])
-            })
-            .collect();
-        let participants: Vec<Value> = record
-            .participants
-            .iter()
-            .map(|p| {
-                let mut entries = vec![
-                    json_entry("signer", p.signer),
-                    json_entry("last_updated_height", p.last_updated_height),
-                ];
-                if let Some(commitment) = p.commitment {
-                    entries.push(json_entry("commitment", hex::encode(commitment)));
-                }
-                if let Some(reveal) = p.reveal {
-                    entries.push(json_entry("reveal", hex::encode(reveal)));
-                }
-                json_object(entries)
-            })
-            .collect();
-        crate::json_object(vec![
-            json_entry("epoch", record.epoch),
-            json_entry("found", true),
-            json_entry("seed_hex", hex::encode(record.seed)),
-            json_entry("epoch_length", record.epoch_length),
-            json_entry("commit_deadline_offset", record.commit_deadline_offset),
-            json_entry("reveal_deadline_offset", record.reveal_deadline_offset),
-            json_entry("roster_len", record.roster_len),
-            json_entry("finalized", record.finalized),
-            json_entry("updated_at_height", record.updated_at_height),
-            json_entry("participants", Value::Array(participants)),
-            json_entry("committed_no_reveal", record.committed_no_reveal.clone()),
-            json_entry("no_participation", record.no_participation.clone()),
-            json_entry("late_reveals_total", late_reveals_total),
-            json_entry("late_reveals", Value::Array(late_reveals)),
-        ])
-    } else {
-        crate::json_object(vec![
-            json_entry("epoch", epoch),
-            json_entry("found", false),
-            json_entry("seed_hex", Option::<String>::None),
-            json_entry("epoch_length", 0u64),
-            json_entry("commit_deadline_offset", 0u64),
-            json_entry("reveal_deadline_offset", 0u64),
-            json_entry("roster_len", 0u32),
-            json_entry("finalized", false),
-            json_entry("updated_at_height", 0u64),
-            json_entry("participants", Value::Array(Vec::new())),
-            json_entry("committed_no_reveal", Vec::<u32>::new()),
-            json_entry("no_participation", Vec::<u32>::new()),
-            json_entry("late_reveals_total", 0u64),
-            json_entry("late_reveals", Value::Array(Vec::new())),
-        ])
-    };
-    pretty_json_response(&payload)
-}
 /// Map an `EventBox` into a compact JSON object used by SSE/WS tests.
 pub fn event_to_json_value(ev: &iroha_data_model::events::EventBox) -> norito::json::Value {
     use iroha_data_model::events::pipeline::PipelineEventBox;
@@ -44246,8 +44209,12 @@ include!("routing/transaction_ingress_overload_tests.rs");
 #[cfg(test)]
 mod validation_fee_torii_ingress_tests {
     use super::*;
+    use iroha_config::parameters::actual::ParliamentTimedOvn;
     use iroha_core::{
         block::{BlockBuilder, ValidBlock},
+        governance::parliament::{
+            ParliamentAttemptStateV1, ParliamentDecisionModeV1, RequiredParliamentBodyV1,
+        },
         kura::Kura,
         query::store::LiveQueryStore,
         queue::{Queue, TransactionGuard},
@@ -44255,7 +44222,7 @@ mod validation_fee_torii_ingress_tests {
         smartcontracts::ivm::cache::IvmCache,
         state::{State, World},
     };
-    use iroha_crypto::{Algorithm, KeyPair, blake2::Blake2b512};
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         account::AccountId,
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
@@ -44280,14 +44247,10 @@ mod validation_fee_torii_ingress_tests {
             VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
             VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
             VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS, ValidationFeeChargingMode,
-            ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
-            ValidationFeeGovernanceWindowV1, ValidationFeeMultisigMarkerV1,
-            ValidationFeeParliamentAuthorizationV1, ValidationFeePayoutLifecycleReferenceV1,
-            ValidationFeePlainElectorateEligibilityRuleV1, ValidationFeePlainElectorateMemberV1,
-            ValidationFeePlainElectorateRulesV1, ValidationFeePlainElectorateSnapshotV1,
-            ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
-            ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
-            ValidationFeeTreasuryPayoutRecipientV1,
+            ValidationFeeMultisigMarkerV1, ValidationFeeParliamentAuthorizationV1,
+            ValidationFeePayoutLifecycleReferenceV1, ValidationFeePolicyRegistryEntryV1,
+            ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
+            ValidationFeeTreasuryPayoutBindingV1, ValidationFeeTreasuryPayoutRecipientV1,
         },
     };
     use iroha_executor_data_model::isi::multisig::MultisigPropose;
@@ -44303,14 +44266,12 @@ mod validation_fee_torii_ingress_tests {
     };
     const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
     const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = 10;
-    const TEST_REFERENDUM_START_HEIGHT: u64 = 1;
-    const TEST_REFERENDUM_DURATION_BLOCKS: u64 = 3_600;
-    const TEST_REFERENDUM_END_HEIGHT: u64 =
-        TEST_REFERENDUM_START_HEIGHT + TEST_REFERENDUM_DURATION_BLOCKS - 1;
-    const TEST_POLICY_ENACTMENT_HEIGHT: u64 = TEST_REFERENDUM_END_HEIGHT + 1;
+    const TEST_PROPOSAL_CREATED_HEIGHT: u64 = 1;
+    const TEST_POLICY_ENACTMENT_HEIGHT: u64 = 3_601;
     const TEST_POLICY_EFFECTIVE_HEIGHT: u64 =
         TEST_POLICY_ENACTMENT_HEIGHT + VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
     const TEST_ACTIVE_VALIDATION_HEIGHT: u64 = TEST_POLICY_EFFECTIVE_HEIGHT + 1;
+    const TEST_PARLIAMENT_POLICY_VERSION: u64 = 1;
     fn fixture_key_pair(seed: u8, algorithm: Algorithm, context: &'static str) -> KeyPair {
         checked_routing_fixture_keypair(seed, algorithm, context)
     }
@@ -44684,146 +44645,396 @@ mod validation_fee_torii_ingress_tests {
     fn validation_fee_policy_treasury(policy: &ValidationFeePolicyV1) -> AccountId {
         policy.treasury_account_id.clone()
     }
+    fn parliament_test_root(tag: u8) -> [u8; 32] {
+        [tag.max(1); 32]
+    }
+    fn parliament_test_candidates() -> Vec<AccountId> {
+        let mut candidates = (9_u8..=32)
+            .map(|seed| account(seed, "derive validation-fee Parliament candidate").0)
+            .collect::<Vec<_>>();
+        candidates.sort_unstable();
+        candidates
+    }
+    fn validation_fee_parliament_requirements() -> Vec<RequiredParliamentBodyV1> {
+        use iroha_data_model::governance::types::ParliamentBody;
+        [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::CoordinationCouncil,
+            ParliamentBody::FmaCommittee,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::PolicyJury,
+        ]
+        .into_iter()
+        .map(|body| RequiredParliamentBodyV1 {
+            body,
+            decision_mode: if body == ParliamentBody::PolicyJury {
+                ParliamentDecisionModeV1::HiddenBindingBallot
+            } else {
+                ParliamentDecisionModeV1::PublicFinding
+            },
+        })
+        .collect()
+    }
+    fn parliament_test_governance(
+        requirements: &[RequiredParliamentBodyV1],
+    ) -> iroha_config::parameters::actual::Governance {
+        use iroha_data_model::governance::types::ParliamentBody;
+        let mut governance = iroha_config::parameters::actual::Governance {
+            parliament_alternate_size: Some(0),
+            ..iroha_config::parameters::actual::Governance::default()
+        };
+        for requirement in requirements {
+            match requirement.body {
+                ParliamentBody::RulesCommittee => governance.rules_committee_size = 3,
+                ParliamentBody::AgendaCouncil => governance.agenda_council_size = 3,
+                ParliamentBody::InterestPanel => governance.interest_panel_size = 3,
+                ParliamentBody::ReviewPanel => governance.review_panel_size = 3,
+                ParliamentBody::CoordinationCouncil => governance.coordination_council_size = 3,
+                ParliamentBody::MpcCommittee => governance.mpc_committee_size = 3,
+                ParliamentBody::FmaCommittee => governance.fma_committee_size = 3,
+                ParliamentBody::OversightCommittee => governance.oversight_committee_size = 3,
+                ParliamentBody::PolicyJury => governance.policy_jury_size = 3,
+                ParliamentBody::ConfirmationJury => governance.confirmation_jury_size = 3,
+            }
+        }
+        governance
+    }
+    fn complete_parliament_body_for_authorization(
+        attempt: &mut ParliamentAttemptStateV1,
+        requirement: RequiredParliamentBodyV1,
+        election_attempt_id: iroha_data_model::governance::types::BodyElectionAttemptId,
+        result_tag: u8,
+    ) {
+        use iroha_data_model::governance::types::{
+            BallotAttemptId, BeaconPulseId, BeaconSessionId, DeliberationPhaseV1,
+            ParliamentAggregateOutcomeV1, ParliamentAggregateTallyV1, TleKeySessionId,
+            TleSessionId,
+        };
+        let governance_attempt_id = attempt.attempt().id;
+        attempt
+            .begin_invitation_acceptance(governance_attempt_id, election_attempt_id, 20, 1)
+            .expect("open deterministic Parliament invitation window");
+        let members = attempt
+            .election(&election_attempt_id)
+            .expect("drawn Parliament election")
+            .primary_assignments()
+            .iter()
+            .map(|assignment| assignment.member.clone())
+            .collect::<Vec<_>>();
+        for member in &members {
+            attempt
+                .record_invitation_response(
+                    governance_attempt_id,
+                    election_attempt_id,
+                    member,
+                    true,
+                    20,
+                )
+                .expect("accept deterministic Parliament invitation");
+        }
+        let body_instance_id = attempt
+            .seal_body_roster(governance_attempt_id, election_attempt_id, 21)
+            .expect("seal deterministic Parliament roster");
+        let mut phases = vec![
+            DeliberationPhaseV1::Orientation,
+            DeliberationPhaseV1::Evidence,
+            DeliberationPhaseV1::Questions,
+            DeliberationPhaseV1::Responses,
+            DeliberationPhaseV1::Deliberation,
+            DeliberationPhaseV1::Reflection,
+        ];
+        if requirement.decision_mode == ParliamentDecisionModeV1::HiddenBindingBallot {
+            phases.push(DeliberationPhaseV1::Vote);
+        }
+        for phase in phases {
+            attempt
+                .advance_body_phase(governance_attempt_id, body_instance_id, phase, 22, 1)
+                .expect("advance deterministic Parliament deliberation");
+        }
+        match requirement.decision_mode {
+            ParliamentDecisionModeV1::PublicFinding => {
+                let result_root = parliament_test_root(result_tag);
+                let mut finalized = false;
+                for member in &members {
+                    finalized = attempt
+                        .endorse_public_finding(
+                            governance_attempt_id,
+                            body_instance_id,
+                            result_root,
+                            member,
+                            22,
+                        )
+                        .expect("endorse deterministic public finding");
+                    if finalized {
+                        break;
+                    }
+                }
+                assert!(
+                    finalized,
+                    "three seats must reach the two-thirds finding quorum"
+                );
+            }
+            ParliamentDecisionModeV1::HiddenBindingBallot => {
+                let ballot_attempt_id = BallotAttemptId::derive_v1(body_instance_id, 0);
+                let release_beacon_session_id = BeaconSessionId::new(parliament_test_root(0xD0));
+                let tle_key_session_id = TleKeySessionId::new(parliament_test_root(0xD1));
+                let release_height = 40;
+                let tle_session_id = TleSessionId::derive_v1(
+                    ballot_attempt_id,
+                    tle_key_session_id,
+                    release_beacon_session_id,
+                    release_height,
+                );
+                attempt
+                    .register_ballot_attempt(
+                        governance_attempt_id,
+                        body_instance_id,
+                        ballot_attempt_id,
+                        0,
+                        tle_session_id,
+                        tle_key_session_id,
+                        release_beacon_session_id,
+                        30,
+                        ParliamentTimedOvn {
+                            registration_phase_blocks: 2,
+                            survivor_freeze_phase_blocks: 2,
+                            commitment_phase_blocks: 2,
+                            release_delay_blocks: 4,
+                            opening_phase_blocks: 2,
+                            max_ballot_retries: 2,
+                            max_corpus_entries: 1_000,
+                        },
+                        release_height,
+                    )
+                    .expect("register deterministic binding ballot");
+                let registration_root = parliament_test_root(0xD2);
+                let dropout_root = parliament_test_root(0xD3);
+                let survivor_root = parliament_test_root(0xD4);
+                let no_recovery_root = parliament_test_root(0xD5);
+                let corpus_root = parliament_test_root(0xD6);
+                let timed_commitment_root = parliament_test_root(0xD7);
+                attempt
+                    .close_ballot_registration(
+                        governance_attempt_id,
+                        ballot_attempt_id,
+                        registration_root,
+                        3,
+                        32,
+                    )
+                    .expect("close deterministic ballot registration");
+                attempt
+                    .freeze_ballot_survivors(
+                        governance_attempt_id,
+                        ballot_attempt_id,
+                        dropout_root,
+                        survivor_root,
+                        3,
+                        no_recovery_root,
+                        34,
+                    )
+                    .expect("freeze deterministic ballot survivors");
+                attempt
+                    .freeze_timed_ovn_corpus(
+                        governance_attempt_id,
+                        ballot_attempt_id,
+                        corpus_root,
+                        survivor_root,
+                        3,
+                        timed_commitment_root,
+                        36,
+                    )
+                    .expect("freeze deterministic timed-OVN corpus");
+                attempt
+                    .begin_ballot_opening_batch(
+                        governance_attempt_id,
+                        vec![ballot_attempt_id],
+                        release_beacon_session_id,
+                        release_height,
+                        release_height,
+                        BeaconPulseId::new(parliament_test_root(0xD8)),
+                    )
+                    .expect("open deterministic timed ballot");
+                let outcome = attempt
+                    .finalize_opened_ballot(
+                        governance_attempt_id,
+                        ballot_attempt_id,
+                        corpus_root,
+                        no_recovery_root,
+                        tle_session_id,
+                        parliament_test_root(0xD9),
+                        3,
+                        ParliamentAggregateTallyV1 {
+                            original_seats: 3,
+                            accepted_ballots: 3,
+                            aye: 2,
+                            nay: 1,
+                            abstain: 0,
+                        },
+                        41,
+                    )
+                    .expect("finalize deterministic aggregate ballot");
+                assert_eq!(outcome, ParliamentAggregateOutcomeV1::Approved);
+            }
+        }
+    }
+    fn validation_fee_test_authorization(
+        state: &State,
+        proposal_kind: &iroha_data_model::governance::types::ProposalKind,
+    ) -> (
+        ValidationFeeParliamentAuthorizationV1,
+        ParliamentAttemptStateV1,
+    ) {
+        use iroha_data_model::governance::types::{
+            BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, GovernanceAttemptId,
+            GovernanceAttemptStatusV1, GovernanceAttemptV1, GovernanceCertificateId,
+            GovernanceExpectedHeadAbsentV1, GovernanceExpectedHeadV1, GovernanceStageV1,
+            ProposalContentId, RiskTierV1, SortitionRequestV1, parliament_candidate_root_v1,
+        };
+        let proposal_operator = match proposal_kind {
+            iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(proposal) => {
+                proposal.proposal_operator.clone()
+            }
+            iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(
+                proposal,
+            ) => proposal.proposal_operator.clone(),
+            _ => panic!("validation-fee fixture requires a validation-fee proposal"),
+        };
+        let proposal_fingerprint = proposal_kind.fingerprint();
+        let proposal_content_id = ProposalContentId::new(proposal_fingerprint);
+        let governance_attempt_id = GovernanceAttemptId::derive_v1(proposal_content_id, 0);
+        let requirements = validation_fee_parliament_requirements();
+        let expected_head = GovernanceExpectedHeadV1::Absent(GovernanceExpectedHeadAbsentV1 {
+            subject_id: proposal_kind
+                .governed_subject_id_v1()
+                .expect("derive exact validation-fee governed subject"),
+        });
+        let mut attempt = ParliamentAttemptStateV1::try_new(
+            GovernanceAttemptV1 {
+                id: governance_attempt_id,
+                proposal_content_id,
+                sequence: 0,
+                risk_tier: RiskTierV1::Constitutional,
+                stage: GovernanceStageV1::Qualification,
+                status: GovernanceAttemptStatusV1::Active,
+            },
+            TEST_PARLIAMENT_POLICY_VERSION,
+            proposal_kind.effect_preimage_hash_v1(),
+            expected_head,
+            requirements.clone(),
+        )
+        .expect("create exact validation-fee Parliament attempt");
+        attempt
+            .complete_qualification(governance_attempt_id)
+            .expect("complete deterministic qualification");
+        let candidates = parliament_test_candidates();
+        let candidate_count = u32::try_from(candidates.len()).expect("candidate count fits u32");
+        let sortition_session = BeaconSessionId::new(parliament_test_root(0xB0));
+        let mut request_ids = Vec::with_capacity(requirements.len());
+        for requirement in &requirements {
+            let election_attempt_id =
+                BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0);
+            let request = SortitionRequestV1::try_new_canonical(
+                governance_attempt_id,
+                election_attempt_id,
+                requirement.body,
+                parliament_candidate_root_v1(governance_attempt_id, requirement.body, &candidates),
+                candidate_count,
+                3,
+                10,
+                20,
+                sortition_session,
+                None,
+            )
+            .expect("construct deterministic sortition request");
+            request_ids.push(request.id);
+            attempt
+                .register_sortition_request(governance_attempt_id, 0, request, candidates.clone())
+                .expect("register deterministic sortition request");
+        }
+        request_ids.sort_unstable();
+        let sortition_pulse_id = BeaconPulseId::new(parliament_test_root(0xB1));
+        attempt
+            .consume_sortition_pulse_batch(
+                governance_attempt_id,
+                request_ids,
+                sortition_session,
+                20,
+                sortition_pulse_id,
+                *sortition_pulse_id.as_bytes(),
+                state.network_id_ref(),
+                &parliament_test_governance(&requirements),
+            )
+            .expect("consume deterministic simultaneous Parliament draw");
+        for (index, requirement) in requirements.iter().copied().enumerate() {
+            complete_parliament_body_for_authorization(
+                &mut attempt,
+                requirement,
+                BodyElectionAttemptId::derive_v1(governance_attempt_id, requirement.body, 0),
+                0xC0_u8
+                    .checked_add(u8::try_from(index).expect("body index fits u8"))
+                    .expect("result tag does not overflow"),
+            );
+        }
+        let governance_certificate = attempt
+            .construct_certificate(
+                governance_attempt_id,
+                TEST_POLICY_ENACTMENT_HEIGHT
+                    .checked_sub(1)
+                    .expect("enactment follows certification"),
+                TEST_POLICY_ENACTMENT_HEIGHT,
+            )
+            .expect("construct complete validation-fee Parliament certificate");
+        governance_certificate
+            .validate()
+            .expect("validation-fee Parliament certificate validates");
+        attempt
+            .mark_enacted(governance_attempt_id, TEST_POLICY_ENACTMENT_HEIGHT)
+            .expect("mark exact-due validation-fee attempt enacted");
+        attempt
+            .validate_proposal_bindings_v1(proposal_kind)
+            .expect("enacted attempt retains the exact proposal bindings");
+        let authorization = ValidationFeeParliamentAuthorizationV1 {
+            proposal_operator,
+            proposal_fingerprint,
+            governance_certificate_id: GovernanceCertificateId::derive_v1(&governance_certificate),
+            governance_certificate,
+            enacted_at_height: TEST_POLICY_ENACTMENT_HEIGHT,
+        };
+        assert_eq!(authorization.invariant_error(), None);
+        (authorization, attempt)
+    }
     fn install_validation_fee_policy(
         state: &Arc<State>,
         authority: &AccountId,
         authority_key_pair: &KeyPair,
         policy: ValidationFeePolicyV1,
     ) {
-        use iroha_data_model::{
-            governance::types::{
-                GovernanceFinalizationEvidence, ParliamentBodies, ParliamentBody, ParliamentRoster,
-                ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
-            },
-            isi::governance::VotingMode,
+        use iroha_data_model::governance::types::{
+            ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         };
-        let member = authority.clone();
-        let rosters = [
-            ParliamentBody::RulesCommittee,
-            ParliamentBody::AgendaCouncil,
-            ParliamentBody::InterestPanel,
-            ParliamentBody::ReviewPanel,
-            ParliamentBody::PolicyJury,
-            ParliamentBody::OversightCommittee,
-            ParliamentBody::FmaCommittee,
-        ]
-        .into_iter()
-        .map(|body| {
-            (
-                body,
-                ParliamentRoster {
-                    body,
-                    epoch: 1,
-                    members: vec![member.clone()],
-                    alternates: Vec::new(),
-                    candidate_count: 1,
-                    derived_by: Default::default(),
-                },
-            )
-        })
-        .collect();
-        let bodies = ParliamentBodies {
-            selection_epoch: 1,
-            rosters,
-        };
-        let roster_digest = Blake2b512::digest(
-            norito::to_bytes(&bodies).expect("encode validation-fee Parliament bodies"),
-        );
-        let mut roster_root = [0; 32];
-        roster_root.copy_from_slice(&roster_digest[..32]);
-        let plain_electorate_rules = ValidationFeePlainElectorateRulesV1 {
-            voting_asset_id: policy.ds_asset_id.clone(),
-            bond_escrow_account: state.gov.bond_escrow_account.clone(),
-            slash_receiver_account: state.gov.slash_receiver_account.clone(),
-            ballot_amount: 150_u64.into(),
-            ballot_duration_blocks: TEST_REFERENDUM_DURATION_BLOCKS,
-            citizenship_amount: 10_000_u64.into(),
-            max_members: 256,
-            conviction_step_blocks: 100,
-            max_conviction: 6,
-            min_turnout: 1,
-            approval_threshold_numerator: 1,
-            approval_threshold_denominator: 2,
-            eligibility_rule:
-                ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
-        };
-        assert_eq!(
-            plain_electorate_rules.invariant_error(),
-            None,
-            "Torii validation-fee fixture must retain an enactable PLAIN electorate contract"
-        );
         let payout_binding = policy
             .treasury_payout_binding
             .clone()
             .expect("enabled validation-fee fixture must carry its payout binding");
         let payout_lifecycle_kind =
             ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+                proposal_operator: authority.clone(),
                 payout_binding: payout_binding.clone(),
-                plain_electorate_rules: plain_electorate_rules.clone(),
             });
         let payout_lifecycle_id = payout_lifecycle_kind.fingerprint();
         let policy_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+            proposal_operator: authority.clone(),
             policy: policy.clone(),
             payout_lifecycle_proposal_id: Some(payout_lifecycle_id),
-            plain_electorate_rules: plain_electorate_rules.clone(),
         });
         let policy_proposal_id = policy_kind.fingerprint();
-        let approval_gate_height = TEST_REFERENDUM_START_HEIGHT - 1;
-        let electorate_for = |proposal_id| {
-            let electorate = ValidationFeePlainElectorateSnapshotV1::from_canonical_members(
-                proposal_id,
-                authority.clone(),
-                TEST_REFERENDUM_START_HEIGHT,
-                approval_gate_height,
-                vec![ValidationFeePlainElectorateMemberV1 {
-                    account_id: authority.clone(),
-                    bonded_height: approval_gate_height,
-                    bonded_amount: plain_electorate_rules.citizenship_amount.clone(),
-                }],
-            )
-            .expect("canonical validation-fee Torii PLAIN electorate snapshot");
-            assert_eq!(
-                electorate.context_error(proposal_id, authority, &plain_electorate_rules),
-                None
-            );
-            electorate
-        };
-        let payout_lifecycle_electorate = electorate_for(payout_lifecycle_id);
-        let policy_electorate = electorate_for(policy_proposal_id);
-        let authorization_for =
-            |proposal_id, electorate: &ValidationFeePlainElectorateSnapshotV1| {
-                ValidationFeeParliamentAuthorizationV1 {
-                    proposal_id,
-                    proposal_fingerprint: proposal_id,
-                    proposal_time_roster_root: roster_root,
-                    plain_electorate_snapshot_root: electorate.roster_root,
-                    plain_electorate_snapshot_member_count: electorate.member_count,
-                    plain_electorate_snapshot_captured_at_height: electorate.captured_at_height,
-                    plain_electorate_snapshot_approval_gate_height: electorate.approval_gate_height,
-                    referendum_window: ValidationFeeGovernanceWindowV1 {
-                        lower: TEST_REFERENDUM_START_HEIGHT,
-                        upper: TEST_REFERENDUM_END_HEIGHT,
-                    },
-                    finalization: ValidationFeeFinalizationEvidenceV1 {
-                        referendum_id: proposal_id,
-                        finalized_at_height: TEST_REFERENDUM_END_HEIGHT,
-                        mode: ValidationFeeGovernanceVotingModeV1::Plain,
-                        approve: 1,
-                        reject: 0,
-                        abstain: 0,
-                        min_turnout: plain_electorate_rules.min_turnout,
-                        approval_threshold_numerator: plain_electorate_rules
-                            .approval_threshold_numerator,
-                        approval_threshold_denominator: plain_electorate_rules
-                            .approval_threshold_denominator,
-                        approved: true,
-                    },
-                    enacted_at_height: TEST_POLICY_ENACTMENT_HEIGHT,
-                }
-            };
-        let payout_lifecycle_authorization =
-            authorization_for(payout_lifecycle_id, &payout_lifecycle_electorate);
-        let policy_authorization = authorization_for(policy_proposal_id, &policy_electorate);
+        let (payout_lifecycle_authorization, payout_lifecycle_attempt) =
+            validation_fee_test_authorization(state, &payout_lifecycle_kind);
+        let (policy_authorization, policy_attempt) =
+            validation_fee_test_authorization(state, &policy_kind);
         assert_eq!(
             payout_lifecycle_authorization.invariant_error(),
             None,
@@ -44836,14 +45047,12 @@ mod validation_fee_torii_ingress_tests {
         );
         let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(
             policy,
-            plain_electorate_rules.clone(),
-            policy_authorization,
+            policy_authorization.clone(),
             Some(ValidationFeePayoutLifecycleReferenceV1 {
                 lifecycle_seal: payout_binding
                     .lifecycle_seal()
                     .expect("derive payout lifecycle seal"),
-                parliament_authorization: payout_lifecycle_authorization,
-                plain_electorate_rules: plain_electorate_rules.clone(),
+                parliament_authorization: payout_lifecycle_authorization.clone(),
             }),
         )
         .expect("validation-fee registry entry");
@@ -44915,83 +45124,27 @@ mod validation_fee_torii_ingress_tests {
             &mut stx,
         )
         .expect("activate protected pool-contract subject");
-        for (proposal_id, kind, authorization, electorate) in [
+        for (proposal_id, kind, attempt) in [
             (
                 payout_lifecycle_id,
                 payout_lifecycle_kind,
-                payout_lifecycle_authorization,
-                payout_lifecycle_electorate,
+                payout_lifecycle_attempt,
             ),
-            (
-                policy_proposal_id,
-                policy_kind,
-                policy_authorization,
-                policy_electorate,
-            ),
+            (policy_proposal_id, policy_kind, policy_attempt),
         ] {
             stx.world.governance_proposals_mut().insert(
                 proposal_id,
                 iroha_core::state::GovernanceProposalRecord {
                     proposer: authority.clone(),
                     kind,
-                    created_height: TEST_REFERENDUM_START_HEIGHT,
+                    created_height: TEST_PROPOSAL_CREATED_HEIGHT,
                     status: iroha_core::state::GovernanceProposalStatus::Enacted,
-                    pipeline: iroha_core::state::GovernancePipeline::default(),
-                    parliament_snapshot: Some(iroha_core::state::GovernanceParliamentSnapshot {
-                        selection_epoch: 1,
-                        beacon: [0x55; 32],
-                        roster_root,
-                        bodies: bodies.clone(),
-                    }),
-                    finalization_evidence: Some(GovernanceFinalizationEvidence {
-                        proposal_id,
-                        referendum_id: authorization.finalization.referendum_id,
-                        finalized_at_height: authorization.finalization.finalized_at_height,
-                        mode: VotingMode::Plain,
-                        approve: authorization.finalization.approve,
-                        reject: authorization.finalization.reject,
-                        abstain: authorization.finalization.abstain,
-                        min_turnout: authorization.finalization.min_turnout,
-                        approval_threshold_numerator: authorization
-                            .finalization
-                            .approval_threshold_numerator,
-                        approval_threshold_denominator: authorization
-                            .finalization
-                            .approval_threshold_denominator,
-                        approved: authorization.finalization.approved,
-                    }),
-                    enacted_at_height: Some(authorization.enacted_at_height),
                 },
             );
-            let referendum_id = hex::encode(proposal_id);
-            stx.world.governance_referenda_mut().insert(
-                referendum_id.clone(),
-                iroha_core::state::GovernanceReferendumRecord {
-                    h_start: authorization.referendum_window.lower,
-                    h_end: authorization.referendum_window.upper,
-                    status: iroha_core::state::GovernanceReferendumStatus::Closed,
-                    mode: iroha_core::state::GovernanceReferendumMode::Plain,
-                },
-            );
-            let mut approvals = iroha_core::state::GovernanceStageApprovals::default();
-            for body in [
-                ParliamentBody::RulesCommittee,
-                ParliamentBody::AgendaCouncil,
-                ParliamentBody::InterestPanel,
-                ParliamentBody::ReviewPanel,
-                ParliamentBody::PolicyJury,
-                ParliamentBody::OversightCommittee,
-                ParliamentBody::FmaCommittee,
-            ] {
-                approvals
-                    .ensure_stage(body, 1, 1, 10_000)
-                    .record(authority.clone());
-            }
-            approvals.approval_gate_height = Some(electorate.approval_gate_height);
-            approvals.validation_fee_plain_electorate_snapshot = Some(electorate);
+            let attempt_id = attempt.attempt().id;
             stx.world
-                .governance_stage_approvals_mut()
-                .insert(referendum_id, approvals);
+                .put_parliament_attempt_for_testing(attempt_id, attempt)
+                .expect("persist exact enacted validation-fee Parliament attempt");
         }
         stx.world
             .parameters_mut_for_testing()
@@ -53595,7 +53748,7 @@ fn build_account_onboarding_plan(
 pub async fn handle_v1_accounts_onboard_plan(
     app: crate::SharedAppState,
     authenticated_scope: crate::AuthenticatedOnboardingScope,
-    crate::CanonicalJsonOnly(request): crate::CanonicalJsonOnly<AccountOnboardingPlanRequestDto>,
+    crate::JsonOnly(request): crate::JsonOnly<AccountOnboardingPlanRequestDto>,
 ) -> Result<impl IntoResponse> {
     let receipt = build_account_onboarding_plan(&app, &authenticated_scope, request)?;
     let body =
@@ -53610,7 +53763,7 @@ pub async fn handle_v1_accounts_onboard_plan(
 pub async fn handle_v1_accounts_onboard_apply(
     app: crate::SharedAppState,
     authenticated_scope: crate::AuthenticatedOnboardingScope,
-    crate::CanonicalJsonOnly(request): crate::CanonicalJsonOnly<AccountOnboardingApplyRequestDto>,
+    crate::JsonOnly(request): crate::JsonOnly<AccountOnboardingApplyRequestDto>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::{alias_setup::AliasPlanDispositionV1, isi::alias_setup::EnsureAlias};
@@ -60561,8 +60714,8 @@ routing_test! { async public_lane_handlers_hide_future_created_autoscale_stale_r
         .expect("future-created autoscale lane catalog");
         let mut nexus = state.nexus.write();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lanes = nonzero_ext::nonzero!(1_u32);
-        nexus.autoscale.max_lanes = nonzero_ext::nonzero!(2_u32);
+        nexus.autoscale.min_lane_id = nonzero_ext::nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = nonzero_ext::nonzero!(2_u32);
         nexus.lane_catalog = lane_catalog;
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);

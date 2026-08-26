@@ -16,6 +16,7 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami genesis generate default`↴](#kagami-genesis-generate-default)
 * [`kagami genesis generate synthetic`↴](#kagami-genesis-generate-synthetic)
 * [`kagami genesis validate`↴](#kagami-genesis-validate)
+* [`kagami genesis validate-prepared`↴](#kagami-genesis-validate-prepared)
 * [`kagami genesis pop`↴](#kagami-genesis-pop)
 * [`kagami genesis embed-pop`↴](#kagami-genesis-embed-pop)
 * [`kagami genesis normalize`↴](#kagami-genesis-normalize)
@@ -23,12 +24,16 @@ This document contains the help content for the `kagami` command-line program.
 * [`kagami kagemusha verify-release-v4`↴](#kagami-kagemusha-verify-release-v4)
 * [`kagami kagemusha promote-release-v4`↴](#kagami-kagemusha-promote-release-v4)
 * [`kagami kagemusha prepare-activation-v4`↴](#kagami-kagemusha-prepare-activation-v4)
+* [`kagami kagemusha prepare-enable-issuance-v4`↴](#kagami-kagemusha-prepare-enable-issuance-v4)
+* [`kagami kagemusha prepare-cancel-release-v4`↴](#kagami-kagemusha-prepare-cancel-release-v4)
+* [`kagami kagemusha prepare-deactivate-issuance-v4`↴](#kagami-kagemusha-prepare-deactivate-issuance-v4)
 * [`kagami kagemusha prepare-release-circuit-params-v4`↴](#kagami-kagemusha-prepare-release-circuit-params-v4)
 * [`kagami kagemusha prepare-taira-release-roster-v4`↴](#kagami-kagemusha-prepare-taira-release-roster-v4)
 * [`kagami kagemusha prepare-taira-testnet-base-genesis-v4`↴](#kagami-kagemusha-prepare-taira-testnet-base-genesis-v4)
 * [`kagami privacy-bootstrap`↴](#kagami-privacy-bootstrap)
 * [`kagami privacy-bootstrap emit-taira-v1`↴](#kagami-privacy-bootstrap-emit-taira-v1)
 * [`kagami privacy-bootstrap validate-taira-v1`↴](#kagami-privacy-bootstrap-validate-taira-v1)
+* [`kagami privacy-bootstrap validate-taira-nevo-review-v1`↴](#kagami-privacy-bootstrap-validate-taira-nevo-review-v1)
 * [`kagami privacy-bootstrap render-taira-release-v1`↴](#kagami-privacy-bootstrap-render-taira-release-v1)
 * [`kagami verify`↴](#kagami-verify)
 * [`kagami advanced`↴](#kagami-advanced)
@@ -96,7 +101,7 @@ Guided node/bootstrap flow for configuring a peer against an existing network pr
 
   Possible values:
   - `local`:
-    Canonical single-lane local network (no Sora profile needed)
+    Canonical local single-lane profile
   - `nexus`:
     Sora Nexus (mainnet)
   - `taira`:
@@ -281,6 +286,7 @@ Commands related to genesis
 * `sign` — Sign the genesis block
 * `generate` — Generate a genesis configuration and standard-output in JSON format
 * `validate` — Validate a genesis JSON file and report invalid identifiers
+* `validate-prepared` — Verify one exact bound-manifest/signed-genesis/signer/hash bundle
 * `pop` — Produce a BLS PoP (Proof-of-Possession) for a consensus key (BLS-normal)
 * `embed-pop` — Embed one or more PoPs into a genesis JSON manifest (inline `topology` entries carrying `pop_hex`)
 * `normalize` — Expand a genesis manifest and show the final ordered transactions
@@ -301,9 +307,9 @@ Sign the genesis block
 
 * `-o`, `--out-file <PATH>` — Path to signed genesis output file in Norito format (stdout by default)
 * `--bound-manifest-out <PATH>` — Persist the exact config-bound genesis manifest used to build the signed block. May point to `GENESIS_FILE` to replace the input only after binding succeeds
-* `--expected-hash-out <PATH>` — Write the exact signed consensus-header hash as one lowercase line.
+* `--expected-hash-out <PATH>` — Write the canonical checked NetworkId derived from the exact signed consensus-header hash as one line.
 
-   Provision this value as `genesis.expected_hash` independently of the signed block body before starting any validator.
+   Validators and clients must select this same file through `genesis.expected_hash_file` and `network_id_file`, respectively.
 * `-t`, `--topology <TOPOLOGY>` — Use this topology instead of specified in genesis.json. JSON-serialized vector of `PeerId`. For use in `iroha_swarm`.
 
    The final unique topology must be an exact Sumeragi v2 `3f + 1` committee in the range 4..=31.
@@ -420,6 +426,25 @@ Validate a genesis JSON file and report invalid identifiers
 
 
 
+## `kagami genesis validate-prepared`
+
+Verify one exact bound-manifest/signed-genesis/signer/hash bundle
+
+**Usage:** `kagami genesis validate-prepared [OPTIONS] --reviewed-manifest <PATH> --validator-roster <PATH> --bound-manifest <PATH> --pre-sign-manifest <PATH> --signed-genesis <PATH> --genesis-public-key <PUBLIC_KEY> --expected-hash <HASH>`
+
+###### **Options:**
+
+* `--reviewed-manifest <PATH>` — Exact reviewed NEVO genesis before validator rendering
+* `--validator-roster <PATH>` — Exact public validator roster used by the renderer
+* `--bound-manifest <PATH>` — Exact config-bound genesis manifest used by the external signer
+* `--pre-sign-manifest <PATH>` — Exact renderer output accepted by the external signer before config binding
+* `--signed-genesis <PATH>` — Exact signed genesis in canonical framed Norito form
+* `--peer-config <PATH>` — Effective validator configs whose complete roster and policy must reproduce the signed context. Repeat exactly four times in `taira-validator-1` through `-4` order
+* `--genesis-public-key <PUBLIC_KEY>` — Public key of the independently provisioned genesis signer
+* `--expected-hash <HASH>` — Exact signed genesis block-header hash
+
+
+
 ## `kagami genesis pop`
 
 Produce a BLS PoP (Proof-of-Possession) for a consensus key (BLS-normal)
@@ -486,6 +511,9 @@ Verify and promote authenticated Kagemusha ABI-21/V4 artifact releases
 * `verify-release-v4` — Verify one complete authenticated ABI-21/V4 release directory
 * `promote-release-v4` — Verify an ABI-21/V4 release and atomically write its typed promotion record
 * `prepare-activation-v4` — Build one release-bound activation instruction from an authenticated V4 catalog
+* `prepare-enable-issuance-v4` — Build one staged-to-enabled instruction from an exact canonical witness
+* `prepare-cancel-release-v4` — Build one permanent staged-release cancellation instruction
+* `prepare-deactivate-issuance-v4` — Build one permanent enabled-issuance deactivation instruction
 * `prepare-release-circuit-params-v4` — Atomically publish the canonical reviewed Eq/Ep first-release circuit parameters
 * `prepare-taira-release-roster-v4` — Build the actual rendered Taira validator roster for signed V4 release generation
 * `prepare-taira-testnet-base-genesis-v4` — Append network-independent offline-cash prerequisites to a fresh Taira genesis
@@ -518,7 +546,7 @@ Verify an ABI-21/V4 release and atomically write its typed promotion record
 
 * `--bundle-dir <BUNDLE_DIR>` — Directory containing the exact seventeen-file pre-promotion ABI-21/V4 candidate
 * `--release-policy <RELEASE_POLICY>` — Canonical release policy provisioned alongside the candidate release
-* `--promotion-record <PROMOTION_RECORD>` — New path for the canonical Norito promotion record; it is never overwritten
+* `--promotion-record <PROMOTION_RECORD>` — Exact absent `<bundle-dir>/promotion-record-v4.norito` leaf; it is never overwritten
 * `--benchmark-evidence <BENCHMARK_EVIDENCE>` — Signed physical-device benchmark evidence file
 * `--cryptographic-review <CRYPTOGRAPHIC_REVIEW>` — Canonical signed, candidate-bound cryptographic review Norito file
 * `--memory-limit-bytes <MEMORY_LIMIT_BYTES>` — Optional nonzero byte ceiling that may only lower the built-in physical-memory limit
@@ -542,7 +570,46 @@ Build one release-bound activation instruction from an authenticated V4 catalog
 * `--verifier-version <VERIFIER_VERSION>` — Next atomic Eq/Ep verifier version observed from live consensus state
 * `--device-attestation-policy <DEVICE_ATTESTATION_POLICY>` — Exact governed verifier policy derived from authenticated physical-device evidence. The policy and release are embedded in one composite consensus instruction
 * `--policy-evaluation-time-ms <POLICY_EVALUATION_TIME_MS>` — Explicit Unix timestamp used for the same certificate-validity checks as consensus. The activation is checked again against its actual block timestamp on every validator
-* `--output <OUTPUT>` — New private file receiving a JSON array accepted by `iroha ledger multisig propose`
+* `--output <OUTPUT>` — New private file receiving exact instruction JSON for direct-lifecycle payload preparation
+
+
+
+## `kagami kagemusha prepare-enable-issuance-v4`
+
+Build one staged-to-enabled instruction from an exact canonical witness
+
+**Usage:** `kagami kagemusha prepare-enable-issuance-v4 --enable-witness <ENABLE_WITNESS> --output <OUTPUT>`
+
+###### **Options:**
+
+* `--enable-witness <ENABLE_WITNESS>` — Exact canonical bounded staged-to-enabled witness
+* `--output <OUTPUT>` — New private file receiving exact instruction JSON for direct-lifecycle payload preparation
+
+
+
+## `kagami kagemusha prepare-cancel-release-v4`
+
+Build one permanent staged-release cancellation instruction
+
+**Usage:** `kagami kagemusha prepare-cancel-release-v4 --cancellation <CANCELLATION> --output <OUTPUT>`
+
+###### **Options:**
+
+* `--cancellation <CANCELLATION>` — Exact canonical predecessor-bound staged-release cancellation
+* `--output <OUTPUT>` — New private file receiving exact instruction JSON for direct-lifecycle payload preparation
+
+
+
+## `kagami kagemusha prepare-deactivate-issuance-v4`
+
+Build one permanent enabled-issuance deactivation instruction
+
+**Usage:** `kagami kagemusha prepare-deactivate-issuance-v4 --deactivation <DEACTIVATION> --output <OUTPUT>`
+
+###### **Options:**
+
+* `--deactivation <DEACTIVATION>` — Exact canonical predecessor-bound enabled-issuance deactivation
+* `--output <OUTPUT>` — New private file receiving exact instruction JSON for direct-lifecycle payload preparation
 
 
 
@@ -603,6 +670,7 @@ Emit and validate fail-closed Taira exact-12 privacy bootstrap artifacts
 
 * `emit-taira-v1` — Emit all twelve compiled governance activation templates atomically
 * `validate-taira-v1` — Validate an emitted exact-12 instruction set and its digest inventory
+* `validate-taira-nevo-review-v1` — Validate a reviewed Taira NEVO unsigned genesis without creating release artifacts
 * `render-taira-release-v1` — Compose a complete secret-free Taira release plan, config, and genesis
 
 
@@ -633,6 +701,19 @@ Validate an emitted exact-12 instruction set and its digest inventory
 
 
 
+## `kagami privacy-bootstrap validate-taira-nevo-review-v1`
+
+Validate a reviewed Taira NEVO unsigned genesis without creating release artifacts
+
+**Usage:** `kagami privacy-bootstrap validate-taira-nevo-review-v1 --unsigned-genesis <UNSIGNED_GENESIS> --review <REVIEW>`
+
+###### **Options:**
+
+* `--unsigned-genesis <UNSIGNED_GENESIS>` — Exact unsigned NEVO genesis bound by the review manifest
+* `--review <REVIEW>` — Deterministic public NEVO review manifest binding the unsigned genesis
+
+
+
 ## `kagami privacy-bootstrap render-taira-release-v1`
 
 Compose a complete secret-free Taira release plan, config, and genesis
@@ -647,7 +728,6 @@ Compose a complete secret-free Taira release plan, config, and genesis
 * `--plan-template <PLAN_TEMPLATE>` — Canonical disabled Taira privacy plan template
 * `--config-template <CONFIG_TEMPLATE>` — Canonical disabled peer-1 Taira config template
 * `--genesis-template <GENESIS_TEMPLATE>` — Canonical Taira genesis without privacy bootstrap instructions
-
 * `--nevo-review <NEVO_REVIEW>` — Deterministic public NEVO review manifest binding the genesis template
 * `--plan-output <PLAN_OUTPUT>` — Fresh output path for the complete public release plan
 * `--config-output <CONFIG_OUTPUT>` — Fresh output path for the complete peer-1 release config
