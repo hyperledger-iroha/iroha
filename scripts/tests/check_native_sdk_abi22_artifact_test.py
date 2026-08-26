@@ -1266,6 +1266,7 @@ def test_kotlin_localnet_release_lane_is_mandatory_and_payload_free() -> None:
         "crates/iroha_core/**",
         "crates/irohad/**",
         "kotlin/core-jvm/**",
+        "scripts/build_norito_xcframework.sh",
         "scripts/deploy_localnet.sh",
         "scripts/*taira*.py",
         "scripts/operator_http_headers.py",

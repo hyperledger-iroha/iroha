@@ -757,6 +757,7 @@ on:
       - "scripts/check_android_device_lab_slot.py"
       - "scripts/capture_android_attestation_status.py"
       - "scripts/android_attestation_certificate_profile.py"
+      - "scripts/build_norito_xcframework.sh"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
       - "scripts/check_swift_offline_device_attestation_fixture.py"
@@ -959,15 +960,19 @@ jobs:
           echo "KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH=$swift_scratch" >> "$GITHUB_ENV"
       - name: Install Apple Rust targets
         run: |
-          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
+          rustup_path="$(command -v rustup)"
+          rustup_path="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_path")"
+          [[ "$rustup_path" == /* && -f "$rustup_path" && ! -L "$rustup_path" && -x "$rustup_path" ]]
+          echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" >> "$GITHUB_ENV"
+          "$rustup_path" target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
           cargo fetch --locked
       - name: Bind the first-release Apple Cargo envelope
         shell: bash
         run: |
           cargo_target="$RUNNER_TEMP/iroha-kagemusha-apple-cargo"
           cargo_target="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
-          rustc_path="$(rustup which --toolchain 1.93.1 rustc)"
-          rustdoc_path="$(rustup which --toolchain 1.93.1 rustdoc)"
+          rustc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustc)"
+          rustdoc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustdoc)"
           echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
           echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
           echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
@@ -998,9 +1003,9 @@ jobs:
       - name: Prefetch locked Rust dependency graph
         run: cargo fetch --locked
       - name: Warm exact Android compile dependencies
-        working-directory: kotlin
-        run: ./gradlew --no-daemon --max-workers=2 :offline-wallet-android:compileDebugAndroidTestKotlin
-      - run: ci/check_kagemusha_candidate_android_lab_compile.sh
+        run: ci/check_kagemusha_candidate_android_lab_compile.sh --warm-dependencies
+      - name: Prove Android candidate compilation offline
+        run: ci/check_kagemusha_candidate_android_lab_compile.sh
       - name: Require fresh ABI-23 JNI bridge in complete Kotlin and Java suites
         run: >-
           NORITO_MOBILE_JAVA_HOME="$JAVA_HOME"

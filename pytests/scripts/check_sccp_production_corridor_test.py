@@ -238,10 +238,25 @@ def test_swift_phase_always_builds_fresh_and_rejects_relative_cargo_target() -> 
     assert "scripts/build_norito_xcframework.sh" in trace
     assert "--disable-automatic-resolution" in trace
 
+    override_environment = os.environ.copy()
+    override_environment["MOBILE_SDK_RUSTUP_BINARY"] = "/absolute/test/rustup"
+    override_trace = dry_run("swift-sdk", env=override_environment).stdout
+    assert (
+        "/absolute/test/rustup target list --toolchain 1.93.1 --installed"
+        in override_trace
+    )
+
     source = RUNNER.read_text(encoding="utf-8")
     swift_builder = source.split("ensure_swift_bridge_artifact() {", 1)[1].split(
         "\nresolve_java_home() {", 1
     )[0]
+    for required in (
+        'artifact_dir="${MOBILE_SDK_APPLE_ARTIFACT_DIR:-}"',
+        'rustup_binary="${MOBILE_SDK_RUSTUP_BINARY:-rustup}"',
+        '"$rustup_binary" target list --toolchain 1.93.1 --installed',
+        '"${NORITO_BRIDGE_OUT_DIR:-}" != "$canonical_artifact"',
+    ):
+        assert required in swift_builder
     for retired in ("bridge_zip", "unzip", "target add", "return 0\n  fi\n\n  if [[ -f"):
         assert retired not in swift_builder
 
@@ -347,18 +362,24 @@ def test_swift_workflow_binds_the_exact_first_release_bridge_envelope() -> None:
         'python-version: "3.12"',
         "dtolnay/rust-toolchain@",
         "toolchain: 1.93.1",
-        "rustup target add --toolchain 1.93.1",
+        '"$rustup_path" target add --toolchain 1.93.1',
+        "x86_64-apple-darwin",
         "cargo fetch --locked",
         "CARGO_BUILD_JOBS=1",
         "CARGO_INCREMENTAL=0",
         "CARGO_NET_OFFLINE=true",
         "CARGO_TARGET_DIR=$cargo_target",
         "MOBILE_SDK_PYTHON_BINARY=$mobile_python",
+        "MOBILE_SDK_RUSTUP_BINARY=$rustup_path",
+        "MOBILE_SDK_APPLE_ARTIFACT_DIR=$bridge_artifacts",
+        "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1",
+        "NORITO_BRIDGE_OUT_DIR=$bridge_artifacts",
         "NORITO_BRIDGE_BUILD_DIR=$bridge_build",
         "RUSTC=$rustc_path",
         "RUSTC_BOOTSTRAP=1",
         "RUSTDOC=$rustdoc_path",
         "$RUNNER_TEMP/iroha-sccp-apple-cargo",
+        "$RUNNER_TEMP/iroha-sccp-apple-artifacts",
         "bash scripts/check_sccp_production_corridor.sh --phase swift-sdk",
     ):
         assert required in job

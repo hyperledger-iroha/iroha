@@ -14,3 +14,5 @@ pub mod replay;
 mod replay_lock;
 mod snapshot_file;
 pub mod token;
+#[cfg(windows)]
+mod windows_file_identity;

@@ -252,15 +252,19 @@ jobs:
           echo "MOBILE_SDK_SWIFT_SCRATCH_DIR=$swift_scratch_dir" >> "$GITHUB_ENV"
       - name: Install Apple Rust targets
         run: |
-          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
+          rustup_path="$(command -v rustup)"
+          rustup_path="$("$MOBILE_SDK_PYTHON_BINARY" -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$rustup_path")"
+          [[ "$rustup_path" == /* && -f "$rustup_path" && ! -L "$rustup_path" && -x "$rustup_path" ]]
+          echo "MOBILE_SDK_RUSTUP_BINARY=$rustup_path" >> "$GITHUB_ENV"
+          "$rustup_path" target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin
           cargo fetch --locked
       - name: Bind the first-release Apple Cargo envelope
         run: |
           cargo_target="$RUNNER_TEMP/iroha-mobile-apple-cargo"
           mkdir -p "$cargo_target"
           cargo_target="$(python3 -I -S -B -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' "$cargo_target")"
-          rustc_path="$(rustup which --toolchain 1.93.1 rustc)"
-          rustdoc_path="$(rustup which --toolchain 1.93.1 rustdoc)"
+          rustc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustc)"
+          rustdoc_path="$("$MOBILE_SDK_RUSTUP_BINARY" which --toolchain 1.93.1 rustdoc)"
           echo "CARGO_BUILD_JOBS=1" >> "$GITHUB_ENV"
           echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
           echo "CARGO_NET_OFFLINE=true" >> "$GITHUB_ENV"
@@ -472,9 +476,8 @@ jobs:
           echo "MOBILE_SDK_PACKAGE_OUT_DIR=$package_dir" >> "$GITHUB_ENV"
           echo "GRADLE_USER_HOME=$gradle_home" >> "$GITHUB_ENV"
       - name: Warm exact Android compile dependencies
-        working-directory: kotlin
-        run: ./gradlew --no-daemon --max-workers=2 :offline-wallet-android:compileDebugAndroidTestKotlin
-      - name: Compile candidate Android lab main and instrumentation sources only
+        run: ci/check_kagemusha_candidate_android_lab_compile.sh --warm-dependencies
+      - name: Prove candidate Android lab compilation offline
         run: ci/check_kagemusha_candidate_android_lab_compile.sh
       - name: Build host SoraFS reference native bridge
         run: cargo build --locked -p connect_norito_bridge
